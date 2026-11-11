@@ -13,7 +13,9 @@
 //! after a gap. In page view sheets are stacked with [`PAGE_GAP`] between
 //! them; rows flow from sheet to sheet:
 //!
-//! - a row is never split and never crosses the bottom of the text area;
+//! - a row is never split and never crosses the bottom of the text area,
+//!   and neither does the padding under a block's last row (the panel of
+//!   a code block ends inside the text area, not in the margin);
 //! - a block may continue on the next sheet at a row boundary, unless its
 //!   measure says [`Measure::keep_together`] and it fits on one sheet;
 //! - no single row is left alone: a block of up to three rows is not
@@ -261,7 +263,13 @@ pub(crate) fn place_paged(
     let top = content_top(page) + y;
     let first_fit = (((page_height - y - measure.pad_top + EPSILON) / line_height).floor() as i64)
         .max(1) as u32;
-    if rows <= first_fit {
+    // Whether the block can end on a sheet with `count` rows on it: under
+    // its last row comes its bottom padding.
+    let ends_on = |count: u32, first_sheet: bool| {
+        let above = if first_sheet { y + measure.pad_top } else { 0. };
+        above + count as f32 * line_height + measure.pad_bottom <= page_height + EPSILON
+    };
+    if rows <= first_fit && (ends_on(rows, true) || rows < 2) {
         return Placement {
             top,
             end: y + whole,
@@ -272,12 +280,20 @@ pub(crate) fn place_paged(
     }
     // The block continues on the following sheets: rows per sheet.
     let per_page = (((page_height + EPSILON) / line_height).floor() as i64).max(1) as u32;
-    let mut chunks = vec![first_fit];
-    let mut left = rows - first_fit;
+    let mut chunks = vec![first_fit.min(rows)];
+    let mut left = rows - chunks[0];
     while left > 0 {
         let take = left.min(per_page);
         chunks.push(take);
         left -= take;
+    }
+    // The sheet the block ends on is too full for its bottom padding: its
+    // last two rows go on to the next one, where there is room.
+    let last = chunks.len() - 1;
+    if chunks[last] >= 2 && !ends_on(chunks[last], last == 0) {
+        let moved = 2.min(chunks[last] - 1);
+        chunks[last] -= moved;
+        chunks.push(moved);
     }
     // The last row does not go to a sheet alone: it takes the one before
     // it along.
@@ -373,6 +389,63 @@ mod tests {
             out.push(rows);
         }
         out
+    }
+
+    #[test]
+    fn the_padding_under_a_block_stays_in_the_text_area() {
+        // A code block: rows of 20 with 8 of padding above and below.
+        let code = |rows| Measure {
+            rows,
+            pad_top: 8.,
+            pad_bottom: 8.,
+            ..paragraph(rows)
+        };
+        let geometry = geometry(200.);
+        // Where the block's box ends on its last sheet: (sheet, y in the
+        // text area).
+        let end = |measures: &[Measure]| {
+            let rows = rows_of(&geometry, measures);
+            let last = rows.last().unwrap().last().unwrap();
+            (last.0, last.2 + measures.last().unwrap().pad_bottom)
+        };
+        // 9 rows: 8 + 180 + 8 fit on the 200 of a sheet.
+        assert_eq!(end(&[code(9)]), (0, 196.));
+        // After two lines of text (50 with the gap) 7 rows fit, but their
+        // padding would end at 206: the last two rows go to the next
+        // sheet, where the panel ends inside the text area.
+        let measures = [paragraph(2), code(7)];
+        let rows = rows_of(&geometry, &measures);
+        assert_eq!(rows[1].iter().filter(|row| row.0 == 0).count(), 5);
+        assert_eq!(rows[1].iter().filter(|row| row.0 == 1).count(), 2);
+        assert_eq!(end(&measures), (1, 48.));
+        // A block that fills its last sheet to the row: 8 + 9 rows on the
+        // first, 10 on the second would leave no room for the padding.
+        let measures = [code(19)];
+        let rows = rows_of(&geometry, &measures);
+        let per_sheet: Vec<usize> = (0..3)
+            .map(|sheet| rows[0].iter().filter(|row| row.0 == sheet).count())
+            .collect();
+        assert_eq!(per_sheet, [9, 8, 2]);
+        assert_eq!(end(&measures), (2, 48.));
+        // Whatever the mix, nothing ends below the text area.
+        for first in 1..12 {
+            for second in 1..25 {
+                let measures = [paragraph(first), code(second), paragraph(3)];
+                let rows = rows_of(&geometry, &measures);
+                let last = rows[1].last().unwrap();
+                assert!(
+                    last.2 + 8. <= 200. + EPSILON,
+                    "{first} rows, then code of {second}: the panel ends at {}",
+                    last.2 + 8.
+                );
+                for (page, top, bottom) in rows.iter().flatten() {
+                    assert!(
+                        *top >= -EPSILON && *bottom <= 200. + EPSILON,
+                        "{page} {top}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

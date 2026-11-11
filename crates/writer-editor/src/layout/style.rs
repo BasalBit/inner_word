@@ -31,8 +31,6 @@ pub(crate) const CODE_PADDING: f32 = 14.;
 const CODE_PADDING_V: f32 = 10.;
 /// Line height ratio of compact editors.
 const COMPACT_LINE_HEIGHT: f32 = 1.45;
-/// Headings are set tighter than body text.
-const HEADING_LINE_HEIGHT: f32 = 1.3;
 
 /// Everything shaping depends on besides the block itself and the width.
 #[derive(Clone, Debug, PartialEq)]
@@ -234,7 +232,11 @@ impl LayoutStyle {
         let ratio = if self.compact {
             COMPACT_LINE_HEIGHT
         } else if heading {
-            self.typography.line_height.min(HEADING_LINE_HEIGHT)
+            // Headings are set tighter than body text; the rule is the
+            // document model's, so that an export can follow it.
+            self.typography
+                .line_height
+                .min(writer_core::HEADING_MAX_LINE_HEIGHT)
         } else {
             self.typography.line_height
         };

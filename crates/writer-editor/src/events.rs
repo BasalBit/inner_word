@@ -149,6 +149,16 @@ pub enum EditorEvent {
         /// `range.start`.
         replaced: Option<TextRange>,
     },
+    /// The background layout has measured every block: from now on (until
+    /// the next change that leaves blocks to measure)
+    /// [`crate::Editor::page_count`], [`crate::Editor::caret_page`] for
+    /// far positions and the scroll range are exact, and
+    /// [`crate::Editor::layout_pending`] is false. Until then they rest on
+    /// estimated heights for the blocks that were never on screen, so a
+    /// status bar that shows "page 3 of 1,290" for a book that was just
+    /// opened or re-flowed is showing an estimate (say so: "of about
+    /// 1,290") and should read the numbers again on this event.
+    LayoutSettled,
     /// The user asked for the context menu of the text: a right-click
     /// (secondary button or `ctrl`-click) or `ctrl-enter`. The editor has
     /// already adjusted the selection as a macOS text view does; whoever

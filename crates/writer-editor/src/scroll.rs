@@ -44,11 +44,22 @@ pub(crate) enum PendingScroll {
     /// Bring a position (`None`: the caret, see `Editor::caret_position`)
     /// into view.
     Position(Option<Position>, Autoscroll),
+    /// Bring the caret into view after a change to the text. Like
+    /// `Position(None, Autoscroll::Fit)`, but whoever writes at the very
+    /// end of the document gets room under the last line instead of
+    /// writing along the bottom edge of the window.
+    Writing,
     /// Put the caret's row `viewport_y` pixels below the top of the
     /// viewport (page-wise movement, switching between flow and page
     /// view).
     CaretAt { viewport_y: Pixels },
 }
+
+/// Flow view: how far above the bottom of the viewport the last line of
+/// the document is kept while it is written on, as a fraction of the
+/// viewport's height. (The content ends with more empty space than this,
+/// see `Editor::install_layout_env`.)
+const WRITING_ROOM: f32 = 0.3;
 
 /// How long the scroll bar stays after the last scroll.
 const SCROLLBAR_LINGER: Duration = Duration::from_millis(1200);
@@ -221,6 +232,7 @@ impl Editor {
             let viewport_height = lay.env().viewport.size.height;
             let (position, mode, viewport_y) = match request {
                 PendingScroll::Position(position, mode) => (position, mode, px(0.)),
+                PendingScroll::Writing => (None, Autoscroll::Fit, px(0.)),
                 PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y),
             };
             // The caret is on the row its affinity puts it on.
@@ -240,6 +252,20 @@ impl Editor {
                 lay.env().style.base_line_height()
             };
             let margin = margin.min(viewport_height / 4.);
+            // Writing on the last line of a document in flow view: room
+            // under it.
+            let last_row = position.block + 1 == document.block_count()
+                && placed.layout.row_for_caret(position.offset, upstream) + 1
+                    == placed.layout.rows.len();
+            let below = if request == PendingScroll::Writing
+                && last_row
+                && !compact
+                && lay.env().page.is_none()
+            {
+                margin.max((viewport_height * WRITING_ROOM).round())
+            } else {
+                margin
+            };
             let target = match mode {
                 Autoscroll::None => None,
                 Autoscroll::Fit => {
@@ -249,8 +275,8 @@ impl Editor {
                         let first_row = position.block == 0
                             && placed.layout.row_for_caret(position.offset, upstream) == 0;
                         Some(if first_row { px(0.) } else { top - margin })
-                    } else if bottom + margin > scroll_y + viewport_height {
-                        Some(bottom + margin - viewport_height)
+                    } else if bottom + below > scroll_y + viewport_height {
+                        Some(bottom + below - viewport_height)
                     } else {
                         None
                     }

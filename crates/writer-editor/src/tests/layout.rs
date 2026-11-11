@@ -1437,3 +1437,119 @@ fn inline_code_is_drawn_smaller_in_a_chip_inside_the_column(cx: &mut TestAppCont
         assert!(rows[0].trim_end().len() >= 68, "{}", rows[0].len());
     });
 }
+
+// --- Writing at the end, and the settled layout ------------------------------
+
+#[gpui::test]
+fn writing_at_the_end_of_a_document_has_room_under_the_last_line(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(book(200), EditorConfig::full(), cx);
+    let room = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            let viewport = editor.viewport_bounds().unwrap();
+            let caret = editor.caret_bounds().unwrap();
+            (viewport.bottom() - caret.bottom()) / viewport.size.height
+        })
+    };
+    // Going to the end shows the end, with a line under it.
+    cx.simulate_keystrokes("cmd-down");
+    let scroll_at_end = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    assert!(room(cx) < 0.2);
+    // Typing there lifts the line: about a third of the window stays
+    // free under it, and it stays there line after line.
+    cx.simulate_input(" More");
+    let after_typing = room(cx);
+    assert!((0.29..0.36).contains(&after_typing), "{after_typing}");
+    assert!(editor.read_with(cx, |editor, _| editor.scroll_offset()) > scroll_at_end);
+    for _ in 0..5 {
+        cx.simulate_keystrokes("enter");
+        cx.simulate_input("Another line.");
+        let now = room(cx);
+        assert!((0.29..0.36).contains(&now), "{now}");
+    }
+    // Moving the caret or clicking does not move the text.
+    let scroll = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    cx.simulate_keystrokes("left left up down");
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        scroll
+    );
+    // Writing further up is not lifted.
+    cx.simulate_keystrokes("up up up up up up up up up up up up up up up up up up");
+    let scroll = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    cx.simulate_input("x");
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        scroll
+    );
+
+    // Page view has the sheet's own margin under the last line.
+    cx.simulate_keystrokes("cmd-down");
+    editor.update(cx, |editor, cx| editor.set_page_view(true, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-up cmd-down");
+    let before = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    cx.simulate_input("y");
+    cx.run_until_parked();
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        before
+    );
+}
+
+#[gpui::test]
+fn the_layout_says_when_page_numbers_are_final(cx: &mut TestAppContext) {
+    setup(cx);
+    let document = book(3000).with_settings(DocumentSettings {
+        page_view: true,
+        ..DocumentSettings::default()
+    });
+    let (editor, cx) = open(document, EditorConfig::full(), cx);
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|_, cx| {
+        let events = events.clone();
+        cx.subscribe(&editor, move |_, event: &EditorEvent, _| {
+            events.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    // Right after opening, the total rests on estimates.
+    let (pending, estimate) = editor.read_with(cx, |editor, _| {
+        (editor.layout_pending(), editor.page_count().unwrap())
+    });
+    assert!(pending);
+    assert!(!events.borrow().contains(&EditorEvent::LayoutSettled));
+    // The background layout runs in slices; when it is through, it says
+    // so once, and the total is the one a full layout gives.
+    for _ in 0..400 {
+        cx.executor().advance_clock(Duration::from_millis(2));
+        cx.run_until_parked();
+        if !editor.read_with(cx, |editor, _| editor.layout_pending()) {
+            break;
+        }
+    }
+    let settled = events
+        .borrow()
+        .iter()
+        .filter(|event| **event == EditorEvent::LayoutSettled)
+        .count();
+    assert_eq!(settled, 1);
+    let total = editor.read_with(cx, |editor, _| editor.page_count().unwrap());
+    let exact = editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        editor.page_count().unwrap()
+    });
+    assert_eq!(total, exact);
+    // The estimate was close, which is all it has to be.
+    let off = (estimate as f32 - exact as f32).abs() / exact as f32;
+    assert!(off < 0.1, "estimated {estimate}, exact {exact}");
+    // An edit that leaves nothing to measure in the background does not
+    // announce anything.
+    events.borrow_mut().clear();
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    assert!(!editor.read_with(cx, |editor, _| editor.layout_pending()));
+}

@@ -711,7 +711,9 @@ impl Editor {
         }
         // The caret is solid while the user types or moves.
         self.restart_blink(cx);
-        if autoscroll != Autoscroll::None {
+        if autoscroll == Autoscroll::Fit && change.is_some_and(|change| change.blocks.is_some()) {
+            self.request_scroll(PendingScroll::Writing);
+        } else if autoscroll != Autoscroll::None {
             self.request_scroll(PendingScroll::Position(None, autoscroll));
         }
         cx.notify();
@@ -850,6 +852,9 @@ impl Editor {
         self.refine_slices += 1;
         if !more {
             self.refining = false;
+            if self.layout.borrow().settled() {
+                cx.emit(EditorEvent::LayoutSettled);
+            }
         }
         // Estimates turning into measures move the scroll bar and the page
         // count; a few repaints while that happens are enough.

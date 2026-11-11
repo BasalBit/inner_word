@@ -65,7 +65,8 @@ impl Editor {
     /// with an estimated height until the background layout has measured
     /// them (a moment after a long document opens), so the number can
     /// still change while [`Editor::layout_pending`] is true. The editor
-    /// notifies its observers when it does.
+    /// notifies its observers when it does and emits
+    /// [`crate::EditorEvent::LayoutSettled`] when the number is final.
     pub fn page_count(&self) -> Option<usize> {
         if !self.paginated() {
             return None;

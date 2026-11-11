@@ -495,3 +495,95 @@ fn the_selection_does_not_cross_the_desk_between_sheets(cx: &mut TestAppContext)
         assert!(on_first > 0 && on_second > 0, "both sheets are on screen");
     });
 }
+
+#[gpui::test]
+fn the_page_number_keeps_clear_of_the_text_and_fits_small_margins(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paged(one_row_paragraphs(60)), EditorConfig::full(), cx);
+    let set_margins = |cx: &mut gpui::VisualTestContext, margin: f32| {
+        editor.update(cx, |editor, cx| {
+            let mut settings = editor.document().settings().clone();
+            settings.page.margins = Margins::uniform(margin);
+            editor.edit(|state| state.set_settings(settings), cx);
+            editor.finish_layout(cx);
+        });
+        cx.run_until_parked();
+    };
+    // The first sheet's number and the bottom of its text area.
+    let number = |cx: &mut gpui::VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            let (sheet_bottom, text_bottom) = editor
+                .with_layout(|lay| {
+                    let env = lay.env();
+                    let geometry = env.page.unwrap();
+                    let top = env.viewport.top() + geometry.sheet_top(0, env.pad_top);
+                    (
+                        top + geometry.sheet_height,
+                        top + geometry.margin_top + geometry.content_height,
+                    )
+                })
+                .unwrap();
+            let label = editor
+                .painted_markers
+                .iter()
+                .find(|marker| marker.top() >= text_bottom && marker.bottom() <= sheet_bottom)
+                .copied();
+            (label, text_bottom, sheet_bottom)
+        })
+    };
+
+    // One-inch margins: the number sits in the lower half of the margin,
+    // 36 pt and more under the text.
+    cx.simulate_keystrokes("cmd-down cmd-up");
+    let (label, text_bottom, sheet_bottom) = number(cx);
+    let label = label.expect("a page number in a one-inch margin");
+    assert!(label.top() - text_bottom >= px(35.), "{label:?}");
+    assert!(sheet_bottom - label.bottom() >= px(18.), "{label:?}");
+    // A margin of 14 pt still has one, smaller, inside the margin.
+    set_margins(cx, 14.);
+    let (small, text_bottom, sheet_bottom) = number(cx);
+    let small = small.expect("a page number in a 14 pt margin");
+    assert!(small.size.height < label.size.height);
+    assert!(small.top() >= text_bottom && small.bottom() <= sheet_bottom);
+    // A margin with no room for a number has none.
+    set_margins(cx, 6.);
+    assert_eq!(number(cx).0, None);
+}
+
+#[gpui::test]
+fn a_code_block_ends_inside_the_text_area(cx: &mut TestAppContext) {
+    setup(cx);
+    // Paragraphs fill the first sheet to different heights; the code
+    // block after them has rows that would fit and padding that may not.
+    for lead in 14..24 {
+        let mut blocks = one_row_paragraphs(lead);
+        let code: Vec<String> = (0..8).map(|line| format!("line_{line}();")).collect();
+        blocks.push(Block::with_text(BlockKind::code(), &code.join("\n")));
+        blocks.push(Block::paragraph("after"));
+        let (editor, cx) = open(paged(blocks), EditorConfig::full(), cx);
+        editor.update(cx, |editor, cx| {
+            editor.finish_layout(cx);
+            assert_rows_on_sheets(editor);
+            editor
+                .with_layout(|lay| {
+                    let (geometry, pad_top) = {
+                        let env = lay.env();
+                        (env.page.unwrap(), env.pad_top)
+                    };
+                    let placed = lay.placed(lead).unwrap();
+                    for segment in placed.segments() {
+                        let page = lay.page_at(segment.top);
+                        let text_top = geometry.sheet_top(page, pad_top) + geometry.margin_top;
+                        let text_bottom = text_top + geometry.content_height;
+                        assert!(
+                            segment.bottom <= text_bottom + px(0.02),
+                            "after {lead} paragraphs the panel ends {:?} below the text area",
+                            segment.bottom - text_bottom
+                        );
+                    }
+                })
+                .unwrap();
+        });
+        cx.update(|window, _| window.remove_window());
+    }
+}

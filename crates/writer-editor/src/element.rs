@@ -73,6 +73,9 @@ pub(crate) struct FramePlan {
     pub(crate) sheets: Vec<Bounds<Pixels>>,
     pub(crate) sheet_color: Hsla,
     pub(crate) sheet_shadows: Vec<BoxShadow>,
+    /// A hairline around each sheet, where a shadow cannot show its edge
+    /// (Night: the desk is nearly black).
+    pub(crate) sheet_border: Option<Hsla>,
     /// Block decorations, comment tints, highlight layers.
     pub(crate) back: Vec<PaintQuad>,
     pub(crate) rows: Vec<PlannedRow>,
@@ -104,6 +107,7 @@ impl FramePlan {
             sheets: Vec::new(),
             sheet_color: gpui::transparent_black(),
             sheet_shadows: Vec::new(),
+            sheet_border: None,
             back: Vec::new(),
             rows: Vec::new(),
             selection: Vec::new(),
@@ -238,8 +242,25 @@ impl Editor {
                 if let Some(geometry) = &env.page {
                     plan.sheet_color = colors.page;
                     plan.sheet_shadows = page_shadows(colors.shadow, colors.appearance.is_dark());
-                    let label_size = env.style.px(f32::from(theme::UI_TEXT_XS)).max(px(8.));
+                    // A shadow separates a white sheet from a light desk.
+                    // On Night's desk it cannot be seen: there the sheet
+                    // gets an edge that catches a little light.
+                    plan.sheet_border = colors
+                        .appearance
+                        .is_dark()
+                        .then_some(colors.border_strong.alpha(0.7));
+                    // The page number: in the lower part of the bottom
+                    // margin, so that the text above it keeps its air, and
+                    // smaller when the margin is small. No number in a
+                    // margin that has no room for one at all.
+                    let margin = geometry.margin_bottom;
+                    let label_size = env
+                        .style
+                        .px(f32::from(theme::UI_TEXT_XS))
+                        .max(px(8.))
+                        .min((margin * 0.5).max(px(6.)));
                     let label_height = (label_size * 1.4).round();
+                    let numbered = margin >= label_height + px(2.);
                     for page in geometry.page_at(scroll_y, env.pad_top)..pages {
                         let top = viewport.top() + geometry.sheet_top(page, env.pad_top) - scroll_y;
                         if top >= viewport.bottom() {
@@ -255,8 +276,7 @@ impl Editor {
                             plan.sheet_hitboxes
                                 .push(window.insert_hitbox(visible, HitboxBehavior::Normal));
                         }
-                        // The page number, centred in the bottom margin.
-                        if geometry.margin_bottom >= label_height * 1.5 {
+                        if numbered {
                             let label = decorations::shape_label(
                                 window,
                                 (page + 1).to_string().into(),
@@ -267,7 +287,10 @@ impl Editor {
                             plan.markers.push(PlannedMarker {
                                 origin: point(
                                     (sheet.left() + (sheet.size.width - label.width) / 2.).round(),
-                                    (sheet.bottom() - (geometry.margin_bottom + label_height) / 2.)
+                                    // Its middle two fifths of the way
+                                    // up the margin.
+                                    (sheet.bottom() - margin * 0.4 - label_height / 2.)
+                                        .min(sheet.bottom() - label_height - px(1.))
                                         .round(),
                                 ),
                                 line_height: label_height,
@@ -762,7 +785,11 @@ impl Element for EditorElement {
                     Corners::all(theme::RADIUS_PAGE),
                     &plan.sheet_shadows,
                 );
-                window.paint_quad(fill(*sheet, plan.sheet_color).corner_radii(theme::RADIUS_PAGE));
+                let mut quad = fill(*sheet, plan.sheet_color).corner_radii(theme::RADIUS_PAGE);
+                if let Some(border) = plan.sheet_border {
+                    quad = quad.border_widths(px(1.)).border_color(border);
+                }
+                window.paint_quad(quad);
             }
             for quad in plan.back.drain(..) {
                 window.paint_quad(quad);

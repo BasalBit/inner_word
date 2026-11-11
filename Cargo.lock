@@ -6873,6 +6873,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-library"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "serde",
+ "tempfile",
+ "writer-store",
+ "writer-ui",
+]
+
+[[package]]
 name = "writer-store"
 version = "0.1.0"
 dependencies = [

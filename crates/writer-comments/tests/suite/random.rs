@@ -1,8 +1,10 @@
-//! A long random walk over the keyboard. Whatever the order of keys, the
-//! panel and the editor must agree, focus must stay on something that is
-//! on screen, and the document must stay valid.
+//! A long random walk over the keyboard, and one over keyboard and mouse.
+//! Whatever the order of keys, clicks and right-clicks, the panel and the
+//! editor must agree, focus must stay on something that is on screen, and
+//! the document must stay valid.
 
-use gpui::TestAppContext;
+use gpui::{Modifiers, MouseButton, TestAppContext, point, px};
+use writer_ui::ContextMenu;
 
 use super::support::{Focus, open, sample};
 
@@ -42,6 +44,8 @@ const KEYS: &[&str] = &[
     "cmd-a",
     "tab",
     "shift-tab",
+    "ctrl-enter",
+    "cmd-c",
 ];
 
 /// A small deterministic generator (xorshift), so a failure can be replayed
@@ -59,7 +63,23 @@ impl Random {
 
 #[gpui::test]
 fn random_keys_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
+    walk(false, cx);
+}
+
+/// The same walk with the pointer in it: every fourth step or so is a
+/// move, a click or a right-click somewhere in the window (mostly in the
+/// panel), so buttons, cards, replies and menu rows are pressed in every
+/// state the keys lead to.
+#[gpui::test]
+fn random_keys_and_clicks_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
+    walk(true, cx);
+}
+
+fn walk(with_pointer: bool, cx: &mut TestAppContext) {
     let (f, cx) = open(sample(), cx);
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let mut saw_menu = false;
+    let mut saw_hover = false;
     // The app's own "focus editor" key, to leave the panel at random.
     cx.update(|window, cx| {
         let _ = window;
@@ -80,11 +100,43 @@ fn random_keys_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
 
     for seed in 1..=6u64 {
         let mut random = Random(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let mut trail: Vec<&str> = Vec::new();
+        let mut trail: Vec<String> = Vec::new();
         for step in 0..500 {
-            let key = KEYS[random.next(KEYS.len())];
-            trail.push(key);
-            cx.simulate_keystrokes(key);
+            if with_pointer && random.next(4) == 0 {
+                // Mostly in the panel (the right 320 px), sometimes in
+                // the text.
+                let x = if random.next(5) == 0 {
+                    random.next(f32::from(viewport.width) as usize) as f32
+                } else {
+                    f32::from(viewport.width) - 320. + random.next(320) as f32
+                };
+                let y = random.next(420) as f32;
+                let at = point(px(x), px(y));
+                match random.next(4) {
+                    0 => {
+                        trail.push(format!("move {x},{y}"));
+                        cx.simulate_mouse_move(at, None, Modifiers::none());
+                    }
+                    1 => {
+                        trail.push(format!("right-click {x},{y}"));
+                        cx.simulate_mouse_move(at, None, Modifiers::none());
+                        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+                        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                    }
+                    _ => {
+                        trail.push(format!("click {x},{y}"));
+                        cx.simulate_mouse_move(at, None, Modifiers::none());
+                        cx.simulate_click(at, Modifiers::none());
+                    }
+                }
+                cx.run_until_parked();
+            } else {
+                let key = KEYS[random.next(KEYS.len())];
+                trail.push(key.to_string());
+                cx.simulate_keystrokes(key);
+            }
+            let menu_open = cx.update(|window, cx| ContextMenu::is_open(window, cx));
+            saw_menu |= menu_open;
 
             let context = || {
                 let recent = &trail[trail.len().saturating_sub(12)..];
@@ -110,6 +162,25 @@ fn random_keys_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
 
             f.panel.read_with(cx, |panel, cx| {
                 let listed: Vec<_> = panel.listed_threads().map(|entry| entry.id).collect();
+                saw_hover |= panel.hovered_thread().is_some();
+                // A menu of the panel is about what is marked in it.
+                if let Some(target) = panel.menu_target() {
+                    assert!(menu_open, "a menu target without a menu: {}", context());
+                    if let Some(thread) = target.thread() {
+                        assert_eq!(panel.active_thread(), Some(thread), "{}", context());
+                    }
+                    if let writer_comments::CommentMenuTarget::Reply(_, reply) = target {
+                        assert_eq!(panel.selected_reply(), Some(reply), "{}", context());
+                    }
+                }
+                if let Some(reply) = panel.selected_reply() {
+                    let thread = panel.active_thread().and_then(|id| panel.thread(id));
+                    assert!(
+                        thread.is_some_and(|entry| entry.thread.reply(reply).is_some()),
+                        "a selected reply that is not in the active thread: {}",
+                        context()
+                    );
+                }
                 if let Some(active) = panel.active_thread() {
                     assert!(listed.contains(&active), "active not listed: {}", context());
                 }
@@ -165,6 +236,11 @@ fn random_keys_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
             });
         }
     }
+    assert!(saw_menu, "the walk never opened a menu");
+    assert!(
+        !with_pointer || saw_hover,
+        "the pointer never was on a card"
+    );
     assert!(saw_list && saw_composer, "the walk never entered the panel");
     assert!(saw_delete_question && saw_reply && saw_resolved);
     assert!(most_threads >= 3, "only {most_threads} threads at once");

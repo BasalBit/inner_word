@@ -5,7 +5,8 @@
 //! anchored text, the comment, its author and a relative time, replies
 //! indented beneath. Resolved threads are hidden behind a "show resolved"
 //! toggle; threads whose text was deleted are grouped under "Detached".
-//! Everything is driven from the keyboard.
+//! Everything can be done from the keyboard, and everything can be done
+//! with the mouse alone.
 //!
 //! The threads themselves live in the document (`writer-core`). The panel
 //! reads them after every change and makes its own changes through
@@ -39,6 +40,22 @@
 //!
 //! // Palette and shortcuts overlay.
 //! let commands = writer_comments::commands();
+//!
+//! // The app's own items in the menus of the panel (optional).
+//! comments.update(cx, |comments, _| {
+//!     comments.set_menu_extension(|target, _window, _cx| match target {
+//!         CommentMenuTarget::Thread(thread) => vec![/* ContextMenuItem ... */],
+//!         _ => Vec::new(),
+//!     })
+//! });
+//!
+//! // The comment items of the text's context menu (the editor tools show
+//! // that menu and ask the app what to add):
+//! // "Add Comment"   -> the action `AddComment` (the selection is already
+//! //                    what the right-click made it)
+//! // "Go to Comment" -> `GoToThread::new(id)` as an action item, or
+//! //                    `comments.update(cx, |c, cx| c.go_to_thread(id, window, cx))`,
+//! //                    with `id` from `ContextMenuRequest::comments`
 //! ```
 //!
 //! - **Layout.** The panel fills its container (`size_full`) and draws no
@@ -90,8 +107,50 @@
 //! | thread list | `x` | [`ToggleResolved`] |
 //! | thread list | `cmd-backspace`, then `enter` / `escape` | [`DeleteComment`], [`ConfirmDelete`] / [`CancelDelete`] |
 //! | thread list | `s` | [`ToggleShowResolved`] |
+//! | thread list | `cmd-c` | [`CopyComment`]: the words of the comment, or of the selected reply |
+//! | thread list | `ctrl-enter` | `writer_ui::context_menu::OpenContextMenu`: the menu of the active thread or the selected reply |
+//! | composer | `ctrl-enter` | the composer's own menu (cut, copy, paste, select all) |
 //! | thread list | `cmd-z` / `cmd-shift-z` | undo / redo in the document; the text scrolls to what changed, a changed thread becomes active |
 //! | thread list | `escape` | [`FocusEditor`] |
+//!
+//! # The mouse
+//!
+//! | Where | What a click does |
+//! |---|---|
+//! | a thread card | the thread is active, the text scrolls to its anchor, the list has the keyboard |
+//! | a reply | the reply is selected, as with the arrow keys |
+//! | the buttons of a card (shown on the card under the pointer and on the active one) | reply, resolve or reopen, more (the card's menu) |
+//! | the key hints of the active card | each label does what its key does |
+//! | under a composer | save (dimmed while there is nothing to save) and cancel |
+//! | the header | add a comment on the selection, hide the comments |
+//! | the footer | show or hide resolved threads |
+//! | a delete confirmation | delete, keep |
+//!
+//! Every button has a tooltip with its name and its key. None of them
+//! takes the keyboard: a press inside the thread list lands it on the list
+//! (as a click on the card does), a press on the header or under the
+//! composer leaves it where it was.
+//!
+//! A right-click (or `ctrl`-click) opens a menu: on a thread Reply, Edit,
+//! Resolve or Reopen, Copy Text, Delete; on a reply Edit Reply, Copy Text,
+//! Delete Reply; on the panel itself (header, footer, the room under the
+//! cards) Add Comment on Selection, Show or Hide Resolved, Hide Comments;
+//! in the composer Cut, Copy, Paste, Select All. The thread or reply
+//! becomes the active thread and the selected reply first. Every item of
+//! the first three menus is one of the panel's actions, dispatched at the
+//! thread list, and shows the key the keymap has for it. The app adds its
+//! own items with [`CommentsPanel::set_menu_extension`]. `ctrl-enter` in
+//! the thread list opens the same menu under the "more" button of the
+//! active card. The menus are `writer_ui::ContextMenu`s: the window needs
+//! a `writer_ui::ToastLayer` or a `writer_ui::ContextMenuLayer` to draw
+//! them (the app has the first).
+//!
+//! The commands that name their thread instead of acting on the active
+//! one: [`CommentsPanel::go_to_thread`] (and the [`GoToThread`] action),
+//! [`CommentsPanel::reply_to`], [`CommentsPanel::edit_comment`],
+//! [`CommentsPanel::edit_reply`], [`CommentsPanel::toggle_resolved_of`],
+//! [`CommentsPanel::request_delete_of`],
+//! [`CommentsPanel::copy_comment_text`].
 //!
 //! # Focus
 //!
@@ -101,7 +160,11 @@
 //! gives focus back there when it closes: the editor for a new comment, the
 //! list for a reply or an edit made in the list. When the last thing that
 //! could hold focus disappears (the last thread is deleted, comments are
-//! hidden), focus returns to the editor. `tab` moves between an open
+//! hidden), focus returns to the editor. It also returns there when the
+//! last thread the list shows is resolved or deleted while resolved
+//! threads are hidden: the list is empty then, and what is typed next is
+//! text. (An empty list can still be entered with [`FocusComments`]; it
+//! says that it has the keyboard and names the keys that lead on.) `tab` moves between an open
 //! composer and the thread list ([`CycleFocus`]).
 //!
 //! While focus is in the editor, the thread the caret is in is the active
@@ -156,9 +219,9 @@ use gpui::App;
 /// Installs the comment key bindings and the global listeners for the
 /// actions that work from anywhere in a window ([`AddComment`],
 /// [`NextComment`], [`PreviousComment`], [`ToggleComments`],
-/// [`FocusComments`], [`ToggleShowResolved`], and the commands on the active
-/// thread: [`ReplyToThread`], [`EditComment`], [`ToggleResolved`],
-/// [`DeleteComment`]). They reach the [`CommentsPanel`] of the active window
+/// [`FocusComments`], [`ToggleShowResolved`], [`GoToThread`], and the
+/// commands on the active thread: [`ReplyToThread`], [`EditComment`],
+/// [`ToggleResolved`], [`DeleteComment`], [`CopyComment`]). They reach the [`CommentsPanel`] of the active window
 /// whenever no element on the focus path handled them, so the panel needs
 /// no listener on any ancestor of the editor.
 ///

@@ -447,7 +447,7 @@ fn the_empty_list_offers_its_two_ways_out_as_buttons(cx: &mut TestAppContext) {
 fn a_button_says_what_it_does_and_which_key_does_the_same(cx: &mut TestAppContext) {
     let (f, cx) = open(sample(), cx);
     let id = f.comment(0, 4, 9, "First", cx);
-    assert!(try_bounds("comment-tip", cx).is_none());
+    assert!(try_bounds("tooltip", cx).is_none());
 
     let button = bounds(format!("comment-resolve-button-{}", id.0), cx);
     move_to(button.center(), cx);
@@ -456,7 +456,7 @@ fn a_button_says_what_it_does_and_which_key_does_the_same(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    let tip = bounds("comment-tip", cx);
+    let tip = bounds("tooltip", cx);
     assert!(tip.size.width > px(40.));
     let _ = f;
 }

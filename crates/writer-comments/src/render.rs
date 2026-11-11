@@ -45,7 +45,7 @@ use crate::{
         SelectPreviousThread, SubmitComment, THREADS_CONTEXT, ToggleComments, ToggleResolved,
         ToggleShowResolved,
     },
-    controls::{ICON_BUTTON, Look, Press, icon_button, text_button},
+    controls::{ICON_BUTTON, Look, Press, icon_button, icon_button_tinted, text_button},
     panel::{
         CommentMenuTarget, CommentsPanel, DeleteTarget, DraftKind, Row, menu::MenuAnchors,
         panel_for_actions,
@@ -925,10 +925,17 @@ impl CommentsPanel {
             })),
         )
         .child(
-            icon_button(
+            icon_button_tinted(
                 ("comment-resolve-button", n),
                 format!("comment-resolve-button-{}", id.0),
                 IconName::Check,
+                // On a resolved thread the check is set; pressing it again
+                // takes it back.
+                if resolved {
+                    colors.success
+                } else {
+                    colors.muted
+                },
                 if resolved { "Reopen" } else { "Resolve" },
                 KeyHint::for_action(&ToggleResolved, cx),
                 Press::Bubble,

@@ -6887,7 +6887,11 @@ dependencies = [
 name = "writer-ui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui",
+ "objc",
+ "raw-window-handle",
+ "unicode-segmentation",
 ]
 
 [[package]]

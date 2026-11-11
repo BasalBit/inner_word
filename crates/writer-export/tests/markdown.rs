@@ -464,10 +464,9 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
     // Markdown parser, the text of that item.
     let mut i = 0;
     while i + 1 < lines.len() {
-        let item = matches!(
-            lines[i].kind,
-            Kind::Bullet | Kind::Numbered(_) | Kind::Todo(_)
-        );
+        // (Not of a to-do: its marker is text already, so its children are
+        // written after a blank line and stay children.)
+        let item = matches!(lines[i].kind, Kind::Bullet | Kind::Numbered(_));
         if item
             && lines[i].text.is_empty()
             && lines[i + 1].kind == Kind::Para
@@ -1702,7 +1701,7 @@ fn random_inline_marks_round_trip() {
             Ok(out) if seed <= 12 && std::env::var("WRITER_EXPORT_SHOW").is_ok() => {
                 eprintln!("{out}")
             }
-            Ok(_) => {}
+            Ok(out) => dump_case(10_000_000 + seed, &doc, &options, &out),
             Err(e) => {
                 eprintln!("seed {seed} failed");
                 std::panic::resume_unwind(e);
@@ -1945,11 +1944,59 @@ fn adversarial_documents_round_trip() {
         let doc = Document::from_blocks(blocks);
         let options = adv_options(&mut rng);
         let result = std::panic::catch_unwind(|| round_trip_with(&doc, &options));
-        if let Err(e) = result {
-            eprintln!("seed {seed} failed");
-            std::panic::resume_unwind(e);
+        match result {
+            Ok(out) => dump_case(seed, &doc, &options, &out),
+            Err(e) => {
+                eprintln!("seed {seed} failed");
+                std::panic::resume_unwind(e);
+            }
         }
     }
+}
+
+/// With `WRITER_EXPORT_DUMP_DIR` set, writes the Markdown of a case as
+/// `<seed>.md` and what a parser should find as `<seed>.expect`, so that
+/// parsers other than the one linked into the tests can be run over the
+/// same corpus. One line per block: kind, depth, the text as hex, and two
+/// hex digits of style flags per character (1 bold, 2 italic, 4 strike,
+/// 8 code, 16 underline, 32 highlight, 64 link).
+fn dump_case(seed: u64, doc: &Document, options: &MarkdownOptions, markdown: &str) {
+    let Ok(dir) = std::env::var("WRITER_EXPORT_DUMP_DIR") else {
+        return;
+    };
+    let mut expect = String::new();
+    for line in expected(doc, options) {
+        let kind = match &line.kind {
+            Kind::Para => "para".to_string(),
+            Kind::Heading(n) => format!("h{n}"),
+            Kind::Bullet => "bullet".to_string(),
+            Kind::Numbered(n) => format!("num{n}"),
+            Kind::Todo(done) => format!("todo{}", u8::from(*done)),
+            Kind::Quote => "quote".to_string(),
+            Kind::Code(lang) => format!("code:{lang}"),
+            Kind::Rule => "rule".to_string(),
+            Kind::Html(_) => "html".to_string(),
+        };
+        let text: String = line.text.iter().map(|(c, _)| *c).collect();
+        let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
+        let flags: String = line
+            .text
+            .iter()
+            .map(|(_, s)| {
+                let f = u8::from(s.bold)
+                    | u8::from(s.italic) << 1
+                    | u8::from(s.strike) << 2
+                    | u8::from(s.code) << 3
+                    | u8::from(s.underline) << 4
+                    | u8::from(s.highlight) << 5
+                    | u8::from(s.link.is_some()) << 6;
+                format!("{f:02x}")
+            })
+            .collect();
+        expect.push_str(&format!("{kind}\t{}\t{hex}\t{flags}\n", line.depth));
+    }
+    std::fs::write(format!("{dir}/{seed}.md"), markdown).unwrap();
+    std::fs::write(format!("{dir}/{seed}.expect"), expect).unwrap();
 }
 
 /// One block with a great many short runs, most of them in places where
@@ -1979,10 +2026,132 @@ fn dense_paragraphs_round_trip() {
             block = block.with_span(rng.pick(&pieces), attrs.clone());
         }
         let doc = Document::from_blocks(vec![block]);
-        let result = std::panic::catch_unwind(|| round_trip_with(&doc, &MarkdownOptions::default()));
-        if let Err(e) = result {
-            eprintln!("seed {seed} failed");
-            std::panic::resume_unwind(e);
+        let options = MarkdownOptions::default();
+        let result = std::panic::catch_unwind(|| round_trip_with(&doc, &options));
+        match result {
+            Ok(out) => dump_case(20_000_000 + seed, &doc, &options, &out),
+            Err(e) => {
+                eprintln!("seed {seed} failed");
+                std::panic::resume_unwind(e);
+            }
         }
+    }
+}
+
+/// Comment bodies and author names with hostile text come back from the
+/// footnotes as written: nothing in them is read as markup.
+#[test]
+fn footnote_comments_keep_their_text() {
+    for seed in 1..=seeds(3000).min(200_000) {
+        let mut rng = Rng(seed.wrapping_mul(0xE703_7ED1_A0B4_28DB) | 1);
+        let mut ed = EditorState::new(Document::from_blocks(vec![
+            Block::paragraph("one two three"),
+            Block::with_text(BlockKind::BulletItem, "item text"),
+        ]));
+        let mut want: Vec<String> = Vec::new();
+        for (block, (from, to)) in [(0, (0, 3)), (0, (4, 7)), (1, (0, 4))] {
+            ed.set_selection(Selection::new(
+                Position::new(block, from),
+                Position::new(block, to),
+            ));
+            let mut entries: Vec<(String, String)> = Vec::new();
+            for _ in 0..1 + rng.below(3) {
+                let author = match rng.below(4) {
+                    0 => String::new(),
+                    1 => "Ada".to_string(),
+                    _ => adv_text(&mut rng, 2),
+                };
+                let n = 1 + rng.below(5);
+                entries.push((author, adv_text(&mut rng, n)));
+            }
+            let resolved = rng.chance(30);
+            let Some(id) = ed.add_comment(&entries[0].1, &entries[0].0, 1) else {
+                continue;
+            };
+            for (author, body) in &entries[1..] {
+                ed.add_reply(id, body, author, 2);
+            }
+            if resolved {
+                ed.resolve_comment(id);
+            }
+            // What the note should read as: one paragraph per entry.
+            let thread = ed.document().comment(id).unwrap().clone();
+            let mut stored = vec![(thread.author.clone(), thread.body.clone())];
+            stored.extend(thread.replies.iter().map(|r| (r.author.clone(), r.body.clone())));
+            let mut paragraphs = Vec::new();
+            for (i, (author, body)) in stored.iter().enumerate() {
+                let mut lines: Vec<&str> = body.split('\n').map(str::trim).collect();
+                while lines.last().is_some_and(|l| l.is_empty()) {
+                    lines.pop();
+                }
+                let lead = lines.iter().take_while(|l| l.is_empty()).count();
+                lines.drain(..lead);
+                let text = lines.join("\n");
+                let author = author.split_whitespace().collect::<Vec<_>>().join(" ");
+                let mark = if i == 0 && resolved { " (resolved)" } else { "" };
+                let p = if !author.is_empty() {
+                    if text.is_empty() {
+                        format!("{author}{mark}:")
+                    } else {
+                        format!("{author}{mark}: {text}")
+                    }
+                } else {
+                    format!("{text}{mark}").trim().to_string()
+                };
+                if !p.is_empty() {
+                    paragraphs.push(p);
+                }
+            }
+            if paragraphs.is_empty() {
+                paragraphs.push("(empty comment)".to_string());
+            }
+            want.push(paragraphs.join("\n\n"));
+        }
+        let doc = ed.into_document();
+        let out = to_markdown(
+            &ExportSource::from(&doc),
+            &MarkdownOptions {
+                comments: MarkdownComments::Footnotes,
+                ..Default::default()
+            },
+        );
+        let mut got: Vec<String> = Vec::new();
+        let mut inside = false;
+        let mut refs = 0;
+        for event in Parser::new_ext(&out, parser_options()) {
+            match event {
+                Event::Start(Tag::FootnoteDefinition(_)) => {
+                    inside = true;
+                    got.push(String::new());
+                }
+                Event::End(TagEnd::FootnoteDefinition) => inside = false,
+                Event::FootnoteReference(_) => refs += 1,
+                _ if !inside => {}
+                Event::Text(t) => got.last_mut().unwrap().push_str(&t),
+                Event::HardBreak => got.last_mut().unwrap().push('\n'),
+                Event::Start(Tag::Paragraph) => {
+                    let note = got.last_mut().unwrap();
+                    if !note.is_empty() {
+                        note.push_str("\n\n");
+                    }
+                }
+                Event::End(TagEnd::Paragraph)
+                | Event::Start(Tag::Strong)
+                | Event::End(TagEnd::Strong) => {}
+                other => panic!("seed {seed}: {other:?} in a footnote:\n{out}"),
+            }
+        }
+        // Whitespace inside a line is not compared (Markdown collapses none
+        // of it, but no-break and other spaces at line edges are trimmed).
+        let squash = |s: &str| {
+            s.split('\n')
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let got: Vec<String> = got.iter().map(|s| squash(s)).collect();
+        let want: Vec<String> = want.iter().map(|s| squash(s)).collect();
+        assert_eq!(got, want, "seed {seed}\n{out}");
+        assert_eq!(refs, want.len(), "seed {seed}\n{out}");
     }
 }

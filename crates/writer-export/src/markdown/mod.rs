@@ -240,6 +240,9 @@ struct Writer<'a> {
     /// The depth of the previous chunk when it is a list item, and whether
     /// that item has no text.
     prev_item: Option<(usize, bool)>,
+    /// The depth of the previous chunk when it is a to-do item without
+    /// text, which needs a filler before it can have children.
+    bare_todo: Option<usize>,
     /// Comment anchors per block: inside the text, or after the block.
     inline_anchors: BTreeMap<usize, Vec<Anchor>>,
     block_anchors: BTreeMap<usize, Vec<String>>,
@@ -259,6 +262,7 @@ impl<'a> Writer<'a> {
             stack: Vec::new(),
             last_list: Vec::new(),
             prev_item: None,
+            bare_todo: None,
             inline_anchors: BTreeMap::new(),
             block_anchors: BTreeMap::new(),
         };
@@ -307,7 +311,25 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Called before a chunk that sits `depth` list items deep is written.
+    ///
+    /// A to-do without text is just `- [ ]`. Parsers disagree on what
+    /// that is: for some the brackets are the item's text (a line right
+    /// below continues or underlines it), for others the item is empty (a
+    /// blank line ends it). When such an item gets a child, an empty HTML
+    /// comment after the marker makes it an item with content for all of
+    /// them.
+    fn before_chunk(&mut self, depth: usize) {
+        if let Some(todo_depth) = self.bare_todo.take()
+            && depth == todo_depth + 1
+            && let Some(chunk) = self.chunks.last_mut()
+        {
+            chunk.text.push_str(" <!-- -->");
+        }
+    }
+
     fn push_other(&mut self, text: String) {
+        self.before_chunk(self.stack.len());
         let glue = self.glue_to_empty_item();
         self.chunks.push(Chunk {
             text,
@@ -428,8 +450,13 @@ impl<'a> Writer<'a> {
         );
         // An empty item directly under its parent's text would be read as
         // the underline of a setext heading ("-") or as more text ("1.").
+        // A to-do without text is not empty to a parser: its "[ ]" is the
+        // text of a paragraph, which a child directly below would continue
+        // or underline.
+        self.before_chunk(depth);
+        let empty = text.is_empty() && task.is_empty();
         let empty_first_child =
-            text.is_empty() && self.prev_item.is_some_and(|(d, empty)| d < depth && !empty);
+            empty && self.prev_item.is_some_and(|(d, empty)| d < depth && !empty);
         self.chunks.push(Chunk {
             text: line.trim_end().to_string(),
             kind: ChunkKind::Item {
@@ -445,7 +472,8 @@ impl<'a> Writer<'a> {
         });
         self.last_list.truncate(depth + 1);
         self.last_list[depth] = Some((family, alternate));
-        self.prev_item = Some((depth, text.is_empty()));
+        self.prev_item = Some((depth, empty));
+        self.bare_todo = (text.is_empty() && !task.is_empty()).then_some(depth);
     }
 
     fn block(&mut self, index: usize, block: &Block) {
@@ -492,6 +520,7 @@ impl<'a> Writer<'a> {
                     *b = index;
                     return;
                 }
+                self.before_chunk(depth);
                 let glue = self.glue_to_empty_item();
                 self.chunks.push(Chunk {
                     text: lines,
@@ -605,7 +634,15 @@ fn footnote(label: usize, thread: &CommentThread) -> String {
             stars: true,
             ..TextContext::for_text(&format!("{author}\n{body}"))
         };
-        let lines: Vec<String> = crate::common::trimmed_lines(body)
+        // Every kind of white space is trimmed here (a line of no-break
+        // spaces would otherwise be a paragraph of nothing).
+        let mut lines: Vec<&str> = body.split('\n').map(str::trim).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        let lead = lines.iter().take_while(|l| l.is_empty()).count();
+        lines.drain(..lead);
+        let lines: Vec<String> = lines
             .into_iter()
             .map(|l| escape_line_in(l, false, false, ctx))
             .collect();

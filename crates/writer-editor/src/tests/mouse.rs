@@ -364,3 +364,61 @@ fn wheel_scroll_bar_and_drag_autoscroll(cx: &mut TestAppContext) {
     assert_eq!(scroll(cx), resting);
     cx.simulate_mouse_up(viewport.center(), MouseButton::Left, Modifiers::none());
 }
+
+#[gpui::test]
+fn the_mouse_works_on_sheets(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "A sentence that is long enough to wrap in the text area of a page. ".repeat(6);
+    let mut blocks: Vec<Block> = (0..40).map(|_| Block::paragraph(long.trim_end())).collect();
+    blocks.insert(
+        1,
+        Block::with_text(BlockKind::todo(), "a to-do on the first sheet"),
+    );
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.set_page_view(true, cx));
+    cx.run_until_parked();
+
+    // A click on text, on the first and on a later sheet.
+    let target = editor.read_with(cx, |editor, _| point_of(editor, 2, 30));
+    click(cx, target, 1, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), Selection::caret(Position::new(2, 30)));
+        assert_eq!(editor.caret_page(), Some(1));
+    });
+    editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(20, 0), crate::Autoscroll::Center, cx);
+    });
+    cx.run_until_parked();
+    let target = editor.read_with(cx, |editor, _| point_of(editor, 20, 12));
+    click(cx, target, 1, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), Selection::caret(Position::new(20, 12)));
+        assert!(editor.caret_page().unwrap() > 1);
+    });
+
+    // A click on the desk beside a sheet lands on the row at that height.
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    let beside = point(viewport.left() + px(4.), target.y);
+    click(cx, beside, 1, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        let head = editor.selection().head;
+        assert_eq!(head.block, 20);
+        assert_eq!(
+            editor.visual_row(head),
+            editor.visual_row(Position::new(20, 12))
+        );
+    });
+
+    // Checkboxes work on a sheet too.
+    cx.simulate_keystrokes("cmd-up");
+    cx.run_until_parked();
+    let boxes = editor.read_with(cx, |editor, _| editor.checkbox_hits.clone());
+    assert_eq!(boxes.len(), 1);
+    click(cx, boxes[0].bounds.center(), 1, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.document().blocks()[1].kind(),
+            &BlockKind::TodoItem { checked: true }
+        );
+    });
+}

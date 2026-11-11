@@ -83,6 +83,9 @@ pub(crate) struct FramePlan {
     pub(crate) paths: Vec<(Path<Pixels>, Hsla)>,
     /// The caret and anything else over the text.
     pub(crate) front: Vec<PaintQuad>,
+    /// Page view: the sheets (the text cursor shows over them, the arrow
+    /// over the desk).
+    pub(crate) sheet_hitboxes: Vec<Hitbox>,
     /// Areas with a pointing-hand cursor (checkboxes).
     pub(crate) pointer_hitboxes: Vec<Hitbox>,
     /// The scroll bar strip (arrow cursor).
@@ -107,6 +110,7 @@ impl FramePlan {
             markers: Vec::new(),
             paths: Vec::new(),
             front: Vec::new(),
+            sheet_hitboxes: Vec::new(),
             pointer_hitboxes: Vec::new(),
             scrollbar_hitbox: None,
             link_cursor: false,
@@ -244,6 +248,11 @@ impl Editor {
                             size(geometry.sheet_width, geometry.sheet_height),
                         );
                         plan.sheets.push(sheet);
+                        let visible = sheet.intersect(&viewport);
+                        if visible.size.width > px(0.) && visible.size.height > px(0.) {
+                            plan.sheet_hitboxes
+                                .push(window.insert_hitbox(visible, HitboxBehavior::Normal));
+                        }
                         // The page number, centred in the bottom margin.
                         if geometry.margin_bottom >= label_height * 1.5 {
                             let label = decorations::shape_label(
@@ -654,15 +663,22 @@ impl Element for EditorElement {
                 cx,
             );
         }
-        // Later requests win where hitboxes overlap.
-        window.set_cursor_style(
-            if plan.link_cursor {
-                CursorStyle::PointingHand
-            } else {
-                CursorStyle::IBeam
-            },
-            &plan.hitbox,
-        );
+        // Later requests win where hitboxes overlap. The text cursor shows
+        // over text surfaces: the whole editor, or the sheets in page view
+        // (the desk around them has the arrow).
+        let text_cursor = if plan.link_cursor {
+            CursorStyle::PointingHand
+        } else {
+            CursorStyle::IBeam
+        };
+        if plan.background.is_some() && !plan.sheet_hitboxes.is_empty() {
+            window.set_cursor_style(CursorStyle::Arrow, &plan.hitbox);
+            for hitbox in &plan.sheet_hitboxes {
+                window.set_cursor_style(text_cursor, hitbox);
+            }
+        } else {
+            window.set_cursor_style(text_cursor, &plan.hitbox);
+        }
         for hitbox in &plan.pointer_hitboxes {
             window.set_cursor_style(CursorStyle::PointingHand, hitbox);
         }

@@ -112,13 +112,19 @@ assembled keymap; `tests/suite/saving.rs` holds the rules of saving in the backg
 
 ## Product rules
 
-1. **Keyboard first.** Every feature must be reachable and completable without a mouse:
-   a shortcut, the command palette, or keyboard navigation inside whatever is open. The mouse
-   works too, but is never required. Every overlay closes with `escape` and returns focus to
-   where it came from.
-2. **Few menus.** No ribbon or permanent formatting toolbar. Formatting is contextual:
-   shortcuts, Markdown-style input rules, the `cmd-.` format menu, the `/` insert menu, and
-   the command palette.
+1. **Keyboard and mouse are equals.** Every feature must be reachable and completable
+   without a mouse: a shortcut, the command palette, or keyboard navigation inside whatever
+   is open. And every feature must be reachable and completable with the mouse alone, for
+   people who are not comfortable driving everything from the keyboard: a right-click
+   context menu on every object (library rows and empty space, text and selections, links,
+   comment threads, text fields, the title, status bar items), the native menu bar for
+   app-level and formatting commands, and a small visible control wherever a right-click
+   would not be discovered. Context menus also open from the keyboard (`ctrl-enter`).
+   Every overlay closes with `escape` or a click outside and returns focus to where it came
+   from.
+2. **Few menus in the window.** No ribbon or permanent formatting toolbar. Formatting is
+   contextual: shortcuts, Markdown-style input rules, the `cmd-.` format menu, the `/`
+   insert menu, right-click context menus, and the command palette.
 3. **One source of truth for shortcuts.** Bindings are registered through GPUI key bindings;
    the shortcuts overlay and palette hints are generated from that registry, not hand-written.
 4. **Never lose text.** Documents autosave (debounced) and on close/quit. No save button.

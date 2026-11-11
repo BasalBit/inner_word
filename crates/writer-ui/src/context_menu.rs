@@ -120,7 +120,8 @@
 //! | [`ContextMenuItem::separator`] | a hairline |
 //! | [`ContextMenuItem::section`] | a small heading above a group |
 //!
-//! Modifiers: [`icon`](ContextMenuItem::icon), [`checked`](ContextMenuItem::checked)
+//! Modifiers: [`icon`](ContextMenuItem::icon), [`swatch`](ContextMenuItem::swatch)
+//! (a colour chip before the title), [`checked`](ContextMenuItem::checked)
 //! (a check mark column), [`disabled`](ContextMenuItem::disabled) (shown
 //! greyed, cannot be chosen), [`danger`](ContextMenuItem::danger) (destructive
 //! actions), [`key_hint`](ContextMenuItem::key_hint) (for closure items).
@@ -142,8 +143,8 @@ use std::{
 
 use gpui::{
     Action, AnyElement, App, Bounds, Context, DismissEvent, DispatchPhase, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
-    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle,
+    Entity, EventEmitter, FocusHandle, GlobalElementId, Hsla, InspectorElementId, Keystroke,
+    LayoutId, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle,
     ScrollWheelEvent, SharedString, Size, Style, Subscription, Task, Window, WindowId, actions,
     deferred, div, point, prelude::*, px, size,
 };
@@ -214,6 +215,7 @@ pub struct ContextMenuItem {
     kind: ItemKind,
     title: SharedString,
     icon: Option<IconName>,
+    swatch: Option<Hsla>,
     checked: Option<bool>,
     disabled: bool,
     danger: bool,
@@ -226,6 +228,7 @@ impl ContextMenuItem {
             kind,
             title: title.into(),
             icon: None,
+            swatch: None,
             checked: None,
             disabled: false,
             danger: false,
@@ -287,6 +290,14 @@ impl ContextMenuItem {
         self
     }
 
+    /// A small chip of `color` before the title: the item stands for that
+    /// colour (a highlight, a text colour). It is drawn beside the leading
+    /// column, so a colour item can be a checkable one too.
+    pub fn swatch(mut self, color: Hsla) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
     /// Makes the item a checkable one: a check mark in the leading column
     /// when `checked` (the column is kept free in the whole menu).
     pub fn checked(mut self, checked: bool) -> Self {
@@ -333,6 +344,11 @@ impl ContextMenuItem {
 
     pub fn is_danger(&self) -> bool {
         self.danger
+    }
+
+    /// The colour of the item's chip ([`ContextMenuItem::swatch`]).
+    pub fn swatch_color(&self) -> Option<Hsla> {
+        self.swatch
     }
 
     /// `Some(true)` / `Some(false)` for a checkable item.
@@ -1445,6 +1461,18 @@ impl ContextMenu {
                                     text
                                 })
                             })))
+                        })
+                        .when_some(item.swatch, |el, color| {
+                            el.child(
+                                div()
+                                    .flex_none()
+                                    .size(px(12.))
+                                    .rounded(px(3.))
+                                    .bg(color)
+                                    .border_1()
+                                    .border_color(colors.hairline)
+                                    .when(!enabled, |el| el.opacity(0.5)),
+                            )
                         })
                         .child(
                             div()

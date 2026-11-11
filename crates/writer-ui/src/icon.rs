@@ -69,6 +69,7 @@ icons! {
     Page => "page",
     Keyboard => "keyboard",
     Alert => "alert",
+    Link => "link",
 }
 
 /// The default icon size.

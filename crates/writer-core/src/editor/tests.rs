@@ -1438,6 +1438,7 @@ fn large_document_edits_are_local() {
 }
 
 #[test]
+#[allow(clippy::reversed_empty_ranges)] // reversed ranges are the point
 fn extreme_inputs_do_not_panic() {
     let mut e = ed(vec![para("ab"), Block::new(BlockKind::Divider), para("中")]);
     let far = Position::new(usize::MAX, usize::MAX);

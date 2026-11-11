@@ -22,7 +22,6 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{Bounds, Context, IntoElement, Pixels, Styled as _, Window, canvas};
 use writer_comments as comments;
-use writer_core::Position;
 use writer_export::SocialNetwork;
 use writer_library::{DocumentId, LibraryItem, LibraryMenuTarget};
 use writer_ui::{ContextMenu, ContextMenuItem, MenuAnchor, Toast};
@@ -259,22 +258,17 @@ impl Workspace {
     /// themselves; each of them asks through its hook when a menu is about
     /// to open. Called once, from [`Workspace::new`].
     pub(super) fn extend_the_menus_of_other_crates(&mut self, cx: &mut Context<Self>) {
-        // The text: comments.
-        let editor = self.editor.downgrade();
+        // The text: comments. "Add comment" is offered whenever the text
+        // menu is, and dimmed when there is nothing to anchor a comment to
+        // (the comments panel knows: a selection, or the word at the
+        // caret, in a document that can be changed).
+        let panel = self.comments.downgrade();
         self.tools.update(cx, |tools, _| {
             tools.set_text_menu_extension(move |request, _, cx| {
-                let Some(editor) = editor.upgrade() else {
+                let Some(panel) = panel.upgrade() else {
                     return Vec::new();
                 };
-                let editor = editor.read(cx);
-                if editor.is_read_only() {
-                    return Vec::new();
-                }
-                // "Add comment" comments the selection, or the word at the
-                // caret: it has something to comment unless the caret sits
-                // in white space.
-                let can_comment = request.has_selection
-                    || has_word_at(editor.document(), request.document_position);
+                let can_comment = panel.read(cx).can_add_comment(cx);
                 let mut items = vec![
                     ContextMenuItem::action("Add Comment", comments::AddComment)
                         .disabled(!can_comment),
@@ -480,10 +474,4 @@ impl Workspace {
     ) {
         self.open_welcome_document(window, cx);
     }
-}
-
-/// Whether "the word at the caret" exists at `position`: a letter or a
-/// digit right before or after it.
-fn has_word_at(document: &writer_core::Document, position: Position) -> bool {
-    comments::threads::word_range_at(document, position).is_some()
 }

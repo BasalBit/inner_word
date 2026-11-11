@@ -793,6 +793,37 @@ fn the_text_menu_offers_comments(cx: &mut TestAppContext) {
     assert!(labels.contains(&"Add Comment".to_string()), "{labels:?}");
     vcx.simulate_keystrokes("escape");
     assert_eq!(text_menu(vcx), None);
+
+    // With nothing to anchor a comment to (the caret in an empty
+    // paragraph) the item is there, dimmed.
+    workspace.update(vcx, |w, cx| {
+        w.editor().update(cx, |editor, cx| {
+            editor.edit(
+                |state| {
+                    let end = state.document().end();
+                    state.set_caret(end);
+                    state.insert_text("\n");
+                },
+                cx,
+            );
+        });
+    });
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    let add_comment = workspace.read_with(vcx, |w, cx| {
+        let menu = w
+            .tools()
+            .read(cx)
+            .text_menu()
+            .expect("the text menu")
+            .read(cx);
+        menu.items()
+            .iter()
+            .find(|item| item.title().as_ref() == "Add Comment")
+            .map(|item| item.is_disabled())
+    });
+    assert_eq!(add_comment, Some(true));
+    vcx.simulate_keystrokes("escape");
 }
 
 #[gpui::test]

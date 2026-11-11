@@ -40,7 +40,8 @@ actions!(
         InsertDate,
         /// Open the find bar.
         Find,
-        /// Open the find bar with the replace field.
+        /// Open the find bar with the replace field; from inside the bar,
+        /// show or hide the replace field.
         FindAndReplace,
         /// Go to the next match.
         FindNext,
@@ -58,7 +59,8 @@ actions!(
         FocusNextField,
         /// Move between the fields of the find bar, backwards.
         FocusPreviousField,
-        /// Close the open tool and return to the editor.
+        /// Close the open tool and return to the editor: the popup tool if
+        /// one is open, else the find bar.
         CloseTool,
     ]
 );
@@ -69,7 +71,9 @@ actions!(
 /// `enter` and `escape` inside the tools are not bindings of this crate:
 /// they arrive through the text fields (`TextField` submits on `enter` and
 /// cancels on `escape`) and, for the insert menu, through the editor's key
-/// interception.
+/// interception. The `escape` bound here is the one pressed in the
+/// document: it closes the find bar (or what `cmd-g` is showing) from
+/// there.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let tools = Some(KEY_CONTEXT);
     let find = Some(FIND_BAR_CONTEXT);
@@ -94,7 +98,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-w", ToggleWholeWord, Some(FIND_FIELD_CONTEXT)),
         // Link popover.
         KeyBinding::new("cmd-enter", OpenLinkInBrowser, link),
-        // Anywhere inside the tools view.
+        // Anywhere inside the tools view. `escape` only gets here from the
+        // document: the fields of the tools and an open insert menu take it
+        // first, and so does Vim mode.
+        KeyBinding::new("escape", CloseTool, tools),
         KeyBinding::new("cmd-.", OpenFormatMenu, tools),
         KeyBinding::new("cmd-k", OpenLink, tools),
         KeyBinding::new("cmd-shift-k", RemoveLink, tools),

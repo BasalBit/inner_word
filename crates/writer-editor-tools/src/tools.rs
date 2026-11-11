@@ -1,14 +1,10 @@
 //! [`EditorTools`]: the view that wraps an editor and gives it the tools.
 
-use std::{cell::Cell, rc::Rc};
-
 use gpui::{
     AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement,
     Render, Subscription, Window, div, prelude::*,
 };
-use writer_editor::{
-    Editor, EditorEvent, InterceptPriority, KeyDisposition, PopupAnchor, PopupPlacement,
-};
+use writer_editor::{Editor, EditorEvent, PopupAnchor, PopupPlacement};
 use writer_ui::theme::GlobalTheme;
 
 use crate::{
@@ -114,17 +110,18 @@ impl PopupTool {
 /// in [`crate::actions`] and floats the menus through the editor's popup
 /// seam. See the crate documentation for the snippet.
 ///
-/// One tool is open at a time. `escape` closes the open tool and returns
-/// focus to the editor.
+/// One popup tool is open at a time; the find bar stays open beside it.
+/// `escape` closes the open tool and returns focus to the editor.
 pub struct EditorTools {
     pub(crate) editor: Entity<Editor>,
     pub(crate) popup: Option<PopupTool>,
     pub(crate) find: FindState,
     pub(crate) find_bar: Option<FindBar>,
     find_placement: FindBarPlacement,
-    /// Set by the key interceptor when `/` was just pressed; consumed by
-    /// the next edit event.
-    slash_typed: Rc<Cell<bool>>,
+    /// The text input that the next `Edited` event belongs to was a single
+    /// `/` (set by `EditorEvent::TextInput`, consumed by the `Edited` that
+    /// always follows it).
+    slash_typed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -143,30 +140,13 @@ impl EditorTools {
     /// `cx.new(|cx| EditorTools::new(editor.clone(), window, cx))` and
     /// render the returned entity instead of the editor.
     pub fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let slash_typed = Rc::new(Cell::new(false));
         let subscriptions = vec![
             cx.subscribe_in(&editor, window, Self::on_editor_event),
-            // Sees every key that reaches the document (after an open menu
-            // and after Vim): remembers whether the last one typed a slash.
-            editor.read(cx).intercept_keys(InterceptPriority::DEFAULT, {
-                let slash_typed = slash_typed.clone();
-                move |key, _, _| {
-                    let modifiers = key.modifiers;
-                    slash_typed.set(
-                        !modifiers.platform
-                            && !modifiers.control
-                            && !modifiers.function
-                            && (key.key_char.as_deref() == Some("/")
-                                || (key.key_char.is_none() && key.key == "/")),
-                    );
-                    KeyDisposition::Pass
-                }
-            }),
-            // Highlight colours come from the theme.
+            // The highlight colours and the swatches of an open format menu
+            // come from the theme.
             cx.observe_global::<GlobalTheme>(|this, cx| {
-                if this.find_bar.is_some() {
-                    this.apply_find_highlights(cx);
-                }
+                this.apply_find_highlights(cx);
+                this.retheme_format_menu(cx);
                 cx.notify();
             }),
         ];
@@ -176,7 +156,7 @@ impl EditorTools {
             find: FindState::default(),
             find_bar: None,
             find_placement: FindBarPlacement::default(),
-            slash_typed,
+            slash_typed: false,
             _subscriptions: subscriptions,
         }
     }
@@ -222,6 +202,7 @@ impl EditorTools {
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popup(false, window, cx);
         self.close_find_bar(cx);
+        self.end_find_flash(cx);
         self.editor.read(cx).focus(window);
     }
 
@@ -274,19 +255,12 @@ impl EditorTools {
         self.editor.read(cx).is_read_only()
     }
 
-    /// Makes room for a tool that is about to open: closes the open popup
-    /// tool and, unless `keep_find`, the find bar. Focus is left alone (the
-    /// new tool decides).
-    pub(crate) fn make_room(
-        &mut self,
-        keep_find: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Makes room for a popup tool that is about to open: closes the open
+    /// one (the editor hosts one popup). The find bar stays: it is not in
+    /// the way, and closing it would lose the search the user is in the
+    /// middle of. Focus is left alone (the new tool decides).
+    pub(crate) fn make_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popup(false, window, cx);
-        if !keep_find {
-            self.close_find_bar(cx);
-        }
     }
 
     /// Shows `tool` as the editor's popup.
@@ -409,16 +383,23 @@ impl EditorTools {
         cx: &mut Context<Self>,
     ) {
         match event {
+            EditorEvent::TextInput { text, .. } => {
+                // Announces the `Edited` of the same insertion.
+                self.slash_typed = text == "/";
+            }
             EditorEvent::Edited { change } => {
-                let slash = self.slash_typed.replace(false);
+                // Only typing opens the insert menu: an edit that was not
+                // announced by a text input (paste, undo, a command, another
+                // crate) finds the flag down.
+                let slash = std::mem::take(&mut self.slash_typed);
                 if change.blocks.is_some() {
                     if matches!(self.popup, Some(PopupTool::Insert(_))) {
                         self.sync_insert_menu(window, cx);
                     } else if slash && self.popup.is_none() {
                         self.open_insert_menu_after_slash(window, cx);
                     }
-                    if self.find_bar.is_some() {
-                        self.refresh_find(false, cx);
+                    if self.find_results_visible() {
+                        self.find_document_edited(change, cx);
                     }
                 }
             }
@@ -426,7 +407,7 @@ impl EditorTools {
                 if matches!(self.popup, Some(PopupTool::Insert(_))) {
                     self.sync_insert_menu(window, cx);
                 }
-                if self.find_bar.is_some() {
+                if self.find_results_visible() {
                     self.sync_find_current(cx);
                 }
             }
@@ -442,8 +423,11 @@ impl EditorTools {
                 // the popup had the keyboard, the editor gets it back.
                 let had_focus = self.popup_has_focus(window, cx);
                 self.close_popup(had_focus, window, cx);
+                self.slash_typed = false;
                 if self.find_bar.is_some() {
                     self.refresh_find(false, cx);
+                } else {
+                    self.end_find_flash(cx);
                 }
             }
             _ => {}
@@ -454,12 +438,34 @@ impl EditorTools {
     // Action handlers
     // -----------------------------------------------------------------
 
+    /// `escape` with the keyboard in the document (the fields of the tools
+    /// take their own `escape`): closes what is open, one thing at a time,
+    /// the popup tool before the find bar. With nothing open the key goes
+    /// on.
     fn on_close_tool(&mut self, _: &CloseTool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_tool().is_some() {
-            self.close(window, cx);
-        } else {
+        if self.popup.is_some() {
+            self.close_popup(true, window, cx);
+        } else if self.find_bar.is_some() {
+            self.close_find(window, cx);
+        } else if !self.end_find_flash(cx) {
             cx.propagate();
         }
+    }
+
+    /// The find actions that need the bar: with the bar closed they open
+    /// it (with the replace row when `replace`) instead of doing nothing,
+    /// so a command from the palette always shows what it did.
+    fn with_find_bar(
+        &mut self,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>),
+    ) {
+        if self.find_bar.is_none() {
+            self.open_find(replace, window, cx);
+        }
+        then(self, window, cx);
     }
 }
 
@@ -493,25 +499,37 @@ impl Render for EditorTools {
             }))
             .on_action(cx.listener(|this, _: &InsertDate, _, cx| this.insert_date(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(false, window, cx)))
-            .on_action(
-                cx.listener(|this, _: &FindAndReplace, window, cx| {
-                    this.open_find(true, window, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &FindAndReplace, window, cx| {
+                this.toggle_find_replace(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &FindNext, window, cx| this.find_next(window, cx)))
             .on_action(
                 cx.listener(|this, _: &FindPrevious, window, cx| this.find_previous(window, cx)),
             )
-            .on_action(
-                cx.listener(|this, _: &ToggleCaseSensitive, _, cx| this.toggle_case_sensitive(cx)),
-            )
-            .on_action(cx.listener(|this, _: &ToggleWholeWord, _, cx| this.toggle_whole_word(cx)))
-            .on_action(
-                cx.listener(|this, _: &ReplaceCurrent, window, cx| {
-                    this.replace_current(window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &ReplaceAll, _, cx| this.replace_all(cx)))
+            .on_action(cx.listener(|this, _: &ToggleCaseSensitive, window, cx| {
+                this.with_find_bar(false, window, cx, |this, _, cx| {
+                    this.toggle_case_sensitive(cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToggleWholeWord, window, cx| {
+                this.with_find_bar(false, window, cx, |this, _, cx| this.toggle_whole_word(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ReplaceCurrent, window, cx| {
+                // Opening the bar is all the first press does: nothing is
+                // replaced before the user has seen what and with what.
+                if this.find_bar.is_none() {
+                    this.open_find(true, window, cx);
+                } else {
+                    this.replace_current(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ReplaceAll, window, cx| {
+                if this.find_bar.is_none() {
+                    this.open_find(true, window, cx);
+                } else {
+                    this.replace_all(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &FocusNextField, window, cx| {
                 this.focus_other_find_field(window, cx)
             }))
@@ -520,7 +538,14 @@ impl Render for EditorTools {
             }))
             .on_action(cx.listener(Self::on_close_tool))
             .children(top)
-            .child(div().flex_1().min_h_0().child(self.editor.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(self.editor.clone())
+                    .children(self.render_find_flash(cx)),
+            )
             .children(bottom)
     }
 }

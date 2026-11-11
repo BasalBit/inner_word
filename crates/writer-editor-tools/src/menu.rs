@@ -83,6 +83,8 @@ pub(crate) struct MenuOptions {
 }
 
 const ROW_HEIGHT: Pixels = px(28.);
+/// The slot of the font sample at the right of a font picker row.
+const SAMPLE_WIDTH: Pixels = px(84.);
 
 pub(crate) struct Menu {
     entries: Vec<MenuEntry>,
@@ -353,13 +355,30 @@ impl Menu {
                                 .border_1()
                                 .border_color(colors.border_strong)
                         });
+                        // A sample in the family itself. Script and display
+                        // faces are much wider and taller than their point
+                        // size says (Zapfino), so the sample gets a fixed
+                        // slot and is cut off at its edges instead of
+                        // running over the row above or out of the panel.
                         let sample = item.sample_font.map(|family| {
                             div()
                                 .flex_none()
-                                .font_family(family)
-                                .text_size(UI_TEXT_BASE)
-                                .text_color(colors.muted)
-                                .child("Aa Bb Cc")
+                                .w(SAMPLE_WIDTH)
+                                .h_full()
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .whitespace_nowrap()
+                                        .font_family(family)
+                                        .text_size(UI_TEXT_BASE)
+                                        .line_height(px(18.))
+                                        .text_color(colors.muted)
+                                        .child("Aa Bb Cc"),
+                                )
                         });
                         outer
                             .cursor_pointer()

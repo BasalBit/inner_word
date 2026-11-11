@@ -201,7 +201,7 @@ impl EditorTools {
         if self.read_only(cx) {
             return;
         }
-        self.make_room(false, window, cx);
+        self.make_room(window, cx);
         let families = font_families(cx);
         let recent = recent_fonts(cx);
         let editor = self.editor.read(cx);

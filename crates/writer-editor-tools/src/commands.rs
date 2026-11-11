@@ -49,7 +49,14 @@ pub fn commands() -> Vec<CommandDescriptor> {
         .keywords(["find", "match case"]),
         CommandDescriptor::new("Toggle Whole Word", CATEGORY_SEARCH, ToggleWholeWord)
             .keywords(["find", "match word"]),
+        CommandDescriptor::new("Replace", CATEGORY_SEARCH, ReplaceCurrent).keywords([
+            "find",
+            "substitute",
+            "current match",
+        ]),
         CommandDescriptor::new("Replace All", CATEGORY_SEARCH, ReplaceAll)
             .keywords(["find", "substitute"]),
+        CommandDescriptor::new("Close Find Bar", CATEGORY_SEARCH, CloseTool)
+            .keywords(["find", "hide", "dismiss", "tool"]),
     ]
 }

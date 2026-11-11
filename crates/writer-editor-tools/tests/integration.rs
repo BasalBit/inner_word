@@ -2,15 +2,15 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use gpui::{Focusable, TestAppContext};
 use writer_core::TextRange;
-use writer_editor_tools::{EditorTools, ToolKind, ToolsEvent, actions, commands};
+use writer_editor_tools::{EditorTools, FIND_LAYER, ToolKind, ToolsEvent, actions, commands};
 use writer_ui::KeyHint;
 
 use crate::support::*;
 
 #[gpui::test]
-fn opening_one_tool_closes_any_other(cx: &mut TestAppContext) {
+fn one_popup_tool_at_a_time_and_the_find_bar_stays(cx: &mut TestAppContext) {
     setup(cx);
-    let (tools, editor, cx) = open(paragraphs(&["Some words to work on"]), cx);
+    let (tools, editor, cx) = open(paragraphs(&["Some words to work on, words again"]), cx);
     select(&editor, TextRange::in_block(0, 5, 10), cx);
     let events = Rc::new(RefCell::new(Vec::new()));
     cx.update(|_, cx| {
@@ -32,13 +32,42 @@ fn opening_one_tool_closes_any_other(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("cmd-t");
     assert_eq!(active(&tools, cx), Some(ToolKind::Font));
+    // The find bar takes the keyboard, so the popup goes.
     cx.simulate_keystrokes("cmd-f");
     assert_eq!(active(&tools, cx), Some(ToolKind::Find));
     editor.read_with(cx, |editor, _| assert!(!editor.has_popup()));
-    // A popup tool closes the find bar.
-    cx.simulate_keystrokes("cmd-.");
-    assert_eq!(active(&tools, cx), Some(ToolKind::Format));
-    tools.read_with(cx, |tools, _| assert!(!tools.is_open(ToolKind::Find)));
+    tools.read_with(cx, |tools, _| {
+        assert_eq!(tools.find_query(), "words", "seeded from the selection");
+        assert_eq!(tools.find_status(), "1 of 2");
+    });
+
+    // A popup tool opened from the find bar leaves the bar and its search
+    // alone: same query, same matches, same highlights.
+    for (keys, kind) in [
+        ("cmd-.", ToolKind::Format),
+        ("cmd-k", ToolKind::Link),
+        ("cmd-t", ToolKind::Font),
+    ] {
+        cx.simulate_keystrokes(keys);
+        assert_eq!(active(&tools, cx), Some(kind));
+        tools.read_with(cx, |tools, _| {
+            assert!(
+                tools.is_open(ToolKind::Find),
+                "{kind:?} closed the find bar"
+            );
+            assert_eq!(tools.find_query(), "words");
+            assert_eq!(tools.find_status(), "1 of 2");
+        });
+        editor.read_with(cx, |editor, _| {
+            assert!(editor.has_popup());
+            assert_eq!(editor.highlights(FIND_LAYER).len(), 2);
+        });
+    }
+    // escape closes the popup and returns to the text; the bar is still
+    // there, and the next escape, in the text, closes it.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    assert!(editor_focused(&editor, cx));
     cx.simulate_keystrokes("escape");
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
@@ -46,7 +75,11 @@ fn opening_one_tool_closes_any_other(cx: &mut TestAppContext) {
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.selection().range(), TextRange::in_block(0, 5, 10));
         assert!(!editor.has_popup());
+        assert!(editor.highlights(FIND_LAYER).is_empty());
     });
+    // With nothing open escape is not ours: it changes nothing.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(text(&editor, cx), "Some words to work on, words again");
 
     use ToolKind::*;
     use ToolsEvent::*;
@@ -60,10 +93,48 @@ fn opening_one_tool_closes_any_other(cx: &mut TestAppContext) {
             Opened(Font),
             Closed(Font),
             Opened(Find),
-            Closed(Find),
             Opened(Format),
             Closed(Format),
+            Opened(Link),
+            Closed(Link),
+            Opened(Font),
+            Closed(Font),
+            Closed(Find),
         ]
+    );
+}
+
+#[gpui::test]
+fn applying_a_format_from_the_find_bar_keeps_the_search(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["one cat", "two cat"]), cx);
+
+    // Find, step to the second match, make it bold through the format
+    // menu, then go on searching: the bar never went away.
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("cat");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        tools.read_with(cx, |tools, _| tools.find_status()),
+        "2 of 2"
+    );
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("bold");
+    cx.simulate_keystrokes("enter");
+    assert!(editor_focused(&editor, cx));
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.document().blocks()[1].attrs_at(4).unwrap().bold);
+        assert!(!editor.document().blocks()[0].attrs_at(4).unwrap().bold);
+        assert_eq!(editor.highlights(FIND_LAYER).len(), 2);
+    });
+    tools.read_with(cx, |tools, _| {
+        assert_eq!(tools.active_tool(), Some(ToolKind::Find));
+        assert_eq!(tools.find_status(), "2 of 2");
+    });
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(
+        tools.read_with(cx, |tools, _| tools.find_status()),
+        "1 of 2"
     );
 }
 
@@ -177,6 +248,8 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
     assert_eq!(hint("Toggle Case Sensitive", cx).as_deref(), Some("⌥⌘C"));
     assert_eq!(hint("Toggle Whole Word", cx).as_deref(), Some("⌥⌘W"));
     assert_eq!(hint("Replace All", cx).as_deref(), Some("⌘↩"));
+    assert_eq!(hint("Close Find Bar", cx).as_deref(), Some("⎋"));
+    assert_eq!(hint("Replace", cx), None);
     assert_eq!(hint("Insert Menu", cx), None);
     cx.update(|_, cx| {
         assert_eq!(
@@ -199,7 +272,14 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
             "Add or Edit Link" => Some(ToolKind::Link),
             "Choose Font" => Some(ToolKind::Font),
             "Insert Menu" => Some(ToolKind::Insert),
-            "Find" | "Find and Replace" => Some(ToolKind::Find),
+            // The find commands that need the bar open it rather than
+            // doing nothing.
+            "Find"
+            | "Find and Replace"
+            | "Replace"
+            | "Replace All"
+            | "Toggle Case Sensitive"
+            | "Toggle Whole Word" => Some(ToolKind::Find),
             _ => None,
         };
         if let Some(expected) = expected {
@@ -211,12 +291,66 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
         assert!(editor_focused(&editor, cx), "{}", command.title);
     }
 
-    // Options toggled from the palette (focus in the editor) apply to the
-    // next search.
+    // Options toggled from the palette (focus in the editor) open the bar,
+    // which shows them.
     cx.dispatch_action(actions::ToggleCaseSensitive);
     assert!(tools.read_with(cx, |tools, _| !tools.find_options().case_sensitive));
     cx.dispatch_action(actions::ToggleWholeWord);
     assert!(tools.read_with(cx, |tools, _| !tools.find_options().whole_word));
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+
+    // "Replace All" from the palette with the bar closed opens the bar
+    // with the replace row and replaces nothing yet; so does "Replace".
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["cat and cat"]), cx)
+    });
+    for action in [
+        Box::new(actions::ReplaceAll) as Box<dyn gpui::Action>,
+        Box::new(actions::ReplaceCurrent),
+    ] {
+        tools.update_in(cx, |tools, window, cx| tools.close(window, cx));
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("cat");
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, cx| window.dispatch_action(action, cx));
+        cx.run_until_parked();
+        tools.read_with(cx, |tools, _| {
+            assert!(tools.is_open(ToolKind::Find));
+            assert!(tools.find_replace_visible());
+            assert_eq!(tools.find_match_count(), 2);
+        });
+        assert_eq!(text(&editor, cx), "cat and cat");
+    }
+    // "Close Find Bar" closes it from the document.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.dispatch_action(actions::CloseTool);
+    assert_eq!(active(&tools, cx), None);
+    assert!(editor_focused(&editor, cx));
+}
+
+#[gpui::test]
+fn every_action_has_a_key_or_a_palette_entry(cx: &mut TestAppContext) {
+    setup(cx);
+    let bound: HashSet<&str> = actions::key_bindings()
+        .iter()
+        .map(|binding| binding.action().name())
+        .collect();
+    let listed: Vec<_> = commands();
+    let listed: HashSet<&str> = listed.iter().map(|command| command.action_name()).collect();
+    let all: Vec<&'static str> = cx.update(|cx| {
+        cx.all_action_names()
+            .iter()
+            .copied()
+            .filter(|name| name.starts_with("editor_tools::"))
+            .collect()
+    });
+    assert_eq!(all.len(), 18, "{all:?}");
+    for name in all {
+        assert!(
+            bound.contains(name) || listed.contains(name),
+            "{name} has neither a key binding nor a palette entry"
+        );
+    }
 }
 
 #[gpui::test]

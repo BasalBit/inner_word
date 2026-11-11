@@ -9,5 +9,6 @@ mod integration;
 mod layout;
 mod link;
 mod mouse;
+mod perf;
 mod support;
 mod util;

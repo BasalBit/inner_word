@@ -25,15 +25,24 @@ use crate::{
     tools::{EditorTools, PopupTool},
 };
 
-/// The text colours the format menu offers, chosen to read on both the
-/// Paper and the Night canvas.
+/// The text colours the format menu offers.
+///
+/// A document stores a text colour as plain RGB and the editor paints it
+/// as stored, in both themes. One fixed colour cannot have a high contrast
+/// against a white page and against a charcoal one at the same time: the
+/// best any colour can do on both is about 4:1. These six sit at that
+/// balance point (relative luminance about 0.205), which gives each of
+/// them between 3.8:1 and 4.3:1 on the Paper canvas, the white page, the
+/// Night canvas and the Night page. Before, red, blue and purple were
+/// tuned for Paper and dropped to 3:1 on Night. The tests hold every
+/// colour to at least 3.8:1 on all four surfaces.
 pub const TEXT_COLORS: [(&str, Rgb); 6] = [
-    ("Red", Rgb::new(0xC2, 0x3B, 0x2E)),
-    ("Orange", Rgb::new(0xC4, 0x6A, 0x1B)),
-    ("Green", Rgb::new(0x2F, 0x8F, 0x5B)),
-    ("Blue", Rgb::new(0x2F, 0x73, 0xB8)),
-    ("Purple", Rgb::new(0x80, 0x55, 0xB5)),
-    ("Grey", Rgb::new(0x8A, 0x85, 0x80)),
+    ("Red", Rgb::new(0xDC, 0x4A, 0x3A)),
+    ("Orange", Rgb::new(0xBF, 0x65, 0x15)),
+    ("Green", Rgb::new(0x29, 0x8E, 0x58)),
+    ("Blue", Rgb::new(0x30, 0x80, 0xCF)),
+    ("Purple", Rgb::new(0x96, 0x66, 0xCC)),
+    ("Grey", Rgb::new(0x82, 0x7C, 0x76)),
 ];
 
 /// Blocks looked at to tell which values a mixed selection contains.
@@ -160,7 +169,7 @@ impl EditorTools {
         if self.read_only(cx) {
             return;
         }
-        self.make_room(false, window, cx);
+        self.make_room(window, cx);
         let editor = self.editor.read(cx);
         let collapsed = editor.selection().is_collapsed();
         let items = format_items(editor.state(), cx);
@@ -202,6 +211,21 @@ impl EditorTools {
         } else {
             self.open_format_menu(window, cx);
         }
+    }
+
+    /// The theme changed under an open format menu: its swatches (the
+    /// highlight colours, the ink of "Default text colour") are colours of
+    /// the theme.
+    pub(crate) fn retheme_format_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(PopupTool::Format(tool)) = &mut self.popup else {
+            return;
+        };
+        tool.items = format_items(self.editor.read(cx).state(), cx);
+        let query = tool.menu.read(cx).query(cx);
+        let selected = tool.menu.read(cx).selected_id();
+        let entries = tool.entries(&query);
+        tool.menu
+            .update(cx, |menu, cx| menu.set_entries(entries, selected, cx));
     }
 
     pub(crate) fn refresh_format_menu(&mut self, cx: &mut Context<Self>) {

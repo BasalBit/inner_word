@@ -197,7 +197,7 @@ impl EditorTools {
         if self.read_only(cx) {
             return;
         }
-        self.make_room(false, window, cx);
+        self.make_room(window, cx);
         let caret = self.editor.update(cx, |editor, cx| {
             let selection = editor.selection();
             if !selection.is_collapsed() {
@@ -241,8 +241,7 @@ impl EditorTools {
         if !at_boundary || in_code {
             return;
         }
-        // Part of typing: the find bar, if open, stays.
-        self.make_room(true, window, cx);
+        self.make_room(window, cx);
         self.show_insert_menu(Position::new(caret.block, slash), 1, window, cx);
     }
 

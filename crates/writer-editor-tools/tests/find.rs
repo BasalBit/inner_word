@@ -1,7 +1,13 @@
+use std::{cell::Cell, time::Duration};
+
 use gpui::{Entity, TestAppContext, VisualTestContext};
-use writer_core::{Document, Position, Selection, TextRange};
+use writer_core::{
+    Block, BlockKind, Document, InlineAttrs, Position, SearchOptions, Selection, TextRange,
+};
 use writer_editor::Editor;
-use writer_editor_tools::{EditorTools, FIND_CURRENT_LAYER, FIND_LAYER, ToolKind};
+use writer_editor_tools::{
+    EditorTools, FIND_BUTTONS, FIND_CURRENT_LAYER, FIND_FLASH_DURATION, FIND_LAYER, ToolKind,
+};
 
 use crate::support::*;
 
@@ -150,6 +156,472 @@ fn escape_closes_and_leaves_the_match_selected(cx: &mut TestAppContext) {
         text(&editor, cx).lines().nth(1),
         Some("Then the other dog left; theatre people stayed.")
     );
+}
+
+#[gpui::test]
+fn find_next_with_the_bar_closed_shows_where_it_lands(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(document(), cx);
+    // (gpui keeps the debug bounds of elements that are gone, so only
+    // their presence says something.)
+    let flash = |cx: &mut VisualTestContext| {
+        let visible = tools.read_with(cx, |tools, _| tools.find_flash_visible());
+        if visible {
+            assert!(
+                cx.debug_bounds("find-flash").is_some(),
+                "the label is drawn"
+            );
+        }
+        visible
+    };
+    let wait = |milliseconds: u64, cx: &mut VisualTestContext| {
+        cx.executor()
+            .advance_clock(Duration::from_millis(milliseconds));
+        cx.run_until_parked();
+    };
+
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("cat");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(selection(&editor, cx), TextRange::in_block(0, 4, 7));
+    assert!(!flash(cx));
+    assert!(cx.debug_bounds("find-flash").is_none());
+    assert_eq!(status(&tools, cx), "");
+
+    // cmd-g: the bar stays closed and the keyboard stays in the text, but
+    // the matches are highlighted and a label says which one this is.
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(active(&tools, cx), None);
+    assert!(editor_focused(&editor, cx));
+    assert!(flash(cx));
+    assert_eq!(selection(&editor, cx), TextRange::in_block(1, 15, 18));
+    assert_eq!(status(&tools, cx), "2 of 2");
+    assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 2);
+    assert_eq!(
+        layer(&editor, FIND_CURRENT_LAYER, cx),
+        [TextRange::in_block(1, 15, 18)]
+    );
+    tools.read_with(cx, |tools, _| {
+        assert_eq!(tools.find_match_count(), 2);
+        assert_eq!(tools.find_current_match(), Some(2));
+        assert!(tools.find_results_visible());
+    });
+
+    // Stepping on does not search again while the results are showing.
+    let searches = tools.read_with(cx, |tools, _| tools.find_full_search_count());
+    cx.simulate_keystrokes("cmd-shift-g");
+    assert_eq!(status(&tools, cx), "1 of 2");
+    cx.simulate_keystrokes("cmd-g cmd-g");
+    assert_eq!(status(&tools, cx), "1 of 2");
+    assert_eq!(
+        tools.read_with(cx, |tools, _| tools.find_full_search_count()),
+        searches
+    );
+    // Editing meanwhile keeps the results in step with the text.
+    caret(&editor, 2, 13, cx);
+    cx.simulate_input(" A cat.");
+    assert_eq!(status(&tools, cx), "3 matches");
+    assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 3);
+    assert!(layer(&editor, FIND_CURRENT_LAYER, cx).is_empty());
+
+    // A moment after the last step everything is as before: no label, no
+    // highlights. The caret stays where it is.
+    wait(FIND_FLASH_DURATION.as_millis() as u64 + 50, cx);
+    assert!(!flash(cx));
+    assert_eq!(status(&tools, cx), "");
+    assert!(layer(&editor, FIND_LAYER, cx).is_empty());
+    assert!(layer(&editor, FIND_CURRENT_LAYER, cx).is_empty());
+    tools.read_with(cx, |tools, _| {
+        assert_eq!(tools.find_match_count(), 0);
+        assert!(!tools.find_results_visible());
+        assert_eq!(tools.find_query(), "cat");
+    });
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.selection()),
+        Selection::caret(Position::new(2, 20))
+    );
+
+    // Every step starts the moment again.
+    let most = FIND_FLASH_DURATION.as_millis() as u64 - 300;
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(status(&tools, cx), "1 of 3");
+    wait(most, cx);
+    cx.simulate_keystrokes("cmd-g");
+    wait(most, cx);
+    assert!(flash(cx));
+    assert_eq!(status(&tools, cx), "2 of 3");
+    wait(400, cx);
+    assert!(!flash(cx));
+
+    // escape in the text ends it at once (and is used up by that).
+    cx.simulate_keystrokes("cmd-g");
+    assert!(flash(cx));
+    cx.simulate_keystrokes("escape");
+    assert!(!flash(cx));
+    assert!(layer(&editor, FIND_LAYER, cx).is_empty());
+    assert_eq!(selection(&editor, cx), TextRange::in_block(2, 16, 19));
+
+    // Opening the bar takes over from the label, and the label's timer
+    // does not close the bar later.
+    cx.simulate_keystrokes("cmd-g");
+    assert!(flash(cx));
+    cx.simulate_keystrokes("cmd-f");
+    assert!(!flash(cx));
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    assert_eq!(status(&tools, cx), "1 of 3");
+    wait(FIND_FLASH_DURATION.as_millis() as u64 + 50, cx);
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 3);
+
+    // Nothing to find any more: the label says so instead of doing
+    // nothing.
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("zebra");
+    cx.simulate_keystrokes("escape");
+    let before = editor.read_with(cx, |editor, _| editor.selection());
+    cx.simulate_keystrokes("cmd-g");
+    assert!(flash(cx));
+    assert_eq!(status(&tools, cx), "No matches");
+    assert_eq!(editor.read_with(cx, |editor, _| editor.selection()), before);
+
+    // A new document ends it.
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["zebra crossing"]), cx)
+    });
+    cx.run_until_parked();
+    assert!(!flash(cx));
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(status(&tools, cx), "1 of 1");
+    assert_eq!(selection(&editor, cx), TextRange::in_block(0, 0, 5));
+}
+
+#[gpui::test]
+fn the_replace_row_shows_and_hides_from_the_keyboard(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(document(), cx);
+    let row = |cx: &mut VisualTestContext| {
+        let visible = tools.read_with(cx, |tools, _| tools.find_replace_visible());
+        if visible {
+            assert!(cx.debug_bounds("find-replace-all").is_some());
+        }
+        visible
+    };
+
+    cx.simulate_keystrokes("cmd-f");
+    assert!(!row(cx));
+    assert!(cx.debug_bounds("find-replace-all").is_none());
+    // cmd-alt-f shows the row; the keyboard stays in the query field.
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(row(cx));
+    cx.simulate_input("cat");
+    tools.read_with(cx, |tools, _| assert_eq!(tools.find_query(), "cat"));
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("dog");
+    tools.read_with(cx, |tools, cx| {
+        assert_eq!(tools.find_replacement(cx), "dog")
+    });
+
+    // Once more, from the replace field: the row goes and the keyboard is
+    // in the query field, not nowhere.
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(!row(cx));
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    cx.simulate_input("s");
+    tools.read_with(cx, |tools, _| assert_eq!(tools.find_query(), "cats"));
+    cx.simulate_keystrokes("backspace");
+    // With the row hidden, tab has nowhere to go and cmd-enter still
+    // replaces nothing by accident.
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("s");
+    tools.read_with(cx, |tools, _| assert_eq!(tools.find_query(), "cats"));
+    cx.simulate_keystrokes("backspace");
+
+    // And back: what was typed in the replace field is still there.
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(row(cx));
+    tools.read_with(cx, |tools, cx| {
+        assert_eq!(tools.find_replacement(cx), "dog")
+    });
+
+    // From the document the key brings the keyboard to the bar and never
+    // hides the row.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(row(cx));
+    assert!(!editor_focused(&editor, cx));
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(!row(cx));
+
+    // With the bar closed it opens with the row.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(active(&tools, cx), None);
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(row(cx));
+}
+
+#[gpui::test]
+fn matches_follow_edits_without_searching_the_whole_document(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(document(), cx);
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("the");
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    let searches = Cell::new(tools.read_with(cx, |tools, _| tools.find_full_search_count()));
+
+    // After every kind of edit the match list is exactly what a search of
+    // the whole document finds, and the whole document was not searched.
+    let check = |what: &str, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        let expected = editor.read_with(cx, |editor, _| {
+            editor.document().find_all("the", SearchOptions::default())
+        });
+        assert_eq!(layer(&editor, FIND_LAYER, cx), expected, "{what}");
+        tools.read_with(cx, |tools, _| {
+            assert_eq!(tools.find_match_count(), expected.len(), "{what}");
+            assert_eq!(tools.find_full_search_count(), searches.get(), "{what}");
+        });
+        expected.len()
+    };
+    assert_eq!(check("start", cx), 8);
+
+    caret(&editor, 2, 0, cx);
+    cx.simulate_input("the ");
+    assert_eq!(check("typing a match", cx), 9);
+    cx.simulate_keystrokes("backspace backspace");
+    assert_eq!(check("typing it away", cx), 8);
+
+    // A block more, a block less: the matches after it move with it.
+    caret(&editor, 1, 8, cx);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.document().blocks().len()),
+        5
+    );
+    assert_eq!(check("splitting a block", cx), 8);
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(check("joining blocks", cx), 8);
+    cx.simulate_keystrokes("cmd-enter");
+    check("a page break", cx);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(check("undo", cx), 8);
+
+    // A selection over several blocks, deleted.
+    select(
+        &editor,
+        TextRange::new(Position::new(0, 10), Position::new(2, 3)),
+        cx,
+    );
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.document().blocks().len()),
+        2
+    );
+    check("deleting across blocks", cx);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(check("undoing it", cx), 8);
+    cx.simulate_keystrokes("cmd-shift-z");
+    check("redoing it", cx);
+    cx.simulate_keystrokes("cmd-z");
+
+    // Blocks that trade places.
+    caret(&editor, 3, 0, cx);
+    cx.simulate_keystrokes("alt-up alt-up");
+    assert_eq!(check("moving a block", cx), 8);
+
+    // Several edits before their events are delivered: the block range of
+    // the first no longer describes the document, so this once the whole
+    // document is searched (once, not once per edit).
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.insert_text("the theory "), cx);
+        editor.edit(|state| state.insert_paragraph_break(), cx);
+        editor.edit(|state| state.insert_text("the end"), cx);
+    });
+    searches.set(searches.get() + 1);
+    assert_eq!(check("three edits at once", cx), 11);
+    searches.set(searches.get() + 1);
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.undo();
+                state.undo();
+            },
+            cx,
+        );
+        editor.edit(|state| state.insert_text("then "), cx);
+    });
+    check("undo and an edit at once", cx);
+
+    // Formatting changes the block but not its matches.
+    cx.simulate_keystrokes("cmd-a cmd-b");
+    check("bold everywhere", cx);
+    cx.simulate_keystrokes("cmd-alt-2");
+    check("headings everywhere", cx);
+
+    // An option does need a new search.
+    cx.simulate_keystrokes("cmd-f");
+    let searches = tools.read_with(cx, |tools, _| tools.find_full_search_count());
+    cx.simulate_keystrokes("cmd-alt-w");
+    assert_eq!(
+        tools.read_with(cx, |tools, _| tools.find_full_search_count()),
+        searches + 1
+    );
+}
+
+#[gpui::test]
+fn matches_inside_formatted_text(cx: &mut TestAppContext) {
+    setup(cx);
+    let bold = InlineAttrs {
+        bold: true,
+        ..InlineAttrs::default()
+    };
+    let link = InlineAttrs {
+        link: Some("https://example.com".into()),
+        italic: true,
+        ..InlineAttrs::default()
+    };
+    // "harbour" three times: across a bold boundary, inside a link, and in
+    // a heading.
+    let document = Document::from_blocks(vec![
+        Block::new(BlockKind::heading(1)).with_span("The harbour", InlineAttrs::default()),
+        Block::new(BlockKind::Paragraph)
+            .with_span("A quiet har", InlineAttrs::default())
+            .with_span("bour", bold.clone())
+            .with_span(" and the ", InlineAttrs::default())
+            .with_span("old harbour wall", link.clone()),
+        Block::new(BlockKind::BulletItem).with_span("no match here", InlineAttrs::default()),
+    ]);
+    let original = document.clone();
+    let (tools, editor, cx) = open(document, cx);
+
+    cx.simulate_keystrokes("cmd-alt-f");
+    cx.simulate_input("harbour");
+    assert_eq!(status(&tools, cx), "1 of 3");
+    assert_eq!(
+        layer(&editor, FIND_LAYER, cx),
+        [
+            TextRange::in_block(0, 4, 11),
+            TextRange::in_block(1, 8, 15),
+            TextRange::in_block(1, 28, 35),
+        ]
+    );
+    // The match that straddles the bold boundary is one match and is
+    // selected whole.
+    cx.simulate_keystrokes("enter");
+    assert_eq!(selection(&editor, cx), TextRange::in_block(1, 8, 15));
+
+    // Replace all: one step, the text around keeps its formatting, the
+    // replacement inside the link stays a link.
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("port");
+    cx.simulate_keystrokes("cmd-enter");
+    assert_eq!(status(&tools, cx), "Replaced 3");
+    assert_eq!(
+        text(&editor, cx),
+        "The port\nA quiet port and the old port wall\nno match here"
+    );
+    editor.read_with(cx, |editor, _| {
+        let blocks = editor.document().blocks();
+        assert_eq!(blocks[0].kind(), &BlockKind::heading(1));
+        let attrs = |offset: usize| blocks[1].attrs_at(offset).unwrap().clone();
+        assert!(!attrs(7).bold, "the text before the match");
+        assert!(!attrs(12).bold, "the text after the match");
+        assert_eq!(attrs(21).link.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            attrs(25).link.as_deref(),
+            Some("https://example.com"),
+            "the replacement inside the link"
+        );
+        assert!(attrs(25).italic);
+        assert_eq!(attrs(30).link.as_deref(), Some("https://example.com"));
+        assert_eq!(editor.state().undo_depth(), 1, "one undo step");
+    });
+
+    // One undo brings back the text and every attribute.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.simulate_keystrokes("cmd-z");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().plain_text(), original.plain_text());
+        for (now, before) in editor.document().blocks().iter().zip(original.blocks()) {
+            let spans = |block: &Block| -> Vec<_> {
+                block
+                    .spans()
+                    .map(|(range, attrs)| (range, attrs.clone()))
+                    .collect()
+            };
+            assert_eq!(spans(now), spans(before));
+        }
+        assert!(!editor.state().can_undo());
+    });
+    // Undo also put the selection back on the match it was on.
+    assert_eq!(status(&tools, cx), "2 of 3");
+    assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 3);
+}
+
+#[gpui::test]
+fn find_bar_buttons_have_tooltips_with_their_keys(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, _editor, cx) = open(document(), cx);
+    cx.simulate_keystrokes("cmd-f");
+    let tooltip = |button: &str, cx: &mut VisualTestContext| {
+        tools.read_with(cx, |tools, cx| tools.find_button_tooltip(button, cx))
+    };
+    let expected = [
+        ("find-disclosure", "Show replace ⌥⌘F"),
+        ("find-case", "Match case ⌥⌘C"),
+        ("find-word", "Whole word ⌥⌘W"),
+        ("find-previous", "Previous match ⇧⌘G"),
+        ("find-next", "Next match ⌘G"),
+        ("find-close", "Close ⎋"),
+        ("find-replace-one", "Replace this match ↩"),
+        ("find-replace-all", "Replace all matches ⌘↩"),
+    ];
+    assert_eq!(expected.map(|(button, _)| button), FIND_BUTTONS);
+    for (button, text) in expected {
+        assert_eq!(tooltip(button, cx).as_deref(), Some(text));
+    }
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert_eq!(
+        tooltip("find-disclosure", cx).as_deref(),
+        Some("Hide replace ⌥⌘F")
+    );
+    assert_eq!(tooltip("find-nothing", cx), None);
+
+    // Resting the pointer on a button shows it, at the pointer; every
+    // button of the bar is on screen to rest on. (gpui keeps the debug
+    // bounds of a tooltip that is gone, so the test looks at where the
+    // tooltip is: a stale one is over the button before.)
+    assert!(cx.debug_bounds("tool-tip").is_none());
+    for button in FIND_BUTTONS {
+        let pointer = cx
+            .debug_bounds(button)
+            .unwrap_or_else(|| panic!("{button} is not drawn"))
+            .center();
+        cx.simulate_mouse_move(pointer, None, gpui::Modifiers::default());
+        assert!(
+            cx.debug_bounds("tool-tip")
+                .is_none_or(|tip| (tip.origin.x - pointer.x).abs() > gpui::px(12.)),
+            "the tooltip waits for the pointer to rest on {button}"
+        );
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let tip = cx
+            .debug_bounds("tool-tip")
+            .unwrap_or_else(|| panic!("no tooltip over {button}"));
+        assert!(
+            (tip.origin.x - pointer.x).abs() <= gpui::px(12.) && tip.origin.y > pointer.y,
+            "the tooltip of {button} is at {tip:?}, the pointer at {pointer:?}"
+        );
+        // Away from the bar it goes again.
+        cx.simulate_mouse_move(
+            gpui::point(gpui::px(400.), gpui::px(600.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+    }
 }
 
 #[gpui::test]

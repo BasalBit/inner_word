@@ -204,7 +204,7 @@ impl EditorTools {
         if self.read_only(cx) {
             return;
         }
-        self.make_room(false, window, cx);
+        self.make_room(window, cx);
         let editor = self.editor.read(cx);
         let selection = editor.selection();
         let collapsed = selection.is_collapsed();

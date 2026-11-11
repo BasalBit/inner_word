@@ -1491,3 +1491,28 @@ fn extreme_inputs_do_not_panic() {
     check(&e);
     assert_eq!(e.undo_depth(), 1);
 }
+
+#[test]
+fn rtl_and_cjk_editing() {
+    let mut e = ed(vec![para("שלום עולם"), para("中文字")]);
+    e.set_caret(e.document().end());
+    e.move_caret(Movement::WordLeft, true);
+    let sel = e.selection();
+    assert_eq!(sel.head.block, 1);
+    assert!(sel.head.offset < "中文字".len());
+    e.set_caret(p(0, "שלום עולם".len()));
+    e.delete_word_backward();
+    assert_eq!(texts(&e)[0], "שלום ");
+    e.select_word_at(p(0, 2));
+    assert_eq!(e.selection(), Selection::new(p(0, 0), p(0, "שלום".len())));
+    e.toggle_bold();
+    assert_eq!(styled(&e, 0, |a| a.bold), "שלום");
+    e.set_caret(p(1, 3));
+    e.insert_paragraph_break();
+    assert_eq!(texts(&e), ["שלום ", "中", "文字"]);
+    e.backspace();
+    assert_eq!(texts(&e), ["שלום ", "中文字"]);
+    let m = e.document().find_all("文", SearchOptions::default());
+    assert_eq!(m, vec![TextRange::in_block(1, 3, 6)]);
+    check(&e);
+}

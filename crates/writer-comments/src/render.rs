@@ -173,7 +173,7 @@ impl Render for CommentsPanel {
             div()
                 .id("comment-threads")
                 .debug_selector(|| "comment-threads".into())
-                .key_context(self.threads_context())
+                .key_context(self.threads_context(composer_focused))
                 .track_focus(&self.focus_handle)
                 .flex_1()
                 .min_h_0()
@@ -203,16 +203,20 @@ impl Render for CommentsPanel {
 }
 
 impl CommentsPanel {
-    /// The key context of the thread list: [`THREADS_CONTEXT`] plus
-    /// `confirming` while a delete confirmation is showing and `composing`
-    /// while a reply or an edit is being written inside the list.
-    pub fn threads_context(&self) -> KeyContext {
+    /// The key context of the thread list: [`THREADS_CONTEXT`], plus
+    /// `confirming` while a delete confirmation is showing, plus `composing`
+    /// while focus is in a composer inside the list (a reply or an edit).
+    /// The list's single-letter bindings exclude `composing`, so that
+    /// letters typed into a reply are text. The flag follows the focus, not
+    /// the draft: when the list itself has focus beside a draft that was
+    /// left open, its keys work.
+    fn threads_context(&self, composer_focused: bool) -> KeyContext {
         let mut context = KeyContext::default();
         context.add(THREADS_CONTEXT);
         if self.pending_delete().is_some() {
             context.add("confirming");
         }
-        if self.draft().is_some_and(|draft| draft.thread().is_some()) {
+        if composer_focused && self.draft().is_some_and(|draft| draft.thread().is_some()) {
             context.add("composing");
         }
         context
@@ -221,6 +225,7 @@ impl CommentsPanel {
     fn render_detached_heading(&self, colors: &ThemeColors) -> Div {
         div()
             .debug_selector(|| "comments-detached".into())
+            .flex_none()
             .flex()
             .flex_col()
             .gap(SPACE_0_5)
@@ -333,6 +338,8 @@ impl CommentsPanel {
         let mut card = div()
             .id(("comment-thread", id.0 as usize))
             .debug_selector(|| format!("comment-thread-{}", id.0))
+            // The list scrolls; a card keeps its height.
+            .flex_none()
             .flex()
             .flex_col()
             .gap(SPACE_1)

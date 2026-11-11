@@ -469,3 +469,54 @@ fn clicking_a_thread_makes_it_active(cx: &mut TestAppContext) {
     // The caret did not move.
     assert_eq!(f.selection(cx).head.block, 1);
 }
+
+#[gpui::test]
+fn the_list_stays_usable_beside_a_draft_that_was_left_open(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    let first = f.comment(0, 4, 9, "First", cx);
+    let second = f.comment(1, 2, 8, "Second", cx);
+    f.caret(0, 5, cx);
+    cx.simulate_keystrokes("cmd-2 r");
+    cx.simulate_input("half");
+    assert_eq!(f.focus(cx), Focus::Composer);
+
+    // A click on the other thread: it becomes active and the list has
+    // focus. The draft stays where it was, with its text.
+    let card = cx
+        .debug_bounds(Box::leak(
+            format!("comment-thread-{}", second.0).into_boxed_str(),
+        ))
+        .unwrap();
+    cx.simulate_click(
+        gpui::point(card.center().x, card.top() + gpui::px(6.)),
+        Modifiers::none(),
+    );
+    assert_eq!(f.focus(cx), Focus::List);
+    assert_eq!(f.active(cx), Some(second));
+    assert_eq!(f.composer_text(cx), "half");
+    f.panel.read_with(cx, |panel, _| {
+        assert_eq!(panel.draft(), Some(&DraftKind::Reply { thread: first }));
+    });
+
+    // The list keys work again; `r` on the draft's thread goes back to it.
+    cx.simulate_keystrokes("k");
+    assert_eq!(f.active(cx), Some(first));
+    cx.simulate_keystrokes("r");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    assert_eq!(f.composer_text(cx), "half");
+    cx.simulate_input(" done");
+    cx.simulate_keystrokes("enter");
+    f.panel.read_with(cx, |panel, _| {
+        assert_eq!(
+            panel.thread(first).unwrap().thread.replies[0].body,
+            "half done"
+        );
+    });
+
+    // A click into the composer keeps focus in the composer.
+    cx.simulate_keystrokes("r");
+    let composer = cx.debug_bounds("comment-composer").unwrap();
+    cx.simulate_keystrokes("escape cmd-2 r");
+    cx.simulate_click(composer.center(), Modifiers::none());
+    assert_eq!(f.focus(cx), Focus::Composer);
+}

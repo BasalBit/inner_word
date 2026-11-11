@@ -184,7 +184,14 @@ pub(crate) fn wrap_line(
     if glyphs.is_empty() || line_width + pad * chips as f32 <= wrap_width {
         return breaks;
     }
-    let char_at = |glyph: usize| line[glyphs[glyph].index..].chars().next().unwrap_or(' ');
+    let bytes = line.as_bytes();
+    let char_at = |glyph: usize| {
+        let index = glyphs[glyph].index;
+        match bytes.get(index) {
+            Some(byte) if byte.is_ascii() => *byte as char,
+            _ => line[index..].chars().next().unwrap_or(' '),
+        }
+    };
     let advance =
         |glyph: usize| glyphs.get(glyph + 1).map_or(line_width, |next| next.x) - glyphs[glyph].x;
 
@@ -199,7 +206,12 @@ pub(crate) fn wrap_line(
         let glyph = glyphs[at];
         let c = char_at(at);
         let space = is_break_space(c);
-        if at > row_start && seen_word && !space {
+        // Inside a word of plain letters, which is most of the time,
+        // there is nothing to look up.
+        let inside_word = c.is_ascii_alphanumeric()
+            && glyph.index > 0
+            && bytes[glyph.index - 1].is_ascii_alphanumeric();
+        if at > row_start && seen_word && !space && !inside_word {
             // (Glyphs of one character, a base and its marks, never part.)
             let before = line[..glyph.index].chars().next_back();
             let before_index = glyph.index - before.map_or(0, char::len_utf8);

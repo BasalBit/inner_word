@@ -221,6 +221,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("escape", Cancel, c),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, c),
+        // `shift-f10` first, so key hints show `ctrl-enter`.
+        KeyBinding::new("shift-f10", OpenContextMenu, c),
         KeyBinding::new("ctrl-enter", OpenContextMenu, c),
     ]
 }

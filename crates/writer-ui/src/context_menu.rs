@@ -72,12 +72,16 @@
 //! and is clamped to the window edges; a menu taller than the window scrolls.
 //! Opening a menu closes the one that is open: there is one menu per window.
 //!
-//! From the keyboard a menu opens on `ctrl-enter`. This crate defines the
-//! action, [`OpenContextMenu`], and binds the key for its own text fields; a
-//! crate with objects of its own binds `ctrl-enter` to the same action in its
-//! key context and opens its menu anchored to the selected object:
+//! From the keyboard a menu opens on `ctrl-enter` (the key macOS uses) and
+//! on `shift-f10` (a second way in, should the system keep the first). This
+//! crate defines the action, [`OpenContextMenu`], and binds the keys for its
+//! own text fields; a crate with objects of its own binds both to the same
+//! action in its key context, `ctrl-enter` last so that key hints show it,
+//! and opens its menu anchored to the selected object. Either key pressed
+//! again closes the menu.
 //!
 //! ```ignore
+//! KeyBinding::new("shift-f10", writer_ui::context_menu::OpenContextMenu, Some("Library"));
 //! KeyBinding::new("ctrl-enter", writer_ui::context_menu::OpenContextMenu, Some("Library"));
 //! .on_action(cx.listener(|this, _: &OpenContextMenu, window, cx| {
 //!     let menu = ContextMenu::open(this.selected_row_bounds(), this.menu_items(cx), window, cx);
@@ -159,7 +163,8 @@ use crate::{
 actions!(
     context_menu,
     [
-        /// Open the context menu of what has the keyboard (`ctrl-enter`).
+        /// Open the context menu of what has the keyboard (`ctrl-enter`,
+        /// `shift-f10`).
         OpenContextMenu
     ]
 );
@@ -1187,8 +1192,12 @@ impl ContextMenu {
                 let last = last_selectable(self.level_items(in_submenu));
                 self.set_selected(in_submenu, last, cx);
             }
-            // ctrl-enter opened the menu from the keyboard; pressed again it closes it
+            // ctrl-enter (or shift-f10) opened the menu from the keyboard; pressed
+            // again it closes it
             "enter" if modifiers.control => self.close(window, cx),
+            "f10" if modifiers.shift && !modifiers.control && !modifiers.alt => {
+                self.close(window, cx)
+            }
             "enter" | "space" if plain && self.type_ahead_running(key) => {
                 self.type_ahead(' ', in_submenu, cx)
             }

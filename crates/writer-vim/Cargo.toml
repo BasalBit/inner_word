@@ -1,0 +1,9 @@
+[package]
+name = "writer-vim"
+description = "Vim emulation engine for The Writer."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+writer-core.workspace = true

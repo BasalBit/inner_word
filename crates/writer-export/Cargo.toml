@@ -1,0 +1,10 @@
+[package]
+name = "writer-export"
+description = "Markdown and DOCX exporters for The Writer."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+writer-core.workspace = true
+anyhow.workspace = true

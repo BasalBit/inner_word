@@ -1,0 +1,12 @@
+[package]
+name = "writer-editor"
+description = "The GPUI rich text editor for The Writer."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+writer-core.workspace = true
+writer-ui.workspace = true
+writer-vim.workspace = true

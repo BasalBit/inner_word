@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+writer-core = { path = "crates/writer-core" }
+writer-store = { path = "crates/writer-store" }
+writer-export = { path = "crates/writer-export" }
+writer-vim = { path = "crates/writer-vim" }
+writer-ui = { path = "crates/writer-ui" }
+writer-editor = { path = "crates/writer-editor" }
+
+# Shared third-party crates. Crate-specific dependencies are declared in the
+# crate's own Cargo.toml, not here.
+gpui = "0.2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+unicode-segmentation = "1"
+
+# Disk on the build machine is tight: keep debug info minimal.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"

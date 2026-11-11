@@ -151,6 +151,7 @@ fn parse(markdown: &str) -> Vec<Line> {
     let mut quotes = 0usize;
     let (mut bold, mut italic, mut strike, mut underline, mut highlight) =
         (0i32, 0i32, 0i32, 0i32, 0i32);
+    let mut html_code = 0i32;
     let mut links: Vec<String> = Vec::new();
 
     let mut in_footnote = false;
@@ -285,6 +286,8 @@ fn parse(markdown: &str) -> Vec<Line> {
                 "</strong>" => bold -= 1,
                 "<em>" => italic += 1,
                 "</em>" => italic -= 1,
+                "<code>" => html_code += 1,
+                "</code>" => html_code -= 1,
                 "<del>" => strike += 1,
                 "</del>" => strike -= 1,
                 t if t.starts_with("<span ") || t == "</span>" || t.starts_with("<!--") => {}
@@ -292,7 +295,7 @@ fn parse(markdown: &str) -> Vec<Line> {
             },
             Event::Text(s) => {
                 let i = cur.unwrap_or_else(|| panic!("text {s:?} outside a block in:\n{markdown}"));
-                let st = style(false);
+                let st = style(html_code > 0);
                 lines[i].text.extend(s.chars().map(|c| (c, st.clone())));
             }
             Event::Code(s) => {
@@ -331,8 +334,25 @@ fn style_of(attrs: &InlineAttrs, options: &MarkdownOptions) -> Style {
             .as_deref()
             .map(str::trim)
             .filter(|u| !u.is_empty())
-            .map(str::to_string),
+            .map(expected_destination),
     }
+}
+
+/// A link target as a parser reports it: the exporter percent-encodes
+/// whitespace and control characters, which a destination cannot hold.
+fn expected_destination(url: &str) -> String {
+    let mut out = String::new();
+    for c in url.chars() {
+        if c.is_whitespace() || c.is_control() {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn block_text(block: &Block, options: &MarkdownOptions, heading: bool) -> Vec<(char, Style)> {
@@ -1101,7 +1121,33 @@ fn escaping_in_context() {
     );
     assert_eq!(
         one(&[("[not](a link) ![img](x)", plain())]),
-        "\\[not](a link) !\\[img](x)"
+        "[not\\](a link) ![img\\](x)"
+    );
+    // Characters that are only markup with a partner stay as they are in
+    // ordinary prose.
+    for prose in [
+        "As shown in [1] and [2], the result [sic] holds [...] everywhere.",
+        "Prices start at $5* a month.",
+        "Use _config.yml, snake_case_names and 2 * 3 = 6.",
+        "If a<b and c < d then e <- f; I <3 this.",
+        "Tom & Jerry, R&D, 100% #1 @home ~5 min, C:\\Users\\me, a|b.",
+        "“Quotes”, ‘single’, em—dash, ellipsis… (parentheses) {braces} + - = / ^ $ !",
+        "A footnote marker* and one more thing.",
+        "Email me@example.com or see example.com/path_a.",
+    ] {
+        assert_eq!(one(&[(prose, plain())]), prose);
+    }
+    // The partner arrives: now they are escaped.
+    assert_eq!(one(&[("a* b*", plain())]), "a\\* b\\*");
+    assert_eq!(one(&[("_a b_", plain())]), "\\_a b\\_");
+    assert_eq!(one(&[("a<b>c", plain())]), "a\\<b>c");
+    assert_eq!(one(&[("x* ", plain()), ("y", bold())]), "x\\* **y**");
+    assert_eq!(one(&[("a<b ", plain()), ("y", underline())]), "a\\<b <u>y</u>");
+    assert_eq!(one(&[("[1]: /url", plain())]), "[1\\]: /url");
+    assert_eq!(one(&[("[", plain()), ("a]: b", code())]), "\\[`a]: b`");
+    assert_eq!(
+        one(&[("x]: y", InlineAttrs { code: true, ..link("u:1") })]),
+        "[<code>x\\]\\: y</code>](u:1)"
     );
     assert_eq!(
         one(&[("&copy; &#169; AT&T", plain())]),
@@ -1730,6 +1776,178 @@ fn random_comments_do_not_disturb_the_text() {
                 }
                 std::panic::resume_unwind(e);
             }
+        }
+    }
+}
+
+// ----- second, independent generator (review pass) ----------------------------------------
+
+/// Text that tries to start a block when it lands at the start of a line.
+const LINE_STARTS: &[&str] = &[
+    "# ", "#", "## x", "####### x", "#\t", "> ", ">", ">x", "- ", "-", "-\t", "+ ", "+", "* ", "*",
+    "1. ", "1.", "1) ", "0. ", "123456789. ", "1234567890. ", "007. ", "```", "````", "~~~", "~~~~",
+    "```rust", "===", "=", "== ", "---", "- - -", "***", "* * *", "___", "_ _ _", "-- -", "|", "| a | b |",
+    "|---|---|", "---|---", ":--", ":-:", "--:|", "a | b", "[x]: /url", "[x]: <u> \"t\"", "[^1]: note",
+    "[^n]:", "<div>", "</div>", "<!-- x -->", "<!--", "<script>", "<pre>", "<style>", "<?php", "<![CDATA[",
+    "<a href=\"x\">", "<b>", "</b>", "<br/>", "<img src=x>", "<x-y>", "<1>", "< a", "<", "[ ] ", "[x] ",
+    "[X] x", "- [ ] x", "\\", "\\\\", "\\#", "&nbsp;", "&#x41;", "&#65;", "&copy;", "&", "&x", "&;",
+    ":", ": x", "::", "%%", "@", "$", "$$", "{", "}", "^", "!", "![", "!\\[", "=", "==x==", "+++", "---x",
+    "    x", "\tx", "1.x", "1.5", "1986. A year", "-5", "+1", "*x", "_x", "~x", "~~~x",
+];
+
+/// Inline constructs written as literal text: every one must come back as text.
+const INLINE_HOSTILE: &[&str] = &[
+    "*a*", "**a**", "***a***", "_a_", "__a__", "*a", "a*", "a*b*c", "a_b_c", "2*3*4", "snake_case_x",
+    "__init__", "~a~", "~~a~~", "~~~a~~~", "`a`", "``a``", "`", "a`b", "[a](b)", "[a](<b c>)", "[a][b]",
+    "[a]", "[a]:", "[]", "[](x)", "![a](b)", "!", "![", "](", "](x)", "[[a]]", "]]", "<http://x.y>",
+    "<a@b.c>", "<mailto:a@b.c>", "http://x.y/a_b_c", "https://x.y/*a*", "www.x.y", "a@b.c", "<b>x</b>",
+    "<i>", "<!---->", "<!-- -->", "-->", "&amp;", "&lt;", "&#35;", "&#x23;", "&unknown;", "&amp", "\\*",
+    "\\\\", "\\", "\\n", "\\`", "\\[", "\\<", "a\\", "*", "**", "_", "__", "~", "~~", "^a^", "$a$", "==a==",
+    "++a++", ":a:", "@a", "#a", "#", "a#", " #", "##", "|", "a|b", "(", ")", "((", "))", "()", "(a)", "[",
+    "]", "{", "}", "<", ">", "<<", ">>", "< >", "<>", "'", "\"", "“", "”", "‘", "’", "—", "–", "…", ".",
+    ",", ";", ":", "?", "!?", "/", "%", "=", "+", "-", "€", "£", "™", "©", "°", "×", "😀", "👍🏽", "🇳🇱",
+    "\u{200b}", "\u{200d}", "\u{feff}", "\u{ad}", "\u{2060}", "\u{202e}", "\u{3000}", "\u{2003}",
+    "\u{2028}", "\u{85}", "\u{b}", "\u{c}",
+];
+
+const URLS: &[&str] = &[
+    "https://example.com", "https://example.com/a b", "https://en.wikipedia.org/wiki/A_(b)",
+    "https://x.y/(", "https://x.y/)", "https://x.y/((a)", "https://x.y/a)b(c", "https://x.y/[a]",
+    "https://x.y/]", "https://x.y/<a>", "https://x.y/a\\b", "https://x.y/\"q\"", "https://x.y/'q'",
+    "https://x.y/?a=1&b=2", "https://x.y/?a=1&amp;b", "https://x.y/&#35;", "https://x.y/*a*_b_`c`",
+    "https://x.y/a#b", "https://x.y/%20%zz", "https://日本.jp/パス", "https://x.y/😀", "mailto:a@b.c",
+    "tel:+1-555", "/relative/path", "relative path", "#frag", "?q", "x", "<", ">", "<>", "()", "(", ")",
+    "\\", "a\\", "\\)", " https://padded.example ", "javascript:alert(1)", "u:1", "http://x.y/\ttab",
+    "https://x.y/a\u{a0}b", "https://x.y/a\u{2028}b", "*", "_", "`", "[", "]", "!", "#", "&", "&amp;",
+    "https://x.y/~a~~b~~", "title \"x\"", "a 'b'", "a (b)",
+];
+
+fn adv_text(rng: &mut Rng, pieces: usize) -> String {
+    let mut s = String::new();
+    for _ in 0..pieces {
+        match rng.below(12) {
+            0..=3 => s.push_str(rng.pick(WORDS)),
+            4 | 5 => s.push_str(rng.pick(INLINE_HOSTILE)),
+            6 => s.push_str(rng.pick(HOSTILE)),
+            7 => {
+                // A line start, sometimes really at the start of a line.
+                if rng.chance(70) {
+                    s.push('\n');
+                }
+                s.push_str(rng.pick(LINE_STARTS));
+            }
+            _ => s.push_str(rng.pick(SPACES)),
+        }
+    }
+    s
+}
+
+fn adv_attrs(rng: &mut Rng) -> InlineAttrs {
+    let mut a = plain();
+    if rng.chance(45) {
+        return a;
+    }
+    a.bold = rng.chance(30);
+    a.italic = rng.chance(30);
+    a.strikethrough = rng.chance(20);
+    a.underline = rng.chance(15);
+    a.code = rng.chance(20);
+    if rng.chance(12) {
+        a.highlight = Some(Highlight::ALL[rng.below(6)]);
+    }
+    if rng.chance(10) {
+        a.color = Some(Rgb::new(10, 20, 30));
+    }
+    if rng.chance(8) {
+        a.font = Some(rng.pick(&["Menlo", "A 'B'", "x;y:z", "<b>", "Gill Sans"]).to_string());
+    }
+    if rng.chance(30) {
+        a.link = Some(rng.pick(URLS).to_string());
+    }
+    a
+}
+
+const CODE_LINES: &[&str] = &[
+    "```", "````", "`````", "~~~", "~~~~", "``` rust", "```\n```", "    indented", "\tx", "", "", " ",
+    "fn main() {", "}", "# not a heading", "- not a list", "> not a quote", "1. x", "<div>", "</div>",
+    "<!-- x -->", "*a* **b** `c`", "\\", "a  ", "  a", "---", "===", "[x]: y", "| a |", "😀 שלום", "`",
+    "``", "a ``` b", "~", "end",
+];
+
+fn adv_block(rng: &mut Rng) -> Block {
+    let kind = match rng.below(20) {
+        0..=5 => BlockKind::Paragraph,
+        6 => BlockKind::heading(1 + rng.below(6) as u8),
+        7..=9 => BlockKind::BulletItem,
+        10..=12 => BlockKind::NumberedItem,
+        13 | 14 => BlockKind::TodoItem {
+            checked: rng.chance(50),
+        },
+        15 | 16 => BlockKind::Quote,
+        17 => BlockKind::CodeBlock {
+            language: rng.chance(60).then(|| {
+                rng.pick(&["rust", "c++", "c#", "plain text", "`", "~~~", "a`b", " ", "", "日本", "{x}"])
+                    .to_string()
+            }),
+        },
+        18 => BlockKind::Divider,
+        _ => BlockKind::PageBreak,
+    };
+    let mut block = Block::new(kind.clone());
+    if kind.is_code() {
+        let lines: Vec<&str> = (0..rng.below(6)).map(|_| rng.pick(CODE_LINES)).collect();
+        block = block.with_span(&lines.join("\n"), plain());
+    } else if !kind.is_void() {
+        for _ in 0..rng.below(6) {
+            let n = 1 + rng.below(4);
+            let text = adv_text(rng, n);
+            let attrs = adv_attrs(rng);
+            block = block.with_span(&text, attrs);
+        }
+    }
+    if rng.chance(55) {
+        block = block.with_indent(rng.below(9) as u8);
+    }
+    block
+}
+
+fn adv_options(rng: &mut Rng) -> MarkdownOptions {
+    MarkdownOptions {
+        underline_html: rng.chance(70),
+        highlight: if rng.chance(70) {
+            MarkdownHighlight::Html
+        } else {
+            MarkdownHighlight::Drop
+        },
+        colors: rng.chance(30),
+        fonts: rng.chance(30),
+        ..Default::default()
+    }
+}
+
+fn seeds(default: u64) -> u64 {
+    std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+#[test]
+fn adversarial_documents_round_trip() {
+    let first: u64 = std::env::var("WRITER_EXPORT_FIRST")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    for seed in first..first + seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
+        let n = 1 + rng.below(10);
+        let blocks: Vec<Block> = (0..n).map(|_| adv_block(&mut rng)).collect();
+        let doc = Document::from_blocks(blocks);
+        let options = adv_options(&mut rng);
+        let result = std::panic::catch_unwind(|| round_trip_with(&doc, &options));
+        if let Err(e) = result {
+            eprintln!("seed {seed} failed");
+            std::panic::resume_unwind(e);
         }
     }
 }

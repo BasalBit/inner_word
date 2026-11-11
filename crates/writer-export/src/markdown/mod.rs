@@ -48,7 +48,7 @@ use crate::common::{
     first_comment_ranges, is_blank_text, ordinals, part_needs_title, thread_entries,
 };
 use crate::{ExportSource, PartTitles};
-use escape::escape_line;
+use escape::{TextContext, escape_line, escape_line_in};
 use inline::{Anchor, render_inline};
 
 /// What happens to comment threads in Markdown.
@@ -599,9 +599,15 @@ fn html_comment(thread: &CommentThread) -> String {
 fn footnote(label: usize, thread: &CommentThread) -> String {
     let mut paragraphs: Vec<String> = Vec::new();
     for (i, (author, body)) in thread_entries(thread).into_iter().enumerate() {
+        // The lines of a body are one paragraph, which also holds the
+        // delimiters around the author's name.
+        let ctx = TextContext {
+            stars: true,
+            ..TextContext::for_text(&format!("{author}\n{body}"))
+        };
         let lines: Vec<String> = crate::common::trimmed_lines(body)
             .into_iter()
-            .map(|l| escape_line(l, false))
+            .map(|l| escape_line_in(l, false, false, ctx))
             .collect();
         let mut text = lines.join("\\\n    ");
         let resolved = if i == 0 && thread.resolved {
@@ -611,7 +617,7 @@ fn footnote(label: usize, thread: &CommentThread) -> String {
         };
         let author = author.split_whitespace().collect::<Vec<_>>().join(" ");
         if !author.is_empty() {
-            let name = escape_line(&author, false);
+            let name = escape_line_in(&author, false, false, ctx);
             // The name is its own chunk; the delimiters sit against a line
             // start and a colon, which always pair.
             let head = format!("**{name}{resolved}:**");

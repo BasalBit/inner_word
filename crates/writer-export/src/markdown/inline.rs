@@ -409,6 +409,27 @@ pub(crate) fn code_span(content: &str) -> String {
     }
 }
 
+/// Code as an HTML element, for the rare place where a backtick code span
+/// cannot be used. Every character that means something to Markdown or
+/// HTML is escaped.
+fn html_code(content: &str) -> String {
+    let mut out = String::from("<code>");
+    for c in content.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c if c.is_ascii_punctuation() => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push_str("</code>");
+    out
+}
+
 fn open_text(iv: &Interval, options: &MarkdownOptions) -> String {
     match &iv.mark {
         Mark::Link(_) => "[".to_string(),
@@ -447,10 +468,22 @@ fn render(
 ) -> Vec<String> {
     let mut link_depth = 0usize;
     let mut out = Vec::with_capacity(tokens.len());
+    // A block that starts with a link starts with `[`. If a code span in
+    // that link held `]:`, the line would be a link reference definition
+    // (block structure wins over code spans) and the paragraph would
+    // vanish. Such a code span is written as `<code>` instead.
+    let html_code_until = match tokens.first() {
+        Some(Token::Open(iv)) if matches!(ivs[*iv].mark, Mark::Link(_)) => tokens
+            .iter()
+            .position(|t| matches!(t, Token::Close(c) if c == iv))
+            .unwrap_or(tokens.len()),
+        _ => 0,
+    };
     for (i, token) in tokens.iter().enumerate() {
         let s = match token {
             Token::Text(text) => {
                 let pos = ChunkPosition {
+                    block_start: i == 0,
                     line_start: i == 0 || matches!(tokens[i - 1], Token::Break),
                     line_end: i + 1 == tokens.len() || matches!(tokens[i + 1], Token::Break),
                     in_link: link_depth > 0,
@@ -465,6 +498,7 @@ fn render(
                 };
                 escape_text(text, pos, ctx)
             }
+            Token::Code(code) if i < html_code_until && code.contains("]:") => html_code(code),
             Token::Code(code) => code_span(code),
             Token::Break => "\\\n".to_string(),
             Token::Raw(raw) => raw.clone(),
@@ -516,6 +550,24 @@ fn pieces(tokens: &[Token], ivs: &[Interval], strings: &[String]) -> Vec<Piece> 
         .collect()
 }
 
+/// How many underscores could open or close emphasis: all but those
+/// between two letters or digits, which never do.
+fn lone_underscores(cells: &[Cell]) -> usize {
+    // A neighbour in another attribute run may be separated by markup.
+    let word = |c: Option<&Cell>, span: usize| {
+        c.is_some_and(|c| !c.code && c.span == span && c.ch.is_alphanumeric())
+    };
+    (0..cells.len())
+        .filter(|&i| {
+            let span = cells[i].span;
+            !cells[i].code
+                && cells[i].ch == '_'
+                && !(word(i.checked_sub(1).map(|p| &cells[p]), span)
+                    && word(cells.get(i + 1), span))
+        })
+        .count()
+}
+
 /// Renders the inline content of a text block as Markdown. Line breaks in
 /// the block come out as hard breaks (a backslash and a newline); the
 /// caller adds the container prefix after each newline. `heading` makes it
@@ -548,17 +600,34 @@ pub(crate) fn render_inline(
     prepared.anchors.sort_by_key(|(at, _)| *at);
     let Tokens { tokens, ends } = tokenize(&prepared, &ivs);
 
-    let plain = |c: &&Cell| !c.code;
+    let literal = |ch: char| {
+        prepared
+            .cells
+            .iter()
+            .filter(|c| !c.code && c.ch == ch)
+            .count()
+    };
+    let has = |mark: &Mark| ivs.iter().any(|iv| iv.mark == *mark);
     let ctx = TextContext {
-        tildes: ivs.iter().any(|iv| iv.mark == Mark::Strike)
-            || prepared
-                .cells
-                .iter()
-                .filter(plain)
-                .filter(|c| c.ch == '~')
-                .count()
-                > 1,
-        brackets: prepared.cells.iter().filter(plain).any(|c| c.ch == ']'),
+        stars: has(&Mark::Bold) || has(&Mark::Italic) || literal('*') > 1,
+        underscores: if prepared.anchors.is_empty() {
+            lone_underscores(&prepared.cells) > 1
+        } else {
+            literal('_') > 1
+        },
+        tildes: has(&Mark::Strike) || literal('~') > 1,
+        // The `>` can also come from what the exporter writes itself: an
+        // HTML tag, a comment or an autolink.
+        // In a quote every further line starts with the quote
+        // marker, which some parsers take for the end of a tag.
+        angles: !ivs.is_empty()
+            || !prepared.anchors.is_empty()
+            || matches!(block.kind(), writer_core::BlockKind::Quote)
+            || prepared.cells.iter().any(|c| c.ch == '>'),
+        code_label: prepared
+            .cells
+            .windows(2)
+            .any(|w| w[0].code && w[0].ch == ']' && w[1].code && w[1].ch == ':'),
     };
 
     // Replace delimiters a parser would not pair as intended with HTML

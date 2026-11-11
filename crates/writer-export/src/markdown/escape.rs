@@ -7,21 +7,48 @@
 
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
-/// Context of a block that decides some escapes.
+/// Context of a block that decides some escapes. A character that can
+/// only be markup together with a partner is left alone when the block has
+/// no partner for it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TextContext {
+    /// Escape `*`: the block writes emphasis delimiters or has more than
+    /// one asterisk.
+    pub stars: bool,
+    /// Escape `_`: the block has more than one underscore.
+    pub underscores: bool,
     /// Escape `~`: the block uses strikethrough or has more than one tilde.
     pub tildes: bool,
-    /// Escape `[`: a `]` occurs somewhere in the block.
-    pub brackets: bool,
+    /// Escape `<`: a `>` occurs somewhere in the block, so a tag, a comment
+    /// or an autolink could be completed.
+    pub angles: bool,
+    /// Escape a `[` that starts the block: a code span in the block holds
+    /// `]:`, which would complete a link reference definition (block
+    /// structure is read before code spans).
+    pub code_label: bool,
 }
 
 impl TextContext {
     /// The context for plain text that stands alone (no inline formatting).
     pub fn for_text(text: &str) -> TextContext {
         TextContext {
+            stars: text.matches('*').count() > 1,
+            underscores: {
+                let chars: Vec<char> = text.chars().collect();
+                let word = |i: Option<usize>| {
+                    i.and_then(|i| chars.get(i))
+                        .is_some_and(|c| c.is_alphanumeric())
+                };
+                (0..chars.len())
+                    .filter(|&i| {
+                        chars[i] == '_' && !(word(i.checked_sub(1)) && word(Some(i + 1)))
+                    })
+                    .count()
+                    > 1
+            },
             tildes: text.matches('~').count() > 1,
-            brackets: text.contains(']'),
+            angles: text.contains('>'),
+            code_label: false,
         }
     }
 }
@@ -29,6 +56,8 @@ impl TextContext {
 /// Where a chunk of literal text sits.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ChunkPosition {
+    /// The chunk starts the block.
+    pub block_start: bool,
     /// The chunk starts a line of the block.
     pub line_start: bool,
     /// The chunk ends a line of the block.
@@ -38,7 +67,7 @@ pub(crate) struct ChunkPosition {
     /// The chunk ends an ATX heading.
     pub heading_end: bool,
     /// A `[` follows the chunk (a link or a footnote reference), so a final
-    /// `!` would turn it into an image.
+    /// `!` would turn it into an image and a final `]` into a reference.
     pub before_bracket: bool,
     /// A footnote reference precedes the chunk, so a leading `(` or `[`
     /// would turn it into a link.
@@ -90,7 +119,7 @@ fn line_start_escape(chars: &[char], line_end: bool) -> Option<usize> {
                 return Some(0);
             }
         }
-        '-' | '+' if ends_marker(1) => return Some(0),
+        '-' | '+' | '*' if ends_marker(1) => return Some(0),
         '0'..='9' => {
             let n = chars.iter().take_while(|c| c.is_ascii_digit()).count();
             if n <= 9 && matches!(after(n), Some('.' | ')')) && ends_marker(n + 1) {
@@ -119,6 +148,14 @@ fn line_start_escape(chars: &[char], line_end: bool) -> Option<usize> {
         }
     }
     None
+}
+
+/// Whether `chars` starts with what GitHub reads as a task marker at the
+/// start of a list item: `[ ]`, `[x]` or `[X]` before a space or the end.
+fn task_marker_at(chars: &[char]) -> bool {
+    matches!(chars, ['[', mark, ']', rest @ ..]
+        if (mark.is_whitespace() || matches!(mark, 'x' | 'X'))
+            && rest.first().is_none_or(|c| c.is_whitespace()))
 }
 
 /// Escapes one chunk of literal text. A chunk is the text between two
@@ -156,15 +193,39 @@ pub(crate) fn escape_text(text: &str, pos: ChunkPosition, ctx: TextContext) -> S
             || match c {
                 '\\' => next.is_none_or(|n| n.is_ascii_punctuation()),
                 '`' => true,
-                '*' => !(is_space(prev) && is_space(next)),
+                '*' => ctx.stars && !(is_space(prev) && is_space(next)),
                 '_' => {
-                    !(prev.is_some_and(char::is_alphanumeric)
-                        && next.is_some_and(char::is_alphanumeric))
+                    ctx.underscores
+                        && !(prev.is_some_and(char::is_alphanumeric)
+                            && next.is_some_and(char::is_alphanumeric))
                 }
                 '~' => ctx.tildes,
-                '[' => pos.in_link || ctx.brackets,
-                ']' => pos.in_link,
-                '<' => next.is_none_or(|n| n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?')),
+                // A bracket pair is only markup with something after it:
+                // `[a](b)`, `[a][b]`, `[a]: b`. The closing bracket takes
+                // the escape there, so `[1]` and `[sic]` stay as they are.
+                '[' => {
+                    pos.in_link
+                        || matches!(next, Some('^' | '['))
+                        || (i == 0
+                            && pos.block_start
+                            && (ctx.code_label || task_marker_at(&chars)))
+                }
+                ']' => {
+                    pos.in_link
+                        || matches!(next, Some('(' | '[' | ':'))
+                        || (next.is_none() && pos.before_bracket)
+                }
+                // A tag, comment or autolink needs a `>` to end it and no
+                // space after the `<`; some HTML blocks start with just
+                // `<name` at the start of a line.
+                '<' => {
+                    (ctx.angles && !is_space(next))
+                        || (i == 0
+                            && pos.line_start
+                            && next.is_none_or(|n| {
+                                n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?')
+                            }))
+                }
                 '&' => entity_at(&chars, i),
                 '!' => next.is_none() && pos.before_bracket,
                 '(' => i == 0 && pos.after_bracket,
@@ -181,9 +242,21 @@ pub(crate) fn escape_text(text: &str, pos: ChunkPosition, ctx: TextContext) -> S
 /// Escapes text that stands alone on one line (a title, a comment body
 /// line): the chunk is the whole line.
 pub(crate) fn escape_line(text: &str, heading: bool) -> String {
+    escape_line_in(text, heading, true, TextContext::for_text(text))
+}
+
+/// Like [`escape_line`] for one line of a longer text whose context is
+/// `ctx`; `block_start` says whether the line starts its paragraph.
+pub(crate) fn escape_line_in(
+    text: &str,
+    heading: bool,
+    block_start: bool,
+    ctx: TextContext,
+) -> String {
     escape_text(
         text,
         ChunkPosition {
+            block_start,
             line_start: true,
             line_end: true,
             in_link: false,
@@ -191,7 +264,7 @@ pub(crate) fn escape_line(text: &str, heading: bool) -> String {
             before_bracket: false,
             after_bracket: false,
         },
-        TextContext::for_text(text),
+        ctx,
     )
 }
 
@@ -308,9 +381,22 @@ mod tests {
             "\\_em\\_ and \\_\\_strong\\_\\_"
         );
         assert_eq!(mid("`code`"), "\\`code\\`");
-        assert_eq!(mid("[text](url)"), "\\[text](url)");
-        assert_eq!(mid("![img](url)"), "!\\[img](url)");
+        assert_eq!(mid("[text](url)"), "[text\\](url)");
+        assert_eq!(mid("![img](url)"), "![img\\](url)");
+        assert_eq!(mid("[a][b] [c][]"), "[a\\][b] [c\\][]");
+        assert_eq!(mid("[[wiki]]"), "\\[[wiki]]");
         assert_eq!(mid("a [ b"), "a [ b");
+        // Brackets that nothing follows are not markup.
+        assert_eq!(mid("as shown [1], [sic] and [...]"), "as shown [1], [sic] and [...]");
+        // One asterisk or underscore has no partner.
+        assert_eq!(mid("price* and _config"), "price* and _config");
+        assert_eq!(mid("5*3"), "5*3");
+        assert_eq!(mid("5*3*2"), "5\\*3\\*2");
+        // No `>` to close a tag or an autolink.
+        assert_eq!(mid("if a<b then"), "if a<b then");
+        assert_eq!(mid("a<b and c>d"), "a\\<b and c>d");
+        assert_eq!(mid("<+a@b.c> <3 > 2"), "\\<+a@b.c> \\<3 > 2");
+        assert_eq!(mid("a < b > c"), "a < b > c");
         assert_eq!(
             mid("<b>bold</b> <!-- c --> <?php"),
             "\\<b>bold\\</b> \\<!-- c --> \\<?php"
@@ -320,10 +406,13 @@ mod tests {
             mid("&amp; &#123; &#x1F600; &copy"),
             "\\&amp; \\&#123; \\&#x1F600; &copy"
         );
-        assert_eq!(mid("a\\*b \\ c\\"), "a\\\\\\*b \\ c\\\\");
+        assert_eq!(mid("a\\*b \\ c\\"), "a\\\\*b \\ c\\\\");
+        assert_eq!(mid("a\\*b* \\ c\\"), "a\\\\\\*b\\* \\ c\\\\");
         assert_eq!(mid("~~no~~"), "\\~\\~no\\~\\~");
         assert_eq!(mid("~one"), "~one");
-        assert_eq!(mid("x <"), "x \\<");
+        assert_eq!(mid("x <"), "x <");
+        assert_eq!(mid("x < >"), "x < >");
+        assert_eq!(mid("> x <"), "> x \\<");
     }
 
     #[test]
@@ -357,8 +446,17 @@ mod tests {
         assert_eq!(line("```rust"), "\\`\\`\\`rust");
         assert_eq!(line("~~~"), "\\~\\~\\~");
         assert_eq!(line("[ ] task"), "\\[ ] task");
-        assert_eq!(line("[^1]: note"), "\\[^1]: note");
+        assert_eq!(line("[^1]: note"), "\\[^1\\]: note");
+        assert_eq!(line("[label]: /url"), "[label\\]: /url");
+        assert_eq!(line("[x] done"), "\\[x] done");
+        assert_eq!(line("[x]done"), "[x]done");
         assert_eq!(line("<div>"), "\\<div>");
+        assert_eq!(line("<div"), "\\<div");
+        assert_eq!(line("<!-- x"), "\\<!-- x");
+        assert_eq!(line("* one star"), "\\* one star");
+        assert_eq!(line("*"), "\\*");
+        assert_eq!(line("*note"), "*note");
+        assert_eq!(mid("[x] done"), "[x] done");
         // The same text in the middle of a line needs nothing.
         assert_eq!(mid("# heading"), "# heading");
         assert_eq!(mid("1. one"), "1. one");

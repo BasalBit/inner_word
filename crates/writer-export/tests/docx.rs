@@ -1619,3 +1619,265 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
         assert!(ps.next().is_none(), "seed {seed}: extra paragraphs");
     }
 }
+
+// ----- second, independent generator (review pass) ----------------------------------------
+
+const ADV_PIECES: &[&str] = &[
+    "word", " ", "  ", " two words ", "\n", "\n\n", "\t", "<", ">", "&", "\"", "'", "]]>", "<!--", "-->",
+    "&amp;", "&#0;", "&#x1;", "</w:t>", "</w:p>", "<w:br/>", "<?xml?>", "😀", "👨‍👩‍👧", "🇳🇱", "שלום",
+    "مرحبا", "日本語", "é", "e\u{301}", "\u{a0}", "\u{200b}", "\u{200d}", "\u{202e}", "\u{feff}", "\u{2028}",
+    "\u{2029}", "\u{85}", "\u{7f}", "\u{9f}", "\u{fffd}", "\u{fffc}", "\u{e000}", "\u{10ffff}", "\u{1f}",
+    "\u{b}", "\u{c}", "\u{0}", "\u{1}", "\u{8}", "\u{fffe}", "\u{ffff}", "*", "`", "1.", "☐", "☑", "123",
+    "׳", "\u{5d0}1\u{5d1}", "a\u{5d0}b", ".", "!", "-",
+];
+
+const ADV_LINKS: &[&str] = &[
+    "https://example.com", "https://example.com/a b", "a b<c>", "#x", "mailto:a@b.c", "%zz \"q\"", "%",
+    "http://", "http://[::1]/", "http://[bad", "]", "[", "::", "http://exa mple.com/ü?q=ö&x=<>", "\\\\server\\share",
+    "file:///C:/a b.txt", "tel:+1 555", "javascript:alert('x')", "https://日本.jp/パス", "https://x.y/😀",
+    "x\u{0}y", "x\u{1}\u{fffe}y", "  padded  ", "a\nb", "a\tb", "?", "#", "##", "a#b#c", "{x}", "a|b", "a^b",
+    "http://user:pw@host:99999/", "http://x.y/%", "http://x.y/%2", "http://x.y/%2G", "//x.y/z", "/",
+];
+
+fn adv_document(rng: &mut Rng) -> Document {
+    let mut blocks = Vec::new();
+    for _ in 0..rng.below(14) {
+        let kind = match rng.below(14) {
+            0..=3 => BlockKind::Paragraph,
+            4 => BlockKind::heading(1 + rng.below(6) as u8),
+            5 | 6 => BlockKind::BulletItem,
+            7 | 8 => BlockKind::NumberedItem,
+            9 => BlockKind::TodoItem {
+                checked: rng.chance(50),
+            },
+            10 => BlockKind::Quote,
+            11 => BlockKind::CodeBlock {
+                language: rng.chance(50).then(|| "ru\"st<&>".to_string()),
+            },
+            12 => BlockKind::Divider,
+            _ => BlockKind::PageBreak,
+        };
+        let mut block = Block::new(kind).with_indent(rng.below(9) as u8);
+        for _ in 0..rng.below(6) {
+            let text: String = (0..1 + rng.below(4))
+                .map(|_| ADV_PIECES[rng.below(ADV_PIECES.len())])
+                .collect();
+            let mut a = plain();
+            if rng.chance(60) {
+                a.bold = rng.chance(30);
+                a.italic = rng.chance(30);
+                a.code = rng.chance(15);
+                a.underline = rng.chance(15);
+                a.strikethrough = rng.chance(15);
+                if rng.chance(25) {
+                    a.link = Some(ADV_LINKS[rng.below(ADV_LINKS.len())].to_string());
+                }
+                if rng.chance(15) {
+                    a.highlight = Some(Highlight::ALL[rng.below(6)]);
+                }
+                if rng.chance(15) {
+                    a.color = Some(Rgb::new(rng.below(256) as u8, 0, 255));
+                }
+                if rng.chance(15) {
+                    a.font = Some(
+                        ["F<o>\"n\"&t", "", " ", "Menlo", "a\u{0}b\nc", "日本 Font", "x;y"][rng.below(7)]
+                            .to_string(),
+                    );
+                }
+            }
+            block = block.with_span(&text, a);
+        }
+        if rng.chance(20) {
+            block = block.with_text_size(Some(
+                [1.0, 6.0, 8.5, 17.0, 33.3, 144.0, 1.0e9, -3.0, f32::NAN][rng.below(9)],
+            ));
+        }
+        if rng.chance(30) {
+            block = block.with_alignment(
+                [Alignment::Left, Alignment::Center, Alignment::Right, Alignment::Justify][rng.below(4)],
+            );
+        }
+        blocks.push(block);
+    }
+    let mut settings = DocumentSettings::default();
+    if rng.chance(50) {
+        settings.page = PageSetup {
+            paper: [
+                PaperSize::A4,
+                PaperSize::UsLetter,
+                PaperSize::Custom {
+                    width: 1.0,
+                    height: 1.0e9,
+                },
+                PaperSize::Custom {
+                    width: f32::NAN,
+                    height: -5.0,
+                },
+                PaperSize::Custom {
+                    width: 300.0,
+                    height: 400.5,
+                },
+            ][rng.below(5)],
+            orientation: if rng.chance(50) {
+                Orientation::Landscape
+            } else {
+                Orientation::Portrait
+            },
+            margins: [
+                Margins::uniform(72.0),
+                Margins::uniform(0.0),
+                Margins::uniform(1.0e6),
+                Margins::uniform(-10.0),
+                Margins {
+                    top: 10.5,
+                    right: 20.25,
+                    bottom: f32::NAN,
+                    left: f32::INFINITY,
+                },
+            ][rng.below(5)],
+        };
+        settings.typography = Typography {
+            body_font: ["Charter", "", "A \"B\" <C> & D", "x\u{0}y"][rng.below(4)].to_string(),
+            base_size: [17.0, 1.0, 400.0, f32::NAN, 12.5][rng.below(5)],
+            line_height: [1.6, 0.0, 9.0, f32::NAN, 1.15][rng.below(5)],
+            paragraph_spacing: [12.0, 0.0, 1.0e6, -4.0, f32::NAN][rng.below(5)],
+        };
+    }
+    let mut ed = EditorState::new(Document::from_blocks(blocks).with_settings(settings));
+    for _ in 0..rng.below(6) {
+        let count = ed.document().block_count();
+        let pick = |rng: &mut Rng, ed: &EditorState| {
+            let b = rng.below(count);
+            let len = ed.document().blocks()[b].len();
+            ed.document()
+                .clamp_position(Position::new(b, rng.below(len + 1)))
+        };
+        let (a, b) = (pick(rng, &ed), pick(rng, &ed));
+        ed.set_selection(Selection::new(a, b));
+        let body = ["body <&> \u{1}", "", "a\n\nb\tc", "]]> </w:t> 😀 שלום", "\u{fffe}"][rng.below(5)];
+        let author = ["A & \"B\"", "", "  ", "x\ny", "<a>\u{0}"][rng.below(5)];
+        if let Some(id) = ed.add_comment(body, author, [0, -1, i64::MAX, i64::MIN, 1_794_391_505_000][rng.below(5)]) {
+            for _ in 0..rng.below(3) {
+                ed.add_reply(id, "reply\nline", author, 2);
+            }
+            if rng.chance(30) {
+                ed.resolve_comment(id);
+            }
+        }
+    }
+    ed.into_document()
+}
+
+/// The characters of `s` that XML can hold, as the exporter writes them.
+fn xml_text(s: &str) -> String {
+    s.chars()
+        .filter(|c| matches!(c, '\t' | '\n' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..))
+        .collect()
+}
+
+/// Hostile documents, settings, options and collections: every package
+/// passes the structural checks and keeps the text of every block. With
+/// `WRITER_EXPORT_DUMP_DIR` set, the packages are also written there (as
+/// `<seed>.docx` and the expected text as `<seed>.txt`) for checks with
+/// external tools.
+#[test]
+fn adversarial_packages_are_valid_and_keep_their_text() {
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    let dump = std::env::var("WRITER_EXPORT_DUMP_DIR").ok();
+    for seed in 1..=seeds.min(20_000) {
+        let mut rng = Rng(seed.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
+        let docs: Vec<Document> = (0..if rng.chance(30) { rng.below(4) } else { 1 })
+            .map(|_| adv_document(&mut rng))
+            .collect();
+        let single = docs.len() == 1 && rng.chance(70);
+        let source = if single {
+            ExportSource::single("T <&> \u{1}", &docs[0])
+        } else {
+            ExportSource::collection(
+                "Book\u{0}",
+                docs.iter().enumerate().map(|(i, d)| (format!("Part {i} <&>"), d)),
+            )
+        };
+        let options = DocxOptions {
+            comments: rng.chance(80),
+            page_numbers: rng.chance(60),
+            author: ["", "Ada <&> \"L\"", "x\u{0}\ny"][rng.below(3)].to_string(),
+            created: [0, -1, i64::MAX, i64::MIN, 1_794_391_505_000][rng.below(5)],
+            modified: [0, 1_794_391_505_000, i64::MAX][rng.below(3)],
+            text_scale: [1.0, 12.0 / 17.0, 0.0, -1.0, 1.0e9, f32::NAN][rng.below(6)],
+            code_font: ["Menlo", "", "A \"B\" <C>"][rng.below(3)].to_string(),
+            part_titles: [PartTitles::Never, PartTitles::WhenMissing, PartTitles::Always][rng.below(3)],
+        };
+        let result = std::panic::catch_unwind(|| {
+            let package = Package::new(&source, &options);
+            let ps = package.paragraphs();
+            let mut ps = ps.iter().peekable();
+            let mut expected_text = String::new();
+            for part in source.parts() {
+                let doc = part.document;
+                let titled = !single
+                    && match options.part_titles {
+                        PartTitles::Never => false,
+                        PartTitles::Always => true,
+                        // The title "Part N <&>" never occurs in the text.
+                        PartTitles::WhenMissing => true,
+                    };
+                if titled {
+                    let p = ps.next().expect("a title paragraph");
+                    assert_eq!(p.style, "Heading1");
+                    assert_eq!(p.text(), part.title);
+                    expected_text.push_str(&p.text());
+                    expected_text.push('\n');
+                }
+                let mut pending_break = false;
+                for block in doc.blocks() {
+                    if matches!(block.kind(), BlockKind::PageBreak) {
+                        if pending_break {
+                            assert!(ps.next().unwrap().runs[0].page_break);
+                        }
+                        pending_break = true;
+                        continue;
+                    }
+                    let p = ps.next().expect("a paragraph for every block");
+                    let mut text = p.text();
+                    assert_eq!(p.runs.first().is_some_and(|r| r.page_break), pending_break);
+                    pending_break = false;
+                    if let BlockKind::TodoItem { checked } = block.kind() {
+                        let mark = if *checked { "\u{2611}\t" } else { "\u{2610}\t" };
+                        text = text.strip_prefix(mark).expect("a ballot box").to_string();
+                    }
+                    assert_eq!(text, xml_text(block.text()));
+                    expected_text.push_str(&text);
+                    expected_text.push('\n');
+                }
+                if pending_break {
+                    assert!(ps.next().unwrap().runs[0].page_break);
+                }
+                if doc.blocks().is_empty() {
+                    ps.next();
+                }
+            }
+            if source.parts().is_empty() {
+                ps.next();
+            }
+            assert!(ps.next().is_none(), "extra paragraphs");
+            expected_text
+        });
+        match result {
+            Ok(text) => {
+                if let Some(dir) = &dump {
+                    let bytes = to_docx(&source, &options);
+                    std::fs::write(format!("{dir}/{seed}.docx"), bytes).unwrap();
+                    std::fs::write(format!("{dir}/{seed}.txt"), text).unwrap();
+                }
+            }
+            Err(e) => {
+                eprintln!("seed {seed} failed");
+                std::panic::resume_unwind(e);
+            }
+        }
+    }
+}

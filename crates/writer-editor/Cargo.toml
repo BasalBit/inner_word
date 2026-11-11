@@ -7,6 +7,23 @@ publish.workspace = true
 
 [dependencies]
 gpui.workspace = true
+serde.workspace = true
 writer-core.workspace = true
 writer-ui.workspace = true
-writer-vim.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+# Tests are unit tests in the lib (src/tests/), so the crate has one test binary.
+gpui = { workspace = true, features = ["test-support"] }
+anyhow.workspace = true
+serde_json.workspace = true
+# The demo example captures its own window for visual QA (same approach as
+# writer-app's screenshot module): the NSWindow number behind a GPUI window.
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc = "0.2"
+
+[[example]]
+name = "demo"
+path = "examples/demo/main.rs"

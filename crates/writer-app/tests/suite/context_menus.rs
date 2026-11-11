@@ -789,6 +789,24 @@ fn the_format_bar_comes_up_over_a_mouse_selection(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
 
+    // A press elsewhere in the window closes it: on the band above the
+    // text, on the status bar.
+    for selector in ["titlebar", "status-bar"] {
+        vcx.simulate_keystrokes("cmd-1");
+        drag_over(&workspace, 2, 0..16, vcx);
+        assert!(bar_visible(&workspace, vcx));
+        let bounds = bounds_of(selector, vcx);
+        let at = point(bounds.left() + px(40.), bounds.center().y);
+        vcx.simulate_mouse_move(at, None, Modifiers::default());
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+        assert!(
+            !bar_visible(&workspace, vcx),
+            "a press on the {selector} closes the bar"
+        );
+        assert_eq!(selected_text(&workspace, vcx), "Nobody remembers");
+    }
+
     // The setting. In the settings modal it is a switch under "Writing".
     vcx.simulate_keystrokes("cmd-1");
     drag_over(&workspace, 2, 0..16, vcx);

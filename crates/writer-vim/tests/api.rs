@@ -219,13 +219,22 @@ fn syncing_after_the_host_moved_things() {
     s.ed.set_caret(Position::new(0, 3));
     s.vim.sync(&mut s.ed, &mut s.host);
     assert_eq!(s.buffer(), "ab|c");
-    // A half-typed command is dropped.
+    // Nothing changed outside: the call is a no-op, also for a half-typed
+    // command.
     s.keys("2d");
+    let o = s.vim.sync(&mut s.ed, &mut s.host);
+    assert!(o.effects.is_empty());
+    assert_eq!(s.vim.pending_keys(), "2d");
+    // A change from outside drops the command.
+    s.ed.set_caret(Position::new(0, 0));
     let o = s.vim.sync(&mut s.ed, &mut s.host);
     assert!(o.effects.contains(&Effect::ModeChanged(Mode::Normal)));
     assert_eq!(s.vim.pending_keys(), "");
-    // So is an open command line.
+    // So it does an open command line.
     s.keys(":abc");
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::CommandLine);
+    s.ed.set_caret(Position::new(0, 1));
     s.vim.sync(&mut s.ed, &mut s.host);
     assert_eq!(s.mode(), Mode::Normal);
     // Insert mode: a click starts a new piece of typing for dot-repeat.
@@ -337,4 +346,91 @@ fn the_ctrl_o_state_is_visible() {
     s.keys("0");
     assert_eq!(s.mode(), Mode::Insert);
     assert!(!s.vim.insert_pending());
+}
+
+#[test]
+fn sync_can_be_called_on_every_change_report() {
+    // A host that calls sync after every key, as it would on every
+    // "selection changed" or "edited" event.
+    fn run_with_sync(buffer: &str, keys: &str) -> Session {
+        let mut s = Session::new(buffer);
+        for k in Key::parse_sequence(keys) {
+            s.key(k);
+            let o = s.vim.sync(&mut s.ed, &mut s.host);
+            s.effects.extend(o.effects);
+            // Twice: one change can be reported as two events.
+            s.vim.sync(&mut s.ed, &mut s.host);
+        }
+        s
+    }
+    // Typing, enter and backspace stay part of what dot repeats.
+    let s = run_with_sync("|x", "iab<BS>c<CR>d<Esc>G.");
+    assert_eq!(s.buffer(), "ac\nac\n|ddx");
+    let s = run_with_sync("|x", "3iab<Esc>");
+    assert_eq!(s.buffer(), "ababa|bx");
+    // Visual mode on an empty line survives (its selection can be empty).
+    let s = run_with_sync("a\n|", "vk");
+    assert_eq!(s.mode(), Mode::Visual);
+    let s = run_with_sync("a\n|\nb", "Vjd");
+    assert_eq!(s.buffer(), "|a");
+    // Pending commands and the command line are not disturbed.
+    let s = run_with_sync("|a b c", "2dw");
+    assert_eq!(s.buffer(), "|c");
+    let s = run_with_sync("|foo bar", "/bar<CR>");
+    assert_eq!(s.buffer(), "foo |bar");
+    let s = run_with_sync("|a\nb\nc", ":2,3d<CR>");
+    assert_eq!(s.buffer(), "|a");
+    let s = run_with_sync("|abc", "A<C-o>hX<Esc>");
+    assert_eq!(s.buffer(), "ab|Xc");
+    let s = run_with_sync("|abc", "RXY<BS>Z<Esc>");
+    assert_eq!(s.buffer(), "X|Zc");
+}
+
+#[test]
+fn the_engine_catches_up_without_sync() {
+    // The host moved the caret after the end of a line and did not say so.
+    let mut s = Session::new("|abc def");
+    s.ed.set_caret(Position::new(0, 7));
+    s.keys("x");
+    assert_eq!(s.buffer(), "abc d|e");
+    // A selection made behind the engine becomes Visual mode at the next key.
+    let mut s = Session::new("|abc def");
+    s.ed.set_selection(Selection::new(Position::new(0, 0), Position::new(0, 3)));
+    s.keys("d");
+    assert_eq!(s.buffer(), "| def");
+    // A pending operator does not survive a click.
+    let mut s = Session::new("|abc def");
+    s.keys("d");
+    s.ed.set_caret(Position::new(0, 4));
+    s.keys("w");
+    assert_eq!(s.buffer(), "abc de|f");
+    assert_eq!(s.text(), "abc def");
+}
+
+#[test]
+fn typed_text_may_be_announced_before_it_is_inserted() {
+    let mut s = Session::new("|x");
+    s.keys("i");
+    for ch in ["a", "b"] {
+        let k = Key::parse_sequence(ch)[0];
+        assert!(!s.vim.handle_key(k, &mut s.ed, &mut s.host).consumed);
+        // Announce, then insert, then the editor reports the change.
+        s.vim.text_inserted(ch, &mut s.ed, &mut s.host);
+        s.ed.insert_text(ch);
+        s.vim.sync(&mut s.ed, &mut s.host);
+    }
+    s.keys("<Esc>");
+    assert_eq!(s.buffer(), "a|bx");
+    s.keys("$.");
+    assert_eq!(s.buffer(), "aba|bx");
+    // The same in Replace mode: the overwritten character goes first.
+    let mut s = Session::new("|xyz");
+    s.keys("R");
+    let k = Key::char('a');
+    s.vim.handle_key(k, &mut s.ed, &mut s.host);
+    s.vim.text_inserted("a", &mut s.ed, &mut s.host);
+    s.ed.insert_text("a");
+    s.vim.sync(&mut s.ed, &mut s.host);
+    s.keys("<Esc>");
+    assert_eq!(s.buffer(), "|ayz");
 }

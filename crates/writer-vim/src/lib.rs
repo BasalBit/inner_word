@@ -84,24 +84,38 @@
 //! altogether, so that dictation or an emoji picker cannot type into the
 //! document behind the engine's back.
 //!
-//! After the host handled a key the engine did not consume **outside**
-//! Insert mode (shift-arrows extending the selection, an Emacs-style
-//! `ctrl-a`), call [`Vim::sync`]: the caret may now sit after the last
-//! character of a line, or a selection may exist, and `sync` turns that
-//! into a valid Normal-mode caret or into Visual mode. Call `sync` also
-//! after anything else that moves the selection or edits the document
-//! without going through the engine: a mouse click or drag, a command from
-//! a menu or the palette (bold, find and replace, undo), in any mode. Do
-//! **not** call it after ordinary typing in Insert mode: in Insert mode
-//! `sync` means "the caret was moved", which ends what dot-repeat records.
+//! ## Changes the engine did not make
+//!
+//! Whenever the editor reports that its selection or document changed,
+//! call [`Vim::sync`]. It does nothing when the editor is as the engine
+//! left it, and in Insert mode it accepts the change that follows a key the
+//! engine left to the host, so the call is safe after every change report.
+//! What it is for:
+//!
+//! - a mouse click or drag, shift-arrows, an Emacs-style `ctrl-a`: outside
+//!   Insert mode the caret may now sit after the last character of a line
+//!   or a selection may exist; `sync` moves the caret onto a character or
+//!   starts Visual mode, and drops a half-typed command;
+//! - a command from a menu or the palette (bold, find and replace, undo);
+//! - in Insert mode, a click: what was typed before no longer repeats with
+//!   `.`, as in Vim.
+//!
+//! One exception: do not call `sync` for the changes the platform input
+//! method makes while it has marked text. They are neither keys nor typed
+//! text yet; the commit is reported with [`Vim::text_inserted`].
+//!
+//! If `sync` is not called, the engine catches up by itself at the next
+//! key outside Insert mode, but the caret and the mode indicator are wrong
+//! until then.
 //!
 //! ## Typing in Insert mode
 //!
 //! In Insert and Replace mode the engine does not insert text. Typed
 //! characters go through the editor's normal path (platform input method,
-//! Markdown input rules, smart punctuation). After the editor inserted
+//! Markdown input rules, smart punctuation). Every time the editor inserts
 //! typed or committed text, tell the engine with [`Vim::text_inserted`],
-//! passing the text as it was typed. That feeds:
+//! passing the text as it was typed, once per insertion (right after the
+//! insertion, or right before it). That feeds:
 //!
 //! - counts: `3ihello<Esc>` types `hello` twice more on escape;
 //! - dot-repeat of the session;

@@ -260,6 +260,12 @@ pub struct Vim {
     pub(crate) keep_redo_carets: bool,
     /// The document revision when the command being typed started.
     pub(crate) command_revision: u64,
+    /// The document revision and selection the engine last left or saw:
+    /// when they differ, something outside the engine changed the editor.
+    seen: Option<(u64, Selection)>,
+    /// A key was left to the host (or typed text announced): the next
+    /// change of the editor is the host carrying it out.
+    expect_host: bool,
     /// What the host was last told; `None` forces a full report.
     shown: Option<Shown>,
 }
@@ -311,6 +317,8 @@ impl Vim {
             redo_carets: Vec::new(),
             keep_redo_carets: false,
             command_revision: 0,
+            seen: None,
+            expect_host: false,
             shown: Some(Shown {
                 mode: Mode::Normal,
                 pending: String::new(),
@@ -475,12 +483,39 @@ impl Vim {
         host: &mut dyn VimHost,
     ) -> Outcome {
         let mut cx = Cx { ed, host };
+        self.catch_up(&mut cx);
         let one_shot = self.resume.is_some();
         let consumed = self.dispatch(key, &mut cx);
         if one_shot {
             self.maybe_resume_insert(&mut cx);
         }
+        // A key left to the host will change the editor behind the engine.
+        self.expect_host = !consumed;
+        self.observe(&cx);
         self.finish(consumed)
+    }
+
+    /// Remembers the state the engine leaves the editor in.
+    fn observe(&mut self, cx: &Cx) {
+        self.seen = Some((cx.ed.revision(), cx.ed.selection()));
+    }
+
+    /// Whether the editor changed since the engine last looked.
+    fn changed_outside(&self, cx: &Cx) -> bool {
+        self.seen != Some((cx.ed.revision(), cx.ed.selection()))
+    }
+
+    /// Before a key: if the editor changed behind the engine and nobody
+    /// called [`Vim::sync`], do it now. In Insert mode changes are the
+    /// host's typing and are left alone.
+    fn catch_up(&mut self, cx: &mut Cx) {
+        self.expect_host = false;
+        if self.seen.is_none() || !self.changed_outside(cx) {
+            return;
+        }
+        if !matches!(self.base, Base::Insert | Base::Replace) {
+            self.sync_inner(cx);
+        }
     }
 
     /// Feeds a sequence of keys (see [`Key::parse_sequence`]) and merges the
@@ -535,7 +570,11 @@ impl Vim {
         host: &mut dyn VimHost,
     ) -> Outcome {
         let mut cx = Cx { ed, host };
+        // Called after the insertion, the change is accounted for now;
+        // called before it, the change is still to come.
+        self.expect_host = !self.changed_outside(&cx);
         self.note_inserted(text, &mut cx);
+        self.observe(&cx);
         self.finish(true)
     }
 
@@ -553,6 +592,7 @@ impl Vim {
         if used {
             self.cmdline_insert(text, &mut cx);
         }
+        self.observe(&cx);
         self.finish(used)
     }
 
@@ -578,13 +618,14 @@ impl Vim {
         }
         self.finish_command(&mut cx, false);
         cx.ed.end_undo_group();
+        self.observe(&cx);
         self.finish(true)
     }
 
     /// Brings the engine in line with the editor after something changed
     /// the selection or the document without going through the engine: a
     /// mouse click or drag, a host command, find and replace, undo from a
-    /// menu, another document being loaded into the same editor state.
+    /// menu.
     ///
     /// - Normal mode: a collapsed caret is moved onto a character; a
     ///   selection starts Visual mode (as a mouse drag does in Vim).
@@ -593,9 +634,29 @@ impl Vim {
     /// - Insert and Replace mode: what was typed so far no longer counts
     ///   for dot-repeat (as after a mouse click in Vim).
     /// - An unfinished command and an open command line are cancelled.
+    ///
+    /// The call does nothing when the editor is as the engine left it, and
+    /// in Insert mode it also accepts the one change that follows a key the
+    /// engine left to the host (or a [`Vim::text_inserted`]). So a host may
+    /// simply call `sync` whenever the editor reports a changed selection
+    /// or document, with one exception: not while the platform input
+    /// method has marked text, whose updates are neither keys nor typed
+    /// text yet.
+    ///
+    /// The engine also catches up by itself at the next key outside Insert
+    /// mode; calling `sync` right away is what keeps the caret and the
+    /// mode indicator correct in between.
     pub fn sync(&mut self, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
         let mut cx = Cx { ed, host };
-        self.sync_inner(&mut cx);
+        if self.changed_outside(&cx) {
+            let typing = matches!(self.base, Base::Insert | Base::Replace);
+            if typing && std::mem::take(&mut self.expect_host) {
+                // The host carrying out the key the engine let through.
+            } else {
+                self.sync_inner(&mut cx);
+            }
+        }
+        self.observe(&cx);
         self.finish(true)
     }
 
@@ -626,6 +687,8 @@ impl Vim {
         }
         // Report everything, not only what changed.
         self.shown = None;
+        self.expect_host = false;
+        self.observe(&cx);
         self.finish(true)
     }
 
@@ -646,6 +709,8 @@ impl Vim {
         }
         self.reset_transient();
         self.search.highlight = false;
+        self.seen = None;
+        self.expect_host = false;
         self.finish(true)
     }
 

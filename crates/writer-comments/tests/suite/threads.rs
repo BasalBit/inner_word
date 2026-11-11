@@ -1,11 +1,11 @@
 //! Working on threads from the thread list: reply, edit, resolve and
 //! reopen, delete, detached threads; undo of each.
 
-use gpui::{Modifiers, TestAppContext};
+use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use writer_comments::{DeleteTarget, DraftKind};
 use writer_core::{ReplyId, TextRange};
 
-use super::support::{AUTHOR, Focus, NOW, open, sample};
+use super::support::{AUTHOR, Fixture, Focus, NOW, open, sample};
 
 #[gpui::test]
 fn reply_from_the_list_and_undo_there(cx: &mut TestAppContext) {
@@ -142,11 +142,22 @@ fn resolve_hides_reopen_brings_back(cx: &mut TestAppContext) {
         );
     });
 
+    // A thread that is not listed is not tinted in the text either.
+    let hidden = |f: &Fixture, cx: &mut VisualTestContext| {
+        f.editor
+            .read_with(cx, |editor, _| editor.hidden_comments().collect::<Vec<_>>())
+    };
+    assert_eq!(hidden(&f, cx), vec![first]);
+
     // Show resolved, go to it, reopen.
     cx.simulate_keystrokes("s");
     f.panel
         .read_with(cx, |panel, _| assert!(panel.show_resolved()));
     assert_eq!(f.listed_ids(cx), vec![first, second]);
+    assert_eq!(hidden(&f, cx), vec![]);
+    cx.simulate_keystrokes("s");
+    assert_eq!(hidden(&f, cx), vec![first]);
+    cx.simulate_keystrokes("s");
     cx.simulate_keystrokes("up");
     assert_eq!(f.active(cx), Some(first));
     cx.simulate_keystrokes("x");

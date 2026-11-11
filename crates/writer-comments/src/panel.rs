@@ -609,7 +609,31 @@ impl CommentsPanel {
         self.validate(cx);
     }
 
+    /// A thread the panel does not list has no tint in the text either: a
+    /// resolved thread is tinted only while "show resolved" is on. (The
+    /// editor forgets the set when its document is replaced, and does not
+    /// follow edits, so this runs with every refresh.)
+    fn sync_hidden_tints(&mut self, cx: &mut Context<Self>) {
+        let mut hidden: Vec<CommentId> = if self.show_resolved {
+            Vec::new()
+        } else {
+            self.threads
+                .iter()
+                .filter(|entry| entry.is_resolved())
+                .map(|entry| entry.id)
+                .collect()
+        };
+        hidden.sort_unstable();
+        let mut current: Vec<CommentId> = self.editor.read(cx).hidden_comments().collect();
+        current.sort_unstable();
+        if hidden != current {
+            self.editor
+                .update(cx, |editor, cx| editor.set_hidden_comments(hidden, cx));
+        }
+    }
+
     fn validate(&mut self, cx: &mut Context<Self>) {
+        self.sync_hidden_tints(cx);
         if self.active.is_some_and(|id| !self.is_listed(id)) {
             self.set_active(None, false, cx);
         }

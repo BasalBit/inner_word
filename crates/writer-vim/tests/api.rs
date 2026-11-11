@@ -213,6 +213,42 @@ fn detaching_closes_what_is_open() {
 }
 
 #[test]
+fn an_edit_from_outside_does_not_start_visual_mode() {
+    // The editor's own undo (cmd-z, the Edit menu) brings back the
+    // selection the undone step was made on. From Normal mode that is not
+    // a Visual selection: the next `d` would delete it.
+    let mut s = Session::new("alpha |beta gamma");
+    s.ed.set_selection(Selection::new(Position::new(0, 6), Position::new(0, 10)));
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Visual);
+    s.ed.toggle_bold();
+    s.vim.sync(&mut s.ed, &mut s.host);
+    // An edit made on a Visual selection keeps it.
+    assert_eq!(s.mode(), Mode::Visual);
+    s.keys("<Esc>");
+    assert_eq!(s.mode(), Mode::Normal);
+    assert!(s.ed.undo());
+    assert!(
+        !s.ed.selection().is_collapsed(),
+        "the undo restores the selection"
+    );
+    let o = s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Normal);
+    assert!(!o.effects.contains(&Effect::ModeChanged(Mode::Visual)));
+    assert_eq!(s.buffer(), "alpha |beta gamma");
+    // Without a sync the engine catches up at the next key the same way.
+    assert!(s.ed.redo());
+    s.keys("x");
+    assert_eq!(s.mode(), Mode::Normal);
+    assert_eq!(s.text(), "alpha **eta** gamma");
+    // A selection made without an edit (a drag, shift-arrows) still
+    // starts Visual mode.
+    s.ed.set_selection(Selection::new(Position::new(0, 0), Position::new(0, 2)));
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Visual);
+}
+
+#[test]
 fn syncing_after_the_host_moved_things() {
     // Normal mode: the caret is put on a character.
     let mut s = Session::new("|abc");

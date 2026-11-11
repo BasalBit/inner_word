@@ -837,7 +837,22 @@ impl Vim {
         self.pending = Pending::default();
         self.goal = None;
         let sel = cx.ed.selection();
+        // The document itself was changed from outside (an undo or redo of
+        // the editor, a command of the application), not just the
+        // selection.
+        let edited = self
+            .seen
+            .is_some_and(|(revision, _)| revision != cx.ed.revision());
         match self.base {
+            Base::Normal if edited && !sel.is_collapsed() => {
+                // An edit made from Normal mode does not start Visual mode,
+                // whatever selection it leaves behind: the editor's undo
+                // brings back the selection a step was made on, and the
+                // next operator key would act on it. The cursor goes to
+                // the start of what was selected, as after `u`.
+                let p = buf::clamp_normal(cx.ed.document(), sel.start());
+                cx.ed.set_caret(p);
+            }
             Base::Insert | Base::Replace => {
                 // The caret was moved (a click): what was typed before is
                 // an undo step of its own and no longer repeats.

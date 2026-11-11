@@ -496,6 +496,16 @@ impl TextField {
         self.focus_handle.is_focused(window)
     }
 
+    /// Bounds of the text area in the last painted frame (window coordinates).
+    pub fn last_painted_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+
+    /// Horizontal scroll of the text inside the field (0 = start visible).
+    pub fn scroll_offset(&self) -> Pixels {
+        self.scroll_x
+    }
+
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
     }

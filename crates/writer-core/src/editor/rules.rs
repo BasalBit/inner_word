@@ -23,8 +23,9 @@
 //!
 //! Smart punctuation: straight quotes become curly (opening after
 //! whitespace, an opening bracket, a dash or the other kind of opening
-//! quote, or at the start; otherwise closing / apostrophe, so `""` is an
-//! empty pair), `--` becomes an em dash (at the very start of a
+//! quote, or at the start, looking through Markdown delimiters as in
+//! `**"bold"**`; otherwise closing / apostrophe, so `""` is an empty pair),
+//! `--` becomes an em dash (at the very start of a
 //! block only once the next character is typed, so `---` can still make a
 //! divider), `...` becomes an ellipsis.
 
@@ -264,14 +265,17 @@ impl EditorState {
         match ch {
             '"' | '\'' => {
                 // Opening after nothing, whitespace, an opening bracket, a
-                // dash or the *other* kind of opening quote (nested quotes).
-                // Right after an opening quote of its own kind it closes, so
-                // typing `""` gives an empty pair of curly quotes.
+                // dash or the *other* kind of opening quote (nested quotes);
+                // Markdown delimiters in between are looked through, so the
+                // quote in `**"bold"**` opens. Right after an opening quote
+                // of its own kind it closes, so typing `""` gives an empty
+                // pair of curly quotes.
                 let own_open = if ch == '"' { '\u{201C}' } else { '\u{2018}' };
-                let opening = char_before(t, start).is_none_or(|c| {
-                    c != own_open
-                        && (c.is_whitespace() || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c))
-                });
+                let lead = t[..start].trim_end_matches(['*', '_', '~', '=', '`']);
+                let opening = char_before(t, start) != Some(own_open)
+                    && lead.chars().next_back().is_none_or(|c| {
+                        c.is_whitespace() || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c)
+                    });
                 let rep = match (ch, opening) {
                     ('"', true) => "\u{201C}",
                     ('"', false) => "\u{201D}",

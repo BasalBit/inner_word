@@ -313,6 +313,19 @@ fn smart_quotes_pair_up() {
         }
         assert_eq!(texts(&e), [want], "{input:?}");
     }
+    // Quotes inside Markdown emphasis open and close correctly, and the
+    // inline rule still fires around them.
+    for (input, want) in [
+        ("**\"bold\"** x", "\u{201C}bold\u{201D} x"),
+        ("a *'it'* x", "a \u{2018}it\u{2019} x"),
+        ("_\"u\"_", "\u{201C}u\u{201D}"),
+        ("word*\"", "word*\u{201D}"),
+    ] {
+        let e = typed(input);
+        assert_eq!(texts(&e), [want], "{input:?}");
+    }
+    let e = typed("**\"bold\"**");
+    assert!(e.document().blocks()[0].runs().iter().all(|r| r.attrs.bold));
     // One undo gives the straight quote back.
     let mut e = typed("\"\"");
     e.undo();

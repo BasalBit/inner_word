@@ -12,14 +12,14 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton, Pixels,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton, Pixels, Rgba,
     ScrollStrategy, SharedString, Subscription, UniformListScrollHandle, Window, div, prelude::*,
     px, uniform_list,
 };
 use writer_ui::{
     Divider, FieldAppearance, HighlightedLabel, Icon, IconName, KeyHint, TextField, TextFieldEvent,
     picker,
-    theme::{ActiveTheme, RADIUS_LG, RADIUS_MD, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
+    theme::{ActiveTheme, RADIUS_LG, RADIUS_MD, ThemeColors, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
 };
 
 /// The state mark in front of a row.
@@ -302,6 +302,7 @@ impl Menu {
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
         let colors = cx.theme().colors;
+        let selected_fill = selected_row_fill(&colors);
         range
             .map(|ix| {
                 let outer = div()
@@ -402,7 +403,7 @@ impl Menu {
                                     .items_center()
                                     .gap(px(8.))
                                     .rounded(RADIUS_MD)
-                                    .when(selected, |el| el.bg(colors.accent_subtle))
+                                    .when(selected, |el| el.bg(selected_fill))
                                     .children(mark)
                                     .children(swatch)
                                     .child(
@@ -550,6 +551,51 @@ impl Render for Menu {
                 el.child(Divider::horizontal()).child(footer)
             })
     }
+}
+
+/// The fill of the selected row.
+///
+/// The menus share the look of `writer_ui::Picker`, whose selected row is
+/// filled with the theme's `accent_subtle`. On Paper that stands out from
+/// the panel (1.22:1). On Night the token is almost the panel's own colour
+/// (`#3A2620` on `#272420`, 1.08:1), and the selected row is the cursor of
+/// a keyboard-driven menu. Until the token is as clear on Night as it is
+/// on Paper, a fill that is too close to the panel is replaced by the
+/// accent mixed into the panel colour, which gives the same 1.22:1 and keeps the key hints on it readable. With a
+/// clear token this function returns the token.
+#[doc(hidden)]
+pub fn selected_row_fill(colors: &ThemeColors) -> Hsla {
+    const CLEAR_ENOUGH: f32 = 1.15;
+    const ACCENT_SHARE: f32 = 0.13;
+    if contrast(colors.accent_subtle, colors.elevated) >= CLEAR_ENOUGH {
+        return colors.accent_subtle;
+    }
+    let (accent, panel) = (Rgba::from(colors.accent), Rgba::from(colors.elevated));
+    let mix = |a: f32, b: f32| b + (a - b) * ACCENT_SHARE;
+    Rgba {
+        r: mix(accent.r, panel.r),
+        g: mix(accent.g, panel.g),
+        b: mix(accent.b, panel.b),
+        a: 1.,
+    }
+    .into()
+}
+
+/// WCAG contrast ratio of two opaque colours.
+fn contrast(a: Hsla, b: Hsla) -> f32 {
+    fn luminance(color: Hsla) -> f32 {
+        let color = Rgba::from(color);
+        let channel = |value: f32| {
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+    }
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 /// Ranks `(id, label, keywords)` candidates against `query`. The label is

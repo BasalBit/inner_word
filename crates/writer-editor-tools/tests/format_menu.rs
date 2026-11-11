@@ -2,7 +2,7 @@ use gpui::{Hsla, Rgba, TestAppContext};
 use writer_core::{
     Alignment, Block, BlockKind, Document, Highlight, InlineAttrs, Position, TextRange,
 };
-use writer_editor_tools::{Mark, TEXT_COLORS, ToolKind};
+use writer_editor_tools::{Mark, TEXT_COLORS, ToolKind, selected_row_fill};
 use writer_ui::theme::{self, ActiveTheme, ThemeMode};
 
 use crate::support::*;
@@ -566,4 +566,27 @@ fn an_open_menu_follows_a_theme_change(cx: &mut TestAppContext) {
             Some(Highlight::Blue)
         );
     });
+}
+
+#[gpui::test]
+fn the_selected_row_stands_out_in_both_themes(cx: &mut TestAppContext) {
+    setup(cx);
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        cx.update(|cx| theme::set_theme_mode(mode, cx));
+        let colors = cx.update(|cx| cx.theme().colors);
+        let fill = selected_row_fill(&colors);
+        // The selected row against the panel it is in, and everything a
+        // row shows against the selected row: the label, the key hint and
+        // detail, the check mark and the matched letters.
+        let stands_out = contrast(fill, colors.elevated);
+        assert!(stands_out >= 1.2, "{mode:?}: row on panel {stands_out:.2}");
+        assert!(contrast(colors.ink, fill) >= 7., "{mode:?}: label");
+        assert!(contrast(colors.muted, fill) >= 4.5, "{mode:?}: key hint");
+        assert!(contrast(colors.accent, fill) >= 3., "{mode:?}: check mark");
+    }
+    // Where the theme's own token is clear enough, it is used as it is
+    // (the look of the app's other pickers).
+    cx.update(|cx| theme::set_theme_mode(ThemeMode::Light, cx));
+    let colors = cx.update(|cx| cx.theme().colors);
+    assert_eq!(selected_row_fill(&colors), colors.accent_subtle);
 }

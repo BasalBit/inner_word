@@ -127,6 +127,8 @@ pub use font_picker::{
 };
 pub use format_menu::TEXT_COLORS;
 pub use menu::Mark;
+#[doc(hidden)]
+pub use menu::selected_row_fill;
 pub use tools::{EditorTools, FindBarPlacement, MenuRow, ToolKind, ToolsEvent};
 pub use util::{format_date, normalize_url, today_string};
 

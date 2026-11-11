@@ -92,7 +92,10 @@ pub const FORMAT_BAR_BUTTONS: [&str; 10] = [
 const GAP: Pixels = px(8.);
 /// Space kept to the edges of the editor's viewport.
 const MARGIN: Pixels = px(8.);
-/// A viewport narrower than this gets the short names of the block kinds.
+/// In a viewport narrower than this the bar is drawn tight: the block
+/// kinds by their short names, no arrows on the buttons that drop a menu.
+/// It then fits the editor of a window at its smallest with the library
+/// beside it.
 const NARROW: Pixels = px(520.);
 /// The bar is drawn over the text like the editor's own popup.
 const DRAW_PRIORITY: usize = 1;
@@ -510,7 +513,9 @@ fn rgb_color(rgb: Rgb) -> Hsla {
 /// it, under the selection when there is no room above, at the top of the
 /// viewport when the selection leaves no room on either side, and nowhere
 /// (`None`) while the selection is out of sight. Always inside `viewport`,
-/// with [`MARGIN`] to its edges where the bar is narrower than it.
+/// with [`MARGIN`] to its edges. Only a bar wider than the viewport (an
+/// editor squeezed between two panels) leaves it sideways, and then stays
+/// inside the window, `window_width` wide.
 ///
 /// `first` is the first row of the selection, `all` the rectangle around
 /// the whole of it; all in window coordinates.
@@ -519,12 +524,19 @@ pub(crate) fn place_format_bar(
     all: Bounds<Pixels>,
     size: Size<Pixels>,
     viewport: Bounds<Pixels>,
+    window_width: Pixels,
 ) -> Option<Point<Pixels>> {
     if all.bottom() <= viewport.top() || all.top() >= viewport.bottom() {
         return None;
     }
-    let left = viewport.left() + MARGIN;
-    let right = (viewport.right() - MARGIN - size.width).max(left);
+    let (left, right) = if size.width + MARGIN * 2. <= viewport.size.width {
+        (
+            viewport.left() + MARGIN,
+            viewport.right() - MARGIN - size.width,
+        )
+    } else {
+        (MARGIN, (window_width - MARGIN - size.width).max(MARGIN))
+    };
     let x = (first.center().x - size.width / 2.).clamp(left, right);
 
     let top = viewport.top() + MARGIN;
@@ -1197,8 +1209,9 @@ impl EditorTools {
     }
 
     /// The bar as an element. `narrow`: the editor is narrow, names are
-    /// short.
-    fn render_format_bar(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// short. `tips`: the buttons show their tooltips (not under a menu
+    /// that has just dropped from one of them: the pointer rests there).
+    fn render_format_bar(&self, narrow: bool, tips: bool, cx: &mut Context<Self>) -> AnyElement {
         let snapshot = self.format_bar_snapshot(cx);
         let specs = self.format_bar_specs(cx);
         let theme = cx.theme();
@@ -1255,14 +1268,18 @@ impl EditorTools {
             } else {
                 colors.ink
             };
+            // The arrow of a button that drops a menu.
             let chevron = || {
-                Icon::new(IconName::ChevronDown)
-                    .size(px(10.))
-                    .color(if spec.enabled {
-                        colors.muted
-                    } else {
-                        colors.faint
-                    })
+                (!narrow).then(|| {
+                    Icon::new(IconName::ChevronDown)
+                        .size(px(10.))
+                        .color(if spec.enabled {
+                            colors.muted
+                        } else {
+                            colors.faint
+                        })
+                        .into_any_element()
+                })
             };
             let letter = |letter: &'static str| {
                 div()
@@ -1270,7 +1287,7 @@ impl EditorTools {
                     .text_size(px(15.))
                     .child(letter)
             };
-            let face: Vec<AnyElement> = match spec.which {
+            let mut face: Vec<AnyElement> = match spec.which {
                 Which::Core(Core::Bold) => {
                     vec![letter("B").font_weight(FontWeight::BOLD).into_any_element()]
                 }
@@ -1312,7 +1329,6 @@ impl EditorTools {
                             .when(!spec.enabled, |el| el.opacity(0.45))
                             .child("A")
                             .into_any_element(),
-                        chevron().into_any_element(),
                     ]
                 }
                 Which::Core(Core::Color) => {
@@ -1344,7 +1360,6 @@ impl EditorTools {
                                     .when(!spec.enabled, |el| el.opacity(0.45)),
                             )
                             .into_any_element(),
-                        chevron().into_any_element(),
                     ]
                 }
                 Which::Core(Core::Link) => {
@@ -1357,7 +1372,6 @@ impl EditorTools {
                             .px(px(2.))
                             .child(if narrow { short } else { full })
                             .into_any_element(),
-                        chevron().into_any_element(),
                     ]
                 }
                 Which::Core(Core::More) => {
@@ -1373,6 +1387,10 @@ impl EditorTools {
                     ],
                 },
             };
+
+            if matches!(spec.which, Which::Core(core) if core.menu().is_some()) {
+                face.extend(chevron());
+            }
 
             let id = spec.id.clone();
             let selector = spec.id.to_string();
@@ -1392,7 +1410,9 @@ impl EditorTools {
                 .rounded(RADIUS_SM)
                 .text_color(ink)
                 .when(on, |el| el.bg(on_fill))
-                .tooltip(tip(spec.label.clone(), spec.hint.clone()))
+                .when(tips, |el| {
+                    el.tooltip(tip(spec.label.clone(), spec.hint.clone()))
+                })
                 .children(face);
             if spec.state == Mark::Mixed {
                 // "In part of the selection": a short stroke under the
@@ -1480,9 +1500,10 @@ fn prepaint_format_bar(tools: &Entity<EditorTools>, window: &mut Window, cx: &mu
         return drawn.set(None);
     };
     let narrow = viewport.size.width < NARROW;
-    let mut bar = tools.update(cx, |tools, cx| tools.render_format_bar(narrow, cx));
+    let tips = !ContextMenu::is_open(window, cx);
+    let mut bar = tools.update(cx, |tools, cx| tools.render_format_bar(narrow, tips, cx));
     let size = bar.layout_as_root(AvailableSpace::min_size(), window, cx);
-    match place_format_bar(first, all, size, viewport) {
+    match place_format_bar(first, all, size, viewport, window.viewport_size().width) {
         Some(origin) => {
             drawn.set(Some(Bounds::new(origin, size)));
             window.defer_draw(bar, origin, DRAW_PRIORITY);

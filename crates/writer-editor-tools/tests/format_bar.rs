@@ -1414,8 +1414,38 @@ fn the_bar_keeps_inside_a_narrow_editor(cx: &mut TestAppContext) {
     assert!(at.right() <= view.right() - px(4.), "{at:?} in {view:?}");
     assert!(at.left() >= view.left());
     assert!(at.bottom() <= rows[0].top() || at.top() >= rows[0].bottom());
-    // A narrow editor names the block kind in short.
-    assert!(at.size.width < view.size.width);
+    let regular = at.size.width;
+    assert!(regular < view.size.width);
+
+    // The editor of the smallest window with the library beside it: the
+    // bar is drawn tight and still fits, with room to its edges.
+    clicks(inside(&editor, 2, 3, cx), 1, Modifiers::none(), cx);
+    cx.simulate_resize(size(px(380.), px(400.)));
+    cx.run_until_parked();
+    let view = viewport(&editor, cx);
+    assert!(view.size.width <= px(380.));
+    tools.update(cx, |tools, _| {
+        tools.set_format_bar_extension(|_, _| {
+            vec![FormatBarButton::new("Comment", |_, _| {}).icon(IconName::Comment)]
+        })
+    });
+    drag(&editor, 0, 0..2, cx);
+    let at = bar(&tools, cx);
+    assert!(at.size.width < regular, "tight: {at:?}");
+    assert!(at.left() >= view.left() + px(4.), "{at:?} in {view:?}");
+    assert!(at.right() <= view.right() - px(4.), "{at:?} in {view:?}");
+    assert_eq!(items(&tools, cx).len(), FORMAT_BAR_BUTTONS.len() + 1);
+
+    // Squeezed narrower than the bar, it leaves the editor sideways but
+    // not the window, and keeps clear of the selection.
+    clicks(inside(&editor, 2, 3, cx), 1, Modifiers::none(), cx);
+    cx.simulate_resize(size(px(240.), px(400.)));
+    cx.run_until_parked();
+    drag(&editor, 0, 0..2, cx);
+    let rows = selection_rows(&editor, cx);
+    let at = bar(&tools, cx);
+    assert!(at.left() >= px(0.), "{at:?}");
+    assert!(at.top() >= rows[0].bottom() || at.bottom() <= rows[0].top());
 }
 
 #[gpui::test]

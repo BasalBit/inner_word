@@ -1,6 +1,6 @@
 //! The contextual tools of the editor: the format menu, the insert menu,
-//! the link popover, the font picker, find and replace, and the context
-//! menu of the text.
+//! the link popover, the font picker, find and replace, the context menu
+//! of the text, and the format bar that floats over a mouse selection.
 //!
 //! Everything here works from the keyboard alone and with the mouse alone,
 //! and plugs into `writer_editor::Editor` through its public seams (the
@@ -41,6 +41,8 @@
 //! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `cmd-alt-f` in the bar shows or hides the replace row, `escape` (in the bar or in the document) closes and leaves the current match selected. |
 //!
 //! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
+//!
+//! | Format bar | a selection made with the mouse | Comes up by itself a moment after a drag, a double or triple click or a `shift`-click, over the selection: bold, italic, underline, strikethrough, inline code (showing the state of the selection), highlight, text colour, link, "turn into", the host's buttons, and "more" (the format menu). Never takes the keyboard; a button keeps the selection and the bar. Goes on `escape`, a keyboard selection, typing, a press elsewhere. See [`EditorTools::set_format_bar_enabled`] and the `format_bar` module docs. |
 //!
 //! With the mouse: every row of the menus can be clicked (the row under
 //! the pointer is the selected one), the buttons of the link popover and
@@ -91,6 +93,20 @@
 //!   selection, "Go to Comment" on commented text). The menu never takes
 //!   the keyboard: the editor keeps it, and an action item is dispatched
 //!   from the editor outwards as its key binding is.
+//! - **The format bar** is on by default; connect a setting to
+//!   [`EditorTools::set_format_bar_enabled`] (and read
+//!   [`EditorTools::format_bar_enabled`]). Add the app's buttons with
+//!   [`EditorTools::set_format_bar_extension`], the counterpart of the
+//!   text menu's hook: a list of [`FormatBarButton`]s, asked for each time
+//!   the bar appears ("Add Comment"). The bar needs nothing mounted; the
+//!   menus its buttons drop are `writer_ui::ContextMenu`s and need the
+//!   window's `ContextMenuLayer` like every other menu. It is not a
+//!   [`ToolKind`] and [`EditorTools::active_tool`] does not report it (it
+//!   never has the keyboard): read [`EditorTools::format_bar_visible`],
+//!   [`EditorTools::format_bar_items`] and
+//!   [`EditorTools::format_bar_bounds`], and press a button from a script
+//!   with [`EditorTools::press_format_bar_button`]. `escape` in the text
+//!   closes a showing bar before the find bar.
 //! - **Key contexts.** The bindings live in `"EditorTools"` (the whole
 //!   view), `"FindBar"` and `"LinkPopover"`. Inside the find bar
 //!   `cmd-alt-c` toggles case sensitivity; a context-free binding for the
@@ -129,6 +145,7 @@
 //! | `menu` | the popup list shared by the format menu, the insert menu and the font picker |
 //! | `format_menu`, `insert_menu`, `link`, `font_picker`, `find` | one tool each, as `impl EditorTools` blocks |
 //! | `text_menu` | the context menu of the text: its items for a request, the host's extension, what each row runs |
+//! | `format_bar` | the floating format bar: telling a mouse selection from a keyboard one, placing and drawing the bar, its buttons and their menus, the host's buttons |
 //! | [`actions`] | actions and key bindings |
 //! | `tip` | the tooltip of a button: its name and key |
 //! | `util` | today's date, URL clean-up |

@@ -41,6 +41,36 @@
 //! `(id, revision)`; no diffing is needed. Typing, moving and undoing one
 //! step cost in proportion to the blocks touched, never to the document.
 //!
+//! # Where to start
+//!
+//! - **Rendering** (editor, exporters): iterate [`Document::blocks`]; per
+//!   block use [`Block::kind`], [`Block::alignment`], [`Block::indent`],
+//!   [`Block::text_size`] (else [`Typography::size_for`] from
+//!   [`Document::settings`]), and [`Block::text_spans`] for the styled runs.
+//!   Numbered items get their number from [`Document::numbered_ordinals`].
+//!   Comment highlights come from [`Document::all_comment_ranges`].
+//! - **Input** (editor): [`EditorState::insert_text`] for typed and IME text,
+//!   [`EditorState::insert_paragraph_break`] (Enter),
+//!   [`EditorState::insert_soft_break`] (shift-enter),
+//!   [`EditorState::backspace`] / [`EditorState::delete_forward`] and the
+//!   word and line variants, [`EditorState::move_caret`] with a
+//!   [`Movement`], [`EditorState::set_selection`] for mouse and vertical
+//!   moves, [`Block::utf16_to_offset`] / [`Block::offset_to_utf16`] for IME
+//!   ranges. Call [`EditorState::break_undo_group`] on a typing pause.
+//! - **Vim**: positions, [`Document::moved`] and the [`text`] helpers for
+//!   motions; [`EditorState::delete_range`], [`EditorState::replace_range`],
+//!   [`EditorState::insert_blocks_at`], [`Document::fragment`] and
+//!   [`EditorState::paste`] for operators and registers;
+//!   [`EditorState::begin_undo_group`] / [`EditorState::end_undo_group`] to
+//!   make an operator, an insert session or a repeat one undo step;
+//!   [`Document::flat_offset`] / [`Document::position_from_flat`] for
+//!   searches across blocks.
+//! - **Formatting UI**: [`EditorState::format_state`], the `toggle_*`,
+//!   `set_*` and block commands; [`EditorState::touched_blocks`] tells which
+//!   blocks a block command acts on.
+//! - **Persistence**: [`Document::to_json`] / [`Document::from_json`];
+//!   [`Document::plain_text`] and [`Document::title`] for the library index.
+//!
 //! # Example
 //!
 //! ```

@@ -80,6 +80,20 @@ impl Fragment {
     pub fn is_inline(&self) -> bool {
         self.blocks.len() == 1 && !self.blocks[0].is_void()
     }
+
+    /// The fragment as a standalone document (fresh ids, default settings),
+    /// so document exporters can also produce clipboard formats.
+    pub fn to_document(&self) -> Document {
+        Document::from_blocks(self.blocks.clone())
+    }
+}
+
+impl Document {
+    /// All blocks of the document as a fragment (without comment anchors),
+    /// for example to paste a document produced by an importer.
+    pub fn to_fragment(&self) -> Fragment {
+        Fragment::new(self.blocks.clone())
+    }
 }
 
 impl Document {
@@ -158,5 +172,11 @@ mod tests {
         assert!(!f.blocks()[1].is_void());
         let f = d.fragment(TextRange::new(Position::new(1, 4), Position::new(1, 1)));
         assert_eq!(f.to_plain_text(), "ody");
+        let whole = d.to_fragment();
+        assert_eq!(whole.blocks().len(), 3);
+        assert!(whole.blocks()[2].is_void());
+        let back = whole.to_document();
+        assert_eq!(back.plain_text(), d.plain_text());
+        back.check_invariants().unwrap();
     }
 }

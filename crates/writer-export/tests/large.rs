@@ -96,8 +96,27 @@ fn varied_book(blocks: usize) -> Document {
     use writer_core::{EditorState, Position, Selection};
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let words = [
-        "the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog", "—", "*", "_x_", "[1]",
-        "日本語", "שלום", "😀", "a<b", "&amp;", "1.", "`code`", "https://example.com/a_b",
+        "the",
+        "quick",
+        "brown",
+        "fox",
+        "jumps",
+        "over",
+        "a",
+        "lazy",
+        "dog",
+        "—",
+        "*",
+        "_x_",
+        "[1]",
+        "日本語",
+        "שלום",
+        "😀",
+        "a<b",
+        "&amp;",
+        "1.",
+        "`code`",
+        "https://example.com/a_b",
     ];
     let mut out = Vec::with_capacity(blocks);
     for i in 0..blocks {
@@ -105,7 +124,9 @@ fn varied_book(blocks: usize) -> Document {
             0 => BlockKind::heading(1 + rng.below(6) as u8),
             1..=3 => BlockKind::NumberedItem,
             4..=6 => BlockKind::BulletItem,
-            7 => BlockKind::TodoItem { checked: i % 2 == 0 },
+            7 => BlockKind::TodoItem {
+                checked: i % 2 == 0,
+            },
             8 => BlockKind::Quote,
             9 => BlockKind::code(),
             10 if i % 7 == 0 => BlockKind::Divider,

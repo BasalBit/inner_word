@@ -23,12 +23,16 @@
 //!   with shading; links as real hyperlinks; soft line breaks.
 //!   Right-to-left paragraphs and runs are marked as such.
 //! - **Page setup.** Paper size, orientation and margins of the document
-//!   settings, and optionally a centred page-number footer.
+//!   settings, and optionally a centred page-number footer. Word's largest
+//!   page is 22 inches each way; a larger custom page is cut to that.
 //! - **Comments.** With [`DocxOptions::comments`], every anchored thread is
 //!   a Word comment on its text range, with its replies threaded under it
 //!   and resolved threads marked done.
 //! - **Collections.** Every document is its own section starting on a new
 //!   page, with its own page setup. Styles come from the first document.
+//!   Page breaks at the very start or end of a document, where the next
+//!   section starts a new page anyway, are dropped so that no empty page
+//!   appears between two documents.
 //!
 //! # Sizes
 //!

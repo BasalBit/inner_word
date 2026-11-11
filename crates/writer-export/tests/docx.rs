@@ -1623,20 +1623,111 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
 // ----- second, independent generator (review pass) ----------------------------------------
 
 const ADV_PIECES: &[&str] = &[
-    "word", " ", "  ", " two words ", "\n", "\n\n", "\t", "<", ">", "&", "\"", "'", "]]>", "<!--", "-->",
-    "&amp;", "&#0;", "&#x1;", "</w:t>", "</w:p>", "<w:br/>", "<?xml?>", "😀", "👨‍👩‍👧", "🇳🇱", "שלום",
-    "مرحبا", "日本語", "é", "e\u{301}", "\u{a0}", "\u{200b}", "\u{200d}", "\u{202e}", "\u{feff}", "\u{2028}",
-    "\u{2029}", "\u{85}", "\u{7f}", "\u{9f}", "\u{fffd}", "\u{fffc}", "\u{e000}", "\u{10ffff}", "\u{1f}",
-    "\u{b}", "\u{c}", "\u{0}", "\u{1}", "\u{8}", "\u{fffe}", "\u{ffff}", "*", "`", "1.", "☐", "☑", "123",
-    "׳", "\u{5d0}1\u{5d1}", "a\u{5d0}b", ".", "!", "-",
+    "word",
+    " ",
+    "  ",
+    " two words ",
+    "\n",
+    "\n\n",
+    "\t",
+    "<",
+    ">",
+    "&",
+    "\"",
+    "'",
+    "]]>",
+    "<!--",
+    "-->",
+    "&amp;",
+    "&#0;",
+    "&#x1;",
+    "</w:t>",
+    "</w:p>",
+    "<w:br/>",
+    "<?xml?>",
+    "😀",
+    "👨‍👩‍👧",
+    "🇳🇱",
+    "שלום",
+    "مرحبا",
+    "日本語",
+    "é",
+    "e\u{301}",
+    "\u{a0}",
+    "\u{200b}",
+    "\u{200d}",
+    "\u{202e}",
+    "\u{feff}",
+    "\u{2028}",
+    "\u{2029}",
+    "\u{85}",
+    "\u{7f}",
+    "\u{9f}",
+    "\u{fffd}",
+    "\u{fffc}",
+    "\u{e000}",
+    "\u{10ffff}",
+    "\u{1f}",
+    "\u{b}",
+    "\u{c}",
+    "\u{0}",
+    "\u{1}",
+    "\u{8}",
+    "\u{fffe}",
+    "\u{ffff}",
+    "*",
+    "`",
+    "1.",
+    "☐",
+    "☑",
+    "123",
+    "׳",
+    "\u{5d0}1\u{5d1}",
+    "a\u{5d0}b",
+    ".",
+    "!",
+    "-",
 ];
 
 const ADV_LINKS: &[&str] = &[
-    "https://example.com", "https://example.com/a b", "a b<c>", "#x", "mailto:a@b.c", "%zz \"q\"", "%",
-    "http://", "http://[::1]/", "http://[bad", "]", "[", "::", "http://exa mple.com/ü?q=ö&x=<>", "\\\\server\\share",
-    "file:///C:/a b.txt", "tel:+1 555", "javascript:alert('x')", "https://日本.jp/パス", "https://x.y/😀",
-    "x\u{0}y", "x\u{1}\u{fffe}y", "  padded  ", "a\nb", "a\tb", "?", "#", "##", "a#b#c", "{x}", "a|b", "a^b",
-    "http://user:pw@host:99999/", "http://x.y/%", "http://x.y/%2", "http://x.y/%2G", "//x.y/z", "/",
+    "https://example.com",
+    "https://example.com/a b",
+    "a b<c>",
+    "#x",
+    "mailto:a@b.c",
+    "%zz \"q\"",
+    "%",
+    "http://",
+    "http://[::1]/",
+    "http://[bad",
+    "]",
+    "[",
+    "::",
+    "http://exa mple.com/ü?q=ö&x=<>",
+    "\\\\server\\share",
+    "file:///C:/a b.txt",
+    "tel:+1 555",
+    "javascript:alert('x')",
+    "https://日本.jp/パス",
+    "https://x.y/😀",
+    "x\u{0}y",
+    "x\u{1}\u{fffe}y",
+    "  padded  ",
+    "a\nb",
+    "a\tb",
+    "?",
+    "#",
+    "##",
+    "a#b#c",
+    "{x}",
+    "a|b",
+    "a^b",
+    "http://user:pw@host:99999/",
+    "http://x.y/%",
+    "http://x.y/%2",
+    "http://x.y/%2G",
+    "//x.y/z",
+    "/",
 ];
 
 fn adv_document(rng: &mut Rng) -> Document {
@@ -1680,8 +1771,16 @@ fn adv_document(rng: &mut Rng) -> Document {
                 }
                 if rng.chance(15) {
                     a.font = Some(
-                        ["F<o>\"n\"&t", "", " ", "Menlo", "a\u{0}b\nc", "日本 Font", "x;y"][rng.below(7)]
-                            .to_string(),
+                        [
+                            "F<o>\"n\"&t",
+                            "",
+                            " ",
+                            "Menlo",
+                            "a\u{0}b\nc",
+                            "日本 Font",
+                            "x;y",
+                        ][rng.below(7)]
+                        .to_string(),
                     );
                 }
             }
@@ -1694,7 +1793,12 @@ fn adv_document(rng: &mut Rng) -> Document {
         }
         if rng.chance(30) {
             block = block.with_alignment(
-                [Alignment::Left, Alignment::Center, Alignment::Right, Alignment::Justify][rng.below(4)],
+                [
+                    Alignment::Left,
+                    Alignment::Center,
+                    Alignment::Right,
+                    Alignment::Justify,
+                ][rng.below(4)],
             );
         }
         blocks.push(block);
@@ -1754,9 +1858,19 @@ fn adv_document(rng: &mut Rng) -> Document {
         };
         let (a, b) = (pick(rng, &ed), pick(rng, &ed));
         ed.set_selection(Selection::new(a, b));
-        let body = ["body <&> \u{1}", "", "a\n\nb\tc", "]]> </w:t> 😀 שלום", "\u{fffe}"][rng.below(5)];
+        let body = [
+            "body <&> \u{1}",
+            "",
+            "a\n\nb\tc",
+            "]]> </w:t> 😀 שלום",
+            "\u{fffe}",
+        ][rng.below(5)];
         let author = ["A & \"B\"", "", "  ", "x\ny", "<a>\u{0}"][rng.below(5)];
-        if let Some(id) = ed.add_comment(body, author, [0, -1, i64::MAX, i64::MIN, 1_794_391_505_000][rng.below(5)]) {
+        if let Some(id) = ed.add_comment(
+            body,
+            author,
+            [0, -1, i64::MAX, i64::MIN, 1_794_391_505_000][rng.below(5)],
+        ) {
             for _ in 0..rng.below(3) {
                 ed.add_reply(id, "reply\nline", author, 2);
             }
@@ -1798,7 +1912,9 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
         } else {
             ExportSource::collection(
                 "Book\u{0}",
-                docs.iter().enumerate().map(|(i, d)| (format!("Part {i} <&>"), d)),
+                docs.iter()
+                    .enumerate()
+                    .map(|(i, d)| (format!("Part {i} <&>"), d)),
             )
         };
         let options = DocxOptions {
@@ -1809,7 +1925,11 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
             modified: [0, 1_794_391_505_000, i64::MAX][rng.below(3)],
             text_scale: [1.0, 12.0 / 17.0, 0.0, -1.0, 1.0e9, f32::NAN][rng.below(6)],
             code_font: ["Menlo", "", "A \"B\" <C>"][rng.below(3)].to_string(),
-            part_titles: [PartTitles::Never, PartTitles::WhenMissing, PartTitles::Always][rng.below(3)],
+            part_titles: [
+                PartTitles::Never,
+                PartTitles::WhenMissing,
+                PartTitles::Always,
+            ][rng.below(3)],
         };
         let result = std::panic::catch_unwind(|| {
             let package = Package::new(&source, &options);
@@ -1832,7 +1952,11 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                 } else {
                     blocks.len() - blocks.iter().rev().take_while(|b| is_break(b)).count()
                 };
-                let blocks = if from < to { &blocks[from..to] } else { &blocks[..0] };
+                let blocks = if from < to {
+                    &blocks[from..to]
+                } else {
+                    &blocks[..0]
+                };
                 let titled = !single
                     && match options.part_titles {
                         PartTitles::Never => false,
@@ -1914,7 +2038,10 @@ fn page_breaks_between_the_parts_of_a_collection_leave_no_empty_page() {
     };
     let (a, b, c) = (chapter("A"), chapter("B"), chapter("C"));
     let only_breaks = Document::from_blocks(vec![Block::new(BlockKind::PageBreak)]);
-    let source = ExportSource::collection("Book", [("A", &a), ("B", &b), ("", &only_breaks), ("C", &c)]);
+    let source = ExportSource::collection(
+        "Book",
+        [("A", &a), ("B", &b), ("", &only_breaks), ("C", &c)],
+    );
     let o = DocxOptions {
         part_titles: PartTitles::Never,
         ..Default::default()
@@ -1922,7 +2049,13 @@ fn page_breaks_between_the_parts_of_a_collection_leave_no_empty_page() {
     let ps = Package::new(&source, &o).paragraphs();
     let seen: Vec<(String, bool, bool)> = ps
         .iter()
-        .map(|p| (p.text(), p.runs.first().is_some_and(|r| r.page_break), p.section))
+        .map(|p| {
+            (
+                p.text(),
+                p.runs.first().is_some_and(|r| r.page_break),
+                p.section,
+            )
+        })
         .collect();
     let row = |t: &str, page_break: bool, section: bool| (t.to_string(), page_break, section);
     assert_eq!(
@@ -1983,7 +2116,13 @@ fn unusable_values_are_left_out() {
             ..Default::default()
         },
     );
-    assert_eq!(package.part(parts::CORE).matches("1970-01-01T00:00:00Z").count(), 2);
+    assert_eq!(
+        package
+            .part(parts::CORE)
+            .matches("1970-01-01T00:00:00Z")
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -2014,5 +2153,8 @@ fn pages_larger_than_word_allows_are_cut_to_its_limit() {
     assert!(top > 0 && left > right);
     // An ordinary page is untouched.
     let s = &Package::of(&Document::new()).sections()[0];
-    assert_eq!((s.0, s.1, s.3, s.4, s.5, s.6), (11_906, 16_838, 1440, 1440, 1440, 1440));
+    assert_eq!(
+        (s.0, s.1, s.3, s.4, s.5, s.6),
+        (11_906, 16_838, 1440, 1440, 1440, 1440)
+    );
 }

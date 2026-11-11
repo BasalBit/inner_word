@@ -296,7 +296,11 @@ pub(crate) fn mismatches(
                 }
             }
             if !pairs.is_empty() {
-                return intended.first().map(|(mark, _)| *mark).into_iter().collect();
+                return intended
+                    .first()
+                    .map(|(mark, _)| *mark)
+                    .into_iter()
+                    .collect();
             }
         }
     }

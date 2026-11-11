@@ -4,6 +4,13 @@
 //! read it as markup, so ordinary prose stays clean: `2 * 3`, `snake_case`,
 //! `AT&T`, `a < b` and `C:\Users` are written as they are, while `*word*`,
 //! `<b>`, `&amp;`, a leading `#`, `-`, `>` or `1.` get a backslash.
+//!
+//! Characters that are markup only together with a partner are left alone
+//! when the block holds no partner: a single `*` or `_` (a footnote
+//! asterisk, `_config.yml`), a `<` with no `>` after it anywhere, and
+//! brackets that nothing follows (`[1]`, `[sic]`). A bracket pair becomes a
+//! link through what comes after it, so the escape goes on the closing
+//! bracket: `[a\](b)`, `[a\]: b`.
 
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
@@ -40,9 +47,7 @@ impl TextContext {
                         .is_some_and(|c| c.is_alphanumeric())
                 };
                 (0..chars.len())
-                    .filter(|&i| {
-                        chars[i] == '_' && !(word(i.checked_sub(1)) && word(Some(i + 1)))
-                    })
+                    .filter(|&i| chars[i] == '_' && !(word(i.checked_sub(1)) && word(Some(i + 1))))
                     .count()
                     > 1
             },
@@ -206,9 +211,7 @@ pub(crate) fn escape_text(text: &str, pos: ChunkPosition, ctx: TextContext) -> S
                 '[' => {
                     pos.in_link
                         || matches!(next, Some('^' | '['))
-                        || (i == 0
-                            && pos.block_start
-                            && (ctx.code_label || task_marker_at(&chars)))
+                        || (i == 0 && pos.block_start && (ctx.code_label || task_marker_at(&chars)))
                 }
                 ']' => {
                     pos.in_link
@@ -387,7 +390,10 @@ mod tests {
         assert_eq!(mid("[[wiki]]"), "\\[[wiki]]");
         assert_eq!(mid("a [ b"), "a [ b");
         // Brackets that nothing follows are not markup.
-        assert_eq!(mid("as shown [1], [sic] and [...]"), "as shown [1], [sic] and [...]");
+        assert_eq!(
+            mid("as shown [1], [sic] and [...]"),
+            "as shown [1], [sic] and [...]"
+        );
         // One asterisk or underscore has no partner.
         assert_eq!(mid("price* and _config"), "price* and _config");
         assert_eq!(mid("5*3"), "5*3");

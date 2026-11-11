@@ -13,11 +13,17 @@
 //!
 //! The output is tidy: one blank line between blocks, none between the
 //! items of a list, exactly one newline at the end. Literal text is escaped
-//! only where it would otherwise be read as markup. Whitespace at the edges
+//! only where it would otherwise be read as markup (`[1]`, `5 * 3`,
+//! `_config.yml` and `a<b` stay as they are). Whitespace at the edges
 //! of bold, italic and other marks is moved outside the delimiters, and a
 //! mark whose delimiters CommonMark would not pair (for example bold that
 //! ends in punctuation right before a letter) is written with an HTML tag
 //! (`<strong>`, `<em>`, `<del>`) instead.
+//!
+//! Two rare constructs also use a little HTML because no Markdown spelling
+//! reads the same in every parser: a to-do item without text that has
+//! nested blocks is written `- [ ] <!-- -->`, and inline code holding `]:`
+//! inside a link that starts a block is written with `<code>`.
 //!
 //! ```
 //! use writer_core::{Block, BlockKind, Document, InlineAttrs, InlineStyle};

@@ -25,6 +25,61 @@ use crate::{editor::Editor, events::EditorEvent, scroll::Autoscroll};
 /// back what was typed since, not the whole paragraph.
 pub(crate) const TYPING_PAUSE: Duration = Duration::from_millis(800);
 
+/// UTF-16 code units of the characters that start in `bytes` (a slice of
+/// UTF-8 text, which may begin or end inside a character).
+fn utf16_units(bytes: &[u8]) -> usize {
+    // One unit per character, two for those outside the basic plane (four
+    // bytes of UTF-8). Counted in blocks, so that the loop over one block
+    // is plain byte arithmetic the compiler can vectorise.
+    bytes
+        .chunks(4096)
+        .map(|block| {
+            block.iter().fold(0u32, |units, byte| {
+                units + u32::from(byte & 0xC0 != 0x80) + u32::from(*byte >= 0xF0)
+            }) as usize
+        })
+        .sum()
+}
+
+/// The UTF-16 offset of byte `offset` in `text` (rounded down to the
+/// start of a character). Like `writer_core::text::utf8_to_utf16`, but
+/// fast enough to answer the platform about a position deep in a
+/// megabyte of text several times per keystroke.
+pub(crate) fn offset_to_utf16(text: &str, offset: usize) -> usize {
+    let offset = writer_core::text::floor_char_boundary(text, offset);
+    utf16_units(&text.as_bytes()[..offset])
+}
+
+/// The byte offset of UTF-16 offset `target` in `text` (clamped; an
+/// offset inside a surrogate pair gives the start of that character).
+/// The counterpart of [`offset_to_utf16`].
+pub(crate) fn utf16_to_offset(text: &str, target: usize) -> usize {
+    const BLOCK: usize = 4096;
+    let bytes = text.as_bytes();
+    let mut units = 0;
+    let mut at = 0;
+    // Whole blocks that end before the target.
+    while at < bytes.len() {
+        let end = (at + BLOCK).min(bytes.len());
+        let here = utf16_units(&bytes[at..end]);
+        if units + here > target {
+            break;
+        }
+        units += here;
+        at = end;
+    }
+    // A block may end inside a character, which was counted with it.
+    let at = writer_core::text::ceil_char_boundary(text, at);
+    for (index, character) in text[at..].char_indices() {
+        let next = units + character.len_utf16();
+        if next > target {
+            return at + index;
+        }
+        units = next;
+    }
+    text.len()
+}
+
 /// An IME composition in progress: bytes `range` of block `block`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MarkedText {
@@ -61,9 +116,25 @@ impl Editor {
     /// Block-local byte range for a platform UTF-16 range.
     fn bytes_for_utf16(&self, block: usize, range: &Range<usize>) -> Range<usize> {
         match self.state.document().block(block) {
-            Some(block) => block.utf16_to_offset(range.start)..block.utf16_to_offset(range.end),
+            Some(block) => {
+                let text = block.text();
+                let start = utf16_to_offset(text, range.start);
+                // The end is usually close to the start.
+                let length = range.end.saturating_sub(range.start);
+                let end = start + utf16_to_offset(&text[start..], length);
+                start..end
+            }
             None => 0..0,
         }
+    }
+
+    /// The UTF-16 range of block-local bytes `range` of `block`.
+    fn utf16_for_bytes(block: &writer_core::Block, range: &Range<usize>) -> Range<usize> {
+        let text = block.text();
+        let start_byte = writer_core::text::floor_char_boundary(text, range.start);
+        let end_byte = writer_core::text::floor_char_boundary(text, range.end).max(start_byte);
+        let start = offset_to_utf16(text, start_byte);
+        start..start + utf16_units(&text.as_bytes()[start_byte..end_byte])
     }
 
     /// The selection clipped to `block`, as block-local bytes.
@@ -108,8 +179,7 @@ impl EntityInputHandler for Editor {
         let index = self.input_block();
         let block = self.state.document().block(index)?;
         let range = self.bytes_for_utf16(index, &range_utf16);
-        adjusted_range
-            .replace(block.offset_to_utf16(range.start)..block.offset_to_utf16(range.end));
+        adjusted_range.replace(Self::utf16_for_bytes(block, &range));
         block.text().get(range).map(str::to_string)
     }
 
@@ -123,7 +193,7 @@ impl EntityInputHandler for Editor {
         let block = self.state.document().block(index)?;
         let range = self.selection_in_block(index);
         Some(UTF16Selection {
-            range: block.offset_to_utf16(range.start)..block.offset_to_utf16(range.end),
+            range: Self::utf16_for_bytes(block, &range),
             reversed: self.state.selection().is_reversed(),
         })
     }
@@ -131,7 +201,7 @@ impl EntityInputHandler for Editor {
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
         let marked = self.marked.as_ref()?;
         let block = self.state.document().block(marked.block)?;
-        Some(block.offset_to_utf16(marked.range.start)..block.offset_to_utf16(marked.range.end))
+        Some(Self::utf16_for_bytes(block, &marked.range))
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -290,6 +360,6 @@ impl EntityInputHandler for Editor {
     ) -> Option<usize> {
         let position = self.position_at_point(point)?;
         let block = self.state.document().block(position.block)?;
-        Some(block.offset_to_utf16(position.offset))
+        Some(offset_to_utf16(block.text(), position.offset))
     }
 }

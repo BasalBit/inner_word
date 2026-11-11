@@ -23,6 +23,9 @@
 //! | `cmd-alt-n` | squeeze the editor into a narrow strip (page view scales down) |
 //! | `cmd-alt-l` | page setup: A4, A4 landscape, US Letter with narrow margins |
 //! | `cmd-alt-x` | print the frame timings collected since the last print |
+//! | `cmd-alt-down` / `cmd-alt-up` | scroll by 120 pixels |
+//! | `cmd-alt-e` | replace every "the" by "THE" (and back), keeping the highlight layer up to date as a find bar does |
+//! | `cmd-alt-m` | move the caret to the middle of the document |
 //! | `cmd-1` / `cmd-2` | focus the editor / the compact composer |
 //! | `cmd-q` | quit |
 //!
@@ -32,7 +35,10 @@
 //!
 //! `THE_WRITER_DEMO_BLOCKS=10000` opens a generated book of that many
 //! blocks instead of the sample document, `THE_WRITER_DEMO_FILE=<path>` a
-//! text file (one block per line, see `textfile.rs`), and
+//! text file (one block per line, see `textfile.rs`),
+//! `THE_WRITER_DEMO_PARAGRAPH=1048576` a single paragraph of that many
+//! bytes (`THE_WRITER_DEMO_CODE=<bytes>`: a single code block,
+//! `THE_WRITER_DEMO_BLOB=<bytes>`: a paragraph without spaces), and
 //! `THE_WRITER_DEMO_PAGE_VIEW=1` starts in page view; the demo then prints
 //! how long opening and the background layout took.
 //!
@@ -89,6 +95,10 @@ actions!(
         ToggleNarrow,
         CyclePageSetup,
         LogPerf,
+        ScrollDown,
+        ScrollUp,
+        ReplaceAll,
+        GoToMiddle,
         FocusEditor,
         FocusComposer,
         Quit,
@@ -242,6 +252,40 @@ fn book(blocks: usize) -> Document {
     Document::from_blocks(out)
 }
 
+/// A heading, one block of about `bytes` bytes of prose (lines of code for
+/// a code block; with `blob`, text without a single space, as pasted
+/// base64 would be), and a closing paragraph.
+fn one_block(kind: BlockKind, bytes: usize, blob: bool) -> Document {
+    let sentences = [
+        "The quick brown fox jumps over the lazy dog and keeps on running. ",
+        "Nobody in the village had seen the river this low before the summer. ",
+        "She put the letter back in the drawer and did not think of it again. ",
+        "It was, by any measure, an ordinary morning: grey, quiet, a little cold. ",
+    ];
+    let code = kind.is_code();
+    let mut text = String::with_capacity(bytes + 80);
+    let mut index = 0;
+    while text.len() < bytes {
+        if code {
+            text.push_str(&format!(
+                "    let value_{index} = compute({index}, \"{}\");\n",
+                index % 97
+            ));
+        } else if blob {
+            let scrambled = (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            text.push_str(&format!("{scrambled:016x}QmFzZTY0"));
+        } else {
+            text.push_str(sentences[index % sentences.len()]);
+        }
+        index += 1;
+    }
+    Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(2), "One very long block"),
+        Block::with_text(kind, text.trim_end()),
+        Block::paragraph("The end."),
+    ])
+}
+
 /// The document the demo opens: the sample, a text file
 /// (`THE_WRITER_DEMO_FILE`, see `textfile`), or a book of
 /// `THE_WRITER_DEMO_BLOCKS` blocks.
@@ -251,12 +295,25 @@ fn initial_document() -> Document {
             .map_err(|err| eprintln!("[demo] reading {path}: {err}"))
             .ok()
     });
+    let number = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    };
     let document = match from_file {
         Some(document) => document,
-        None => std::env::var("THE_WRITER_DEMO_BLOCKS")
-            .ok()
-            .and_then(|blocks| blocks.trim().parse::<usize>().ok())
-            .map_or_else(sample_document, |blocks| book(blocks.max(1))),
+        None => {
+            if let Some(bytes) = number("THE_WRITER_DEMO_PARAGRAPH") {
+                one_block(BlockKind::Paragraph, bytes, false)
+            } else if let Some(bytes) = number("THE_WRITER_DEMO_BLOB") {
+                one_block(BlockKind::Paragraph, bytes, true)
+            } else if let Some(bytes) = number("THE_WRITER_DEMO_CODE") {
+                one_block(BlockKind::code(), bytes, false)
+            } else {
+                number("THE_WRITER_DEMO_BLOCKS")
+                    .map_or_else(sample_document, |blocks| book(blocks.max(1)))
+            }
+        }
     };
     if std::env::var("THE_WRITER_DEMO_PAGE_VIEW").is_ok() {
         document.with_settings(DocumentSettings {
@@ -558,6 +615,74 @@ impl Demo {
         self.frames.clear();
     }
 
+    fn scroll_down(&mut self, _: &ScrollDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.scroll_by_pixels(px(120.), cx));
+    }
+
+    fn scroll_up(&mut self, _: &ScrollUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.scroll_by_pixels(px(-120.), cx));
+    }
+
+    /// What a find bar's "replace all" does to the editor: one edit that
+    /// rewrites every match, then the highlight layer set again from a
+    /// fresh search. Prints what each part costs.
+    fn replace_all(&mut self, _: &ReplaceAll, _: &mut Window, cx: &mut Context<Self>) {
+        let colors = cx.theme().colors;
+        self.editor.update(cx, |editor, cx| {
+            let options = SearchOptions {
+                case_sensitive: true,
+                ..SearchOptions::default()
+            };
+            let (from, to) = if editor.document().find_all("THE", options).is_empty() {
+                ("the", "THE")
+            } else {
+                ("THE", "the")
+            };
+            let started = Instant::now();
+            let replaced = editor.edit_with(
+                writer_editor::Autoscroll::None,
+                |state| state.replace_all(from, options, to),
+                cx,
+            );
+            let edited = started.elapsed();
+            let matches = editor.document().find_all(to, options);
+            let searched = started.elapsed() - edited;
+            let count = matches.len();
+            editor.set_highlights(
+                "find",
+                matches,
+                HighlightStyle::background(colors.find_match),
+                cx,
+            );
+            eprintln!(
+                "[demo] replace all: {replaced} replacements in {edited:?} (edit, layout, events), \
+                 search again {searched:?}, {count} highlights set in {:?}",
+                started.elapsed() - edited - searched,
+            );
+        });
+    }
+
+    fn go_to_middle(&mut self, _: &GoToMiddle, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            let document = editor.document();
+            let block = document.block_count() / 2;
+            // In the largest block when the document is one long block.
+            let block = (0..document.block_count())
+                .max_by_key(|index| document.blocks()[*index].len())
+                .filter(|index| document.blocks()[*index].len() > 100_000)
+                .unwrap_or(block);
+            let offset = document.blocks()[block].len() / 2;
+            let position = document.clamp_position(Position::new(block, offset));
+            editor.edit_with(
+                writer_editor::Autoscroll::Center,
+                |state| state.set_caret(position),
+                cx,
+            );
+        });
+    }
+
     fn focus_editor(&mut self, _: &FocusEditor, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.read(cx).focus(window);
     }
@@ -630,6 +755,10 @@ impl Render for Demo {
             .on_action(cx.listener(Self::toggle_narrow))
             .on_action(cx.listener(Self::cycle_page_setup))
             .on_action(cx.listener(Self::log_perf))
+            .on_action(cx.listener(Self::scroll_down))
+            .on_action(cx.listener(Self::scroll_up))
+            .on_action(cx.listener(Self::replace_all))
+            .on_action(cx.listener(Self::go_to_middle))
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::focus_composer))
             .size_full()
@@ -720,6 +849,10 @@ fn main() {
                 KeyBinding::new("cmd-alt-n", ToggleNarrow, None),
                 KeyBinding::new("cmd-alt-l", CyclePageSetup, None),
                 KeyBinding::new("cmd-alt-x", LogPerf, None),
+                KeyBinding::new("cmd-alt-down", ScrollDown, None),
+                KeyBinding::new("cmd-alt-up", ScrollUp, None),
+                KeyBinding::new("cmd-alt-e", ReplaceAll, None),
+                KeyBinding::new("cmd-alt-m", GoToMiddle, None),
                 KeyBinding::new("cmd-1", FocusEditor, None),
                 KeyBinding::new("cmd-2", FocusComposer, None),
                 KeyBinding::new("cmd-q", Quit, None),

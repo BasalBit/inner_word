@@ -1,10 +1,13 @@
 //! A small copy of writer-app's visual-QA hook (writer-editor cannot depend on
 //! writer-app). Same script syntax, subset of steps:
 //! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `typeslow:<text>`,
-//! `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`, `quit`.
+//! `bench:<count> <keystrokes>`, `theme:<light|dark|system>`,
+//! `screenshot:<path>`, `log:<text>`, `quit`.
 //! Steps are separated by `;` or newlines; `THE_WRITER_AUTOMATION=@file`
-//! reads a file. `typeslow` leaves a frame between keys and prints what
-//! dispatching one key costs (handlers and events, without the frame).
+//! reads a file. `typeslow` types one character per frame and `bench`
+//! presses a sequence of keys `count` times; both draw a frame after
+//! every key and print what a key costs: dispatching it (handlers and
+//! events) and that plus the frame it causes.
 
 use std::{
     path::PathBuf,
@@ -24,6 +27,7 @@ enum Step {
     Keys(Vec<Keystroke>),
     Type(String),
     TypeSlow(String),
+    Bench(usize, Vec<Keystroke>),
     Theme(ThemeMode),
     Screenshot(PathBuf),
     Log(String),
@@ -47,6 +51,19 @@ fn parse(source: &str) -> Result<Vec<Step>> {
             ),
             "type" => Step::Type(arg.replace("\\s", " ")),
             "typeslow" => Step::TypeSlow(arg.replace("\\s", " ")),
+            "bench" => {
+                let mut words = arg.split_whitespace();
+                let count = words
+                    .next()
+                    .ok_or_else(|| anyhow!("bench needs a count"))?
+                    .parse()?;
+                Step::Bench(
+                    count,
+                    words
+                        .map(|k| Keystroke::parse(k).map_err(|e| anyhow!("{e}")))
+                        .collect::<Result<_>>()?,
+                )
+            }
             "theme" => {
                 Step::Theme(ThemeMode::parse(arg).ok_or_else(|| anyhow!("unknown theme {arg:?}"))?)
             }
@@ -155,6 +172,43 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             costs.get(costs.len() / 2).copied().unwrap_or_default(),
                             costs.last().copied().unwrap_or_default(),
                             totals.get(totals.len() / 2).copied().unwrap_or_default(),
+                            totals.last().copied().unwrap_or_default(),
+                        );
+                    }
+                    Step::Bench(count, keys) => {
+                        let mut costs = Vec::new();
+                        let mut totals = Vec::new();
+                        for _ in 0..count {
+                            for key in &keys {
+                                let key = key.clone();
+                                let started = Instant::now();
+                                window.update(cx, |_, window, cx| {
+                                    window.dispatch_keystroke(key, cx);
+                                })?;
+                                costs.push(started.elapsed());
+                                draw_frame(window, view, cx);
+                                totals.push(started.elapsed());
+                                // Let timers and background work run as
+                                // they would between two real keys.
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(12))
+                                    .await;
+                            }
+                        }
+                        costs.sort();
+                        totals.sort();
+                        let label: Vec<String> = keys.iter().map(|key| key.unparse()).collect();
+                        eprintln!(
+                            "[automation] bench {} x {count}: dispatch median {:?}, max {:?}; \
+                             key to frame done median {:?}, p95 {:?}, max {:?}",
+                            label.join(" "),
+                            costs.get(costs.len() / 2).copied().unwrap_or_default(),
+                            costs.last().copied().unwrap_or_default(),
+                            totals.get(totals.len() / 2).copied().unwrap_or_default(),
+                            totals
+                                .get(totals.len() * 95 / 100)
+                                .copied()
+                                .unwrap_or_default(),
                             totals.last().copied().unwrap_or_default(),
                         );
                     }

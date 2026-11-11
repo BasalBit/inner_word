@@ -365,7 +365,18 @@ impl Dice {
 /// Everything about where blocks and rows are, in content space: per block
 /// its top, its row count, the top of its last row and the left edge of
 /// its text; then the content height and the page count.
-type Fingerprint = (Vec<(f32, usize, f32, f32)>, f32, usize);
+type Fingerprint = (Vec<(f32, usize, f32, f32, u64)>, f32, usize);
+
+/// A hash of the rows of a block: which bytes each one holds and how it
+/// ends.
+fn rows_hash(layout: &crate::layout::BlockLayout) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for row in &layout.rows {
+        (row.range.clone(), row.soft_wrapped).hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 fn fingerprint(editor: &Editor) -> Fingerprint {
     editor
@@ -379,6 +390,7 @@ fn fingerprint(editor: &Editor) -> Fingerprint {
                     rows,
                     f32::from(placed.row_top(rows - 1)),
                     f32::from(placed.layout.text_left),
+                    rows_hash(&placed.layout),
                 ));
             }
             (
@@ -718,5 +730,485 @@ fn the_gutter_of_a_numbered_list_fits_its_largest_number(cx: &mut TestAppContext
         assert_eq!(text_left(editor, 41), px(24. + 26.));
         // The outer list lost three numbers and still has two digits.
         assert_eq!(text_left(editor, 43), two_digits);
+    });
+}
+
+/// A long paragraph and a long code block, built from a fixed sequence.
+fn long_blocks() -> Document {
+    let mut dice = Dice(7);
+    let words = [
+        "ink",
+        "paper",
+        "a",
+        "margin",
+        "the",
+        "quiet",
+        "sentence",
+        "of",
+        "typography",
+        "row",
+        "na\u{ef}ve",
+        "\u{65e5}\u{672c}\u{8a9e}",
+        "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+    ];
+    let mut prose = String::new();
+    while prose.len() < 6_000 {
+        prose.push_str(words[dice.roll(words.len())]);
+        prose.push(' ');
+    }
+    let mut code = String::new();
+    for line in 0..160 {
+        code.push_str(&" ".repeat(4 * dice.roll(3)));
+        code.push_str(&format!(
+            "let value_{line} = compute({});\n",
+            dice.roll(1_000)
+        ));
+    }
+    Document::from_blocks(vec![
+        Block::paragraph("before"),
+        Block::paragraph(prose.trim_end()),
+        Block::with_text(BlockKind::code(), code.trim_end()),
+        Block::paragraph("after"),
+    ])
+}
+
+/// Sets how long a block must be to be shaped in pieces and how long a
+/// piece is, for this test thread.
+fn set_piece_limits(limits: (usize, usize)) -> (usize, usize) {
+    crate::layout::block::PIECE_LIMITS.with(|cell| cell.replace(limits))
+}
+
+#[gpui::test]
+fn a_long_block_shaped_in_pieces_wraps_like_one_shaped_whole(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(long_blocks(), EditorConfig::full(), cx);
+    for page_view in [false, true] {
+        editor.update(cx, |editor, cx| editor.set_page_view(page_view, cx));
+        cx.run_until_parked();
+        for alignment in [
+            writer_core::Alignment::Left,
+            writer_core::Alignment::Justify,
+            writer_core::Alignment::Right,
+        ] {
+            editor.update(cx, |editor, cx| {
+                editor.edit(
+                    |state| {
+                        state.select_all();
+                        state.set_alignment(alignment);
+                    },
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+            editor.read_with(cx, |editor, _| {
+                let document = editor.document();
+                for index in [1, 2] {
+                    let mut layout = editor.layout.borrow_mut();
+                    // In pieces of several sizes, and as a whole.
+                    let mut prints = Vec::new();
+                    // (The last of the piecewise ones has pieces as long as
+                    // the text: the code block is then cut by its number
+                    // of lines.)
+                    let all_limits = [
+                        (200, 150),
+                        (200, 333),
+                        (500, 1_000),
+                        (500, 100_000),
+                        (usize::MAX, usize::MAX),
+                    ];
+                    for limits in all_limits {
+                        let before = set_piece_limits(limits);
+                        let shaped = layout.fresh_layout(index, document);
+                        set_piece_limits(before);
+                        match limits {
+                            (usize::MAX, _) => assert_eq!(shaped.piece_count(), 0),
+                            (_, 100_000) if index == 1 => assert_eq!(shaped.piece_count(), 1),
+                            (_, 100_000) => assert_eq!(shaped.piece_count(), 4),
+                            _ => assert!(shaped.piece_count() >= 5, "{}", shaped.piece_count()),
+                        }
+                        assert!(shaped.rows.len() > 50);
+                        prints.push(shaped.row_fingerprint());
+                    }
+                    for print in &prints[..4] {
+                        assert_eq!(print.len(), prints[4].len(), "block {index}");
+                        for (row, (pieces, whole)) in print.iter().zip(&prints[4]).enumerate() {
+                            // The same bytes on every row; glyphs at the
+                            // same places, as far as positions hold up
+                            // that are measured along one line of tens
+                            // of thousands of pixels (the whole block
+                            // shaped at once: the test platform adds up
+                            // advances in an `f32`).
+                            let same = pieces.range == whole.range
+                                && pieces.soft_wrapped == whole.soft_wrapped
+                                && pieces.y == whole.y
+                                && pieces.glyphs.len() == whole.glyphs.len()
+                                && pieces
+                                    .glyphs
+                                    .iter()
+                                    .zip(&whole.glyphs)
+                                    .all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 0.5);
+                            assert!(
+                                same,
+                                "block {index}, row {row}, {alignment:?}, page view \
+                                 {page_view}: {:?} / {:?}",
+                                pieces.range, whole.range,
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// After any sequence of edits to a long block, the layout that took over
+/// pieces of its predecessors is the layout shaped from scratch.
+#[gpui::test]
+fn edits_to_a_long_block_keep_its_layout_exact(cx: &mut TestAppContext) {
+    setup(cx);
+    let seeds = std::env::var("WRITER_EDITOR_SEEDS")
+        .ok()
+        .and_then(|seeds| seeds.parse::<u64>().ok())
+        .unwrap_or(3);
+    let first = std::env::var("WRITER_EDITOR_FIRST_SEED")
+        .ok()
+        .and_then(|seed| seed.parse::<u64>().ok())
+        .unwrap_or(0);
+    for seed in first..first + seeds {
+        let (editor, cx) = open(long_blocks(), EditorConfig::full(), cx);
+        let mut dice = Dice(977 + seed * 131);
+        let words = [
+            "ink",
+            "a",
+            "margin",
+            "typography",
+            "\u{65e5}\u{672c}",
+            "to",
+            "row.",
+        ];
+        for step in 0..300 {
+            let roll = dice.roll(100);
+            editor.update(cx, |editor, cx| {
+                let document = editor.document();
+                // (Blocks can merge: a backspace at the start of one.)
+                let block = (1 + dice.roll(2)).min(document.block_count() - 1);
+                let length = document.blocks()[block].len();
+                let at = |dice: &mut Dice| {
+                    document.clamp_position(Position::new(block, dice.roll(length + 1)))
+                };
+                let start = at(&mut dice);
+                // A range of up to a few rows from there.
+                let end = document.clamp_position(Position::new(
+                    block,
+                    start.offset + dice.roll(if roll.is_multiple_of(7) { 900 } else { 40 }),
+                ));
+                let range = writer_core::Selection::new(start, end);
+                match roll {
+                    0..=34 => {
+                        let mut text = String::new();
+                        for _ in 0..1 + dice.roll(if roll.is_multiple_of(5) { 60 } else { 3 }) {
+                            text.push_str(words[dice.roll(words.len())]);
+                            text.push(' ');
+                        }
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.insert_text(&text);
+                            },
+                            cx,
+                        );
+                    }
+                    35..=44 => {
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.insert_text("x");
+                            },
+                            cx,
+                        );
+                    }
+                    45..=59 => {
+                        editor.edit(
+                            |state| {
+                                state.set_selection(range);
+                                state.delete_selection();
+                            },
+                            cx,
+                        );
+                    }
+                    60..=67 => {
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.backspace();
+                            },
+                            cx,
+                        );
+                    }
+                    68..=75 => {
+                        editor.edit(
+                            |state| {
+                                state.set_selection(range);
+                                state.toggle_bold();
+                            },
+                            cx,
+                        );
+                    }
+                    76..=81 => {
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.insert_soft_break();
+                            },
+                            cx,
+                        );
+                    }
+                    82..=85 => {
+                        editor.edit(
+                            |state| {
+                                state.set_selection(range);
+                                state.toggle_italic();
+                            },
+                            cx,
+                        );
+                    }
+                    86..=89 => {
+                        editor.edit(|state| state.undo(), cx);
+                    }
+                    90..=91 => {
+                        editor.edit(|state| state.redo(), cx);
+                    }
+                    92..=93 => {
+                        let alignment = [
+                            writer_core::Alignment::Left,
+                            writer_core::Alignment::Justify,
+                            writer_core::Alignment::Center,
+                        ][dice.roll(3)];
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.set_alignment(alignment);
+                            },
+                            cx,
+                        );
+                    }
+                    94..=95 => {
+                        // The start and the very end of the block.
+                        let end = document.block_range(block).end;
+                        editor.edit(
+                            |state| {
+                                state.set_caret(end);
+                                state.insert_text(" tail");
+                                state.set_caret(Position::new(block, 0));
+                                state.insert_text("Head ");
+                            },
+                            cx,
+                        );
+                    }
+                    96 => editor.toggle_page_view(cx),
+                    97 => {
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.step_text_size(1);
+                            },
+                            cx,
+                        );
+                    }
+                    _ => {
+                        editor.edit(
+                            |state| {
+                                state.set_caret(start);
+                                state.paste_plain_text("one line\nanother line");
+                            },
+                            cx,
+                        );
+                    }
+                }
+            });
+            // Sometimes a frame between two edits, sometimes not.
+            if dice.roll(3) > 0 {
+                cx.run_until_parked();
+            }
+            // Whatever an edit left behind (a reflow may be cut short at a
+            // seam) is a consistent layout: the rows cover the text, and
+            // a position is where a click on it would put the caret.
+            editor.read_with(cx, |editor, _| {
+                let document = editor.document();
+                for index in 0..document.block_count() {
+                    let kept = editor
+                        .with_layout(|lay| lay.placed(index).map(|placed| placed.layout))
+                        .flatten()
+                        .expect("laid out");
+                    let length = document.blocks()[index].len();
+                    assert!(
+                        kept.rows_are_contiguous(length),
+                        "seed {seed}, step {step} (roll {roll}), block {index} of {length} \
+                         bytes:\n{}",
+                        kept.describe()
+                    );
+                    for _ in 0..4 {
+                        let position =
+                            document.clamp_position(Position::new(index, dice.roll(length + 1)));
+                        let bounds = editor.position_bounds(position).unwrap();
+                        assert_eq!(
+                            editor.position_at_point(bounds.center()),
+                            Some(position),
+                            "seed {seed}, step {step} (roll {roll})"
+                        );
+                    }
+                }
+            });
+            // Once the background has finished the reflow, it is the
+            // layout shaped from scratch.
+            if step % 5 == 4 {
+                editor.update(cx, |editor, cx| editor.finish_layout(cx));
+                editor.read_with(cx, |editor, _| {
+                    let document = editor.document();
+                    for index in 0..document.block_count() {
+                        let kept = editor
+                            .with_layout(|lay| lay.placed(index).map(|placed| placed.layout))
+                            .flatten()
+                            .expect("laid out");
+                        assert!(!kept.has_seam());
+                        let fresh = editor.layout.borrow_mut().fresh_layout(index, document);
+                        assert_eq!(
+                            kept.rows.len(),
+                            fresh.rows.len(),
+                            "seed {seed}, step {step} (roll {roll}), block {index}"
+                        );
+                        let (kept, fresh) = (kept.row_fingerprint(), fresh.row_fingerprint());
+                        for (row, (kept, fresh)) in kept.iter().zip(&fresh).enumerate() {
+                            assert_eq!(
+                                kept, fresh,
+                                "seed {seed}, step {step} (roll {roll}), block {index}, row {row}"
+                            );
+                        }
+                    }
+                });
+            }
+        }
+        cx.update(|window, _| window.remove_window());
+    }
+}
+
+#[gpui::test]
+fn typing_in_a_very_long_paragraph_shapes_a_piece_of_it(cx: &mut TestAppContext) {
+    setup(cx);
+    // The limits of the real app, and a paragraph of half a megabyte.
+    set_piece_limits(crate::layout::block::REAL_PIECE_LIMITS);
+    let piece = crate::layout::block::REAL_PIECE_LIMITS.1;
+    let sentence = "The quick brown fox jumps over the lazy dog and keeps on running. ";
+    let text = sentence.repeat(512 * 1024 / sentence.len());
+    let length = text.trim_end().len();
+    let (editor, cx) = open(
+        Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(2), "One very long block"),
+            Block::paragraph(text.trim_end()),
+            Block::paragraph("The end."),
+        ]),
+        EditorConfig::full(),
+        cx,
+    );
+    let shaped = || crate::layout::block::SHAPED_BYTES.with(|bytes| bytes.get());
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    cx.run_until_parked();
+    let rows = editor.read_with(cx, |editor, _| {
+        let layout = editor
+            .with_layout(|lay| lay.placed(1).map(|placed| placed.layout))
+            .flatten()
+            .unwrap();
+        assert!(layout.piece_count() > 20, "{}", layout.piece_count());
+        layout.rows.len()
+    });
+    assert!(rows > 5_000);
+
+    // Typing in the middle, at the start and at the end: each key shapes
+    // a piece or two, not the paragraph.
+    for offset in [length / 2, 0, length] {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(1, offset)), cx);
+        });
+        cx.run_until_parked();
+        let before = shaped();
+        let started = Instant::now();
+        cx.simulate_input("Hello there");
+        let per_key = (shaped() - before) / 11;
+        eprintln!(
+            "typing at {offset} of {length}: {per_key} bytes shaped per key, {:?} per key",
+            started.elapsed() / 11
+        );
+        assert!(
+            per_key <= 4 * piece,
+            "{per_key} bytes shaped per key at {offset}"
+        );
+        // The rows of this text are nearly full, so a character more
+        // can move every row after it: the edit leaves that to the
+        // background. What is on screen is laid out for good.
+        editor.read_with(cx, |editor, _| {
+            let kept = editor
+                .with_layout(|lay| lay.placed(1).map(|placed| placed.layout))
+                .flatten()
+                .unwrap();
+            assert!(kept.rows_are_contiguous(editor.document().blocks()[1].len()));
+            assert!(!kept.has_seam() || editor.layout_pending());
+            let fresh = editor
+                .layout
+                .borrow_mut()
+                .fresh_layout(1, editor.document());
+            let (kept, fresh) = (kept.row_fingerprint(), fresh.row_fingerprint());
+            let caret_row = kept
+                .iter()
+                .position(|row| row.range.end >= editor.selection().head.offset)
+                .unwrap();
+            let from = caret_row.saturating_sub(40);
+            let to = (caret_row + 150).min(kept.len()).min(fresh.len());
+            assert_eq!(kept[from..to], fresh[from..to], "the rows around the caret");
+        });
+        // The background finishes the reflow in slices.
+        let mut slices = 0;
+        while editor.read_with(cx, |editor, _| editor.layout_pending()) {
+            cx.executor().advance_clock(Duration::from_millis(2));
+            slices += 1;
+            assert!(slices < 400, "the reflow does not finish");
+        }
+        editor.read_with(cx, |editor, _| {
+            let kept = editor
+                .with_layout(|lay| lay.placed(1).map(|placed| placed.layout))
+                .flatten()
+                .unwrap();
+            assert!(!kept.has_seam());
+            let fresh = editor
+                .layout
+                .borrow_mut()
+                .fresh_layout(1, editor.document());
+            assert_eq!(kept.row_fingerprint(), fresh.row_fingerprint());
+        });
+    }
+    // Deleting a word, splitting the paragraph and joining it again.
+    let before = shaped();
+    cx.simulate_keystrokes("alt-backspace alt-backspace");
+    assert!(shaped() - before <= 6 * piece);
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(1, length / 3)), cx);
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("backspace");
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 3);
+        let kept = editor
+            .with_layout(|lay| lay.placed(1).map(|placed| placed.layout))
+            .flatten()
+            .unwrap();
+        let fresh = editor
+            .layout
+            .borrow_mut()
+            .fresh_layout(1, editor.document());
+        assert_eq!(kept.row_fingerprint(), fresh.row_fingerprint());
+        // The counts are right once the background has caught up.
+        assert_eq!(editor.stats(), editor.document().stats());
     });
 }

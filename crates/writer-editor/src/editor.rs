@@ -7,7 +7,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     time::{Duration, Instant},
 };
 
@@ -17,7 +17,7 @@ use gpui::{
     prelude::*,
 };
 use writer_core::{
-    CommentId, Document, EditorOptions, EditorState, Position, Selection, Stats, TextRange,
+    BlockId, CommentId, Document, EditorOptions, EditorState, Position, Selection, Stats, TextRange,
 };
 use writer_ui::theme::GlobalTheme;
 
@@ -152,6 +152,9 @@ pub struct Editor {
     refine_task: Option<Task<()>>,
     refining: bool,
     refine_slices: usize,
+    /// Very long blocks whose words are being counted on a background
+    /// thread: the revision stamp that is being counted, and the task.
+    counting: HashMap<BlockId, (u64, Task<()>)>,
     pub(crate) perf: Cell<FramePerf>,
     /// The selection rectangles of the last frame, in window coordinates.
     #[cfg(test)]
@@ -328,6 +331,7 @@ impl Editor {
             refine_task: None,
             refining: false,
             refine_slices: 0,
+            counting: HashMap::new(),
             perf: Cell::new(FramePerf::default()),
             #[cfg(test)]
             painted_selection: Vec::new(),
@@ -336,9 +340,7 @@ impl Editor {
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.
-        if editor.layout.borrow().pending() {
-            editor.start_refining(cx);
-        }
+        editor.start_background_work(cx);
         editor
     }
 
@@ -483,9 +485,8 @@ impl Editor {
         self.hidden_comments.clear();
         self.popup = None;
         self.selection_stats.set(None);
-        if self.layout.borrow().pending() {
-            self.start_refining(cx);
-        }
+        self.counting.clear();
+        self.start_background_work(cx);
         cx.emit(EditorEvent::DocumentReplaced);
         cx.notify();
     }
@@ -694,9 +695,7 @@ impl Editor {
             if change.settings {
                 cx.emit(EditorEvent::SettingsChanged);
             }
-            if self.layout.borrow().pending() {
-                self.start_refining(cx);
-            }
+            self.start_background_work(cx);
         }
         if selection_changed {
             self.goal_x = None;
@@ -751,6 +750,63 @@ impl Editor {
         }));
     }
 
+    /// Starts whatever the layout has left to do in the background: the
+    /// layout task (measuring blocks that only have an estimated height,
+    /// counting words, finishing reflows) and, for very long blocks, word
+    /// counts on a background thread.
+    pub(crate) fn start_background_work(&mut self, cx: &mut Context<Self>) {
+        if self.layout.borrow().pending() {
+            self.start_refining(cx);
+        }
+        self.count_large_blocks(cx);
+    }
+
+    /// Has the words of very long blocks counted on a background thread.
+    /// Counting a megabyte takes several milliseconds, and such a block is
+    /// counted again after every change to it: on the main thread that
+    /// would be felt while typing. The counts arrive like those of the
+    /// layout task ([`Editor::stats_pending`],
+    /// [`EditorEvent::StatsChanged`]).
+    fn count_large_blocks(&mut self, cx: &mut Context<Self>) {
+        let jobs = self.layout.borrow().large_uncounted();
+        if jobs.is_empty() {
+            if !self.counting.is_empty() {
+                self.counting.clear();
+            }
+            return;
+        }
+        // Counts of blocks that are gone or changed are of no use.
+        self.counting
+            .retain(|id, (stamp, _)| jobs.iter().any(|job| job.1 == *id && job.2 == *stamp));
+        for (index, id, stamp) in jobs {
+            if self.counting.contains_key(&id) {
+                continue;
+            }
+            let Some(block) = self.state.document().block(index) else {
+                continue;
+            };
+            let text = block.text().to_string();
+            let task = cx.spawn(async move |this, cx| {
+                let stats = cx
+                    .background_spawn(async move { Stats::of_text(&text) })
+                    .await;
+                this.update(cx, |editor, cx| {
+                    editor.counting.remove(&id);
+                    let complete = {
+                        let mut layout = editor.layout.borrow_mut();
+                        layout.set_block_stats(id, stamp, stats) && layout.stats_complete()
+                    };
+                    if complete {
+                        cx.emit(EditorEvent::StatsChanged);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            });
+            self.counting.insert(id, (stamp, task));
+        }
+    }
+
     /// Starts the background layout task unless it is running: it measures
     /// the blocks that only have an estimated height and counts words, a
     /// few milliseconds at a time, until nothing is left.
@@ -777,7 +833,7 @@ impl Editor {
         let (more, counted) = {
             let mut layout = self.layout.borrow_mut();
             let counting = !layout.stats_complete();
-            let more = layout.refine(self.state.document(), deadline, REFINE_BLOCKS);
+            let more = layout.refine(self.state.document(), deadline, REFINE_BLOCKS, false);
             (more, counting && layout.stats_complete())
         };
         if counted {
@@ -811,6 +867,7 @@ impl Editor {
             layout.measure_all(self.state.document());
             counting && layout.stats_complete()
         };
+        self.counting.clear();
         if counted {
             cx.emit(EditorEvent::StatsChanged);
         }

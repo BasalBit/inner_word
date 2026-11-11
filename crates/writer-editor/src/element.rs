@@ -772,15 +772,22 @@ impl Element for EditorElement {
             for quad in plan.selection.drain(..) {
                 window.paint_quad(quad);
             }
-            for row in &plan.rows {
-                row.paint_text(window, cx);
-            }
-            for marker in &plan.markers {
-                marker
-                    .line
-                    .paint(marker.origin, marker.line_height, window, cx)
-                    .ok();
-            }
+            // All the text is one layer: glyphs do not cover each other,
+            // so the scene does not have to work out an order for each of
+            // the thousands of them. (Within a layer quads are drawn
+            // before glyphs, which puts underlines and strikethroughs
+            // behind the letters they have the colour of.)
+            window.paint_layer(bounds, |window| {
+                for row in &plan.rows {
+                    row.paint_text(window, cx);
+                }
+                for marker in &plan.markers {
+                    marker
+                        .line
+                        .paint(marker.origin, marker.line_height, window, cx)
+                        .ok();
+                }
+            });
             for (path, color) in plan.paths.drain(..) {
                 window.paint_path(path, color);
             }
@@ -853,8 +860,6 @@ impl Editor {
     /// Bookkeeping at the end of a frame's prepaint.
     fn after_frame(&mut self, prepaint: std::time::Duration, cx: &mut Context<Self>) {
         self.perf.set(self.perf.get().with_prepaint(prepaint));
-        if self.layout.borrow().pending() {
-            self.start_refining(cx);
-        }
+        self.start_background_work(cx);
     }
 }

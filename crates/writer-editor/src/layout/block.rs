@@ -15,11 +15,49 @@
 //! Coordinates: x is measured from the left edge of the text box
 //! ([`BlockLayout::text_left`] from the column's left edge), y from the top
 //! of the block's box. The caller adds the block's position.
+//!
+//! # Very long blocks
+//!
+//! Shaping costs time in proportion to the text, and a block is shaped
+//! again whenever it changes, so a paragraph of a megabyte would cost a
+//! megabyte of shaping per keystroke. Blocks longer than
+//! [`PIECEWISE_MIN`] are therefore shaped in **pieces** of about
+//! [`PIECE_BYTES`], each a run of whole rows:
+//!
+//! - Wrapping is greedy: where a row ends depends only on the text from
+//!   the row's start to the first word that does not fit. So a slice of the
+//!   text that starts at a row start wraps into the same rows as the whole
+//!   text would, except for its last row, which the end of the slice may
+//!   have cut short. A piece is a slice minus that last row; the next
+//!   slice starts where the dropped row started.
+//! - When the block changes, the pieces of the old layout whose text and
+//!   fonts are untouched are taken over: those before the change as they
+//!   are, those after it as soon as the newly shaped rows meet one of
+//!   their starts (rows after an edit fall back into step with the old
+//!   ones within a few rows). An edit therefore shapes one or two pieces,
+//!   whatever the length of the block.
+//! - Sometimes the rows do not fall back into step: in text without
+//!   spaces, or with rows that are all full, one more character moves
+//!   every row after it. Then the edit stops after [`SEAM_PATIENCE`]
+//!   pieces and joins the old pieces at a **seam**: the row before it ends
+//!   early, as if at a line break. That is still a consistent layout
+//!   (everything that is painted and hit-tested agrees), just not the
+//!   one a fresh wrap would give, and the seam is hundreds of rows below
+//!   the edit. The background layout then continues the reflow from the
+//!   seam ([`Reflow::Mend`]) until the rows meet or the block ends.
+//!
+//! A side effect: glyph positions inside a piece are small numbers, where
+//! positions along one megabyte-long line would run into the millions of
+//! pixels and lose their fractions in an `f32`.
 
-use std::{ops::Range, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ops::{Bound, Range},
+    sync::Arc,
+};
 
 use gpui::{
-    Bounds, Hsla, Pixels, ShapedGlyph, ShapedRun, SharedString, WindowTextSystem,
+    Bounds, Font, Hsla, Pixels, ShapedGlyph, ShapedRun, SharedString, TextRun, WindowTextSystem,
     WrappedLineLayout, point, px, size,
 };
 use writer_core::{Alignment, Block, BlockKind, text};
@@ -34,6 +72,54 @@ const NEWLINE_STUB: f32 = 0.35;
 /// A justified row is left alone when its gaps would grow by more than
 /// this many font sizes each.
 const MAX_JUSTIFY_STRETCH: f32 = 1.2;
+/// Blocks with more text than this are shaped in pieces.
+const PIECEWISE_MIN: usize = 32 * 1024;
+/// How much text one piece is shaped from.
+const PIECE_BYTES: usize = 16 * 1024;
+/// And how many hard lines at most: every line is a call to the system's
+/// shaper, which costs more than its few dozen characters (code is all
+/// short lines).
+const PIECE_LINES: usize = 48;
+/// How many pieces an edit shapes past the first untouched one while it
+/// waits for the new rows to meet the old ones, before it leaves a seam.
+const SEAM_PATIENCE: usize = 2;
+/// The same for one step of mending in the background.
+const MEND_PATIENCE: usize = 8;
+
+/// What shaping a long block does about the rows after a change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reflow {
+    /// After an edit: reflow a few pieces, then leave a seam.
+    Edit,
+    /// In the background: continue the reflow at the first seam.
+    Mend,
+}
+
+/// The limits of the real app, for a test that wants them.
+#[cfg(test)]
+pub(crate) const REAL_PIECE_LIMITS: (usize, usize) = (PIECEWISE_MIN, PIECE_BYTES);
+
+#[cfg(test)]
+thread_local! {
+    /// `(PIECEWISE_MIN, PIECE_BYTES)` for tests. Small by default, so that
+    /// ordinary test documents go through the piecewise path.
+    pub(crate) static PIECE_LIMITS: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((200, 150)) };
+    /// Bytes of text handed to the shaper so far.
+    pub(crate) static SHAPED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `(longest block shaped as a whole, bytes per piece)`.
+fn piece_limits() -> (usize, usize) {
+    #[cfg(test)]
+    {
+        PIECE_LIMITS.with(|limits| limits.get())
+    }
+    #[cfg(not(test))]
+    {
+        (PIECEWISE_MIN, PIECE_BYTES)
+    }
+}
 
 /// What pagination and the block stack need to know about a block: how
 /// many rows of which height, and the space around them. All in layout
@@ -144,6 +230,35 @@ fn text_width(metrics: &BlockMetrics, column_width: Pixels) -> Pixels {
     (column_width - metrics.text_left - metrics.right_inset).max(px(MIN_TEXT_WIDTH))
 }
 
+/// One row of [`BlockLayout::row_fingerprint`].
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct RowPrint {
+    pub(crate) range: Range<usize>,
+    pub(crate) soft_wrapped: bool,
+    /// `(block offset, x)` of every glyph.
+    pub(crate) glyphs: Vec<(usize, f32)>,
+    pub(crate) y: f32,
+}
+
+#[cfg(test)]
+impl PartialEq for RowPrint {
+    /// Equal up to the rounding of positions measured from different
+    /// origins.
+    fn eq(&self, other: &Self) -> bool {
+        let close = |a: f32, b: f32| (a - b).abs() < 0.05;
+        self.range == other.range
+            && self.soft_wrapped == other.soft_wrapped
+            && close(self.y, other.y)
+            && self.glyphs.len() == other.glyphs.len()
+            && self
+                .glyphs
+                .iter()
+                .zip(&other.glyphs)
+                .all(|(a, b)| a.0 == b.0 && close(a.1, b.1))
+    }
+}
+
 /// One hard line of a block.
 #[derive(Debug)]
 pub(crate) struct Line {
@@ -222,38 +337,297 @@ pub(crate) struct BlockLayout {
     pub(crate) ink: Hsla,
     /// Sum of the unwrapped line widths: calibrates height estimates.
     pub(crate) natural_width: Pixels,
+    /// The pieces of a block that was shaped piecewise (empty otherwise).
+    pieces: Vec<Piece>,
+    /// What the pieces were shaped from.
+    source: Option<Source>,
 }
 
-/// Shapes the hard lines of `block`.
-fn shape_lines(
-    block: &Block,
-    style: &LayoutStyle,
-    metrics: &BlockMetrics,
-    text_width: Pixels,
-    text_system: &WindowTextSystem,
-) -> Vec<Line> {
-    let text: SharedString = block.text().to_string().into();
-    let runs = style.shape_runs(block);
-    let shaped = text_system
-        .shape_text(text, metrics.font_size, &runs, Some(text_width), None)
-        .map(|lines| lines.into_vec())
-        .unwrap_or_default();
-    let mut start = 0;
-    shaped
+/// A run of whole rows of a block that was shaped in pieces.
+#[derive(Clone, Debug)]
+pub(crate) struct Piece {
+    /// The bytes of the block's text whose rows the piece holds. Starts
+    /// and ends at row boundaries.
+    range: Range<usize>,
+    /// How far the text was shaped to find those rows: the piece and the
+    /// row after it that was dropped. The rows are valid while the text
+    /// and the fonts of `range.start..slice_end` stay as they are.
+    slice_end: usize,
+    /// The piece's entries in [`BlockLayout::lines`] and
+    /// [`BlockLayout::rows`].
+    lines: Range<usize>,
+    rows: Range<usize>,
+    /// The piece ends at a seam: its last row was cut where the next
+    /// piece starts instead of where it would wrap.
+    seam: bool,
+}
+
+/// What a piecewise layout was shaped from: enough to tell what a later
+/// version of the block changed.
+#[derive(Debug)]
+struct Source {
+    text: SharedString,
+    runs: Vec<(usize, Font)>,
+}
+
+/// The fonts of a block as `(end offset, font)` runs covering its text.
+fn font_runs(block: &Block, style: &LayoutStyle) -> Vec<(usize, Font)> {
+    let mut end = 0;
+    style
+        .shape_runs(block)
         .into_iter()
-        .map(|line| {
-            let entry = Line {
-                layout: Arc::clone(&*line),
-                text: line.text.clone(),
-                start,
-            };
-            start += line.len() + 1;
-            entry
+        .map(|run| {
+            end += run.len;
+            (end, run.font)
         })
         .collect()
 }
 
+/// Shapes slices of one block's text.
+struct Shaper<'a> {
+    text: &'a str,
+    runs: &'a [(usize, Font)],
+    font_size: Pixels,
+    text_width: Pixels,
+    ink: Hsla,
+    text_system: &'a WindowTextSystem,
+}
+
+/// The hard lines and the rows of a slice. Row offsets are block offsets;
+/// `Row::line` counts from the slice's first line; `Row::y` is not set.
+struct Shaped {
+    lines: Vec<Line>,
+    rows: Vec<Row>,
+}
+
+impl Shaper<'_> {
+    /// Shapes `text[range]`, which must start at the start of a row.
+    fn shape(&self, range: Range<usize>) -> Shaped {
+        #[cfg(test)]
+        SHAPED_BYTES.with(|bytes| bytes.set(bytes.get() + range.len()));
+        let slice: SharedString = self.text[range.clone()].to_string().into();
+        // The fonts of the slice. Colours and decorations are painted by
+        // the editor itself and are not part of the runs.
+        let mut runs = Vec::new();
+        let mut run_ix = self.runs.partition_point(|(end, _)| *end <= range.start);
+        let mut at = range.start;
+        while at < range.end {
+            let Some((end, font)) = self.runs.get(run_ix) else {
+                break;
+            };
+            let upto = (*end).min(range.end);
+            runs.push(TextRun {
+                len: upto - at,
+                font: font.clone(),
+                color: self.ink,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+            at = upto;
+            run_ix += 1;
+        }
+        let shaped = self
+            .text_system
+            .shape_text(slice, self.font_size, &runs, Some(self.text_width), None)
+            .map(|lines| lines.into_vec())
+            .unwrap_or_default();
+        let mut lines = Vec::with_capacity(shaped.len());
+        let mut rows = Vec::new();
+        let mut line_start = range.start;
+        for (line_ix, line) in shaped.into_iter().enumerate() {
+            let layout = Arc::clone(&*line);
+            let unwrapped = &layout.unwrapped_layout;
+            let mut start = 0;
+            let mut start_pos = GlyphPos { run: 0, glyph: 0 };
+            let mut x_start = px(0.);
+            for boundary in layout.wrap_boundaries() {
+                let Some(glyph) = unwrapped
+                    .runs
+                    .get(boundary.run_ix)
+                    .and_then(|run| run.glyphs.get(boundary.glyph_ix))
+                else {
+                    continue;
+                };
+                let end_pos = GlyphPos {
+                    run: boundary.run_ix,
+                    glyph: boundary.glyph_ix,
+                };
+                rows.push(Row {
+                    range: line_start + start..line_start + glyph.index,
+                    line: line_ix,
+                    x_start,
+                    width: glyph.position.x - x_start,
+                    y: px(0.),
+                    soft_wrapped: true,
+                    glyphs: (start_pos, end_pos),
+                    dx: px(0.),
+                    justify: None,
+                });
+                start = glyph.index;
+                start_pos = end_pos;
+                x_start = glyph.position.x;
+            }
+            rows.push(Row {
+                range: line_start + start..line_start + line.text.len(),
+                line: line_ix,
+                x_start,
+                width: unwrapped.width - x_start,
+                y: px(0.),
+                soft_wrapped: false,
+                glyphs: (
+                    start_pos,
+                    GlyphPos {
+                        run: unwrapped.runs.len(),
+                        glyph: 0,
+                    },
+                ),
+                dx: px(0.),
+                justify: None,
+            });
+            let length = line.text.len();
+            lines.push(Line {
+                layout,
+                text: line.text.clone(),
+                start: line_start,
+            });
+            line_start += length + 1;
+        }
+        Shaped { lines, rows }
+    }
+
+    /// Shapes a slice of about `piece_bytes` from `pos` (a row start) and
+    /// says how many of its rows are whole: all of them when the slice
+    /// reaches the end of the text, otherwise all but the last one, which
+    /// the end of the slice may have cut short. Returns the shaped slice,
+    /// where it ended and the number of whole rows.
+    ///
+    /// The next slice starts at the first row that is not whole. That row
+    /// must not begin with a space: the wrapping would treat it as the
+    /// indentation of a new line, which it is not.
+    fn piece(&self, pos: usize, piece_bytes: usize) -> (Shaped, usize, usize) {
+        let len = self.text.len();
+        let mut bytes = piece_bytes.max(1);
+        let mut lines = PIECE_LINES;
+        loop {
+            let mut slice_end = text::ceil_char_boundary(self.text, pos.saturating_add(bytes));
+            // Not more hard lines than a piece should have.
+            if let Some((at, _)) = self.text.as_bytes()[pos..slice_end]
+                .iter()
+                .enumerate()
+                .filter(|(_, byte)| **byte == b'\n')
+                .nth(lines.saturating_sub(1))
+            {
+                slice_end = pos + at + 1;
+            }
+            let shaped = self.shape(pos..slice_end);
+            if slice_end >= len {
+                let whole = shaped.rows.len();
+                return (shaped, slice_end, whole);
+            }
+            let mut whole = shaped.rows.len().saturating_sub(1);
+            // (A row that starts a hard line may begin with a space: there
+            // it is indentation in the whole text too.)
+            while whole > 0
+                && shaped.rows[whole - 1].soft_wrapped
+                && self.text.as_bytes().get(shaped.rows[whole].range.start) == Some(&b' ')
+            {
+                whole -= 1;
+            }
+            if whole > 0 {
+                return (shaped, slice_end, whole);
+            }
+            // One row as long as the slice: look further.
+            bytes = bytes.saturating_mul(2);
+            lines = lines.saturating_mul(2);
+        }
+    }
+}
+
+/// How many bytes two texts have in common at their start.
+fn common_prefix(a: &[u8], b: &[u8]) -> usize {
+    const CHUNK: usize = 512;
+    let limit = a.len().min(b.len());
+    let mut at = 0;
+    while at + CHUNK <= limit && a[at..at + CHUNK] == b[at..at + CHUNK] {
+        at += CHUNK;
+    }
+    while at < limit && a[at] == b[at] {
+        at += 1;
+    }
+    at
+}
+
+/// How many bytes two texts have in common at their end.
+fn common_suffix(a: &[u8], b: &[u8]) -> usize {
+    const CHUNK: usize = 512;
+    let limit = a.len().min(b.len());
+    let mut count = 0;
+    while count + CHUNK <= limit
+        && a[a.len() - count - CHUNK..a.len() - count]
+            == b[b.len() - count - CHUNK..b.len() - count]
+    {
+        count += CHUNK;
+    }
+    while count < limit && a[a.len() - 1 - count] == b[b.len() - 1 - count] {
+        count += 1;
+    }
+    count
+}
+
+/// How far from the start two sets of font runs agree.
+fn runs_prefix(a: &[(usize, Font)], b: &[(usize, Font)], limit: usize) -> usize {
+    let (mut i, mut j, mut at) = (0, 0, 0);
+    while at < limit {
+        let (Some((end_a, font_a)), Some((end_b, font_b))) = (a.get(i), b.get(j)) else {
+            break;
+        };
+        if font_a != font_b {
+            break;
+        }
+        at = (*end_a).min(*end_b);
+        if *end_a <= at {
+            i += 1;
+        }
+        if *end_b <= at {
+            j += 1;
+        }
+    }
+    at.min(limit)
+}
+
+/// How far from the end two sets of font runs agree (the texts they cover
+/// are `len_a` and `len_b` long).
+fn runs_suffix(
+    a: &[(usize, Font)],
+    len_a: usize,
+    b: &[(usize, Font)],
+    len_b: usize,
+    limit: usize,
+) -> usize {
+    let (mut i, mut j, mut at) = (a.len(), b.len(), 0);
+    while at < limit && i > 0 && j > 0 {
+        if a[i - 1].1 != b[j - 1].1 {
+            break;
+        }
+        // How far from the end each run reaches back.
+        let start_a = if i >= 2 { a[i - 2].0 } else { 0 };
+        let start_b = if j >= 2 { b[j - 2].0 } else { 0 };
+        let reach_a = len_a.saturating_sub(start_a);
+        let reach_b = len_b.saturating_sub(start_b);
+        at = reach_a.min(reach_b);
+        if reach_a <= at {
+            i -= 1;
+        }
+        if reach_b <= at {
+            j -= 1;
+        }
+    }
+    at.min(limit)
+}
+
 /// The measure of `block` at `column_width`, without keeping its layout.
+/// Also returns the sum of its line widths (for calibrating estimates).
 pub(crate) fn measure_block(
     block: &Block,
     style: &LayoutStyle,
@@ -265,32 +639,54 @@ pub(crate) fn measure_block(
     if block.is_void() {
         return (Measure::new(&metrics, block.kind(), 1), px(0.));
     }
-    let lines = shape_lines(
-        block,
-        style,
-        &metrics,
-        text_width(&metrics, column_width),
+    let runs = font_runs(block, style);
+    let shaper = Shaper {
+        text: block.text(),
+        runs: &runs,
+        font_size: metrics.font_size,
+        text_width: text_width(&metrics, column_width),
+        ink: style.colors.ink,
         text_system,
-    );
-    let rows = lines
-        .iter()
-        .map(|line| line.layout.wrap_boundaries().len() + 1)
-        .sum();
-    let natural = lines
-        .iter()
-        .fold(px(0.), |sum, line| sum + line.layout.unwrapped_layout.width);
+    };
+    let (whole_limit, piece_bytes) = piece_limits();
+    let len = shaper.text.len();
+    let mut rows = 0;
+    let mut natural = px(0.);
+    let mut pos = 0;
+    loop {
+        let (shaped, _, whole) = if len <= whole_limit {
+            let shaped = shaper.shape(0..len);
+            let whole = shaped.rows.len();
+            (shaped, len, whole)
+        } else {
+            shaper.piece(pos, piece_bytes)
+        };
+        rows += whole;
+        natural = shaped.lines.iter().fold(natural, |sum, line| {
+            sum + line.layout.unwrapped_layout.width
+        });
+        match shaped.rows.get(whole) {
+            Some(next) => pos = next.range.start,
+            None => break,
+        }
+    }
     (Measure::new(&metrics, block.kind(), rows), natural)
 }
 
 impl BlockLayout {
     /// Shapes `block` for a text column `column_width` wide. `marker` is
     /// the gutter its numbered list needs ([`Marker::NONE`] otherwise).
+    /// `previous` is an earlier layout of the same block, if one is at
+    /// hand: a very long block takes over what did not change from it
+    /// (see the module documentation).
     pub(crate) fn shape(
         block: &Block,
         style: &LayoutStyle,
         column_width: Pixels,
         text_system: &WindowTextSystem,
         marker: Marker,
+        previous: Option<&BlockLayout>,
+        reflow: Reflow,
     ) -> Self {
         let metrics = style.metrics(block, marker);
         let text_width = text_width(&metrics, column_width);
@@ -317,64 +713,49 @@ impl BlockLayout {
             x_height,
             ink: style.colors.ink,
             natural_width: px(0.),
+            pieces: Vec::new(),
+            source: None,
         };
-        let mut y = metrics.pad_top;
+        // Rows that were shaped now (the others came with their alignment
+        // from `previous`).
+        let mut fresh: Vec<Range<usize>> = Vec::new();
         if !layout.void {
             layout.decorations = style.decorations(block);
-            layout.lines = shape_lines(block, style, &metrics, text_width, text_system);
-            for (line_ix, line) in layout.lines.iter().enumerate() {
-                let unwrapped = &line.layout.unwrapped_layout;
-                layout.natural_width += unwrapped.width;
-                let mut start = 0;
-                let mut start_pos = GlyphPos { run: 0, glyph: 0 };
-                let mut x_start = px(0.);
-                for boundary in line.layout.wrap_boundaries() {
-                    let Some(glyph) = unwrapped
-                        .runs
-                        .get(boundary.run_ix)
-                        .and_then(|run| run.glyphs.get(boundary.glyph_ix))
-                    else {
-                        continue;
-                    };
-                    let end_pos = GlyphPos {
-                        run: boundary.run_ix,
-                        glyph: boundary.glyph_ix,
-                    };
-                    layout.rows.push(Row {
-                        range: line.start + start..line.start + glyph.index,
-                        line: line_ix,
-                        x_start,
-                        width: glyph.position.x - x_start,
-                        y,
-                        soft_wrapped: true,
-                        glyphs: (start_pos, end_pos),
-                        dx: px(0.),
-                        justify: None,
-                    });
-                    start = glyph.index;
-                    start_pos = end_pos;
-                    x_start = glyph.position.x;
-                    y += metrics.line_height;
-                }
-                layout.rows.push(Row {
-                    range: line.start + start..line.start + line.text.len(),
-                    line: line_ix,
-                    x_start,
-                    width: unwrapped.width - x_start,
-                    y,
-                    soft_wrapped: false,
-                    glyphs: (
-                        start_pos,
-                        GlyphPos {
-                            run: unwrapped.runs.len(),
-                            glyph: 0,
-                        },
-                    ),
-                    dx: px(0.),
-                    justify: None,
+            let runs = font_runs(block, style);
+            let shaper = Shaper {
+                text: block.text(),
+                runs: &runs,
+                font_size: metrics.font_size,
+                text_width,
+                ink: style.colors.ink,
+                text_system,
+            };
+            let (whole_limit, piece_bytes) = piece_limits();
+            if shaper.text.len() <= whole_limit {
+                let shaped = shaper.shape(0..shaper.text.len());
+                layout.lines = shaped.lines;
+                layout.rows = shaped.rows;
+                fresh.push(0..layout.rows.len());
+            } else {
+                // Rows carry their alignment and sit in a text box of one
+                // width at one font size: an old layout is only of use
+                // when it agrees on all of that.
+                let previous = previous.filter(|old| {
+                    old.source.is_some()
+                        && old.font_size == layout.font_size
+                        && old.text_width == layout.text_width
+                        && old.align == layout.align
                 });
-                y += metrics.line_height;
+                fresh = layout.shape_pieces(&shaper, previous, piece_bytes, reflow);
+                layout.source = Some(Source {
+                    text: shaper.text.to_string().into(),
+                    runs,
+                });
             }
+            layout.natural_width = layout
+                .lines
+                .iter()
+                .fold(px(0.), |sum, line| sum + line.layout.unwrapped_layout.width);
         }
         if layout.rows.is_empty() {
             // A void block, or a shaping failure: one empty row keeps every
@@ -384,24 +765,284 @@ impl BlockLayout {
                 line: 0,
                 x_start: px(0.),
                 width: px(0.),
-                y,
+                y: px(0.),
                 soft_wrapped: false,
                 glyphs: (GlyphPos { run: 0, glyph: 0 }, GlyphPos { run: 0, glyph: 0 }),
                 dx: px(0.),
                 justify: None,
             });
+            layout.pieces.clear();
+            layout.source = None;
+        }
+        for (ix, row) in layout.rows.iter_mut().enumerate() {
+            row.y = metrics.pad_top + metrics.line_height * ix as f32;
         }
         layout.measure = Measure::new(&metrics, block.kind(), layout.rows.len());
-        layout.align_rows();
+        for rows in fresh {
+            layout.align_rows(rows);
+        }
+        // The row before a seam is short by accident: it is not spread
+        // over the column.
+        for piece in &layout.pieces {
+            if piece.seam
+                && let Some(row) = layout.rows.get_mut(piece.rows.end.wrapping_sub(1))
+            {
+                row.justify = None;
+            }
+        }
         layout
     }
 
-    /// Computes each row's alignment shift and justification.
-    fn align_rows(&mut self) {
+    /// Whether the block has a seam: a place where an edit stopped
+    /// reflowing its rows (see the module documentation).
+    pub(crate) fn has_seam(&self) -> bool {
+        self.pieces.iter().any(|piece| piece.seam)
+    }
+
+    /// Fills `lines`, `rows` and `pieces` for a long text: what `previous`
+    /// has of it is taken over, the rest is shaped. Returns the ranges of
+    /// the rows that were shaped.
+    fn shape_pieces(
+        &mut self,
+        shaper: &Shaper,
+        previous: Option<&BlockLayout>,
+        piece_bytes: usize,
+        reflow: Reflow,
+    ) -> Vec<Range<usize>> {
+        let len = shaper.text.len();
+        let mut fresh = Vec::new();
+        let mut pos = 0;
+        // Where (in the new text) an untouched old piece starts: once the
+        // new rows reach one of these, the old pieces from there on are
+        // the layout of the rest.
+        let mut resume: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut delta = 0isize;
+        let old = previous.and_then(|old| Some((old, old.source.as_ref()?)));
+        if let Some((old, source)) = old {
+            let (before, after) = (source.text.as_bytes(), shaper.text.as_bytes());
+            let limit = before.len().min(after.len());
+            let prefix =
+                common_prefix(before, after).min(runs_prefix(&source.runs, shaper.runs, limit));
+            let suffix = common_suffix(&before[prefix..], &after[prefix..])
+                .min(runs_suffix(
+                    &source.runs,
+                    before.len(),
+                    shaper.runs,
+                    after.len(),
+                    limit,
+                ))
+                .min(limit - prefix);
+            let same_text = prefix == before.len() && before.len() == after.len();
+            // Pieces before the change, with everything they were shaped
+            // from untouched. The last piece was also shaped from the fact
+            // that the text ended there: it only stays when nothing
+            // changed at all. Mending starts over at the first seam.
+            let kept = old
+                .pieces
+                .iter()
+                .take_while(|piece| {
+                    piece.slice_end <= prefix
+                        && (piece.slice_end < before.len() || same_text)
+                        && !(piece.seam && reflow == Reflow::Mend)
+                })
+                .count();
+            for piece in &old.pieces[..kept] {
+                self.adopt(old, piece, 0, len);
+            }
+            pos = self.pieces.last().map_or(0, |piece| piece.range.end);
+            delta = after.len() as isize - before.len() as isize;
+            let untouched_from = if same_text { 0 } else { before.len() - suffix };
+            for (ix, piece) in old.pieces.iter().enumerate().skip(kept) {
+                // (Mending starts at a piece that ends in a seam: taking
+                // that very piece over again would mend nothing.)
+                let mending_this = reflow == Reflow::Mend && ix == kept;
+                if piece.range.start >= untouched_from && !mending_this {
+                    resume.insert((piece.range.start as isize + delta) as usize, ix);
+                }
+            }
+        }
+        let patience = match reflow {
+            Reflow::Edit => SEAM_PATIENCE,
+            Reflow::Mend => MEND_PATIENCE,
+        };
+        // Pieces shaped across the start of an untouched old piece without
+        // the rows meeting there.
+        let mut missed = 0;
+        while pos < len {
+            let Some((old, _)) = old else {
+                // Nothing to take over: shape to the end.
+                let (shaped, slice_end, whole) = shaper.piece(pos, piece_bytes);
+                let end = shaped.rows.get(whole).map_or(len, |row| row.range.start);
+                let first_row = self.rows.len();
+                self.push_piece(shaped, whole, pos..end, slice_end, false);
+                fresh.push(first_row..self.rows.len());
+                pos = end;
+                continue;
+            };
+            if let Some(ix) = resume.get(&pos) {
+                for piece in &old.pieces[*ix..] {
+                    self.adopt(old, piece, delta, len);
+                }
+                break;
+            }
+            // Out of patience: a seam at the next untouched piece. The
+            // text up to there is shaped as if it ended there.
+            let next = resume
+                .range((Bound::Excluded(pos), Bound::Unbounded))
+                .next()
+                .map(|(start, ix)| (*start, *ix));
+            if missed >= patience
+                && let Some((start, ix)) = next
+                && start - pos <= piece_bytes.saturating_mul(4)
+            {
+                let mut shaped = shaper.shape(pos..start);
+                let seam = shaper.text.as_bytes()[start - 1] != b'\n';
+                let mut whole = shaped.rows.len();
+                if seam {
+                    if let Some(last) = shaped.rows.last_mut() {
+                        last.soft_wrapped = true;
+                    }
+                } else {
+                    // The slice ends with a line break: its last row is
+                    // the (still empty) start of the next line, which
+                    // belongs to the next piece. No seam there at all.
+                    whole = whole.saturating_sub(1);
+                }
+                let first_row = self.rows.len();
+                self.push_piece(shaped, whole, pos..start, start, seam);
+                fresh.push(first_row..self.rows.len());
+                for piece in &old.pieces[ix..] {
+                    self.adopt(old, piece, delta, len);
+                }
+                break;
+            }
+            let (shaped, slice_end, whole) = shaper.piece(pos, piece_bytes);
+            // The first row start (after this piece's own) at which the
+            // old layout can take over. Every row up to the first one
+            // that is not whole starts where it would in the full text.
+            let mut keep = whole;
+            let mut resumed = None;
+            for row in 1..=whole.min(shaped.rows.len().saturating_sub(1)) {
+                if let Some(ix) = resume.get(&shaped.rows[row].range.start) {
+                    keep = row;
+                    resumed = Some(*ix);
+                    break;
+                }
+            }
+            let end = shaped.rows.get(keep).map_or(len, |row| row.range.start);
+            let first_row = self.rows.len();
+            self.push_piece(shaped, keep, pos..end, slice_end, false);
+            fresh.push(first_row..self.rows.len());
+            if let Some(ix) = resumed {
+                for piece in &old.pieces[ix..] {
+                    self.adopt(old, piece, delta, len);
+                }
+                break;
+            }
+            if resume
+                .range((Bound::Excluded(pos), Bound::Included(end)))
+                .next()
+                .is_some()
+            {
+                missed += 1;
+            }
+            pos = end;
+        }
+        // The end of the text. What was taken over may stop short of it in
+        // two ways.
+        match self.rows.last_mut() {
+            // The text now ends where an old piece ended in a seam: that
+            // row is the last row of the block, not one that wraps.
+            Some(last) if last.soft_wrapped && last.range.end >= len => {
+                last.soft_wrapped = false;
+                if let Some(piece) = self.pieces.last_mut() {
+                    piece.seam = false;
+                    piece.slice_end = len;
+                }
+            }
+            // The text now ends with a line break that used to be followed
+            // by more: the empty line after it is a row too.
+            Some(last) if !last.soft_wrapped && last.range.end + 1 == len => {
+                let shaped = shaper.shape(len..len);
+                let first_row = self.rows.len();
+                let whole = shaped.rows.len();
+                self.push_piece(shaped, whole, len..len, len, false);
+                fresh.push(first_row..self.rows.len());
+            }
+            _ => {}
+        }
+        fresh
+    }
+
+    /// Appends the first `keep` rows of a shaped slice as a piece.
+    fn push_piece(
+        &mut self,
+        shaped: Shaped,
+        keep: usize,
+        range: Range<usize>,
+        slice_end: usize,
+        seam: bool,
+    ) {
+        let keep = keep.min(shaped.rows.len());
+        if keep == 0 {
+            return;
+        }
+        let line_base = self.lines.len();
+        let row_base = self.rows.len();
+        let lines = shaped.rows[keep - 1].line + 1;
+        self.lines.extend(shaped.lines.into_iter().take(lines));
+        self.rows
+            .extend(shaped.rows.into_iter().take(keep).map(|mut row| {
+                row.line += line_base;
+                row
+            }));
+        self.pieces.push(Piece {
+            range,
+            slice_end,
+            lines: line_base..self.lines.len(),
+            rows: row_base..self.rows.len(),
+            seam,
+        });
+    }
+
+    /// Appends a piece of an older layout of the same block, `delta` bytes
+    /// further on in a text that is now `len` long.
+    fn adopt(&mut self, old: &BlockLayout, piece: &Piece, delta: isize, len: usize) {
+        let shift = |offset: usize| (offset as isize + delta).max(0) as usize;
+        let line_base = self.lines.len();
+        let row_base = self.rows.len();
+        self.lines
+            .extend(old.lines[piece.lines.clone()].iter().map(|line| Line {
+                layout: line.layout.clone(),
+                text: line.text.clone(),
+                start: shift(line.start),
+            }));
+        self.rows
+            .extend(old.rows[piece.rows.clone()].iter().map(|row| {
+                let mut row = row.clone();
+                row.range = shift(row.range.start)..shift(row.range.end);
+                row.line = row.line - piece.lines.start + line_base;
+                if let Some(justify) = &mut row.justify {
+                    justify.end = shift(justify.end);
+                }
+                row
+            }));
+        self.pieces.push(Piece {
+            range: shift(piece.range.start)..shift(piece.range.end),
+            slice_end: shift(piece.slice_end).min(len),
+            lines: line_base..self.lines.len(),
+            rows: row_base..self.rows.len(),
+            seam: piece.seam,
+        });
+    }
+
+    /// Computes the alignment shift and the justification of the rows in
+    /// `rows`.
+    fn align_rows(&mut self, rows: Range<usize>) {
         if self.align == Alignment::Left || self.void {
             return;
         }
-        for row_ix in 0..self.rows.len() {
+        for row_ix in rows.start..rows.end.min(self.rows.len()) {
             let row = &self.rows[row_ix];
             let Some(line) = self.lines.get(row.line) else {
                 continue;
@@ -721,6 +1362,85 @@ impl BlockLayout {
             }
         }
         rects
+    }
+
+    /// Everything about the rows that hit testing and painting use, for
+    /// comparing two layouts of the same text: per row its bytes, how it
+    /// ends, where it is, and the x of every glyph.
+    #[cfg(test)]
+    pub(crate) fn row_fingerprint(&self) -> Vec<RowPrint> {
+        (0..self.rows.len())
+            .map(|row_ix| {
+                let row = &self.rows[row_ix];
+                let line_start = self.lines.get(row.line).map_or(0, |line| line.start);
+                let mut glyphs = Vec::new();
+                self.for_each_glyph(row_ix, |_, glyph, x| {
+                    glyphs.push((line_start + glyph.index, f32::from(x)));
+                });
+                RowPrint {
+                    range: row.range.clone(),
+                    soft_wrapped: row.soft_wrapped,
+                    glyphs,
+                    y: f32::from(row.y),
+                }
+            })
+            .collect()
+    }
+
+    /// Whether the rows cover the text without gaps: each one starts
+    /// where the one before it ended (after the line break, at the end of
+    /// a hard line). Holds for every layout, also one with seams.
+    #[cfg(test)]
+    pub(crate) fn rows_are_contiguous(&self, len: usize) -> bool {
+        let mut at = 0;
+        for row in &self.rows {
+            if row.range.start != at || row.range.end < row.range.start {
+                return false;
+            }
+            at = row.range.end + usize::from(!row.soft_wrapped);
+        }
+        at == len + 1
+    }
+
+    /// The pieces and the first place where the rows do not follow each
+    /// other, for a failing test to print.
+    #[cfg(test)]
+    pub(crate) fn describe(&self) -> String {
+        let mut out = String::new();
+        for piece in &self.pieces {
+            out.push_str(&format!(
+                "piece {:?} shaped to {} rows {:?} lines {:?} seam {}\n",
+                piece.range, piece.slice_end, piece.rows, piece.lines, piece.seam
+            ));
+        }
+        let mut at = 0;
+        for (ix, row) in self.rows.iter().enumerate() {
+            if row.range.start != at {
+                out.push_str(&format!(
+                    "row {ix} starts at {} instead of {at}: {:?} soft {} after {:?}\n",
+                    row.range.start,
+                    row.range,
+                    row.soft_wrapped,
+                    ix.checked_sub(1)
+                        .map(|prev| (&self.rows[prev].range, self.rows[prev].soft_wrapped)),
+                ));
+                break;
+            }
+            at = row.range.end + usize::from(!row.soft_wrapped);
+        }
+        for row in self.rows.iter().rev().take(3).rev() {
+            out.push_str(&format!(
+                "row {:?} soft {} line {}\n",
+                row.range, row.soft_wrapped, row.line
+            ));
+        }
+        out
+    }
+
+    /// Number of pieces the block was shaped in (0: as a whole).
+    #[cfg(test)]
+    pub(crate) fn piece_count(&self) -> usize {
+        self.pieces.len()
     }
 
     /// Top and height of the ink of a row (ascent to descent), from the top

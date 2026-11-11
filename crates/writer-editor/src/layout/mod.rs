@@ -60,6 +60,7 @@ use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Instant};
 use gpui::{Bounds, Pixels, Point, SharedString, TextRun, WindowTextSystem, point, px, size};
 use writer_core::{Block, BlockId, BlockKind, BlockSplice, Document, Stats};
 
+use block::Reflow;
 pub(crate) use block::{BlockLayout, Measure};
 pub(crate) use pages::PageGeometry;
 pub(crate) use style::LayoutStyle;
@@ -135,6 +136,9 @@ struct Slot {
     measured: bool,
     /// Word counts of the block; `None` until counted.
     stats: Option<Stats>,
+    /// The block has too much text to count on the main thread: the
+    /// editor has it counted on a background thread.
+    large: bool,
     /// Valid for slots below the placement watermark.
     place: Placement,
 }
@@ -163,6 +167,8 @@ pub(crate) struct DocumentLayout {
     unmeasured: usize,
     /// Number of slots without word counts.
     uncounted: usize,
+    /// How many of those are `Slot::large`.
+    uncounted_large: usize,
     /// Sum of the counted slots.
     stats_sum: Stats,
     /// The last complete sum (what the editor shows while counting).
@@ -179,6 +185,9 @@ pub(crate) struct DocumentLayout {
     /// Widths of a digit and of a period in ems of the body font, for the
     /// gutters of numbered lists. Measured when first needed.
     marker_em: Option<(f32, f32)>,
+    /// Very long blocks whose rows an edit left with a seam (see
+    /// `block`): the background layout finishes their reflow.
+    seamed: Vec<BlockId>,
 }
 
 /// What a block is to list numbering: bit 7 for a numbered item, the low
@@ -224,6 +233,7 @@ impl DocumentLayout {
             scroll: ScrollPosition::Top,
             unmeasured: 0,
             uncounted: 0,
+            uncounted_large: 0,
             stats_sum: Stats::default(),
             stats_shown: Stats::default(),
             refine_cursor: 0,
@@ -233,6 +243,7 @@ impl DocumentLayout {
             calibration: (0., 0.),
             calibrated: false,
             marker_em: None,
+            seamed: Vec::new(),
         };
         layout.reset(document, revision);
         layout
@@ -243,6 +254,7 @@ impl DocumentLayout {
     pub(crate) fn reset(&mut self, document: &Document, revision: u64) {
         self.slots.clear();
         self.layouts.clear();
+        self.seamed.clear();
         self.scroll = ScrollPosition::Top;
         self.stats_shown = Stats::default();
         self.calibrated = false;
@@ -259,6 +271,7 @@ impl DocumentLayout {
         let mut budget = EAGER_STATS_BYTES;
         self.unmeasured = 0;
         self.uncounted = 0;
+        self.uncounted_large = 0;
         self.stats_sum = Stats::default();
         let mut slots = Vec::with_capacity(document.block_count());
         for block in document.blocks() {
@@ -312,6 +325,7 @@ impl DocumentLayout {
                     measure,
                     measured: false,
                     stats,
+                    large: block.len() > EAGER_STATS_BYTES,
                     place: empty_placement(),
                 }
             }
@@ -324,7 +338,10 @@ impl DocumentLayout {
         }
         match slot.stats {
             Some(stats) => self.stats_sum += stats,
-            None => self.uncounted += 1,
+            None => {
+                self.uncounted += 1;
+                self.uncounted_large += usize::from(slot.large);
+            }
         }
     }
 
@@ -334,7 +351,10 @@ impl DocumentLayout {
         }
         match slot.stats {
             Some(stats) => self.stats_sum = minus(self.stats_sum, stats),
-            None => self.uncounted -= 1,
+            None => {
+                self.uncounted -= 1;
+                self.uncounted_large -= usize::from(slot.large);
+            }
         }
     }
 
@@ -581,6 +601,7 @@ impl DocumentLayout {
         self.env = Some(env);
         if reshape {
             self.layouts.clear();
+            self.seamed.clear();
             self.marker_em = None;
             self.calibrated = false;
             self.calibration = (0., 0.);
@@ -718,14 +739,32 @@ impl DocumentLayout {
             }
             return Some(layout);
         }
+        self.shape(index, document, Reflow::Edit)
+    }
+
+    /// Shapes block `index` and caches the result.
+    fn shape(
+        &mut self,
+        index: usize,
+        document: &Document,
+        reflow: Reflow,
+    ) -> Option<Rc<BlockLayout>> {
+        let block = document.block(index)?;
+        let digits = self.slots.get(index)?.digits;
+        let (id, stamp) = (block.id(), block.revision());
         let marker = self.marker(digits);
         let env = self.env.as_ref()?;
+        // The layout of the block as it was before: a very long block
+        // takes over from it what did not change.
+        let previous = self.layouts.get(&id).map(|cached| cached.layout.clone());
         let layout = Rc::new(BlockLayout::shape(
             block,
             &env.style,
             env.column_width,
             &env.text_system,
             marker,
+            previous.as_deref(),
+            reflow,
         ));
         self.layouts.insert(
             id,
@@ -736,6 +775,14 @@ impl DocumentLayout {
                 epoch: self.epoch,
             },
         );
+        let seamed = self.seamed.iter().position(|seamed| *seamed == id);
+        match (layout.has_seam(), seamed) {
+            (true, None) => self.seamed.push(id),
+            (false, Some(at)) => {
+                self.seamed.swap_remove(at);
+            }
+            _ => {}
+        }
         let sample = (!block.kind().is_code() && !block.is_void()).then(|| {
             (
                 f32::from(layout.natural_width),
@@ -744,6 +791,29 @@ impl DocumentLayout {
         });
         self.note_measure(index, layout.measure, sample);
         Some(layout)
+    }
+
+    /// Continues the reflow of one block that an edit left with a seam.
+    /// Returns whether it did anything.
+    fn mend(&mut self, document: &Document) -> bool {
+        while let Some(id) = self.seamed.last().copied() {
+            let cached = self
+                .layouts
+                .get(&id)
+                .filter(|cached| cached.layout.has_seam())
+                .map(|cached| cached.stamp);
+            let index = self.slots.iter().position(|slot| slot.id == id);
+            match (cached, index) {
+                (Some(_), Some(index)) => {
+                    return self.shape(index, document, Reflow::Mend).is_some();
+                }
+                // The block or its layout is gone.
+                _ => {
+                    self.seamed.pop();
+                }
+            }
+        }
+        false
     }
 
     /// Measures block `index` without keeping its shaped layout.
@@ -769,26 +839,66 @@ impl DocumentLayout {
         self.slots.get(index).is_some_and(|slot| slot.measured)
     }
 
-    /// Whether estimates or missing word counts remain.
+    /// Whether there is work for [`Self::refine`]: estimates, missing
+    /// word counts (of blocks it counts itself) or unfinished reflows.
     pub(crate) fn pending(&self) -> bool {
-        (self.unmeasured > 0 && self.env.is_some()) || self.uncounted > 0
+        (self.unmeasured > 0 && self.env.is_some())
+            || self.uncounted > self.uncounted_large
+            || (!self.seamed.is_empty() && self.env.is_some())
     }
 
-    /// Whether every block's measure is real.
+    /// The blocks whose words a background thread has to count: `(index,
+    /// id, revision stamp)` of every very long block without counts.
+    pub(crate) fn large_uncounted(&self) -> Vec<(usize, BlockId, u64)> {
+        if self.uncounted_large == 0 {
+            return Vec::new();
+        }
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.large && slot.stats.is_none())
+            .map(|(index, slot)| (index, slot.id, slot.stamp))
+            .collect()
+    }
+
+    /// Records the counts of a very long block that were made elsewhere,
+    /// if the block is still the one that was counted. Returns whether it
+    /// was.
+    pub(crate) fn set_block_stats(&mut self, id: BlockId, stamp: u64, stats: Stats) -> bool {
+        let Some(slot) = self
+            .slots
+            .iter_mut()
+            .find(|slot| slot.id == id && slot.stamp == stamp && slot.stats.is_none())
+        else {
+            return false;
+        };
+        slot.stats = Some(stats);
+        self.uncounted -= 1;
+        self.uncounted_large -= usize::from(slot.large);
+        self.stats_sum += stats;
+        self.settle_stats();
+        true
+    }
+
+    /// Whether every block's measure is real and final (no reflow of a
+    /// very long block is still under way).
     pub(crate) fn settled(&self) -> bool {
-        self.unmeasured == 0
+        self.unmeasured == 0 && self.seamed.is_empty()
     }
 
     /// One slice of background work: counts the words of blocks that have
     /// no counts yet (first, because it is quick and the status bar waits
     /// for it), then measures blocks that only have an estimate, until
     /// `deadline` passes or `max_blocks` were handled. Returns whether work
-    /// remains.
+    /// remains. Very long blocks are only counted here with `count_large`;
+    /// otherwise they are left to a background thread (see
+    /// [`Self::large_uncounted`]).
     pub(crate) fn refine(
         &mut self,
         document: &Document,
         deadline: Option<Instant>,
         max_blocks: usize,
+        count_large: bool,
     ) -> bool {
         let count = self.slots.len();
         if count != document.block_count() {
@@ -800,15 +910,19 @@ impl DocumentLayout {
         let mut handled = 0;
         let mut scanned = 0;
         let mut index = self.count_cursor;
-        while self.uncounted > 0 && scanned < count && !expired(handled) {
+        let leave = if count_large { 0 } else { self.uncounted_large };
+        while self.uncounted > leave && scanned < count && !expired(handled) {
             if index >= count {
                 index = 0;
             }
-            if self.slots[index].stats.is_none() {
+            let slot = &self.slots[index];
+            if slot.stats.is_none() && (count_large || !slot.large) {
+                let large = slot.large;
                 let stats = Stats::of_text(document.blocks()[index].text());
                 self.slots[index].stats = Some(stats);
                 self.stats_sum += stats;
                 self.uncounted -= 1;
+                self.uncounted_large -= usize::from(large);
                 handled += 1;
             }
             index += 1;
@@ -832,13 +946,20 @@ impl DocumentLayout {
                 scanned += 1;
             }
             self.refine_cursor = index;
+            // Reflows that an edit to a very long block cut short.
+            while !self.seamed.is_empty() && !expired(handled) {
+                if !self.mend(document) {
+                    break;
+                }
+                handled += 1;
+            }
         }
         self.pending()
     }
 
-    /// Measures every block now (compact editors, tests).
+    /// Measures and counts every block now (compact editors, tests).
     pub(crate) fn measure_all(&mut self, document: &Document) {
-        while self.refine(document, None, usize::MAX) {}
+        while self.refine(document, None, usize::MAX, true) {}
     }
 
     /// Makes the estimates follow the text that was really measured.
@@ -1076,6 +1197,24 @@ impl DocumentLayout {
     #[cfg(test)]
     pub(crate) fn cached_layouts(&self) -> usize {
         self.layouts.len()
+    }
+
+    /// The layout of block `index` shaped from scratch: nothing taken from
+    /// the cache, nothing put into it.
+    #[cfg(test)]
+    pub(crate) fn fresh_layout(&mut self, index: usize, document: &Document) -> BlockLayout {
+        let block = document.block(index).expect("a block");
+        let marker = self.marker(self.slots[index].digits);
+        let env = self.env.as_ref().expect("laid out");
+        BlockLayout::shape(
+            block,
+            &env.style,
+            env.column_width,
+            &env.text_system,
+            marker,
+            None,
+            Reflow::Edit,
+        )
     }
 
     #[cfg(test)]

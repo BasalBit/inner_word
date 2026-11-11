@@ -189,3 +189,60 @@ fn character_index_for_point_and_refusal(cx: &mut TestAppContext) {
         assert_eq!(editor.plain_text(), "\u{1f600}\u{e0}bc");
     });
 }
+
+#[test]
+fn utf16_offsets_agree_with_the_engine_and_are_fast() {
+    use crate::input::{offset_to_utf16, utf16_to_offset};
+    use writer_core::text;
+
+    // Every kind of character, across the 4096-byte blocks the fast
+    // conversion counts in.
+    let pieces = [
+        "plain ascii ",
+        "na\u{ef}ve caf\u{e9} ",
+        "\u{65e5}\u{672c}\u{8a9e} ",
+        "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f467} ",
+        "e\u{301} ",
+        "\u{201c}quoted\u{201d} ",
+    ];
+    let mut sample = String::new();
+    let mut seed = 17u64;
+    while sample.len() < 20_000 {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        sample.push_str(pieces[(seed >> 33) as usize % pieces.len()]);
+    }
+    let total = sample.encode_utf16().count();
+    for offset in (0..=sample.len())
+        .step_by(7)
+        .chain([sample.len(), sample.len() + 9])
+    {
+        assert_eq!(
+            offset_to_utf16(&sample, offset),
+            text::utf8_to_utf16(&sample, offset),
+            "byte {offset}"
+        );
+    }
+    for units in (0..=total + 3).step_by(5) {
+        assert_eq!(
+            utf16_to_offset(&sample, units),
+            text::utf16_to_utf8(&sample, units),
+            "unit {units}"
+        );
+    }
+    assert_eq!(offset_to_utf16("", 0), 0);
+    assert_eq!(utf16_to_offset("", 4), 0);
+
+    // A megabyte: the platform asks about the caret several times per
+    // keystroke.
+    let long = sample.repeat(1_048_576 / sample.len() + 1);
+    let started = std::time::Instant::now();
+    let units = offset_to_utf16(&long, long.len());
+    let forward = started.elapsed();
+    let started = std::time::Instant::now();
+    assert_eq!(utf16_to_offset(&long, units), long.len());
+    let back = started.elapsed();
+    eprintln!("{} bytes: to UTF-16 {forward:?}, back {back:?}", long.len());
+    assert_eq!(units, long.encode_utf16().count());
+}

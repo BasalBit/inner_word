@@ -319,13 +319,14 @@ impl EditorState {
         if text.is_empty() || url.is_empty() {
             return false;
         }
-        let mut attrs = self.current_attrs();
-        attrs.link = Some(url.to_string());
+        let url = url.to_string();
         self.edit(EditKind::Other, |ed| {
             if !ed.selection.is_collapsed() {
                 ed.delete_selection_impl();
             }
             let pos = ed.leave_void(ed.selection.head);
+            let mut attrs = ed.insertion_attrs(pos);
+            attrs.link = Some(url);
             let p = ed.insert_in_block(pos, &text, &attrs);
             ed.caret_to(p);
             ed.pending = None;

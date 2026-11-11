@@ -1,6 +1,6 @@
 //! Per-document settings: page setup, typography defaults, page view.
 
-use crate::block::BlockKind;
+use crate::block::{Block, BlockKind};
 
 /// Points per inch.
 pub const POINTS_PER_INCH: f32 = 72.0;
@@ -205,6 +205,12 @@ impl Typography {
         (self.base_size * factor).round()
     }
 
+    /// The text size in points `block` is shown at: its override, else
+    /// [`Typography::size_for`] its kind.
+    pub fn size_of(&self, block: &Block) -> f32 {
+        block.text_size().unwrap_or_else(|| self.size_for(block.kind()))
+    }
+
     /// Clamps values into usable ranges and replaces an empty font name.
     pub fn sanitized(self) -> Typography {
         let d = Typography::default();
@@ -293,5 +299,7 @@ mod tests {
         assert_eq!(t.size_for(&BlockKind::Paragraph), 17.0);
         assert_eq!(t.size_for(&BlockKind::heading(1)), 34.0);
         assert!(t.size_for(&BlockKind::heading(2)) > t.size_for(&BlockKind::heading(3)));
+        assert_eq!(t.size_of(&Block::with_text(BlockKind::heading(1), "x")), 34.0);
+        assert_eq!(t.size_of(&Block::paragraph("x").with_text_size(Some(22.0))), 22.0);
     }
 }

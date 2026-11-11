@@ -83,8 +83,10 @@ fn acceptable(text: &str, r: &Range<usize>, bounds: Option<&[usize]>) -> bool {
         && bounds.is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok())
 }
 
-/// All non-overlapping matches of `query` in `text`, left to right.
+/// All non-overlapping matches of `query` in `text`, left to right. The
+/// query is normalised like typed text first (`\r\n` becomes `\n`).
 pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<Range<usize>> {
+    let query = &*text::normalize_input(query);
     let mut out = Vec::new();
     if query.is_empty() || text.is_empty() {
         return out;

@@ -243,6 +243,32 @@ impl Document {
         out
     }
 
+    /// The part of `range` (clamped) inside block `index`, as a byte range
+    /// of that block: `None` when the block lies outside the range. Blocks
+    /// strictly inside get their whole text (`0..0` for a void block, which
+    /// the UI shows as selected); a void block at either end of a
+    /// multi-block range is included too, matching what deletion and copy
+    /// do. For drawing selections, search matches and comment ranges.
+    pub fn range_in_block(&self, range: TextRange, index: usize) -> Option<Range<usize>> {
+        let s = self.clamp_position(range.start);
+        let e = self.clamp_position(range.end);
+        let (s, e) = if s <= e { (s, e) } else { (e, s) };
+        if index < s.block || index > e.block || index >= self.blocks.len() {
+            return None;
+        }
+        let len = self.blocks[index].len();
+        let from = if index == s.block { s.offset } else { 0 };
+        let to = if index == e.block { e.offset } else { len };
+        if s.block == e.block && from == to {
+            return None;
+        }
+        if index == e.block && to == 0 && index > s.block && !self.blocks[index].is_void() {
+            // The range ends at the start of this text block: nothing of it.
+            return None;
+        }
+        Some(from..to)
+    }
+
     /// The byte offset of `pos` (clamped) in [`Document::plain_text`]
     /// (blocks joined by `\n`). Linear in the number of blocks before `pos`;
     /// meant for occasional use (Vim search, find-in-document), not per frame.
@@ -721,6 +747,27 @@ mod tests {
         let t = d.title().unwrap();
         assert!(t.chars().count() <= TITLE_MAX_CHARS);
         assert!(t.ends_with("word"));
+    }
+
+    #[test]
+    fn range_in_block_parts() {
+        let d = Document::from_blocks(vec![
+            Block::paragraph("hello"),
+            Block::new(BlockKind::Divider),
+            Block::paragraph("world"),
+            Block::paragraph("next"),
+        ]);
+        let r = TextRange::new(Position::new(0, 2), Position::new(3, 0));
+        assert_eq!(d.range_in_block(r, 0), Some(2..5));
+        assert_eq!(d.range_in_block(r, 1), Some(0..0));
+        assert_eq!(d.range_in_block(r, 2), Some(0..5));
+        assert_eq!(d.range_in_block(r, 3), None);
+        let r = TextRange::new(Position::new(0, 5), Position::new(1, 0));
+        assert_eq!(d.range_in_block(r, 0), Some(5..5));
+        assert_eq!(d.range_in_block(r, 1), Some(0..0));
+        assert_eq!(d.range_in_block(TextRange::empty(Position::new(2, 1)), 2), None);
+        assert_eq!(d.range_in_block(TextRange::in_block(2, 1, 3), 2), Some(1..3));
+        assert_eq!(d.range_in_block(TextRange::in_block(2, 1, 3), 9), None);
     }
 
     #[test]

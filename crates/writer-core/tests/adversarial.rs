@@ -3,6 +3,8 @@
 //! comment anchors, Enter / Backspace per block kind, input rules, smart
 //! punctuation, fragments, numbering, search and serialization.
 
+#![allow(clippy::type_complexity)]
+
 use writer_core::text;
 use writer_core::*;
 
@@ -795,7 +797,9 @@ fn numbered_ordinals_with_nesting() {
     for s in 0..want.len() {
         assert_eq!(d.numbered_ordinals(s..want.len()), want[s..].to_vec(), "from {s}");
     }
-    assert_eq!(d.numbered_ordinals(3..1), Vec::<Option<usize>>::new());
+    #[allow(clippy::reversed_empty_ranges)]
+    let reversed = 3..1;
+    assert_eq!(d.numbered_ordinals(reversed), Vec::<Option<usize>>::new());
 }
 
 // ----- search -------------------------------------------------------------------------
@@ -934,8 +938,10 @@ fn serialization_is_compact_and_versioned() {
     let back = Document::from_json(&j).unwrap();
     assert_eq!(&back, e.document());
     // Default settings are omitted, changed ones are written.
-    let mut s = DocumentSettings::default();
-    s.page_view = true;
+    let mut s = DocumentSettings {
+        page_view: true,
+        ..Default::default()
+    };
     s.page.paper = PaperSize::UsLetter;
     let d = Document::new().with_settings(s.clone());
     let j = d.to_json();

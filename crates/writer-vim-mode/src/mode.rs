@@ -388,6 +388,25 @@ impl VimMode {
         if modifiers.function {
             return KeyDisposition::Pass;
         }
+        if let Some(typed) = self.typed_into_popup(keystroke, cx) {
+            // The first character typed for a popup that filters by the
+            // text in the document starts Insert mode, as `i` does. The
+            // editor still refuses typed text for this key (its input
+            // handler was registered while Normal mode had it switched
+            // off), so the character is inserted here, as typing would.
+            if let Some(insert) = Key::parse_sequence("i").into_iter().next() {
+                let outcome = self.engine_call(Call::Key(insert), cx);
+                self.apply(outcome, true, cx);
+            }
+            if self.vim.mode() == Mode::Insert {
+                self.editor.update(cx, |editor, cx| {
+                    editor.edit(|state| state.insert_text(&typed), cx);
+                });
+                let outcome = self.engine_call(Call::TextInserted(&typed), cx);
+                self.apply(outcome, false, cx);
+                return KeyDisposition::Consumed;
+            }
+        }
         let Some(key) = key_from_keystroke(keystroke, wants_literal_key(&self.vim)) else {
             return KeyDisposition::Pass;
         };
@@ -401,6 +420,25 @@ impl VimMode {
             // the editor reports it (`EditorEvent::TextInput`).
             KeyDisposition::Pass
         }
+    }
+
+    /// The character `keystroke` types, when it is meant for a popup of the
+    /// editor that left the keyboard in the document: the insert menu,
+    /// which is filtered by what is typed after it opened. (A popup with a
+    /// field of its own has the focus, and its keys never come here.) In
+    /// Normal mode such a character would run as a command, on the text
+    /// under a menu that is waiting for a name.
+    fn typed_into_popup(&self, keystroke: &Keystroke, cx: &App) -> Option<String> {
+        let idle_normal = self.vim.mode() == Mode::Normal
+            && !self.vim.insert_pending()
+            && self.vim.pending_keys().is_empty();
+        let editor = self.editor.read(cx);
+        if !idle_normal || !editor.has_popup() || editor.is_read_only() {
+            return None;
+        }
+        key_from_keystroke(keystroke, true)?
+            .plain_char()
+            .map(String::from)
     }
 
     // ----- editor events ---------------------------------------------------------------

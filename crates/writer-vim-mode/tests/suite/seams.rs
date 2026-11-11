@@ -595,3 +595,85 @@ fn a_failed_command_rings_the_bell_for_a_moment(cx: &mut TestAppContext) {
     rig.vim.update(cx, |vim, cx| vim.detach(cx));
     assert!(!rig.status(cx).bell);
 }
+
+// ----- a popup that is filtered by typing ---------------------------------------------------
+
+/// Stands in for the insert menu: a popup of the editor that leaves the
+/// keyboard in the document.
+struct Blank;
+
+impl gpui::Render for Blank {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        gpui::div()
+    }
+}
+
+#[gpui::test]
+fn typing_for_a_popup_in_normal_mode_starts_insert_mode(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+    use writer_editor::{PopupAnchor, PopupPlacement};
+
+    setup(cx);
+    let (rig, cx) = open(doc(&["quote me", "undo"]), cx);
+    cx.simulate_keystrokes("x u");
+    assert_eq!(rig.text(cx), "quote me\nundo");
+
+    // The insert menu was opened from Normal mode (`:insertmenu`, the
+    // palette): the keyboard stays in the document.
+    let popup = cx.new(|_| Blank);
+    rig.editor.update(cx, |editor, cx| {
+        editor.show_popup(
+            popup.clone().into(),
+            PopupAnchor::Caret,
+            PopupPlacement::Below,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(rig.mode(cx), Mode::Normal, "opening it changes nothing");
+
+    // Its filter is typed: these are not the commands q, u, o, t, e.
+    cx.simulate_input("quote");
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    assert!(rig.text_input(cx));
+    assert_eq!(rig.text(cx), "quotequote me\nundo");
+    assert_eq!(rig.head(cx), at(0, 5));
+
+    // The popup goes (applied or dismissed); typing goes on in Insert
+    // mode until escape.
+    rig.editor.update(cx, |editor, cx| editor.hide_popup(cx));
+    cx.simulate_input("!");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.text(cx), "quote!quote me\nundo");
+    // One undo step for what was typed.
+    cx.simulate_keystrokes("u");
+    assert_eq!(rig.text(cx), "quote me\nundo");
+
+    // Keys that are not text never start Insert mode for a popup, and a
+    // command that is already under way is finished, not typed.
+    cx.simulate_keystrokes("d");
+    rig.editor.update(cx, |editor, cx| {
+        editor.show_popup(
+            popup.clone().into(),
+            PopupAnchor::Caret,
+            PopupPlacement::Below,
+            cx,
+        );
+    });
+    cx.simulate_keystrokes("w");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.text(cx), "me\nundo");
+    cx.simulate_keystrokes("right ctrl-e");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.text(cx), "me\nundo");
+    // Without a popup the same letters are commands again.
+    rig.editor.update(cx, |editor, cx| editor.hide_popup(cx));
+    cx.simulate_keystrokes("g g x");
+    assert_eq!(rig.text(cx), "e\nundo");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+}

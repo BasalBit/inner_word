@@ -18,7 +18,9 @@ writer-editor = { path = "crates/writer-editor" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.
-gpui = "0.2.2"
+# runtime_shaders: this machine has no offline Metal toolchain (xcrun metal fails with
+# "missing Metal Toolchain"), so shaders are compiled at runtime by Metal.framework.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

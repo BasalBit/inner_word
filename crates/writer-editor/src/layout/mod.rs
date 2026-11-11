@@ -942,10 +942,16 @@ impl Placed {
         found
     }
 
-    /// The caret line box at `offset`: zero width, one row high. x from
-    /// the column's left edge, y in content space.
+    /// The line box of the position at `offset`: zero width, one row high.
+    /// x from the column's left edge, y in content space.
     pub(crate) fn line_box(&self, offset: usize) -> Bounds<Pixels> {
-        let (row, bounds) = self.layout.caret_bounds(offset);
+        self.caret_box(offset, false)
+    }
+
+    /// The line box of a caret at `offset`: with `upstream`, a caret at a
+    /// soft wrap is at the end of the row that ends there.
+    pub(crate) fn caret_box(&self, offset: usize, upstream: bool) -> Bounds<Pixels> {
+        let (row, bounds) = self.layout.caret_bounds_on(offset, upstream);
         self.lift(row, bounds)
     }
 

@@ -39,6 +39,12 @@ actions!(
         MoveToLineStart,
         /// Move the caret to the end of the visual row.
         MoveToLineEnd,
+        /// Move the caret to the start of the paragraph (of the line, in a
+        /// block with line breaks).
+        MoveToParagraphStart,
+        /// Move the caret to the end of the paragraph (of the line, in a
+        /// block with line breaks).
+        MoveToParagraphEnd,
         /// Move the caret to the start of the document.
         MoveToDocumentStart,
         /// Move the caret to the end of the document.
@@ -64,6 +70,10 @@ actions!(
         SelectToLineStart,
         /// Extend the selection to the end of the visual row.
         SelectToLineEnd,
+        /// Extend the selection to the start of the paragraph.
+        SelectToParagraphStart,
+        /// Extend the selection to the end of the paragraph.
+        SelectToParagraphEnd,
         /// Extend the selection to the start of the document.
         SelectToDocumentStart,
         /// Extend the selection to the end of the document.
@@ -87,6 +97,9 @@ actions!(
         DeleteToLineStart,
         /// Delete forward to the end of the visual row.
         DeleteToLineEnd,
+        /// Delete from the caret to the end of the paragraph; at its end,
+        /// the line break after it.
+        DeleteToParagraphEnd,
         // --- Insertion ---
         /// Start a new paragraph (in compact mode with submit-on-enter:
         /// submit).
@@ -198,12 +211,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", MoveDown, c),
         KeyBinding::new("alt-left", MoveWordLeft, c),
         KeyBinding::new("alt-right", MoveWordRight, c),
-        KeyBinding::new("ctrl-a", MoveToLineStart, c),
         KeyBinding::new("home", MoveToLineStart, c),
         KeyBinding::new("cmd-left", MoveToLineStart, c),
-        KeyBinding::new("ctrl-e", MoveToLineEnd, c),
         KeyBinding::new("end", MoveToLineEnd, c),
         KeyBinding::new("cmd-right", MoveToLineEnd, c),
+        // As in macOS text views: the Emacs keys work on the paragraph,
+        // the `cmd` keys on the visual row.
+        KeyBinding::new("ctrl-a", MoveToParagraphStart, c),
+        KeyBinding::new("ctrl-e", MoveToParagraphEnd, c),
         KeyBinding::new("cmd-up", MoveToDocumentStart, c),
         KeyBinding::new("cmd-down", MoveToDocumentEnd, c),
         KeyBinding::new("pageup", MovePageUp, c),
@@ -219,6 +234,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-left", SelectToLineStart, c),
         KeyBinding::new("shift-end", SelectToLineEnd, c),
         KeyBinding::new("cmd-shift-right", SelectToLineEnd, c),
+        KeyBinding::new("ctrl-shift-a", SelectToParagraphStart, c),
+        KeyBinding::new("ctrl-shift-e", SelectToParagraphEnd, c),
         KeyBinding::new("cmd-shift-up", SelectToDocumentStart, c),
         KeyBinding::new("cmd-shift-down", SelectToDocumentEnd, c),
         KeyBinding::new("shift-pageup", SelectPageUp, c),
@@ -233,8 +250,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-backspace", DeleteWordBackward, c),
         KeyBinding::new("alt-delete", DeleteWordForward, c),
         KeyBinding::new("cmd-backspace", DeleteToLineStart, c),
-        KeyBinding::new("ctrl-k", DeleteToLineEnd, c),
         KeyBinding::new("cmd-delete", DeleteToLineEnd, c),
+        KeyBinding::new("ctrl-k", DeleteToParagraphEnd, c),
         // Insertion.
         KeyBinding::new("enter", Newline, c),
         KeyBinding::new("shift-enter", InsertSoftBreak, c),

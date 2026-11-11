@@ -270,7 +270,12 @@ impl EntityInputHandler for Editor {
         let index = self.input_block();
         let range = self.bytes_for_utf16(index, &range_utf16);
         if range.is_empty() {
-            return self.position_bounds(Position::new(index, range.start));
+            let position = Position::new(index, range.start);
+            // The input method's window goes where the caret is drawn.
+            if position == self.state.selection().head && self.caret_is_upstream() {
+                return self.caret_line_bounds();
+            }
+            return self.position_bounds(position);
         }
         self.range_bounds(TextRange::in_block(index, range.start, range.end))?
             .into_iter()

@@ -129,30 +129,46 @@ fn line_keys_work_on_visual_rows(cx: &mut TestAppContext) {
     assert_eq!(at(cx), Position::new(0, 65));
     cx.simulate_keystrokes("cmd-left");
     assert_eq!(at(cx), Position::new(0, 65));
-    // The end of the row: after its last word, before the space it wraps
-    // at, so the caret stays on the row.
+    // The end of the row: the position where it wraps, which is also the
+    // start of the next row. The caret stays on the row it came from.
+    let row_top = |cx: &mut gpui::VisualTestContext, offset: usize| {
+        editor.read_with(cx, |editor, _| {
+            editor
+                .position_bounds(Position::new(0, offset))
+                .unwrap()
+                .top()
+        })
+    };
+    let caret_top = |cx: &mut gpui::VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap().top())
+    };
     cx.simulate_keystrokes("cmd-right");
-    assert_eq!(at(cx), Position::new(0, 129));
-    editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.visual_row(head(editor)).unwrap(), second);
-    });
-    cx.simulate_keystrokes("end ctrl-e");
-    assert_eq!(at(cx), Position::new(0, 129));
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret_top(cx), row_top(cx, 70));
+    assert!(row_top(cx, 130) > row_top(cx, 70));
+    cx.simulate_keystrokes("end");
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret_top(cx), row_top(cx, 70));
     cx.simulate_keystrokes("home");
     assert_eq!(at(cx), Position::new(0, 65));
-    // Extending selects the row.
+    // Extending selects the row, with the space it wraps at.
     cx.simulate_keystrokes("cmd-shift-right");
     editor.read_with(cx, |editor, _| {
         assert_eq!(
             editor.selection(),
-            Selection::new(Position::new(0, 65), Position::new(0, 129))
+            Selection::new(Position::new(0, 65), Position::new(0, 130))
         );
     });
-    cx.simulate_keystrokes("right shift-home");
+    // Collapsing to the end leaves the caret at the end of that row, and
+    // from there the row is still this one.
+    cx.simulate_keystrokes("right");
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret_top(cx), row_top(cx, 70));
+    cx.simulate_keystrokes("shift-home");
     editor.read_with(cx, |editor, _| {
         assert_eq!(
             editor.selection(),
-            Selection::new(Position::new(0, 129), Position::new(0, 65))
+            Selection::new(Position::new(0, 130), Position::new(0, 65))
         );
     });
     // The last row of the paragraph ends at the end of the block.
@@ -448,4 +464,327 @@ fn justified_rows_fill_the_column(cx: &mut TestAppContext) {
         assert!((centre_start - centre_end).abs() < px(0.5));
         assert!(centre_start > px(1.));
     });
+}
+
+#[gpui::test]
+fn the_caret_stays_on_the_row_it_was_put_on(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(wrapping(), EditorConfig::full(), cx);
+    let at = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| head(editor));
+    let caret = |cx: &mut gpui::VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap())
+    };
+    let line_box = |cx: &mut gpui::VisualTestContext, offset: usize| {
+        editor.read_with(cx, |editor, _| {
+            editor.position_bounds(Position::new(0, offset)).unwrap()
+        })
+    };
+    let put = |cx: &mut gpui::VisualTestContext, offset: usize| {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(0, offset)), cx);
+        });
+    };
+    // The first paragraph: rows of 65 bytes ("word " thirteen times), the
+    // last one shorter. Row n starts at 65 n.
+    let rows: Vec<_> = (0..5).map(|row| line_box(cx, row * 65)).collect();
+    for pair in rows.windows(2) {
+        assert!(pair[1].top() > pair[0].top());
+    }
+    let column_left = rows[0].left();
+
+    // Line end on a wrapped row: the position is where the next row
+    // starts, the caret is drawn at the end of this one, right of the
+    // row's last letter and inside the column.
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret(cx).top(), rows[1].top());
+    assert!(caret(cx).left() > line_box(cx, 129).left());
+    assert!(caret(cx).right() <= column_left + px(701.));
+    editor.read_with(cx, |editor, _| {
+        // The position itself has no affinity: it starts the third row.
+        assert_eq!(
+            editor.visual_row(head(editor)).unwrap().start,
+            Position::new(0, 130)
+        );
+        assert_eq!(
+            editor.position_bounds(head(editor)).unwrap().top(),
+            rows[2].top()
+        );
+    });
+    // Pressing it again changes nothing; line start is this row's start.
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret(cx).top(), rows[1].top());
+    cx.simulate_keystrokes("cmd-left");
+    assert_eq!(at(cx), Position::new(0, 65));
+    assert_eq!(caret(cx).top(), rows[1].top());
+
+    // Up and down from the end of a row go to the ends of the rows above
+    // and below, and stay on them.
+    cx.simulate_keystrokes("cmd-right down");
+    assert_eq!(at(cx), Position::new(0, 195));
+    assert_eq!(caret(cx).top(), rows[2].top());
+    cx.simulate_keystrokes("up up");
+    assert_eq!(at(cx), Position::new(0, 65));
+    assert_eq!(caret(cx).top(), rows[0].top());
+    // The last row of the paragraph ends at a real line end.
+    cx.simulate_keystrokes("down down down down");
+    assert_eq!(at(cx), Position::new(0, 299));
+    assert_eq!(caret(cx).top(), rows[4].top());
+    cx.simulate_keystrokes("up");
+    assert_eq!(at(cx), Position::new(0, 260));
+    assert_eq!(caret(cx).top(), rows[3].top());
+
+    // Moving on by a character leaves the row end: the same position
+    // reached from the right is the start of the next row.
+    cx.simulate_keystrokes("right");
+    assert_eq!(at(cx), Position::new(0, 261));
+    cx.simulate_keystrokes("left");
+    assert_eq!(at(cx), Position::new(0, 260));
+    assert_eq!(caret(cx).top(), rows[4].top());
+    assert_eq!(caret(cx).left() + px(1.), column_left);
+    cx.simulate_keystrokes("cmd-left");
+    assert_eq!(at(cx), Position::new(0, 260));
+
+    // Text typed at the end of a row goes in at that position (before the
+    // word that starts the next row), and the caret follows it.
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-right");
+    cx.simulate_input("x");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            &editor.document().blocks()[0].text()[125..136],
+            "word xword "
+        );
+        assert_eq!(head(editor), Position::new(0, 131));
+    });
+    assert_eq!(caret(cx).top(), rows[2].top());
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(at(cx), Position::new(0, 130));
+    assert_eq!(caret(cx).top(), rows[2].top());
+
+    // Extending to the line end and on by rows.
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-shift-right shift-down");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 70), Position::new(0, 195))
+        );
+    });
+    cx.simulate_keystrokes("shift-up shift-up");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 70), Position::new(0, 65))
+        );
+    });
+
+    // Deleting to the line start from the end of a row takes that row;
+    // deleting to the line end there takes nothing.
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-right cmd-delete");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].len(), 299);
+        assert_eq!(head(editor), Position::new(0, 130));
+    });
+    cx.simulate_keystrokes("cmd-backspace");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].len(), 299 - 65);
+        assert_eq!(head(editor), Position::new(0, 65));
+    });
+    assert_eq!(caret(cx).top(), rows[1].top());
+    cx.simulate_keystrokes("cmd-z");
+
+    // A block caret sits on a character and has no affinity: line end is
+    // the row's last character, as before.
+    editor.update(cx, |editor, cx| {
+        editor.set_caret_style(crate::CaretStyle::Block, cx)
+    });
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 129));
+    assert_eq!(caret(cx).top(), rows[1].top());
+    cx.simulate_keystrokes("down");
+    assert_eq!(at(cx), Position::new(0, 194));
+    // So does a caret that is drawn somewhere else.
+    editor.update(cx, |editor, cx| {
+        editor.set_caret_style(crate::CaretStyle::Bar, cx);
+        editor.set_caret_override(Some(Position::new(0, 3)), cx);
+    });
+    put(cx, 70);
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 129));
+}
+
+#[gpui::test]
+fn the_caret_affinity_holds_in_page_view_and_for_scrolling(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "word ".repeat(400);
+    let (editor, cx) = open(
+        Document::from_blocks(vec![Block::paragraph(long.trim_end())]),
+        EditorConfig::full(),
+        cx,
+    );
+    editor.update(cx, |editor, cx| editor.set_page_view(true, cx));
+    cx.run_until_parked();
+    // Go down row by row at the far right: the caret is at the end of
+    // every row it passes, on that row, and stays in view.
+    cx.simulate_keystrokes("cmd-right");
+    let mut last = None;
+    for _ in 0..40 {
+        let (position, caret, row_top, viewport) = editor.read_with(cx, |editor, _| {
+            let position = head(editor);
+            let before = Position::new(0, position.offset - 1);
+            (
+                position,
+                editor.caret_bounds().unwrap(),
+                editor.position_bounds(before).unwrap().top(),
+                editor.viewport_bounds().unwrap(),
+            )
+        });
+        assert_eq!(position.offset % 5, 0, "after a space: {position:?}");
+        assert_eq!(caret.top(), row_top, "on the row that ends at {position:?}");
+        assert!(caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom());
+        assert!(caret.right() <= viewport.right());
+        assert!(
+            last.is_none_or(|last| position > last),
+            "a row further down"
+        );
+        last = Some(position);
+        cx.simulate_keystrokes("down");
+    }
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.scroll_offset() > px(0.));
+        // The page of the caret is the page of the row it is on.
+        let page = editor.caret_page().unwrap();
+        assert!(page >= 1 && page <= editor.page_count().unwrap());
+    });
+}
+
+#[gpui::test]
+fn the_emacs_keys_work_on_the_paragraph(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(wrapping(), EditorConfig::full(), cx);
+    let at = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| head(editor));
+    let put = |cx: &mut gpui::VisualTestContext, block: usize, offset: usize| {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(block, offset)), cx);
+        });
+    };
+
+    // In a paragraph that wraps into five rows, ctrl-a and ctrl-e go to
+    // the ends of the paragraph; cmd-left and cmd-right stay on the row.
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("ctrl-a");
+    assert_eq!(at(cx), Position::ZERO);
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("cmd-left");
+    assert_eq!(at(cx), Position::new(0, 130));
+    cx.simulate_keystrokes("ctrl-e");
+    assert_eq!(at(cx), Position::new(0, 299));
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 195));
+    // At the ends they stay.
+    cx.simulate_keystrokes("ctrl-e ctrl-e");
+    assert_eq!(at(cx), Position::new(0, 299));
+    cx.simulate_keystrokes("ctrl-a ctrl-a");
+    assert_eq!(at(cx), Position::ZERO);
+
+    // With shift they select.
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("ctrl-shift-a");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 140), Position::ZERO)
+        );
+    });
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("ctrl-shift-e");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 140), Position::new(0, 299))
+        );
+    });
+
+    // ctrl-k deletes to the end of the paragraph, over every row of it;
+    // at the end it takes the paragraph break. cmd-delete stops at the
+    // end of the row.
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("cmd-delete");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].len(), 299 - 55);
+    });
+    cx.simulate_keystrokes("cmd-z");
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("ctrl-k");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 3);
+        assert_eq!(editor.document().blocks()[0].len(), 140);
+        assert_eq!(head(editor), Position::new(0, 140));
+    });
+    cx.simulate_keystrokes("ctrl-k");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 2);
+        assert!(editor.document().blocks()[0].text().ends_with("word short"));
+        assert_eq!(head(editor), Position::new(0, 140));
+    });
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 3);
+        assert_eq!(editor.document().blocks()[0].len(), 299);
+    });
+    // Read-only: nothing is deleted.
+    editor.update(cx, |editor, cx| editor.set_read_only(true, cx));
+    put(cx, 0, 140);
+    cx.simulate_keystrokes("ctrl-k");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].len(), 299);
+    });
+}
+
+#[gpui::test]
+fn the_paragraph_keys_stop_at_line_breaks_inside_a_block(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(
+        Document::from_blocks(vec![
+            Block::paragraph("one\ntwo three\nfour"),
+            Block::with_text(BlockKind::code(), "fn main() {\n    body();\n}"),
+        ]),
+        EditorConfig::full(),
+        cx,
+    );
+    let at = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| head(editor));
+    let put = |cx: &mut gpui::VisualTestContext, block: usize, offset: usize| {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(block, offset)), cx);
+        });
+    };
+    // A soft line break ends the line the keys work on.
+    put(cx, 0, 7);
+    cx.simulate_keystrokes("ctrl-a");
+    assert_eq!(at(cx), Position::new(0, 4));
+    cx.simulate_keystrokes("ctrl-e");
+    assert_eq!(at(cx), Position::new(0, 13));
+    put(cx, 0, 7);
+    cx.simulate_keystrokes("ctrl-k");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].text(), "one\ntwo\nfour");
+    });
+    // At the end of the line: the break itself.
+    cx.simulate_keystrokes("ctrl-k");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].text(), "one\ntwofour");
+        assert_eq!(head(editor), Position::new(0, 7));
+    });
+    // Lines of a code block.
+    put(cx, 1, 18);
+    cx.simulate_keystrokes("ctrl-a");
+    assert_eq!(at(cx), Position::new(1, 12));
+    cx.simulate_keystrokes("ctrl-e");
+    assert_eq!(at(cx), Position::new(1, 23));
 }

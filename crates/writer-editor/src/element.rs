@@ -211,6 +211,7 @@ impl Editor {
         let document = self.state.document();
         let selection = self.state.selection();
         let caret_position = self.caret_position();
+        let caret_upstream = self.caret_is_upstream();
 
         {
             let mut guard = self.layout.borrow_mut();
@@ -462,7 +463,8 @@ impl Editor {
                         || self.caret_override.is_some())
                 {
                     caret_painted = true;
-                    let rect = caret_rect(&placed, block.text(), head.offset, style);
+                    let rect =
+                        caret_rect(&placed, block.text(), head.offset, style, caret_upstream);
                     let color = match style {
                         // A block caret lets the character show through.
                         CaretStyle::Block => colors.caret.alpha(0.45),

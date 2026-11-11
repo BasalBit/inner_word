@@ -27,6 +27,7 @@ use crate::{
     config::EditorMode,
     editor::Editor,
     events::EditorEvent,
+    movement::CaretRow,
     scroll::{Autoscroll, PendingScroll},
 };
 
@@ -59,6 +60,8 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         MoveWordRight => move_word_right,
         MoveToLineStart => move_to_line_start,
         MoveToLineEnd => move_to_line_end,
+        MoveToParagraphStart => move_to_paragraph_start,
+        MoveToParagraphEnd => move_to_paragraph_end,
         MoveToDocumentStart => move_to_document_start,
         MoveToDocumentEnd => move_to_document_end,
         MovePageUp => move_page_up,
@@ -71,6 +74,8 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         SelectWordRight => select_word_right,
         SelectToLineStart => select_to_line_start,
         SelectToLineEnd => select_to_line_end,
+        SelectToParagraphStart => select_to_paragraph_start,
+        SelectToParagraphEnd => select_to_paragraph_end,
         SelectToDocumentStart => select_to_document_start,
         SelectToDocumentEnd => select_to_document_end,
         SelectPageUp => select_page_up,
@@ -82,6 +87,7 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         DeleteWordForward => delete_word_forward,
         DeleteToLineStart => delete_to_line_start,
         DeleteToLineEnd => delete_to_line_end,
+        DeleteToParagraphEnd => delete_to_paragraph_end,
         Newline => newline,
         InsertSoftBreak => insert_soft_break,
         InsertPageBreak => insert_page_break,
@@ -136,32 +142,36 @@ impl Editor {
         self.reveal_caret(cx);
     }
 
-    /// The start or the end of the visual row the selection head is on:
-    /// what `cmd-left` / `cmd-right` go to in a wrapped paragraph. `None`
-    /// before the first layout.
-    fn row_edge(&self, end: bool) -> Option<Position> {
-        let row = self.visual_row(self.state.selection().head)?;
+    /// The start or the end of the visual row the caret is on, and the
+    /// affinity the caret has there: what `cmd-left` / `cmd-right` go to
+    /// in a wrapped paragraph. `None` before the first layout.
+    fn row_edge(&self, end: bool) -> Option<(Position, bool)> {
+        let CaretRow { row, soft_wrapped } = self.caret_row()?;
         if !end {
-            return Some(row.start);
+            return Some((row.start, false));
         }
-        // A row that ends at a soft wrap ends where the next one starts;
-        // the caret stays on this row, before the space it wraps at.
+        if !soft_wrapped || row.end.offset == row.start.offset {
+            return Some((row.end, false));
+        }
+        // A row that ends at a soft wrap ends where the next one starts.
+        // The caret's affinity keeps it on this row.
+        if self.caret_has_affinity() {
+            return Some((row.end, true));
+        }
+        // A caret without one (a block caret sits on a character) stops
+        // on the row's last character instead.
         let block = self.state.document().block(row.end.block)?;
-        let content = block.text();
-        let soft_wrapped =
-            row.end.offset < content.len() && content.as_bytes()[row.end.offset] != b'\n';
-        if soft_wrapped && row.end.offset > row.start.offset {
-            let before = text::prev_grapheme_boundary(content, row.end.offset);
-            Some(Position::new(row.end.block, before.max(row.start.offset)))
-        } else {
-            Some(row.end)
-        }
+        let before = text::prev_grapheme_boundary(block.text(), row.end.offset);
+        Some((
+            Position::new(row.end.block, before.max(row.start.offset)),
+            false,
+        ))
     }
 
     /// Moves or extends to the start or end of the visual row (of the hard
     /// line when there is no layout yet).
     fn line_edge(&mut self, end: bool, extend: bool, cx: Cx) {
-        let Some(target) = self.row_edge(end) else {
+        let Some((target, upstream)) = self.row_edge(end) else {
             let movement = if end {
                 Movement::LineEnd
             } else {
@@ -178,6 +188,7 @@ impl Editor {
             |state| state.set_selection(Selection::new(anchor, target)),
             cx,
         );
+        self.caret_upstream = upstream;
         self.reveal_caret(cx);
     }
 
@@ -203,7 +214,10 @@ impl Editor {
         } else {
             selection.end()
         };
-        let Some(step) = self.move_by_visual_rows(from, rows, self.goal_x) else {
+        // The move starts on the row the caret is drawn on.
+        let upstream = from == selection.head && self.caret_is_upstream();
+        let Some((step, upstream)) = self.move_caret_by_rows(from, upstream, rows, self.goal_x)
+        else {
             // No layout yet: fall back to hard lines.
             let movement = if rows < 0 {
                 Movement::BlockStart
@@ -212,20 +226,21 @@ impl Editor {
             };
             return self.movement(movement, extend, cx);
         };
-        let target = if step.rows_moved == 0 {
+        let (target, upstream) = if step.rows_moved == 0 {
             if rows < 0 {
-                self.state.document().start()
+                (self.state.document().start(), false)
             } else {
-                self.state.document().end()
+                (self.state.document().end(), false)
             }
         } else {
-            step.position
+            (step.position, upstream)
         };
         let anchor = if extend { selection.anchor } else { target };
         self.edit(
             |state| state.set_selection(Selection::new(anchor, target)),
             cx,
         );
+        self.caret_upstream = upstream;
         self.reveal_caret(cx);
         // `edit` clears the goal when the selection changes; a vertical
         // move keeps it.
@@ -268,6 +283,15 @@ impl Editor {
     fn move_to_line_end(&mut self, _: &mut Window, cx: Cx) {
         self.line_edge(true, false, cx)
     }
+    // The paragraph keys (`ctrl-a`, `ctrl-e`) go by hard lines: the whole
+    // paragraph however often it wraps, or one line of a block that has
+    // line breaks in it (a code block, a paragraph with soft breaks).
+    fn move_to_paragraph_start(&mut self, _: &mut Window, cx: Cx) {
+        self.movement(Movement::LineStart, false, cx)
+    }
+    fn move_to_paragraph_end(&mut self, _: &mut Window, cx: Cx) {
+        self.movement(Movement::LineEnd, false, cx)
+    }
     fn move_to_document_start(&mut self, _: &mut Window, cx: Cx) {
         self.movement(Movement::DocStart, false, cx)
     }
@@ -304,6 +328,12 @@ impl Editor {
     fn select_to_line_end(&mut self, _: &mut Window, cx: Cx) {
         self.line_edge(true, true, cx)
     }
+    fn select_to_paragraph_start(&mut self, _: &mut Window, cx: Cx) {
+        self.movement(Movement::LineStart, true, cx)
+    }
+    fn select_to_paragraph_end(&mut self, _: &mut Window, cx: Cx) {
+        self.movement(Movement::LineEnd, true, cx)
+    }
     fn select_to_document_start(&mut self, _: &mut Window, cx: Cx) {
         self.movement(Movement::DocStart, true, cx)
     }
@@ -336,15 +366,16 @@ impl Editor {
     fn delete_word_forward(&mut self, _: &mut Window, cx: Cx) {
         self.user_edit(|state| state.delete_word_forward(), cx);
     }
-    /// Deletes back to the start of the visual row (with a selection, or
-    /// at the start of a row, what the engine's line deletion does).
+    /// Deletes back to the start of the visual row the caret is on (with a
+    /// selection, or at the start of a row, what the engine's line
+    /// deletion does).
     fn delete_to_line_start(&mut self, _: &mut Window, cx: Cx) {
         let selection = self.state.selection();
         let range = selection
             .is_collapsed()
-            .then(|| self.visual_row(selection.head))
+            .then(|| self.caret_row())
             .flatten()
-            .map(|row| TextRange::new(row.start, selection.head))
+            .map(|caret| TextRange::new(caret.row.start, selection.head))
             .filter(|range| !range.is_empty());
         match range {
             Some(range) => self.delete_text(range, cx),
@@ -353,14 +384,21 @@ impl Editor {
             }
         }
     }
-    /// Deletes forward to the end of the visual row.
+    /// Deletes forward to the end of the visual row the caret is on.
     fn delete_to_line_end(&mut self, _: &mut Window, cx: Cx) {
         let selection = self.state.selection();
-        let range = selection
-            .is_collapsed()
-            .then(|| self.visual_row(selection.head))
-            .flatten()
-            .map(|row| TextRange::new(selection.head, row.end))
+        let caret = selection.is_collapsed().then(|| self.caret_row()).flatten();
+        if let Some(caret) = caret
+            && caret.soft_wrapped
+            && caret.row.end == selection.head
+        {
+            // The caret is at the end of a wrapped row (upstream): there
+            // is nothing of this row left to delete, and the rest of the
+            // paragraph is other rows.
+            return;
+        }
+        let range = caret
+            .map(|caret| TextRange::new(selection.head, caret.row.end))
             .filter(|range| !range.is_empty());
         match range {
             Some(range) => self.delete_text(range, cx),
@@ -368,6 +406,12 @@ impl Editor {
                 self.user_edit(|state| state.delete_to_line_end(), cx);
             }
         }
+    }
+
+    /// `ctrl-k`: deletes to the end of the paragraph (the hard line); at
+    /// its end, the line break that follows.
+    fn delete_to_paragraph_end(&mut self, _: &mut Window, cx: Cx) {
+        self.user_edit(|state| state.delete_to_line_end(), cx);
     }
 
     /// Deletes a range as one user edit, leaving the caret at its start.

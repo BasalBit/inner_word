@@ -79,12 +79,50 @@ impl Editor {
     /// row: as tall as the text.)
     pub fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
         let head = self.caret_position();
+        let upstream = self.caret_is_upstream();
         let document = self.state.document();
         let block_text = document.block(head.block).map_or("", |block| block.text());
         self.with_layout(|lay| {
             let placed = lay.placed(head.block)?;
             Some(shifted(
-                caret_rect(&placed, block_text, head.offset, self.config.caret_style),
+                caret_rect(
+                    &placed,
+                    block_text,
+                    head.offset,
+                    self.config.caret_style,
+                    upstream,
+                ),
+                lay.origin(),
+            ))
+        })
+        .flatten()
+    }
+
+    /// Whether the caret has an affinity: a bar caret sits between two
+    /// characters, so at a soft wrap it can be at the end of one row or at
+    /// the start of the next. A block or underline caret sits on a
+    /// character and a caret override is a position someone else chose;
+    /// neither has one.
+    pub(crate) fn caret_has_affinity(&self) -> bool {
+        self.config.caret_style == CaretStyle::Bar && self.caret_override.is_none()
+    }
+
+    /// Whether the caret, when it is at a soft wrap, is drawn at the end
+    /// of the row that ends there instead of at the start of the next one.
+    pub(crate) fn caret_is_upstream(&self) -> bool {
+        self.caret_upstream && self.caret_has_affinity()
+    }
+
+    /// The line box of the caret: like [`Editor::position_bounds`] of
+    /// [`Editor::caret_position`], on the row the caret's affinity puts it
+    /// on.
+    pub(crate) fn caret_line_bounds(&self) -> Option<Bounds<Pixels>> {
+        let head = self.caret_position();
+        let upstream = self.caret_is_upstream();
+        self.with_layout(|lay| {
+            let placed = lay.placed(head.block)?;
+            Some(shifted(
+                placed.caret_box(head.offset, upstream),
                 lay.origin(),
             ))
         })
@@ -169,7 +207,24 @@ impl Editor {
     /// The caret position closest to a window point: the block and row
     /// under the point's y (clamped to the document), the nearest character
     /// boundary to its x.
+    ///
+    /// The result is never the end of a soft-wrapped row (that position is
+    /// also the start of the next row, where a caret without an affinity
+    /// would be drawn): past the end of such a row it is the position
+    /// before the row's last character.
     pub fn position_at_point(&self, point: Point<Pixels>) -> Option<Position> {
+        self.hit_test(point, false).map(|(position, _)| position)
+    }
+
+    /// Where a click at a window point puts the caret: the position and
+    /// whether the caret is upstream there (the point is past the end of a
+    /// soft-wrapped row, see [`Editor::caret_is_upstream`]). Without a
+    /// caret affinity this is [`Editor::position_at_point`].
+    pub(crate) fn caret_at_point(&self, point: Point<Pixels>) -> Option<(Position, bool)> {
+        self.hit_test(point, self.caret_has_affinity())
+    }
+
+    fn hit_test(&self, point: Point<Pixels>, affine: bool) -> Option<(Position, bool)> {
         let document = self.state.document();
         self.with_layout(|lay| {
             let y = point.y - lay.origin().y;
@@ -177,10 +232,16 @@ impl Editor {
             let placed = lay.placed(index)?;
             let origin = lay.origin();
             let row = placed.row_at(point.y - origin.y);
-            let offset = placed
-                .layout
-                .offset_for_x(row, point.x - origin.x - placed.layout.text_left);
-            Some(document.clamp_position(Position::new(index, offset)))
+            let x = point.x - origin.x - placed.layout.text_left;
+            let (offset, upstream) = if affine {
+                placed.layout.caret_for_x(row, x)
+            } else {
+                (placed.layout.offset_for_x(row, x), false)
+            };
+            Some((
+                document.clamp_position(Position::new(index, offset)),
+                upstream,
+            ))
         })
         .flatten()
     }
@@ -249,14 +310,16 @@ pub(crate) fn shifted(rect: Bounds<Pixels>, origin: Point<Pixels>) -> Bounds<Pix
 }
 
 /// The caret rectangle at `offset` for a caret style: column-local x,
-/// content-space y, one row high.
+/// content-space y, one row high. `upstream` puts a bar caret at a soft
+/// wrap on the row that ends there.
 pub(crate) fn caret_rect(
     placed: &Placed,
     block_text: &str,
     offset: usize,
     style: CaretStyle,
+    upstream: bool,
 ) -> Bounds<Pixels> {
-    let line_box = placed.line_box(offset);
+    let line_box = placed.caret_box(offset, upstream && style == CaretStyle::Bar);
     if style == CaretStyle::Bar {
         return Bounds::new(
             point(line_box.origin.x - CARET_WIDTH / 2., line_box.origin.y),

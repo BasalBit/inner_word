@@ -422,3 +422,88 @@ fn the_mouse_works_on_sheets(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn a_click_past_the_end_of_a_wrapped_row_stays_on_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "word ".repeat(60);
+    let (editor, cx) = open(
+        Document::from_blocks(vec![Block::paragraph(long.trim_end())]),
+        EditorConfig::full(),
+        cx,
+    );
+    // Rows of 65 bytes; the second one is 65..130.
+    let (row, next, column_left) = editor.read_with(cx, |editor, _| {
+        (
+            editor.position_bounds(Position::new(0, 70)).unwrap(),
+            editor.position_bounds(Position::new(0, 130)).unwrap(),
+            editor.position_bounds(Position::new(0, 65)).unwrap().left(),
+        )
+    });
+    assert!(next.top() > row.top());
+    let caret = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            (editor.selection().head, editor.caret_bounds().unwrap())
+        })
+    };
+
+    // Past the end of the row's text: the caret is at the end of the row.
+    let past = point(column_left + px(695.), row.center().y);
+    click(cx, past, 1, Modifiers::none());
+    let (head, bounds) = caret(cx);
+    assert_eq!(head, Position::new(0, 130));
+    assert_eq!(bounds.top(), row.top());
+    assert!(bounds.left() > column_left + px(600.));
+    // The same position clicked at the start of the next row is there.
+    click(cx, next.center(), 1, Modifiers::none());
+    let (head, bounds) = caret(cx);
+    assert_eq!(head, Position::new(0, 130));
+    assert_eq!(bounds.top(), next.top());
+    // And back, although the position is the same.
+    click(cx, past, 1, Modifiers::none());
+    assert_eq!(caret(cx).1.top(), row.top());
+    // The public hit test knows no affinity: it stays before the wrap.
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.position_at_point(past), Some(Position::new(0, 129)));
+    });
+
+    // Dragging to the right of a row selects through its end and leaves
+    // the head there; shift-click does the same.
+    let from = editor.read_with(cx, |editor, _| point_of(editor, 0, 70));
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(past, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(past, MouseButton::Left, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 70), Position::new(0, 130))
+        );
+    });
+    cx.simulate_keystrokes("shift-up");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection().head, Position::new(0, 65));
+    });
+    click(cx, from, 1, Modifiers::none());
+    click(cx, past, 1, Modifiers::shift());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 70), Position::new(0, 130))
+        );
+    });
+
+    // A double click past the end selects the last word, not the caret's
+    // affinity.
+    click(cx, past, 2, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert!(!editor.selection().is_collapsed());
+        assert!(!editor.caret_upstream);
+    });
+
+    // A block caret has no affinity.
+    editor.update(cx, |editor, cx| {
+        editor.set_caret_style(crate::CaretStyle::Block, cx)
+    });
+    click(cx, past, 1, Modifiers::none());
+    assert_eq!(caret(cx).0, Position::new(0, 129));
+}

@@ -93,6 +93,22 @@
 //! handler (queries lay out on demand). Vertical movement keeps a goal x
 //! that is measured from the text column's left edge.
 //!
+//! ## The caret at a soft wrap
+//!
+//! Where a paragraph wraps, one position is both the end of a row and the
+//! start of the next. Positions (and everything that takes or returns one:
+//! [`Editor::position_bounds`], [`Editor::visual_row`],
+//! [`Editor::position_at_point`]) put it on the row that starts there. The
+//! editor's own bar caret also remembers how it got there: after line end
+//! (`cmd-right`, `end`), a click past the end of a wrapped row, or `up` /
+//! `down` into a shorter row, it is drawn at the end of the row it is on,
+//! and [`Editor::caret_bounds`], popups at the caret, autoscroll and the
+//! next row-wise key follow that. Typing still inserts at the position.
+//! This affinity is view state: it is not in the selection, it is dropped
+//! when the head moves or the text changes, and a block or underline caret
+//! or a caret override ([`Editor::set_caret_override`]) has none (line end
+//! then stops on the row's last character, as the row oracle does).
+//!
 //! # Module map (for whoever works on this crate)
 //!
 //! | Module | Contents |

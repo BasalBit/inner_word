@@ -81,9 +81,10 @@ impl Editor {
             return None;
         }
         let head = self.state.selection().head;
+        let upstream = self.caret_is_upstream();
         self.with_layout(|lay| {
             let placed = lay.placed(head.block)?;
-            let row = placed.layout.row_for_offset(head.offset);
+            let row = placed.layout.row_for_caret(head.offset, upstream);
             Some(lay.page_at(placed.row_top(row)) + 1)
         })
         .flatten()

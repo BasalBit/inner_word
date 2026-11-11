@@ -511,12 +511,30 @@ impl BlockLayout {
         }
     }
 
-    /// The row a caret at `offset` is drawn on. An offset at a soft wrap
-    /// belongs to the following row (there is no caret affinity).
+    /// The row a position at `offset` is on. An offset at a soft wrap
+    /// belongs to the row that starts there (see [`Self::row_for_caret`]
+    /// for the caret, which can also sit at the end of the row before).
     pub(crate) fn row_for_offset(&self, offset: usize) -> usize {
         self.rows
             .partition_point(|row| row.range.start <= offset)
             .saturating_sub(1)
+    }
+
+    /// The row a caret at `offset` is drawn on. An offset at a soft wrap is
+    /// both the end of one row and the start of the next: `upstream` picks
+    /// the row that ends there. Everywhere else `upstream` changes
+    /// nothing.
+    pub(crate) fn row_for_caret(&self, offset: usize, upstream: bool) -> usize {
+        let row = self.row_for_offset(offset);
+        if upstream
+            && row > 0
+            && self.rows[row].range.start == offset
+            && self.rows[row - 1].soft_wrapped
+        {
+            row - 1
+        } else {
+            row
+        }
     }
 
     /// x of `offset` on row `row_ix`, from the left edge of the text box.
@@ -543,13 +561,35 @@ impl BlockLayout {
 
     /// The caret offset on row `row_ix` closest to `x` (from the left edge
     /// of the text box). On a soft-wrapped row the result stays before the
-    /// wrap, so the caret stays on this row.
+    /// wrap, so that the position belongs to this row whatever the caret's
+    /// affinity (see [`Self::caret_for_x`] for the caret itself).
     pub(crate) fn offset_for_x(&self, row_ix: usize, x: Pixels) -> usize {
+        let (offset, upstream) = self.caret_for_x(row_ix, x);
+        if !upstream {
+            return offset;
+        }
+        let (Some(row), Some(line)) = (
+            self.rows.get(row_ix),
+            self.rows
+                .get(row_ix)
+                .and_then(|row| self.lines.get(row.line)),
+        ) else {
+            return offset;
+        };
+        let before = text::prev_grapheme_boundary(&line.text, offset - line.start);
+        (line.start + before).max(row.range.start)
+    }
+
+    /// The caret on row `row_ix` closest to `x` (from the left edge of the
+    /// text box): its offset, and whether it is the end of a soft-wrapped
+    /// row. That offset is also the start of the next row, so the caret
+    /// needs upstream affinity to be drawn on this one.
+    pub(crate) fn caret_for_x(&self, row_ix: usize, x: Pixels) -> (usize, bool) {
         let Some(row) = self.rows.get(row_ix) else {
-            return 0;
+            return (0, false);
         };
         let Some(line) = self.lines.get(row.line) else {
-            return row.range.start;
+            return (row.range.start, false);
         };
         let row_end = row.range.end - line.start;
         // Candidate boundaries: every glyph start, then the row's end.
@@ -567,11 +607,9 @@ impl BlockLayout {
         // Glyphs inside a grapheme cluster are not caret positions.
         let mut index = text::floor_grapheme_boundary(&line.text, best.min(row_end));
         index = index.max(row.range.start - line.start);
-        if row.soft_wrapped && index == row_end && row_end > row.range.start - line.start {
-            index =
-                text::prev_grapheme_boundary(&line.text, index).max(row.range.start - line.start);
-        }
-        line.start + index
+        let upstream =
+            row.soft_wrapped && index == row_end && row_end > row.range.start - line.start;
+        (line.start + index, upstream)
     }
 
     /// The offset of the character whose box contains `x` on row `row_ix`,
@@ -592,14 +630,26 @@ impl BlockLayout {
         found.map(|index| line.start + text::floor_grapheme_boundary(&line.text, index))
     }
 
-    /// The caret line box at `offset`: zero width, one row high.
+    /// The line box of the position at `offset`: zero width, one row high.
     pub(crate) fn caret_bounds(&self, offset: usize) -> (usize, Bounds<Pixels>) {
-        let row_ix = self.row_for_offset(offset);
+        self.caret_bounds_on(offset, false)
+    }
+
+    /// The line box of a caret at `offset` with the given affinity (see
+    /// [`Self::row_for_caret`]). At the end of a soft-wrapped row the
+    /// white space the row wraps at hangs past the text box; the caret
+    /// stays inside it.
+    pub(crate) fn caret_bounds_on(&self, offset: usize, upstream: bool) -> (usize, Bounds<Pixels>) {
+        let row_ix = self.row_for_caret(offset, upstream);
         let row = &self.rows[row_ix];
+        let mut x = self.x_in_row(row_ix, offset);
+        if row.soft_wrapped && offset >= row.range.end {
+            x = x.min(self.text_width);
+        }
         (
             row_ix,
             Bounds::new(
-                point(self.text_left + self.x_in_row(row_ix, offset), row.y),
+                point(self.text_left + x, row.y),
                 size(px(0.), self.line_height),
             ),
         )

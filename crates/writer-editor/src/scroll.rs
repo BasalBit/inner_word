@@ -205,7 +205,7 @@ impl Editor {
     /// is on screen.
     pub(crate) fn caret_viewport_y(&self) -> Option<Pixels> {
         let viewport = self.viewport_bounds()?;
-        let caret = self.position_bounds(self.caret_position())?;
+        let caret = self.caret_line_bounds()?;
         (caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom())
             .then(|| caret.top() - viewport.top())
     }
@@ -214,6 +214,7 @@ impl Editor {
     /// scroll position changed; `None` without a layout.
     fn apply_scroll(&mut self, request: PendingScroll) -> Option<bool> {
         let head = self.caret_position();
+        let head_upstream = self.caret_is_upstream();
         let document = self.state.document();
         let compact = self.config.mode.is_compact();
         self.with_layout(|lay| {
@@ -222,11 +223,13 @@ impl Editor {
                 PendingScroll::Position(position, mode) => (position, mode, px(0.)),
                 PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y),
             };
+            // The caret is on the row its affinity puts it on.
+            let upstream = position.is_none() && head_upstream;
             let position = document.clamp_position(position.unwrap_or(head));
             let Some(placed) = lay.placed(position.block) else {
                 return false;
             };
-            let row = placed.line_box(position.offset);
+            let row = placed.caret_box(position.offset, upstream);
             let (top, bottom) = (row.top(), row.bottom());
             let scroll_y = lay.scroll_y();
             // Room kept around the caret row: a line of text, less in a
@@ -244,7 +247,7 @@ impl Editor {
                         // The first row of the document shows what is above
                         // it too (padding, the top of the sheet).
                         let first_row = position.block == 0
-                            && placed.layout.row_for_offset(position.offset) == 0;
+                            && placed.layout.row_for_caret(position.offset, upstream) == 0;
                         Some(if first_row { px(0.) } else { top - margin })
                     } else if bottom + margin > scroll_y + viewport_height {
                         Some(bottom + margin - viewport_height)

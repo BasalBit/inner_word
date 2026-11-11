@@ -95,6 +95,13 @@ pub struct Editor {
     pub(crate) goal_x: Option<Pixels>,
     /// Where the caret is drawn instead of the selection head.
     pub(crate) caret_override: Option<Position>,
+    /// The caret's affinity: a selection head that sits at a soft wrap is
+    /// drawn at the end of the row that ends there, not at the start of
+    /// the next one (after `cmd-right`, a click past the end of a wrapped
+    /// row, `up` / `down` into a shorter row). View state: positions in
+    /// writer-core have no affinity. Reset whenever the head moves or the
+    /// text changes; see `Editor::caret_is_upstream`.
+    pub(crate) caret_upstream: bool,
     /// IME composition in progress.
     pub(crate) marked: Option<MarkedText>,
     /// Set while the platform input handler mutates the state, so the
@@ -244,6 +251,7 @@ impl Editor {
             pending_scroll: None,
             goal_x: None,
             caret_override: None,
+            caret_upstream: false,
             marked: None,
             in_ime_edit: false,
             interceptors,
@@ -414,6 +422,7 @@ impl Editor {
         self.pending_scroll = None;
         self.goal_x = None;
         self.caret_override = None;
+        self.caret_upstream = false;
         self.drag = None;
         self.drag_scroll = None;
         self.drag_scrolling = false;
@@ -601,6 +610,14 @@ impl Editor {
         let selection_changed = self.state.selection() != selection_before;
         if change.is_none() && !selection_changed {
             return;
+        }
+        // The caret's affinity belongs to where the head was put: it goes
+        // when the head moves or the text under it changes. (Whoever moved
+        // the head to the end of a wrapped row sets it again afterwards.)
+        if self.state.selection().head != selection_before.head
+            || change.is_some_and(|change| change.blocks.is_some() || change.settings)
+        {
+            self.caret_upstream = false;
         }
         if let Some(change) = change {
             if change.blocks.is_some()

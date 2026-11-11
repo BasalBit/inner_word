@@ -98,7 +98,7 @@ impl Editor {
             return;
         }
 
-        let Some(position) = self.position_at_point(event.position) else {
+        let Some((position, upstream)) = self.caret_at_point(event.position) else {
             return;
         };
         self.end_composition();
@@ -116,6 +116,9 @@ impl Editor {
             cx,
         );
         self.state.break_undo_group();
+        // A click past the end of a wrapped row leaves the caret there.
+        self.caret_upstream =
+            upstream && !matches!(clicks, 2 | 3) && self.state.selection().head == position;
         self.drag = Some(match clicks {
             2 => Drag::Words(self.state.selection().range()),
             3 => Drag::Blocks(position.block..position.block + 1),
@@ -221,9 +224,10 @@ impl Editor {
                 .y
                 .clamp(viewport.top(), viewport.bottom() - px(1.)),
         );
-        let Some(position) = self.position_at_point(pointer) else {
+        let Some((position, upstream)) = self.caret_at_point(pointer) else {
             return;
         };
+        let by_characters = drag == Drag::Characters;
         let document = self.state.document();
         let selection = match drag {
             Drag::Characters => Selection::new(self.state.selection().anchor, position),
@@ -256,6 +260,11 @@ impl Editor {
         };
         if selection != self.state.selection() {
             self.edit_with(Autoscroll::None, |state| state.set_selection(selection), cx);
+        }
+        let upstream = upstream && by_characters && self.state.selection().head == position;
+        if upstream != self.caret_upstream {
+            self.caret_upstream = upstream;
+            cx.notify();
         }
     }
 

@@ -58,9 +58,12 @@ mod panel;
 
 pub use library::{DocumentEntry, Library, LibraryEvent};
 pub use panel::{
-    Collapse, Dismiss, EXPANDED_FOLDERS_SETTING, Expand, KEY_CONTEXT, LibraryItem, LibraryPanel,
-    LibraryPanelEvent, OpenSelected, SelectFirst, SelectLast, SelectNext, SelectPrevious, commands,
-    key_bindings,
+    Collapse, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash, Expand,
+    FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem, LibraryPanel,
+    LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash, MoveUp, NewDocument, NewFolder,
+    OpenSelected, ROW_DETAIL_SETTING, ROW_HEIGHT, Rename, RestoreSelected, RowDetail,
+    SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPrevious, ShowTrash,
+    TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, commands, forward_actions, key_bindings,
 };
 
 /// The whole storage crate, for anything not re-exported above.

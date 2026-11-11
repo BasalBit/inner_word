@@ -1,0 +1,595 @@
+//! Rendering of the [`LibraryPanel`]: the filter row, the virtualised tree, the trash row,
+//! and the trash view.
+
+use std::ops::Range;
+
+use gpui::{
+    AnyElement, ClickEvent, Context, Focusable, FontWeight, KeyContext, Window, anchored, deferred,
+    div, point, prelude::*, px, uniform_list,
+};
+use writer_ui::theme::{
+    ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, SPACE_4, UI_TEXT_BASE, UI_TEXT_SM,
+    UI_TEXT_XS,
+};
+use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
+
+use super::{
+    DeleteForever, Dismiss, EmptyTrash, FocusFilter, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
+    LibraryPanel, NewDocument, NewFolder, ROW_HEIGHT, RestoreSelected, ShowTrash, TRASH_ROW_HEIGHT,
+    View,
+};
+
+/// The height of the strip under the list: the trash row, or the key hints of the trash
+/// view.
+const FOOTER_HEIGHT: gpui::Pixels = px(32.);
+/// How far each level of the tree is indented.
+const INDENT: gpui::Pixels = px(14.);
+
+impl Render for LibraryPanel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_subscription.is_none() {
+            self.focus_subscription =
+                Some(cx.on_focus(&self.focus_handle, window, |this, _, cx| this.focused(cx)));
+        }
+        let filter_field = self.ensure_filter_field(window, cx);
+        // A text field that is no longer drawn must not keep the keyboard: a rename that
+        // ended without a window at hand, or the filter when the trash view took over.
+        let rename_focused = self
+            .rename_field
+            .as_ref()
+            .is_some_and(|field| field.focus_handle(cx).is_focused(window));
+        let filter_focused = filter_field.focus_handle(cx).is_focused(window);
+        if (rename_focused && self.renaming.is_none())
+            || (filter_focused && self.view == View::Trash)
+        {
+            window.focus(&self.focus_handle);
+        }
+
+        let theme = cx.theme();
+        let colors = theme.colors;
+        let ui_font = theme.fonts.ui.clone();
+        let panel_focused = self.focus_handle.contains_focused(window, cx);
+
+        let mut context = KeyContext::default();
+        context.add(KEY_CONTEXT);
+        context.set(
+            "mode",
+            match self.view {
+                View::Tree => "tree",
+                View::Trash => "trash",
+            },
+        );
+
+        let (header, body, footer) = match self.view {
+            View::Tree => (
+                self.render_filter_row(filter_field, filter_focused, cx),
+                self.render_tree(cx),
+                self.render_trash_footer(panel_focused, cx),
+            ),
+            View::Trash => (
+                self.render_trash_header(cx),
+                self.render_trash_list(cx),
+                self.render_trash_hints(cx),
+            ),
+        };
+
+        let panel = div()
+            .id("library-panel")
+            .key_context(context)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_select_next))
+            .on_action(cx.listener(Self::on_select_previous))
+            .on_action(cx.listener(Self::on_select_first))
+            .on_action(cx.listener(Self::on_select_last))
+            .on_action(cx.listener(Self::on_expand))
+            .on_action(cx.listener(Self::on_collapse))
+            .on_action(cx.listener(Self::on_open_selected))
+            .on_action(cx.listener(Self::on_dismiss))
+            .on_action(cx.listener(Self::on_focus_tree))
+            .on_action(cx.listener(Self::on_new_document))
+            .on_action(cx.listener(Self::on_new_folder))
+            .on_action(cx.listener(Self::on_rename))
+            .on_action(cx.listener(Self::on_duplicate))
+            .on_action(cx.listener(Self::on_move_to_folder))
+            .on_action(cx.listener(Self::on_move_up))
+            .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_move_to_trash))
+            .on_action(cx.listener(Self::on_undo_trash))
+            .on_action(cx.listener(Self::on_focus_filter))
+            .on_action(cx.listener(Self::on_show_trash))
+            .on_action(cx.listener(Self::on_restore_selected))
+            .on_action(cx.listener(Self::on_delete_forever))
+            .on_action(cx.listener(Self::on_empty_trash))
+            .on_action(cx.listener(Self::on_toggle_row_detail))
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(colors.sidebar)
+            .text_color(colors.ink)
+            .font_family(ui_font)
+            .text_size(UI_TEXT_BASE)
+            .line_height(px(18.))
+            .child(header)
+            .child(body)
+            .child(footer);
+
+        // The panel's own modal layer is drawn over the whole window, and outside the
+        // panel's key context so that its keys do not reach the tree behind it.
+        let own_modal = (!self.modal_layer_is_shared && self.modal_layer.read(cx).has_modal())
+            .then(|| {
+                let viewport = window.viewport_size();
+                deferred(
+                    anchored().position(point(px(0.), px(0.))).child(
+                        div()
+                            .relative()
+                            .w(viewport.width)
+                            .h(viewport.height)
+                            .child(self.modal_layer.clone()),
+                    ),
+                )
+                .with_priority(1)
+            });
+
+        div().size_full().child(panel).children(own_modal)
+    }
+}
+
+impl LibraryPanel {
+    fn render_filter_row(
+        &self,
+        field: gpui::Entity<writer_ui::TextField>,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = cx.theme().colors;
+        let filtering = self.filter.is_some();
+        let hint = (!focused && !filtering)
+            .then(|| KeyHint::for_action(&FocusFilter, cx))
+            .flatten();
+        let matches = filtering.then(|| {
+            self.rows
+                .iter()
+                .filter(|row| !row.positions.is_empty())
+                .count()
+        });
+        div()
+            .id("library-filter")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(SPACE_2)
+            .h(HEADER_HEIGHT)
+            .px(SPACE_3)
+            .border_b_1()
+            .border_color(colors.hairline)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.focus_filter(window, cx)))
+            .child(
+                Icon::new(IconName::Search)
+                    .size(px(14.))
+                    .color(if focused || filtering {
+                        colors.ink
+                    } else {
+                        colors.muted
+                    }),
+            )
+            .child(div().flex_1().min_w_0().child(field))
+            .children(hint)
+            .when_some(matches, |el, count| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_size(UI_TEXT_SM)
+                        .text_color(colors.muted)
+                        .child(count.to_string()),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_tree(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let list = div()
+            .id("library-tree")
+            .flex_1()
+            .min_h_0()
+            .py(SPACE_1)
+            // A click below the last row clears the selection (new items then go to the root).
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if this.renaming.is_none() {
+                    this.set_selected(None, cx);
+                }
+            }));
+        if !self.rows.is_empty() {
+            return list
+                .child(
+                    uniform_list(
+                        "library-rows",
+                        self.rows.len(),
+                        cx.processor(|this, range: Range<usize>, window, cx| {
+                            this.render_rows(range, window, cx)
+                        }),
+                    )
+                    .track_scroll(self.scroll.clone())
+                    .size_full(),
+                )
+                .into_any_element();
+        }
+        let message = if self.filter.is_some() {
+            div()
+                .child(format!("Nothing is named “{}”.", self.filter_text.trim()))
+                .into_any_element()
+        } else {
+            let hint = |label: &'static str, hint: Option<KeyHint>| {
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(SPACE_2)
+                    .child(label)
+                    .children(hint.map(|hint| hint.boxed()))
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap(SPACE_2)
+                .child(div().text_color(colors.ink).child("The library is empty."))
+                .child(hint("New document", KeyHint::for_action(&NewDocument, cx)))
+                .child(hint("New folder", KeyHint::for_action(&NewFolder, cx)))
+                .into_any_element()
+        };
+        list.child(
+            div()
+                .px(SPACE_4)
+                .py(SPACE_3)
+                .text_color(colors.muted)
+                .child(message),
+        )
+        .into_any_element()
+    }
+
+    fn render_rows(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let colors = cx.theme().colors;
+        let panel_focused = self.focus_handle.contains_focused(window, cx);
+        let now = self.library.read(cx).clock().now_ms();
+        let mut elements = Vec::with_capacity(range.len());
+        for ix in range {
+            let Some(row) = self.rows.get(ix) else {
+                break;
+            };
+            let is_folder = matches!(row.item, LibraryItem::Folder(_));
+            let selected = !self.on_trash_row && self.selected == Some(row.item);
+            let active =
+                matches!(row.item, LibraryItem::Document(id) if self.active_document == Some(id));
+            let rename_field = (self.renaming == Some(row.item))
+                .then(|| self.rename_field.clone())
+                .flatten();
+            let detail = self.detail_text(row, now);
+
+            let disclosure = div()
+                .id(("library-disclosure", ix))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(16.))
+                .when(is_folder && row.has_children, |el| {
+                    el.rounded(RADIUS_SM)
+                        .hover(|style| style.bg(colors.hover))
+                        .child(
+                            Icon::new(if row.expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(12.))
+                            .color(colors.muted),
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.click_disclosure(ix, cx);
+                        }))
+                });
+            let icon = Icon::new(match row.item {
+                LibraryItem::Folder(_) if row.expanded => IconName::FolderOpen,
+                LibraryItem::Folder(_) => IconName::Folder,
+                LibraryItem::Document(_) => IconName::Document,
+            })
+            .color(if active {
+                colors.accent
+            } else if selected {
+                colors.ink
+            } else {
+                colors.muted
+            });
+            let label = match rename_field {
+                Some(field) => div().flex_1().min_w_0().child(field),
+                None => div().flex_1().min_w_0().child(
+                    HighlightedLabel::new(row.label.clone(), row.positions.clone()).color(
+                        if active {
+                            colors.accent
+                        } else if row.untitled {
+                            colors.muted
+                        } else {
+                            colors.ink
+                        },
+                    ),
+                ),
+            };
+
+            elements.push(
+                div()
+                    .id(("library-row", ix))
+                    .h(ROW_HEIGHT)
+                    .w_full()
+                    .px(SPACE_1)
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.click_row(ix, event.click_count(), window, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_1)
+                            .h_full()
+                            .pl(SPACE_1 + INDENT * row.depth as f32)
+                            .pr(SPACE_2)
+                            .rounded(RADIUS_SM)
+                            .map(|el| match (selected, panel_focused) {
+                                (true, true) => el.bg(colors.accent_subtle),
+                                (true, false) => el.bg(colors.hover),
+                                (false, _) => el.hover(|style| style.bg(colors.hover)),
+                            })
+                            .child(disclosure)
+                            .child(icon)
+                            .child(label.ml(px(2.)))
+                            .when_some(detail, |el, detail| {
+                                el.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(UI_TEXT_XS)
+                                        .text_color(if is_folder {
+                                            colors.faint
+                                        } else {
+                                            colors.muted
+                                        })
+                                        .child(detail),
+                                )
+                            }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        elements
+    }
+
+    /// The "Trash" row under the tree: the way into the trash view.
+    fn render_trash_footer(&self, panel_focused: bool, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let selected = self.on_trash_row;
+        let count = self.trash_rows.len();
+        div()
+            .id("library-trash-row")
+            .flex_none()
+            .h(FOOTER_HEIGHT)
+            .px(SPACE_1)
+            .py(px(3.))
+            .border_t_1()
+            .border_color(colors.hairline)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_trash(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .h_full()
+                    .px(SPACE_2)
+                    .rounded(RADIUS_SM)
+                    .map(|el| match (selected, panel_focused) {
+                        (true, true) => el.bg(colors.accent_subtle),
+                        (true, false) => el.bg(colors.hover),
+                        (false, _) => el.hover(|style| style.bg(colors.hover)),
+                    })
+                    .child(Icon::new(IconName::Trash).size(px(14.)).color(if selected {
+                        colors.ink
+                    } else {
+                        colors.muted
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(if selected { colors.ink } else { colors.muted })
+                            .child("Trash"),
+                    )
+                    .when(count > 0, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(UI_TEXT_XS)
+                                .text_color(colors.muted)
+                                .child(count.to_string()),
+                        )
+                    })
+                    .children(KeyHint::for_action(&ShowTrash, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_trash_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(SPACE_2)
+            .h(HEADER_HEIGHT)
+            .px(SPACE_3)
+            .border_b_1()
+            .border_color(colors.hairline)
+            .child(Icon::new(IconName::Trash).size(px(14.)).color(colors.ink))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Trash"),
+            )
+            .child(
+                div()
+                    .id("library-trash-back")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(SPACE_1)
+                    .px(SPACE_1)
+                    .rounded(RADIUS_SM)
+                    .text_size(UI_TEXT_SM)
+                    .text_color(colors.muted)
+                    .hover(|style| style.bg(colors.hover))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_tree(cx)))
+                    .child("Back")
+                    .children(KeyHint::for_action(&Dismiss, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_trash_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let list = div().id("library-trash").flex_1().min_h_0().py(SPACE_1);
+        if self.trash_rows.is_empty() {
+            return list
+                .child(
+                    div()
+                        .px(SPACE_4)
+                        .py(SPACE_3)
+                        .text_color(colors.muted)
+                        .child("The trash is empty."),
+                )
+                .into_any_element();
+        }
+        list.child(
+            uniform_list(
+                "library-trash-rows",
+                self.trash_rows.len(),
+                cx.processor(|this, range: Range<usize>, window, cx| {
+                    this.render_trash_rows(range, window, cx)
+                }),
+            )
+            .track_scroll(self.trash_scroll.clone())
+            .size_full(),
+        )
+        .into_any_element()
+    }
+
+    fn render_trash_rows(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let colors = cx.theme().colors;
+        let panel_focused = self.focus_handle.contains_focused(window, cx);
+        let mut elements = Vec::with_capacity(range.len());
+        for ix in range {
+            let Some(row) = self.trash_rows.get(ix) else {
+                break;
+            };
+            let selected = self.trash_selected == Some(row.item);
+            let mut origin = format!("From {}", row.location);
+            if let Some(contents) = &row.contents {
+                origin.push_str(" · ");
+                origin.push_str(contents);
+            }
+            elements.push(
+                div()
+                    .id(("library-trash-row", ix))
+                    .h(TRASH_ROW_HEIGHT)
+                    .w_full()
+                    .px(SPACE_1)
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        this.click_trash_row(ix, event.click_count(), window, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .h_full()
+                            .px(SPACE_2)
+                            .rounded(RADIUS_SM)
+                            .map(|el| match (selected, panel_focused) {
+                                (true, true) => el.bg(colors.accent_subtle),
+                                (true, false) => el.bg(colors.hover),
+                                (false, _) => el.hover(|style| style.bg(colors.hover)),
+                            })
+                            .child(
+                                Icon::new(match row.item {
+                                    LibraryItem::Folder(_) => IconName::Folder,
+                                    LibraryItem::Document(_) => IconName::Document,
+                                })
+                                .color(if selected {
+                                    colors.ink
+                                } else {
+                                    colors.muted
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().truncate().child(row.label.clone()))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(UI_TEXT_XS)
+                                            .line_height(px(15.))
+                                            .text_color(colors.muted)
+                                            .child(origin),
+                                    ),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+        }
+        elements
+    }
+
+    /// The keys of the trash view, under its list.
+    fn render_trash_hints(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let hint = |label: &'static str, hint: Option<KeyHint>| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(SPACE_1)
+                .child(label)
+                .children(hint)
+        };
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .gap_x(SPACE_3)
+            .min_h(FOOTER_HEIGHT)
+            .px(SPACE_3)
+            .py(SPACE_1)
+            .border_t_1()
+            .border_color(colors.hairline)
+            .text_size(UI_TEXT_SM)
+            .text_color(colors.muted)
+            .child(hint("Restore", KeyHint::for_action(&RestoreSelected, cx)))
+            .child(hint("Delete", KeyHint::for_action(&DeleteForever, cx)))
+            .child(hint("Empty", KeyHint::for_action(&EmptyTrash, cx)))
+            .into_any_element()
+    }
+}

@@ -631,25 +631,3 @@ pub fn first_occurrence(document: &Document, query: &str) -> Option<TextRange> {
         .filter_map(|word| document.find_all(word, options).into_iter().next())
         .min_by_key(|range| range.start)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn first_occurrence_prefers_the_whole_query() {
-        let document = Document::from_blocks(vec![
-            Block::paragraph("The harbour was quiet."),
-            Block::paragraph("A quiet harbour, then."),
-        ]);
-        let range = first_occurrence(&document, "quiet harbour").unwrap();
-        assert_eq!(range.start, Position::new(1, 2));
-        // No exact phrase: the earliest of the words.
-        let range = first_occurrence(&document, "then harbour").unwrap();
-        assert_eq!(range.start, Position::new(0, 4));
-        assert_eq!(document.text_in(range), "harbour");
-        assert!(first_occurrence(&document, "  ").is_none());
-        assert!(first_occurrence(&document, "ferry").is_none());
-        assert!(first_occurrence(&document, "\"Quiet Harbour\"").is_some());
-    }
-}

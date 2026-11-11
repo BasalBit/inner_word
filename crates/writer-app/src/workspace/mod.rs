@@ -67,7 +67,8 @@ use crate::{
     window::StoredBounds,
 };
 
-pub use session::{AUTOSAVE_DELAY, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveState};
+pub use render::{STATUS_BAR_HEIGHT, StatusLine, counted, group_digits};
+pub use session::{AUTOSAVE_DELAY, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveState, first_occurrence};
 pub(crate) use session::{Session, display_title as session_title};
 
 /// The key context of the workspace root element.

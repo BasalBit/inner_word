@@ -233,19 +233,3 @@ impl PickerDelegate for ShortcutsDelegate {
         "No shortcut matches".into()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn action_names_read_as_phrases() {
-        assert_eq!(humanize_action_name("editor::MoveWordLeft"), "Move word left");
-        assert_eq!(humanize_action_name("editor::SetHeading1"), "Set heading 1");
-        assert_eq!(humanize_action_name("Backspace"), "Backspace");
-        assert_eq!(
-            humanize_action_name("editor::SelectToDocumentEnd"),
-            "Select to document end"
-        );
-    }
-}

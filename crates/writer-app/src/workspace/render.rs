@@ -482,18 +482,3 @@ impl Render for Workspace {
             .child(self.toast_layer.clone())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn digits_are_grouped() {
-        assert_eq!(group_digits(0), "0");
-        assert_eq!(group_digits(999), "999");
-        assert_eq!(group_digits(1000), "1,000");
-        assert_eq!(group_digits(1234567), "1,234,567");
-        assert_eq!(counted(1, "word", "words"), "1 word");
-        assert_eq!(counted(2400, "word", "words"), "2,400 words");
-    }
-}

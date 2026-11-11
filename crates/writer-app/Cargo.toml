@@ -8,10 +8,14 @@ publish.workspace = true
 [lib]
 name = "writer_app"
 path = "src/lib.rs"
+# All tests are in tests/main.rs (one GPUI test binary, see below).
+test = false
+doctest = false
 
 [[bin]]
 name = "the-writer"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 gpui.workspace = true

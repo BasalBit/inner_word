@@ -9,6 +9,7 @@ mod everyday;
 mod ex;
 mod fuzz;
 mod insert;
+mod large;
 mod motions;
 mod operators;
 mod registers;

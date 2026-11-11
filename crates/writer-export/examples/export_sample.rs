@@ -8,14 +8,14 @@
 //! Files written: `sample.md`, `sample-footnotes.md`, `sample.txt`,
 //! `sample-social.txt`, `sample.docx`, `lists.docx` (one page of lists that
 //! restart in every way, small enough for a Quick Look thumbnail),
-//! `book.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
+//! `book.docx`, `chapter2.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
 //! numbered items say their own number ("item 2"), which passes every
 //! limit the DOCX numbering has (a definition per list, shared
 //! definitions, numbers as text).
 
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
-    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection, Typography,
 };
 use writer_export::{
     DocxOptions, ExportFormat, ExportSource, MarkdownComments, MarkdownOptions, PlainTextOptions,
@@ -306,8 +306,13 @@ fn main() -> std::io::Result<()> {
             ));
         }
         blocks.push(Block::paragraph(&format!(
-            "The text of chapter {n} starts here."
+            "The text of chapter {n} starts here. It runs on for a few lines so that the size of \
+             the letters, the height of a line and the space after a paragraph can be compared \
+             from one chapter to the next: every chapter keeps the look it was written in."
         )));
+        blocks.push(Block::paragraph("A second paragraph of the chapter."));
+        blocks.push(Block::with_text(BlockKind::heading(2), "A section"));
+        blocks.push(Block::with_text(BlockKind::Quote, "A quoted line."));
         blocks.push(Block::with_text(
             BlockKind::NumberedItem,
             "A numbered point",
@@ -324,6 +329,13 @@ fn main() -> std::io::Result<()> {
             orientation: Orientation::Landscape,
             ..Default::default()
         },
+        // Its own look: the styles of the book come from chapter 1.
+        typography: Typography {
+            body_font: "Georgia".into(),
+            base_size: 21.0,
+            line_height: 1.9,
+            paragraph_spacing: 20.0,
+        },
         ..Default::default()
     });
     let three = chapter(3, true);
@@ -336,6 +348,11 @@ fn main() -> std::io::Result<()> {
         ],
     );
     std::fs::write(dir.join("book.docx"), to_docx(&book, &docx))?;
+    // The second chapter by itself, to compare with its pages in the book.
+    std::fs::write(
+        dir.join("chapter2.docx"),
+        to_docx(&ExportSource::single("Chapter 2", &two), &docx),
+    )?;
     std::fs::write(
         dir.join("book.md"),
         export(&book, ExportFormat::Markdown, &Default::default()),

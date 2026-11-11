@@ -32,6 +32,31 @@ pub(crate) const FIRST_DECIMAL_NUM_ID: u32 = 2;
 const BULLET_ABSTRACT: u32 = 0;
 const FIRST_DECIMAL_ABSTRACT: u32 = 1;
 
+/// Space before and after a heading of `level` in twips: more room above
+/// than below, measured in body lines, as in the editor.
+pub(crate) fn heading_spacing(typography: &Typography, m: &Metrics, level: u8) -> (i32, i32) {
+    let base_line = m.base_line(typography);
+    let (before, after) = match level {
+        0 | 1 => (0.9, 0.5),
+        2 => (0.9, 0.35),
+        3 => (0.75, 0.3),
+        _ => (0.6, 0.3),
+    };
+    (
+        m.twips((base_line * before).round()),
+        m.twips((base_line * after).round()),
+    )
+}
+
+/// `w:line` and the space after a code block in twips.
+pub(crate) fn code_spacing(typography: &Typography, m: &Metrics) -> (i32, i32) {
+    let points = typography.size_for(&BlockKind::code());
+    (
+        m.line(&m.code_font, points, typography.line_height),
+        m.paragraph_gap(typography) + m.twips(4.0),
+    )
+}
+
 fn fonts(name: &str) -> String {
     let n = attr(name);
     format!("<w:rFonts w:ascii=\"{n}\" w:hAnsi=\"{n}\" w:cs=\"{n}\"/>")
@@ -77,17 +102,9 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
     );
     // Headings as in the editor: sizes from the typography, a tighter
     // line, and more room above than below, measured in body lines.
-    let base_line = m.base_line(typography);
     for level in 1..=6u8 {
         let pt = typography.size_for(&BlockKind::heading(level));
-        let (before, after) = match level {
-            1 => (0.9, 0.5),
-            2 => (0.9, 0.35),
-            3 => (0.75, 0.3),
-            _ => (0.6, 0.3),
-        };
-        let before = m.twips((base_line * before).round());
-        let after = m.twips((base_line * after).round());
+        let (before, after) = heading_spacing(typography, m, level);
         let heading_line = m.heading_line(typography, pt);
         s.push_str(&format!(
             "<w:style w:type=\"paragraph\" w:styleId=\"Heading{level}\"><w:name w:val=\"heading {level}\"/>\
@@ -114,11 +131,10 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
     let code_font = fonts(&m.code_font);
     let code_points = typography.size_for(&BlockKind::code());
     let code_size = size(m.half_points(code_points));
-    let code_line = m.line(&m.code_font, code_points, typography.line_height);
+    let (code_line, code_after) = code_spacing(typography, m);
     let (pad, pad_v) = m.code_padding();
     let code_indent = pad * 20 + 10;
     let code_before = m.twips(4.0);
-    let code_after = after + m.twips(4.0);
     let side = |name: &str, space: i32| {
         format!(
             "<w:{name} w:val=\"single\" w:sz=\"4\" w:space=\"{space}\" w:color=\"{CODE_FILL}\"/>"

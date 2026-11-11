@@ -8,7 +8,7 @@ use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientatio
 use super::numbering::{Allocator, Instance, Slot};
 use super::styles::{
     BULLET_NUM_ID, CHECKED_COLOR, CODE_FILL, FAINT_COLOR, FIRST_DECIMAL_NUM_ID, MUTED_COLOR,
-    RULE_COLOR,
+    RULE_COLOR, code_spacing, heading_spacing,
 };
 use super::xml::{DECLARATION, attr, text, uri};
 use super::{Comment, DocxOptions, FIRST_LINK_REL, FOOTER_REL, Metrics, R_NS, W_NS, page_twips};
@@ -46,12 +46,17 @@ struct Para {
     space_after: Option<i32>,
     /// An exact line height in twips.
     line_exact: Option<i32>,
+    /// A line height as a multiple of the font's own (`w:line` with the
+    /// rule "auto"), where it differs from the style's.
+    line_auto: Option<i32>,
     /// Left indent and hanging indent in twips.
     indent: Option<(i32, i32)>,
     align: Option<&'static str>,
     /// Size of the paragraph mark in half-points, for blocks with their
     /// own text size.
     mark_size: Option<u32>,
+    /// Font of the paragraph mark, where it differs from the style's.
+    mark_font: Option<String>,
     /// Starts on a new page.
     page_break: bool,
     /// Section properties, on the last paragraph of a section.
@@ -90,7 +95,11 @@ impl Para {
         if self.bidi {
             p.push_str("<w:bidi/>");
         }
-        if self.space_before.is_some() || self.space_after.is_some() || self.line_exact.is_some() {
+        if self.space_before.is_some()
+            || self.space_after.is_some()
+            || self.line_exact.is_some()
+            || self.line_auto.is_some()
+        {
             p.push_str("<w:spacing");
             if let Some(before) = self.space_before {
                 p.push_str(&format!(" w:before=\"{before}\""));
@@ -100,6 +109,8 @@ impl Para {
             }
             if let Some(line) = self.line_exact {
                 p.push_str(&format!(" w:line=\"{line}\" w:lineRule=\"exact\""));
+            } else if let Some(line) = self.line_auto {
+                p.push_str(&format!(" w:line=\"{line}\" w:lineRule=\"auto\""));
             }
             p.push_str("/>");
         }
@@ -115,10 +126,14 @@ impl Para {
         if let Some(align) = self.align {
             p.push_str(&format!("<w:jc w:val=\"{align}\"/>"));
         }
-        if let Some(size) = self.mark_size {
-            p.push_str(&format!(
-                "<w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr>"
-            ));
+        if self.mark_size.is_some() || self.mark_font.is_some() {
+            // The paragraph mark carries what the list marker is set in.
+            let mark = RunProps {
+                font: self.mark_font.clone(),
+                size: self.mark_size,
+                ..RunProps::default()
+            };
+            p.push_str(&mark.xml());
         }
         if let Some(section) = &self.section {
             p.push_str(section);
@@ -290,6 +305,11 @@ struct Builder<'a> {
     metrics: &'a Metrics,
     /// The typography the styles are written from: the first document's.
     typography: Typography,
+    /// The typography of the document being written, when it is not the
+    /// one the styles carry: its paragraphs and runs then say so
+    /// themselves, so that every document of a collection keeps its own
+    /// text size, font, line height and spacing.
+    local: Option<Typography>,
     links: Vec<String>,
     link_ids: HashMap<String, usize>,
     numbering: Allocator,
@@ -376,6 +396,11 @@ impl Builder<'_> {
                 ..RunProps::default()
             };
         }
+        let local_font = self
+            .local
+            .as_ref()
+            .filter(|t| t.body_font != self.typography.body_font)
+            .map(|t| t.body_font.clone());
         let mut p = RunProps {
             bold: attrs.bold,
             italic: attrs.italic,
@@ -389,7 +414,8 @@ impl Builder<'_> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|f| !super::xml::attr(f).trim().is_empty())
-                .map(str::to_string),
+                .map(str::to_string)
+                .or(local_font),
             shade: attrs.highlight.map(|h| {
                 h.reference_rgb()
                     .to_hex()
@@ -483,6 +509,61 @@ impl Builder<'_> {
         out
     }
 
+    /// A paragraph with what a document with its own typography adds to
+    /// the style of a block of `kind`: the size and font of the paragraph
+    /// mark, the line height and the space around the paragraph. Nothing
+    /// for a document that has the typography of the styles.
+    fn para(&self, kind: &BlockKind, text_size: Option<u32>) -> Para {
+        let mut para = Para {
+            mark_size: text_size,
+            ..Para::default()
+        };
+        let Some(t) = &self.local else {
+            return para;
+        };
+        let m = self.metrics;
+        para.mark_size = text_size.or(Some(m.half_points(t.size_for(kind))));
+        if t.body_font != self.typography.body_font && !kind.is_code() {
+            para.mark_font = Some(t.body_font.clone());
+        }
+        let body_line = m.line(&t.body_font, t.base_size, t.line_height);
+        match kind {
+            BlockKind::Heading { level } => {
+                let (before, after) = heading_spacing(t, m, (*level).clamp(1, 6));
+                para.space_before = Some(before);
+                para.space_after = Some(after);
+                para.line_auto = Some(m.heading_line(t, t.size_for(kind)));
+            }
+            BlockKind::CodeBlock { .. } => {
+                let (line, after) = code_spacing(t, m);
+                para.space_after = Some(after);
+                para.line_auto = Some(line);
+            }
+            // A divider sets its own exact height.
+            BlockKind::Divider => {}
+            k if k.is_list_item() => {
+                para.space_after = Some(m.list_gap(t));
+                para.line_auto = Some(body_line);
+            }
+            _ => {
+                para.space_after = Some(m.paragraph_gap(t));
+                para.line_auto = Some(body_line);
+            }
+        }
+        para
+    }
+
+    /// The text size of a run or a paragraph mark of `block` in
+    /// half-points, where the style does not give it: the block's own
+    /// size, or the size of its kind in a document with its own typography.
+    fn size(&self, block: &Block) -> Option<u32> {
+        match (block.text_size(), &self.local) {
+            (Some(size), _) => Some(self.metrics.half_points(size)),
+            (None, Some(t)) => Some(self.metrics.half_points(t.size_for(block.kind()))),
+            (None, None) => None,
+        }
+    }
+
     /// The paragraphs of one document.
     /// `first` and `last` say where the part sits in the export: page
     /// breaks at the edge towards another part are dropped, because the
@@ -508,22 +589,27 @@ impl Builder<'_> {
         } else {
             blocks.len() - blocks.iter().rev().take_while(|b| is_break(b)).count()
         };
-        let typography = &doc.settings().typography;
+        let typography = doc.settings().typography.clone().sanitized();
+        self.local = (typography != self.typography).then(|| typography.clone());
         let ordinals = ordinals(doc);
-        let paragraph_gap = self.metrics.paragraph_gap(&self.typography);
-        let quote_gap = self.metrics.quote_gap(&self.typography);
+        let paragraph_gap = self.metrics.paragraph_gap(&typography);
+        let quote_gap = self.metrics.quote_gap(&typography);
         let divider_half = self
             .metrics
-            .twips((self.metrics.base_line(&self.typography) * 0.3).round());
+            .twips((self.metrics.base_line(&typography) * 0.3).round());
+        let heading = BlockKind::heading(1);
+        let body = BlockKind::Paragraph;
         let markers = self.comment_markers(doc);
         let none: Vec<Marker> = Vec::new();
         let mut paras: Vec<Para> = Vec::new();
         if part_needs_title(source, part, self.options.part_titles) {
+            let title = Block::with_text(heading.clone(), "");
+            let props = self.run_props(&InlineAttrs::default(), self.size(&title), &title);
             paras.push(Para {
                 style: Some("Heading1"),
                 bidi: starts_rtl(&part.title),
-                content: text_runs(&part.title, &RunProps::default()),
-                ..Para::default()
+                content: text_runs(&part.title, &props),
+                ..self.para(&heading, None)
             });
         }
         let mut pending_break = false;
@@ -537,21 +623,18 @@ impl Builder<'_> {
                     // Two page breaks in a row: an empty page.
                     paras.push(Para {
                         page_break: true,
-                        ..Para::default()
+                        ..self.para(&body, None)
                     });
                 }
                 pending_break = true;
                 continue;
             }
             let level = block.indent().min(8);
-            let size = block
-                .text_size()
-                .map(|_| self.metrics.half_points(typography.size_of(block)));
+            let size = self.size(block);
             let block_markers = markers.get(&index).unwrap_or(&none);
             let bidi = starts_rtl(block.text());
             let mut para = Para {
                 bidi,
-                mark_size: size,
                 page_break: std::mem::take(&mut pending_break),
                 // In a right-to-left paragraph Word reads "left" as the
                 // leading edge, which is the right.
@@ -562,7 +645,7 @@ impl Builder<'_> {
                     (Alignment::Right, false) => Some("right"),
                     (Alignment::Right, true) => Some("left"),
                 },
-                ..Para::default()
+                ..self.para(block.kind(), size)
             };
             let indented = (level > 0).then(|| (self.metrics.indent(level), 0));
             // What follows on the same page: blocks of one group (list
@@ -659,9 +742,8 @@ impl Builder<'_> {
             }
             if let Some((marker, color, flush_right)) = literal_marker {
                 let props = RunProps {
-                    size,
                     color: Some(color.to_string()),
-                    ..RunProps::default()
+                    ..self.run_props(&InlineAttrs::default(), size, &Block::paragraph(""))
                 };
                 para.content.push_str(&format!(
                     "<w:r>{}{}<w:t>{marker}</w:t><w:tab/></w:r>",
@@ -677,8 +759,12 @@ impl Builder<'_> {
             // A page break with nothing after it.
             paras.push(Para {
                 page_break: true,
-                ..Para::default()
+                ..self.para(&body, None)
             });
+        }
+        if paras.is_empty() {
+            // A document without blocks is still a section.
+            paras.push(self.para(&body, None));
         }
         paras
     }
@@ -745,6 +831,7 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
             .first()
             .map(|p| p.document.settings().typography.clone().sanitized())
             .unwrap_or_default(),
+        local: None,
         links: Vec::new(),
         link_ids: HashMap::new(),
         numbering: Allocator::new(),
@@ -759,9 +846,6 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
     for (i, part) in parts.iter().enumerate() {
         let mut paras = builder.document(source, part, i == 0, i + 1 == parts.len());
         let section = section_xml(part.document, options.page_numbers);
-        if paras.is_empty() {
-            paras.push(Para::default());
-        }
         // As in the page view, nothing stands above the first line of a
         // page: a heading or a code block that opens the document or
         // follows a page break gets no space before. (Readers drop that

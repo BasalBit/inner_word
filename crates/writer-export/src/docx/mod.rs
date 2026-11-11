@@ -35,7 +35,11 @@
 //!   a Word comment on its text range, with its replies threaded under it
 //!   and resolved threads marked done.
 //! - **Collections.** Every document is its own section starting on a new
-//!   page, with its own page setup. Styles come from the first document.
+//!   page, with its own page setup and its own typography. The styles
+//!   are written from the first document; a document whose font, text
+//!   size, line height or paragraph spacing differ carries them on its
+//!   own paragraphs and runs, so that it looks in the collection exactly
+//!   as it does exported alone, and its headings are still headings.
 //!   Page breaks at the very start or end of a document, where the next
 //!   section starts a new page anyway, are dropped so that no empty page
 //!   appears between two documents.

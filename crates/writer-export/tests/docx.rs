@@ -1731,6 +1731,248 @@ fn page_number_footer() {
 
 // ----- collections ------------------------------------------------------------------------
 
+/// What a reader resolves for every paragraph of the body: its text, then
+/// space before, space after, line and line rule, the font and size of the
+/// paragraph mark, and the font and size of every run. Direct formatting
+/// wins over the paragraph style, which wins over the style it is based on.
+fn resolved_look(package: &Package) -> Vec<(String, Vec<String>)> {
+    let styles = roxmltree::Document::parse(package.part(parts::STYLES)).unwrap();
+    let document = roxmltree::Document::parse(package.part(parts::DOCUMENT)).unwrap();
+    let style = |id: &str| {
+        styles
+            .descendants()
+            .find(|n| n.has_tag_name((W, "style")) && n.attribute((W, "styleId")) == Some(id))
+            .unwrap_or_else(|| panic!("no style {id}"))
+    };
+    // The chain of property holders of a paragraph: itself, its style, the
+    // styles that one is based on.
+    let chain = |p: Node<'_, '_>| {
+        let mut ids = Vec::new();
+        let mut id = child(p, "pPr")
+            .and_then(|ppr| val(ppr, "pStyle"))
+            .unwrap_or("Normal")
+            .to_string();
+        loop {
+            ids.push(id.clone());
+            match val(style(&id), "basedOn") {
+                Some(base) => id = base.to_string(),
+                None => break,
+            }
+        }
+        ids
+    };
+    let spacing = |p: Node<'_, '_>, ids: &[String], name: &str| {
+        child(p, "pPr")
+            .into_iter()
+            .chain(ids.iter().filter_map(|id| child(style(id), "pPr")))
+            .find_map(|ppr| child(ppr, "spacing")?.attribute((W, name)))
+            .unwrap_or("-")
+            .to_string()
+    };
+    let run_look = |rpr: Option<Node<'_, '_>>, ids: &[String]| {
+        let holders: Vec<Node<'_, '_>> = rpr
+            .into_iter()
+            .chain(ids.iter().filter_map(|id| child(style(id), "rPr")))
+            .collect();
+        let font = holders
+            .iter()
+            .find_map(|h| child(*h, "rFonts")?.attribute((W, "ascii")))
+            .unwrap();
+        let size = holders.iter().find_map(|h| val(*h, "sz")).unwrap();
+        format!("{font} {size}")
+    };
+    let body = document
+        .descendants()
+        .find(|n| n.has_tag_name((W, "body")))
+        .unwrap();
+    body.children()
+        .filter(|n| n.has_tag_name((W, "p")))
+        .map(|p| {
+            let ids = chain(p);
+            let mut look: Vec<String> = ["before", "after", "line", "lineRule"]
+                .iter()
+                .map(|name| format!("{name} {}", spacing(p, &ids, name)))
+                .collect();
+            look.push(format!(
+                "mark {}",
+                run_look(child(p, "pPr").and_then(|ppr| child(ppr, "rPr")), &ids)
+            ));
+            let mut text = String::new();
+            for r in p.descendants().filter(|n| n.has_tag_name((W, "r"))) {
+                let t: String = r
+                    .children()
+                    .filter(|n| n.has_tag_name((W, "t")))
+                    .filter_map(|n| n.text())
+                    .collect();
+                // The comment reference mark has a size of its own.
+                if child(r, "commentReference").is_some() {
+                    continue;
+                }
+                look.push(format!("{t:?} {}", run_look(child(r, "rPr"), &ids)));
+                text.push_str(&t);
+            }
+            (text, look)
+        })
+        .collect()
+}
+
+#[test]
+fn every_document_of_a_collection_keeps_its_own_typography() {
+    let every_kind = |name: &str| {
+        Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), name),
+            Block::paragraph("Body text"),
+            Block::paragraph("Larger").with_text_size(Some(30.0)),
+            Block::with_text(BlockKind::heading(2), "Two"),
+            Block::with_text(BlockKind::heading(3), "Three").with_text_size(Some(40.0)),
+            Block::with_text(BlockKind::heading(6), "Six"),
+            Block::with_text(BlockKind::BulletItem, "bullet"),
+            Block::with_text(BlockKind::BulletItem, "bullet").with_indent(1),
+            Block::with_text(BlockKind::NumberedItem, "number"),
+            Block::with_text(BlockKind::NumberedItem, "number"),
+            Block::with_text(BlockKind::todo(), "open"),
+            Block::with_text(BlockKind::TodoItem { checked: true }, "done"),
+            Block::with_text(BlockKind::Quote, "quote"),
+            Block::with_text(BlockKind::Quote, "quote"),
+            Block::with_text(BlockKind::code(), "code();\nmore();"),
+            Block::new(BlockKind::Divider),
+            Block::paragraph(""),
+            Block::new(BlockKind::PageBreak),
+            Block::new(BlockKind::PageBreak),
+            Block::paragraph("See ")
+                .with_span("the site", link("https://example.com"))
+                .with_span(" and ", plain())
+                .with_span(
+                    "code",
+                    InlineAttrs {
+                        code: true,
+                        ..plain()
+                    },
+                )
+                .with_span(
+                    " in Futura",
+                    InlineAttrs {
+                        font: Some("Futura".into()),
+                        bold: true,
+                        ..plain()
+                    },
+                ),
+            Block::paragraph("Centred").with_alignment(Alignment::Center),
+        ])
+    };
+    let own = DocumentSettings {
+        typography: Typography {
+            body_font: "Georgia".into(),
+            base_size: 19.0,
+            line_height: 1.7,
+            paragraph_spacing: 14.0,
+        },
+        page: PageSetup {
+            paper: PaperSize::UsLetter,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let one = every_kind("Chapter One");
+    let two = every_kind("Chapter Two").with_settings(own.clone());
+    let three = every_kind("Chapter Three");
+    let empty = Document::new().with_settings(own);
+    let o = DocxOptions::default();
+
+    let alone = |title: &str, doc: &Document| {
+        resolved_look(&Package::new(&ExportSource::single(title, doc), &o))
+    };
+    let book = Package::new(
+        &ExportSource::collection(
+            "Book",
+            [
+                ("Chapter One", &one),
+                ("Chapter Two", &two),
+                ("Chapter Three", &three),
+            ],
+        ),
+        &o,
+    );
+    let looks = resolved_look(&book);
+    let (first, second, third) = (
+        alone("Chapter One", &one),
+        alone("Chapter Two", &two),
+        alone("Chapter Three", &three),
+    );
+    let n = first.len();
+    assert_eq!(looks.len(), 3 * n);
+    // Every chapter looks in the book as it does exported by itself.
+    for (i, (in_book, by_itself)) in looks
+        .iter()
+        .zip(first.iter().chain(&second).chain(&third))
+        .enumerate()
+    {
+        assert_eq!(in_book, by_itself, "paragraph {i}");
+    }
+    // The second chapter really is different: 19 pt Georgia.
+    assert!(
+        second[1]
+            .1
+            .contains(&"\"Body text\" Georgia 38".to_string())
+    );
+    assert!(first[1].1.contains(&"\"Body text\" Charter 34".to_string()));
+    assert_ne!(first[1].1, second[1].1);
+    // Its paper is its own too, as before.
+    let widths: Vec<i32> = book.sections().iter().map(|s| s.0).collect();
+    assert_eq!(widths, vec![11906, 12240, 11906]);
+    // Its headings are still the built-in heading styles.
+    let ps = book.paragraphs();
+    assert_eq!(ps[n].style, "Heading1");
+    assert_eq!(ps[n + 3].style, "Heading2");
+
+    // Documents with the typography of the styles carry nothing of their
+    // own, whatever their place.
+    let document = book.part(parts::DOCUMENT);
+    // (Every paragraph of the second chapter but the divider, whose height
+    // is exact.)
+    assert_eq!(document.matches("w:lineRule=\"auto\"").count(), n - 1);
+    let uniform = Package::new(
+        &ExportSource::collection("Book", [("Chapter One", &one), ("Chapter Three", &three)]),
+        &o,
+    );
+    assert!(
+        !uniform
+            .part(parts::DOCUMENT)
+            .contains("w:lineRule=\"auto\"")
+    );
+    assert!(!uniform.part(parts::DOCUMENT).contains("Georgia"));
+
+    // A title written above a chapter, and the one paragraph of an empty
+    // document, follow that document's typography as well.
+    let titled = Document::from_blocks(vec![Block::paragraph("No heading here")])
+        .with_settings(two.settings().clone());
+    let book = Package::new(
+        &ExportSource::collection(
+            "Book",
+            [
+                ("Chapter One", &one),
+                ("Second", &titled),
+                ("Third", &empty),
+            ],
+        ),
+        &o,
+    );
+    let looks = resolved_look(&book);
+    assert_eq!(looks.len(), n + 4);
+    assert_eq!(looks[n].0, "Second");
+    assert!(looks[n].1.contains(&"\"Second\" Georgia 76".to_string()));
+    assert_eq!(
+        looks[n + 1].1,
+        second[1].1[..5]
+            .iter()
+            .cloned()
+            .chain(["\"No heading here\" Georgia 38".to_string()])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(looks[n + 2].0, "Third");
+    assert_eq!(looks[n + 3].1[..5], second[1].1[..5]);
+}
+
 #[test]
 fn collections_are_sections_on_new_pages() {
     let landscape = DocumentSettings {

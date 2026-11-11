@@ -1,35 +1,41 @@
-use gpui::{
-    App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
-};
+//! The Writer: entry point.
 
-struct Root;
-
-impl Render for Root {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .size_full()
-            .justify_center()
-            .items_center()
-            .bg(rgb(0xfbfaf7))
-            .text_color(rgb(0x1f1d1a))
-            .text_xl()
-            .child("The Writer")
-    }
-}
+use gpui::{App, Application};
+use writer_app::{automation, data_dir, window};
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1100.), px(760.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| Root),
-        )
-        .unwrap();
+    let data_dir = match data_dir::ensure_data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("The Writer: cannot create the data directory: {err}");
+            std::process::exit(1);
+        }
+    };
+    if data_dir::is_overridden() {
+        eprintln!("The Writer: using data directory {}", data_dir.display());
+    }
+
+    let script = match automation::Script::from_env() {
+        Ok(script) => script,
+        Err(err) => {
+            eprintln!("The Writer: invalid {}: {err:#}", automation::AUTOMATION_ENV);
+            std::process::exit(2);
+        }
+    };
+
+    Application::new().run(move |cx: &mut App| {
+        writer_app::init(cx);
+        let main_window = match window::open_main_window(cx) {
+            Ok(handle) => handle,
+            Err(err) => {
+                eprintln!("The Writer: cannot open the main window: {err:#}");
+                cx.quit();
+                return;
+            }
+        };
         cx.activate(true);
+        if let Some(script) = script {
+            automation::run(script, main_window.into(), cx);
+        }
     });
 }

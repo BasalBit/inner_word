@@ -329,15 +329,17 @@
 //!   `:y [x] [N]`, `:s/pattern/replacement/[g][i][I][n]` (literal pattern;
 //!   `&` or `\0` in the replacement is the match, `\r` breaks the line into
 //!   a new block, `\n` is a soft line break), `:&` `:&&` `:s`,
-//!   `:j[!] [N]`, `:>` `:<`, `:u`, `:red`, `:noh`.
+//!   `:j[!] [N]`, `:>` `:<`, `:m {address}` (move the lines below that
+//!   line; `:m0` to the top, `:m$` to the end), `:t {address}` and
+//!   `:co {address}` (copy them there), `:pu[!] [x]` (put a register as
+//!   lines below, with `!` above, the line), `:u`, `:red`, `:noh`.
 //!   A count `N` takes that many lines starting with the last of the range.
 //!   Ranges: `N`, `.`, `$`, `'m`, `+N` / `-N` offsets, `a,b`, `%`; lines
 //!   are blocks. Any other name is passed to the host. `ZZ` and `ZQ` too.
 //!
 //! Not supported: regular expressions, macros (`q`, `@`), blockwise Visual
 //! mode (`ctrl-v`), `U`, folds, digraphs, `ctrl-a` / `ctrl-x`, `gq`, tag
-//! objects (`it`, `at`), the `c` flag of `:s`, `:g`, `:m`, `:t`,
-//! `:normal`.
+//! objects (`it`, `at`), the `c` flag of `:s`, `:g`, `:normal`.
 //!
 //! # Where the engine differs from Vim on purpose
 //!

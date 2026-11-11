@@ -250,3 +250,45 @@ fn run_directly() {
     s.keys("u");
     assert_eq!(s.text(), "a\nx\nc");
 }
+
+#[test]
+fn moving_copying_and_putting_lines() {
+    run(&[
+        // :m moves the line (or the range) below the address.
+        c("a\n|b\nc\nd", ":m0<CR>", "|b\na\nc\nd"),
+        c("a\n|b\nc\nd", ":m$<CR>", "a\nc\nd\n|b"),
+        c("a\n|b\nc\nd", ":m+1<CR>", "a\nc\n|b\nd"),
+        c("a\n|b\nc\nd", ":m-2<CR>", "|b\na\nc\nd"),
+        c("|a\nb\nc\nd", ":2,3m0<CR>", "b\n|c\na\nd"),
+        c("|a\nb\nc\nd", ":1,2m$<CR>", "c\nd\na\n|b"),
+        c("a\n  |b\nc", ":m$<CR>", "a\nc\n  |b"),
+        // Into itself, or nowhere: refused.
+        c("|a\nb\nc\nd", ":1,3m2<CR>", "|a\nb\nc\nd"),
+        c("a\nb\nc\n|d", ":m+1<CR>", "a\nb\nc\n|d"),
+        c("|a\nb", ":m<CR>", "|a\nb"),
+        // :t and :co copy.
+        c("a\n|b\nc", ":t.<CR>", "a\nb\n|b\nc"),
+        c("a\n|b\nc", ":t0<CR>", "|b\na\nb\nc"),
+        c("|a\nb\nc", ":1,2co$<CR>", "a\nb\nc\na\n|b"),
+        // :pu puts a register as lines, whatever it holds.
+        c("one |two\nthree", "yiw:pu<CR>", "one two\n|two\nthree"),
+        c("one |two\nthree", "yiw:pu!<CR>", "|two\none two\nthree"),
+        c("|a\nb\nc", "yy:$pu<CR>", "a\nb\nc\n|a"),
+        c("a\n|b\nc", "\"qyy:0pu q<CR>", "|b\na\nb\nc"),
+        // One undo step each.
+        c("a\n|b\nc\nd", ":m0<CR>u", "a\n|b\nc\nd"),
+        c("a\n|b\nc", ":t$<CR>u", "a\nb\n|c"),
+    ]);
+    // A moved heading stays a heading.
+    let mut s = session("# |Title\ntext\nmore", ":m$<CR>");
+    assert_eq!(s.buffer(), "text\nmore\n# |Title");
+    s.keys(":t0<CR>");
+    assert_eq!(s.buffer(), "# |Title\ntext\nmore\n# Title");
+    // A document that is read-only stays as it is.
+    let mut s = session("|a\nb", "");
+    let mut options = s.vim.options().clone();
+    options.read_only = true;
+    s.vim.set_options(options);
+    s.keys(":m$<CR>:t.<CR>");
+    assert_eq!(s.buffer(), "|a\nb");
+}

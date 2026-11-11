@@ -90,7 +90,7 @@ fn selectable_pieces(cx: &Cx, range: &Range<usize>) -> Vec<Range<usize>> {
 }
 
 /// Deletes exactly the blocks `range`.
-fn delete_blocks(cx: &mut Cx, range: &Range<usize>) {
+pub(crate) fn delete_blocks(cx: &mut Cx, range: &Range<usize>) {
     for piece in selectable_pieces(cx, range) {
         cx.ed.select_blocks(piece);
         cx.ed.delete_blocks();

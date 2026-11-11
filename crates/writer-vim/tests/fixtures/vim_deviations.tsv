@@ -101,3 +101,17 @@ héllo wörld ñandú\n日本語 テキスト です\nnaïve café — dash…en
 #
 # A paragraph object that cannot extend a Visual selection backwards (`vkap` on the first lines): Vim moves the cursor to column one before it gives up; the engine leaves it.
 one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	2	6	vkapvd	one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	1	1															
+#
+# `:pu` of a register that holds an empty text (`yiw` on an empty line): Vim puts an empty line; for the engine such a register holds nothing.
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	4	2	yiw:pu<CR>	one two  three\nfour.five,six\n\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	5	1	v		v												
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	4	2	yiwj:pu!<CR>	one two  three\nfour.five,six\n\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	5	1	v		v												
+#
+# An ex range that runs past the last line (`:.,+1m$` on the last line): Vim refuses the command; the engine takes the lines there are.
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	7	5	:.,+1m$<CR>	one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	7	5															
+#
+# Where the cursor goes when a `:m` is undone and redone, or a `:t$` made on the last line is undone: Vim keeps positions the engine does not record.
+alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\niota\n	4	2	:2,3m$<CR>u<C-r>	alpha beta\nepsilon\n\n\nzeta eta theta\niota\n\ngamma delta\n	9	1															
+alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\niota\n	7	5	:2,3m$<CR>u<C-r>	alpha beta\nepsilon\n\n\nzeta eta theta\niota\n\ngamma delta\n	9	1															
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	4	2	yiw:$pu<CR>	one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end\n	8	1	v		v												
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	4	2	:2,3m$<CR>u<C-r>	one two  three\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end\nfour.five,six\n	7	1															
+one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	7	5	:t$<CR>u	one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y_z9 end	7	5															

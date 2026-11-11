@@ -365,6 +365,32 @@ impl Vim {
         Some(base.saturating_add(a.offset).clamp(0, last as isize) as usize)
     }
 
+    /// The line an address names as a destination (`:m`, `:t`, `:pu`):
+    /// the number of lines the text goes below, from 0 (the top) to the
+    /// number of lines in the document. Outside of that it is an error, as
+    /// in Vim.
+    fn resolve_destination(&mut self, cx: &Cx, a: Addr) -> Option<usize> {
+        let n = cx.ed.document().block_count() as isize;
+        let base = match a.base {
+            AddrBase::Number(line) => isize::try_from(line).unwrap_or(isize::MAX / 4),
+            AddrBase::Current => self.cursor(cx).block as isize + 1,
+            AddrBase::Last => n,
+            AddrBase::Mark(m) => match self.mark_position(cx, m) {
+                Some(p) => p.block as isize + 1,
+                None => {
+                    self.error("E20: Mark not set");
+                    return None;
+                }
+            },
+        };
+        let line = base.saturating_add(a.offset);
+        if !(0..=n).contains(&line) {
+            self.error("E16: Invalid range");
+            return None;
+        }
+        Some(line as usize)
+    }
+
     /// The blocks a range names; `default` when no range was given.
     fn resolve_range(
         &mut self,
@@ -409,7 +435,10 @@ impl Vim {
             | ExCommand::ShiftLeft(_)
             | ExCommand::RepeatSubstitute { .. }
             | ExCommand::Undo
-            | ExCommand::Redo => true,
+            | ExCommand::Redo
+            | ExCommand::Move(_)
+            | ExCommand::Copy(_)
+            | ExCommand::Put { .. } => true,
             ExCommand::Substitute(args) => !args.count_only,
             _ => false,
         };
@@ -545,6 +574,97 @@ impl Vim {
                 }
                 self.leave_visual_quietly(cx);
                 self.substitute(cx, r, args);
+            }
+            ExCommand::Move(to) | ExCommand::Copy(to) => {
+                let moving = matches!(parsed.command, ExCommand::Move(_));
+                let Some(r) = self.resolve_range(cx, parsed.range, here) else {
+                    return;
+                };
+                let Some(dest) = to.and_then(|to| self.resolve_destination(cx, to)) else {
+                    if to.is_none() {
+                        self.error("E14: Invalid address");
+                    }
+                    return;
+                };
+                if moving && dest > r.start && dest < r.end {
+                    self.error("E134: Cannot move a range of lines into itself");
+                    return;
+                }
+                self.leave_visual_quietly(cx);
+                // Undoing a move returns to where the cursor was; undoing a
+                // copy to the line the text went below.
+                let back = if moving {
+                    origin
+                } else {
+                    Position::new(dest.saturating_sub(1), 0)
+                };
+                self.hint_undo(cx, back);
+                let len = r.len();
+                // The lines travel as a register would hold them: kinds,
+                // indent and formatting come along.
+                let lines = cx.ed.document().block_fragment(r.clone());
+                let first = if !moving {
+                    cx.ed.insert_blocks_at(dest, &lines);
+                    dest
+                } else if dest >= r.end && dest > r.start {
+                    if dest > r.end {
+                        cx.ed.insert_blocks_at(dest, &lines);
+                        super::operators::delete_blocks(cx, &r);
+                    }
+                    dest - len
+                } else {
+                    if dest < r.start {
+                        cx.ed.insert_blocks_at(dest, &lines);
+                        super::operators::delete_blocks(cx, &(r.start + len..r.end + len));
+                    }
+                    dest
+                };
+                // The cursor goes to the last of the lines.
+                let last = first + len - 1;
+                self.set_mark(cx, '[', Position::new(first, 0));
+                self.set_mark(cx, ']', Position::new(last, 0));
+                let doc = cx.ed.document();
+                let target =
+                    buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(last, 0)));
+                self.set_normal_caret(cx, target);
+                if len > 2 {
+                    let what = if moving { "moved" } else { "more lines" };
+                    self.message(format!("{len} {what}"));
+                }
+            }
+            ExCommand::Put { register } => {
+                let n = cx.ed.document().block_count();
+                // Below the line of the range (`:0pu`: at the top), with
+                // `!` above it.
+                let at = match parsed.range {
+                    RangeSpec::None => cur + usize::from(!parsed.bang),
+                    RangeSpec::One(a) | RangeSpec::Two(_, a) => {
+                        let Some(below) = self.resolve_destination(cx, a) else {
+                            return;
+                        };
+                        if parsed.bang {
+                            below.saturating_sub(1)
+                        } else {
+                            below
+                        }
+                    }
+                    RangeSpec::All => n - usize::from(parsed.bang),
+                };
+                let Some(content) = self.read_register(cx, register) else {
+                    return;
+                };
+                self.leave_visual_quietly(cx);
+                self.hint_undo(cx, Position::new(at.saturating_sub(1), 0));
+                // Whatever the register holds goes in as whole lines.
+                let lines = content.fragment.blocks().len();
+                cx.ed.insert_blocks_at(at, &content.fragment);
+                let last = at + lines - 1;
+                self.set_mark(cx, '[', Position::new(at, 0));
+                self.set_mark(cx, ']', Position::new(last, 0));
+                let doc = cx.ed.document();
+                let target =
+                    buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(last, 0)));
+                self.set_normal_caret(cx, target);
             }
             ExCommand::NoHighlight => self.search.highlight = false,
             ExCommand::Undo => {

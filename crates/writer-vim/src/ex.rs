@@ -85,6 +85,16 @@ pub(crate) enum ExCommand {
     ShiftLeft(usize),
     Undo,
     Redo,
+    /// `:m {address}`: move the lines of the range below that line (`0`:
+    /// to the top).
+    Move(Option<Addr>),
+    /// `:t {address}`, `:co {address}`: copy them there.
+    Copy(Option<Addr>),
+    /// `:pu [x]`: put a register as lines below the line of the range;
+    /// with `!` above it.
+    Put {
+        register: Option<char>,
+    },
     /// Not a command of the engine.
     Host {
         name: String,
@@ -394,6 +404,14 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
         ExCommand::NoHighlight
     } else if abbreviates(name, "join", 1) {
         ExCommand::Join
+    } else if abbreviates(name, "move", 1) {
+        ExCommand::Move(parse_addr(args).0)
+    } else if name == "t" || abbreviates(name, "copy", 2) {
+        ExCommand::Copy(parse_addr(args).0)
+    } else if abbreviates(name, "put", 2) {
+        ExCommand::Put {
+            register: register_arg(args),
+        }
     } else if abbreviates(name, "undo", 1) {
         ExCommand::Undo
     } else if abbreviates(name, "redo", 3) {

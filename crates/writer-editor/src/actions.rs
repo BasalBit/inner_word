@@ -255,10 +255,19 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-4", SetHeading4, c),
         KeyBinding::new("cmd-alt-5", SetHeading5, c),
         KeyBinding::new("cmd-alt-6", SetHeading6, c),
+        // Shift plus a digit or a punctuation key arrives from a real
+        // keyboard as the shifted character without the shift flag (GPUI's
+        // macOS key translation: `cmd-shift-7` is `cmd-&` on a US layout),
+        // so those are bound too. The spelled-out form comes last: it is
+        // the one key hints show, and what scripted keystrokes send.
+        KeyBinding::new("cmd-&", ToggleNumberedList, c),
         KeyBinding::new("cmd-shift-7", ToggleNumberedList, c),
+        KeyBinding::new("cmd-*", ToggleBulletList, c),
         KeyBinding::new("cmd-shift-8", ToggleBulletList, c),
+        KeyBinding::new("cmd-(", ToggleTodoList, c),
         KeyBinding::new("cmd-shift-9", ToggleTodoList, c),
         KeyBinding::new("cmd-'", ToggleQuote, c),
+        KeyBinding::new("cmd-\"", ToggleCodeBlock, c),
         KeyBinding::new("cmd-shift-'", ToggleCodeBlock, c),
         KeyBinding::new("cmd-shift-enter", ToggleTodoChecked, c),
         // Block layout.
@@ -266,7 +275,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-e", AlignCenter, c),
         KeyBinding::new("cmd-shift-r", AlignRight, c),
         KeyBinding::new("cmd-shift-j", AlignJustify, c),
+        KeyBinding::new("cmd->", IncreaseTextSize, c),
         KeyBinding::new("cmd-shift-.", IncreaseTextSize, c),
+        KeyBinding::new("cmd-<", DecreaseTextSize, c),
         KeyBinding::new("cmd-shift-,", DecreaseTextSize, c),
         KeyBinding::new("cmd-]", Indent, c),
         KeyBinding::new("tab", Indent, c),

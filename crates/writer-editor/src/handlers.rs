@@ -23,7 +23,11 @@ use writer_core::{
 };
 
 use crate::{
-    actions::*, config::EditorMode, editor::Editor, events::EditorEvent, scroll::PendingScroll,
+    actions::*,
+    config::EditorMode,
+    editor::Editor,
+    events::EditorEvent,
+    scroll::{Autoscroll, PendingScroll},
 };
 
 /// Width of one indentation step in a code block, in spaces.
@@ -129,6 +133,15 @@ type Cx<'a, 'b> = &'a mut Context<'b, Editor>;
 impl Editor {
     fn movement(&mut self, movement: Movement, extend: bool, cx: Cx) {
         self.edit(|state| state.move_caret(movement, extend), cx);
+        self.reveal_caret(cx);
+    }
+
+    /// A movement key brings the caret into view even when the caret has
+    /// nowhere to go (`cmd-up` at the start of a document that is scrolled
+    /// down).
+    fn reveal_caret(&mut self, cx: Cx) {
+        self.request_scroll(PendingScroll::Position(None, Autoscroll::Fit));
+        cx.notify();
     }
 
     /// Moves the selection head by visual rows, keeping the goal x across
@@ -168,6 +181,7 @@ impl Editor {
             |state| state.set_selection(Selection::new(anchor, target)),
             cx,
         );
+        self.reveal_caret(cx);
         // `edit` clears the goal when the selection changes; a vertical
         // move keeps it.
         self.goal_x = Some(step.goal_x);

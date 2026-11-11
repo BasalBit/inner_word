@@ -1,0 +1,346 @@
+//! Page view: pagination invariants, page counts, the caret's page,
+//! scaling to a narrow window, switching views.
+
+use gpui::{TestAppContext, px, size};
+use writer_core::{
+    Block, BlockKind, Document, DocumentSettings, Margins, Orientation, PageSetup, PaperSize,
+    Position,
+};
+
+use super::slice::{open, setup};
+use crate::{Editor, EditorConfig, layout::pages::PAGE_GAP};
+
+/// A4 portrait with one-inch margins: 595.28 x 841.89 points, a text area
+/// of 451.28 x 697.89.
+fn paged(blocks: Vec<Block>) -> Document {
+    Document::from_blocks(blocks).with_settings(DocumentSettings {
+        page_view: true,
+        ..DocumentSettings::default()
+    })
+}
+
+fn one_row_paragraphs(count: usize) -> Vec<Block> {
+    (0..count)
+        .map(|ix| Block::paragraph(&format!("Paragraph {ix}")))
+        .collect()
+}
+
+/// Checks, for every row of the document, that it lies completely inside
+/// the text area of exactly one sheet and that rows go down the sheets in
+/// document order. Returns the number of sheets that carry rows.
+fn assert_rows_on_sheets(editor: &Editor) -> usize {
+    editor
+        .with_layout(|lay| {
+            let (geometry, pad_top) = {
+                let env = lay.env();
+                (env.page.expect("page view"), env.pad_top)
+            };
+            let mut previous = (0, px(-1.));
+            let mut last_page = 0;
+            for index in 0..lay.count() {
+                let placed = lay.placed(index).unwrap();
+                for row in 0..placed.layout.rows.len() {
+                    let top = placed.row_top(row);
+                    let bottom = top + placed.layout.line_height;
+                    let page = lay.page_at(top);
+                    let text_top = geometry.sheet_top(page, pad_top) + geometry.margin_top;
+                    let text_bottom = text_top + geometry.content_height;
+                    assert!(
+                        top >= text_top - px(0.02),
+                        "block {index} row {row} starts above the text area of sheet {page}"
+                    );
+                    assert!(
+                        bottom <= text_bottom + px(0.02),
+                        "block {index} row {row} crosses the bottom of sheet {page}: \
+                         {bottom:?} > {text_bottom:?}"
+                    );
+                    assert!(
+                        (page, top) > previous,
+                        "block {index} row {row} is not below the row before it"
+                    );
+                    previous = (page, top);
+                    last_page = page;
+                }
+            }
+            last_page + 1
+        })
+        .expect("laid out")
+}
+
+#[gpui::test]
+fn known_page_counts(cx: &mut TestAppContext) {
+    setup(cx);
+    // One-row paragraphs are 27px rows 39px apart: 18 fit in the 697.89px
+    // text area (17 * 39 + 27 = 690).
+    let (editor, cx) = open(paged(one_row_paragraphs(100)), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        assert_eq!(editor.page_count(), Some(6));
+        assert_eq!(assert_rows_on_sheets(editor), 6);
+        assert_eq!(editor.caret_page(), Some(1));
+        // Block 17 is the last on sheet 1, block 18 the first on sheet 2.
+        editor.edit(|state| state.set_caret(Position::new(17, 2)), cx);
+        assert_eq!(editor.caret_page(), Some(1));
+        editor.edit(|state| state.set_caret(Position::new(18, 0)), cx);
+        assert_eq!(editor.caret_page(), Some(2));
+        editor.edit(|state| state.set_caret(Position::new(99, 0)), cx);
+        assert_eq!(editor.caret_page(), Some(6));
+    });
+
+    // A page break after the first paragraph: the other 99 start on sheet
+    // 2 and need 6 sheets (5 * 18 + 9).
+    cx.simulate_keystrokes("cmd-up cmd-right cmd-enter");
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        assert!(matches!(
+            editor.document().blocks()[1].kind(),
+            BlockKind::PageBreak
+        ));
+        assert_eq!(editor.page_count(), Some(7));
+        assert_eq!(assert_rows_on_sheets(editor), 7);
+        editor.edit(|state| state.set_caret(Position::new(2, 0)), cx);
+        assert_eq!(editor.caret_page(), Some(2));
+    });
+    // Undo removes the break and the sheet.
+    cx.simulate_keystrokes("cmd-z");
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        assert_eq!(editor.page_count(), Some(6));
+    });
+
+    // A trailing page break opens an empty sheet.
+    cx.simulate_keystrokes("cmd-down cmd-enter");
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        assert_eq!(editor.page_count(), Some(7));
+    });
+
+    // Flow view has no pages.
+    editor.update(cx, |editor, cx| {
+        editor.set_page_view(false, cx);
+        assert_eq!(editor.page_count(), None);
+        assert_eq!(editor.caret_page(), None);
+    });
+}
+
+#[gpui::test]
+fn rows_never_cross_a_sheet_and_headings_stay_with_their_text(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "A sentence that is long enough to wrap in the text area of a page. ".repeat(9);
+    let mut blocks = Vec::new();
+    for chapter in 0..12 {
+        blocks.push(Block::with_text(
+            BlockKind::heading(2),
+            &format!("Chapter {chapter}"),
+        ));
+        for paragraph in 0..(3 + chapter % 4) {
+            blocks.push(Block::paragraph(&long[..long.len() - paragraph * 37]));
+        }
+        blocks.push(Block::with_text(BlockKind::BulletItem, "a list item"));
+        blocks.push(Block::with_text(BlockKind::BulletItem, long.trim_end()).with_indent(1));
+        blocks.push(Block::with_text(
+            BlockKind::code(),
+            &"let line = of_code();\n".repeat(11 + chapter),
+        ));
+        blocks.push(Block::with_text(BlockKind::Quote, long.trim_end()));
+        if chapter % 5 == 4 {
+            blocks.push(Block::new(BlockKind::PageBreak));
+        }
+        blocks.push(Block::new(BlockKind::Divider));
+    }
+    // One block far taller than a sheet.
+    blocks.push(Block::with_text(
+        BlockKind::code(),
+        &"a very long listing\n".repeat(90),
+    ));
+    let (editor, cx) = open(paged(blocks), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        let sheets = assert_rows_on_sheets(editor);
+        assert_eq!(editor.page_count(), Some(sheets));
+        assert!(sheets > 12);
+
+        // No heading is the last thing on its sheet: the first row of the
+        // block after it is on the same sheet.
+        let page_of = |position: Position| {
+            editor
+                .with_layout(|lay| {
+                    let placed = lay.placed(position.block).unwrap();
+                    let row = placed.layout.row_for_offset(position.offset);
+                    lay.page_at(placed.row_top(row))
+                })
+                .unwrap()
+        };
+        let document = editor.document();
+        let mut headings = 0;
+        for (index, block) in document.blocks().iter().enumerate() {
+            if block.kind().heading_level().is_some() {
+                headings += 1;
+                assert_eq!(
+                    page_of(Position::new(index, 0)),
+                    page_of(Position::new(index + 1, 0)),
+                    "heading {index} was left behind"
+                );
+            }
+            // The block after a page break starts a sheet.
+            if matches!(block.kind(), BlockKind::PageBreak) {
+                assert_eq!(
+                    page_of(Position::new(index + 1, 0)),
+                    page_of(Position::new(index, 0)) + 1
+                );
+            }
+        }
+        assert_eq!(headings, 12);
+
+        // The tall block spans several sheets, at row boundaries.
+        let tall = document.block_count() - 1;
+        let end = document.blocks()[tall].len();
+        assert!(page_of(Position::new(tall, end)) >= page_of(Position::new(tall, 0)) + 2);
+
+        // Typing keeps the invariants (the layout is incremental).
+        editor.edit(|state| state.set_caret(Position::new(1, 0)), cx);
+        for _ in 0..40 {
+            editor.edit(|state| state.insert_text("more words to push rows "), cx);
+        }
+        editor.finish_layout(cx);
+        assert_eq!(editor.page_count(), Some(assert_rows_on_sheets(editor)));
+    });
+}
+
+#[gpui::test]
+fn page_setup_changes_the_sheets(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paged(one_row_paragraphs(100)), EditorConfig::full(), cx);
+    let sheet = |editor: &Editor| {
+        editor
+            .with_layout(|lay| {
+                let geometry = lay.env().page.unwrap();
+                (
+                    geometry.sheet_width,
+                    geometry.sheet_height,
+                    lay.env().column_width,
+                )
+            })
+            .unwrap()
+    };
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        let (width, height, column) = sheet(editor);
+        assert!((width - px(595.28)).abs() < px(0.1));
+        assert!((height - px(841.89)).abs() < px(0.1));
+        assert!((column - px(451.28)).abs() < px(0.1));
+
+        // US Letter, landscape, half-inch margins.
+        let mut settings = editor.document().settings().clone();
+        settings.page = PageSetup {
+            paper: PaperSize::UsLetter,
+            orientation: Orientation::Landscape,
+            margins: Margins::uniform(36.),
+        };
+        editor.edit(|state| state.set_settings(settings), cx);
+    });
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        let (width, height, column) = sheet(editor);
+        assert_eq!((width, height, column), (px(792.), px(612.), px(720.)));
+        // 540px of text: 14 one-row paragraphs per sheet (13 * 39 + 27 =
+        // 534), 100 paragraphs on 8 sheets.
+        assert_eq!(editor.page_count(), Some(8));
+        assert_eq!(assert_rows_on_sheets(editor), 8);
+    });
+}
+
+#[gpui::test]
+fn narrow_window_scales_the_page_down(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paged(one_row_paragraphs(100)), EditorConfig::full(), cx);
+    cx.simulate_resize(size(px(420.), px(700.)));
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        let viewport = editor.viewport_bounds().unwrap();
+        assert_eq!(viewport.size.width, px(420.));
+        let (scale, left, width) = editor
+            .with_layout(|lay| {
+                let geometry = lay.env().page.unwrap();
+                (geometry.scale, geometry.sheet_left, geometry.sheet_width)
+            })
+            .unwrap();
+        // The sheet fits between the edges: no horizontal scrolling.
+        assert!(scale < 0.7 && scale > 0.6, "{scale}");
+        assert!(left >= viewport.left() + px(15.));
+        assert!(left + width <= viewport.right() - px(15.));
+        // Text is scaled with the sheet: the same lines on the same pages.
+        assert_eq!(editor.page_count(), Some(6));
+        assert_eq!(assert_rows_on_sheets(editor), 6);
+        let row = editor.position_bounds(Position::new(3, 0)).unwrap();
+        assert!((row.size.height - px(27. * scale)).abs() < px(0.01));
+        // Everything is inside the sheet horizontally.
+        let end = editor.document().blocks()[3].len();
+        let right = editor
+            .position_bounds(Position::new(3, end))
+            .unwrap()
+            .left();
+        assert!(row.left() > left && right < left + width);
+    });
+}
+
+#[gpui::test]
+fn switching_views_keeps_the_caret_on_screen(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "A sentence that is long enough to wrap in the text area of a page. ".repeat(5);
+    let blocks: Vec<Block> = (0..300)
+        .map(|_| Block::paragraph(long.trim_end()))
+        .collect();
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    let caret_y = |editor: &Editor| {
+        editor.caret_bounds().unwrap().top() - editor.viewport_bounds().unwrap().top()
+    };
+
+    // Somewhere in the middle of the document and of the viewport.
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(150, 40)), cx);
+        editor.scroll_to_caret(crate::Autoscroll::Center, cx);
+    });
+    cx.run_until_parked();
+    let before = editor.read_with(cx, |editor, _| caret_y(editor));
+    assert!(before > px(100.));
+
+    for on in [true, false, true] {
+        editor.update(cx, |editor, cx| editor.set_page_view(on, cx));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.page_view(), on);
+            assert_eq!(editor.selection().head, Position::new(150, 40));
+            let after = caret_y(editor);
+            assert!(
+                (after - before).abs() < px(1.),
+                "page view {on}: the caret moved from {before:?} to {after:?}"
+            );
+        });
+    }
+
+    // At the very top the top stays: the first sheet shows its margin.
+    editor.update(cx, |editor, cx| {
+        editor.set_page_view(false, cx);
+        editor.edit(|state| state.set_caret(Position::ZERO), cx);
+    });
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.scroll_offset(), px(0.));
+        editor.set_page_view(true, cx);
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.scroll_offset(), px(0.));
+        // Desk padding, then the sheet's top margin, then the text.
+        assert_eq!(caret_y(editor), px(24. + 72.));
+    });
+
+    // The gap between two sheets is desk: PAGE_GAP pixels without rows.
+    editor.read_with(cx, |editor, _| {
+        let geometry = editor.with_layout(|lay| lay.env().page.unwrap()).unwrap();
+        assert_eq!(geometry.gap, px(PAGE_GAP));
+    });
+}

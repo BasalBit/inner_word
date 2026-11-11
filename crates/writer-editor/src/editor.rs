@@ -29,7 +29,7 @@ use crate::{
     highlights::{HighlightStyle, Highlights},
     input::MarkedText,
     intercept::{self, InterceptPriority, Interceptors, KeyDisposition},
-    layout::DocumentLayout,
+    layout::{DocumentLayout, ScrollPosition},
     mouse::Drag,
     popup::{Popup, PopupElement},
     scroll::{Autoscroll, PendingScroll, Scrollbar},
@@ -358,7 +358,9 @@ impl Editor {
         if on == self.page_view() {
             return;
         }
-        let caret_y = self.caret_viewport_y();
+        // At the very top the top stays (the first sheet shows its margin).
+        let at_top = self.layout.borrow().scroll_position() == ScrollPosition::Top;
+        let caret_y = self.caret_viewport_y().filter(|_| !at_top);
         self.edit_with(Autoscroll::None, |state| state.set_page_view(on), cx);
         if let Some(viewport_y) = caret_y {
             // The layout changes shape with the next frame; the request is

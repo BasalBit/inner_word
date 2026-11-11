@@ -117,11 +117,28 @@
 //! questions at the same time) and for the request that would remove the
 //! copy.
 //!
+//! # Keyboard layouts
+//!
+//! The engine gets the character a key types (`shift-4` is `$`). Two
+//! adjustments are made for it: a character that the layout types with the
+//! option key (`{`, `[`, `|`, `@` on a German keyboard) is passed as that
+//! character rather than as an option chord, and on a layout without Latin
+//! letters a command key is taken by its Latin position, so `j` moves down
+//! on a Russian layout too. Where a character is wanted (Insert mode, the
+//! command line, the argument of `f`, `t`, `r`) the typed character counts.
+//!
 //! # Not covered
 //!
 //! - The command line takes keys only: no IME composition and no dictation
 //!   into `:` or `/` (the engine's `command_line_input` is used for
 //!   `cmd-v`).
+//! - Text that reaches the document in Insert mode without a key and
+//!   without a composition (the emoji palette, a system text replacement)
+//!   is inserted, but the engine sees it as an outside change: it is not
+//!   part of what `.` repeats, and what was typed before it in the same
+//!   session is not either.
+//! - In Visual Line mode an empty line at the end of the selection shows no
+//!   tint (there is no text to tint); the status shows the mode.
 //! - Whatever the engine does not support (macros, blockwise Visual mode,
 //!   regular expressions): see the [`writer_vim`] crate docs.
 

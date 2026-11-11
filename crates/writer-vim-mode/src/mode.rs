@@ -1,0 +1,848 @@
+//! [`VimMode`]: one Vim engine attached to one [`Editor`].
+
+use gpui::{App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, WeakEntity};
+use writer_core::{EditorState, Position, Selection, TextRange, text};
+use writer_editor::{
+    Autoscroll, CaretStyle, Editor, EditorEvent, HighlightStyle, InterceptPriority, KeyDisposition,
+};
+use writer_ui::theme::{ActiveTheme, GlobalTheme};
+use writer_vim::{
+    CaretShape, Effect, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, Vim,
+    VimHost, VimOptions,
+};
+
+use crate::{
+    host::{EditorHost, may_ask_layout, read_clipboard, write_clipboard},
+    search::SearchMatches,
+    status::{VimEvent, VimMessage, VimStatus},
+};
+
+/// The editor's key context entry that carries the mode: `vim_mode=normal`,
+/// `insert`, `replace`, `visual`, `visual_line`, `operator` or `command`.
+/// Bind keys for one mode with a predicate such as
+/// `"Editor && vim_mode == normal"` (such a binding only sees keys the
+/// engine leaves alone: `cmd` shortcuts, option chords, function keys).
+pub const KEY_CONTEXT_MODE: &str = "vim_mode";
+
+/// The editor highlight layer that marks the search matches.
+pub const SEARCH_LAYER: &str = "vim-search";
+/// The editor highlight layer that marks the Vim cursor while the editor's
+/// own caret is somewhere else (the far end of a Visual selection).
+pub const CURSOR_LAYER: &str = "vim-cursor";
+
+/// What the editor looked like before Vim mode took it over.
+#[derive(Clone, Copy)]
+struct SavedEditor {
+    caret_style: CaretStyle,
+    text_input: bool,
+}
+
+/// One call into the engine.
+enum Call<'a> {
+    Key(Key),
+    TextInserted(&'a str),
+    CommandLineInput(&'a str),
+    Execute(&'a str),
+    Sync,
+    Attach,
+    Detach,
+}
+
+impl Call<'_> {
+    fn run(&self, vim: &mut Vim, state: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+        match self {
+            Call::Key(key) => vim.handle_key(*key, state, host),
+            Call::TextInserted(text) => vim.text_inserted(text, state, host),
+            Call::CommandLineInput(text) => vim.command_line_input(text, state, host),
+            Call::Execute(command) => vim.execute(command, state, host),
+            Call::Sync => vim.sync(state, host),
+            Call::Attach => vim.attach(state, host),
+            Call::Detach => vim.detach(state, host),
+        }
+    }
+
+    /// Whether the caret should be scrolled into view after the call. Not
+    /// for the calls that only bring the engine in line with the editor:
+    /// they may nudge the caret onto a character, which must not undo a
+    /// scroll position somebody just restored.
+    fn autoscroll(&self) -> Autoscroll {
+        match self {
+            Call::Sync | Call::Attach | Call::Detach => Autoscroll::None,
+            _ => Autoscroll::Fit,
+        }
+    }
+}
+
+/// What an IME composition is doing, as far as the engine cares.
+enum Composition {
+    /// No composition.
+    None,
+    /// Marked text exists: its updates are neither keys nor typed text.
+    Active,
+    /// The composition just ended with this text in the document.
+    Committed(String),
+}
+
+/// The Vim modes that exist, for finding the one a global action is for.
+#[derive(Default)]
+struct VimRegistry {
+    modes: Vec<WeakEntity<VimMode>>,
+    /// The one whose editor had the keyboard focus last.
+    last_focused: Option<WeakEntity<VimMode>>,
+}
+
+impl Global for VimRegistry {}
+
+/// The [`VimMode`] a window-wide command (the palette's "Toggle Vim mode")
+/// is meant for: the one whose editor was focused last, or the only one.
+pub(crate) fn target_for_global_action(cx: &mut App) -> Option<Entity<VimMode>> {
+    let registry = cx.try_global::<VimRegistry>()?;
+    if let Some(mode) = registry.last_focused.as_ref().and_then(WeakEntity::upgrade) {
+        return Some(mode);
+    }
+    let mut live = registry.modes.iter().filter_map(WeakEntity::upgrade);
+    let first = live.next()?;
+    live.next().is_none().then_some(first)
+}
+
+/// Vim mode for one [`Editor`]: owns the [`writer_vim::Vim`] engine, routes
+/// the editor's keys to it, keeps the editor's caret, text input and
+/// highlights in step with the mode, and reports status and requests.
+///
+/// Create one per editor and keep it for as long as the editor lives; it
+/// starts detached. [`VimMode::attach`] and [`VimMode::detach`] switch Vim
+/// mode on and off at any time. While detached it does nothing at all: the
+/// editor behaves as if this crate did not exist. Registers and the search
+/// and command-line history survive a detach.
+///
+/// ```ignore
+/// let vim = cx.new(|cx| VimMode::new(editor.clone(), cx));
+/// vim.update(cx, |vim, cx| vim.set_attached(settings.vim_mode, cx));
+/// cx.subscribe(&vim, |this: &mut Shell, _, event: &VimEvent, cx| match event {
+///     VimEvent::Request(HostRequest::Save) => this.save(cx),
+///     _ => {}
+/// }).detach();
+/// ```
+pub struct VimMode {
+    editor: Entity<Editor>,
+    vim: Vim,
+    /// The options as the host set them; the engine gets them with
+    /// `read_only` also following the editor.
+    options: VimOptions,
+    attached: bool,
+    status: VimStatus,
+    /// The key interceptor on the editor, while attached.
+    keys: Option<Subscription>,
+    saved: Option<SavedEditor>,
+    /// Text of a key the engine left to the editor in Insert mode: reported
+    /// to the engine once the editor has inserted it.
+    typed: Option<String>,
+    /// Where the IME composition in progress started.
+    composing: Option<Position>,
+    search: SearchMatches,
+    /// What the cursor layer shows.
+    cursor_cell: Option<TextRange>,
+    /// The editor's document revision and selection after the engine last
+    /// looked: a change report that finds them unchanged needs no sync.
+    seen: Option<(u64, Selection)>,
+    layout_fallbacks: usize,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<VimEvent> for VimMode {}
+
+impl VimMode {
+    /// Vim mode for `editor`, detached.
+    pub fn new(editor: Entity<Editor>, cx: &mut Context<Self>) -> Self {
+        let subscriptions = vec![
+            cx.subscribe(&editor, Self::on_editor_event),
+            // The highlight colours come from the theme.
+            cx.observe_global::<GlobalTheme>(|this, cx| this.restyle(cx)),
+            // Dropped while attached: give the editor back as it was.
+            cx.on_release(|this, cx| this.release(cx)),
+        ];
+        let handle = cx.weak_entity();
+        let registry = cx.default_global::<VimRegistry>();
+        registry.modes.retain(|mode| mode.upgrade().is_some());
+        registry.modes.push(handle);
+        Self {
+            editor,
+            vim: Vim::new(),
+            options: VimOptions::default(),
+            attached: false,
+            status: VimStatus::default(),
+            keys: None,
+            saved: None,
+            typed: None,
+            composing: None,
+            search: SearchMatches::default(),
+            cursor_cell: None,
+            seen: None,
+            layout_fallbacks: 0,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// The editor this belongs to.
+    pub fn editor(&self) -> &Entity<Editor> {
+        &self.editor
+    }
+
+    /// Whether Vim mode is on.
+    pub fn is_attached(&self) -> bool {
+        self.attached
+    }
+
+    /// What a status bar shows: mode, pending keys, command line, message.
+    /// Idle values while detached.
+    pub fn status(&self) -> &VimStatus {
+        &self.status
+    }
+
+    /// The mode (Normal while detached).
+    pub fn mode(&self) -> Mode {
+        self.status.mode
+    }
+
+    /// The engine, read-only: registers, the search pattern, the last
+    /// inserted text.
+    pub fn engine(&self) -> &Vim {
+        &self.vim
+    }
+
+    /// The engine options as set by the host.
+    pub fn options(&self) -> &VimOptions {
+        &self.options
+    }
+
+    /// Changes the engine options. `read_only` is also on whenever the
+    /// editor is read-only, whatever is set here.
+    pub fn set_options(&mut self, options: VimOptions, cx: &mut Context<Self>) {
+        self.options = options;
+        self.sync_options(cx);
+    }
+
+    /// Layout questions of the engine that were answered without the
+    /// editor's layout (see the `host` module). Stays 0 unless a key asks
+    /// about rows that was not expected to; tests watch it.
+    #[doc(hidden)]
+    pub fn layout_fallbacks(&self) -> usize {
+        self.layout_fallbacks
+    }
+
+    // ----- on and off --------------------------------------------------------------
+
+    /// Switches Vim mode on: Normal mode, block caret on a character, typed
+    /// text refused until Insert mode. Does nothing when already on.
+    pub fn attach(&mut self, cx: &mut Context<Self>) {
+        if self.attached {
+            return;
+        }
+        let editor = self.editor.read(cx);
+        self.saved = Some(SavedEditor {
+            caret_style: editor.config().caret_style,
+            text_input: editor.text_input_enabled(),
+        });
+        let handle = cx.weak_entity();
+        self.keys = Some(editor.intercept_keys(
+            InterceptPriority::MODAL,
+            move |keystroke, _, cx| {
+                handle
+                    .update(cx, |this, cx| this.on_key(keystroke, cx))
+                    .unwrap_or(KeyDisposition::Pass)
+            },
+        ));
+        self.attached = true;
+        self.typed = None;
+        self.composing = None;
+        self.status = VimStatus {
+            attached: true,
+            ..VimStatus::default()
+        };
+        let outcome = self.engine_call(Call::Attach, cx);
+        // The attach reports the whole display state as effects.
+        self.status.mode = self.vim.mode();
+        self.apply_mode(cx);
+        self.apply(outcome, false, cx);
+        cx.emit(VimEvent::Attached);
+        cx.emit(VimEvent::StatusChanged);
+        cx.notify();
+    }
+
+    /// Switches Vim mode off: an Insert session ends (as one undo step), a
+    /// Visual selection collapses, the highlights go, and the editor gets
+    /// its caret and its text input back. Does nothing when already off.
+    pub fn detach(&mut self, cx: &mut Context<Self>) {
+        if !self.attached {
+            return;
+        }
+        self.release(cx);
+        cx.emit(VimEvent::Detached);
+        cx.emit(VimEvent::StatusChanged);
+        cx.notify();
+    }
+
+    /// [`VimMode::attach`] or [`VimMode::detach`].
+    pub fn set_attached(&mut self, attached: bool, cx: &mut Context<Self>) {
+        if attached {
+            self.attach(cx);
+        } else {
+            self.detach(cx);
+        }
+    }
+
+    /// Switches Vim mode on or off.
+    pub fn toggle(&mut self, cx: &mut Context<Self>) {
+        self.set_attached(!self.attached, cx);
+    }
+
+    /// The detach itself, also run when the entity is dropped.
+    fn release(&mut self, cx: &mut App) {
+        if !self.attached {
+            return;
+        }
+        self.engine_call(Call::Detach, cx);
+        self.attached = false;
+        self.keys = None;
+        self.typed = None;
+        self.composing = None;
+        self.seen = None;
+        self.cursor_cell = None;
+        self.search = SearchMatches::default();
+        self.status = VimStatus::default();
+        let saved = self.saved.take();
+        self.editor.update(cx, |editor, cx| {
+            editor.clear_highlights(SEARCH_LAYER, cx);
+            editor.clear_highlights(CURSOR_LAYER, cx);
+            editor.remove_key_context_entry(KEY_CONTEXT_MODE, cx);
+            if let Some(saved) = saved {
+                editor.set_caret_style(saved.caret_style, cx);
+                editor.set_text_input_enabled(saved.text_input, cx);
+            }
+        });
+    }
+
+    // ----- for the host --------------------------------------------------------------
+
+    /// Shows a message in the status (until the next command).
+    pub fn show_message(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.set_message(Some(VimMessage::info(text)), cx);
+    }
+
+    /// Shows an error in the status: for example
+    /// `"E492: Not an editor command: frobnicate"` for a
+    /// [`writer_vim::HostRequest::Command`] the application does not know.
+    pub fn show_error(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.set_message(Some(VimMessage::error(text)), cx);
+    }
+
+    fn set_message(&mut self, message: Option<VimMessage>, cx: &mut Context<Self>) {
+        if self.status.message != message {
+            self.status.message = message;
+            cx.emit(VimEvent::StatusChanged);
+            cx.notify();
+        }
+    }
+
+    /// Runs an ex command line (without the leading `:`), as if it had been
+    /// typed and confirmed: `vim.execute("noh", cx)`, `vim.execute("%s/a/b/g", cx)`.
+    /// Does nothing while detached.
+    pub fn execute(&mut self, command: &str, cx: &mut Context<Self>) {
+        if !self.attached {
+            return;
+        }
+        let outcome = self.engine_call(Call::Execute(command), cx);
+        self.apply(outcome, true, cx);
+    }
+
+    /// Feeds keys in Vim notation (`"ciwnew<Esc>"`, `"<C-r>"`) to the engine
+    /// as if they were pressed, for key mappings and scripted commands.
+    /// Keys the engine leaves to the editor are dropped, so text "typed" in
+    /// Insert mode this way is not inserted. Does nothing while detached.
+    pub fn feed_keys(&mut self, keys: &str, cx: &mut Context<Self>) {
+        if !self.attached {
+            return;
+        }
+        for key in Key::parse_sequence(keys) {
+            let outcome = self.engine_call(Call::Key(key), cx);
+            let consumed = outcome.consumed;
+            self.apply(outcome, consumed, cx);
+        }
+    }
+
+    // ----- keys ------------------------------------------------------------------------
+
+    /// One key of the focused editor, before its bindings and text input.
+    fn on_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> KeyDisposition {
+        if !self.attached {
+            return KeyDisposition::Pass;
+        }
+        self.typed = None;
+        // The keys of an IME composition belong to the input method.
+        if self.editor.read(cx).marked_range().is_some() {
+            return KeyDisposition::Pass;
+        }
+        let modifiers = keystroke.modifiers;
+        if modifiers.platform {
+            // Application and editor shortcuts, in every mode. One
+            // exception: paste goes into an open command line.
+            let plain_paste =
+                keystroke.key == "v" && !modifiers.control && !modifiers.alt && !modifiers.shift;
+            if plain_paste && self.vim.mode() == Mode::CommandLine {
+                let text = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .unwrap_or_default();
+                let line = text.lines().next().unwrap_or_default().to_string();
+                let outcome = self.engine_call(Call::CommandLineInput(&line), cx);
+                self.apply(outcome, false, cx);
+                return KeyDisposition::Consumed;
+            }
+            return KeyDisposition::Pass;
+        }
+        if modifiers.function {
+            return KeyDisposition::Pass;
+        }
+        let Some(key) = key_from_keystroke(keystroke) else {
+            return KeyDisposition::Pass;
+        };
+        let outcome = self.engine_call(Call::Key(key), cx);
+        let consumed = outcome.consumed;
+        self.apply(outcome, consumed, cx);
+        if consumed {
+            return KeyDisposition::Consumed;
+        }
+        // The editor handles the key as without Vim. If it types text, the
+        // engine learns it once the editor reports the insertion.
+        if self.vim.mode().is_insert() {
+            self.typed = typed_text(keystroke, &key);
+        }
+        KeyDisposition::Pass
+    }
+
+    // ----- editor events ---------------------------------------------------------------
+
+    fn on_editor_event(&mut self, _: Entity<Editor>, event: &EditorEvent, cx: &mut Context<Self>) {
+        if matches!(event, EditorEvent::Focused) {
+            let handle = cx.weak_entity();
+            cx.default_global::<VimRegistry>().last_focused = Some(handle);
+        }
+        if !self.attached {
+            return;
+        }
+        match event {
+            EditorEvent::Edited { change } => {
+                let typed = self.typed.take();
+                self.refresh_search(change, cx);
+                match self.composition(cx) {
+                    Composition::Active => {}
+                    Composition::Committed(text) => self.text_inserted(&text, cx),
+                    Composition::None => match typed {
+                        Some(text) if change.blocks.is_some() && self.vim.mode().is_insert() => {
+                            self.text_inserted(&text, cx)
+                        }
+                        _ => self.sync(cx),
+                    },
+                }
+            }
+            EditorEvent::SelectionChanged => {
+                self.typed = None;
+                match self.composition(cx) {
+                    Composition::Active => {}
+                    Composition::Committed(text) => self.text_inserted(&text, cx),
+                    Composition::None => self.sync(cx),
+                }
+            }
+            EditorEvent::DocumentReplaced => self.document_replaced(cx),
+            _ => {}
+        }
+    }
+
+    /// Follows the editor's IME composition: while it has marked text
+    /// nothing is reported to the engine, and when it ends the committed
+    /// text is.
+    fn composition(&mut self, cx: &mut Context<Self>) -> Composition {
+        let editor = self.editor.read(cx);
+        if let Some(marked) = editor.marked_range() {
+            self.composing.get_or_insert(marked.start);
+            self.typed = None;
+            return Composition::Active;
+        }
+        let Some(start) = self.composing.take() else {
+            return Composition::None;
+        };
+        let head = editor.selection().head;
+        let committed = (head.block == start.block && head.offset > start.offset)
+            .then(|| editor.document().block(start.block))
+            .flatten()
+            .and_then(|block| block.text().get(start.offset..head.offset))
+            .map(str::to_string);
+        match committed {
+            Some(text) if self.vim.mode().is_insert() => Composition::Committed(text),
+            _ => Composition::None,
+        }
+    }
+
+    /// The editor inserted `text` through its typing path.
+    fn text_inserted(&mut self, text: &str, cx: &mut Context<Self>) {
+        let outcome = self.engine_call(Call::TextInserted(text), cx);
+        self.apply(outcome, false, cx);
+    }
+
+    /// Something changed the editor: let the engine catch up, unless the
+    /// editor is exactly as the engine left it.
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        let editor = self.editor.read(cx);
+        let now = (editor.state().revision(), editor.selection());
+        if self.seen == Some(now) {
+            return;
+        }
+        let outcome = self.engine_call(Call::Sync, cx);
+        self.apply(outcome, false, cx);
+    }
+
+    /// Another document was loaded into the editor: start over in Normal
+    /// mode. Registers and history stay; marks and the jump list go.
+    fn document_replaced(&mut self, cx: &mut Context<Self>) {
+        self.typed = None;
+        self.composing = None;
+        self.status.message = None;
+        // The editor dropped its highlight layers with the old document.
+        self.cursor_cell = None;
+        self.search = SearchMatches::default();
+        let outcome = self.engine_call(Call::Attach, cx);
+        self.apply(outcome, false, cx);
+    }
+
+    // ----- the engine ------------------------------------------------------------------
+
+    /// The engine follows the editor's read-only state.
+    fn sync_options(&mut self, cx: &App) {
+        let mut options = self.options.clone();
+        options.read_only |= self.editor.read(cx).is_read_only();
+        if *self.vim.options() != options {
+            self.vim.set_options(options);
+        }
+    }
+
+    /// Whether the call may read the `+` / `*` register, so the clipboard
+    /// has to be fetched before it.
+    fn wants_clipboard(&self, call: &Call) -> bool {
+        match call {
+            Call::Key(key) => {
+                self.vim.options().unnamed_clipboard
+                    || matches!(self.vim.pending_register(), Some('+' | '*'))
+                    // The register name itself (after `"` or `ctrl-r`), and
+                    // a repeat of a command that named it.
+                    || matches!(key.plain_char(), Some('+' | '*' | '.'))
+            }
+            Call::Execute(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Runs one call into the engine against the editor (see the `host`
+    /// module for the two ways), then carries out what the host collected:
+    /// the clipboard write and the scroll requests.
+    fn engine_call(&mut self, call: Call, cx: &mut App) -> Outcome {
+        self.sync_options(cx);
+        let clipboard = self
+            .wants_clipboard(&call)
+            .then(|| read_clipboard(cx))
+            .flatten();
+        let with_layout = matches!(&call, Call::Key(key) if may_ask_layout(&self.vim, key));
+        let vim = &mut self.vim;
+        let (outcome, scrolls, clipboard_write, fallbacks) = if with_layout {
+            let editor = self.editor.read(cx);
+            let mut scratch = editor.state().clone();
+            let mut host = EditorHost::new(clipboard).with_layout(editor);
+            let outcome = call.run(vim, &mut scratch, &mut host);
+            let (scrolls, write, fallbacks) = (host.scrolls, host.clipboard_write, host.fallbacks);
+            // An explicit scroll decides where the view goes.
+            let autoscroll = if scrolls.is_empty() {
+                call.autoscroll()
+            } else {
+                Autoscroll::None
+            };
+            self.editor.update(cx, |editor, cx| {
+                editor.edit_with(autoscroll, |state| *state = scratch, cx)
+            });
+            (outcome, scrolls, write, fallbacks)
+        } else {
+            let mut host = EditorHost::new(clipboard);
+            let autoscroll = call.autoscroll();
+            let outcome = self.editor.update(cx, |editor, cx| {
+                editor.edit_with(autoscroll, |state| call.run(vim, state, &mut host), cx)
+            });
+            (outcome, host.scrolls, host.clipboard_write, host.fallbacks)
+        };
+        self.layout_fallbacks += fallbacks;
+        if let Some(content) = clipboard_write {
+            write_clipboard(&content, cx);
+        }
+        if !scrolls.is_empty() {
+            self.editor
+                .update(cx, |editor, cx| apply_scrolls(editor, &scrolls, cx));
+        }
+        let editor = self.editor.read(cx);
+        self.seen = Some((editor.state().revision(), editor.selection()));
+        outcome
+    }
+
+    /// Takes over what a call reported.
+    fn apply(&mut self, outcome: Outcome, clear_message: bool, cx: &mut Context<Self>) {
+        let before = self.status.clone();
+        if clear_message {
+            self.status.message = None;
+        }
+        for effect in outcome.effects {
+            match effect {
+                Effect::ModeChanged(mode) => {
+                    self.status.mode = mode;
+                    self.apply_mode(cx);
+                    cx.emit(VimEvent::ModeChanged(mode));
+                }
+                Effect::CommandLine(line) => self.status.command_line = line,
+                Effect::PendingKeys(keys) => self.status.pending_keys = keys,
+                Effect::Message(text) => self.status.message = Some(VimMessage::info(text)),
+                Effect::Error(text) => self.status.message = Some(VimMessage::error(text)),
+                Effect::SearchHighlight(pattern) => {
+                    let editor = self.editor.read(cx);
+                    self.search
+                        .set(pattern, editor.document(), editor.state().revision());
+                    self.paint_search(cx);
+                }
+                Effect::Request(request) => cx.emit(VimEvent::Request(request)),
+                Effect::Bell => cx.emit(VimEvent::Bell),
+            }
+        }
+        self.status.insert_pending = self.vim.insert_pending();
+        self.status.caret = self.vim.caret_shape();
+        self.status.search_highlighted = self.search.pattern().is_some();
+        self.paint_caret(cx);
+        if self.status != before {
+            cx.emit(VimEvent::StatusChanged);
+            cx.notify();
+        }
+    }
+
+    /// The parts of the editor that follow the mode: text input and the
+    /// key context. (The caret follows every call, see `paint_caret`.)
+    fn apply_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = self.status.mode;
+        self.editor.update(cx, |editor, cx| {
+            // Outside Insert and Replace mode nothing typed, composed,
+            // dictated or picked from the emoji palette reaches the text.
+            editor.set_text_input_enabled(mode.is_insert(), cx);
+            editor.set_key_context_value(KEY_CONTEXT_MODE, mode_context_name(mode), cx);
+        });
+    }
+
+    // ----- caret and highlights --------------------------------------------------------
+
+    /// Draws the Vim cursor. The editor draws its caret at the head of its
+    /// selection, which is where the Vim cursor is except in Visual mode:
+    /// there the selection covers the selected characters, and its head is
+    /// the far end of the last one (or of the last line, in Visual Line
+    /// mode). Then the editor's caret is hidden (a bar caret is not drawn
+    /// over a selection) and the cursor's character is marked through a
+    /// highlight layer instead.
+    fn paint_caret(&mut self, cx: &mut Context<Self>) {
+        let editor = self.editor.read(cx);
+        let state = editor.state();
+        let cursor = self.vim.caret(state);
+        let head = state.selection().head;
+        let (style, cell) = if cursor == head {
+            (caret_style(self.vim.caret_shape()), None)
+        } else {
+            let text = state
+                .document()
+                .block(cursor.block)
+                .map_or("", |block| block.text());
+            let end = text::next_grapheme_boundary(text, cursor.offset);
+            let cell = (end > cursor.offset)
+                .then(|| TextRange::in_block(cursor.block, cursor.offset, end));
+            (CaretStyle::Bar, cell)
+        };
+        let cell_changed = cell != self.cursor_cell;
+        if !cell_changed && editor.config().caret_style == style {
+            return;
+        }
+        self.cursor_cell = cell;
+        let fill = cursor_fill(cx);
+        self.editor.update(cx, |editor, cx| {
+            editor.set_caret_style(style, cx);
+            if cell_changed {
+                match cell {
+                    Some(cell) => editor.set_highlights(CURSOR_LAYER, vec![cell], fill, cx),
+                    None => editor.clear_highlights(CURSOR_LAYER, cx),
+                }
+            }
+        });
+    }
+
+    /// Hands the search matches to the editor's highlight layer.
+    fn paint_search(&mut self, cx: &mut Context<Self>) {
+        let style = HighlightStyle::background(cx.theme().colors.find_match);
+        let ranges = self.search.ranges().to_vec();
+        let highlighted = self.search.pattern().is_some();
+        self.editor.update(cx, |editor, cx| {
+            if highlighted {
+                editor.set_highlights(SEARCH_LAYER, ranges, style, cx);
+            } else {
+                editor.clear_highlights(SEARCH_LAYER, cx);
+            }
+        });
+    }
+
+    /// The document changed: the highlight ranges are positions in the old
+    /// text.
+    fn refresh_search(&mut self, change: &writer_core::Change, cx: &mut Context<Self>) {
+        let editor = self.editor.read(cx);
+        if self
+            .search
+            .document_changed(change, editor.document(), editor.state().revision())
+        {
+            self.paint_search(cx);
+        }
+    }
+
+    /// The theme changed: the layers keep the colours they were set with.
+    fn restyle(&mut self, cx: &mut Context<Self>) {
+        if !self.attached {
+            return;
+        }
+        if self.search.pattern().is_some() {
+            self.paint_search(cx);
+        }
+        if let Some(cell) = self.cursor_cell {
+            let fill = cursor_fill(cx);
+            self.editor.update(cx, |editor, cx| {
+                editor.set_highlights(CURSOR_LAYER, vec![cell], fill, cx);
+            });
+        }
+        cx.notify();
+    }
+}
+
+/// The colour of the cursor layer: what the editor paints a block caret
+/// with.
+fn cursor_fill(cx: &App) -> HighlightStyle {
+    HighlightStyle::background(cx.theme().colors.caret.alpha(0.45))
+}
+
+fn caret_style(shape: CaretShape) -> CaretStyle {
+    match shape {
+        CaretShape::Block => CaretStyle::Block,
+        CaretShape::Bar => CaretStyle::Bar,
+        CaretShape::Underline => CaretStyle::Underline,
+    }
+}
+
+/// The value of [`KEY_CONTEXT_MODE`] for a mode.
+fn mode_context_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Normal => "normal",
+        Mode::Insert => "insert",
+        Mode::Replace => "replace",
+        Mode::Visual => "visual",
+        Mode::VisualLine => "visual_line",
+        Mode::OperatorPending => "operator",
+        Mode::CommandLine => "command",
+    }
+}
+
+/// Carries out the scroll requests of one engine call.
+fn apply_scrolls(editor: &mut Editor, scrolls: &[Scroll], cx: &mut Context<Editor>) {
+    let mut by_rows = false;
+    for scroll in scrolls {
+        match *scroll {
+            Scroll::Rows(rows) => {
+                by_rows = true;
+                editor.scroll_by_rows(rows, cx);
+            }
+            Scroll::Align { caret, align } => {
+                // The editor keeps a row of context around the caret when
+                // it scrolls for a movement. Leave the same row here, or
+                // the next movement after `zt` would shift the view.
+                let (target, autoscroll) = match align {
+                    ScrollAlign::Top => (neighbour_row(editor, caret, -1), Autoscroll::Top),
+                    ScrollAlign::Center => (caret, Autoscroll::Center),
+                    ScrollAlign::Bottom => (neighbour_row(editor, caret, 1), Autoscroll::Bottom),
+                };
+                editor.scroll_to_position(target, autoscroll, cx);
+            }
+        }
+    }
+    // The engine keeps the caret on screen when it scrolls by rows, counting
+    // rows; the editor scrolls by pixels. Rows of different heights can
+    // leave the caret outside: bring it back.
+    if by_rows {
+        let head = editor.selection().head;
+        let visible = editor
+            .visible_range()
+            .is_some_and(|range| range.start <= head && head <= range.end);
+        if !visible {
+            editor.scroll_to_caret(Autoscroll::Fit, cx);
+        }
+    }
+}
+
+/// A position on the row above (`-1`) or below (`1`) the row of `position`,
+/// or `position` itself at the ends of the document.
+fn neighbour_row(editor: &Editor, position: Position, rows: isize) -> Position {
+    editor
+        .move_by_visual_rows(position, rows, None)
+        .map_or(position, |step| step.position)
+}
+
+/// The engine's key for a GPUI keystroke; `None` for keys the engine has
+/// no use for.
+///
+/// On keyboard layouts that type `[`, `{`, `|`, `@` or `~` with the option
+/// key, those are characters, not option chords: when option turns the key
+/// into another ASCII character, the engine gets that character without the
+/// option flag, so `{` and `}` work as motions on a German keyboard.
+fn key_from_keystroke(keystroke: &Keystroke) -> Option<Key> {
+    let modifiers = keystroke.modifiers;
+    let key_char = keystroke.key_char.as_deref();
+    let typed_with_option = modifiers.alt
+        && !modifiers.control
+        && key_char.is_some_and(|typed| {
+            typed.len() == 1 && typed.as_bytes()[0].is_ascii_graphic() && typed != keystroke.key
+        });
+    Key::from_keystroke(
+        &keystroke.key,
+        key_char,
+        modifiers.control,
+        modifiers.alt && !typed_with_option,
+        modifiers.shift,
+    )
+}
+
+/// The text the editor will insert for a key the engine left to it, if the
+/// key types text at all.
+fn typed_text(keystroke: &Keystroke, key: &Key) -> Option<String> {
+    if key.ctrl || !matches!(key.code, KeyCode::Char(_)) {
+        return None;
+    }
+    keystroke
+        .key_char
+        .as_ref()
+        .filter(|typed| !typed.is_empty())
+        .cloned()
+}
+
+/// Keeps `RegisterContent` in the public surface reachable from here for
+/// hosts that want to fill a register (for example from a command).
+impl VimMode {
+    /// Sets register `name` (`'a'`..`'z'`, `'"'`, `'+'` for the system
+    /// clipboard, …).
+    pub fn set_register(&mut self, name: char, content: RegisterContent, cx: &mut Context<Self>) {
+        let mut host = EditorHost::new(None);
+        self.vim.set_register(name, content, &mut host);
+        if let Some(content) = host.clipboard_write {
+            write_clipboard(&content, cx);
+        }
+    }
+}

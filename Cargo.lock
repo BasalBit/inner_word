@@ -6978,6 +6978,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-vim-mode"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "writer-core",
+ "writer-editor",
+ "writer-ui",
+ "writer-vim",
+]
+
+[[package]]
 name = "x11"
 version = "2.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

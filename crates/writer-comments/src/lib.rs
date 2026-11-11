@@ -52,7 +52,8 @@
 //! // The comment items of the text's context menu (the editor tools show
 //! // that menu and ask the app what to add):
 //! // "Add Comment"   -> the action `AddComment` (the selection is already
-//! //                    what the right-click made it)
+//! //                    what the right-click made it), enabled while
+//! //                    `comments.read(cx).can_add_comment(cx)`
 //! // "Go to Comment" -> `GoToThread::new(id)` as an action item, or
 //! //                    `comments.update(cx, |c, cx| c.go_to_thread(id, window, cx))`,
 //! //                    with `id` from `ContextMenuRequest::comments`

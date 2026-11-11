@@ -141,14 +141,17 @@ impl CommentsPanel {
             CommentMenuTarget::Reply(..) => (
                 vec![
                     item("Edit Reply", Box::new(EditComment), writable),
-                    ContextMenuItem::separator(),
                     item("Copy Text", Box::new(CopyComment), true),
                 ],
                 vec![item("Delete Reply", Box::new(DeleteComment), writable).danger()],
             ),
             CommentMenuTarget::Panel => (
                 vec![
-                    item("Add Comment on Selection", Box::new(AddComment), writable),
+                    item(
+                        "Add Comment on Selection",
+                        Box::new(AddComment),
+                        self.can_add_comment(cx),
+                    ),
                     ContextMenuItem::separator(),
                     item(
                         if self.show_resolved {

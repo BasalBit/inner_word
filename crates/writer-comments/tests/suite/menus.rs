@@ -319,7 +319,7 @@ fn a_reply_has_its_own_menu(cx: &mut TestAppContext) {
     right_click(at, cx);
     assert_eq!(
         labels(cx).unwrap(),
-        ["Edit Reply", "-", "Copy Text", "-", "Delete Reply"]
+        ["Edit Reply", "Copy Text", "-", "Delete Reply"]
     );
     assert_eq!(
         menu_target(&f, cx),
@@ -465,6 +465,9 @@ fn a_right_click_beside_the_cards_opens_the_menu_of_the_panel(cx: &mut TestAppCo
     }
     // Nothing is resolved, so there is nothing to show.
     assert!(item("Show Resolved", cx).is_disabled());
+    assert!(!item("Add Comment on Selection", cx).is_disabled());
+    f.panel
+        .read_with(cx, |panel, cx| assert!(panel.can_add_comment(cx)));
     assert_eq!(
         key_in_list(&f, &AddComment, cx).as_deref(),
         Some("⌥⌘M"),
@@ -497,6 +500,18 @@ fn a_right_click_beside_the_cards_opens_the_menu_of_the_panel(cx: &mut TestAppCo
     click_item("Hide Resolved", cx);
     f.panel
         .read_with(cx, |panel, _| assert!(!panel.show_resolved()));
+
+    // Without text to anchor to (the caret in white space), a comment
+    // cannot be added: the item says so.
+    f.editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.insert_text("   "), cx);
+    });
+    cx.run_until_parked();
+    f.panel
+        .read_with(cx, |panel, cx| assert!(!panel.can_add_comment(cx)));
+    right_click(at, cx);
+    assert!(item("Add Comment on Selection", cx).is_disabled());
+    cx.simulate_keystrokes("escape");
 
     right_click(at, cx);
     click_item("Hide Comments", cx);
@@ -590,7 +605,7 @@ fn the_app_adds_its_own_items(cx: &mut TestAppContext) {
     right_click(at, cx);
     assert_eq!(
         labels(cx).unwrap(),
-        ["Edit Reply", "-", "Copy Text", "-", "Delete Reply"]
+        ["Edit Reply", "Copy Text", "-", "Delete Reply"]
     );
     cx.simulate_keystrokes("escape");
 

@@ -1,7 +1,7 @@
 //! The composer: starting, saving and discarding a new comment, a reply or
 //! an edit.
 
-use gpui::{Context, Focusable, Window};
+use gpui::{App, Context, Focusable, Window};
 use writer_core::{Selection, TextRange};
 use writer_editor::HighlightStyle;
 use writer_ui::theme::ActiveTheme;
@@ -26,19 +26,7 @@ impl CommentsPanel {
         if self.read_only(cx) {
             return;
         }
-        let target = {
-            let editor = self.editor.read(cx);
-            let document = editor.document();
-            let selection = editor.selection();
-            let range = if selection.is_collapsed() {
-                word_range_at(document, selection.head)
-            } else {
-                Some(selection.range())
-            };
-            range
-                .filter(|range| !document.text_in(*range).trim().is_empty())
-                .map(|range| (range, quote(document, &[range])))
-        };
+        let target = self.comment_target(cx);
         let retargeting = matches!(self.draft(), Some(DraftKind::New { .. }));
         let Some((range, quote)) = target else {
             if retargeting {
@@ -64,6 +52,31 @@ impl CommentsPanel {
             return;
         }
         self.open_draft(DraftKind::New { range }, quote, "", window, cx);
+    }
+
+    /// The text [`CommentsPanel::add_comment`] would anchor a comment to
+    /// right now, and its quote: the selection, or the word at a collapsed
+    /// caret. `None` when there is no text there.
+    fn comment_target(&self, cx: &App) -> Option<(TextRange, String)> {
+        let editor = self.editor.read(cx);
+        let document = editor.document();
+        let selection = editor.selection();
+        let range = if selection.is_collapsed() {
+            word_range_at(document, selection.head)
+        } else {
+            Some(selection.range())
+        };
+        range
+            .filter(|range| !document.text_in(*range).trim().is_empty())
+            .map(|range| (range, quote(document, &[range])))
+    }
+
+    /// Whether [`CommentsPanel::add_comment`] would open (or re-aim) a
+    /// composer right now: the document can be changed and there is text
+    /// to anchor to, a selection or the word at the caret. For an "Add
+    /// Comment" item that is shown disabled when it cannot apply.
+    pub fn can_add_comment(&self, cx: &App) -> bool {
+        !self.read_only(cx) && self.comment_target(cx).is_some()
     }
 
     /// Opens the composer for a reply to the active thread.

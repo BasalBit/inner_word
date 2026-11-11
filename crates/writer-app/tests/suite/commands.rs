@@ -505,8 +505,13 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), headers.len(), "{headers:?}");
+    // The first line says that the menus offer the same; then the places.
     assert_eq!(
         headers.first().map(String::as_str),
+        Some(writer_app::shortcuts::MENUS_NOTE)
+    );
+    assert_eq!(
+        headers.get(1).map(String::as_str),
         Some("Anywhere \u{b7} File")
     );
     // Nothing is left without a place.

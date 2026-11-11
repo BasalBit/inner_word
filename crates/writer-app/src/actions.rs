@@ -99,6 +99,14 @@ actions!(
         UseSystemTheme,
         /// Dismiss the notifications at the bottom of the window.
         DismissNotifications,
+        /// Save the open document now, without waiting for the autosave.
+        SaveNow,
+        /// Rename the open document: its row in the library becomes a field.
+        RenameDocument,
+        /// Show the open document's row in the library.
+        RevealInLibrary,
+        /// Open the welcome document; it is written again when it is gone.
+        OpenWelcomeDocument,
     ]
 );
 
@@ -147,6 +155,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-left", NarrowSidebar, None),
         KeyBinding::new("cmd-shift-f", SearchLibrary, None),
         KeyBinding::new("cmd-shift-s", Export, None),
+        KeyBinding::new("cmd-s", SaveNow, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-/", ShowShortcuts, None),
         KeyBinding::new("cmd-alt-p", TogglePageView, None),
@@ -172,6 +181,13 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "plain text",
             "save as",
             "copy",
+        ]),
+        CommandDescriptor::new("Save now", CATEGORY_FILE, SaveNow)
+            .keywords(["write", "store", "autosave"]),
+        CommandDescriptor::new("Rename document", CATEGORY_FILE, RenameDocument).keywords([
+            "name",
+            "title",
+            "this document",
         ]),
         CommandDescriptor::new("Version history", CATEGORY_FILE, ShowVersionHistory).keywords([
             "versions",
@@ -229,6 +245,13 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "everywhere",
             "all documents",
         ]),
+        CommandDescriptor::new("Reveal in library", CATEGORY_GO, RevealInLibrary).keywords([
+            "show",
+            "sidebar",
+            "where",
+            "folder",
+            "this document",
+        ]),
         CommandDescriptor::new("Go to library", CATEGORY_GO, FocusLibrary)
             .keywords(["focus", "sidebar", "folders", "tree"]),
         CommandDescriptor::new("Go to text", CATEGORY_GO, FocusEditor)
@@ -267,6 +290,13 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "preferences",
             "options",
             "configure",
+        ]),
+        CommandDescriptor::new("Welcome document", CATEGORY_APP, OpenWelcomeDocument).keywords([
+            "help",
+            "introduction",
+            "getting started",
+            "tour",
+            "guide",
         ]),
         CommandDescriptor::new("Keyboard shortcuts", CATEGORY_APP, ShowShortcuts).keywords([
             "keys",

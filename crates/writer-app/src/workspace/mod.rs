@@ -50,6 +50,7 @@
 //! modals get their keys directly.
 
 mod measure;
+mod menus;
 mod render;
 mod saver;
 mod session;
@@ -76,7 +77,6 @@ use writer_vim_mode::{HostRequest, VimCommandLine, VimEvent, VimMode, VimStatusI
 
 use crate::{
     actions::*,
-    export::ExportDelegate,
     library_search::LibrarySearchDelegate,
     palette::PaletteDelegate,
     quick_open::QuickOpenDelegate,
@@ -87,6 +87,7 @@ use crate::{
     window::StoredBounds,
 };
 
+pub use menus::{Anchors, MenuKind};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
     counted, group_digits, limit_label, panel_layout,
@@ -167,6 +168,9 @@ pub struct Workspace {
     pub(crate) status_items: Vec<(SharedString, AnyView)>,
     /// The Vim mode indicator the workspace put in the status bar itself.
     pub(crate) vim_status_id: gpui::EntityId,
+    /// Where the title and the status bar items were drawn last: their
+    /// menus drop down from there.
+    pub(crate) anchors: menus::Anchors,
     pub(crate) character_count: Option<(u64, writer_export::SocialCount)>,
     /// The per-block counts behind `character_count`, for the open document.
     pub(crate) limit_counter: Option<crate::character_limit::LimitCounter>,
@@ -254,7 +258,21 @@ impl Workspace {
             comments
         });
         let vim = cx.new(|cx| VimMode::new(editor.clone(), cx));
-        let vim_status = cx.new(|cx| VimStatusItem::new(vim.clone(), cx));
+        let vim_status = cx.new(|cx| {
+            let mut status = VimStatusItem::new(vim.clone(), cx);
+            // "Turn off Vim mode" in the chip's menu is the app's own
+            // toggle (it has the key and stores the setting); the settings
+            // are one more click away.
+            status.set_toggle_action(ToggleVimMode);
+            status.extend_menu(|items, _, _| {
+                items.push(writer_ui::ContextMenuItem::separator());
+                items.push(writer_ui::ContextMenuItem::action(
+                    "Settings…",
+                    OpenSettings,
+                ));
+            });
+            status
+        });
         let vim_command_line = cx.new(|cx| VimCommandLine::new(vim.clone(), cx));
 
         let subscriptions = vec![
@@ -340,6 +358,7 @@ impl Workspace {
             last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             vim_status_id: vim_status.entity_id(),
+            anchors: menus::Anchors::default(),
             status_items: vec![(VIM_STATUS_KEY.into(), vim_status.into())],
             character_count: None,
             limit_counter: None,
@@ -350,6 +369,7 @@ impl Workspace {
             text_commands: text_commands(),
             _subscriptions: subscriptions,
         };
+        this.extend_the_menus_of_other_crates(cx);
         this.restore_session(window, cx);
         this.sync_comments_panel(cx);
         this.apply_vim_setting(cx);
@@ -909,23 +929,18 @@ impl Workspace {
         });
     }
 
-    /// Opens the export picker, or closes it when it is open.
+    /// Opens the export picker for the open document, or closes it when it
+    /// is open.
     pub fn toggle_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session.is_none() {
-            self.show_toast(Toast::new("Open a document to export it"), cx);
-            return;
+        if self
+            .modal_layer
+            .read(cx)
+            .is_open::<crate::export::ExportPicker>()
+        {
+            self.dismiss_modal(window, cx);
+        } else {
+            self.show_export(crate::export::ExportTarget::Open, window, cx);
         }
-        let workspace = cx.weak_entity();
-        let folder = self.export_folder_name(cx);
-        self.modal_layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| {
-                let delegate = ExportDelegate::new(workspace, folder);
-                let rows = picker_rows(window, 12);
-                Picker::modal(delegate, window, cx)
-                    .width(px(MODAL_WIDTH))
-                    .max_visible_rows(rows)
-            });
-        });
     }
 
     /// Opens the settings, or closes them when they are open. With a

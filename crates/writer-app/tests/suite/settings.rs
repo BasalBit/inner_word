@@ -100,11 +100,20 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
         workspace.read_with(vcx, |w, _| w.settings().character_limit),
         Some(SocialNetwork::X)
     );
+    // What the status bar counts: three switches.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::StatusWords));
+    vcx.simulate_keystrokes("down down space");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::StatusReadingTime));
+    assert!(!workspace.read_with(vcx, |w, _| w.settings().status_reading_time));
+    assert_eq!(workspace.update(vcx, |w, cx| w.status_line(cx)).reading, "");
+    vcx.simulate_keystrokes("space");
+    assert!(workspace.read_with(vcx, |w, _| w.settings().status_reading_time));
     // With a document open the list goes on with that document's own
     // settings; up goes back.
     vcx.simulate_keystrokes("down");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentPageView));
-    vcx.simulate_keystrokes("up up");
+    vcx.simulate_keystrokes("up up up up up");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::Paper));
 
     // Escape closes and focus returns to the editor.

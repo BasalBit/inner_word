@@ -6,7 +6,7 @@ use gpui::{
     MouseUpEvent, SharedString, Window, div, prelude::*, px,
 };
 use writer_ui::{
-    KeyHint,
+    Icon, IconName, KeyHint, Tooltip,
     theme::{
         ActiveTheme, SPACE_2, SPACE_3, SPACE_4, TITLEBAR_HEIGHT, TRAFFIC_LIGHT_RESERVED_WIDTH,
         UI_TEXT_BASE, UI_TEXT_SM,
@@ -16,15 +16,16 @@ use writer_ui::{
 use writer_comments as comments;
 use writer_editor::actions as editor;
 
-use super::{EditCommand, KEY_CONTEXT, SaveState, Workspace};
+use super::{EditCommand, KEY_CONTEXT, MenuKind, SaveState, Workspace};
 use crate::{
     actions::{FocusLibrary, NewDocument, QuickOpen, ToggleCommandPalette},
     character_limit::LimitCounter,
     settings::{DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, keys},
 };
 
-/// Height of the status bar.
-pub const STATUS_BAR_HEIGHT: f32 = 26.;
+/// Height of the status bar. The same as the footer of the library panel
+/// (its "Trash" row), so the rules of the two run on one line.
+pub const STATUS_BAR_HEIGHT: f32 = 32.;
 
 /// The side panels give way before the text column gets narrower than this.
 pub const MIN_EDITOR_WIDTH: f32 = 360.;
@@ -237,17 +238,20 @@ impl Workspace {
             self.character_count = Some((revision, count));
         }
 
+        // What the writer chose to see (the statistics menu of the status
+        // bar, or the settings).
+        let shown = |on: bool, text: String| if on { text } else { String::new() };
         StatusLine {
             save,
             save_failed,
             page,
-            words,
+            words: shown(self.settings.status_words, words),
             characters: if count.is_some() && selection.is_none() {
                 String::new()
             } else {
-                characters
+                shown(self.settings.status_characters, characters)
             },
-            reading,
+            reading: shown(self.settings.status_reading_time, reading),
             limit: count.map(limit_label),
             over_limit: count.is_some_and(|count| !count.fits()),
         }
@@ -287,13 +291,72 @@ impl Workspace {
                     window.titlebar_double_click();
                 }
             })
+            .child(self.render_title(cx))
+            .into_any_element()
+    }
+
+    /// The title of the open document, with its menu: a right-click on the
+    /// title opens it, and so does the small chevron beside it (a
+    /// right-click is not something one stumbles on).
+    fn render_title(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let title = div()
+            .min_w_0()
+            .truncate()
+            .text_size(UI_TEXT_BASE)
+            .text_color(colors.muted)
+            .child(self.display_title());
+        if self.session.is_none() {
+            return div().max_w_full().child(title).into_any_element();
+        }
+        let chevron = div()
+            .id("title-chevron")
+            .debug_selector(|| "title-chevron".into())
+            .flex_none()
+            .size(px(18.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(writer_ui::theme::RADIUS_SM)
+            .cursor_pointer()
+            .hover(|style| style.bg(colors.hover))
             .child(
-                div()
-                    .max_w_full()
-                    .truncate()
-                    .text_size(UI_TEXT_BASE)
-                    .text_color(colors.muted)
-                    .child(self.display_title()),
+                Icon::new(IconName::ChevronDown)
+                    .size(px(12.))
+                    .color(colors.faint),
+            )
+            .tooltip(Tooltip::text("Rename, export, versions, settings"))
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                // The keyboard stays in the text; the band under the
+                // chevron does not take the press for a window drag.
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_menu(MenuKind::Title, None, window, cx);
+            }));
+        div()
+            .id("title")
+            .debug_selector(|| MenuKind::Title.selector().into())
+            .relative()
+            .max_w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            // As wide on the left as the chevron on the right, so the
+            // title itself stays centred.
+            .pl(px(20.))
+            .child(title)
+            .child(chevron)
+            .child(self.anchors.track(MenuKind::Title))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuKind::Title, Some(event.position.into()), window, cx);
+                }),
             )
             .into_any_element()
     }
@@ -437,19 +500,76 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// One item of the status bar that can be clicked: it lights up under
+    /// the pointer, says what it is in a tooltip, and opens its menu on a
+    /// right-click (at the pointer). What a plain click does is the
+    /// caller's: most open the same menu above the item.
+    fn status_item(
+        &self,
+        kind: MenuKind,
+        id: &'static str,
+        tooltip: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let colors = cx.theme().colors;
+        div()
+            .id(id)
+            .relative()
+            .flex_none()
+            .h(px(20.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(SPACE_3)
+            .rounded(writer_ui::theme::RADIUS_SM)
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .hover(|style| style.bg(colors.hover).text_color(colors.ink))
+            .tooltip(Tooltip::text(tooltip))
+            .child(self.anchors.track(kind))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(kind, Some(event.position.into()), window, cx);
+                }),
+            )
+    }
+
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let status = self.status_line(cx);
         let colors = cx.theme().colors;
-        let text = |text: String| div().flex_none().whitespace_nowrap().child(text);
+        let weak = cx.weak_entity();
+        let opens_menu = move |kind: MenuKind| {
+            let weak = weak.clone();
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                weak.update(cx, |this, cx| {
+                    this.open_menu(kind, None, window, cx);
+                })
+                .ok();
+            }
+        };
 
         // The Vim indicator draws nothing while Vim mode is off; leave it
         // out then, or the gap before the next text would be doubled. With
         // no document open there is no mode to show either.
         let vim_on = self.vim.read(cx).is_attached() && self.session.is_some();
+        let save = (!status.save.is_empty()).then(|| {
+            self.status_item(
+                MenuKind::Save,
+                "status-save",
+                "Saved as you write. Click to save now or see earlier versions",
+                cx,
+            )
+            .debug_selector(|| MenuKind::Save.selector().into())
+            .when(status.save_failed, |el| el.text_color(colors.danger))
+            .child(status.save.clone())
+            .on_click(opens_menu(MenuKind::Save))
+        });
         let left = div()
             .flex()
             .items_center()
-            .gap(SPACE_3)
+            .gap(px(6.))
             .min_w_0()
             .children(
                 self.status_items
@@ -457,59 +577,101 @@ impl Workspace {
                     .filter(|(_, view)| vim_on || view.entity_id() != self.vim_status_id)
                     .map(|(_, view)| div().flex_none().child(view.clone())),
             )
-            .when(!status.save.is_empty(), |el| {
-                el.child(
-                    text(status.save.clone())
-                        .when(status.save_failed, |el| el.text_color(colors.danger)),
-                )
-            });
+            .children(save);
 
+        let limit = status.limit.clone().map(|limit| {
+            // Only the number says "too long"; the rest stays quiet.
+            let (number, rest) = match limit.split_once(' ') {
+                Some((number, rest)) => (number.to_string(), format!(" {rest}")),
+                None => (limit.clone(), String::new()),
+            };
+            self.status_item(
+                MenuKind::Limit,
+                "status-limit",
+                "Characters as the network counts them. Click to change the limit",
+                cx,
+            )
+            .debug_selector(|| MenuKind::Limit.selector().into())
+            .gap(px(0.))
+            .child(div().child(number).when(status.over_limit, |el| {
+                el.text_color(colors.danger)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+            }))
+            .child(rest)
+            .on_click(opens_menu(MenuKind::Limit))
+        });
+        let page = status.page.clone().map(|page| {
+            self.status_item(
+                MenuKind::Page,
+                "status-page",
+                "Page view. Click to go back to one column",
+                cx,
+            )
+            .debug_selector(|| MenuKind::Page.selector().into())
+            .child(page)
+            .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
+                // What the key does.
+                window.dispatch_action(Box::new(crate::actions::TogglePageView), cx);
+            }))
+        });
+        let counts: Vec<String> = [&status.words, &status.characters, &status.reading]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .cloned()
+            .collect();
+        let statistics = (!counts.is_empty()).then(|| {
+            self.status_item(
+                MenuKind::Statistics,
+                "status-statistics",
+                "Click to choose what is counted here",
+                cx,
+            )
+            .debug_selector(|| MenuKind::Statistics.selector().into())
+            .gap(SPACE_4)
+            .children(counts)
+            .on_click(opens_menu(MenuKind::Statistics))
+        });
         let right = div()
             .flex()
             .items_center()
-            .gap(SPACE_4)
+            .gap(px(6.))
             .flex_none()
-            .children(status.limit.clone().map(|limit| {
-                // Only the number says "too long"; the rest stays quiet.
-                let (number, rest) = match limit.split_once(' ') {
-                    Some((number, rest)) => (number.to_string(), format!(" {rest}")),
-                    None => (limit.clone(), String::new()),
-                };
-                div()
-                    .flex()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .child(div().child(number).when(status.over_limit, |el| {
-                        el.text_color(colors.danger)
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                    }))
-                    .child(rest)
-            }))
-            .children(status.page.clone().map(text))
-            .when(!status.words.is_empty(), |el| {
-                el.child(text(status.words.clone()))
-            })
-            .when(!status.characters.is_empty(), |el| {
-                el.child(text(status.characters.clone()))
-            })
-            .when(!status.reading.is_empty(), |el| {
-                el.child(text(status.reading.clone()))
-            });
+            .children(limit)
+            .children(page)
+            .children(statistics);
 
         div()
             .id("status-bar")
+            .debug_selector(|| "status-bar".into())
             .h(px(STATUS_BAR_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
             .justify_between()
             .gap(SPACE_4)
-            .px(SPACE_3)
+            .px(px(6.))
             .border_t_1()
             .border_color(colors.hairline)
             .text_size(UI_TEXT_SM)
             .text_color(colors.muted)
             .overflow_hidden()
+            // A press on the bar is not a press on the text: the keyboard
+            // stays where it is.
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            // A right-click on the bar itself: what it counts (the way
+            // back when every count has been switched off).
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    window.prevent_default();
+                    this.open_menu(
+                        MenuKind::Statistics,
+                        Some(event.position.into()),
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .child(left)
             .child(right)
             .into_any_element()
@@ -555,6 +717,23 @@ impl Render for Workspace {
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
         let layout = self.side_panels(window, cx);
+        // Where the title and the status bar items are is noted again as
+        // they are drawn.
+        self.anchors.clear();
+        // Toasts are centred on the text column and sit above the status
+        // bar.
+        let insets = gpui::Edges {
+            top: px(0.),
+            left: px(layout.sidebar.unwrap_or(0.)),
+            right: px(if self.right_panel.is_some() {
+                layout.right.unwrap_or(0.)
+            } else {
+                0.
+            }),
+            bottom: px(STATUS_BAR_HEIGHT + 14.),
+        };
+        self.toast_layer
+            .update(cx, |layer, cx| layer.set_insets(insets, cx));
 
         let titlebar = self.render_titlebar(layout.sidebar.is_some(), cx);
         let editor_area = self.render_editor_area(cx);
@@ -644,6 +823,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_minimize))
             .on_action(cx.listener(Self::on_zoom))
             .on_action(cx.listener(Self::on_toggle_full_screen))
+            .on_action(cx.listener(Self::on_save_now))
+            .on_action(cx.listener(Self::on_rename_document))
+            .on_action(cx.listener(Self::on_reveal_in_library))
+            .on_action(cx.listener(Self::on_open_welcome))
             // The Edit menu's standard items reach a focused text field as
             // the field's own actions (see `edit_where_the_keyboard_is`).
             .capture_action(cx.listener(|this, _: &editor::Undo, window, cx| {

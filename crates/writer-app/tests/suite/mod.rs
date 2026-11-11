@@ -6,6 +6,7 @@ mod commands;
 mod export;
 mod findings;
 mod keymap;
+mod mouse;
 mod saving;
 mod session;
 mod settings;

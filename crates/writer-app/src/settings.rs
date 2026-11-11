@@ -42,6 +42,12 @@ pub mod keys {
     /// `"instagram"`, `"linkedin"`. The character-limit indicator in the
     /// status bar.
     pub const CHARACTER_LIMIT: &str = "status.character_limit";
+    /// `bool`: whether the status bar shows the word count.
+    pub const STATUS_WORDS: &str = "status.words";
+    /// `bool`: whether the status bar shows the character count.
+    pub const STATUS_CHARACTERS: &str = "status.characters";
+    /// `bool`: whether the status bar shows the reading time.
+    pub const STATUS_READING_TIME: &str = "status.reading_time";
     /// `bool`: whether the library sidebar is shown.
     pub const SIDEBAR_VISIBLE: &str = "sidebar.visible";
     /// `number`: width of the library sidebar in pixels.
@@ -67,7 +73,7 @@ pub mod keys {
 
     /// The keys behind [`super::Settings`]: a change to one of them is a
     /// change of the user settings.
-    pub const USER_SETTINGS: [&str; 14] = [
+    pub const USER_SETTINGS: [&str; 17] = [
         THEME,
         VIM_MODE,
         INPUT_RULES,
@@ -80,6 +86,9 @@ pub mod keys {
         NEW_DOCUMENT_PAGE_VIEW,
         NEW_DOCUMENT_PAPER,
         CHARACTER_LIMIT,
+        STATUS_WORDS,
+        STATUS_CHARACTERS,
+        STATUS_READING_TIME,
         SIDEBAR_VISIBLE,
         SIDEBAR_WIDTH,
     ];
@@ -211,6 +220,12 @@ pub struct Settings {
     pub new_document_paper: Paper,
     /// The network whose post limit the status bar counts against.
     pub character_limit: Option<SocialNetwork>,
+    /// Whether the status bar shows the word count.
+    pub status_words: bool,
+    /// Whether the status bar shows the character count.
+    pub status_characters: bool,
+    /// Whether the status bar shows the reading time.
+    pub status_reading_time: bool,
     /// Whether the library sidebar is shown.
     pub sidebar_visible: bool,
     /// Width of the library sidebar in pixels.
@@ -233,6 +248,9 @@ impl Default for Settings {
             new_document_page_view: false,
             new_document_paper: Paper::A4,
             character_limit: None,
+            status_words: true,
+            status_characters: true,
+            status_reading_time: true,
             sidebar_visible: true,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         }
@@ -331,6 +349,11 @@ impl Settings {
             ),
             new_document_paper: Paper::parse(&paper),
             character_limit: parse_character_limit(&limit),
+            status_words: library.setting_or(keys::STATUS_WORDS, defaults.status_words),
+            status_characters: library
+                .setting_or(keys::STATUS_CHARACTERS, defaults.status_characters),
+            status_reading_time: library
+                .setting_or(keys::STATUS_READING_TIME, defaults.status_reading_time),
             sidebar_visible: library.setting_or(keys::SIDEBAR_VISIBLE, defaults.sidebar_visible),
             sidebar_width: library
                 .setting_or(keys::SIDEBAR_WIDTH, defaults.sidebar_width)

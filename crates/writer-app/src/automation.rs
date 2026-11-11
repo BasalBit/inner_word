@@ -19,12 +19,14 @@
 //! | `keys:<keystrokes>`   | GPUI keystrokes separated by spaces: `keys:cmd-shift-p escape` |
 //! | `type:<text>`         | types each character (escapes: `\;` `\n` `\t` `\s` `\\`)     |
 //! | `action:<name>`       | dispatches a registered action by name: `action:app::Quit`   |
+//! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
+//! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, focus, status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
@@ -56,7 +58,10 @@
 //!
 //! There are no mouse steps: `Window::dispatch_event` is public in gpui 0.2.2
 //! but returns a crate-private type, so it cannot be called from outside gpui.
-//! Drive everything through the keyboard (which the product requires anyway).
+//! Context menus open from the keyboard (`keys:ctrl-enter` in the text, the
+//! library, the comment list or a text field); the menus that belong to the
+//! title and the status bar, which the keyboard does not reach, open with
+//! `menu:`. `choose:` picks an item of whichever menu is open.
 //!
 //! Example:
 //!
@@ -109,6 +114,8 @@ pub enum Step {
     Keys(Vec<Keystroke>),
     Type(String),
     Action(String),
+    Menu(crate::workspace::MenuKind),
+    Choose(String),
     Resize(f32, f32),
     Theme(ThemeMode),
     Screenshot(PathBuf),
@@ -235,6 +242,16 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 bail!("expected an action name");
             }
             Step::Action(arg.to_string())
+        }
+        "menu" => Step::Menu(
+            crate::workspace::MenuKind::parse(arg)
+                .ok_or_else(|| anyhow!("expected one of: title, save, statistics, page, limit"))?,
+        ),
+        "choose" => {
+            if arg.is_empty() {
+                bail!("expected the label of a menu item");
+            }
+            Step::Choose(unescape(arg))
         }
         "resize" => {
             let (w, h) = arg
@@ -365,6 +382,26 @@ async fn execute(
                 Ok(())
             })??;
             eprintln!("[automation] dispatched {name}");
+            frame_pause(window, view, cx).await;
+        }
+        Step::Menu(kind) => {
+            let opened = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                workspace.open_menu(kind, None, window, cx)
+            })?;
+            if !opened {
+                bail!("the {} menu has nothing to open on", kind.name());
+            }
+            eprintln!("[automation] menu {} opened", kind.name());
+            frame_pause(window, view, cx).await;
+        }
+        Step::Choose(label) => {
+            let chosen = window.update(cx, |_, window, cx| {
+                writer_ui::ContextMenu::choose(&label, window, cx)
+            })?;
+            if !chosen {
+                bail!("no open menu has an item {label:?} that can be chosen");
+            }
+            eprintln!("[automation] chose {label:?}");
             frame_pause(window, view, cx).await;
         }
         Step::Resize(width, height) => {
@@ -560,9 +597,13 @@ pub fn describe_state(
         }
         None => "none".to_string(),
     };
+    let menu = match writer_ui::ContextMenu::current(window, cx) {
+        Some(menu) => menu.read(cx).labels().join(" | "),
+        None => "none".to_string(),
+    };
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
-         modal={} sidebar={} page_view={} \
+         modal={} menu=[{menu}] sidebar={} page_view={} \
          vim=[{vim}] tool=[{tool}] comments=[{comments}] words={:?} characters={:?} page={:?} \
          limit={:?}",
         workspace.open_document_id().map(|id| id.0),

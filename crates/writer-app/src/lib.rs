@@ -30,7 +30,7 @@
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`character_limit`] | the character-limit indicator, counted block by block |
-//! | [`controls`] | tooltips and the close control of a modal: the small things for the pointer |
+//! | [`controls`] | the close control of a modal |
 //! | [`welcome`] | the welcome document, the demo library for QA |
 //! | [`window`] | main window options, stored bounds, the error window |
 //! | [`menus`] | the native menu bar |
@@ -86,6 +86,8 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 pub fn init(cx: &mut App) {
     writer_ui::theme::init(writer_ui::ThemeMode::System, cx);
 
+    // First of all: the bindings that only give menu items their key.
+    cx.bind_keys(menus::menu_key_bindings());
     cx.bind_keys(actions::key_bindings());
     writer_ui::init(cx);
     writer_editor::init(cx);

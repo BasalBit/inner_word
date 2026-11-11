@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use gpui::{App, AppContext as _, ClipboardItem, Context, SharedString, WeakEntity, Window};
 use writer_core::Document;
 use writer_export::{ExportFormat, ExportOptions, ExportSource, suggested_file_name};
-use writer_library::{DocumentMeta, FolderNode};
+use writer_library::{DocumentId, DocumentMeta, FolderId, FolderNode};
 use writer_ui::{IconName, Picker, PickerDelegate, PickerEntry, PickerItem, Toast};
 
 use crate::{
@@ -24,6 +24,18 @@ use crate::{
 
 /// The export picker as a modal view.
 pub type ExportPicker = Picker<ExportDelegate>;
+
+/// What the export picker was opened for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportTarget {
+    /// The open document and its folder (`cmd-shift-s`).
+    #[default]
+    Open,
+    /// A document of the library and its folder: "Export…" on its row.
+    Document(DocumentId),
+    /// A folder of the library, as one file: "Export Folder…" on its row.
+    Folder(FolderId),
+}
 
 /// What is exported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,18 +173,48 @@ enum Row {
 /// The picker delegate behind the export picker.
 pub struct ExportDelegate {
     workspace: WeakEntity<Workspace>,
+    target: ExportTarget,
+    /// The heading of the first group: the document. `None` when only a
+    /// folder is on offer.
+    document: Option<String>,
     folder: String,
     rows: Vec<Row>,
 }
 
 impl ExportDelegate {
-    /// `folder` names the open document's folder in the second group.
+    /// The picker for the open document; `folder` names its folder in the
+    /// second group.
     pub fn new(workspace: WeakEntity<Workspace>, folder: String) -> Self {
+        Self::for_target(
+            workspace,
+            ExportTarget::Open,
+            Some("This document".to_string()),
+            folder,
+        )
+    }
+
+    /// The picker for `target`. `document` is the heading of the group
+    /// that exports the document (`None`: the target is a folder, and only
+    /// the group for the whole folder is listed); `folder` names the
+    /// folder.
+    pub fn for_target(
+        workspace: WeakEntity<Workspace>,
+        target: ExportTarget,
+        document: Option<String>,
+        folder: String,
+    ) -> Self {
         Self {
             workspace,
+            target,
+            document,
             folder,
             rows: Vec::new(),
         }
+    }
+
+    /// What the picker exports.
+    pub fn target(&self) -> ExportTarget {
+        self.target
     }
 
     /// The listed choices, in order (headers excluded).
@@ -205,10 +247,12 @@ impl PickerDelegate for ExportDelegate {
                 .collect::<Vec<_>>()
         };
         self.rows.clear();
-        let document = matching(ExportScope::Document);
-        if !document.is_empty() {
-            self.rows.push(Row::Header("This document".into()));
-            self.rows.extend(document);
+        if let Some(heading) = &self.document {
+            let document = matching(ExportScope::Document);
+            if !document.is_empty() {
+                self.rows.push(Row::Header(heading.clone().into()));
+                self.rows.extend(document);
+            }
         }
         let folder = matching(ExportScope::Folder);
         if !folder.is_empty() {
@@ -252,10 +296,13 @@ impl PickerDelegate for ExportDelegate {
             return false;
         };
         let choice = *choice;
+        let target = self.target;
         let workspace = self.workspace.clone();
         window.defer(cx, move |window, cx| {
             workspace
-                .update(cx, |workspace, cx| workspace.export(choice, window, cx))
+                .update(cx, |workspace, cx| {
+                    workspace.export_target(target, choice, window, cx)
+                })
                 .ok();
         });
         false
@@ -300,6 +347,72 @@ impl Workspace {
             .unwrap_or_else(|| LIBRARY_ROOT_NAME.to_string())
     }
 
+    /// The name of folder `folder` ([`LIBRARY_ROOT_NAME`] for the top level
+    /// and for a folder that is gone).
+    fn folder_name(&self, folder: Option<FolderId>, cx: &App) -> String {
+        let library = self.library.read(cx);
+        folder
+            .and_then(|folder| library.folder(folder).ok())
+            .map(|folder| folder.name)
+            .unwrap_or_else(|| LIBRARY_ROOT_NAME.to_string())
+    }
+
+    /// Opens the export picker for `target`: the open document
+    /// (`cmd-shift-s`), another document of the library, or a folder as
+    /// one file (the last two from the menu of a library row). The open
+    /// document stays the open one.
+    pub fn show_export(
+        &mut self,
+        target: ExportTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A row of the open document is the open document.
+        let target = match target {
+            ExportTarget::Document(id) if self.open_document_id() == Some(id) => ExportTarget::Open,
+            other => other,
+        };
+        let (document, folder) = match target {
+            ExportTarget::Open => {
+                if self.session.is_none() {
+                    self.show_toast(Toast::new("Open a document to export it"), cx);
+                    return;
+                }
+                (
+                    Some("This document".to_string()),
+                    self.export_folder_name(cx),
+                )
+            }
+            ExportTarget::Document(id) => {
+                let meta = match self.library.read(cx).document_meta(id) {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        self.toast_error(format!("Could not export: {error}"), cx);
+                        return;
+                    }
+                };
+                (
+                    Some(format!(
+                        "\u{201c}{}\u{201d}",
+                        short_title(&session_title(&meta.title))
+                    )),
+                    self.folder_name(meta.folder_id, cx),
+                )
+            }
+            ExportTarget::Folder(id) => (None, self.folder_name(Some(id), cx)),
+        };
+        let workspace = cx.weak_entity();
+        self.modal_layer.update(cx, |layer, cx| {
+            let picker = cx.new(|cx| {
+                let delegate = ExportDelegate::for_target(workspace, target, document, folder);
+                Picker::modal(delegate, window, cx)
+                    .width(gpui::px(crate::workspace::MODAL_WIDTH))
+                    .max_visible_rows(12)
+            });
+            layer.show(picker, window, cx);
+        });
+    }
+
     /// Builds the bytes of an export of the open document or its folder.
     /// The open document is saved first, so a folder export reads current
     /// text for every document.
@@ -309,22 +422,49 @@ impl Workspace {
         format: ExportFormat,
         cx: &mut Context<Self>,
     ) -> Result<PreparedExport, String> {
-        let Some(id) = self.open_document_id() else {
-            return Err("No document is open".to_string());
+        self.prepare_export_of(ExportTarget::Open, scope, format, cx)
+    }
+
+    /// Builds the bytes of an export of `target`: the document it names
+    /// (`scope` [`ExportScope::Document`]) or the folder it names or its
+    /// document is in (`scope` [`ExportScope::Folder`]). The open document
+    /// is saved first and exported as it is on screen; every other
+    /// document is read from the library.
+    pub fn prepare_export_of(
+        &mut self,
+        target: ExportTarget,
+        scope: ExportScope,
+        format: ExportFormat,
+        cx: &mut Context<Self>,
+    ) -> Result<PreparedExport, String> {
+        let open = self.open_document_id();
+        let subject = match target {
+            ExportTarget::Open => Some(open.ok_or_else(|| "No document is open".to_string())?),
+            ExportTarget::Document(id) => Some(id),
+            ExportTarget::Folder(_) => None,
         };
         self.flush(cx);
         let library = self.library.read(cx);
-        let meta = library
-            .document_meta(id)
-            .map_err(|error| error.to_string())?;
+        let meta = subject
+            .map(|id| library.document_meta(id).map_err(|error| error.to_string()))
+            .transpose()?;
+        // The live text of the open document, not the stored copy: correct
+        // even while a save is failing.
+        let text_of = |id: DocumentId| -> Result<Document, String> {
+            if Some(id) == open {
+                Ok(self.editor.read(cx).document().clone())
+            } else {
+                let stored = library.document(id).map_err(|error| error.to_string())?;
+                Ok(load_document(&stored.content).document)
+            }
+        };
 
-        match scope {
-            ExportScope::Document => {
-                // The live text, not the stored copy: correct even while a
-                // save is failing.
-                let document = self.editor.read(cx).document();
+        match (scope, meta) {
+            (ExportScope::Document, None) => Err("A folder is exported as a whole".to_string()),
+            (ExportScope::Document, Some(meta)) => {
+                let document = text_of(meta.id)?;
                 let title = session_title(&meta.title);
-                let source = ExportSource::single(title.clone(), document);
+                let source = ExportSource::single(title.clone(), &document);
                 let options = export_options(meta.created_at, meta.updated_at);
                 Ok(PreparedExport {
                     file_name: suggested_file_name(source.title(), format),
@@ -334,9 +474,13 @@ impl Workspace {
                     documents: 1,
                 })
             }
-            ExportScope::Folder => {
+            (ExportScope::Folder, meta) => {
+                let folder = match target {
+                    ExportTarget::Folder(id) => Some(id),
+                    _ => meta.and_then(|meta| meta.folder_id),
+                };
                 let tree = library.tree();
-                let (name, metas) = match meta.folder_id {
+                let (name, metas) = match folder {
                     Some(folder) => {
                         let node = tree
                             .find_folder(folder)
@@ -349,15 +493,7 @@ impl Workspace {
                 };
                 let mut parts: Vec<(String, Document)> = Vec::with_capacity(metas.len());
                 for part in &metas {
-                    let document = if part.id == id {
-                        self.editor.read(cx).document().clone()
-                    } else {
-                        let stored = library
-                            .document(part.id)
-                            .map_err(|error| error.to_string())?;
-                        load_document(&stored.content).document
-                    };
-                    parts.push((session_title(&part.title), document));
+                    parts.push((session_title(&part.title), text_of(part.id)?));
                 }
                 if parts.is_empty() {
                     return Err("The folder has no documents".to_string());
@@ -388,8 +524,19 @@ impl Workspace {
     /// Runs one export choice: to the clipboard right away, or through the
     /// save panel into a file. The outcome is reported in a toast.
     pub fn export(&mut self, choice: ExportChoice, window: &mut Window, cx: &mut Context<Self>) {
+        self.export_target(ExportTarget::Open, choice, window, cx);
+    }
+
+    /// Like [`Workspace::export`], for what the picker was opened for.
+    pub fn export_target(
+        &mut self,
+        target: ExportTarget,
+        choice: ExportChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.dismiss_modal(window, cx);
-        let prepared = match self.prepare_export(choice.scope, choice.format, cx) {
+        let prepared = match self.prepare_export_of(target, choice.scope, choice.format, cx) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.toast_error(format!("Could not export: {error}"), cx);

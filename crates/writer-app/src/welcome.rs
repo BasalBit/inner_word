@@ -79,16 +79,36 @@ fn todo(checked: bool, markup: &str) -> Block {
     rich(BlockKind::TodoItem { checked }, markup)
 }
 
+/// The title of the welcome document (its first heading).
+pub const WELCOME_TITLE: &str = "Welcome to The Writer";
+
 /// The document a new library starts with. It teaches the essentials: the
-/// palette, the format and insert menus, Markdown shortcuts, page view,
-/// comments, Vim mode and export.
+/// mouse (right-click menus, the menu bar), the palette, the format and
+/// insert menus, Markdown shortcuts, page view, comments, Vim mode and
+/// export.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
-        heading(1, "Welcome to The Writer"),
+        heading(1, WELCOME_TITLE),
         paragraph(
             "The Writer is a quiet place for long and short writing. Everything can be done \
-             from the keyboard, and your text is saved as you type. {i:There is no save button.}",
+             from the keyboard, everything can be done with the mouse, and your text is saved \
+             as you type. {i:There is no save button.}",
         ),
+        heading(2, "With the mouse"),
+        bullet(
+            "Right-click anything to see what you can do with it: the text or a selection, a \
+             link, a comment, a document or a folder in the library, the title above the text, \
+             the counts at the bottom of the window.",
+        ),
+        bullet(
+            "The menu bar at the top of the screen has every command, with its key beside it: \
+             File, Edit, Format, Insert, View.",
+        ),
+        bullet(
+            "In the library, the {b:+} button starts a document or a folder, and rows can be \
+             dragged to another folder or to the trash.",
+        ),
+        bullet("{k:⌃↩} opens the same menus from the keyboard."),
         heading(2, "Find anything"),
         bullet("{k:⇧⌘P} opens the command palette: every command, with its shortcut beside it."),
         bullet("{k:⌘P} jumps to a document by name. {k:⇧⌘F} searches the text of every document."),

@@ -116,6 +116,12 @@ pub enum SettingRow {
     Paper,
     /// The character-limit indicator.
     CharacterLimit,
+    /// The word count in the status bar.
+    StatusWords,
+    /// The character count in the status bar.
+    StatusCharacters,
+    /// The reading time in the status bar.
+    StatusReadingTime,
     /// This document: page view or the flowing column.
     DocumentPageView,
     /// This document: A4, US Letter or a custom size.
@@ -146,7 +152,7 @@ pub enum SettingRow {
 
 impl SettingRow {
     /// The rows about the app, in order. They are always listed.
-    pub const APP: [SettingRow; 11] = [
+    pub const APP: [SettingRow; 14] = [
         SettingRow::Theme,
         SettingRow::VimMode,
         SettingRow::MarkdownShortcuts,
@@ -158,6 +164,9 @@ impl SettingRow {
         SettingRow::PageView,
         SettingRow::Paper,
         SettingRow::CharacterLimit,
+        SettingRow::StatusWords,
+        SettingRow::StatusCharacters,
+        SettingRow::StatusReadingTime,
     ];
 
     /// The rows about the open document, in order. Listed while a document
@@ -206,7 +215,10 @@ impl SettingRow {
             | SettingRow::LineHeight
             | SettingRow::PageView
             | SettingRow::Paper => "New documents",
-            SettingRow::CharacterLimit => "Status bar",
+            SettingRow::CharacterLimit
+            | SettingRow::StatusWords
+            | SettingRow::StatusCharacters
+            | SettingRow::StatusReadingTime => "Status bar",
             _ => "This document",
         }
     }
@@ -224,6 +236,9 @@ impl SettingRow {
             SettingRow::PageView => "Start in page view",
             SettingRow::Paper => "Paper size",
             SettingRow::CharacterLimit => "Character limit",
+            SettingRow::StatusWords => "Word count",
+            SettingRow::StatusCharacters => "Character count",
+            SettingRow::StatusReadingTime => "Reading time",
             SettingRow::DocumentPageView => "Page view",
             SettingRow::DocumentPaper => "Paper size",
             SettingRow::DocumentPaperWidth => "Paper width",
@@ -253,6 +268,9 @@ impl SettingRow {
             SettingRow::PageView => "Show sheets of paper instead of one column.",
             SettingRow::Paper => "Used by page view and Word export.",
             SettingRow::CharacterLimit => "Count the text against a social network's post limit.",
+            SettingRow::StatusWords => "Words in the document, or in the selection.",
+            SettingRow::StatusCharacters => "Characters, spaces included.",
+            SettingRow::StatusReadingTime => "Minutes at an unhurried pace.",
             SettingRow::DocumentPageView => "Show sheets of paper instead of one column.",
             SettingRow::DocumentPaper => "Used by page view and Word export.",
             SettingRow::DocumentPaperWidth | SettingRow::DocumentPaperHeight => {
@@ -746,6 +764,9 @@ impl SettingsView {
                     count: options.len(),
                 }
             }
+            SettingRow::StatusWords => Control::Switch(settings.status_words),
+            SettingRow::StatusCharacters => Control::Switch(settings.status_characters),
+            SettingRow::StatusReadingTime => Control::Switch(settings.status_reading_time),
             SettingRow::DocumentPageView => Control::Switch(document.page_view),
             SettingRow::DocumentPaper => Control::Segments {
                 options: vec!["A4".into(), "US Letter".into(), "Custom".into()],
@@ -851,6 +872,11 @@ impl SettingsView {
                 if let Some(option) = Self::limit_options().get(index) {
                     self.write(keys::CHARACTER_LIMIT, character_limit_name(*option), cx);
                 }
+            }
+            SettingRow::StatusWords => self.write(keys::STATUS_WORDS, &(index != 0), cx),
+            SettingRow::StatusCharacters => self.write(keys::STATUS_CHARACTERS, &(index != 0), cx),
+            SettingRow::StatusReadingTime => {
+                self.write(keys::STATUS_READING_TIME, &(index != 0), cx)
             }
             SettingRow::DocumentPageView => {
                 self.change_document(|settings| settings.page_view = index != 0, cx)

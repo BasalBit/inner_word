@@ -22,7 +22,7 @@ use gpui::{
 use writer_core::BlockKind;
 use writer_library::{DocumentId, Library, SnapshotId, SnapshotMeta};
 use writer_ui::{
-    Icon, IconName,
+    Button, ButtonSize, Icon, IconName, KeyHint,
     theme::{
         ActiveTheme, RADIUS_LG, RADIUS_MD, SPACE_2, SPACE_3, SPACE_4, UI_TEXT_BASE, UI_TEXT_LG,
         UI_TEXT_SM, UI_TEXT_XS,
@@ -429,12 +429,23 @@ impl VersionHistory {
                 let selected = ix == self.selected;
                 div()
                     .id(("version", ix))
+                    .debug_selector(move || format!("version-{ix}"))
                     .h(px(ROW_HEIGHT))
                     .w_full()
                     .px(px(4.))
                     .py(px(1.))
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(ix, cx)))
+                    .when(!selected, |el| el.hover(|style| style.bg(colors.hover)))
+                    // A click chooses the version; a double click brings
+                    // it back (what enter does).
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            this.select(ix, cx);
+                            if event.click_count() == 2 {
+                                this.restore(window, cx);
+                            }
+                        }),
+                    )
                     .child(
                         div()
                             .size_full()
@@ -564,6 +575,21 @@ impl Render for VersionHistory {
                 .child(what)
         };
 
+        let close = crate::controls::close_control(
+            cx.listener(|_, _: &gpui::ClickEvent, _, cx| cx.emit(DismissEvent)),
+            cx,
+        );
+        // What enter does, as a button.
+        let restore = (count > 0).then(|| {
+            Button::new("restore-version", "Restore This Version")
+                .primary()
+                .size(ButtonSize::Compact)
+                .key_hint(KeyHint::parse("enter"))
+                .on_click(
+                    cx.listener(|this, _: &gpui::ClickEvent, window, cx| this.restore(window, cx)),
+                )
+        });
+
         let body = if count == 0 {
             div()
                 .h(px(120.))
@@ -671,13 +697,14 @@ impl Render for VersionHistory {
                             .truncate()
                             .text_color(colors.muted)
                             .child(self.title.clone()),
-                    ),
+                    )
+                    .child(close),
             )
             .child(body)
             .child(
                 div()
                     .flex_none()
-                    .h(px(34.))
+                    .h(px(40.))
                     .px(SPACE_4)
                     .flex()
                     .items_center()
@@ -689,9 +716,14 @@ impl Render for VersionHistory {
                     .when(count > 0, |el| {
                         el.child(hint("\u{2191} \u{2193}", "Choose"))
                             .child(hint("Space", "Scroll the text"))
-                            .child(hint("\u{21a9}", "Restore"))
                     })
-                    .child(hint("Esc", "Close")),
+                    .child(hint("Esc", "Close"))
+                    .child(div().flex_1())
+                    .children(restore.map(|button| {
+                        div()
+                            .debug_selector(|| "version-restore".into())
+                            .child(button)
+                    })),
             )
     }
 }

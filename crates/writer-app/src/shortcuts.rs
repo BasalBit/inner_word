@@ -13,6 +13,11 @@
 //! overlays. Within a place the commands keep their categories; a heading
 //! reads "In the text · Format". The list is searchable, and enter runs the
 //! selected command.
+//!
+//! Two things the keymap cannot tell are added: the insert menu, which is
+//! opened by typing `/` and not by a binding ([`TYPED_TRIGGERS`]), and a
+//! first line that says the same commands are in the menus
+//! ([`MENUS_NOTE`]), for whoever would rather click.
 
 use std::collections::HashSet;
 
@@ -27,7 +32,7 @@ pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 7] = [
+const KEY_GROUPS: [(&str, &str); 8] = [
     ("editor", "Moving and selecting"),
     ("editor_tools", ""),
     ("comments", ""),
@@ -35,7 +40,22 @@ const KEY_GROUPS: [(&str, &str); 7] = [
     ("picker", ""),
     ("settings", ""),
     ("version_history", ""),
+    // `ctrl-enter` in the library, the comment list and a text field.
+    ("context_menu", ""),
 ];
+
+/// Commands that are started by typing a character, not by a key binding,
+/// so the keymap does not know them: the action, the character, and where
+/// it has to be typed. They are listed like the others.
+const TYPED_TRIGGERS: [(&str, &str, &str); 1] = [(
+    "editor_tools::OpenInsertMenu",
+    "/",
+    "at the start of a line or after a space",
+)];
+
+/// What the overlay says above the list: the keys are one way, the menus
+/// are the other.
+pub const MENUS_NOTE: &str = "Every command is also in a menu: right-click, or the menu bar";
 
 /// Where the keyboard has to be for a shortcut to work. In the order the
 /// overlay lists them.
@@ -255,6 +275,21 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
                     action: command.action(),
                     hint,
                 });
+            } else if let Some((_, typed, whereabouts)) = TYPED_TRIGGERS
+                .iter()
+                .find(|(action, _, _)| *action == command.action_name())
+                && let Some(hint) = KeyHint::parse(typed)
+            {
+                let place = Place::Text;
+                shortcuts.push(Shortcut {
+                    title: format!("{} ({whereabouts})", command.title).into(),
+                    category: category.clone(),
+                    place,
+                    heading: place.heading(&category).into(),
+                    keys: hint.text(),
+                    action: command.action(),
+                    hint,
+                });
             }
         }
     }
@@ -335,6 +370,7 @@ impl PickerDelegate for ShortcutsDelegate {
     fn update_matches(&mut self, query: &str, _: &mut Window, _: &mut Context<Picker<Self>>) {
         self.rows.clear();
         if query.trim().is_empty() {
+            self.rows.push(Row::Header(MENUS_NOTE.into()));
             let mut heading: Option<&SharedString> = None;
             for (index, shortcut) in self.shortcuts.iter().enumerate() {
                 if heading != Some(&shortcut.heading) {

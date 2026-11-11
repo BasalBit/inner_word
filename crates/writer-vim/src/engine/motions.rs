@@ -264,7 +264,10 @@ impl Vim {
                         break;
                     };
                     if buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
-                        if takes_break {
+                        if self.is_visual() {
+                            // In Visual mode the cursor may rest on the
+                            // line break: it is one step of its own.
+                        } else if takes_break {
                             over_break = true;
                         } else {
                             // Skip the newline cell of a non-empty line.
@@ -289,7 +292,13 @@ impl Vim {
                     let Some(mut q) = buf::next_cell(doc, p) else {
                         break;
                     };
-                    if !op_pending && buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
+                    // (In Visual mode the line break is a step of its own,
+                    // as for `l`.)
+                    if !op_pending
+                        && !self.is_visual()
+                        && buf::is_newline(doc, q)
+                        && !buf::is_empty_line(doc, q)
+                    {
                         match buf::next_cell(doc, q) {
                             Some(r) => q = r,
                             None => break,

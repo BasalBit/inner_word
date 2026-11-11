@@ -765,7 +765,9 @@ impl Vim {
             // The last change is the last character typed.
             self.set_mark(cx, '.', back);
             self.set_mark(cx, '[', s.start.min(back));
-            self.set_mark(cx, ']', back);
+            // The end of the inserted text is where the caret stood when
+            // the session ended, after the last character (as in Vim).
+            self.set_mark(cx, ']', head);
             self.last_inserted = Self::actions_text(&s.actions);
         }
         self.base = Base::Normal;

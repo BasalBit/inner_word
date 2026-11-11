@@ -927,7 +927,11 @@ impl Vim {
                 buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(index, 0)))
             };
             self.set_mark(cx, '[', Position::new(index, 0));
-            self.set_mark(cx, ']', Position::new(index + total - 1, 0));
+            // The end of the put text is its last character.
+            let last = index + total - 1;
+            let last_text = buf::text_of(doc, last);
+            let last_char = buf::prev_boundary(last_text, last_text.len());
+            self.set_mark(cx, ']', Position::new(last, last_char));
             self.set_mark(cx, '.', Position::new(index, 0));
             if total > 2 {
                 self.message(format!("{total} more lines"));

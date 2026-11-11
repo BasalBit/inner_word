@@ -769,7 +769,11 @@ impl Vim {
         self.move_cursor_eol(
             cx,
             out.pos,
-            keep_eol || matches!(m, Motion::LineEnd | Motion::Right),
+            keep_eol
+                || matches!(
+                    m,
+                    Motion::LineEnd | Motion::Right | Motion::WrapRight | Motion::WrapLeft
+                ),
         );
         match out.goal {
             GoalUpdate::Keep => {}
@@ -1106,7 +1110,24 @@ impl Vim {
                 ) {
                     Ok(o) => Some(Found::Text(o)),
                     Err(stopped) => {
-                        // Vim leaves the cursor where the search ended.
+                        // Vim leaves the cursor where the search ended;
+                        // and a selection that was one character has by
+                        // then been moved to the start of its word.
+                        if visual
+                            && anchor.is_none()
+                            && count > 1
+                            && let Ok(first) = textobj::word(
+                                doc,
+                                cursor,
+                                None,
+                                false,
+                                1,
+                                self.class_opts(c == 'W'),
+                            )
+                            && let Some(start) = first.start
+                        {
+                            self.visual.anchor = start;
+                        }
                         self.move_cursor(cx, stopped);
                         self.goal = None;
                         self.fail();
@@ -1239,7 +1260,18 @@ impl Vim {
                 }
             }
             Found::Blocks(r) => {
-                self.visual.anchor = Position::new(r.start, 0);
+                // The selection becomes linewise, but as in Vim its start
+                // keeps its column when it stays on its line: `vipv` on
+                // the first line of a paragraph is characterwise again
+                // from where it began. (Inside a code block the offset
+                // would name one of its lines.)
+                let old = doc.clamp_position(self.visual.anchor);
+                let column = if old.block == r.start && !doc.blocks()[r.start].kind().is_code() {
+                    old.offset
+                } else {
+                    0
+                };
+                self.visual.anchor = Position::new(r.start, column);
                 self.visual.cursor = Position::new(r.end - 1, 0);
                 self.base = Base::Visual { line: true };
             }
@@ -1714,7 +1746,10 @@ impl Vim {
     fn put_command(&mut self, cx: &mut Cx, before: bool, caret_after: bool) {
         let reg = self.pending.register;
         let Some(content) = self.read_register(cx, reg) else {
-            self.fail();
+            // Nothing to put. As in Vim the command still becomes the one
+            // `.` repeats (and fails again), not the change before it.
+            self.bell();
+            self.finish_command(cx, true);
             return;
         };
         let n = self.pending.count1();
@@ -1849,6 +1884,7 @@ impl Vim {
         }
         self.pending = Pending::default();
         self.replaying = true;
+        let bells_before = self.effects.iter().filter(|e| **e == Effect::Bell).count();
         if let Some(v) = rec.visual {
             self.visual_for_repeat(cx, v);
         }
@@ -1872,8 +1908,11 @@ impl Vim {
         }
         self.pending = Pending::default();
         self.replaying = false;
-        // The new count sticks for the next repeat.
-        if let Some(last) = self.last_change.as_mut() {
+        // The new count sticks for the next repeat, unless the command
+        // failed with it (`3.` of `cc` on the last line): then, as in Vim,
+        // the change to repeat is still the one from before.
+        let failed = self.effects.iter().filter(|e| **e == Effect::Bell).count() > bells_before;
+        if !failed && let Some(last) = self.last_change.as_mut() {
             last.count = rec.count;
         }
     }

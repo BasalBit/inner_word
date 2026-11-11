@@ -12,20 +12,26 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-export` | pure Rust | Markdown and DOCX exporters over `writer-core`. |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), overlays, vim integration. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window, library sidebar, command palette, settings, comments panel, export wiring. |
+| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), input, and the seams the crates below plug into. |
+| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace. |
+| `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
+| `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
+| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, settings, status bar, autosave, export flow. Mounts everything above. |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
-Dependency direction: `app → editor → {ui, vim, core}`, `app → {store, export, ui}`,
-`export → core`, `vim → core`. Never the reverse.
+Dependency direction: `app → {editor-tools, vim-mode, comments, library, export}`,
+`{editor-tools, vim-mode, comments} → editor → {ui, core}`, `vim-mode → vim → core`,
+`library → {store, ui}`, `export → core`. Never the reverse.
 
 ## Build and test
 
 ```bash
 cargo build -p writer-app            # debug build
 cargo run -p writer-app              # run the app
-cargo test -p <crate>                # per-crate tests
+cargo test -p <crate>                # per-crate tests (GPUI crates)
+CARGO_TARGET_DIR=target-pure cargo test -p writer-core   # pure crates use target-pure
 THE_WRITER_DATA_DIR=/some/tmp cargo run -p writer-app   # run against a throwaway library
 scripts/bundle.sh                    # release .app + .dmg in dist/
 ```
@@ -35,8 +41,14 @@ QA must set `THE_WRITER_DATA_DIR` to a temp directory and never touch the real o
 
 ## Working rules
 
-- **One `target/` directory.** Disk on this machine is nearly full. Do not create extra
+- **Two target directories, no more.** Disk on this machine is nearly full. Everything that
+  depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
+  `writer-store`, `writer-export`, `writer-vim`) build and test with
+  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
+- **Test binaries are expensive.** Every test binary or example that links GPUI costs about
+  150 MB. Keep at most one integration-test binary per GPUI crate (`tests/main.rs` with
+  submodules) or use unit tests; add an example only when your task says so.
 - **Cargo may block** with "waiting for file lock on build directory" while another build
   runs. That is normal; wait for it (use long command timeouts).
 - **Stay in your crate.** Edit only the crate(s) you were assigned. If another crate needs a

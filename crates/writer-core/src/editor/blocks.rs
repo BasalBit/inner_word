@@ -58,6 +58,7 @@ fn sibling_of(b: &Block) -> Block {
 
 /// The next size on [`TEXT_SIZE_SCALE`] in the direction of `steps`.
 fn stepped_size(current: f32, steps: i32) -> f32 {
+    let steps = steps.clamp(-(TEXT_SIZE_SCALE.len() as i32), TEXT_SIZE_SCALE.len() as i32);
     let mut v = current;
     if steps > 0 {
         for _ in 0..steps {

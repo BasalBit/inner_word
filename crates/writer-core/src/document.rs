@@ -230,6 +230,29 @@ impl Document {
         out
     }
 
+    /// The byte offset of `pos` (clamped) in [`Document::plain_text`]
+    /// (blocks joined by `\n`). Linear in the number of blocks before `pos`;
+    /// meant for occasional use (Vim search, find-in-document), not per frame.
+    pub fn flat_offset(&self, pos: Position) -> usize {
+        let pos = self.clamp_position(pos);
+        let before: usize = self.blocks[..pos.block].iter().map(|b| b.len() + 1).sum();
+        before + pos.offset
+    }
+
+    /// The position of byte `offset` of [`Document::plain_text`], clamped
+    /// to the end. An offset on a block separator maps to the end of the
+    /// block before it. Linear in the number of blocks.
+    pub fn position_from_flat(&self, offset: usize) -> Position {
+        let mut start = 0;
+        for (i, b) in self.blocks.iter().enumerate() {
+            if offset <= start + b.len() {
+                return self.clamp_position(Position::new(i, offset - start));
+            }
+            start += b.len() + 1;
+        }
+        self.end()
+    }
+
     /// Plain text of the whole document: blocks joined by `\n`, void blocks
     /// as empty lines. Intended for search indexing.
     pub fn plain_text(&self) -> String {
@@ -686,5 +709,19 @@ mod tests {
         assert_eq!(d.clamp_position(Position::new(1, 3)), Position::new(1, 0));
         assert_eq!(d.clamp_position(Position::new(2, 2)), Position::new(2, 0));
         assert!(!d.is_valid_position(Position::new(2, 1)));
+        let text = d.plain_text();
+        for (i, _) in text.char_indices() {
+            let p = d.position_from_flat(i);
+            assert!(d.flat_offset(p) <= i);
+            if text::is_grapheme_boundary(&text, i) {
+                assert_eq!(d.flat_offset(p), i);
+            }
+        }
+        assert_eq!(d.position_from_flat(5), Position::new(0, 5));
+        assert_eq!(d.position_from_flat(6), Position::new(1, 0));
+        assert_eq!(d.position_from_flat(7), Position::new(2, 0));
+        assert_eq!(d.position_from_flat(999), d.end());
+        assert_eq!(d.flat_offset(Position::new(2, 1)), 7);
+        assert_eq!(d.flat_offset(d.end()), text.len());
     }
 }

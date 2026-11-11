@@ -141,8 +141,9 @@ impl Store {
             std::fs::create_dir_all(parent)?;
         }
         let mut conn = Connection::open(&path)?;
-        schema::configure(&conn, true)?;
+        schema::configure(&conn)?;
         let header = schema::inspect(&conn)?;
+        schema::enable_wal(&conn)?;
         let mut backup_outcome = None;
         if options.daily_backup && header.user_version > 0 {
             backup_outcome = backup::daily_backup(
@@ -172,7 +173,7 @@ impl Store {
     /// Opens a fresh in-memory library with the given clock.
     pub fn open_in_memory_with_clock(clock: Clock) -> Result<Self> {
         let mut conn = Connection::open_in_memory()?;
-        schema::configure(&conn, false)?;
+        schema::configure(&conn)?;
         schema::migrate(&mut conn)?;
         Ok(Self {
             conn,

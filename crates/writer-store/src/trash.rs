@@ -9,7 +9,9 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::Store;
-use crate::documents::{DOC_META_COLS, DocumentMeta, load_meta, meta_from_row, require_live_document};
+use crate::documents::{
+    DOC_META_COLS, DocumentMeta, load_meta, meta_from_row, require_live_document,
+};
 use crate::error::{ItemKind, Result, StoreError};
 use crate::folders::{
     FOLDER_COLS, Folder, Siblings, folder_from_row, is_live_folder, load_folder, next_position,

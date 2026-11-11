@@ -72,7 +72,10 @@ impl Store {
 
         let mut child_folders: HashMap<Option<FolderId>, Vec<Folder>> = HashMap::new();
         for folder in folders {
-            child_folders.entry(folder.parent_id).or_default().push(folder);
+            child_folders
+                .entry(folder.parent_id)
+                .or_default()
+                .push(folder);
         }
         let mut child_docs: HashMap<Option<FolderId>, Vec<DocumentMeta>> = HashMap::new();
         for doc in documents {

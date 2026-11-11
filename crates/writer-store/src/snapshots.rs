@@ -132,7 +132,12 @@ fn insert_snapshot(conn: &Connection, document: DocumentId, now: i64) -> Result<
     )?)
 }
 
-fn prune(conn: &Connection, document: DocumentId, policy: &SnapshotPolicy, now: i64) -> Result<usize> {
+fn prune(
+    conn: &Connection,
+    document: DocumentId,
+    policy: &SnapshotPolicy,
+    now: i64,
+) -> Result<usize> {
     let rows: Vec<(i64, i64)> = {
         let mut stmt = conn.prepare_cached(
             "SELECT id, created_at FROM snapshots WHERE document_id = ?1
@@ -191,7 +196,9 @@ impl Store {
 
     /// Deletes one snapshot.
     pub fn delete_snapshot(&mut self, id: SnapshotId) -> Result<()> {
-        let n = self.conn.execute("DELETE FROM snapshots WHERE id = ?1", [id])?;
+        let n = self
+            .conn
+            .execute("DELETE FROM snapshots WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(StoreError::NotFound {
                 kind: ItemKind::Snapshot,
@@ -202,7 +209,11 @@ impl Store {
     }
 
     /// Applies `policy` to a document's snapshots; returns how many were deleted.
-    pub fn prune_snapshots(&mut self, document: DocumentId, policy: &SnapshotPolicy) -> Result<usize> {
+    pub fn prune_snapshots(
+        &mut self,
+        document: DocumentId,
+        policy: &SnapshotPolicy,
+    ) -> Result<usize> {
         let now = self.now();
         let tx = self.conn.transaction()?;
         let n = prune(&tx, document, policy, now)?;
@@ -234,10 +245,10 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((created_at, same)) = last {
-            if same || now.saturating_sub(created_at) < duration_ms(min_age) {
-                return Ok(None);
-            }
+        if let Some((created_at, same)) = last
+            && (same || now.saturating_sub(created_at) < duration_ms(min_age))
+        {
+            return Ok(None);
         }
         let meta = insert_snapshot(&tx, document, now)?;
         prune(&tx, document, &policy, now)?;
@@ -272,7 +283,10 @@ mod tests {
         assert!(kept.len() >= 38 && kept.len() <= 48, "kept {}", kept.len());
         // No two kept older-than-a-day snapshots share a day.
         let mut days = HashSet::new();
-        for (_, t) in kept.iter().filter(|(_, t)| now - t >= DAY_MS && now - t < 30 * DAY_MS) {
+        for (_, t) in kept
+            .iter()
+            .filter(|(_, t)| now - t >= DAY_MS && now - t < 30 * DAY_MS)
+        {
             assert!(days.insert(t.div_euclid(DAY_MS)));
         }
     }

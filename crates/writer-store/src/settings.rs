@@ -13,7 +13,9 @@ impl Store {
     pub fn setting<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         let raw: Option<String> = self
             .conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
             .optional()?;
         match raw {
             Some(raw) => Ok(Some(serde_json::from_str(&raw)?)),
@@ -27,7 +29,9 @@ impl Store {
     pub fn setting_or<T: DeserializeOwned>(&self, key: &str, default: T) -> Result<T> {
         let raw: Option<String> = self
             .conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
             .optional()?;
         Ok(raw
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -57,7 +61,9 @@ impl Store {
 
     /// All setting keys, sorted.
     pub fn setting_keys(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare_cached("SELECT key FROM settings ORDER BY key")?;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT key FROM settings ORDER BY key")?;
         let keys = stmt
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;

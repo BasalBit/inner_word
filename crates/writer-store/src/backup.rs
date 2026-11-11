@@ -38,7 +38,7 @@ pub fn list_backups(dir: &Path) -> Result<Vec<(i64, PathBuf)>> {
         };
         backups.push((stamp, entry.path()));
     }
-    backups.sort_by(|a, b| b.0.cmp(&a.0));
+    backups.sort_by_key(|b| std::cmp::Reverse(b.0));
     Ok(backups)
 }
 

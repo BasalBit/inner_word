@@ -299,7 +299,10 @@ impl Store {
         let copy = DocumentId(tx.last_insert_rowid());
         let mut ids = sibling_ids(&tx, Siblings::Documents, meta.folder_id)?;
         ids.retain(|&other| other != copy.0);
-        let at = ids.iter().position(|&other| other == id.0).map_or(ids.len(), |i| i + 1);
+        let at = ids
+            .iter()
+            .position(|&other| other == id.0)
+            .map_or(ids.len(), |i| i + 1);
         ids.insert(at, copy.0);
         crate::folders::write_positions(&tx, Siblings::Documents, &ids)?;
         let copy = load_meta(&tx, copy)?;

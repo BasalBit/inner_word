@@ -100,21 +100,26 @@ CREATE TRIGGER documents_fts_update AFTER UPDATE OF title, plain_text ON documen
 END;
 "#;
 
-/// Applies the per-connection pragmas.
+/// Applies the per-connection pragmas that do not modify the file: busy timeout, foreign
+/// keys, in-memory temp storage.
+pub(crate) fn configure(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "foreign_keys", true)?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    Ok(())
+}
+
+/// Switches an on-disk database to WAL with `synchronous=FULL`. Called only after
+/// [`inspect`] accepted the file, because changing the journal mode writes the header.
 ///
 /// WAL lets readers run during writes and makes commits atomic on disk; `synchronous=FULL`
 /// fsyncs the WAL on every commit, so a committed save survives an app crash and power loss.
-pub(crate) fn configure(conn: &Connection, on_disk: bool) -> Result<()> {
-    conn.busy_timeout(Duration::from_secs(5))?;
-    conn.pragma_update(None, "foreign_keys", true)?;
-    if on_disk {
-        let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
-        if !mode.eq_ignore_ascii_case("wal") {
-            return Err(StoreError::JournalMode(mode));
-        }
-        conn.pragma_update(None, "synchronous", "FULL")?;
+pub(crate) fn enable_wal(conn: &Connection) -> Result<()> {
+    let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::JournalMode(mode));
     }
-    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
     Ok(())
 }
 

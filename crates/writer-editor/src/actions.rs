@@ -315,7 +315,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-x", Cut, c),
         KeyBinding::new("cmd-v", Paste, c),
         KeyBinding::new("cmd-shift-v", PasteAsPlainText, c),
-        // The key macOS itself uses for "show contextual menu".
+        // The key macOS itself uses for "show contextual menu", and before
+        // it (so that key hints show `ctrl-enter`) the one other systems
+        // use: a second way in, should the system keep `ctrl-enter`.
+        KeyBinding::new("shift-f10", OpenContextMenu, c),
         KeyBinding::new("ctrl-enter", OpenContextMenu, c),
     ]
 }

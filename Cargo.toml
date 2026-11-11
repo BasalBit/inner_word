@@ -15,6 +15,10 @@ writer-export = { path = "crates/writer-export" }
 writer-vim = { path = "crates/writer-vim" }
 writer-ui = { path = "crates/writer-ui" }
 writer-editor = { path = "crates/writer-editor" }
+writer-editor-tools = { path = "crates/writer-editor-tools" }
+writer-vim-mode = { path = "crates/writer-vim-mode" }
+writer-comments = { path = "crates/writer-comments" }
+writer-library = { path = "crates/writer-library" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.
@@ -26,6 +30,14 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 unicode-segmentation = "1"
+# localtime_r (dates in the editor tools, times in the version history).
+libc = "0.2"
+# The NSWindow behind a GPUI window (window capture for visual QA) and
+# Objective-C calls (user name, user defaults, forcing a frame).
+raw-window-handle = "0.6"
+objc = "0.2"
+# Throwaway libraries on disk in tests.
+tempfile = "3"
 
 # Disk on the build machine is tight: keep debug info minimal.
 [profile.dev]

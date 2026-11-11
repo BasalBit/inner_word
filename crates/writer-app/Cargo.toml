@@ -26,24 +26,22 @@ unicode-segmentation.workspace = true
 writer-core.workspace = true
 writer-ui.workspace = true
 writer-editor.workspace = true
+writer-editor-tools.workspace = true
+writer-vim-mode.workspace = true
+writer-comments.workspace = true
+writer-library.workspace = true
 writer-export.workspace = true
-# Not in [workspace.dependencies]: only this crate uses them.
-writer-library = { path = "../writer-library" }
-writer-editor-tools = { path = "../writer-editor-tools" }
-writer-comments = { path = "../writer-comments" }
-writer-vim-mode = { path = "../writer-vim-mode" }
+# localtime_r for the times in the version history.
+libc.workspace = true
 # Window capture for visual QA: the NSWindow number behind a GPUI window.
-raw-window-handle = "0.6"
-# localtime_r for the times in the version history (already in the lock tree
-# through gpui).
-libc = "0.2"
+raw-window-handle.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
+objc.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-tempfile = "3"
+tempfile.workspace = true
 writer-editor.workspace = true
 
 # One integration-test binary (tests/main.rs with submodules): each GPUI test

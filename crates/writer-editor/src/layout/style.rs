@@ -21,6 +21,8 @@ use writer_ui::theme::{self, HighlightColor, Theme, ThemeColors};
 pub(crate) const INDENT_STEP: f32 = 24.;
 /// Space left of a list item's text for its marker.
 pub(crate) const MARKER_GUTTER: f32 = 26.;
+/// Space between a list number and the item's text.
+pub(crate) const MARKER_GAP: f32 = 7.;
 /// Space left of a quote's text (the bar sits in it).
 pub(crate) const QUOTE_GUTTER: f32 = 20.;
 /// Horizontal inner padding of a code block.
@@ -69,6 +71,47 @@ pub(crate) struct BlockMetrics {
     pub(crate) group: Group,
     /// Space between two neighbours of the same group.
     pub(crate) group_gap: Pixels,
+}
+
+/// What the numbers of a numbered list need to fit left of the text: the
+/// digit count of the list's largest number and the widths of a digit and
+/// of the period, in ems of the body font. All items of a list share one
+/// marker, so their text lines up.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Marker {
+    /// Digits of the largest number in the list; 0 for lists whose numbers
+    /// have one digit, which fit the standard gutter.
+    pub(crate) digits: u8,
+    pub(crate) digit_em: f32,
+    pub(crate) period_em: f32,
+}
+
+impl Marker {
+    /// The standard gutter.
+    pub(crate) const NONE: Self = Self {
+        digits: 0,
+        digit_em: 0.,
+        period_em: 0.,
+    };
+
+    /// Digits to keep for a list whose largest number is `count`.
+    pub(crate) fn digits_for(count: usize) -> u8 {
+        if count < 10 {
+            0
+        } else {
+            count.ilog10() as u8 + 1
+        }
+    }
+
+    /// Gutter in points for text of `font_points`: at least the standard
+    /// one, wider when the widest number of the list needs it.
+    fn gutter(&self, font_points: f32) -> f32 {
+        if self.digits == 0 {
+            return MARKER_GUTTER;
+        }
+        let label = (self.digits as f32 * self.digit_em + self.period_em) * font_points;
+        MARKER_GUTTER.max((label + MARKER_GAP).ceil())
+    }
 }
 
 /// Runs of neighbouring blocks that read as one unit.
@@ -198,7 +241,10 @@ impl LayoutStyle {
         (font_points * ratio).round().max(1.)
     }
 
-    pub(crate) fn metrics(&self, block: &Block) -> BlockMetrics {
+    /// The metrics of `block`. `marker` widens the gutter of a numbered
+    /// item to the widest number of its list ([`Marker::NONE`]: the
+    /// standard gutter).
+    pub(crate) fn metrics(&self, block: &Block, marker: Marker) -> BlockMetrics {
         let kind = block.kind();
         let heading = kind.heading_level().filter(|_| !self.compact);
         let font_points = if self.compact {
@@ -234,7 +280,11 @@ impl LayoutStyle {
                 space_after = (base_line * after).round();
             }
             BlockKind::BulletItem | BlockKind::NumberedItem | BlockKind::TodoItem { .. } => {
-                text_left += MARKER_GUTTER;
+                text_left += if matches!(kind, BlockKind::NumberedItem) {
+                    marker.gutter(font_points)
+                } else {
+                    MARKER_GUTTER
+                };
                 group = Group::List;
                 group_gap = (spacing * 0.33).round();
             }

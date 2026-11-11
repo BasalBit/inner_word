@@ -21,7 +21,7 @@ use crate::{
     element::{FramePlan, PlannedMarker},
     layout::{
         LayoutEnv, Placed,
-        style::{CODE_PADDING, MARKER_GUTTER, QUOTE_GUTTER},
+        style::{CODE_PADDING, MARKER_GAP, MARKER_GUTTER, QUOTE_GUTTER},
     },
     paint::snap,
 };
@@ -128,9 +128,10 @@ pub(crate) fn plan_block(
                 layout.font_size,
                 colors.muted,
             );
-            // Right-aligned in the gutter so the dots line up.
+            // Right-aligned in the gutter so the dots line up. The gutter
+            // is as wide as the widest number of the list needs.
             plan.markers.push(PlannedMarker {
-                origin: point(text_left - style.px(7.) - line.width, first_row_y),
+                origin: point(text_left - style.px(MARKER_GAP) - line.width, first_row_y),
                 line_height,
                 line,
             });

@@ -363,9 +363,11 @@ impl Dice {
 }
 
 /// Everything about where blocks and rows are, in content space: per block
-/// its top, its row count and the top of its last row; then the content
-/// height and the page count.
-fn fingerprint(editor: &Editor) -> (Vec<(f32, usize, f32)>, f32, usize) {
+/// its top, its row count, the top of its last row and the left edge of
+/// its text; then the content height and the page count.
+type Fingerprint = (Vec<(f32, usize, f32, f32)>, f32, usize);
+
+fn fingerprint(editor: &Editor) -> Fingerprint {
     editor
         .with_layout(|lay| {
             let mut blocks = Vec::new();
@@ -376,6 +378,7 @@ fn fingerprint(editor: &Editor) -> (Vec<(f32, usize, f32)>, f32, usize) {
                     f32::from(placed.top),
                     rows,
                     f32::from(placed.row_top(rows - 1)),
+                    f32::from(placed.layout.text_left),
                 ));
             }
             (
@@ -389,10 +392,7 @@ fn fingerprint(editor: &Editor) -> (Vec<(f32, usize, f32)>, f32, usize) {
 
 /// The fingerprint of a brand-new editor on `document`, in a window of
 /// its own of the same size.
-fn fresh_fingerprint(
-    document: Document,
-    cx: &mut TestAppContext,
-) -> (Vec<(f32, usize, f32)>, f32, usize) {
+fn fresh_fingerprint(document: Document, cx: &mut TestAppContext) -> Fingerprint {
     let (fresh, cx) = open(document, EditorConfig::full(), cx);
     let result = fresh.update(cx, |editor, cx| {
         editor.finish_layout(cx);
@@ -569,4 +569,154 @@ fn random_edits_keep_the_layout_exact(seed: u64, cx: &mut TestAppContext) {
         }
     }
     cx.update(|window, _| window.remove_window());
+}
+
+#[gpui::test]
+fn the_gutter_of_a_numbered_list_fits_its_largest_number(cx: &mut TestAppContext) {
+    setup(cx);
+    let items = |count: usize| {
+        (0..count)
+            .map(|ix| Block::with_text(BlockKind::NumberedItem, &format!("Item {ix}")))
+            .collect::<Vec<_>>()
+    };
+    // A paragraph, a list of 9, a paragraph, a list of 120, a bullet.
+    let mut blocks = vec![Block::paragraph("before")];
+    blocks.extend(items(9));
+    blocks.push(Block::paragraph("between"));
+    blocks.extend(items(120));
+    blocks.push(Block::with_text(BlockKind::BulletItem, "a bullet"));
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    cx.run_until_parked();
+
+    let column_left = editor.read_with(cx, |editor, _| {
+        editor.position_bounds(Position::ZERO).unwrap().left()
+    });
+    let text_left = |editor: &Editor, block: usize| {
+        editor
+            .position_bounds(Position::new(block, 0))
+            .unwrap()
+            .left()
+            - column_left
+    };
+    // The numbers painted in the last frame: inside the column, and
+    // ending a little left of the text.
+    let assert_numbers_fit = |editor: &Editor, gutters: &[gpui::Pixels]| {
+        assert!(!editor.painted_markers.is_empty());
+        for marker in &editor.painted_markers {
+            assert!(
+                marker.left() >= column_left - px(0.01),
+                "a number starts left of the column: {marker:?}"
+            );
+            assert!(
+                gutters.iter().any(|gutter| {
+                    (marker.right() - (column_left + *gutter - px(7.))).abs() < px(0.01)
+                }),
+                "{marker:?} does not end at one of the gutters {gutters:?}"
+            );
+        }
+    };
+
+    let wide = editor.read_with(cx, |editor, _| {
+        // Nine items: the standard gutter, the same as a bullet's.
+        let standard = text_left(editor, 131);
+        assert_eq!(standard, px(26.));
+        for block in 1..=9 {
+            assert_eq!(text_left(editor, block), standard);
+        }
+        // 120 items: one gutter for all of them, wide enough for "120.".
+        let wide = text_left(editor, 11);
+        assert!(wide > standard + px(15.), "{wide:?}");
+        for block in 11..=130 {
+            assert_eq!(text_left(editor, block), wide);
+        }
+        wide
+    });
+    // The numbers themselves, at the end of the long list.
+    editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(129, 0), Autoscroll::Center, cx)
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let first = editor.visible_range().unwrap().start.block;
+        assert!(first > 100, "three-digit numbers are on screen");
+        // The bullet is not a label; every label here is a number.
+        assert_numbers_fit(editor, &[wide]);
+    });
+
+    // Typing in an item of the long list reshapes that item only.
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(125, 4)), cx);
+    });
+    cx.simulate_input("x");
+    editor.read_with(cx, |editor, _| assert_eq!(unmeasured(editor), 0));
+
+    // A tenth item widens the gutter of the short list, for all its
+    // items, and of no other.
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(9, 6)), cx);
+    });
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("ten");
+    cx.run_until_parked();
+    let two_digits = editor.read_with(cx, |editor, _| {
+        let gutter = text_left(editor, 1);
+        assert!(gutter > px(26.) && gutter < wide, "{gutter:?}");
+        for block in 1..=10 {
+            assert_eq!(text_left(editor, block), gutter);
+        }
+        assert_eq!(text_left(editor, 12), wide);
+        // Both lists are on screen.
+        assert_numbers_fit(editor, &[gutter, wide]);
+        gutter
+    });
+    // Without it the list is back to the standard gutter.
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 132);
+        for block in 1..=9 {
+            assert_eq!(text_left(editor, block), px(26.));
+        }
+    });
+
+    // A paragraph in the middle of the long list makes two lists, each
+    // with its own gutter; a nested list counts by itself.
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_caret(Position::new(31, 0));
+                state.set_block_kind(BlockKind::Paragraph);
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        // 20 items before the paragraph, 99 after it.
+        assert_eq!(text_left(editor, 11), two_digits);
+        assert_eq!(text_left(editor, 30), two_digits);
+        assert_eq!(text_left(editor, 31), px(0.));
+        assert_eq!(text_left(editor, 32), two_digits);
+        assert_eq!(text_left(editor, 130), two_digits);
+    });
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_selection(writer_core::Selection::new(
+                    Position::new(40, 0),
+                    Position::new(42, 1),
+                ));
+                state.indent();
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        // Three nested items: the standard gutter after one indent step.
+        assert_eq!(text_left(editor, 41), px(24. + 26.));
+        // The outer list lost three numbers and still has two digits.
+        assert_eq!(text_left(editor, 43), two_digits);
+    });
 }

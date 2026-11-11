@@ -33,6 +33,14 @@
 //! slots up to a watermark and resumed from the first block whose measure
 //! changed. Queries place as far as they need.
 //!
+//! **Numbered lists** are the one place where a block's layout depends on
+//! its neighbours: the gutter of every item is as wide as the list's
+//! largest number needs, so the text of the items lines up. Each slot
+//! keeps the digit count of its list ([`Marker`]); a change that adds,
+//! removes or re-levels list items recounts the lists it touches
+//! (`DocumentLayout::number_lists`), and items whose gutter changed are
+//! measured again.
+//!
 //! **Scrolling** is anchored to a block (`ScrollPosition`), not stored in
 //! pixels, so measuring or editing blocks above the viewport never moves
 //! what is on screen.
@@ -49,12 +57,13 @@ pub(crate) mod style;
 
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Instant};
 
-use gpui::{Bounds, Pixels, Point, WindowTextSystem, point, px, size};
-use writer_core::{Block, BlockId, BlockSplice, Document, Stats};
+use gpui::{Bounds, Pixels, Point, SharedString, TextRun, WindowTextSystem, point, px, size};
+use writer_core::{Block, BlockId, BlockKind, BlockSplice, Document, Stats};
 
 pub(crate) use block::{BlockLayout, Measure};
 pub(crate) use pages::PageGeometry;
 pub(crate) use style::LayoutStyle;
+use style::Marker;
 
 use pages::{
     KEEP_LOOKAHEAD, Placement, Previous, RowShift, kept_height, place_flow, place_paged, row_shift,
@@ -117,6 +126,10 @@ pub(crate) enum ScrollPosition {
 struct Slot {
     id: BlockId,
     stamp: u64,
+    /// What the block is to list numbering, see [`list_key`].
+    list: u8,
+    /// [`Marker::digits`] of the numbered list the block is in.
+    digits: u8,
     measure: Measure,
     /// `measure` comes from shaping, not from an estimate.
     measured: bool,
@@ -128,6 +141,8 @@ struct Slot {
 
 struct CachedLayout {
     stamp: u64,
+    /// The `Slot::digits` the layout was shaped with.
+    digits: u8,
     layout: Rc<BlockLayout>,
     epoch: u64,
 }
@@ -161,6 +176,17 @@ pub(crate) struct DocumentLayout {
     advance: f32,
     calibration: (f32, f32),
     calibrated: bool,
+    /// Widths of a digit and of a period in ems of the body font, for the
+    /// gutters of numbered lists. Measured when first needed.
+    marker_em: Option<(f32, f32)>,
+}
+
+/// What a block is to list numbering: bit 7 for a numbered item, the low
+/// bits its indent. 0 is a block that ends every list (not numbered, not
+/// indented). Two runs of blocks with the same keys number alike.
+fn list_key(block: &Block) -> u8 {
+    let numbered = matches!(block.kind(), BlockKind::NumberedItem);
+    (u8::from(numbered) << 7) | block.indent().min(0x7f)
 }
 
 fn empty_placement() -> Placement {
@@ -206,6 +232,7 @@ impl DocumentLayout {
             advance: DEFAULT_ADVANCE,
             calibration: (0., 0.),
             calibrated: false,
+            marker_em: None,
         };
         layout.reset(document, revision);
         layout
@@ -245,11 +272,13 @@ impl DocumentLayout {
         self.refine_cursor = 0;
         self.count_cursor = 0;
         self.measure_changes += 1;
+        self.number_lists(document, 0..self.slots.len());
         self.settle_stats();
     }
 
     /// A slot for `block`, reusing `old` (the slot the block had before)
-    /// when the block did not change.
+    /// when the block did not change. A new slot has no list digits yet:
+    /// the caller copies them or recounts the lists.
     fn make_slot(&self, block: &Block, old: Option<Slot>, budget: &mut usize) -> Slot {
         let (id, stamp) = (block.id(), block.revision());
         match old {
@@ -259,9 +288,13 @@ impl DocumentLayout {
                 // measure is the best estimate.
                 let measure = match (&old, &self.env) {
                     (Some(old), _) => old.measure,
-                    (None, Some(env)) => {
-                        Measure::estimate(block, &env.style, env.column_width, self.advance)
-                    }
+                    (None, Some(env)) => Measure::estimate(
+                        block,
+                        &env.style,
+                        env.column_width,
+                        self.advance,
+                        Marker::NONE,
+                    ),
                     (None, None) => Measure::default(),
                 };
                 let stats = if block.len() <= *budget {
@@ -274,6 +307,8 @@ impl DocumentLayout {
                 Slot {
                     id,
                     stamp,
+                    list: list_key(block),
+                    digits: 0,
                     measure,
                     measured: false,
                     stats,
@@ -351,14 +386,32 @@ impl DocumentLayout {
         for slot in &removed {
             self.count_out(slot);
         }
+        let old_lists: Vec<(u8, u8)> = removed
+            .iter()
+            .map(|slot| (slot.list, slot.digits))
+            .collect();
         let mut old: HashMap<BlockId, Slot> =
             removed.into_iter().map(|slot| (slot.id, slot)).collect();
         let mut budget = EAGER_STATS_BYTES;
         let mut added = Vec::with_capacity(splice.new_len);
         for block in &document.blocks()[new_range] {
             let slot = self.make_slot(block, old.remove(&block.id()), &mut budget);
-            self.count_in(&slot);
             added.push(slot);
+        }
+        // The usual change (typing) leaves list items list items at the
+        // same levels: the lists number as before.
+        let same_lists = old_lists.len() == added.len()
+            && old_lists
+                .iter()
+                .zip(&added)
+                .all(|((list, _), slot)| *list == slot.list);
+        if same_lists {
+            for ((_, digits), slot) in old_lists.iter().zip(&mut added) {
+                slot.digits = *digits;
+            }
+        }
+        for slot in &added {
+            self.count_in(slot);
         }
         self.slots.splice(splice.start..splice.start, added);
         // Headings just before the change are kept with it.
@@ -367,8 +420,136 @@ impl DocumentLayout {
         self.refine_cursor = self.refine_cursor.min(splice.start);
         self.count_cursor = self.count_cursor.min(splice.start);
         self.measure_changes += 1;
+        if !same_lists {
+            self.number_lists(document, splice.start..splice.start + splice.new_len);
+        }
         self.shift_scroll_anchor(splice);
         self.settle_stats();
+    }
+
+    /// Recounts the numbered lists that the blocks in `touched` belong to
+    /// or border on, and gives every item of a list the digit count of
+    /// the list's largest number. Items whose digits change will be
+    /// measured again (their gutter changes, so their text may wrap
+    /// differently). Linear in the size of those lists.
+    fn number_lists(&mut self, document: &Document, touched: Range<usize>) {
+        let blocks = document.blocks();
+        if self.slots.len() != blocks.len() {
+            return;
+        }
+        // Widen to where no list is open: a block with key 0 ends them all.
+        let mut start = touched.start.min(blocks.len());
+        while start > 0 && self.slots[start - 1].list != 0 {
+            start -= 1;
+        }
+        let mut end = touched.end.clamp(start, blocks.len());
+        while end < blocks.len() && self.slots[end].list != 0 {
+            end += 1;
+        }
+        if start == end {
+            return;
+        }
+        // The same counting as `Document::numbered_ordinals`: one open
+        // list per indent level; deeper levels close when a shallower
+        // block comes, a level closes at a block of it that is not
+        // numbered.
+        let mut digits = vec![0u8; end - start];
+        let mut open: Vec<Vec<usize>> = Vec::new();
+        let close = |members: &mut Vec<usize>, digits: &mut Vec<u8>| {
+            let wide = Marker::digits_for(members.len());
+            for member in members.drain(..) {
+                digits[member] = wide;
+            }
+        };
+        for (offset, slot) in self.slots[start..end].iter().enumerate() {
+            let level = (slot.list & 0x7f) as usize;
+            if open.len() <= level {
+                open.resize_with(level + 1, Vec::new);
+            }
+            for members in &mut open[level + 1..] {
+                close(members, &mut digits);
+            }
+            if slot.list & 0x80 != 0 {
+                open[level].push(offset);
+            } else {
+                close(&mut open[level], &mut digits);
+            }
+        }
+        for members in &mut open {
+            close(members, &mut digits);
+        }
+        let mut first_changed = None;
+        for (offset, digits) in digits.into_iter().enumerate() {
+            let slot = &mut self.slots[start + offset];
+            if slot.digits == digits {
+                continue;
+            }
+            slot.digits = digits;
+            if slot.measured {
+                slot.measured = false;
+                self.unmeasured += 1;
+            }
+            first_changed.get_or_insert(start + offset);
+        }
+        if let Some(first) = first_changed {
+            self.placed = self.placed.min(first.saturating_sub(KEEP_LOOKAHEAD));
+            self.refine_cursor = self.refine_cursor.min(first);
+            self.measure_changes += 1;
+        }
+    }
+
+    /// Widths of a digit (the widest one) and of a period in ems of the
+    /// body font: what the numbers of a numbered list are set in.
+    fn marker_em(&mut self) -> (f32, f32) {
+        if let Some(em) = self.marker_em {
+            return em;
+        }
+        let Some(env) = &self.env else {
+            return (0.6, 0.3);
+        };
+        const SIZE: f32 = 100.;
+        let text: SharedString = "0123456789.".into();
+        let run = TextRun {
+            len: text.len(),
+            font: env.style.body_font.clone(),
+            color: env.style.colors.ink,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = env.text_system.shape_line(text, px(SIZE), &[run], None);
+        let mut edges: Vec<f32> = line
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter().map(|glyph| f32::from(glyph.position.x)))
+            .collect();
+        edges.push(f32::from(line.width));
+        let em = if edges.len() == 12 {
+            let digit = edges[..11]
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .fold(0., f32::max);
+            (digit / SIZE, (edges[11] - edges[10]) / SIZE)
+        } else {
+            // A font that shapes digits into something else: an average.
+            let each = f32::from(line.width) / 11. / SIZE;
+            (each, each)
+        };
+        self.marker_em = Some(em);
+        em
+    }
+
+    /// The marker for a block whose list has `digits` (see [`Slot`]).
+    fn marker(&mut self, digits: u8) -> Marker {
+        if digits == 0 {
+            return Marker::NONE;
+        }
+        let (digit_em, period_em) = self.marker_em();
+        Marker {
+            digits,
+            digit_em,
+            period_em,
+        }
     }
 
     /// Keeps the scroll position on its block when blocks before it were
@@ -400,6 +581,7 @@ impl DocumentLayout {
         self.env = Some(env);
         if reshape {
             self.layouts.clear();
+            self.marker_em = None;
             self.calibrated = false;
             self.calibration = (0., 0.);
             self.estimate_all(document);
@@ -419,14 +601,21 @@ impl DocumentLayout {
     /// Replaces every measure with an estimate for the current
     /// environment.
     fn estimate_all(&mut self, document: &Document) {
-        let Some(env) = &self.env else {
-            return;
-        };
         if self.slots.len() != document.block_count() {
             return;
         }
+        let (digit_em, period_em) = self.marker_em();
+        let Some(env) = &self.env else {
+            return;
+        };
         for (slot, block) in self.slots.iter_mut().zip(document.blocks()) {
-            slot.measure = Measure::estimate(block, &env.style, env.column_width, self.advance);
+            let marker = Marker {
+                digits: slot.digits,
+                digit_em,
+                period_em,
+            };
+            slot.measure =
+                Measure::estimate(block, &env.style, env.column_width, self.advance, marker);
             slot.measured = false;
         }
         self.unmeasured = self.slots.len();
@@ -438,18 +627,25 @@ impl DocumentLayout {
     /// Estimates again for the blocks that were not measured yet, after
     /// the average advance became known.
     fn estimate_unmeasured(&mut self, document: &Document) {
-        let Some(env) = &self.env else {
-            return;
-        };
         if self.slots.len() != document.block_count() {
             return;
         }
+        let (digit_em, period_em) = self.marker_em();
+        let Some(env) = &self.env else {
+            return;
+        };
         let mut first = None;
         for (index, (slot, block)) in self.slots.iter_mut().zip(document.blocks()).enumerate() {
             if slot.measured {
                 continue;
             }
-            let measure = Measure::estimate(block, &env.style, env.column_width, self.advance);
+            let marker = Marker {
+                digits: slot.digits,
+                digit_em,
+                period_em,
+            };
+            let measure =
+                Measure::estimate(block, &env.style, env.column_width, self.advance, marker);
             if measure != slot.measure {
                 slot.measure = measure;
                 first.get_or_insert(index);
@@ -508,13 +704,12 @@ impl DocumentLayout {
     /// without an environment or for an index outside the document.
     pub(crate) fn layout(&mut self, index: usize, document: &Document) -> Option<Rc<BlockLayout>> {
         let block = document.block(index)?;
-        let env = self.env.as_ref()?;
-        if index >= self.slots.len() {
-            return None;
-        }
+        self.env.as_ref()?;
+        let digits = self.slots.get(index)?.digits;
         let (id, stamp) = (block.id(), block.revision());
         if let Some(cached) = self.layouts.get_mut(&id)
             && cached.stamp == stamp
+            && cached.digits == digits
         {
             cached.epoch = self.epoch;
             let layout = cached.layout.clone();
@@ -523,16 +718,20 @@ impl DocumentLayout {
             }
             return Some(layout);
         }
+        let marker = self.marker(digits);
+        let env = self.env.as_ref()?;
         let layout = Rc::new(BlockLayout::shape(
             block,
             &env.style,
             env.column_width,
             &env.text_system,
+            marker,
         ));
         self.layouts.insert(
             id,
             CachedLayout {
                 stamp,
+                digits,
                 layout: layout.clone(),
                 epoch: self.epoch,
             },
@@ -549,11 +748,20 @@ impl DocumentLayout {
 
     /// Measures block `index` without keeping its shaped layout.
     fn measure_only(&mut self, index: usize, document: &Document) {
+        let Some(digits) = self.slots.get(index).map(|slot| slot.digits) else {
+            return;
+        };
+        let marker = self.marker(digits);
         let (Some(block), Some(env)) = (document.block(index), self.env.as_ref()) else {
             return;
         };
-        let (measure, _) =
-            block::measure_block(block, &env.style, env.column_width, &env.text_system);
+        let (measure, _) = block::measure_block(
+            block,
+            &env.style,
+            env.column_width,
+            &env.text_system,
+            marker,
+        );
         self.note_measure(index, measure, None);
     }
 

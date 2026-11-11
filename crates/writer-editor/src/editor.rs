@@ -150,6 +150,9 @@ pub struct Editor {
     /// The selection rectangles of the last frame, in window coordinates.
     #[cfg(test)]
     pub(crate) painted_selection: Vec<gpui::Bounds<Pixels>>,
+    /// The labels of the last frame (list numbers, page numbers, ...).
+    #[cfg(test)]
+    pub(crate) painted_markers: Vec<gpui::Bounds<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -287,6 +290,8 @@ impl Editor {
             perf: Cell::new(FramePerf::default()),
             #[cfg(test)]
             painted_selection: Vec::new(),
+            #[cfg(test)]
+            painted_markers: Vec::new(),
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.

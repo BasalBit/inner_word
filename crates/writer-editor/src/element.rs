@@ -594,6 +594,13 @@ impl Editor {
         #[cfg(test)]
         {
             self.painted_selection = plan.selection.iter().map(|quad| quad.bounds).collect();
+            self.painted_markers = plan
+                .markers
+                .iter()
+                .map(|marker| {
+                    Bounds::new(marker.origin, size(marker.line.width, marker.line_height))
+                })
+                .collect();
         }
         self.checkbox_hits = checkboxes;
         self.scrollbar.geometry = scrollbar;

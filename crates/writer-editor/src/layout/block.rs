@@ -24,7 +24,7 @@ use gpui::{
 };
 use writer_core::{Alignment, Block, BlockKind, text};
 
-use super::style::{BlockMetrics, Decorations, Group, LayoutStyle};
+use super::style::{BlockMetrics, Decorations, Group, LayoutStyle, Marker};
 
 /// Narrowest text box a block is ever wrapped to.
 const MIN_TEXT_WIDTH: f32 = 40.;
@@ -116,8 +116,9 @@ impl Measure {
         style: &LayoutStyle,
         column_width: Pixels,
         advance: f32,
+        marker: Marker,
     ) -> Self {
-        let metrics = style.metrics(block);
+        let metrics = style.metrics(block, marker);
         let rows = if block.is_void() {
             1
         } else {
@@ -258,8 +259,9 @@ pub(crate) fn measure_block(
     style: &LayoutStyle,
     column_width: Pixels,
     text_system: &WindowTextSystem,
+    marker: Marker,
 ) -> (Measure, Pixels) {
-    let metrics = style.metrics(block);
+    let metrics = style.metrics(block, marker);
     if block.is_void() {
         return (Measure::new(&metrics, block.kind(), 1), px(0.));
     }
@@ -281,14 +283,16 @@ pub(crate) fn measure_block(
 }
 
 impl BlockLayout {
-    /// Shapes `block` for a text column `column_width` wide.
+    /// Shapes `block` for a text column `column_width` wide. `marker` is
+    /// the gutter its numbered list needs ([`Marker::NONE`] otherwise).
     pub(crate) fn shape(
         block: &Block,
         style: &LayoutStyle,
         column_width: Pixels,
         text_system: &WindowTextSystem,
+        marker: Marker,
     ) -> Self {
-        let metrics = style.metrics(block);
+        let metrics = style.metrics(block, marker);
         let text_width = text_width(&metrics, column_width);
         let font_id = text_system.resolve_font(&style.block_font(block));
         let ascent = text_system.ascent(font_id, metrics.font_size);

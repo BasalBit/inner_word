@@ -2,8 +2,8 @@
 //!
 //! **Status: skeleton.** The public API below is final. The rendering is a plain
 //! indented list with keyboard navigation (move, expand, collapse, open). Inline rename,
-//! create / trash / duplicate / move commands, the trash section, drag and drop and the
-//! `commands()` list for the command palette are added by the panel implementation.
+//! create / trash / duplicate / move commands (also in [`commands`]), the trash section and
+//! drag and drop are added by the panel implementation.
 
 use std::collections::HashSet;
 
@@ -13,7 +13,7 @@ use gpui::{
 };
 use writer_store::{DocumentId, FolderId, FolderNode, LibraryTree};
 use writer_ui::theme::{ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_4, UI_TEXT_BASE};
-use writer_ui::{Icon, IconName};
+use writer_ui::{CommandDescriptor, Icon, IconName};
 
 use crate::library::{Library, LibraryEvent};
 
@@ -63,6 +63,25 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("left", Collapse, context),
         KeyBinding::new("enter", OpenSelected, context),
         KeyBinding::new("escape", Dismiss, context),
+    ]
+}
+
+/// The panel's commands for the command palette and the shortcuts overlay. Their actions
+/// are handled by the panel, so they act when the panel has focus.
+///
+/// Skeleton: only the navigation commands exist so far; the panel implementation adds
+/// rename, trash, duplicate and move here.
+pub fn commands() -> Vec<CommandDescriptor> {
+    const CATEGORY: &str = "Library";
+    vec![
+        CommandDescriptor::new("Open selected item", CATEGORY, OpenSelected)
+            .keywords(["document", "folder", "toggle"]),
+        CommandDescriptor::new("Expand folder", CATEGORY, Expand).keywords(["open", "unfold"]),
+        CommandDescriptor::new("Collapse folder", CATEGORY, Collapse).keywords(["close", "fold"]),
+        CommandDescriptor::new("Select next item", CATEGORY, SelectNext).keywords(["down"]),
+        CommandDescriptor::new("Select previous item", CATEGORY, SelectPrevious).keywords(["up"]),
+        CommandDescriptor::new("Select first item", CATEGORY, SelectFirst).keywords(["top"]),
+        CommandDescriptor::new("Select last item", CATEGORY, SelectLast).keywords(["bottom"]),
     ]
 }
 
@@ -283,7 +302,12 @@ impl LibraryPanel {
     ///
     /// Skeleton: the state is tracked ([`renaming`](Self::renaming)) but the inline text
     /// field is drawn by the panel implementation.
-    pub fn begin_rename(&mut self, item: LibraryItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub fn begin_rename(
+        &mut self,
+        item: LibraryItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.reveal(item, cx) {
             return false;
         }
@@ -349,7 +373,13 @@ impl LibraryPanel {
                     parent,
                 });
                 if open {
-                    push(&node.folders, depth + 1, Some(node.folder.id), expanded, rows);
+                    push(
+                        &node.folders,
+                        depth + 1,
+                        Some(node.folder.id),
+                        expanded,
+                        rows,
+                    );
                     push_documents(&node.documents, depth + 1, Some(node.folder.id), rows);
                 }
             }
@@ -387,18 +417,20 @@ impl LibraryPanel {
         let old_index = self.selected_index();
         self.rebuild_rows(cx);
         let tree = self.library.read(cx).tree();
-        if let Some(selected) = self.selected {
-            if ancestors(&tree, selected).is_none() {
-                // The selected item is gone: stay at the same place in the list.
-                self.selected = old_index
-                    .and_then(|ix| self.rows.get(ix.min(self.rows.len().saturating_sub(1))))
-                    .map(|row| row.item);
-            }
+        if self
+            .selected
+            .is_some_and(|item| ancestors(&tree, item).is_none())
+        {
+            // The selected item is gone: stay at the same place in the list.
+            self.selected = old_index
+                .and_then(|ix| self.rows.get(ix.min(self.rows.len().saturating_sub(1))))
+                .map(|row| row.item);
         }
-        if let Some(renaming) = self.renaming {
-            if ancestors(&tree, renaming).is_none() {
-                self.renaming = None;
-            }
+        if self
+            .renaming
+            .is_some_and(|item| ancestors(&tree, item).is_none())
+        {
+            self.renaming = None;
         }
         if self
             .active_document
@@ -425,7 +457,12 @@ impl LibraryPanel {
         self.select_index(next, cx);
     }
 
-    fn select_previous(&mut self, _: &SelectPrevious, _window: &mut Window, cx: &mut Context<Self>) {
+    fn select_previous(
+        &mut self,
+        _: &SelectPrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let previous = match self.selected_index() {
             Some(ix) => ix.saturating_sub(1),
             None => self.rows.len().saturating_sub(1),
@@ -448,7 +485,11 @@ impl LibraryPanel {
         if let LibraryItem::Folder(id) = self.rows[ix].item {
             if !self.rows[ix].expanded {
                 self.set_expanded(id, true, cx);
-            } else if self.rows.get(ix + 1).is_some_and(|row| row.parent == Some(id)) {
+            } else if self
+                .rows
+                .get(ix + 1)
+                .is_some_and(|row| row.parent == Some(id))
+            {
                 self.select_index(ix + 1, cx);
             }
         }

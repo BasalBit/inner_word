@@ -58,21 +58,21 @@ mod panel;
 
 pub use library::{DocumentEntry, Library, LibraryEvent};
 pub use panel::{
-    Collapse, Dismiss, Expand, LibraryItem, LibraryPanel, LibraryPanelEvent, OpenSelected,
-    SelectFirst, SelectLast, SelectNext, SelectPrevious, EXPANDED_FOLDERS_SETTING, KEY_CONTEXT,
+    Collapse, Dismiss, EXPANDED_FOLDERS_SETTING, Expand, KEY_CONTEXT, LibraryItem, LibraryPanel,
+    LibraryPanelEvent, OpenSelected, SelectFirst, SelectLast, SelectNext, SelectPrevious, commands,
     key_bindings,
 };
 
+/// The whole storage crate, for anything not re-exported above.
+pub use writer_store as store;
 /// The storage types that appear in this crate's API, re-exported so that consumers do not
 /// need a direct dependency on `writer-store`.
 pub use writer_store::{
-    Clock, DATA_DIR_ENV, Document, DocumentContent, DocumentId, DocumentMeta, EmptiedTrash,
-    Folder, FolderId, FolderNode, ItemKind, LibraryTree, MATCH_END, MATCH_START, Result,
-    SearchHit, Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart, StoreError,
-    TrashEntry, data_dir, database_path,
+    Clock, DATA_DIR_ENV, Document, DocumentContent, DocumentId, DocumentMeta, EmptiedTrash, Folder,
+    FolderId, FolderNode, ItemKind, LibraryTree, MATCH_END, MATCH_START, Result, SearchHit,
+    Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart, StoreError, TrashEntry,
+    data_dir, database_path,
 };
-/// The whole storage crate, for anything not re-exported above.
-pub use writer_store as store;
 
 /// Installs the key bindings of the library panel. Call once at startup, after the app's
 /// own context-free bindings (a later binding wins at equal context depth).

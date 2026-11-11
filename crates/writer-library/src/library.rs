@@ -225,7 +225,12 @@ impl Library {
     }
 
     /// Renames a live folder. Emits `FolderRenamed`, `TreeChanged`.
-    pub fn rename_folder(&mut self, id: FolderId, name: &str, cx: &mut Context<Self>) -> Result<()> {
+    pub fn rename_folder(
+        &mut self,
+        id: FolderId,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         self.store.rename_folder(id, name)?;
         self.changed(cx, [LibraryEvent::FolderRenamed(id)], false, true)
     }
@@ -253,7 +258,12 @@ impl Library {
 
     /// Puts a folder at 0-based `index` among its live sibling folders (clamped).
     /// Emits `FolderMoved`, `TreeChanged`.
-    pub fn reorder_folder(&mut self, id: FolderId, index: usize, cx: &mut Context<Self>) -> Result<()> {
+    pub fn reorder_folder(
+        &mut self,
+        id: FolderId,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         self.store.reorder_folder(id, index)?;
         self.changed(cx, [LibraryEvent::FolderMoved(id)], false, true)
     }
@@ -275,7 +285,12 @@ impl Library {
             collect(node, &mut documents);
         }
         self.store.trash_folder(id)?;
-        self.changed(cx, [LibraryEvent::FolderTrashed { id, documents }], true, true)
+        self.changed(
+            cx,
+            [LibraryEvent::FolderTrashed { id, documents }],
+            true,
+            true,
+        )
     }
 
     // ----- documents ------------------------------------------------------------------
@@ -333,7 +348,12 @@ impl Library {
 
     /// Renames a live document. If the app derives titles from content, its next save
     /// overwrites this title. Emits `DocumentRenamed`, `TreeChanged`.
-    pub fn rename_document(&mut self, id: DocumentId, title: &str, cx: &mut Context<Self>) -> Result<()> {
+    pub fn rename_document(
+        &mut self,
+        id: DocumentId,
+        title: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         self.store.rename_document(id, title)?;
         self.changed(cx, [LibraryEvent::DocumentRenamed(id)], false, true)
     }
@@ -359,14 +379,23 @@ impl Library {
 
     /// Puts a document at 0-based `index` among the live documents of its folder (clamped).
     /// Emits `DocumentMoved`, `TreeChanged`.
-    pub fn reorder_document(&mut self, id: DocumentId, index: usize, cx: &mut Context<Self>) -> Result<()> {
+    pub fn reorder_document(
+        &mut self,
+        id: DocumentId,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         self.store.reorder_document(id, index)?;
         self.changed(cx, [LibraryEvent::DocumentMoved(id)], false, true)
     }
 
     /// Copies a document into the same folder, directly after the original, titled
-    /// "<title> copy". Emits `DocumentCreated` (the copy), `TreeChanged`.
-    pub fn duplicate_document(&mut self, id: DocumentId, cx: &mut Context<Self>) -> Result<DocumentMeta> {
+    /// "`<title>` copy". Emits `DocumentCreated` (the copy), `TreeChanged`.
+    pub fn duplicate_document(
+        &mut self,
+        id: DocumentId,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentMeta> {
         let meta = self.store.duplicate_document(id)?;
         self.changed(cx, [LibraryEvent::DocumentCreated(meta.id)], false, true)?;
         Ok(meta)
@@ -392,7 +421,11 @@ impl Library {
     /// Every live document with its folder path, most recently edited first. No content is
     /// loaded; this is the listing for quick open.
     pub fn all_documents(&self) -> Result<Vec<DocumentEntry>> {
-        fn index(nodes: &[FolderNode], path: &mut Vec<String>, out: &mut HashMap<FolderId, Vec<String>>) {
+        fn index(
+            nodes: &[FolderNode],
+            path: &mut Vec<String>,
+            out: &mut HashMap<FolderId, Vec<String>>,
+        ) {
             for node in nodes {
                 path.push(node.folder.name.clone());
                 out.insert(node.folder.id, path.clone());
@@ -438,7 +471,11 @@ impl Library {
 
     /// Restores a trashed document to its original folder (or the root if that folder is
     /// gone). Emits `DocumentRestored`, `TrashChanged`, `TreeChanged`.
-    pub fn restore_document(&mut self, id: DocumentId, cx: &mut Context<Self>) -> Result<DocumentMeta> {
+    pub fn restore_document(
+        &mut self,
+        id: DocumentId,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentMeta> {
         let meta = self.store.restore_document(id)?;
         self.changed(cx, [LibraryEvent::DocumentRestored(id)], true, true)?;
         Ok(meta)
@@ -487,7 +524,11 @@ impl Library {
     }
 
     /// Snapshots the stored content of a document (save first). Emits `SnapshotsChanged`.
-    pub fn create_snapshot(&mut self, document: DocumentId, cx: &mut Context<Self>) -> Result<SnapshotMeta> {
+    pub fn create_snapshot(
+        &mut self,
+        document: DocumentId,
+        cx: &mut Context<Self>,
+    ) -> Result<SnapshotMeta> {
         let meta = self.store.create_snapshot(document)?;
         self.announce(cx, LibraryEvent::SnapshotsChanged(document))?;
         Ok(meta)

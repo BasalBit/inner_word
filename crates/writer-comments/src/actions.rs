@@ -5,7 +5,7 @@
 //! | Context | Where | Keys |
 //! |---|---|---|
 //! | none | anywhere in the window | add comment, next / previous comment, show or hide comments, focus comments |
-//! | [`THREADS_CONTEXT`] | the thread list has focus | thread and reply navigation, reply, edit, resolve, delete, show resolved, undo, back to the editor |
+//! | [`THREADS_CONTEXT`] | the thread list has focus | thread and reply navigation, reply, edit, resolve, delete, show resolved, undo, the menu of the active thread, back to the editor |
 //! | [`THREADS_CONTEXT`] with `confirming` | a delete confirmation is showing | confirm, cancel |
 //! | [`COMPOSER_CONTEXT`] | the composer has focus | submit, cancel, on to the thread list |
 //!
@@ -13,8 +13,9 @@
 //! (the `composing` flag), so letters typed into a reply are text, not
 //! commands.
 
-use gpui::{KeyBinding, actions};
-use writer_ui::CommandDescriptor;
+use gpui::{Action, KeyBinding, actions};
+use writer_core::CommentId;
+use writer_ui::{CommandDescriptor, context_menu::OpenContextMenu};
 
 actions!(
     comments,
@@ -53,6 +54,8 @@ actions!(
         ToggleResolved,
         /// Delete the active thread, or the selected reply, after a confirmation.
         DeleteComment,
+        /// Copy the words of the active comment, or of the selected reply.
+        CopyComment,
         /// Confirm the pending delete.
         ConfirmDelete,
         /// Keep the comment: dismiss the delete confirmation.
@@ -68,6 +71,34 @@ actions!(
         CancelComment,
     ]
 );
+
+/// Show one thread in the panel and its text in the editor, and move the
+/// keyboard to the thread list: "Go to Comment" for a thread whose id is
+/// known, for example from a right-click on commented text
+/// (`ContextMenuRequest::comments`). Works from anywhere in the window,
+/// like [`NextComment`]; see `CommentsPanel::go_to_thread`.
+///
+/// ```ignore
+/// ContextMenuItem::action("Go to Comment", GoToThread::new(thread))
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Action)]
+#[action(namespace = comments, no_json)]
+pub struct GoToThread {
+    /// The thread's id (`CommentId.0`).
+    pub thread: u64,
+}
+
+impl GoToThread {
+    /// The action for `thread`.
+    pub fn new(thread: CommentId) -> Self {
+        Self { thread: thread.0 }
+    }
+
+    /// The thread to go to.
+    pub fn id(&self) -> CommentId {
+        CommentId(self.thread)
+    }
+}
 
 /// Key context of the panel's root element.
 pub const PANEL_CONTEXT: &str = "CommentsPanel";
@@ -126,8 +157,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("e", EditComment, threads),
         KeyBinding::new("x", ToggleResolved, threads),
         KeyBinding::new("cmd-backspace", DeleteComment, threads),
+        KeyBinding::new("cmd-c", CopyComment, threads),
         KeyBinding::new("s", ToggleShowResolved, threads),
         KeyBinding::new("escape", FocusEditor, threads),
+        // The menu of the active thread (the shared context-menu key).
+        KeyBinding::new("ctrl-enter", OpenContextMenu, threads),
         // Back into a composer that was left open.
         KeyBinding::new("shift-tab", CycleFocus, threads),
         KeyBinding::new("tab", CycleFocus, threads),
@@ -152,7 +186,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 
 /// The comment commands for the command palette and the shortcuts overlay.
 ///
-/// The first six work from anywhere. The last four act on the active
+/// The first six work from anywhere. The last five act on the active
 /// thread, which is the one the caret is in or the one chosen in the panel.
 pub fn commands() -> Vec<CommandDescriptor> {
     vec![
@@ -181,5 +215,7 @@ pub fn commands() -> Vec<CommandDescriptor> {
         ]),
         CommandDescriptor::new("Delete comment", CATEGORY, DeleteComment)
             .keywords(["remove", "thread"]),
+        CommandDescriptor::new("Copy comment text", CATEGORY, CopyComment)
+            .keywords(["clipboard", "thread"]),
     ]
 }

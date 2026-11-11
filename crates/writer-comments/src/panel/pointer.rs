@@ -68,7 +68,12 @@ impl CommentsPanel {
     /// Makes `thread` the active one and selects `reply` in it (`None`: the
     /// opening comment), for a command that names what it acts on. `false`
     /// when the panel does not list the thread or the reply is gone.
-    fn aim(&mut self, thread: CommentId, reply: Option<ReplyId>, cx: &mut Context<Self>) -> bool {
+    pub(super) fn aim(
+        &mut self,
+        thread: CommentId,
+        reply: Option<ReplyId>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.is_listed(thread) {
             return false;
         }
@@ -240,6 +245,18 @@ impl CommentsPanel {
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         true
+    }
+
+    /// Puts the words of the selected reply, or of the active comment, on
+    /// the clipboard (`cmd-c` in the thread list, "Copy Text" in a menu)
+    /// and says so.
+    pub fn copy_active(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.active else {
+            return;
+        };
+        if self.copy_comment_text(thread, self.selected_reply, cx) {
+            self.notice("Copied the comment's text.", cx);
+        }
     }
 
     /// Whether the composer has something that [`CommentsPanel::submit`]

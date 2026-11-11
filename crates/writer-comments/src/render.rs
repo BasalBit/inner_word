@@ -23,11 +23,13 @@
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
-    KeyContext, Render, SharedString, Stateful, WeakEntity, Window, div, list, prelude::*, px,
+    KeyContext, MouseButton, MouseDownEvent, Render, SharedString, Stateful, WeakEntity, Window,
+    canvas, div, list, prelude::*, px,
 };
 use writer_core::{CommentId, Reply, ReplyId};
 use writer_ui::{
     IconName, KeyHint, SectionLabel,
+    context_menu::OpenContextMenu,
     theme::{
         ActiveTheme, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, ThemeColors,
         UI_LINE_HEIGHT, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
@@ -36,14 +38,18 @@ use writer_ui::{
 
 use crate::{
     actions::{
-        AddComment, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, CycleFocus,
-        DeleteComment, EditComment, FocusComments, FocusEditor, NextComment, PANEL_CONTEXT,
-        PreviousComment, ReplyToThread, SelectFirstThread, SelectLastThread, SelectNextReply,
-        SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment,
-        THREADS_CONTEXT, ToggleComments, ToggleResolved, ToggleShowResolved,
+        AddComment, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, CopyComment,
+        CycleFocus, DeleteComment, EditComment, FocusComments, FocusEditor, GoToThread,
+        NextComment, PANEL_CONTEXT, PreviousComment, ReplyToThread, SelectFirstThread,
+        SelectLastThread, SelectNextReply, SelectNextThread, SelectPreviousReply,
+        SelectPreviousThread, SubmitComment, THREADS_CONTEXT, ToggleComments, ToggleResolved,
+        ToggleShowResolved,
     },
     controls::{ICON_BUTTON, Look, Press, icon_button, text_button},
-    panel::{CommentsPanel, DeleteTarget, DraftKind, Row, panel_for_actions},
+    panel::{
+        CommentMenuTarget, CommentsPanel, DeleteTarget, DraftKind, Row, menu::MenuAnchors,
+        panel_for_actions,
+    },
     threads::ThreadEntry,
     time::relative_time,
 };
@@ -71,6 +77,16 @@ macro_rules! forward {
 /// With focus inside the panel these listeners handle them; from anywhere
 /// else the global listeners in `global_actions` do.
 fn window_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<CommentsPanel>) -> E {
+    let element = element.on_action({
+        let panel = panel.clone();
+        move |action: &GoToThread, window: &mut Window, cx: &mut App| {
+            panel
+                .update(cx, |panel, cx| {
+                    panel.go_to_thread(action.id(), window, cx);
+                })
+                .ok();
+        }
+    });
     forward!(element, panel,
         AddComment => add_comment,
         NextComment => next_comment,
@@ -82,6 +98,7 @@ fn window_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<Comments
         EditComment => edit,
         ToggleResolved => toggle_resolved,
         DeleteComment => request_delete,
+        CopyComment => copy_active,
     )
 }
 
@@ -98,6 +115,7 @@ fn panel_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<CommentsP
         CancelDelete => cancel_delete,
         FocusEditor => focus_editor,
         CycleFocus => cycle_focus,
+        OpenContextMenu => open_context_menu,
         SubmitComment => submit,
         CancelComment => cancel,
         writer_editor::actions::Undo => undo,
@@ -128,6 +146,21 @@ pub(crate) fn global_actions(cx: &mut App) {
             )+
         };
     }
+    cx.on_action(|action: &GoToThread, cx: &mut App| {
+        let Some((window, panel)) = panel_for_actions(cx) else {
+            return;
+        };
+        let thread = action.id();
+        cx.defer(move |cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    panel.update(cx, |panel, cx| {
+                        panel.go_to_thread(thread, window, cx);
+                    });
+                })
+                .ok();
+        });
+    });
     global!(
         AddComment => add_comment,
         NextComment => next_comment,
@@ -139,6 +172,7 @@ pub(crate) fn global_actions(cx: &mut App) {
         EditComment => edit,
         ToggleResolved => toggle_resolved,
         DeleteComment => request_delete,
+        CopyComment => copy_active,
     );
 }
 
@@ -160,6 +194,8 @@ impl Render for CommentsPanel {
         }
         let panel = cx.weak_entity();
         let composer_focused = self.composer.read(cx).is_focused(window);
+        // The "more" buttons this frame draws say where they are.
+        *self.menu_anchors.borrow_mut() = MenuAnchors::default();
         if self.reveal_pending() {
             // Once this frame has measured the cards: is the active one
             // fully in view?
@@ -199,7 +235,15 @@ impl Render for CommentsPanel {
             .text_size(UI_TEXT_BASE)
             .line_height(UI_LINE_HEIGHT)
             .text_color(colors.ink);
-        let root = panel_actions(window_actions(root, &panel), &panel);
+        let root = panel_actions(window_actions(root, &panel), &panel)
+            // A right-click that no card took: the menu of the panel.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(CommentMenuTarget::Panel, event.position, false, window, cx);
+                }),
+            );
 
         root.child(
             div()
@@ -207,11 +251,21 @@ impl Render for CommentsPanel {
                 .flex_none()
                 .items_center()
                 .justify_between()
+                .relative()
                 .h(px(36.))
                 .pl(SPACE_3)
                 .pr(SPACE_2)
                 .border_b_1()
                 .border_color(colors.hairline)
+                .child({
+                    let anchors = self.menu_anchors.clone();
+                    canvas(
+                        move |bounds, _, _| anchors.borrow_mut().header = Some(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full()
+                })
                 .child(SectionLabel::new("Comments"))
                 .child(
                     div()
@@ -478,6 +532,9 @@ impl CommentsPanel {
         div()
             .debug_selector(|| "comment-composer".into())
             .key_context(COMPOSER_CONTEXT)
+            // A right-click in the composer is about its text (the
+            // composer asks for its own menu), not about the card around.
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .px(SPACE_2)
             .py(SPACE_1)
             .bg(colors.canvas)
@@ -698,7 +755,20 @@ impl CommentsPanel {
             }))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.click_thread(id, window, cx);
-            }));
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(
+                        CommentMenuTarget::Thread(id),
+                        event.position,
+                        false,
+                        window,
+                        cx,
+                    );
+                }),
+            );
 
         // A resolved thread steps back: its words are done with.
         let resolved = entry.is_resolved();
@@ -820,9 +890,23 @@ impl CommentsPanel {
             .justify_end()
             .gap(SPACE_0_5)
             .h(ICON_BUTTON)
-            .w(ICON_BUTTON * 2. + SPACE_0_5);
-        if !shown || self.editor.read(cx).is_read_only() {
+            .w(ICON_BUTTON * 3. + SPACE_0_5 * 2.);
+        if !shown {
             return row;
+        }
+        let target = CommentMenuTarget::Thread(id);
+        let more = self
+            .more_button(
+                ("comment-more-button", n),
+                format!("comment-more-button-{}", id.0),
+                target,
+                colors,
+                cx,
+            )
+            .into_any_element();
+        if self.editor.read(cx).is_read_only() {
+            // Nothing can be changed; the menu still copies the text.
+            return row.child(more);
         }
         let resolved = entry.is_resolved();
         row.child(
@@ -855,6 +939,43 @@ impl CommentsPanel {
                 this.toggle_resolved_of(id, window, cx);
             })),
         )
+        .child(more)
+    }
+
+    /// The "more" button of a card or a reply: opens its menu, dropping
+    /// down from the button. `ctrl-enter` in the list opens the same menu
+    /// at the same place.
+    fn more_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        name: String,
+        target: CommentMenuTarget,
+        colors: &ThemeColors,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let anchors = self.menu_anchors.clone();
+        icon_button(
+            id,
+            name,
+            IconName::More,
+            "More",
+            KeyHint::for_action(&OpenContextMenu, cx),
+            Press::Bubble,
+            colors,
+        )
+        .child(
+            canvas(
+                move |bounds, _, _| anchors.borrow_mut().more.push((target, bounds)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            let anchor = this.menu_anchor(target);
+            this.open_menu(target, anchor, false, window, cx);
+        }))
     }
 
     /// One reply. A click selects it, as the arrow keys do.
@@ -871,6 +992,8 @@ impl CommentsPanel {
     ) -> Stateful<Div> {
         let reply_id = reply.id;
         let ReplyId(n) = reply_id;
+        let target = CommentMenuTarget::Reply(thread, reply_id);
+        let controls_shown = selected || self.hovered_reply == Some((thread, reply_id));
         div()
             .id(("comment-reply", n as usize))
             .debug_selector(move || format!("comment-reply-{}-{}", thread.0, n))
@@ -888,13 +1011,45 @@ impl CommentsPanel {
                 cx.stop_propagation();
                 this.select_reply(thread, reply_id, window, cx);
             }))
-            .child(meta_line(
-                &reply.author,
-                relative_time(reply.created_at, now),
-                false,
-                name_color,
-                colors,
-            ))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(target, event.position, false, window, cx);
+                }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .child(
+                        meta_line(
+                            &reply.author,
+                            relative_time(reply.created_at, now),
+                            false,
+                            name_color,
+                            colors,
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    )
+                    // The room of the button is kept, as on the card.
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(ICON_BUTTON)
+                            .when(controls_shown, |slot| {
+                                slot.child(self.more_button(
+                                    ("comment-reply-more-button", n as usize),
+                                    format!("comment-reply-more-button-{}-{}", thread.0, n),
+                                    target,
+                                    colors,
+                                    cx,
+                                ))
+                            }),
+                    ),
+            )
             .child(body_text(&reply.body, body_color))
     }
 

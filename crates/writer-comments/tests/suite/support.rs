@@ -49,6 +49,9 @@ impl Render for Workspace {
                         .child(self.panel.clone()),
                 )
             })
+            // The app's toast layer draws the open context menu; a window
+            // without one mounts the menu layer itself.
+            .child(writer_ui::ContextMenuLayer)
     }
 }
 

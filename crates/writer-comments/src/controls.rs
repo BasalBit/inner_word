@@ -105,6 +105,9 @@ pub(crate) fn icon_button(
     let button = div()
         .id(id)
         .debug_selector(move || name)
+        // A menu that drops down from the button measures it through an
+        // absolute child.
+        .relative()
         .flex_none()
         .size(ICON_BUTTON)
         .flex()

@@ -135,7 +135,7 @@ fn threads_come_in_document_order_with_detached_last() {
 fn commands_are_published_with_their_keys(cx: &mut TestAppContext) {
     setup(cx);
     let commands = writer_comments::commands();
-    assert_eq!(commands.len(), 10);
+    assert_eq!(commands.len(), 11);
     assert!(
         commands
             .iter()
@@ -156,6 +156,7 @@ fn commands_are_published_with_their_keys(cx: &mut TestAppContext) {
     // The canonical key of an action with alternatives is the one shown.
     assert_eq!(hint("Reply to comment").as_deref(), Some("↩"));
     assert_eq!(hint("Delete comment").as_deref(), Some("⌘⌫"));
+    assert_eq!(hint("Copy comment text").as_deref(), Some("⌘C"));
 
     // Every action can be built by name, as the palette does.
     cx.update(|cx| {

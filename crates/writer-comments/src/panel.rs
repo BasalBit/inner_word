@@ -7,7 +7,7 @@
 //! goes through `Editor::edit_with`, so it is one undo step in the
 //! document's history.
 
-use std::{rc::Rc, time::Duration};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use gpui::{
     AnyWindowHandle, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -30,9 +30,12 @@ use crate::{
 };
 
 mod compose;
+pub(crate) mod menu;
 mod navigation;
 mod pointer;
 mod resolve;
+
+pub use menu::CommentMenuTarget;
 
 /// The editor highlight layer that marks the text a new comment will be
 /// anchored to while its composer is open.
@@ -231,6 +234,15 @@ pub struct CommentsPanel {
     /// Whether the composer holds nothing but white space (its save button
     /// is disabled then).
     pub(crate) composer_empty: bool,
+    /// What the app adds to the menus of the panel.
+    menu_extension: Option<menu::MenuExtension>,
+    /// What the open menu of the panel is on.
+    menu_target: Option<CommentMenuTarget>,
+    /// Counts the menus the panel opened, to tell them apart.
+    menu_generation: u64,
+    menu_subscription: menu::MenuSubscription,
+    /// Where menus drop down from, as the last frame drew it.
+    pub(crate) menu_anchors: Rc<RefCell<menu::MenuAnchors>>,
     clock: Rc<dyn Fn() -> Timestamp>,
     _editor_subscriptions: [Subscription; 2],
     _subscriptions: Vec<Subscription>,
@@ -281,14 +293,17 @@ impl CommentsPanel {
         });
         let panel = cx.weak_entity();
         let mut subscriptions = vec![
-            // `enter` in the composer (submit-on-enter).
+            // `enter` in the composer (submit-on-enter), and a right-click
+            // or `ctrl-enter` in it.
             cx.subscribe_in(
                 &composer,
                 window,
-                |this, _, event: &EditorEvent, window, cx| {
-                    if matches!(event, EditorEvent::Submitted) {
-                        this.submit(window, cx);
+                |this, _, event: &EditorEvent, window, cx| match event {
+                    EditorEvent::Submitted => this.submit(window, cx),
+                    EditorEvent::ContextMenuRequested(request) => {
+                        this.open_composer_menu(request, window, cx)
                     }
+                    _ => {}
                 },
             ),
             // `cmd-enter` and `escape` in the composer. The editor binds
@@ -369,6 +384,11 @@ impl CommentsPanel {
             hovered: None,
             hovered_reply: None,
             composer_empty: true,
+            menu_extension: None,
+            menu_target: None,
+            menu_generation: 0,
+            menu_subscription: None,
+            menu_anchors: Rc::default(),
             clock: Rc::new(time::now),
             _subscriptions: subscriptions,
             _refresh_times: refresh_times,
@@ -585,6 +605,14 @@ impl CommentsPanel {
     /// composer).
     pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
         self.focus_handle.is_focused(window) || self.composer.focus_handle(cx).is_focused(window)
+    }
+
+    /// The focus handle of the thread list: where the keys of the list
+    /// are bound ([`crate::THREADS_CONTEXT`]) and where the items of the
+    /// panel's menus are dispatched. For key hints as the list sees them
+    /// (`KeyHint::for_action_in`).
+    pub fn list_focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
     }
 
     /// Whether the thread list itself has keyboard focus.

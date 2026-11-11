@@ -139,13 +139,16 @@ pub mod time;
 pub mod track;
 
 pub use actions::{
-    AddComment, CATEGORY, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, CycleFocus,
-    DeleteComment, EditComment, FocusComments, FocusEditor, NextComment, PANEL_CONTEXT,
-    PreviousComment, ReplyToThread, SelectFirstThread, SelectLastThread, SelectNextReply,
-    SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment, THREADS_CONTEXT,
-    ToggleComments, ToggleResolved, ToggleShowResolved, commands, key_bindings,
+    AddComment, CATEGORY, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete,
+    CopyComment, CycleFocus, DeleteComment, EditComment, FocusComments, FocusEditor, GoToThread,
+    NextComment, PANEL_CONTEXT, PreviousComment, ReplyToThread, SelectFirstThread,
+    SelectLastThread, SelectNextReply, SelectNextThread, SelectPreviousReply, SelectPreviousThread,
+    SubmitComment, THREADS_CONTEXT, ToggleComments, ToggleResolved, ToggleShowResolved, commands,
+    key_bindings,
 };
-pub use panel::{CommentsEvent, CommentsPanel, DRAFT_HIGHLIGHT_LAYER, DeleteTarget, DraftKind};
+pub use panel::{
+    CommentMenuTarget, CommentsEvent, CommentsPanel, DRAFT_HIGHLIGHT_LAYER, DeleteTarget, DraftKind,
+};
 pub use threads::ThreadEntry;
 
 use gpui::App;

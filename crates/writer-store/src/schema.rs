@@ -19,7 +19,7 @@ pub(crate) const APPLICATION_ID: i32 = 0x5752_4954;
 /// The newest schema version this build creates and understands.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 const V1: &str = r#"
 CREATE TABLE folders (
@@ -100,6 +100,19 @@ CREATE TRIGGER documents_fts_update AFTER UPDATE OF title, plain_text ON documen
 END;
 "#;
 
+/// Version 2: an index that holds everything a document listing shows.
+///
+/// In the `documents` table the counts, the position and the timestamps are stored after
+/// the content and the plain text, so reading them makes SQLite walk through the text of
+/// every document: listing the library cost time in proportion to everything ever written
+/// (22 ms for 5,000 documents of 2,000 words, on every reload of the tree). With this
+/// index the listings of live documents never touch the text.
+const V2: &str = r#"
+CREATE INDEX documents_meta ON documents(
+    trashed_at, position, id, folder_id, title, word_count, char_count, created_at, updated_at
+);
+"#;
+
 /// Applies the per-connection pragmas that do not modify the file: busy timeout, foreign
 /// keys, in-memory temp storage.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -178,4 +191,87 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A database as version 1 of the app left it, with one document.
+    fn version_1() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        configure(&conn).unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO documents (title, content, plain_text, word_count, char_count,
+                 position, created_at, updated_at)
+             VALUES ('Kept', '{}', 'kept words', 2, 10, 0, 5, 6)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn plan(conn: &Connection, sql: &str) -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        rows.join("; ")
+    }
+
+    #[test]
+    fn version_1_upgrades_in_place() {
+        let mut conn = version_1();
+        migrate(&mut conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 2);
+        let (title, words): (String, i64) = conn
+            .query_row("SELECT title, word_count FROM documents", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((title.as_str(), words), ("Kept", 2));
+        // The search index is untouched by the upgrade.
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH 'kept'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+        // Running it again changes nothing.
+        migrate(&mut conn).unwrap();
+    }
+
+    /// The listings must be answered from the index alone: a plan that visits the table
+    /// reads the text of every document.
+    #[test]
+    fn listings_of_live_documents_do_not_read_the_text() {
+        let mut conn = version_1();
+        migrate(&mut conn).unwrap();
+        let cols = crate::documents::DOC_META_COLS;
+        for order in ["position, id", "updated_at DESC, id DESC"] {
+            let plan = plan(
+                &conn,
+                &format!(
+                    "SELECT {cols} FROM documents INDEXED BY documents_meta
+                     WHERE trashed_at IS NULL ORDER BY {order}"
+                ),
+            );
+            assert!(
+                plan.contains("COVERING INDEX documents_meta"),
+                "ORDER BY {order}: {plan}"
+            );
+        }
+    }
 }

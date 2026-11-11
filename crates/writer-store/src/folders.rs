@@ -285,6 +285,75 @@ impl Store {
         Ok(())
     }
 
+    /// Copies a live folder with everything live inside it (subfolders and documents, at
+    /// any depth) next to the original: same parent, directly after it, named
+    /// `"<name> copy"`. Inside the copy every name, title and order is kept. Documents are
+    /// copied as [`Store::duplicate_document`] copies them (content, plain text, counts and
+    /// view state; no snapshots), and the copies are stamped with the current time. Trashed
+    /// items inside the folder are not copied. One transaction: all of it or nothing.
+    /// Returns the new folder.
+    pub fn duplicate_folder(&mut self, id: FolderId) -> Result<Folder> {
+        /// Copies `source` under `parent`; returns the copy.
+        fn copy(
+            conn: &Connection,
+            source: FolderId,
+            parent: Option<FolderId>,
+            name: &str,
+            position: i64,
+            now: i64,
+        ) -> Result<FolderId> {
+            conn.execute(
+                "INSERT INTO folders (parent_id, name, position, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![parent, name, position, now],
+            )?;
+            let copied = FolderId(conn.last_insert_rowid());
+            conn.execute(
+                "INSERT INTO documents
+                     (folder_id, title, content, plain_text, word_count, char_count, position,
+                      created_at, updated_at, view_state)
+                 SELECT ?2, title, content, plain_text, word_count, char_count, position,
+                        ?3, ?3, view_state
+                 FROM documents WHERE folder_id = ?1 AND trashed_at IS NULL",
+                params![source, copied, now],
+            )?;
+            // Read the children before copying them: the copies must not be seen as
+            // children to copy.
+            let children: Vec<(FolderId, String, i64)> = {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, name, position FROM folders
+                     WHERE parent_id = ?1 AND trashed_at IS NULL ORDER BY position, id",
+                )?;
+                stmt.query_map([source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            for (child, name, position) in children {
+                copy(conn, child, Some(copied), &name, position, now)?;
+            }
+            Ok(copied)
+        }
+
+        let now = self.now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_live_folder(&tx, id)?;
+        let folder = load_folder(&tx, id)?;
+        let name = format!("{} copy", folder.name);
+        let copied = copy(&tx, id, folder.parent_id, &name, folder.position, now)?;
+        let mut ids = sibling_ids(&tx, Siblings::Folders, folder.parent_id)?;
+        ids.retain(|&other| other != copied.0);
+        let at = ids
+            .iter()
+            .position(|&other| other == id.0)
+            .map_or(ids.len(), |ix| ix + 1);
+        ids.insert(at, copied.0);
+        write_positions(&tx, Siblings::Folders, &ids)?;
+        let folder = load_folder(&tx, copied)?;
+        tx.commit()?;
+        Ok(folder)
+    }
+
     /// Moves a live folder to `index` among its live sibling folders (0 = first; an index
     /// past the end places it last). Does not bump `updated_at`.
     pub fn reorder_folder(&mut self, id: FolderId, index: usize) -> Result<()> {

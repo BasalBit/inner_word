@@ -192,3 +192,99 @@ fn trashed_folders_cannot_be_targets_or_edited() {
     // Still loadable, marked trashed.
     assert_eq!(store.folder(a.id).unwrap().trashed_at, Some(START));
 }
+
+#[test]
+fn duplicate_copies_the_whole_live_subtree_next_to_the_original() {
+    let (mut store, clock) = store();
+    let before = store.create_folder(None, "Before").unwrap();
+    let book = store.create_folder(None, "Book").unwrap();
+    let after = store.create_folder(None, "After").unwrap();
+    let part = store.create_folder(Some(book.id), "Part one").unwrap();
+    let notes = store.create_folder(Some(book.id), "Notes").unwrap();
+    let deep = store.create_folder(Some(part.id), "Scenes").unwrap();
+    let empty = store.create_folder(Some(book.id), "Empty").unwrap();
+    let outline = doc(&mut store, Some(book.id), "Outline", "the plan");
+    let first = doc(&mut store, Some(part.id), "Chapter 1", "harbour at dawn");
+    doc(&mut store, Some(part.id), "Chapter 2", "low tide");
+    doc(&mut store, Some(deep.id), "Scene", "a letter arrives");
+    store.save_view_state(first.id, "{\"caret\":3}").unwrap();
+    store.create_snapshot(first.id).unwrap();
+    // Trashed things inside the folder stay behind.
+    let cut = doc(&mut store, Some(part.id), "Cut chapter", "gone");
+    store.trash_document(cut.id).unwrap();
+    store.trash_folder(notes.id).unwrap();
+    // The order inside is not creation order.
+    store.reorder_folder(empty.id, 0).unwrap();
+    store.reorder_document(first.id, 1).unwrap();
+
+    clock.advance_ms(HOUR);
+    let copy = store.duplicate_folder(book.id).unwrap();
+    assert_eq!(copy.name, "Book copy");
+    assert_eq!(copy.parent_id, None);
+    assert_eq!(copy.created_at, START + HOUR);
+    assert_eq!(
+        folder_names(&store, None),
+        vec!["Before", "Book", "Book copy", "After"]
+    );
+
+    let tree = store.library_tree().unwrap();
+    let original = tree.find_folder(book.id).unwrap();
+    let copied = tree.find_folder(copy.id).unwrap();
+    /// Names and titles of a subtree, without ids.
+    fn shape(node: &writer_store::FolderNode) -> String {
+        let folders: Vec<String> = node.folders.iter().map(shape).collect();
+        let documents: Vec<&str> = node.documents.iter().map(|d| d.title.as_str()).collect();
+        format!(
+            "{}[{}|{}]",
+            node.folder.name,
+            folders.join(","),
+            documents.join(",")
+        )
+    }
+    assert_eq!(
+        shape(copied),
+        "Book copy[Empty[|],Part one[Scenes[|Scene]|Chapter 2,Chapter 1]|Outline]"
+    );
+    assert_eq!(
+        shape(copied).replacen("Book copy", "Book", 1),
+        shape(original)
+    );
+
+    // The copies are documents of their own: content, text, counts and view state.
+    let copied_first = copied.folders[1]
+        .documents
+        .iter()
+        .find(|d| d.title == "Chapter 1")
+        .unwrap();
+    assert_ne!(copied_first.id, first.id);
+    assert_eq!(copied_first.word_count, first.word_count);
+    assert_eq!(copied_first.updated_at, START + HOUR);
+    let loaded = store.document(copied_first.id).unwrap();
+    assert_eq!(loaded.content, store.document(first.id).unwrap().content);
+    assert_eq!(loaded.view_state.as_deref(), Some("{\"caret\":3}"));
+    assert!(store.snapshots(copied_first.id).unwrap().is_empty());
+    // Both are found by the search.
+    assert_eq!(store.search("harbour", 10).unwrap().len(), 2);
+    // The original is untouched.
+    assert_eq!(store.document_meta(outline.id).unwrap(), outline);
+    assert_eq!(store.folder(after.id).unwrap().parent_id, None);
+    assert_eq!(store.folder(before.id).unwrap().parent_id, None);
+    // The trash still holds exactly what was trashed.
+    assert_eq!(store.trash().unwrap().len(), 2);
+
+    // A nested folder is copied next to itself; a trashed or missing one is not found.
+    let copy = store.duplicate_folder(part.id).unwrap();
+    assert_eq!(copy.parent_id, Some(book.id));
+    assert_eq!(
+        folder_names(&store, Some(book.id)),
+        vec!["Empty", "Part one", "Part one copy"]
+    );
+    assert!(matches!(
+        store.duplicate_folder(notes.id),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert!(matches!(
+        store.duplicate_folder(FolderId(4040)),
+        Err(StoreError::NotFound { .. })
+    ));
+}

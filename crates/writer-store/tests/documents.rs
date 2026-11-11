@@ -430,3 +430,134 @@ fn save_cost() {
     }
     report("save_document, 1 MB, same text (formatting only)", times);
 }
+
+#[test]
+fn the_tree_takes_a_saved_document_in_place() {
+    let (mut store, clock) = store();
+    let folder = store.create_folder(None, "A").unwrap();
+    let inner = store.create_folder(Some(folder.id), "A1").unwrap();
+    let at_root = doc(&mut store, None, "Root", "x");
+    let nested = doc(&mut store, Some(inner.id), "Nested", "x");
+    doc(&mut store, Some(inner.id), "Sibling", "x");
+    let mut tree = store.library_tree().unwrap();
+    assert_eq!(tree.find_document(nested.id), Some(&nested));
+    assert_eq!(tree.find_document(DocumentId(404)), None);
+    assert_eq!(tree.documents_in(None).unwrap().len(), 1);
+    assert_eq!(tree.documents_in(Some(inner.id)).unwrap().len(), 2);
+    assert!(
+        tree.documents_in(Some(writer_store::FolderId(404)))
+            .is_none()
+    );
+
+    clock.advance_ms(MINUTE);
+    for id in [at_root.id, nested.id] {
+        let saved = store
+            .save_document(
+                id,
+                &content("Renamed by its first line", "one two three", "{}"),
+            )
+            .unwrap();
+        assert!(tree.update_document(&saved));
+        assert_eq!(tree.find_document(id), Some(&saved));
+    }
+    // Patched in place, the tree is the tree a reload gives.
+    assert_eq!(tree, store.library_tree().unwrap());
+
+    // What the tree cannot simply take: a document that moved, changed place among its
+    // siblings, is trashed or is not there. Nothing changes then.
+    let before = tree.clone();
+    store.move_document(nested.id, None).unwrap();
+    assert!(!tree.update_document(&store.document_meta(nested.id).unwrap()));
+    store.move_document(nested.id, Some(inner.id)).unwrap();
+    assert!(!tree.update_document(&store.document_meta(nested.id).unwrap()));
+    store.trash_document(at_root.id).unwrap();
+    assert!(!tree.update_document(&store.document_meta(at_root.id).unwrap()));
+    let mut stranger = nested.clone();
+    stranger.id = DocumentId(404);
+    assert!(!tree.update_document(&stranger));
+    stranger.folder_id = Some(writer_store::FolderId(404));
+    assert!(!tree.update_document(&stranger));
+    assert_eq!(tree, before);
+}
+
+#[test]
+fn a_save_that_keeps_the_text_keeps_the_search_index() {
+    let (mut store, clock) = store();
+    let d = doc(&mut store, None, "Tides", "the harbour at low tide");
+    let titles = |store: &writer_store::Store, query: &str| -> Vec<String> {
+        store
+            .search(query, 10)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.title)
+            .collect()
+    };
+    // Formatting only: new content, same title and text.
+    clock.advance_ms(MINUTE);
+    let saved = store
+        .save_document(
+            d.id,
+            &DocumentContent {
+                content: "{\"bold\":true}",
+                title: "Tides",
+                plain_text: "the harbour at low tide",
+                word_count: 5,
+                char_count: 23,
+            },
+        )
+        .unwrap();
+    assert_eq!(saved.updated_at, START + MINUTE);
+    assert_eq!(saved.word_count, 5);
+    assert_eq!(store.document(d.id).unwrap().content, "{\"bold\":true}");
+    assert_eq!(titles(&store, "harbour"), vec!["Tides"]);
+    // Only the title changes, then only the text: the index follows each.
+    store
+        .save_document(d.id, &content("Ebb", "the harbour at low tide", "{}"))
+        .unwrap();
+    assert_eq!(titles(&store, "ebb"), vec!["Ebb"]);
+    assert!(titles(&store, "tides").is_empty());
+    store
+        .save_document(d.id, &content("Ebb", "the quay at high water", "{}"))
+        .unwrap();
+    assert!(titles(&store, "harbour").is_empty());
+    assert_eq!(titles(&store, "quay"), vec!["Ebb"]);
+    // The index is still consistent with the table.
+    store.rebuild_search_index().unwrap();
+    assert_eq!(titles(&store, "quay"), vec!["Ebb"]);
+    assert!(titles(&store, "harbour").is_empty());
+}
+
+#[test]
+fn listings_are_the_same_whatever_the_size_of_the_text() {
+    // The listings come from an index, the single-document reads from the table: both must
+    // tell the same story, also for a document whose text spills over many pages.
+    let (mut store, clock) = store();
+    let folder = store.create_folder(None, "A").unwrap();
+    let long = "word ".repeat(40_000);
+    let big = doc(&mut store, Some(folder.id), "Big", &long);
+    let small = doc(&mut store, None, "Small", "x");
+    clock.advance_ms(MINUTE);
+    let renamed = {
+        store.rename_document(small.id, "Small, renamed").unwrap();
+        store.document_meta(small.id).unwrap()
+    };
+    let tree = store.library_tree().unwrap();
+    assert_eq!(tree.find_document(big.id), Some(&big));
+    assert_eq!(tree.find_document(small.id), Some(&renamed));
+    assert_eq!(
+        store.documents().unwrap(),
+        vec![renamed.clone(), big.clone()]
+    );
+    assert_eq!(store.recent_documents(1).unwrap(), vec![renamed]);
+    store.trash_document(big.id).unwrap();
+    assert_eq!(store.documents().unwrap().len(), 1);
+    assert!(
+        store
+            .library_tree()
+            .unwrap()
+            .find_document(big.id)
+            .is_none()
+    );
+    store.restore_document(big.id).unwrap();
+    assert_eq!(store.documents().unwrap().len(), 2);
+}

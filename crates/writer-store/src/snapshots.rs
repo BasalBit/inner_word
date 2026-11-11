@@ -7,7 +7,6 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::Store;
-use crate::documents::load_meta;
 use crate::error::{ItemKind, Result, StoreError, not_found};
 use crate::ids::{DocumentId, SnapshotId, count_from_sql};
 
@@ -235,20 +234,42 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        load_meta(&tx, document)?;
-        let last: Option<(i64, bool)> = tx
+        // Only whether it exists: the metadata sits behind the text in the row.
+        let exists: Option<i64> = tx
+            .query_row("SELECT 1 FROM documents WHERE id = ?1", [document], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if exists.is_none() {
+            return Err(StoreError::NotFound {
+                kind: ItemKind::Document,
+                id: document.0,
+            });
+        }
+        // The age first: it is answered from an index. Comparing the content reads both
+        // copies of the text, which is not something to do after every autosave.
+        let last: Option<(SnapshotId, i64)> = tx
             .query_row(
-                "SELECT s.created_at, s.content = d.content
-                 FROM snapshots s JOIN documents d ON d.id = s.document_id
-                 WHERE s.document_id = ?1 ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
+                "SELECT id, created_at FROM snapshots
+                 WHERE document_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
                 [document],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((created_at, same)) = last
-            && (same || now.saturating_sub(created_at) < duration_ms(min_age))
-        {
-            return Ok(None);
+        if let Some((snapshot, created_at)) = last {
+            if now.saturating_sub(created_at) < duration_ms(min_age) {
+                return Ok(None);
+            }
+            let same: bool = tx.query_row(
+                "SELECT s.content = d.content
+                 FROM snapshots s JOIN documents d ON d.id = s.document_id
+                 WHERE s.id = ?1",
+                [snapshot],
+                |r| r.get(0),
+            )?;
+            if same {
+                return Ok(None);
+            }
         }
         let meta = insert_snapshot(&tx, document, now)?;
         prune(&tx, document, &policy, now)?;

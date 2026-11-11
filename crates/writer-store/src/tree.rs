@@ -8,7 +8,7 @@ use crate::Store;
 use crate::documents::{DOC_META_COLS, DocumentMeta, meta_from_row};
 use crate::error::Result;
 use crate::folders::{FOLDER_COLS, Folder, folder_from_row};
-use crate::ids::FolderId;
+use crate::ids::{DocumentId, FolderId};
 
 /// A folder with its live subfolders and documents, each in display order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +45,71 @@ impl LibraryTree {
         }
         walk(&self.folders, id)
     }
+
+    /// Finds a live document anywhere in the tree.
+    pub fn find_document(&self, id: DocumentId) -> Option<&DocumentMeta> {
+        fn walk(nodes: &[FolderNode], id: DocumentId) -> Option<&DocumentMeta> {
+            nodes.iter().find_map(|node| {
+                node.documents
+                    .iter()
+                    .find(|document| document.id == id)
+                    .or_else(|| walk(&node.folders, id))
+            })
+        }
+        self.documents
+            .iter()
+            .find(|document| document.id == id)
+            .or_else(|| walk(&self.folders, id))
+    }
+
+    /// The documents directly in `folder` (`None` is the root), in display order, or `None`
+    /// when the folder is not in the tree.
+    pub fn documents_in(&self, folder: Option<FolderId>) -> Option<&[DocumentMeta]> {
+        match folder {
+            None => Some(&self.documents),
+            Some(id) => self.find_folder(id).map(|node| node.documents.as_slice()),
+        }
+    }
+
+    /// Replaces the metadata of a document in place, for a change that leaves the document
+    /// where it is: a content save or a rename (title, counts and `updated_at`).
+    ///
+    /// Returns false and changes nothing when the tree cannot simply take the new metadata:
+    /// the document is not in the tree at `meta.folder_id`, its position differs, or `meta`
+    /// is trashed. The caller then reloads the tree with [`Store::library_tree`].
+    pub fn update_document(&mut self, meta: &DocumentMeta) -> bool {
+        fn find_mut(nodes: &mut [FolderNode], id: FolderId) -> Option<&mut FolderNode> {
+            for node in nodes {
+                if node.folder.id == id {
+                    return Some(node);
+                }
+                if let Some(found) = find_mut(&mut node.folders, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        if meta.trashed_at.is_some() {
+            return false;
+        }
+        let documents = match meta.folder_id {
+            None => &mut self.documents,
+            Some(id) => match find_mut(&mut self.folders, id) {
+                Some(node) => &mut node.documents,
+                None => return false,
+            },
+        };
+        match documents
+            .iter_mut()
+            .find(|document| document.id == meta.id && document.position == meta.position)
+        {
+            Some(document) => {
+                *document = meta.clone();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl Store {
@@ -62,8 +127,8 @@ impl Store {
         };
         let documents: Vec<DocumentMeta> = {
             let mut stmt = tx.prepare_cached(&format!(
-                "SELECT {DOC_META_COLS} FROM documents WHERE trashed_at IS NULL
-                 ORDER BY position, id"
+                "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
+                 WHERE trashed_at IS NULL ORDER BY position, id"
             ))?;
             stmt.query_map([], meta_from_row)?
                 .collect::<rusqlite::Result<_>>()?

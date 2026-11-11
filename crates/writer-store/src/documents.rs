@@ -173,26 +173,51 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute(
-            "UPDATE documents SET content = ?2, title = ?3, plain_text = ?4, word_count = ?5,
-                 char_count = ?6, updated_at = ?7
-             WHERE id = ?1",
-            params![
-                id,
-                content.content,
-                content.title,
-                content.plain_text,
-                count_to_sql(content.word_count),
-                count_to_sql(content.char_count),
-                now
-            ],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound {
-                kind: ItemKind::Document,
-                id: id.0,
-            });
-        }
+        // The search index follows `title` and `plain_text` through a trigger that fires
+        // whenever a statement sets them, changed or not. A save that changes neither (new
+        // formatting, a comment, a moved block of the same words) leaves them out, so the
+        // text is not indexed again.
+        let same_text: Option<bool> = tx
+            .query_row(
+                "SELECT title = ?2 AND plain_text = ?3 FROM documents WHERE id = ?1",
+                params![id, content.title, content.plain_text],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match same_text {
+            None => {
+                return Err(StoreError::NotFound {
+                    kind: ItemKind::Document,
+                    id: id.0,
+                });
+            }
+            Some(true) => tx.execute(
+                "UPDATE documents SET content = ?2, word_count = ?3, char_count = ?4,
+                     updated_at = ?5
+                 WHERE id = ?1",
+                params![
+                    id,
+                    content.content,
+                    count_to_sql(content.word_count),
+                    count_to_sql(content.char_count),
+                    now
+                ],
+            )?,
+            Some(false) => tx.execute(
+                "UPDATE documents SET content = ?2, title = ?3, plain_text = ?4,
+                     word_count = ?5, char_count = ?6, updated_at = ?7
+                 WHERE id = ?1",
+                params![
+                    id,
+                    content.content,
+                    content.title,
+                    content.plain_text,
+                    count_to_sql(content.word_count),
+                    count_to_sql(content.char_count),
+                    now
+                ],
+            )?,
+        };
         let meta = load_meta(&tx, id)?;
         tx.commit()?;
         Ok(meta)
@@ -314,8 +339,8 @@ impl Store {
     pub fn documents(&self) -> Result<Vec<DocumentMeta>> {
         self.query_metas(
             &format!(
-                "SELECT {DOC_META_COLS} FROM documents WHERE trashed_at IS NULL
-                 ORDER BY updated_at DESC, id DESC"
+                "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
+                 WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC"
             ),
             [],
         )

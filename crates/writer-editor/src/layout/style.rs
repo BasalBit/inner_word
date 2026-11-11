@@ -400,6 +400,27 @@ impl LayoutStyle {
         runs
     }
 
+    /// The byte ranges of inline code in a block, in order, neighbours
+    /// merged. Inline code is drawn smaller than it is shaped and in a
+    /// chip (see `layout::wrap`); a code block is not inline code, and a
+    /// compact editor holds plain text.
+    pub(crate) fn code_ranges(&self, block: &Block) -> Vec<Range<usize>> {
+        let mut ranges: Vec<Range<usize>> = Vec::new();
+        if self.compact || block.kind().is_code() {
+            return ranges;
+        }
+        for (range, attrs) in block.spans() {
+            if !attrs.code || range.is_empty() {
+                continue;
+            }
+            match ranges.last_mut() {
+                Some(last) if last.end == range.start => last.end = range.end,
+                _ => ranges.push(range),
+            }
+        }
+        ranges
+    }
+
     /// Colours, backgrounds, underlines and strikethroughs of a block.
     pub(crate) fn decorations(&self, block: &Block) -> Decorations {
         let checked = matches!(block.kind(), BlockKind::TodoItem { checked: true });

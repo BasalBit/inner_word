@@ -54,6 +54,7 @@
 pub(crate) mod block;
 pub(crate) mod pages;
 pub(crate) mod style;
+pub(crate) mod wrap;
 
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Instant};
 

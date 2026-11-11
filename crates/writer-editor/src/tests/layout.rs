@@ -444,6 +444,10 @@ fn random_edits_keep_the_layout_exact(seed: u64, cx: &mut TestAppContext) {
         "of",
         "typography",
         "row",
+        "(why?)",
+        "don\u{2019}t",
+        "well-known",
+        "\u{201c}so!\u{201d}",
     ];
     let kinds = [
         BlockKind::Paragraph,
@@ -497,8 +501,11 @@ fn random_edits_keep_the_layout_exact(seed: u64, cx: &mut TestAppContext) {
                     let kind = kinds[dice.roll(kinds.len())].clone();
                     editor.edit(|state| state.set_block_kind(kind), cx);
                 }
-                72..=74 => {
+                72..=73 => {
                     editor.edit(|state| state.toggle_bold(), cx);
+                }
+                74 => {
+                    editor.edit(|state| state.toggle_code(), cx);
                 }
                 75..=77 => {
                     editor.edit(|state| state.delete_selection(), cx);
@@ -547,15 +554,24 @@ fn random_edits_keep_the_layout_exact(seed: u64, cx: &mut TestAppContext) {
         cx.run_until_parked();
 
         // The caret is where a click on it would put it, whatever is
-        // measured so far.
+        // measured so far. (Positions in the white space that hangs past
+        // the end of a wrapped row are all drawn at the edge of the text
+        // box: there the click finds one that is drawn where the caret
+        // is.)
         editor.read_with(cx, |editor, _| {
             let head = editor.selection().head;
             let bounds = editor.position_bounds(head).unwrap();
+            let found = editor.position_at_point(bounds.center()).unwrap();
             assert_eq!(
-                editor.position_at_point(bounds.center()),
-                Some(head),
-                "seed {seed}, step {step}"
+                editor.position_bounds(found),
+                Some(bounds),
+                "seed {seed}, step {step}: {found:?} for {head:?}"
             );
+            let hangs = editor
+                .document()
+                .block(head.block)
+                .is_some_and(|block| block.text()[..head.offset].ends_with(' '));
+            assert!(found == head || hangs, "seed {seed}, step {step}");
             assert_eq!(
                 editor.stats(),
                 editor.document().stats(),
@@ -1210,5 +1226,214 @@ fn typing_in_a_very_long_paragraph_shapes_a_piece_of_it(cx: &mut TestAppContext)
         assert_eq!(kept.row_fingerprint(), fresh.row_fingerprint());
         // The counts are right once the background has caught up.
         assert_eq!(editor.stats(), editor.document().stats());
+    });
+}
+
+// --- Line breaking and inline code --------------------------------------------
+
+/// The text of every visual row of a block.
+fn rows_of(editor: &Editor, block: usize) -> Vec<String> {
+    let text = editor.document().blocks()[block].text().to_string();
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at <= text.len() {
+        let row = editor.visual_row(Position::new(block, at)).unwrap();
+        rows.push(text[row.start.offset..row.end.offset].to_string());
+        if row.end.offset >= text.len() {
+            break;
+        }
+        // A soft-wrapped row ends where the next one starts; a hard line
+        // ends before its line break.
+        at = if text.as_bytes()[row.end.offset] == b'\n' {
+            row.end.offset + 1
+        } else {
+            row.end.offset.max(at + 1)
+        };
+    }
+    rows
+}
+
+#[gpui::test]
+fn a_row_never_starts_with_closing_punctuation(cx: &mut TestAppContext) {
+    setup(cx);
+    // Dialogue, shifted by a prefix of one to thirty characters so that
+    // every mark comes to stand at the end of a full row once.
+    let dialogue = "Could they? \u{201c}Why not!\u{201d} she said; and then (quietly): \
+                    \u{201c}don\u{2019}t\u{2026}\u{201d} It was well-known, wasn\u{2019}t it? Yes! ";
+    let blocks: Vec<Block> = (1..=30)
+        .map(|prefix| Block::paragraph(&format!("{}{}", "x".repeat(prefix), dialogue.repeat(6))))
+        .collect();
+    let count = blocks.len();
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    for page_view in [false, true] {
+        editor.update(cx, |editor, cx| {
+            editor.set_page_view(page_view, cx);
+            editor.finish_layout(cx);
+        });
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            let mut wrapped = 0;
+            for block in 0..count {
+                let rows = rows_of(editor, block);
+                wrapped += rows.len() - 1;
+                for (index, row) in rows.iter().enumerate() {
+                    let first = row.chars().next().unwrap();
+                    assert!(
+                        index == 0 || first.is_alphanumeric() || "\u{201c}(".contains(first),
+                        "block {block}: a row starts with {first:?}: {row:?}"
+                    );
+                    // Rows end after their white space, or after a hyphen.
+                    let last = row.chars().next_back().unwrap();
+                    assert!(
+                        index == rows.len() - 1 || last == ' ' || last == '-',
+                        "block {block}: a row ends with {last:?}: {row:?}"
+                    );
+                    assert!(!row.ends_with("\u{201c}") && !row.ends_with('('));
+                }
+                assert_eq!(rows.concat(), editor.document().blocks()[block].text());
+            }
+            assert!(wrapped > 150, "{wrapped} wraps looked at");
+        });
+    }
+}
+
+#[gpui::test]
+fn a_word_keeps_its_row_when_only_the_space_after_it_does_not_fit(cx: &mut TestAppContext) {
+    setup(cx);
+    // The test font is 10.2 wide per character at body size and the
+    // column 700: 68 characters fit, the 69th does not.
+    let full = format!("{} {} tail", "a".repeat(33), "b".repeat(34));
+    let (editor, cx) = open(
+        Document::from_blocks(vec![Block::paragraph(&full)]),
+        EditorConfig::full(),
+        cx,
+    );
+    editor.read_with(cx, |editor, _| {
+        let rows = rows_of(editor, 0);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].len(), 69, "the space hangs: {rows:?}");
+        assert_eq!(rows[1], "tail");
+        // The caret after the hanging space is drawn at the edge of the
+        // text box, not outside it, and a click there finds it.
+        let column = editor.position_bounds(Position::ZERO).unwrap().left();
+        let end_of_word = editor.position_bounds(Position::new(0, 68)).unwrap();
+        assert!((end_of_word.left() - column - px(693.6)).abs() < px(0.01));
+        assert_eq!(
+            editor.position_at_point(gpui::point(column + px(699.), end_of_word.center().y)),
+            Some(Position::new(0, 68))
+        );
+    });
+    // End of line goes past the space, and stays on the row.
+    cx.simulate_keystrokes("cmd-right");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection().head, Position::new(0, 69));
+        let caret = editor.caret_bounds().unwrap();
+        let column = editor.position_bounds(Position::ZERO).unwrap();
+        assert_eq!(caret.top(), column.top());
+        assert!(caret.right() <= column.left() + px(701.), "{caret:?}");
+    });
+}
+
+#[gpui::test]
+fn inline_code_is_drawn_smaller_in_a_chip_inside_the_column(cx: &mut TestAppContext) {
+    setup(cx);
+    let code = writer_core::InlineAttrs {
+        code: true,
+        ..Default::default()
+    };
+    let plain = writer_core::InlineAttrs::default;
+    let (editor, cx) = open(
+        Document::from_blocks(vec![
+            Block::new(BlockKind::Paragraph)
+                .with_span("ab ", plain())
+                .with_span("code", code.clone())
+                .with_span(" cd", plain()),
+            // Code at the very start of a row, and a justified row.
+            Block::new(BlockKind::Paragraph)
+                .with_span("start", code.clone())
+                .with_span(" of the row", plain()),
+            Block::new(BlockKind::Paragraph)
+                .with_span(&"word ".repeat(11), plain())
+                .with_span("some code", code.clone())
+                .with_span(&" word".repeat(20), plain())
+                .with_alignment(writer_core::Alignment::Justify),
+            Block::paragraph("ab code cd"),
+        ]),
+        EditorConfig::full(),
+        cx,
+    );
+    editor.read_with(cx, |editor, _| {
+        let x = |block: usize, offset: usize| {
+            editor
+                .position_bounds(Position::new(block, offset))
+                .unwrap()
+                .left()
+        };
+        let column = x(0, 0);
+        let close = |a: gpui::Pixels, b: f32| (f32::from(a - column) - b).abs() < 0.01;
+        // 17 px text: 10.2 per shaped character, 8.976 per character of
+        // code, 2.72 of padding on each side of the chip.
+        let (glyph, small, pad) = (10.2, 10.2 * 0.88, 17. * 0.16);
+        assert!(close(x(0, 2), glyph * 2.));
+        // The chip starts where the code starts; its first letter comes
+        // after the padding.
+        assert!(close(x(0, 3), glyph * 3.), "{:?}", x(0, 3) - column);
+        assert!(close(x(0, 4), glyph * 3. + pad + small));
+        assert!(close(x(0, 6), glyph * 3. + pad + small * 3.));
+        // It ends after the padding; what follows is not pushed further
+        // than the chip is wide.
+        let chip_end = glyph * 3. + pad * 2. + small * 4.;
+        assert!(close(x(0, 7), chip_end));
+        assert!(close(x(0, 8), chip_end + glyph));
+        // The same text without code is laid out as shaped.
+        assert!(close(x(3, 7), glyph * 7.));
+
+        // The chip of code at the start of a row starts at the column
+        // edge, not left of it.
+        let chip = editor
+            .range_bounds(writer_core::TextRange::in_block(1, 0, 5))
+            .unwrap();
+        assert_eq!(chip.len(), 1);
+        assert_eq!(chip[0].left(), column);
+        assert!(close(chip[0].right(), pad * 2. + small * 5.));
+
+        // Every position on a row with code is found again by a click on
+        // it, and a click on a letter of code finds that letter.
+        for block in [0, 1, 2] {
+            let length = editor.document().blocks()[block].len();
+            for offset in 0..=length {
+                let position = Position::new(block, offset);
+                let bounds = editor.position_bounds(position).unwrap();
+                let found = editor.position_at_point(bounds.center()).unwrap();
+                assert_eq!(
+                    editor.position_bounds(found),
+                    Some(bounds),
+                    "{position:?} found as {found:?}"
+                );
+            }
+        }
+        let on_d = gpui::point(
+            column + px(glyph * 3. + pad + small * 2.5),
+            editor
+                .position_bounds(Position::new(0, 5))
+                .unwrap()
+                .center()
+                .y,
+        );
+        assert_eq!(editor.position_under_point(on_d), Some(Position::new(0, 5)));
+
+        // A justified row with code still ends at the edge of the column.
+        let rows = rows_of(editor, 2);
+        assert!(rows.len() >= 2, "{rows:?}");
+        assert!(rows[0].contains("some code"));
+        let visible_end = rows[0].trim_end().len();
+        assert!(
+            close(x(2, visible_end), 700.),
+            "{:?}",
+            x(2, visible_end) - column
+        );
+        // And holds more than it could if the code took its shaped width:
+        // 68 shaped characters fill the column.
+        assert!(rows[0].trim_end().len() >= 68, "{}", rows[0].len());
     });
 }

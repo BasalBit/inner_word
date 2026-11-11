@@ -53,7 +53,7 @@ impl PlannedRow {
     /// chips of inline code.
     pub(crate) fn paint_backgrounds(&self, window: &mut Window) {
         let layout = &self.layout;
-        let (ink_top, ink_height) = layout.ink_box();
+        let ink_box = layout.ink_box();
         for (ix, range) in self.marks() {
             let Some((color, shape)) = layout.decorations.marks[ix].background else {
                 continue;
@@ -61,15 +61,19 @@ impl PlannedRow {
             let Some((x0, x1)) = layout.span_in_row(self.row, &range) else {
                 continue;
             };
-            let (grow, radius) = match shape {
-                MarkShape::Highlight => (px(0.), px(2.)),
-                MarkShape::Code => (px(1.5), px(3.5)),
+            // A highlight covers the ink of the row. A chip of inline
+            // code is as high as its (smaller) text and as wide as the
+            // code with its padding, which is part of the row's layout:
+            // it never reaches out of the column or into its neighbours.
+            let ((top, height), radius) = match shape {
+                MarkShape::Highlight => (ink_box, px(2.)),
+                MarkShape::Code => (layout.code_box, px(3.5)),
             };
             window.paint_quad(
                 fill(
                     Bounds::new(
-                        point(self.origin.x + x0 - grow, self.origin.y + ink_top),
-                        size(x1 - x0 + grow * 2., ink_height),
+                        point(self.origin.x + x0, self.origin.y + top),
+                        size(x1 - x0, height),
                     ),
                     color,
                 )
@@ -92,7 +96,7 @@ impl PlannedRow {
         let mut run_ix = colors.partition_point(|(end, _)| *end <= row.range.start);
         let mut run_start = if run_ix == 0 { 0 } else { colors[run_ix - 1].0 };
         let ink = layout.ink;
-        layout.for_each_glyph(self.row, |run, glyph, x| {
+        layout.for_each_glyph(self.row, |run, glyph, x, scale| {
             let offset = line.start + glyph.index;
             if offset < run_start {
                 run_ix = colors.partition_point(|(end, _)| *end <= offset);
@@ -104,13 +108,15 @@ impl PlannedRow {
             }
             let color: Hsla = colors.get(run_ix).map_or(ink, |(_, color)| *color);
             let origin = point(self.origin.x + x, baseline);
+            // Inline code is drawn smaller than the line it was shaped in.
+            let font_size = layout.font_size * scale;
             if glyph.is_emoji {
                 window
-                    .paint_emoji(origin, run.font_id, glyph.id, layout.font_size)
+                    .paint_emoji(origin, run.font_id, glyph.id, font_size)
                     .ok();
             } else {
                 window
-                    .paint_glyph(origin, run.font_id, glyph.id, layout.font_size, color)
+                    .paint_glyph(origin, run.font_id, glyph.id, font_size, color)
                     .ok();
             }
         });

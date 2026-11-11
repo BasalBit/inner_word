@@ -2,9 +2,16 @@
 //!
 //! A block is shaped with `shape_text` (never `shape_line`: it loses per-run
 //! fonts and panics on `\n`, see `docs/gpui-notes.md`). `shape_text` returns
-//! one wrapped line per hard line (the text between `\n`s); each wraps into
-//! one or more visual [`Row`]s. All offsets in this module are byte offsets
-//! into the block's text.
+//! one line per hard line (the text between `\n`s), unwrapped; the editor
+//! breaks each into one or more visual [`Row`]s itself (see [`super::wrap`]
+//! for the rules and for why GPUI's own wrapping is not used). All offsets
+//! in this module are byte offsets into the block's text.
+//!
+//! Inline code is shaped at the block's text size, like everything else
+//! on its line, and drawn smaller, in a chip with a little padding. A row
+//! therefore knows its stretches of inline code ([`Row::code`]): every x
+//! this module hands out is where things are drawn, not where the shaper
+//! put them.
 //!
 //! The editor paints rows itself (see `crate::paint`) instead of using
 //! `WrappedLine::paint`. That is what makes justified text, rows that move
@@ -62,7 +69,10 @@ use gpui::{
 };
 use writer_core::{Alignment, Block, BlockKind, text};
 
-use super::style::{BlockMetrics, Decorations, Group, LayoutStyle, Marker};
+use super::{
+    style::{BlockMetrics, Decorations, Group, LayoutStyle, Marker},
+    wrap::{self, INLINE_CODE_PAD, INLINE_CODE_SCALE, WrapGlyph},
+};
 
 /// Narrowest text box a block is ever wrapped to.
 const MIN_TEXT_WIDTH: f32 = 40.;
@@ -284,6 +294,28 @@ pub(crate) struct Justify {
     pub(crate) end: usize,
 }
 
+/// A stretch of inline code on a row: shaped at the block's text size,
+/// drawn at [`INLINE_CODE_SCALE`] of it between two paddings.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CodeFragment {
+    /// Bytes of the row's hard line (offsets in the line's text).
+    pub(crate) range: Range<usize>,
+    /// Shaped x of its first glyph, from the row's first glyph.
+    start_x: Pixels,
+    /// Its shaped width.
+    width: Pixels,
+    /// How much narrower than shaped the row is drawn up to here (what
+    /// the fragments before this one save; a short chip can cost room).
+    before: Pixels,
+}
+
+impl CodeFragment {
+    /// How much narrower than shaped the fragment is drawn.
+    fn saving(&self, pad: Pixels) -> Pixels {
+        self.width * (1. - INLINE_CODE_SCALE) - pad * 2.
+    }
+}
+
 /// One visual row of a block.
 #[derive(Clone, Debug)]
 pub(crate) struct Row {
@@ -306,6 +338,8 @@ pub(crate) struct Row {
     /// Shift from the block's alignment.
     pub(crate) dx: Pixels,
     pub(crate) justify: Option<Justify>,
+    /// The inline code on the row, left to right (empty for most rows).
+    pub(crate) code: Vec<CodeFragment>,
 }
 
 /// The layout of one block at one width.
@@ -335,6 +369,11 @@ pub(crate) struct BlockLayout {
     pub(crate) x_height: Pixels,
     /// Colour of text without a colour run (never happens for valid runs).
     pub(crate) ink: Hsla,
+    /// Padding inside an inline code chip.
+    pub(crate) code_pad: Pixels,
+    /// Top and height of an inline code chip, from the top of a row
+    /// (the ink of the code at the size it is drawn).
+    pub(crate) code_box: (Pixels, Pixels),
     /// Sum of the unwrapped line widths: calibrates height estimates.
     pub(crate) natural_width: Pixels,
     /// The pieces of a block that was shaped piecewise (empty otherwise).
@@ -390,6 +429,8 @@ struct Shaper<'a> {
     font_size: Pixels,
     text_width: Pixels,
     ink: Hsla,
+    /// The inline code of the block (see `LayoutStyle::code_ranges`).
+    code: &'a [Range<usize>],
     text_system: &'a WindowTextSystem,
 }
 
@@ -427,65 +468,100 @@ impl Shaper<'_> {
             at = upto;
             run_ix += 1;
         }
+        // Unwrapped: the rows are broken below, by the editor's own rules
+        // and with the widths that are drawn.
         let shaped = self
             .text_system
-            .shape_text(slice, self.font_size, &runs, Some(self.text_width), None)
+            .shape_text(slice, self.font_size, &runs, None, None)
             .map(|lines| lines.into_vec())
             .unwrap_or_default();
+        let pad = self.font_size * INLINE_CODE_PAD;
         let mut lines = Vec::with_capacity(shaped.len());
         let mut rows = Vec::new();
         let mut line_start = range.start;
+        let mut glyphs: Vec<WrapGlyph> = Vec::new();
+        let mut positions: Vec<GlyphPos> = Vec::new();
         for (line_ix, line) in shaped.into_iter().enumerate() {
             let layout = Arc::clone(&*line);
             let unwrapped = &layout.unwrapped_layout;
-            let mut start = 0;
-            let mut start_pos = GlyphPos { run: 0, glyph: 0 };
-            let mut x_start = px(0.);
-            for boundary in layout.wrap_boundaries() {
-                let Some(glyph) = unwrapped
-                    .runs
-                    .get(boundary.run_ix)
-                    .and_then(|run| run.glyphs.get(boundary.glyph_ix))
-                else {
-                    continue;
-                };
-                let end_pos = GlyphPos {
-                    run: boundary.run_ix,
-                    glyph: boundary.glyph_ix,
-                };
+            let length = line.text.len();
+            let line_end = GlyphPos {
+                run: unwrapped.runs.len(),
+                glyph: 0,
+            };
+            // The inline code that touches this line.
+            let first_code = self.code.partition_point(|code| code.end <= line_start);
+            let code = &self.code[first_code..];
+            let has_code = code
+                .first()
+                .is_some_and(|code| code.start < line_start + length);
+            if !has_code && unwrapped.width <= self.text_width {
+                // The common case: one row, nothing to break or squeeze.
                 rows.push(Row {
-                    range: line_start + start..line_start + glyph.index,
+                    range: line_start..line_start + length,
                     line: line_ix,
-                    x_start,
-                    width: glyph.position.x - x_start,
+                    x_start: px(0.),
+                    width: unwrapped.width,
                     y: px(0.),
-                    soft_wrapped: true,
-                    glyphs: (start_pos, end_pos),
+                    soft_wrapped: false,
+                    glyphs: (GlyphPos { run: 0, glyph: 0 }, line_end),
                     dx: px(0.),
                     justify: None,
+                    code: Vec::new(),
                 });
-                start = glyph.index;
-                start_pos = end_pos;
-                x_start = glyph.position.x;
+            } else {
+                glyphs.clear();
+                positions.clear();
+                for (run_ix, run) in unwrapped.runs.iter().enumerate() {
+                    for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                        let offset = line_start + glyph.index;
+                        let in_code = has_code && {
+                            let at = code.partition_point(|code| code.end <= offset);
+                            code.get(at).is_some_and(|code| code.start <= offset)
+                        };
+                        glyphs.push(WrapGlyph {
+                            index: glyph.index,
+                            x: glyph.position.x,
+                            code: in_code,
+                        });
+                        positions.push(GlyphPos {
+                            run: run_ix,
+                            glyph: glyph_ix,
+                        });
+                    }
+                }
+                let breaks =
+                    wrap::wrap_line(&line.text, &glyphs, unwrapped.width, self.text_width, pad);
+                let mut from = 0;
+                for cut in breaks.into_iter().chain([glyphs.len()]) {
+                    let soft_wrapped = cut < glyphs.len();
+                    let (start, x_start, start_pos) = match glyphs.get(from) {
+                        Some(glyph) if from > 0 => (glyph.index, glyph.x, positions[from]),
+                        _ => (0, px(0.), GlyphPos { run: 0, glyph: 0 }),
+                    };
+                    let (end, end_x, end_pos) = match glyphs.get(cut) {
+                        Some(glyph) => (glyph.index, glyph.x, positions[cut]),
+                        None => (length, unwrapped.width, line_end),
+                    };
+                    rows.push(Row {
+                        range: line_start + start..line_start + end,
+                        line: line_ix,
+                        x_start,
+                        width: end_x - x_start,
+                        y: px(0.),
+                        soft_wrapped,
+                        glyphs: (start_pos, end_pos),
+                        dx: px(0.),
+                        justify: None,
+                        code: if has_code {
+                            code_fragments(&glyphs[from..cut], end, end_x, x_start, pad)
+                        } else {
+                            Vec::new()
+                        },
+                    });
+                    from = cut;
+                }
             }
-            rows.push(Row {
-                range: line_start + start..line_start + line.text.len(),
-                line: line_ix,
-                x_start,
-                width: unwrapped.width - x_start,
-                y: px(0.),
-                soft_wrapped: false,
-                glyphs: (
-                    start_pos,
-                    GlyphPos {
-                        run: unwrapped.runs.len(),
-                        glyph: 0,
-                    },
-                ),
-                dx: px(0.),
-                justify: None,
-            });
-            let length = line.text.len();
             lines.push(Line {
                 layout,
                 text: line.text.clone(),
@@ -542,6 +618,44 @@ impl Shaper<'_> {
             lines = lines.saturating_mul(2);
         }
     }
+}
+
+/// The stretches of inline code among the glyphs of one row. `end` and
+/// `end_x` are the line offset and the shaped x where the row ends,
+/// `x_start` the shaped x of its first glyph.
+fn code_fragments(
+    glyphs: &[WrapGlyph],
+    end: usize,
+    end_x: Pixels,
+    x_start: Pixels,
+    pad: Pixels,
+) -> Vec<CodeFragment> {
+    let mut fragments: Vec<CodeFragment> = Vec::new();
+    let mut before = px(0.);
+    let mut at = 0;
+    while at < glyphs.len() {
+        if !glyphs[at].code {
+            at += 1;
+            continue;
+        }
+        let mut after = at;
+        while after < glyphs.len() && glyphs[after].code {
+            after += 1;
+        }
+        let (range_end, x_end) = glyphs
+            .get(after)
+            .map_or((end, end_x), |glyph| (glyph.index, glyph.x));
+        let fragment = CodeFragment {
+            range: glyphs[at].index..range_end,
+            start_x: glyphs[at].x - x_start,
+            width: x_end - glyphs[at].x,
+            before,
+        };
+        before += fragment.saving(pad);
+        fragments.push(fragment);
+        at = after;
+    }
+    fragments
 }
 
 /// How many bytes two texts have in common at their start.
@@ -640,12 +754,14 @@ pub(crate) fn measure_block(
         return (Measure::new(&metrics, block.kind(), 1), px(0.));
     }
     let runs = font_runs(block, style);
+    let code = style.code_ranges(block);
     let shaper = Shaper {
         text: block.text(),
         runs: &runs,
         font_size: metrics.font_size,
         text_width: text_width(&metrics, column_width),
         ink: style.colors.ink,
+        code: &code,
         text_system,
     };
     let (whole_limit, piece_bytes) = piece_limits();
@@ -712,6 +828,8 @@ impl BlockLayout {
             descent,
             x_height,
             ink: style.colors.ink,
+            code_pad: metrics.font_size * INLINE_CODE_PAD,
+            code_box: (px(0.), metrics.line_height),
             natural_width: px(0.),
             pieces: Vec::new(),
             source: None,
@@ -722,12 +840,26 @@ impl BlockLayout {
         if !layout.void {
             layout.decorations = style.decorations(block);
             let runs = font_runs(block, style);
+            let code = style.code_ranges(block);
+            if !code.is_empty() {
+                // The chip is as high as the code is drawn, not as the
+                // body text around it.
+                let size = metrics.font_size * INLINE_CODE_SCALE;
+                let mono = text_system.resolve_font(&style.mono_font);
+                let up = text_system.ascent(mono, size);
+                let down = text_system.descent(mono, size).abs();
+                let pad = (size * 0.1).max(px(1.));
+                let top = (baseline - up - pad).max(px(0.));
+                let bottom = (baseline + down + pad).min(metrics.line_height);
+                layout.code_box = (top, (bottom - top).max(px(1.)));
+            }
             let shaper = Shaper {
                 text: block.text(),
                 runs: &runs,
                 font_size: metrics.font_size,
                 text_width,
                 ink: style.colors.ink,
+                code: &code,
                 text_system,
             };
             let (whole_limit, piece_bytes) = piece_limits();
@@ -770,6 +902,7 @@ impl BlockLayout {
                 glyphs: (GlyphPos { run: 0, glyph: 0 }, GlyphPos { run: 0, glyph: 0 }),
                 dx: px(0.),
                 justify: None,
+                code: Vec::new(),
             });
             layout.pieces.clear();
             layout.source = None;
@@ -1051,7 +1184,7 @@ impl BlockLayout {
             let row_text = line.text.get(local.clone()).unwrap_or("");
             // Trailing white space hangs past the edge it is aligned to.
             let trimmed = local.start + row_text.trim_end().len();
-            let visible = self.natural_x(row, trimmed);
+            let visible = self.drawn_x(row, trimmed);
             let slack = self.text_width - visible;
             let (dx, justify) = match self.align {
                 Alignment::Center => (slack / 2., None),
@@ -1115,8 +1248,49 @@ impl BlockLayout {
             })
     }
 
-    /// x of the line-local byte `index` on `row` without alignment or
-    /// justification, from the row's first glyph.
+    /// Where the line-local byte `index` of `row` is drawn, from the row's
+    /// first glyph, without alignment or justification: its shaped x,
+    /// moved by what the inline code before it saves. A position at
+    /// either end of a stretch of code is outside its chip.
+    fn drawn_x(&self, row: &Row, index: usize) -> Pixels {
+        let shaped = self.natural_x(row, index);
+        let mut saved = px(0.);
+        for code in &row.code {
+            if index <= code.range.start {
+                return shaped - code.before;
+            }
+            if index < code.range.end {
+                return code.start_x - code.before
+                    + self.code_pad
+                    + (shaped - code.start_x) * INLINE_CODE_SCALE;
+            }
+            saved = code.before + code.saving(self.code_pad);
+        }
+        shaped - saved
+    }
+
+    /// Where the glyph at the line-local byte `index`, shaped at `shaped`
+    /// (from the row's first glyph), is drawn, and at what fraction of the
+    /// block's text size.
+    fn drawn_glyph(&self, row: &Row, index: usize, shaped: Pixels) -> (Pixels, f32) {
+        let mut saved = px(0.);
+        for code in &row.code {
+            if index < code.range.start {
+                return (shaped - code.before, 1.);
+            }
+            if index < code.range.end {
+                let x = code.start_x - code.before
+                    + self.code_pad
+                    + (shaped - code.start_x) * INLINE_CODE_SCALE;
+                return (x, INLINE_CODE_SCALE);
+            }
+            saved = code.before + code.saving(self.code_pad);
+        }
+        (shaped - saved, 1.)
+    }
+
+    /// Shaped x of the line-local byte `index` on `row`, from the row's
+    /// first glyph.
     fn natural_x(&self, row: &Row, index: usize) -> Pixels {
         for (_, glyphs) in self.row_runs(row) {
             for glyph in glyphs {
@@ -1128,12 +1302,14 @@ impl BlockLayout {
         row.width
     }
 
-    /// Calls `f(run, glyph, x)` for every glyph of row `row_ix`, with the x
-    /// of the glyph's origin from the left edge of the text box.
+    /// Calls `f(run, glyph, x, scale)` for every glyph of row `row_ix`,
+    /// with the x of the glyph's origin from the left edge of the text box
+    /// and the fraction of the block's text size it is drawn at (inline
+    /// code is smaller).
     pub(crate) fn for_each_glyph(
         &self,
         row_ix: usize,
-        mut f: impl FnMut(&ShapedRun, &ShapedGlyph, Pixels),
+        mut f: impl FnMut(&ShapedRun, &ShapedGlyph, Pixels, f32),
     ) {
         let Some(row) = self.rows.get(row_ix) else {
             return;
@@ -1145,7 +1321,13 @@ impl BlockLayout {
         let mut shift = px(0.);
         for (run, glyphs) in self.row_runs(row) {
             for glyph in glyphs {
-                f(run, glyph, glyph.position.x - row.x_start + row.dx + shift);
+                let shaped = glyph.position.x - row.x_start;
+                let (x, scale) = if row.code.is_empty() {
+                    (shaped, 1.)
+                } else {
+                    self.drawn_glyph(row, glyph.index, shaped)
+                };
+                f(run, glyph, x + row.dx + shift, scale);
                 if let Some(justify) = row.justify
                     && bytes.get(glyph.index) == Some(&b' ')
                     && line.start + glyph.index < justify.end
@@ -1192,7 +1374,7 @@ impl BlockLayout {
         };
         let offset = offset.clamp(row.range.start, row.range.end);
         let index = offset - line.start;
-        let mut x = self.natural_x(row, index) + row.dx;
+        let mut x = self.drawn_x(row, index) + row.dx;
         if let Some(justify) = row.justify {
             let end = offset.min(justify.end);
             let spaces = line.text.as_bytes()[row.range.start - line.start..end - line.start]
@@ -1237,18 +1419,26 @@ impl BlockLayout {
             return (row.range.start, false);
         };
         let row_end = row.range.end - line.start;
-        // Candidate boundaries: every glyph start, then the row's end.
+        // The white space a row wraps at hangs past the text box, and a
+        // caret in it is drawn at the edge: that is where it is found.
+        let edge = if row.soft_wrapped {
+            self.text_width
+        } else {
+            Pixels::MAX
+        };
+        // Candidate boundaries: every glyph start, then the row's end
+        // (which wins a tie: at the edge, the caret goes to the end).
         let mut best = row.range.start - line.start;
         let mut best_distance = None;
-        let mut consider = |index: usize, at: Pixels| {
-            let distance = (at - x).abs();
-            if best_distance.is_none_or(|best| distance < best) {
+        let mut consider = |index: usize, at: Pixels, last: bool| {
+            let distance = (at.min(edge) - x).abs();
+            if best_distance.is_none_or(|best| distance < best || (last && distance == best)) {
                 best_distance = Some(distance);
                 best = index;
             }
         };
-        self.for_each_glyph(row_ix, |_, glyph, at| consider(glyph.index, at));
-        consider(row_end, self.x_in_row(row_ix, row.range.end));
+        self.for_each_glyph(row_ix, |_, glyph, at, _| consider(glyph.index, at, false));
+        consider(row_end, self.x_in_row(row_ix, row.range.end), true);
         // Glyphs inside a grapheme cluster are not caret positions.
         let mut index = text::floor_grapheme_boundary(&line.text, best.min(row_end));
         index = index.max(row.range.start - line.start);
@@ -1267,7 +1457,7 @@ impl BlockLayout {
             return None;
         }
         let mut found = None;
-        self.for_each_glyph(row_ix, |_, glyph, at| {
+        self.for_each_glyph(row_ix, |_, glyph, at, _| {
             if at <= x {
                 found = Some(glyph.index);
             }
@@ -1288,7 +1478,8 @@ impl BlockLayout {
         let row_ix = self.row_for_caret(offset, upstream);
         let row = &self.rows[row_ix];
         let mut x = self.x_in_row(row_ix, offset);
-        if row.soft_wrapped && offset >= row.range.end {
+        if row.soft_wrapped {
+            // The white space a row wraps at hangs past the text box.
             x = x.min(self.text_width);
         }
         (
@@ -1317,8 +1508,14 @@ impl BlockLayout {
         if start > end || (start == end && !covers_break) {
             return None;
         }
-        let x0 = self.x_in_row(row_ix, start);
+        let mut x0 = self.x_in_row(row_ix, start);
         let mut x1 = self.x_in_row(row_ix, end);
+        if row.soft_wrapped {
+            // The white space a row wraps at hangs past the text box;
+            // what is painted for it stays inside.
+            x0 = x0.min(self.text_width);
+            x1 = x1.min(self.text_width);
+        }
         if covers_break {
             x1 += self.font_size * NEWLINE_STUB;
         }
@@ -1374,7 +1571,7 @@ impl BlockLayout {
                 let row = &self.rows[row_ix];
                 let line_start = self.lines.get(row.line).map_or(0, |line| line.start);
                 let mut glyphs = Vec::new();
-                self.for_each_glyph(row_ix, |_, glyph, x| {
+                self.for_each_glyph(row_ix, |_, glyph, x, _| {
                     glyphs.push((line_start + glyph.index, f32::from(x)));
                 });
                 RowPrint {

@@ -1426,6 +1426,7 @@ fn large_document_edits_are_local() {
         e.undo();
     }
     let elapsed = t0.elapsed();
+    eprintln!("10k blocks: 651 edits + 50 undos took {elapsed:?}");
     let c = e.take_changes().unwrap();
     let s = c.blocks.unwrap();
     assert!(s.start >= 5_000 && s.old_len <= 2 && s.new_len <= 2, "{s:?}");
@@ -1434,7 +1435,10 @@ fn large_document_edits_are_local() {
     let t1 = std::time::Instant::now();
     let stats = e.stats();
     assert!(stats.words > 100_000);
+    let first = t1.elapsed();
+    let t2 = std::time::Instant::now();
     let _ = e.stats();
+    eprintln!("10k blocks: stats first {first:?}, cached {:?}", t2.elapsed());
     assert!(t1.elapsed().as_secs_f64() < 10.0);
 }
 

@@ -247,6 +247,8 @@ fn prepare(block: &Block, anchors: &[Anchor], single_line: bool) -> Prepared {
 /// The nested intervals of all marks, sorted outermost first.
 fn intervals(cells: &[Cell], spans: &[[Option<Mark>; FAMILIES]]) -> Vec<Interval> {
     let mut accepted: Vec<Interval> = Vec::new();
+    // One pass per family, in rank order: `family` indexes the inner arrays.
+    #[allow(clippy::needless_range_loop)]
     for family in 0..FAMILIES {
         let mut candidates: Vec<(usize, usize, Mark)> = Vec::new();
         let mut i = 0;

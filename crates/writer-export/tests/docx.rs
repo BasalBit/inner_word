@@ -224,8 +224,8 @@ impl Package {
         body.children().filter(|n| n.has_tag_name((W, "p"))).map(|p| P::read(p, &rels)).collect()
     }
 
-    /// The `w:sectPr` elements in document order, as `(w, h, orient, top, right, bottom, left, has footer)`.
-    fn sections(&self) -> Vec<(i32, i32, String, i32, i32, i32, i32, bool)> {
+    /// The `w:sectPr` elements in document order.
+    fn sections(&self) -> Vec<Section> {
         let document = roxmltree::Document::parse(self.part(parts::DOCUMENT)).unwrap();
         document
             .descendants()
@@ -248,6 +248,9 @@ impl Package {
             .collect()
     }
 }
+
+/// A section: `(width, height, orientation, top, right, bottom, left, has a footer)`, lengths in twips.
+type Section = (i32, i32, String, i32, i32, i32, i32, bool);
 
 fn child<'a, 'i>(n: Node<'a, 'i>, name: &str) -> Option<Node<'a, 'i>> {
     n.children().find(|c| c.has_tag_name((W, name)))

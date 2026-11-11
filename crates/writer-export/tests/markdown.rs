@@ -1234,11 +1234,11 @@ fn random_comments_do_not_disturb_the_text() {
             let (start, end) = (pos(&mut rng, a), pos(&mut rng, b));
             ed.set_selection(Selection::new(start, end));
             let body = random_text(&mut rng, 4);
-            if let Some(id) = ed.add_comment(&body, rng.pick(&["Ada", "", "*B*", "--> x"]), 1) {
-                if rng.chance(40) {
-                    let reply = random_text(&mut rng, 3);
-                    ed.add_reply(id, &reply, "Ben -- B", 2);
-                }
+            if let Some(id) = ed.add_comment(&body, rng.pick(&["Ada", "", "*B*", "--> x"]), 1)
+                && rng.chance(40)
+            {
+                let reply = random_text(&mut rng, 3);
+                ed.add_reply(id, &reply, "Ben -- B", 2);
             }
         }
         let doc = ed.into_document();

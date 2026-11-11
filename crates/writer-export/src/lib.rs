@@ -297,7 +297,7 @@ fn file_stem(title: &str) -> String {
         }
     }
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let s = s.trim_matches(|c: char| c == '.' || c == ' ' || c == '-');
+    let s = s.trim_matches(['.', ' ', '-']);
     let mut out = String::new();
     let mut chars = 0;
     for g in s.graphemes(true) {
@@ -308,7 +308,7 @@ fn file_stem(title: &str) -> String {
         chars += n;
         out.push_str(g);
     }
-    let out = out.trim_end_matches(|c: char| c == '.' || c == ' ' || c == '-');
+    let out = out.trim_end_matches(['.', ' ', '-']);
     // Device names Windows reserves, with or without an extension.
     const RESERVED: [&str; 22] = [
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",

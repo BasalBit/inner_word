@@ -3,6 +3,11 @@
 //! Each hit shows the document title and a snippet with the matching words
 //! highlighted. Enter opens the document and selects the first occurrence
 //! of the query in its text.
+//!
+//! The text of a document usually starts with its title (the first
+//! heading). The row shows the title already, so a snippet that starts
+//! with it goes on after it; the words of the query are marked in the
+//! title instead.
 
 use gpui::{App, Context, Entity, SharedString, WeakEntity, Window};
 use writer_library::{DocumentId, Library, SearchHit};
@@ -51,9 +56,24 @@ impl HitRow {
                 positions.extend(part.text.char_indices().map(|(offset, _)| start + offset));
             }
         }
+        let title = hit.title.trim();
+        // The title is on the row already: a snippet that begins with it
+        // goes on after it (unless nothing would be left).
+        if !title.is_empty()
+            && let Some(rest) = snippet.strip_prefix(title)
+            && !rest.trim().is_empty()
+        {
+            let cut = snippet.len() - rest.trim_start().len();
+            snippet.drain(..cut);
+            positions = positions
+                .into_iter()
+                .filter(|position| *position >= cut)
+                .map(|position| position - cut)
+                .collect();
+        }
         Self {
             document_id: hit.document_id,
-            title: if hit.title.trim().is_empty() {
+            title: if title.is_empty() {
                 UNTITLED.to_string()
             } else {
                 hit.title.clone()
@@ -62,6 +82,42 @@ impl HitRow {
             positions,
         }
     }
+}
+
+/// The byte offsets of the characters of `text` that belong to an
+/// occurrence of one of the words of `query` (case-insensitive; quotes
+/// around a phrase are ignored, its words are marked one by one).
+pub fn word_positions(text: &str, query: &str) -> Vec<usize> {
+    let words: Vec<Vec<char>> = query
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\u{201c}' | '\u{201d}'))
+        .filter(|word| !word.is_empty())
+        .map(|word| word.chars().flat_map(char::to_lowercase).collect())
+        .collect();
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut marked = vec![false; chars.len()];
+    for word in &words {
+        for start in 0..chars.len() {
+            let mut end = start;
+            let mut matched = 0;
+            while matched < word.len() && end < chars.len() {
+                let lower: Vec<char> = chars[end].1.to_lowercase().collect();
+                if word[matched..].starts_with(&lower) {
+                    matched += lower.len();
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            if matched == word.len() {
+                marked[start..end].iter_mut().for_each(|mark| *mark = true);
+            }
+        }
+    }
+    chars
+        .iter()
+        .zip(marked)
+        .filter_map(|((offset, _), mark)| mark.then_some(*offset))
+        .collect()
 }
 
 /// The picker delegate behind library search.
@@ -110,7 +166,10 @@ impl PickerDelegate for LibrarySearchDelegate {
 
     fn entry(&self, ix: usize, _: &App) -> PickerEntry {
         let hit = &self.hits[ix];
-        PickerItem::new(short_title(&hit.title))
+        let title = short_title(&hit.title);
+        let marked = word_positions(&title, &self.query);
+        PickerItem::new(title)
+            .positions(marked)
             .detail(hit.snippet.clone())
             .detail_positions(hit.positions.clone())
             .icon(IconName::Document)

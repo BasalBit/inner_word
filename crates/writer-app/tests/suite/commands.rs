@@ -311,6 +311,32 @@ fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
         .filter_map(|offset| hits[0].snippet[*offset..].chars().next())
         .collect();
     assert_eq!(marked, "horizon");
+    // The row shows the title, so a snippet from the start of the text
+    // does not begin with it again; the marks are still on the match.
+    picker.update_in(vcx, |picker, window, cx| {
+        picker.set_query("pans", window, cx)
+    });
+    let hits = picker.read_with(vcx, |picker, _| picker.delegate.hits().to_vec());
+    assert!(
+        hits[0].snippet.starts_with("The pans"),
+        "{}",
+        hits[0].snippet
+    );
+    let marked: String = hits[0]
+        .positions
+        .iter()
+        .filter_map(|offset| hits[0].snippet[*offset..].chars().next())
+        .collect();
+    assert_eq!(marked, "pans");
+    picker.update_in(vcx, |picker, window, cx| {
+        picker.set_query("horizon", window, cx)
+    });
+    // A word of the query that is in the title is marked there.
+    assert_eq!(
+        writer_app::library_search::word_positions("Salt works", "\"salt\" WORK"),
+        [0, 1, 2, 3, 5, 6, 7, 8]
+    );
+    assert!(writer_app::library_search::word_positions("Bread", "horizon").is_empty());
 
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();

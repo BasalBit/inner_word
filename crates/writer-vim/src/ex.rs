@@ -207,7 +207,9 @@ fn parse_replacement(raw: &str) -> Vec<RepPiece> {
                     }
                     out.push(RepPiece::Match);
                 }
-                Some('n' | 'r') => lit.push('\n'),
+                // `\r` breaks the line (a new block), `\n` is a soft break.
+                Some('r') => lit.push('\r'),
+                Some('n') => lit.push('\n'),
                 Some('t') => lit.push('\t'),
                 Some(other) => lit.push(other),
                 None => lit.push('\\'),

@@ -727,6 +727,22 @@ impl Vim {
             self.op_inclusive = false;
             return;
         }
+        let mut out = out;
+        if self.is_visual()
+            && matches!(m, Motion::Down | Motion::Up)
+            && self.goal == Some(GoalColumn::EndOfRow)
+        {
+            // After `v$` the selection keeps running to the ends of lines,
+            // line breaks included.
+            let doc = cx.ed.document();
+            let le = buf::line_end(doc, out.pos);
+            if buf::cell_end(doc, out.pos).offset == le {
+                out.pos = Position::new(out.pos.block, le);
+            }
+        }
+        let keep_eol = self.is_visual()
+            && matches!(m, Motion::Down | Motion::Up)
+            && self.goal == Some(GoalColumn::EndOfRow);
         if out.jump {
             // Also when the jump ends where it started: Vim adds the place
             // to the jump list all the same (the `''` mark is put right
@@ -734,7 +750,11 @@ impl Vim {
             self.push_jump(cx, origin);
         }
         let before = self.cursor(cx);
-        self.move_cursor_eol(cx, out.pos, matches!(m, Motion::LineEnd | Motion::Right));
+        self.move_cursor_eol(
+            cx,
+            out.pos,
+            keep_eol || matches!(m, Motion::LineEnd | Motion::Right),
+        );
         match out.goal {
             GoalUpdate::Keep => {}
             GoalUpdate::Clear => self.goal = None,
@@ -1115,7 +1135,19 @@ impl Vim {
                     })
             }
             'p' => {
-                let anchor_block = anchor.map(|a| a.block).filter(|b| *b != cursor.block);
+                let mut anchor_block = anchor.map(|a| a.block).filter(|b| *b != cursor.block);
+                if visual
+                    && anchor_block.is_none()
+                    && matches!(self.base, Base::Visual { line: true })
+                {
+                    // The selection is already this object (`vip` again):
+                    // extend it, as in Vim.
+                    let a = doc.clamp_position(self.visual.anchor).block;
+                    let fresh = textobj::paragraph(doc, cursor, None, around, 1);
+                    if fresh == Some(a.min(cursor.block)..a.max(cursor.block) + 1) {
+                        anchor_block = Some(a.min(cursor.block));
+                    }
+                }
                 textobj::paragraph(doc, cursor, anchor_block, around, count).map(|r| {
                     if anchor_block.is_some() {
                         // Only the cursor's end moves.
@@ -1129,7 +1161,7 @@ impl Vim {
                     }
                 })
             }
-            '"' | '\'' | '`' => textobj::quote(doc, cursor, c, around).map(Found::Range),
+            '"' | '\'' | '`' => textobj::quote(doc, cursor, c, around, count).map(Found::Range),
             _ => match brackets(c) {
                 Some((o, cl)) => {
                     textobj::bracket(doc, cursor, anchor, o, cl, around, count).map(Found::Text)

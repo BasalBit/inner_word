@@ -63,6 +63,10 @@ one two  three\nfour.five,six\n\n\nseven eight\nfoo--bar  ..baz!! qux\na.b.c x_y
 Hello there. How are you?  Fine!  Thanks.\n\nAnother one here. And more\n\nLast sentence. Really (yes). "Quoted." End.\n\nno stop	4	1	pV30dgUas	Hello there. How are you?  Fine!  Thanks.\n\nAnother one here. AND MORE\nLAST SENTENCE. Really (yes). "Quoted." End.\n\nno stop	3	19	V	\n			V	\n									noop-undo
 First one. Second one!  Third one?\n\nFourth here.) Fifth "quoted."  Sixth e.g. this one.\n\n\nSeventh... eighth.Ninth   tenth?!\n\n  Indented start. And end.  \n\nlast without stop	4	1	|yjV9G~dasIZz<Esc>	First one. Second one!  Third one?\n\nFourth here.) Fifth "quoted."  Sixth e.g. this one.\n\nZzsEVENTH... EIGHTH.nINTH   TENTH?!\n\n  iNDENTED START. aND END.  \n\nlast without stop	5	2	V	\n	V	\n\n	V	\n									
 #
+# `*` and `#` on an emoji: Vim finds no word under the cursor; the engine searches for the emoji.
+héllo wörld ñandú\n日本語 テキスト です\nnaïve café — dash…end\néäb combining x\nsmile 😀 face 😀😀 end\n\nüber straße	5	7	*	héllo wörld ñandú\n日本語 テキスト です\nnaïve café — dash…end\néäb combining x\nsmile 😀 face 😀😀 end\n\nüber straße	5	7															
+héllo wörld ñandú\n日本語 テキスト です\nnaïve café — dash…end\néäb combining x\nsmile 😀 face 😀😀 end\n\nüber straße	5	7	#	héllo wörld ñandú\n日本語 テキスト です\nnaïve café — dash…end\néäb combining x\nsmile 😀 face 😀😀 end\n\nüber straße	5	7															
+#
 # `iw` on an empty last line: Vim takes the character before the line break (a Vim quirk); the engine selects nothing.
 alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\niota\n	9	1	yiwbP	alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\na\niota\n	8	1	v	a\n	v	a\n											
 alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\niota\n	9	1	diw2wgp.	alpha beta\ngamma delta\n\nepsilon\n\n\nzeta eta theta\niota\na\n	10	1	v	a\n			v	a\n									

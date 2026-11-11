@@ -218,7 +218,8 @@ pub(crate) fn find_char(
         } else {
             le
         };
-        if till && skip_adjacent && o < le {
+        // (Only without a count, as in Vim.)
+        if till && skip_adjacent && count == 1 && o < le {
             o = buf::next_boundary(t, o);
         }
         while o < le {
@@ -233,7 +234,7 @@ pub(crate) fn find_char(
         }
     } else {
         let mut o = from.offset.min(le);
-        if till && skip_adjacent && o > ls {
+        if till && skip_adjacent && count == 1 && o > ls {
             o = buf::prev_boundary(t, o);
         }
         while o > ls {

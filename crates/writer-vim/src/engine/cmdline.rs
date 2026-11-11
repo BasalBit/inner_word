@@ -603,7 +603,10 @@ impl Vim {
         let mut lines = 0usize;
         let mut last_block = None;
         cx.ed.set_caret(origin);
-        for b in range {
+        // Blocks added by `\r` in the replacement, which breaks the line.
+        let mut added = 0usize;
+        for b0 in range {
+            let b = b0 + added;
             if b >= cx.ed.document().block_count() {
                 break;
             }
@@ -625,6 +628,7 @@ impl Vim {
             if args.count_only {
                 continue;
             }
+            let mut splits = 0usize;
             for m in matches.into_iter().rev() {
                 let matched = cx.ed.document().blocks()[b].text()[m.clone()].to_string();
                 let mut rep = String::new();
@@ -635,12 +639,29 @@ impl Vim {
                     }
                 }
                 let r = TextRange::in_block(b, m.start, m.end);
-                if rep.is_empty() {
+                let mut parts = rep.split('\r');
+                let first = parts.next().unwrap_or("");
+                if first.is_empty() {
                     cx.ed.delete_range(r);
                 } else {
-                    cx.ed.replace_range(r, &rep);
+                    cx.ed.replace_range(r, first);
+                }
+                // Every `\r` starts a new block with what follows it.
+                let mut at = Position::new(b, m.start + first.len());
+                for part in parts {
+                    cx.ed.set_caret(at);
+                    cx.ed.insert_paragraph_break();
+                    at = Position::new(at.block + 1, 0);
+                    if !part.is_empty() {
+                        cx.ed
+                            .replace_range(TextRange::in_block(at.block, 0, 0), part);
+                        at.offset = part.len();
+                    }
+                    splits += 1;
                 }
             }
+            added += splits;
+            last_block = Some(b + splits);
         }
         let Some(last) = last_block else {
             self.set_normal_caret(cx, origin);
@@ -655,7 +676,9 @@ impl Vim {
             }
         };
         if args.count_only {
-            self.set_normal_caret(cx, origin);
+            // (Vim leaves the cursor at the start of the last line with a
+            // match.)
+            self.set_normal_caret(cx, Position::new(last, 0));
             self.message(format!(
                 "{} on {}",
                 plural(total, "match").replace("matchs", "matches"),

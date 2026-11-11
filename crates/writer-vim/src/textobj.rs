@@ -430,11 +430,10 @@ pub(crate) fn paragraph(
     let n = doc.block_count();
     let last = n - 1;
     let count = count.max(1);
-    if let Some(a) = anchor_block
-        && a != at.block
-    {
-        // Extend the selection by whole objects in its direction.
-        let forward = at.block > a;
+    if let Some(a) = anchor_block {
+        // Extend the selection by whole objects in its direction (forward
+        // when it covers one block).
+        let forward = at.block >= a;
         let edge = if forward { last } else { 0 };
         let step = |b: usize| if forward { b + 1 } else { b - 1 };
         let mut b = at.block;
@@ -692,7 +691,13 @@ fn curly_quotes(
 /// `i"` / `a"` and the same for `'` and `` ` `` on the hard line of `at`.
 /// The double and single quote objects also match the typographic pairs
 /// (`“ ”` and `‘ ’`) that smart punctuation produces.
-pub(crate) fn quote(doc: &Document, at: Position, q: char, around: bool) -> Option<TextRange> {
+pub(crate) fn quote(
+    doc: &Document,
+    at: Position,
+    q: char,
+    around: bool,
+    count: usize,
+) -> Option<TextRange> {
     let t = text_of(doc, at.block);
     let ls = buf::line_start(doc, at);
     let le = buf::line_end(doc, at);
@@ -727,6 +732,14 @@ pub(crate) fn quote(doc: &Document, at: Position, q: char, around: bool) -> Opti
         (None, Some(b)) => b,
         (None, None) => return None,
     };
+    if !around && count >= 2 {
+        // `2i"`: the quotes too, without the white space `a"` adds.
+        return Some(TextRange::in_block(
+            at.block,
+            found.open,
+            found.close + found.close_len,
+        ));
+    }
     if !around {
         return Some(TextRange::in_block(
             at.block,

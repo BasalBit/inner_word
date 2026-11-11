@@ -125,7 +125,11 @@ fn substitute() {
         c("|foo\nfoo\nfoo", ":2,3s/foo/x/<CR>", "foo\nx\n|x"),
         c("|foo", ":s/zzz/x/<CR>", "|foo").message("E486"),
         c("|foo foo", ":s/foo//gn<CR>", "|foo foo").message("2 matches on 1 line"),
-        c("|a,b", ":s/,/\\r/<CR>", "|a↵b"),
+        // `\\r` breaks the line: a new block. `\\n` is a soft break.
+        c("|a,b", ":s/,/\\r/<CR>", "a\n|b"),
+        c("|a,b,c", ":s/,/\\r/g<CR>", "a\nb\n|c"),
+        c("|a,b\nc,d", ":%s/,/\\r/<CR>", "a\nb\nc\n|d"),
+        c("|a,b", ":s/,/\\n/<CR>", "|a↵b"),
         c("|a.b axb", ":s/a.b/Z/g<CR>", "|Z axb"),
         c("|añb", ":s/ñ/nn/<CR>", "|annb"),
         c("|foo\nfoo\nfoo", "Vj:s/foo/x/<CR>", "x\n|x\nfoo"),

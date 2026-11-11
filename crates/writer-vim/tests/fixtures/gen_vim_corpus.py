@@ -12,6 +12,15 @@ Usage:
     python3 gen_vim_corpus.py OUT.tsv [--per-category N] [--seed S] [--vim PATH]
     python3 gen_vim_corpus.py OUT.tsv --keys-file FILE   # extra hand-picked cases
 
+How the checked-in fixtures were made (Vim 9.1.1752, macOS):
+    1. `gen_vim_corpus.py all.tsv --per-category 250`, plus a hand-picked
+       list of about 500 cases for the usual trouble spots (`--keys-file`).
+    2. `VIMDIFF_CORPUS=all.tsv VIMDIFF_SPLIT=dir cargo test -p writer-vim
+       engine_matches_vim` writes `dir/matching.tsv` and `dir/differing.tsv`.
+    3. `matching.tsv` is `vim_corpus.tsv`. Every line of `differing.tsv` was
+       looked at: the engine was fixed, or the case went into
+       `vim_deviations.tsv` under the reason for the difference.
+
 `--keys-file` lines are `buffer-name<TAB>line<TAB>col<TAB>keys` (1-based line,
 1-based byte column, keys in the notation of `Key::parse_sequence`).
 

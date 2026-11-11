@@ -307,8 +307,9 @@
 //! - **Ex commands:** `:w` `:q` `:q!` `:wq` `:x` (as [`HostRequest`]s),
 //!   `:{number}` and other ranges alone (go to that block), `:d [x] [N]`,
 //!   `:y [x] [N]`, `:s/pattern/replacement/[g][i][I][n]` (literal pattern;
-//!   `&` or `\0` in the replacement is the match, `\r` / `\n` a soft line
-//!   break), `:&` `:&&` `:s`, `:j[!] [N]`, `:>` `:<`, `:u`, `:red`, `:noh`.
+//!   `&` or `\0` in the replacement is the match, `\r` breaks the line into
+//!   a new block, `\n` is a soft line break), `:&` `:&&` `:s`,
+//!   `:j[!] [N]`, `:>` `:<`, `:u`, `:red`, `:noh`.
 //!   A count `N` takes that many lines starting with the last of the range.
 //!   Ranges: `N`, `.`, `$`, `'m`, `+N` / `-N` offsets, `a,b`, `%`; lines
 //!   are blocks. Any other name is passed to the host. `ZZ` and `ZQ` too.

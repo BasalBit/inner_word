@@ -94,6 +94,11 @@ pub const CATEGORY_APP: &str = "App";
 /// The app's context-free key bindings.
 pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
+        // The message window shown when the library cannot be opened. First
+        // in the list: key hints and menus show the binding added last, and
+        // that must stay cmd-q.
+        KeyBinding::new("enter", Quit, Some(crate::window::ERROR_WINDOW_KEY_CONTEXT)),
+        KeyBinding::new("escape", Quit, Some(crate::window::ERROR_WINDOW_KEY_CONTEXT)),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-h", Hide, None),

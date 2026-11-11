@@ -52,6 +52,17 @@ use crate::screenshot;
 /// Environment variable holding the script (or `@path`).
 pub const AUTOMATION_ENV: &str = "THE_WRITER_AUTOMATION";
 
+/// Environment variable: when set to a non-empty value, a scripted run
+/// brings the app to the front like a normal launch. By default it does
+/// not, so the script never takes keyboard focus from the person at the
+/// machine (their typing would otherwise land in the app under test).
+pub const FOREGROUND_ENV: &str = "THE_WRITER_AUTOMATION_FOREGROUND";
+
+/// Whether [`FOREGROUND_ENV`] asks for the app to come to the front.
+pub fn foreground_requested() -> bool {
+    std::env::var_os(FOREGROUND_ENV).is_some_and(|value| !value.is_empty())
+}
+
 /// One parsed step.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {

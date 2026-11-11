@@ -118,8 +118,10 @@ impl PaletteDelegate {
                 if let Some(found) = fuzzy_match(query, &command.title) {
                     return Some((found.score + TITLE_BONUS + bonus, index, found.positions));
                 }
-                fuzzy_match(query, &command.search_text())
-                    .map(|found| (found.score + bonus, index, Vec::new()))
+                // Category and keywords match by whole query words only: a
+                // loose subsequence over that much text matches nearly
+                // everything.
+                words_match(query, &command.search_text()).then(|| (bonus, index, Vec::new()))
             })
             .collect();
         matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -128,6 +130,15 @@ impl PaletteDelegate {
             .map(|(_, index, positions)| Row::Command { index, positions })
             .collect()
     }
+}
+
+/// Whether every whitespace-separated word of `query` occurs in `text`,
+/// ignoring case. Used for the parts of a command that are not shown with
+/// match highlights (category, keywords).
+pub fn words_match(query: &str, text: &str) -> bool {
+    let text = text.to_lowercase();
+    let mut words = query.split_whitespace().peekable();
+    words.peek().is_some() && words.all(|word| text.contains(&word.to_lowercase()))
 }
 
 impl PickerDelegate for PaletteDelegate {

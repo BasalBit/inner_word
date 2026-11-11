@@ -159,6 +159,9 @@ pub fn open_main_window(
     })
 }
 
+/// The key context of the message window. `enter` and `escape` quit there.
+pub const ERROR_WINDOW_KEY_CONTEXT: &str = "ErrorWindow";
+
 /// The view of the message window: what went wrong, and a way out.
 pub struct ErrorView {
     title: String,
@@ -196,10 +199,9 @@ impl Render for ErrorView {
         let colors = theme.colors;
         div()
             .id("error-window")
-            .key_context("ErrorWindow")
+            .key_context(ERROR_WINDOW_KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(|_: &crate::actions::CloseWindow, _, cx| cx.quit())
-            .on_action(|_: &writer_ui::button::Press, _, cx| cx.quit())
             .size_full()
             .flex()
             .flex_col()

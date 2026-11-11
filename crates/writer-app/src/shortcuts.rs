@@ -169,7 +169,7 @@ impl PickerDelegate for ShortcutsDelegate {
                     return Some((found.score + 10_000, index, found.positions));
                 }
                 let haystack = format!("{} {}", shortcut.category, shortcut.title);
-                fuzzy_match(query, &haystack).map(|found| (found.score, index, Vec::new()))
+                crate::palette::words_match(query, &haystack).then(|| (0, index, Vec::new()))
             })
             .collect();
         matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));

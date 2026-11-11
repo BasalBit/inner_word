@@ -108,6 +108,15 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
     assert!(!has_modal(&workspace, vcx));
     assert!(editor_focused(&workspace, vcx));
 
+    // Keywords find commands whose title says something else; loose
+    // subsequences over keywords do not.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let palette = modal!(workspace, vcx, CommandPalette).unwrap();
+    vcx.simulate_input("dark");
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(titles, ["Use Night theme", "Follow system appearance"]);
+    vcx.simulate_keystrokes("escape");
+
     // An app-level command through the palette: hide the sidebar.
     vcx.simulate_keystrokes("cmd-shift-p");
     vcx.simulate_input("hide library");
@@ -135,6 +144,8 @@ fn palette_shows_the_real_key_bindings(cx: &mut TestAppContext) {
         assert_eq!(hint("Show or hide library").as_deref(), Some("⌥⌘S"));
         assert_eq!(hint("Bold").as_deref(), Some("⌘B"));
         assert_eq!(hint("Settings").as_deref(), Some("⌘,"));
+        assert_eq!(hint("Quit The Writer").as_deref(), Some("⌘Q"));
+        assert_eq!(hint("Close window").as_deref(), Some("⌘W"));
         assert_eq!(hint("Use Night theme"), None);
         // Registering again changes nothing.
         let before = all.len();

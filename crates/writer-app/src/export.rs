@@ -172,11 +172,10 @@ impl PickerDelegate for ExportDelegate {
                 .filter(move |choice| choice.scope == scope)
                 .filter(|choice| {
                     query.is_empty()
-                        || writer_ui::fuzzy::fuzzy_match(
+                        || crate::palette::words_match(
                             query,
                             &format!("{} {}", choice.label(), choice.detail()),
                         )
-                        .is_some()
                 })
                 .map(Row::Choice)
                 .collect::<Vec<_>>()

@@ -29,9 +29,18 @@ fn main() {
                 cx.quit();
                 return;
             };
-            cx.activate(true);
-            if let Some(script) = script {
-                automation::run(script, main_window, cx);
+            match script {
+                // A scripted run must not take the keyboard away from
+                // whoever is using the machine: their typing would land in
+                // this window. Keystrokes of the script are dispatched
+                // inside the app and do not need it to be frontmost.
+                Some(script) => {
+                    if automation::foreground_requested() {
+                        cx.activate(true);
+                    }
+                    automation::run(script, main_window, cx);
+                }
+                None => cx.activate(true),
             }
         });
 }

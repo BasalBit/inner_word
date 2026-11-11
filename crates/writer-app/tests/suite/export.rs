@@ -192,6 +192,24 @@ fn export_of_a_top_level_document_names_the_library(cx: &mut TestAppContext) {
     assert_eq!(single.documents, 1);
     assert!(single.file_name.ends_with(".docx"));
 
+    // The keyboard path to "Copy as Markdown": fourth row of the picker.
+    vcx.simulate_keystrokes("cmd-shift-s down down down enter");
+    vcx.run_until_parked();
+    let clipboard = vcx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    assert!(clipboard.starts_with("# Leaf"), "{clipboard}");
+    assert_eq!(toast_count(&workspace, vcx), 1);
+    assert!(editor_focused(&workspace, vcx));
+    // Typing filters the picker: "word" leaves the two Word rows.
+    vcx.simulate_keystrokes("cmd-shift-s");
+    vcx.simulate_input("word");
+    let picker = workspace
+        .read_with(vcx, |w, cx| w.modal_layer().read(cx).active::<ExportPicker>())
+        .unwrap();
+    let filtered = picker.read_with(vcx, |picker, _| picker.delegate.choices());
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered.iter().all(|choice| choice.format == ExportFormat::Docx));
+    vcx.simulate_keystrokes("escape");
+
     // Without a document there is nothing to export, and no picker.
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.close_document(window, cx);

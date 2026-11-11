@@ -20,7 +20,9 @@
 //!   every [`RETRY_DELAY`] until it succeeds. Nothing is dropped.
 //! - The title is derived from the text until the user renames the document
 //!   in the library; from then on the chosen name is kept
-//!   ([`Workspace::use_title_from_text`] goes back to deriving).
+//!   ([`Workspace::use_title_from_text`] goes back to deriving). A derived
+//!   title follows the text with every edit, undo included; the library's
+//!   row follows with the save.
 //! - After a successful save the library takes a version snapshot when the
 //!   newest one is older than [`SNAPSHOT_INTERVAL`] and the text differs.
 
@@ -43,7 +45,7 @@ use super::{
     saver::{SaveJob, SaveOutcome},
 };
 use crate::{
-    document_io::{StoredForm, UNTITLED, load_document},
+    document_io::{StoredForm, UNTITLED, derived_title, load_document},
     settings::keys,
     welcome,
 };
@@ -98,7 +100,9 @@ pub(crate) struct InFlight {
 /// The open document.
 pub(crate) struct Session {
     pub id: DocumentId,
-    /// The title as stored in the library.
+    /// The title shown above the text: the one the text gives as it is
+    /// now (it follows every edit and is what the next save stores), or
+    /// the one the user chose.
     pub title: String,
     /// The user named the document; do not derive the title from the text.
     /// Shared with a background save, which reads it right before writing.
@@ -446,6 +450,14 @@ impl Workspace {
         session.dirty = true;
         let now = cx.background_executor().now();
         session.dirty_since.get_or_insert(now);
+        // The title above the text follows the text at once (an edit, an
+        // undo, a heading made or unmade), not when the save comes round.
+        if !session.custom_title.load(Ordering::SeqCst) {
+            let title = derived_title(self.editor.read(cx).document());
+            if session.title != title {
+                session.title = title;
+            }
+        }
         let delay = self.autosave_delay(cx);
         self.schedule_save(delay, cx);
         cx.notify();
@@ -586,7 +598,12 @@ impl Workspace {
             SaveOutcome::Saved(saved) => {
                 // Clean only if nothing was edited while the save ran.
                 let unchanged = self.editor.read(cx).state().revision() == in_flight.revision;
-                session.title = saved.meta.title.clone();
+                // The title of text that has changed since is already the
+                // newer one (`mark_dirty`); a title the user chose is
+                // whatever the library has.
+                if unchanged || session.custom_title.load(Ordering::SeqCst) {
+                    session.title = saved.meta.title.clone();
+                }
                 if let Some(view_state) = saved.view_state {
                     session.stored_view_state = Some(view_state);
                 }
@@ -881,6 +898,9 @@ impl Workspace {
         };
         if let Some(session) = self.session.as_mut()
             && session.title != meta.title
+            // Text that is newer than what the library holds has a newer
+            // title too, unless the user chose the title.
+            && (!session.dirty || session.custom_title.load(Ordering::SeqCst))
         {
             session.title = meta.title;
             cx.notify();
@@ -905,7 +925,8 @@ impl Workspace {
         self.update_window_title(window);
     }
 
-    /// The title for the titlebar band: the stored title, or the app name.
+    /// The title for the titlebar band: the open document's title (see
+    /// [`Session::title`]), or the app name.
     pub(crate) fn display_title(&self) -> String {
         match &self.session {
             Some(session) => display_title(&session.title),

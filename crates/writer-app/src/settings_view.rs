@@ -102,6 +102,8 @@ pub enum SettingRow {
     MarkdownShortcuts,
     /// Smart quotes and dashes.
     SmartPunctuation,
+    /// The format bar over a selection made with the mouse.
+    FormatBar,
     /// Author name for comments.
     Author,
     /// Font of new documents.
@@ -152,11 +154,12 @@ pub enum SettingRow {
 
 impl SettingRow {
     /// The rows about the app, in order. They are always listed.
-    pub const APP: [SettingRow; 14] = [
+    pub const APP: [SettingRow; 15] = [
         SettingRow::Theme,
         SettingRow::VimMode,
         SettingRow::MarkdownShortcuts,
         SettingRow::SmartPunctuation,
+        SettingRow::FormatBar,
         SettingRow::Author,
         SettingRow::Font,
         SettingRow::TextSize,
@@ -209,6 +212,7 @@ impl SettingRow {
             SettingRow::VimMode
             | SettingRow::MarkdownShortcuts
             | SettingRow::SmartPunctuation
+            | SettingRow::FormatBar
             | SettingRow::Author => "Writing",
             SettingRow::Font
             | SettingRow::TextSize
@@ -229,6 +233,7 @@ impl SettingRow {
             SettingRow::VimMode => "Vim mode",
             SettingRow::MarkdownShortcuts => "Markdown shortcuts",
             SettingRow::SmartPunctuation => "Smart punctuation",
+            SettingRow::FormatBar => "Format bar",
             SettingRow::Author => "Name on comments",
             SettingRow::Font => "Font",
             SettingRow::TextSize => "Text size",
@@ -261,6 +266,7 @@ impl SettingRow {
             SettingRow::VimMode => "Modal editing with Vim keys.",
             SettingRow::MarkdownShortcuts => "Typing # , - , > or **bold** formats as you go.",
             SettingRow::SmartPunctuation => "Curly quotes, dashes and ellipses.",
+            SettingRow::FormatBar => "Comes up over text selected with the mouse.",
             SettingRow::Author => "Written on the comments you add.",
             SettingRow::Font => "Body text of a new document.",
             SettingRow::TextSize => "In points.",
@@ -715,6 +721,7 @@ impl SettingsView {
             SettingRow::VimMode => Control::Switch(settings.vim_mode),
             SettingRow::MarkdownShortcuts => Control::Switch(settings.input_rules),
             SettingRow::SmartPunctuation => Control::Switch(settings.smart_punctuation),
+            SettingRow::FormatBar => Control::Switch(settings.format_bar),
             SettingRow::Author => Control::Field { unit: None },
             SettingRow::Font => {
                 let index = self
@@ -846,6 +853,7 @@ impl SettingsView {
             SettingRow::VimMode => self.write(keys::VIM_MODE, &(index != 0), cx),
             SettingRow::MarkdownShortcuts => self.write(keys::INPUT_RULES, &(index != 0), cx),
             SettingRow::SmartPunctuation => self.write(keys::SMART_PUNCTUATION, &(index != 0), cx),
+            SettingRow::FormatBar => self.write(keys::FORMAT_BAR, &(index != 0), cx),
             SettingRow::Author => {}
             SettingRow::Font => {
                 if let Some(font) = self.fonts.get(index).cloned() {

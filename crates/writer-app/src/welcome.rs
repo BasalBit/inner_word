@@ -101,6 +101,11 @@ pub fn welcome_document() -> Document {
              the counts at the bottom of the window.",
         ),
         bullet(
+            "Select some text by dragging over it, or double-click a word: a small format bar \
+             comes up above it, with bold, italic, highlight, a link, a comment and more. It \
+             can be switched off in the settings.",
+        ),
+        bullet(
             "The menu bar at the top of the screen has every command, with its key beside it: \
              File, Edit, Format, Insert, View.",
         ),
@@ -108,7 +113,7 @@ pub fn welcome_document() -> Document {
             "In the library, the {b:+} button starts a document or a folder, and rows can be \
              dragged to another folder or to the trash.",
         ),
-        bullet("{k:⌃↩} opens the same menus from the keyboard."),
+        bullet("{k:⌃↩} opens the same menus from the keyboard, and so does {k:⇧F10}."),
         heading(2, "Find anything"),
         bullet("{k:⇧⌘P} opens the command palette: every command, with its shortcut beside it."),
         bullet("{k:⌘P} jumps to a document by name. {k:⇧⌘F} searches the text of every document."),

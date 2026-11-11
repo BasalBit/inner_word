@@ -21,6 +21,7 @@
 //! | `action:<name>`       | dispatches a registered action by name: `action:app::Quit`   |
 //! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 //! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
+//! | `bar[:<button>]`      | shows the format bar over the selection, as a selection made with the mouse does; with a button (`bold`, `italic`, `highlight`, `turn-into`, `more`, `extra-0` ...) presses that button of the bar |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
@@ -61,7 +62,9 @@
 //! Context menus open from the keyboard (`keys:ctrl-enter` in the text, the
 //! library, the comment list or a text field); the menus that belong to the
 //! title and the status bar, which the keyboard does not reach, open with
-//! `menu:`. `choose:` picks an item of whichever menu is open.
+//! `menu:`. `choose:` picks an item of whichever menu is open. The format
+//! bar, which only a selection made with the mouse brings up, is shown with
+//! `bar`.
 //!
 //! Example:
 //!
@@ -116,6 +119,7 @@ pub enum Step {
     Action(String),
     Menu(crate::workspace::MenuKind),
     Choose(String),
+    Bar(Option<String>),
     Resize(f32, f32),
     Theme(ThemeMode),
     Screenshot(PathBuf),
@@ -253,6 +257,7 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             }
             Step::Choose(unescape(arg))
         }
+        "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
         "resize" => {
             let (w, h) = arg
                 .split_once(['x', 'X'])
@@ -402,6 +407,31 @@ async fn execute(
                 bail!("no open menu has an item {label:?} that can be chosen");
             }
             eprintln!("[automation] chose {label:?}");
+            frame_pause(window, view, cx).await;
+        }
+        Step::Bar(button) => {
+            let done = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                workspace
+                    .tools()
+                    .clone()
+                    .update(cx, |tools, cx| match &button {
+                        None => tools.show_format_bar(window, cx),
+                        Some(button) => {
+                            let id = format!("format-bar-{button}");
+                            tools.press_format_bar_button(&id, window, cx)
+                        }
+                    })
+            })?;
+            match (done, &button) {
+                (true, None) => eprintln!("[automation] format bar shown"),
+                (true, Some(button)) => eprintln!("[automation] format bar: pressed {button}"),
+                (false, None) => {
+                    bail!("the format bar has nothing to come up over (no selection, or it is off)")
+                }
+                (false, Some(button)) => {
+                    bail!("the format bar is not showing a button {button:?} that can be pressed")
+                }
+            }
             frame_pause(window, view, cx).await;
         }
         Step::Resize(width, height) => {
@@ -572,6 +602,22 @@ pub fn describe_state(
         }
         None => "none".to_string(),
     };
+    let bar = if tools.format_bar_visible() {
+        tools
+            .format_bar_items(cx)
+            .iter()
+            .map(|item| match item.state {
+                writer_editor_tools::Mark::Check => format!("{}*", item.label),
+                writer_editor_tools::Mark::Mixed => format!("{}~", item.label),
+                writer_editor_tools::Mark::None => item.label.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    } else if tools.format_bar_enabled() {
+        "none".to_string()
+    } else {
+        "off".to_string()
+    };
     let comments = workspace.comments().read(cx);
     let comments = format!(
         "{} threads={} open={} active={:?} composing={}",
@@ -604,7 +650,8 @@ pub fn describe_state(
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
          modal={} menu=[{menu}] sidebar={} page_view={} \
-         vim=[{vim}] tool=[{tool}] comments=[{comments}] words={:?} characters={:?} page={:?} \
+         vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] words={:?} characters={:?} \
+         page={:?} \
          limit={:?}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),

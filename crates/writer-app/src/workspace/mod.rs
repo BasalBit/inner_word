@@ -256,7 +256,11 @@ impl Workspace {
         // entity here and follows `DocumentReplaced` by itself.
         let recent_fonts: Vec<String> = library.read(cx).setting_or(keys::RECENT_FONTS, Vec::new());
         writer_editor_tools::set_recent_fonts(recent_fonts.into_iter().map(SharedString::from), cx);
-        let tools = cx.new(|cx| EditorTools::new(editor.clone(), window, cx));
+        let tools = cx.new(|cx| {
+            let mut tools = EditorTools::new(editor.clone(), window, cx);
+            tools.set_format_bar_enabled(settings.format_bar, cx);
+            tools
+        });
         let comments = cx.new(|cx| {
             let mut comments =
                 CommentsPanel::new(editor.clone(), settings.comment_author.clone(), window, cx);
@@ -444,7 +448,9 @@ impl Workspace {
         self.session.as_ref().map(|session| session.id)
     }
 
-    /// The title of the open document as the library shows it.
+    /// The title of the open document, as the band above the text shows
+    /// it: the title its text gives now, or the one the user chose. The
+    /// library's row has it from the next save on.
     pub fn document_title(&self) -> Option<&str> {
         self.session.as_ref().map(|session| session.title.as_str())
     }
@@ -802,6 +808,11 @@ impl Workspace {
         }
         if old.vim_mode != new.vim_mode {
             self.apply_vim_setting(cx);
+        }
+        if old.format_bar != new.format_bar {
+            self.tools.update(cx, |tools, cx| {
+                tools.set_format_bar_enabled(new.format_bar, cx)
+            });
         }
         if old.comment_author != new.comment_author {
             let author = new.comment_author.clone();

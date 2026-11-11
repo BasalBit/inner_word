@@ -1,15 +1,17 @@
 //! What the testers found, kept from coming back: a modal that lost the
 //! keyboard, commands for the text chosen from elsewhere, a settings row
 //! that stayed out of sight, the sidebar edge that clicked through, two
-//! copies on one library, a polite request to end the process.
+//! copies on one library, a polite request to end the process, a title that
+//! lagged behind the text.
 
 use gpui::{Focusable as _, Modifiers, MouseButton, TestAppContext, point, px, size};
 use writer_app::{
     palette::CommandPalette,
+    settings::keys,
     settings_view::{SettingRow, SettingsView},
     single_instance::{self, Acquired},
     window,
-    workspace::limit_label,
+    workspace::{AUTOSAVE_DELAY, limit_label},
 };
 use writer_core::{BlockKind, Position};
 use writer_editor::actions as editor;
@@ -469,4 +471,116 @@ fn the_limit_indicator_reads_like_the_other_counts() {
         limit: 3000,
     };
     assert_eq!(limit_label(linkedin), "3,100 / 3,000 on LinkedIn");
+}
+
+/// The title above the text is the title of the text as it is now: making a
+/// heading, undoing it and redoing it change it at once, not when the next
+/// save comes round. (Seen in the app: a paragraph was turned into a heading
+/// and became the title; two undos brought the text back, and the title
+/// band still showed the heading.)
+#[gpui::test]
+fn the_title_follows_the_text_after_every_change(cx: &mut TestAppContext) {
+    init(cx);
+    // A library on disk, as the app has: its autosave runs in the
+    // background and reports back later.
+    let dir = tempfile::tempdir().unwrap();
+    let library = cx.new(|_| writer_library::Library::open(dir.path().join("library.db")).unwrap());
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
+    });
+    let document = Document::from_blocks(vec![
+        Block::paragraph("The Salt Road is out next month. It took four years."),
+        Block::paragraph("What the harbour remembers"),
+    ]);
+    let id = add_document(&library, None, &document, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(id, true, window, cx);
+    });
+    vcx.run_until_parked();
+    let title = |cx: &mut VisualTestContext| {
+        workspace
+            .read_with(cx, |w, _| w.document_title().map(str::to_string))
+            .unwrap()
+    };
+    let stored_title = |cx: &mut VisualTestContext| {
+        library.read_with(cx, |library, _| library.document_meta(id).unwrap().title)
+    };
+    let first_sentence = "The Salt Road is out next month";
+    let heading = "What the harbour remembers";
+    assert_eq!(title(vcx), first_sentence);
+
+    // The second paragraph becomes a heading: it is the title, before any
+    // save has run.
+    workspace.update(vcx, |w, cx| {
+        w.editor().update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(1, 4)), cx);
+        });
+    });
+    vcx.simulate_keystrokes("cmd-alt-2");
+    assert_eq!(block_kind(&workspace, 1, vcx), BlockKind::heading(2));
+    assert_eq!(title(vcx), heading);
+    assert_eq!(stored_title(vcx), first_sentence, "nothing was saved yet");
+
+    // Undo: the text is back and so is the title, at once.
+    vcx.simulate_keystrokes("cmd-z");
+    assert_eq!(block_kind(&workspace, 1, vcx), BlockKind::Paragraph);
+    assert_eq!(title(vcx), first_sentence);
+    // Redo, and undo again while the background save of the heading is
+    // still on its way: its answer must not bring the heading back.
+    vcx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(title(vcx), heading);
+    workspace.update(vcx, |w, cx| w.autosave(cx));
+    assert!(workspace.read_with(vcx, |w, _| w.is_saving_in_background()));
+    workspace.update(vcx, |w, cx| {
+        w.editor().update(cx, |editor, cx| {
+            editor.edit(
+                |state| {
+                    state.undo();
+                },
+                cx,
+            );
+        });
+    });
+    assert!(workspace.read_with(vcx, |w, _| w.is_saving_in_background()));
+    assert_eq!(title(vcx), first_sentence);
+    vcx.run_until_parked();
+    assert_eq!(
+        stored_title(vcx),
+        heading,
+        "the older text was saved meanwhile"
+    );
+    assert_eq!(title(vcx), first_sentence, "the band keeps to the text");
+    // The next save stores what the band already shows.
+    vcx.executor().advance_clock(AUTOSAVE_DELAY * 2);
+    vcx.run_until_parked();
+    assert_eq!(stored_title(vcx), first_sentence);
+    assert_eq!(title(vcx), first_sentence);
+
+    // Typing in the first sentence moves the title with it.
+    workspace.update(vcx, |w, cx| {
+        w.editor().update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(0, 0)), cx);
+        });
+    });
+    vcx.simulate_input("Soon: ");
+    assert_eq!(title(vcx), "Soon: The Salt Road is out next month");
+
+    // A title the user chose is left alone by all of this.
+    vcx.executor().advance_clock(AUTOSAVE_DELAY * 2);
+    vcx.run_until_parked();
+    library.update(vcx, |library, cx| {
+        library.rename_document(id, "Launch notes", cx).unwrap();
+    });
+    vcx.run_until_parked();
+    assert_eq!(title(vcx), "Launch notes");
+    vcx.simulate_keystrokes("cmd-alt-1");
+    assert_eq!(title(vcx), "Launch notes");
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.executor().advance_clock(AUTOSAVE_DELAY * 2);
+    vcx.run_until_parked();
+    assert_eq!(title(vcx), "Launch notes");
+    assert_eq!(stored_title(vcx), "Launch notes");
 }

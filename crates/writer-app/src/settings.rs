@@ -24,6 +24,9 @@ pub mod keys {
     pub const INPUT_RULES: &str = "editor.input_rules";
     /// `bool`: smart quotes, dashes and ellipses.
     pub const SMART_PUNCTUATION: &str = "editor.smart_punctuation";
+    /// `bool`: the format bar that comes up over a selection made with the
+    /// mouse.
+    pub const FORMAT_BAR: &str = "editor.format_bar";
     /// `bool`: comment tints in the text and the comments panel.
     pub const COMMENTS_VISIBLE: &str = "editor.comments_visible";
     /// `string`: the author name written on new comments.
@@ -73,11 +76,12 @@ pub mod keys {
 
     /// The keys behind [`super::Settings`]: a change to one of them is a
     /// change of the user settings.
-    pub const USER_SETTINGS: [&str; 17] = [
+    pub const USER_SETTINGS: [&str; 18] = [
         THEME,
         VIM_MODE,
         INPUT_RULES,
         SMART_PUNCTUATION,
+        FORMAT_BAR,
         COMMENTS_VISIBLE,
         COMMENT_AUTHOR,
         NEW_DOCUMENT_FONT,
@@ -204,6 +208,8 @@ pub struct Settings {
     pub input_rules: bool,
     /// Smart quotes, dashes and ellipses.
     pub smart_punctuation: bool,
+    /// The format bar over a selection made with the mouse.
+    pub format_bar: bool,
     /// Comment tints in the text and the comments panel.
     pub comments_visible: bool,
     /// Author name written on new comments.
@@ -240,6 +246,7 @@ impl Default for Settings {
             vim_mode: false,
             input_rules: true,
             smart_punctuation: true,
+            format_bar: true,
             comments_visible: true,
             comment_author: default_author(),
             new_document_font: typography.body_font,
@@ -323,6 +330,7 @@ impl Settings {
             input_rules: library.setting_or(keys::INPUT_RULES, defaults.input_rules),
             smart_punctuation: library
                 .setting_or(keys::SMART_PUNCTUATION, defaults.smart_punctuation),
+            format_bar: library.setting_or(keys::FORMAT_BAR, defaults.format_bar),
             comments_visible: library.setting_or(keys::COMMENTS_VISIBLE, defaults.comments_visible),
             comment_author: if author.trim().is_empty() {
                 defaults.comment_author

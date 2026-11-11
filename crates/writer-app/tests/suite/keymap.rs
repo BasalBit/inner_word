@@ -90,6 +90,7 @@ const EDITOR: &[(&str, &str)] = &[
     ("cmd-shift-v", "editor::PasteAsPlainText"),
     // The context menu of the text, from the keyboard.
     ("ctrl-enter", "editor::OpenContextMenu"),
+    ("shift-f10", "editor::OpenContextMenu"),
     // The same keys as a real US keyboard reports them: GPUI names shift
     // plus a digit or punctuation by the shifted character.
     ("cmd-&", "editor::ToggleNumberedList"),

@@ -61,16 +61,26 @@ silicon. The name of the disk image says which kind of Mac it is for:
 Finding your way
 ----------------
 
-Right-click anything to see what you can do with it: the text, a document or
-a folder in the library on the left, the title above the text, the counts at
-the bottom of the window. The menu bar at the top of the screen has every
-command with its key beside it. Help > Keyboard Shortcuts lists all the keys,
-and Help > Welcome Document opens a short introduction.
+Right-click anything to see what you can do with it: the text, a link, a
+comment, a document or a folder in the library on the left, the title above
+the text, the counts at the bottom of the window. Select some text with the
+mouse and a small format bar comes up above it (bold, italic, highlight,
+link, comment and more); it can be switched off in the settings. The menu bar
+at the top of the screen has every command with its key beside it.
+Help > Keyboard Shortcuts lists all the keys, and Help > Welcome Document
+opens a short introduction.
+
+From the keyboard, Control-Return opens the same menus as a right-click, and
+so does Shift-F10.
 
 If The Writer says that it is already open, another copy of it is running
 with your library (for example an older copy that was not quit). Switch to
 that copy, or quit it and open The Writer again. Two copies never work on one
 library at the same time, so that neither overwrites what the other wrote.
+
+If you are replacing an earlier preview build: quit the old copy before you
+open this one. The preview does not take part in that check, so the two
+could otherwise have your library open together.
 
 
 Your documents

@@ -40,7 +40,8 @@ const KEY_GROUPS: [(&str, &str); 8] = [
     ("picker", ""),
     ("settings", ""),
     ("version_history", ""),
-    // `ctrl-enter` in the library, the comment list and a text field.
+    // `ctrl-enter` (and `shift-f10`) in the library, the comment list and a
+    // text field.
     ("context_menu", ""),
 ];
 
@@ -52,6 +53,13 @@ const TYPED_TRIGGERS: [(&str, &str, &str); 1] = [(
     "/",
     "at the start of a line or after a space",
 )];
+
+/// Actions whose row names every key they are bound to in their place, not
+/// only the preferred one ("Context menu (also ⇧F10)"): the context menu
+/// opens on `ctrl-enter` and, should the system keep that key, on
+/// `shift-f10`. (Other actions have second bindings that are the same key
+/// spelled another way, `cmd-shift-7` and `cmd-&`; those are not named.)
+const EVERY_KEY: [&str; 2] = ["editor::OpenContextMenu", "context_menu::OpenContextMenu"];
 
 /// What the overlay says above the list: the keys are one way, the menus
 /// are the other.
@@ -214,6 +222,39 @@ fn preferred_binding(action: &dyn Action, cx: &App) -> Option<(KeyHint, Place)> 
     best.map(|(binding, place)| (KeyHint::from_binding(binding), place))
 }
 
+/// `title` with the other keys `action` is bound to in `place`, for the
+/// actions of [`EVERY_KEY`]: every binding there whose key is not
+/// `preferred`, once each, in the order the keymap has them, as the keymap
+/// spells them.
+fn with_second_keys(
+    title: SharedString,
+    action: &dyn Action,
+    place: Place,
+    preferred: &KeyHint,
+    cx: &App,
+) -> SharedString {
+    if !EVERY_KEY.contains(&action.name()) {
+        return title;
+    }
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let mut others: Vec<String> = Vec::new();
+    for binding in keymap.bindings_for_action(action) {
+        if binding_place(binding) != place {
+            continue;
+        }
+        let text = KeyHint::from_binding(binding).text();
+        if text != preferred.text() && !others.contains(&text) {
+            others.push(text);
+        }
+    }
+    if others.is_empty() {
+        title
+    } else {
+        format!("{title} (also {})", others.join(", ")).into()
+    }
+}
+
 fn binding_place(binding: &gpui::KeyBinding) -> Place {
     let predicate = binding.predicate().map(|predicate| predicate.to_string());
     Place::of_predicate(predicate.as_deref())
@@ -272,8 +313,15 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
         for command in all.iter().filter(|command| command.category == category) {
             described.insert(command.action_name());
             if let Some((hint, place)) = preferred_binding(command.action_ref(), cx) {
+                let title = with_second_keys(
+                    command.title.clone(),
+                    command.action_ref(),
+                    place,
+                    &hint,
+                    cx,
+                );
                 shortcuts.push(Shortcut {
-                    title: command.title.clone(),
+                    title,
                     category: category.clone(),
                     place,
                     heading: place.heading(&category).into(),
@@ -318,8 +366,15 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
             let Some((hint, place)) = preferred_binding(action.as_ref(), cx) else {
                 continue;
             };
+            let title = with_second_keys(
+                plain_words(&humanize_action_name(action.name())).into(),
+                action.as_ref(),
+                place,
+                &hint,
+                cx,
+            );
             shortcuts.push(Shortcut {
-                title: plain_words(&humanize_action_name(action.name())).into(),
+                title,
                 category: category.into(),
                 place,
                 heading: place.heading(category).into(),

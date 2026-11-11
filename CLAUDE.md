@@ -13,7 +13,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
 | `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), input, and the seams the crates below plug into. |
-| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace. |
+| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
@@ -56,15 +56,18 @@ THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/som
 Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `action:<name>`, `menu:<name>` (opens
 a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`),
 `choose:<label>` (chooses that item of the open context menu, as a click would),
-`resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
+`bar` (shows the format bar over the selection, as a selection made with the mouse does;
+`bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
+it), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-Vim, tool, comments, status bar), `dump`, `log:<text>`, `quit`, and for measuring
+Vim, tool, the format bar, comments, status bar), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document), `savecost[:<rounds>]` (every part
 of a synchronous save, timed) and `limitcost[:<rounds>]` (the character-limit count). Useful
 lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a palette command
 `keys:cmd-shift-p; type:version history; keys:enter`; the settings of the open document
 `keys:cmd-shift-p; type:document settings; keys:enter`; a context menu `keys:ctrl-enter`
-(in the text, the library, the comment list or a text field), then `choose:Add Comment`.
+(in the text, the library, the comment list or a text field), then `choose:Add Comment`;
+the format bar `keys:shift-right shift-right; bar; bar:bold`.
 There are no mouse steps (GPUI cannot be handed pointer events from outside); mouse
 behaviour is tested headlessly with the test context's `simulate_*` calls.
 
@@ -97,7 +100,10 @@ headlessly; `tests/suite/keymap.rs` checks every key of the tables below against
 assembled keymap; `tests/suite/saving.rs` holds the rules of saving in the background;
 `tests/suite/mouse.rs` does everything with simulated pointer events (the menu bar, the
 menus of the title, the status bar, the text and the library rows, modals);
-`tests/suite/findings.rs` keeps what the testers found from coming back.
+`tests/suite/context_menus.rs` right-clicks every kind of object in the assembled workspace
+(a document row, a folder row, the empty library, a selection, a link, a comment thread, a
+text field, the title, a status bar item), clicks an item of each menu, and holds the format
+bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from coming back.
 
 ## Working rules
 
@@ -135,12 +141,16 @@ menus of the title, the status bar, the text and the library rows, modals);
    context menu on every object (library rows and empty space, text and selections, links,
    comment threads, text fields, the title, status bar items), the native menu bar for
    app-level and formatting commands, and a small visible control wherever a right-click
-   would not be discovered. Context menus also open from the keyboard (`ctrl-enter`).
+   would not be discovered. Context menus also open from the keyboard (`ctrl-enter`, and
+   `shift-f10` as a second key).
    Every overlay closes with `escape` or a click outside and returns focus to where it came
    from.
 2. **Few menus in the window.** No ribbon or permanent formatting toolbar. Formatting is
    contextual: shortcuts, Markdown-style input rules, the `cmd-.` format menu, the `/`
-   insert menu, right-click context menus, and the command palette.
+   insert menu, right-click context menus, the command palette, and the floating format
+   bar: a small bar that comes up by itself over a selection made with the mouse (a drag, a
+   double or triple click, a shift-click), never for a keyboard selection, never takes the
+   keyboard, and can be switched off in the settings ("Format bar").
 3. **One source of truth for shortcuts.** Bindings are registered through GPUI key bindings;
    the shortcuts overlay and palette hints are generated from that registry, not hand-written.
 4. **Never lose text.** Documents autosave (debounced) and on close/quit. No save button;
@@ -153,6 +163,8 @@ menus of the title, the status bar, the text and the library rows, modals);
    documents, closing and quitting is synchronous and waits for a save in flight, and an
    older copy is never written after a newer one (`crates/writer-app/src/workspace/saver.rs`).
    The library keeps version snapshots; "Version history" in the palette brings one back.
+   The title above the text is the title of the text as it is now (it follows every edit,
+   undo included, `Workspace::mark_dirty`); the library's row follows with the save.
 
 ## Document model in one paragraph
 
@@ -180,8 +192,8 @@ text, `enter` restores, after keeping the current text as a version), "Document 
 size, orientation, margins, font, text size, line spacing, paragraph spacing; lengths are
 typed, `20mm`, `0.75in`), "Rename document", "Reveal in library" and "Welcome document"
 (opens it; written again when it is gone). In the settings `up` / `down` move, `left` /
-`right` change, `space` switches; the "Status bar" section chooses the character limit and
-which counts are shown.
+`right` change, `space` switches; the "Writing" section has the switch for the format bar,
+the "Status bar" section chooses the character limit and which counts are shown.
 
 Global (work anywhere in the window):
 
@@ -196,7 +208,7 @@ Global (work anywhere in the window):
 | `cmd-shift-f` | Search the whole library |
 | `cmd-shift-s` | Export (Markdown, DOCX) |
 | `cmd-s` | Save now (the text is saved as it is written anyway) |
-| `ctrl-enter` | Context menu of what has the keyboard: the text, a library row, a comment thread, a text field |
+| `ctrl-enter` or `shift-f10` | Context menu of what has the keyboard: the text, a library row, a comment thread, a text field |
 | `cmd-,` | Settings |
 | `cmd-/` | Keyboard shortcuts overlay |
 | `cmd-opt-p` | Turn page view on or off |
@@ -238,6 +250,17 @@ extend, `alt-backspace`, `cmd-backspace`, and the `ctrl-a/e/f/b/n/p/k/d/h` Emacs
 
 Keymap facts that bite (details in `docs/gpui-notes.md`):
 
+- **The context menu has two keys.** `ctrl-enter` is the one macOS itself uses and the one
+  key hints show; `shift-f10` is bound beside it everywhere (the text, the library, the
+  comment list, text fields; bound first, so hints keep showing `ctrl-enter`), because a
+  real `ctrl-return` posted to a background window never reached GPUI (keypad enter did)
+  and nobody has pressed it on a keyboard in an active window yet. The shortcuts overlay
+  names the second key in the row ("Context menu (also ⇧F10)", `shortcuts::EVERY_KEY`).
+- **Panel keys that are easy to miss**: in the library `alt-right` / `alt-left` open or close
+  every folder (of the selected folder, or all of them) and a click on a folder row opens
+  or closes it; in the comment list `cmd-c` copies the comment's text; `cmd-opt-f` on an
+  open find bar with a query moves to the replace field; `escape` in the text closes the
+  format bar before the find bar.
 - **Shift plus a digit or punctuation** reaches GPUI as the shifted character without the
   shift flag (`cmd-shift-7` is `cmd-&` on a US keyboard). Bind both spellings, the readable
   one last so key hints show it (see `crates/writer-editor/src/actions.rs`).
@@ -293,6 +316,13 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   `writer-ui`. Each offers a hook through which the app adds its items
   (`Workspace::extend_the_menus_of_other_crates`: Add Comment and Go to Comment in the text
   menu, Export and Version History on library rows).
+- **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
+  the left button is released on a selection the pointer made: bold, italic, underline,
+  strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),
+  the app's "Add Comment" (`EditorTools::set_format_bar_extension`, set beside the text
+  menu's hook) and "more" (the format menu). Each button runs what its key runs and keeps
+  the selection and the bar. `editor.format_bar` (the "Format bar" switch in the settings)
+  turns it off through `EditorTools::set_format_bar_enabled`. It is not a `ToolKind`.
 - **The app's own menus** (`crates/writer-app/src/workspace/menus.rs`): the title above the
   text (right-click, or the chevron beside it) and the items of the status bar (the save
   state, the counts, the page indicator, the character limit; a click or a right-click).

@@ -3,6 +3,7 @@
 
 mod assembly;
 mod commands;
+mod context_menus;
 mod export;
 mod findings;
 mod keymap;

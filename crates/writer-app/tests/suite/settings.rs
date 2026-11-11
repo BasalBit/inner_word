@@ -66,6 +66,15 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
     // Smart punctuation: left turns a switch off.
     vcx.simulate_keystrokes("down left");
     assert_eq!(config(vcx), (false, false));
+    // The format bar over a mouse selection: on unless switched off here.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::FormatBar));
+    assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).format_bar_enabled()));
+    vcx.simulate_keystrokes("space");
+    assert!(!workspace.read_with(vcx, |w, _| w.settings().format_bar));
+    assert!(!workspace.read_with(vcx, |w, cx| w.tools().read(cx).format_bar_enabled()));
+    vcx.simulate_keystrokes("right");
+    assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).format_bar_enabled()));
 
     // The author name is a text field inside the list.
     vcx.simulate_keystrokes("down");

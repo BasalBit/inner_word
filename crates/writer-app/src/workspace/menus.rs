@@ -12,6 +12,7 @@
 //! | The character-limit indicator | click or right-click | the network to count against, off |
 //! | The Vim mode chip | click or right-click (the Vim crate's own menu) | plus "Settings…" from here |
 //! | The text | right-click or `ctrl-enter` (the editor tools' menu) | plus "Add Comment" and "Go to Comment" from here |
+//! | A selection made with the mouse | by itself (the editor tools' format bar) | plus an "Add Comment" button from here |
 //! | A row of the library | right-click, `ctrl-enter` or its "more" button (the panel's menu) | plus "Export…" and "Version History…" from here |
 //!
 //! The menus are [`writer_ui::ContextMenu`]s. An item that is a command is
@@ -22,9 +23,10 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{Bounds, Context, IntoElement, Pixels, Styled as _, Window, canvas};
 use writer_comments as comments;
+use writer_editor_tools::FormatBarButton;
 use writer_export::SocialNetwork;
 use writer_library::{DocumentId, LibraryItem, LibraryMenuTarget};
-use writer_ui::{ContextMenu, ContextMenuItem, MenuAnchor, Toast};
+use writer_ui::{ContextMenu, ContextMenuItem, IconName, MenuAnchor, Toast};
 
 use super::{SidePanel, Workspace};
 use crate::{
@@ -280,6 +282,23 @@ impl Workspace {
                     ));
                 }
                 items
+            });
+        });
+
+        // The format bar over a selection made with the mouse: the same
+        // "Add Comment", as a button between "turn into" and "more". The
+        // composer then takes the keyboard and the bar goes by itself.
+        let panel = self.comments.downgrade();
+        self.tools.update(cx, |tools, _| {
+            tools.set_format_bar_extension(move |_, cx| {
+                let Some(panel) = panel.upgrade() else {
+                    return Vec::new();
+                };
+                vec![
+                    FormatBarButton::action("Add Comment", comments::AddComment)
+                        .icon(IconName::Comment)
+                        .disabled(!panel.read(cx).can_add_comment(cx)),
+                ]
             });
         });
 

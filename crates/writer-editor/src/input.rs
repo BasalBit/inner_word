@@ -11,18 +11,19 @@
 //! A composition is kept as a marked byte range in the UI ([`MarkedText`])
 //! and written into the document with `replace_range` inside one undo group,
 //! as writer-core's guide prescribes, so a whole composition is one undo
-//! step.
-//!
-//! Status: skeleton in the details. Marked text is in the document but is
-//! not drawn underlined yet, and `new_selected_range` inside a composition
-//! is applied only as a caret position.
+//! step. The element draws the marked range underlined; the part of it the
+//! input method reports as selected is the editor's selection.
 
-use std::ops::Range;
+use std::{ops::Range, time::Duration};
 
 use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window};
-use writer_core::{Position, TextRange};
+use writer_core::{Position, Selection, TextRange};
 
 use crate::{editor::Editor, scroll::Autoscroll};
+
+/// A pause in typing this long ends the undo step: `cmd-z` after it takes
+/// back what was typed since, not the whole paragraph.
+pub(crate) const TYPING_PAUSE: Duration = Duration::from_millis(800);
 
 /// An IME composition in progress: bytes `range` of block `block`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +80,20 @@ impl Editor {
                 };
                 offset..offset
             })
+    }
+
+    /// Ends the typing undo step after a pause (see [`TYPING_PAUSE`]).
+    /// Called after every typed insertion; each call restarts the wait.
+    fn break_undo_after_pause(&mut self, cx: &mut Context<Self>) {
+        self.typing_pause = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TYPING_PAUSE).await;
+            this.update(cx, |editor, _| {
+                if editor.marked.is_none() {
+                    editor.state.break_undo_group();
+                }
+            })
+            .ok();
+        }));
     }
 }
 
@@ -172,6 +187,7 @@ impl EntityInputHandler for Editor {
         }
         self.finish_edit(selection_before, Autoscroll::Fit, cx);
         self.in_ime_edit = false;
+        self.break_undo_after_pause(cx);
     }
 
     fn replace_and_mark_text_in_range(
@@ -201,11 +217,19 @@ impl EntityInputHandler for Editor {
         self.state
             .replace_range(TextRange::in_block(index, range.start, range.end), new_text);
         let inserted = writer_core::text::normalize_input(new_text);
-        let caret_in_text = new_selected_range_utf16
-            .map(|selected| writer_core::text::utf16_to_utf8(&inserted, selected.end))
-            .unwrap_or(inserted.len());
-        self.state
-            .set_caret(Position::new(index, range.start + caret_in_text));
+        // The part of the composition the input method has selected (the
+        // clause being converted), relative to the inserted text; without
+        // one the caret goes to its end.
+        let selected = new_selected_range_utf16
+            .map(|selected| {
+                writer_core::text::utf16_to_utf8(&inserted, selected.start)
+                    ..writer_core::text::utf16_to_utf8(&inserted, selected.end)
+            })
+            .unwrap_or(inserted.len()..inserted.len());
+        self.state.set_selection(Selection::new(
+            Position::new(index, range.start + selected.start),
+            Position::new(index, range.start + selected.end.max(selected.start)),
+        ));
         if inserted.is_empty() {
             // The composition was cancelled.
             self.marked = None;

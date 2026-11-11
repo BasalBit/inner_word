@@ -6,10 +6,7 @@ use gpui::{Context, px};
 use serde::{Deserialize, Serialize};
 use writer_core::{Position, Selection};
 
-use crate::{
-    editor::Editor,
-    scroll::{Autoscroll, PendingScroll},
-};
+use crate::{editor::Editor, scroll::Autoscroll};
 
 /// Selection and scroll position of an editor. Plain data: store it as JSON
 /// next to the document. Every field has a default, so older or partial
@@ -32,7 +29,7 @@ pub struct ViewState {
     /// Index of the block at the top of the viewport.
     pub scroll_block: usize,
     /// How far the top of the viewport is below that block's top, in
-    /// pixels.
+    /// pixels (negative: above it, in the space before the block).
     pub scroll_offset: f32,
 }
 
@@ -50,15 +47,7 @@ impl Editor {
     /// The current selection and scroll position.
     pub fn view_state(&self) -> ViewState {
         let selection = self.state.selection();
-        // A restore that has not been laid out yet is still the truth.
-        let scroll = match self.pending_scroll {
-            Some(PendingScroll::BlockOffset { block, offset }) => Some((block, offset)),
-            _ => self.with_layout(|layout, _| {
-                let block = layout.block_at_y(self.scroll_y);
-                (block, self.scroll_y - layout.block_top(block))
-            }),
-        };
-        let (scroll_block, scroll_offset) = scroll.unwrap_or((0, px(0.)));
+        let (scroll_block, scroll_offset) = self.scroll_anchor();
         ViewState {
             anchor_block: selection.anchor.block,
             anchor_offset: selection.anchor.offset,
@@ -70,9 +59,8 @@ impl Editor {
     }
 
     /// Restores a snapshot: sets the selection (clamped to the document)
-    /// and the scroll position. Works before the first layout; the scroll
-    /// position is then applied on the first frame. The caret is not
-    /// scrolled into view, the saved scroll position wins.
+    /// and the scroll position. Works before the first layout. The caret is
+    /// not scrolled into view, the saved scroll position wins.
     pub fn restore_view_state(&mut self, view: &ViewState, cx: &mut Context<Self>) {
         let selection = view.selection();
         self.edit_with(Autoscroll::None, |state| state.set_selection(selection), cx);
@@ -81,10 +69,7 @@ impl Editor {
         } else {
             0.
         };
-        self.request_scroll(PendingScroll::BlockOffset {
-            block: view.scroll_block,
-            offset: px(offset),
-        });
+        self.set_scroll_anchor(view.scroll_block, px(offset));
         cx.notify();
     }
 }

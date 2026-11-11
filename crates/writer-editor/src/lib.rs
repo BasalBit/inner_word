@@ -84,15 +84,16 @@
 //! | Module | Contents |
 //! |---|---|
 //! | `editor` | the entity: state, config, mutation seam, interception and key context API, highlights and comments API, `Render` |
-//! | `layout` | `DocumentLayout` (cache keyed by block revision stamps, block stack), `layout::block` (shaping, rows, hit testing), `layout::style` (runs, metrics), `layout::pages` (pagination) |
+//! | `layout` | `DocumentLayout` (a slot per block with its measure, lazy placement, shaped layouts for what is on screen, background refinement, scroll anchor, word counts), `layout::block` (shaping, rows, hit testing), `layout::style` (fonts, colours, metrics), `layout::pages` (placement in flow view and on sheets) |
 //! | `element` | `EditorElement`: measure, prepaint (frame plan), paint, listeners |
+//! | `paint` | painting one visual row: glyphs, backgrounds, underlines |
 //! | `decorations` | per block kind painting: markers, quote bar, code panel, rules |
 //! | `input` | platform input handler (typing, IME) |
 //! | `actions`, `handlers` | actions and key bindings; what each action does |
 //! | `commands` | command descriptors for the palette |
 //! | `movement` | the visual-row oracle |
-//! | `mouse` | click, drag, wheel |
-//! | `scroll` | scroll offset, requests, autoscroll |
+//! | `mouse` | click, drag, checkboxes, links, wheel, scroll bar drag |
+//! | `scroll` | scroll position, requests, autoscroll, the overlay scroll bar |
 //! | `geometry` | positions to window rectangles and back |
 //! | `highlights` | highlight layers |
 //! | `popup` | popup hosting and placement |
@@ -101,7 +102,16 @@
 //! | `stats` | statistics and page numbers |
 //! | `view_state` | selection and scroll snapshot |
 //!
-//! Search the crate for `Status: skeleton` to find what is not finished.
+//! # Long documents
+//!
+//! Nothing is laid out up front. A frame shapes the blocks in the viewport;
+//! all others count with a height estimated from their length until a
+//! background task has measured them, a few milliseconds at a time. For a
+//! consumer this means: positions on screen are exact, while the scroll
+//! range, [`Editor::page_count`] and the window y of positions far from the
+//! viewport can still settle for a moment after a long document opens
+//! ([`Editor::layout_pending`]). Word counts work the same way
+//! ([`Editor::stats`], [`EditorEvent::StatsChanged`]).
 
 pub mod actions;
 mod commands;
@@ -119,6 +129,7 @@ mod intercept;
 mod layout;
 mod mouse;
 mod movement;
+mod paint;
 mod popup;
 mod scroll;
 mod stats;
@@ -132,6 +143,8 @@ pub use commands::{
 };
 pub use config::{CaretStyle, CompactOptions, EditorConfig, EditorMode};
 pub use editor::Editor;
+#[doc(hidden)]
+pub use editor::FramePerf;
 pub use events::EditorEvent;
 pub use highlights::HighlightStyle;
 pub use intercept::{InterceptPriority, KeyDisposition};

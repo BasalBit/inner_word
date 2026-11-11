@@ -5,11 +5,16 @@
 //! `input` (platform text input), `handlers` (actions), `mouse`, `popup`,
 //! `view_state`, `compact`, `stats`.
 
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyContext, Keystroke, Pixels,
-    Render, SharedString, Subscription, Window, div, prelude::*, px,
+    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyContext, Keystroke,
+    ModifiersChangedEvent, Pixels, Point, Render, SharedString, Subscription, Task, Window, div,
+    prelude::*,
 };
 use writer_core::{CommentId, Document, EditorOptions, EditorState, Selection, Stats, TextRange};
 use writer_ui::theme::GlobalTheme;
@@ -17,6 +22,7 @@ use writer_ui::theme::GlobalTheme;
 use crate::{
     actions::KEY_CONTEXT,
     config::{CaretStyle, EditorConfig},
+    decorations::CheckboxHit,
     element::EditorElement,
     events::EditorEvent,
     handlers,
@@ -24,9 +30,44 @@ use crate::{
     input::MarkedText,
     intercept::{self, InterceptPriority, Interceptors, KeyDisposition},
     layout::DocumentLayout,
+    mouse::Drag,
     popup::{Popup, PopupElement},
-    scroll::{Autoscroll, PendingScroll},
+    scroll::{Autoscroll, PendingScroll, Scrollbar},
 };
+
+/// Half a caret blink: how long the caret is shown, then hidden.
+const BLINK_INTERVAL: Duration = Duration::from_millis(530);
+/// The background layout works for this long, then lets the app breathe.
+const REFINE_SLICE: Duration = Duration::from_millis(4);
+const REFINE_PAUSE: Duration = Duration::from_millis(1);
+/// Most blocks one slice handles (what bounds a slice in tests, where
+/// time does not).
+const REFINE_BLOCKS: usize = 256;
+
+/// Timings of the editor's last frame, for performance tests and the demo.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FramePerf {
+    /// Layout and planning (the element's prepaint).
+    pub prepaint: Duration,
+    /// Painting (the element's paint).
+    pub paint: Duration,
+    /// Frames drawn so far.
+    pub frames: u64,
+}
+
+impl FramePerf {
+    pub(crate) fn with_prepaint(mut self, prepaint: Duration) -> Self {
+        self.prepaint = prepaint;
+        self.frames += 1;
+        self
+    }
+
+    pub(crate) fn with_paint(mut self, paint: Duration) -> Self {
+        self.paint = paint;
+        self
+    }
+}
 
 /// The rich text editor: a view over a [`writer_core::EditorState`].
 ///
@@ -41,11 +82,10 @@ pub struct Editor {
     pub(crate) state: EditorState,
     pub(crate) config: EditorConfig,
     pub(crate) focus_handle: FocusHandle,
-    /// Block layouts and the geometry of the last frame. Behind a `RefCell`
-    /// so geometry queries work through `&Editor` and can lay out on demand.
+    /// Block measures, shaped layouts, placement, the scroll position and
+    /// the word counts. Behind a `RefCell` so geometry queries work through
+    /// `&Editor` and can lay out on demand.
     pub(crate) layout: RefCell<DocumentLayout>,
-    /// How far the content is scrolled, in pixels from its top.
-    pub(crate) scroll_y: Pixels,
     /// A scroll request waiting for the next layout.
     pub(crate) pending_scroll: Option<PendingScroll>,
     /// Column-local x that vertical caret movement tries to keep.
@@ -62,11 +102,34 @@ pub struct Editor {
     pub(crate) context_entries: Vec<(SharedString, Option<SharedString>)>,
     pub(crate) highlights: Highlights,
     pub(crate) active_comment: Option<CommentId>,
+    /// Threads whose anchors are not tinted.
+    pub(crate) hidden_comments: BTreeSet<CommentId>,
     pub(crate) popup: Option<Popup>,
-    pub(crate) stats: Stats,
     pub(crate) selection_stats: Cell<Option<(u64, Selection, Stats)>>,
     /// A mouse drag selection is in progress.
-    pub(crate) selecting: bool,
+    pub(crate) drag: Option<Drag>,
+    /// Scrolls while a drag selection is outside the viewport.
+    pub(crate) drag_scroll: Option<Task<()>>,
+    pub(crate) drag_scrolling: bool,
+    /// The last pointer position of a drag, in window coordinates.
+    pub(crate) last_mouse: Point<Pixels>,
+    pub(crate) scrollbar: Scrollbar,
+    /// The to-do checkboxes of the last frame.
+    pub(crate) checkbox_hits: Vec<CheckboxHit>,
+    /// The pointer is over a link with `cmd` held.
+    pub(crate) link_hover: bool,
+    /// The editor's focus handle is focused (as of the last focus event).
+    focused: bool,
+    /// The caret is in the visible half of its blink.
+    pub(crate) blink_on: bool,
+    blink_task: Option<Task<()>>,
+    /// Ends the typing undo step after a pause.
+    pub(crate) typing_pause: Option<Task<()>>,
+    /// The background layout task, while it has work.
+    refine_task: Option<Task<()>>,
+    refining: bool,
+    refine_slices: usize,
+    pub(crate) perf: Cell<FramePerf>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -102,22 +165,41 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let focus_handle = cx.focus_handle();
+        // A compact editor is a field among others: `tab` reaches it.
+        let focus_handle = cx.focus_handle().tab_stop(config.mode.is_compact());
         let interceptors = Interceptors::default();
         let mut state = EditorState::new(document);
         state.set_options(options_of(&config));
-        let stats = state.stats();
+        let layout = DocumentLayout::new(state.document(), state.revision());
 
         let subscriptions = vec![
-            cx.on_focus(&focus_handle, window, |_, _, cx| {
+            cx.on_focus(&focus_handle, window, |this, _, cx| {
+                this.focused = true;
+                this.restart_blink(cx);
                 cx.emit(EditorEvent::Focused);
                 cx.notify();
             }),
             cx.on_blur(&focus_handle, window, |this, _, cx| {
+                this.focused = false;
+                this.blink_task = None;
+                this.blink_on = true;
                 this.end_composition();
-                this.selecting = false;
+                this.drag = None;
+                this.drag_scroll = None;
+                this.drag_scrolling = false;
+                this.link_hover = false;
                 this.state.break_undo_group();
                 cx.emit(EditorEvent::Blurred);
+                cx.notify();
+            }),
+            // The caret and the selection colour follow the window's
+            // active state.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.restart_blink(cx);
+                } else {
+                    this.blink_task = None;
+                }
                 cx.notify();
             }),
             // The one interception point, see `intercept`. It holds the
@@ -144,12 +226,11 @@ impl Editor {
             cx.observe_global::<GlobalTheme>(|_, cx| cx.notify()),
         ];
 
-        Self {
+        let mut editor = Self {
             state,
             config,
             focus_handle,
-            layout: RefCell::new(DocumentLayout::default()),
-            scroll_y: px(0.),
+            layout: RefCell::new(layout),
             pending_scroll: None,
             goal_x: None,
             marked: None,
@@ -159,12 +240,31 @@ impl Editor {
             context_entries: Vec::new(),
             highlights: Highlights::default(),
             active_comment: None,
+            hidden_comments: BTreeSet::new(),
             popup: None,
-            stats,
             selection_stats: Cell::new(None),
-            selecting: false,
+            drag: None,
+            drag_scroll: None,
+            drag_scrolling: false,
+            last_mouse: Point::default(),
+            scrollbar: Scrollbar::default(),
+            checkbox_hits: Vec::new(),
+            link_hover: false,
+            focused: false,
+            blink_on: true,
+            blink_task: None,
+            typing_pause: None,
+            refine_task: None,
+            refining: false,
+            refine_slices: 0,
+            perf: Cell::new(FramePerf::default()),
             _subscriptions: subscriptions,
+        };
+        // A long document: its words are counted in the background.
+        if editor.layout.borrow().pending() {
+            editor.start_refining(cx);
         }
+        editor
     }
 
     /// The current configuration.
@@ -220,18 +320,26 @@ impl Editor {
     /// [`Editor::restore_view_state`].
     pub fn set_document(&mut self, document: Document, cx: &mut Context<Self>) {
         self.marked = None;
+        self.typing_pause = None;
         self.state = EditorState::new(document);
         self.state.set_options(options_of(&self.config));
-        self.layout.borrow_mut().clear();
-        self.scroll_y = px(0.);
+        self.layout
+            .borrow_mut()
+            .reset(self.state.document(), self.state.revision());
         self.pending_scroll = None;
         self.goal_x = None;
-        self.selecting = false;
+        self.drag = None;
+        self.drag_scroll = None;
+        self.drag_scrolling = false;
+        self.checkbox_hits.clear();
         self.highlights.clear_all();
         self.active_comment = None;
+        self.hidden_comments.clear();
         self.popup = None;
-        self.stats = self.state.stats();
         self.selection_stats.set(None);
+        if self.layout.borrow().pending() {
+            self.start_refining(cx);
+        }
         cx.emit(EditorEvent::DocumentReplaced);
         cx.notify();
     }
@@ -243,9 +351,21 @@ impl Editor {
     }
 
     /// Turns page view on or off (a document settings change: emits
-    /// [`EditorEvent::SettingsChanged`], not undoable).
+    /// [`EditorEvent::SettingsChanged`], not undoable). A caret that is on
+    /// screen stays where it is on screen; otherwise the text at the top
+    /// of the viewport stays there.
     pub fn set_page_view(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.edit_with(Autoscroll::Fit, |state| state.set_page_view(on), cx);
+        if on == self.page_view() {
+            return;
+        }
+        let caret_y = self.caret_viewport_y();
+        self.edit_with(Autoscroll::None, |state| state.set_page_view(on), cx);
+        if let Some(viewport_y) = caret_y {
+            // The layout changes shape with the next frame; the request is
+            // applied then.
+            self.defer_scroll(PendingScroll::CaretAt { viewport_y });
+        }
+        cx.notify();
     }
 
     /// Switches between flow view and page view.
@@ -335,16 +455,17 @@ impl Editor {
             return;
         }
         if let Some(change) = change {
-            // Block layouts are keyed by revision stamps, so only the stack
-            // needs a rebuild; it happens on the next layout query or frame.
-            self.layout.borrow_mut().invalidate();
-            if change.blocks.is_some() {
-                if !self.in_ime_edit {
-                    // An edit from elsewhere during a composition: the
-                    // marked range no longer means anything.
-                    self.end_composition();
-                }
-                self.stats = self.state.stats();
+            // The layout replaces the slots of the changed blocks (their
+            // measures, word counts and placement); everything else stays.
+            self.layout.borrow_mut().apply_change(
+                self.state.document(),
+                self.state.revision(),
+                change.blocks,
+            );
+            if change.blocks.is_some() && !self.in_ime_edit {
+                // An edit from elsewhere during a composition: the marked
+                // range no longer means anything.
+                self.end_composition();
             }
             if change.blocks.is_some() || change.comments {
                 cx.emit(EditorEvent::Edited { change });
@@ -352,11 +473,16 @@ impl Editor {
             if change.settings {
                 cx.emit(EditorEvent::SettingsChanged);
             }
+            if self.layout.borrow().pending() {
+                self.start_refining(cx);
+            }
         }
         if selection_changed {
             self.goal_x = None;
             cx.emit(EditorEvent::SelectionChanged);
         }
+        // The caret is solid while the user types or moves.
+        self.restart_blink(cx);
         if autoscroll != Autoscroll::None {
             self.request_scroll(PendingScroll::Position(None, autoscroll));
         }
@@ -374,6 +500,118 @@ impl Editor {
             return None;
         }
         Some(self.edit(f, cx))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Timers: caret blink, background layout
+// ---------------------------------------------------------------------------
+
+impl Editor {
+    /// Shows the caret and starts its blink over. Does nothing but show it
+    /// while the editor is not focused.
+    pub(crate) fn restart_blink(&mut self, cx: &mut Context<Self>) {
+        self.blink_on = true;
+        if !self.focused {
+            self.blink_task = None;
+            return;
+        }
+        self.blink_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BLINK_INTERVAL).await;
+                let alive = this.update(cx, |editor, cx| {
+                    editor.blink_on = !editor.blink_on;
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Starts the background layout task unless it is running: it measures
+    /// the blocks that only have an estimated height and counts words, a
+    /// few milliseconds at a time, until nothing is left.
+    pub(crate) fn start_refining(&mut self, cx: &mut Context<Self>) {
+        if self.refining {
+            return;
+        }
+        self.refining = true;
+        self.refine_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(REFINE_PAUSE).await;
+                let more = this.update(cx, |editor, cx| editor.refine_slice(cx));
+                if !matches!(more, Ok(true)) {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// One slice of background layout. Returns whether work remains.
+    fn refine_slice(&mut self, cx: &mut Context<Self>) -> bool {
+        // Tests have no clock: there a slice is bounded by its block count.
+        let deadline = (!cfg!(test)).then(|| Instant::now() + REFINE_SLICE);
+        let (more, counted) = {
+            let mut layout = self.layout.borrow_mut();
+            let counting = !layout.stats_complete();
+            let more = layout.refine(self.state.document(), deadline, REFINE_BLOCKS);
+            (more, counting && layout.stats_complete())
+        };
+        if counted {
+            cx.emit(EditorEvent::StatsChanged);
+        }
+        self.refine_slices += 1;
+        if !more {
+            self.refining = false;
+        }
+        // Estimates turning into measures move the scroll bar and the page
+        // count; a few repaints while that happens are enough.
+        if !more || counted || self.refine_slices % 8 == 0 {
+            cx.notify();
+        }
+        more
+    }
+
+    /// Timings of the last frame.
+    #[doc(hidden)]
+    pub fn frame_perf(&self) -> FramePerf {
+        self.perf.get()
+    }
+
+    /// Finishes the background layout now: every block measured, every
+    /// word counted. For tests and benchmarks; the app never needs it.
+    #[doc(hidden)]
+    pub fn finish_layout(&mut self, cx: &mut Context<Self>) {
+        let counted = {
+            let mut layout = self.layout.borrow_mut();
+            let counting = !layout.stats_complete();
+            layout.measure_all(self.state.document());
+            counting && layout.stats_complete()
+        };
+        if counted {
+            cx.emit(EditorEvent::StatsChanged);
+        }
+        cx.notify();
+    }
+
+    /// `cmd` went down or up: the cursor over a link changes.
+    fn modifiers_changed(
+        &mut self,
+        event: &ModifiersChangedEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let over_link = event.modifiers.platform
+            && self
+                .viewport_bounds()
+                .is_some_and(|viewport| viewport.contains(&window.mouse_position()))
+            && self.link_at_point(window.mouse_position()).is_some();
+        if over_link != self.link_hover {
+            self.link_hover = over_link;
+            cx.notify();
+        }
     }
 }
 
@@ -578,6 +816,34 @@ impl Editor {
     pub fn active_comment(&self) -> Option<CommentId> {
         self.active_comment
     }
+
+    /// Sets the comment threads whose anchored text is *not* tinted (for
+    /// example resolved threads the comments panel is hiding). Text that
+    /// also carries a thread outside the set keeps its tint. The set is
+    /// kept until it is replaced or the document is replaced
+    /// ([`Editor::set_document`] clears it); it does not follow edits, so
+    /// set it again when the list of threads changes.
+    ///
+    /// ```ignore
+    /// let resolved = editor.document().comments().filter(|thread| thread.resolved).map(|thread| thread.id);
+    /// editor.set_hidden_comments(resolved.collect::<Vec<_>>(), cx);
+    /// ```
+    pub fn set_hidden_comments(
+        &mut self,
+        comments: impl IntoIterator<Item = CommentId>,
+        cx: &mut Context<Self>,
+    ) {
+        let hidden: BTreeSet<CommentId> = comments.into_iter().collect();
+        if hidden != self.hidden_comments {
+            self.hidden_comments = hidden;
+            cx.notify();
+        }
+    }
+
+    /// The comment threads whose anchors are not tinted.
+    pub fn hidden_comments(&self) -> impl Iterator<Item = CommentId> + '_ {
+        self.hidden_comments.iter().copied()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +859,7 @@ impl Render for Editor {
         let surface = div()
             .key_context(self.key_context())
             .track_focus(&self.focus_handle)
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .w_full()
             .when(!compact, |surface| surface.h_full());
         let surface = handlers::register(surface, cx).child(EditorElement::new(cx.entity()));

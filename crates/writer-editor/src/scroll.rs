@@ -1,18 +1,24 @@
-//! Scrolling: the scroll offset, scroll requests and autoscroll.
+//! Scrolling: the scroll position, scroll requests, autoscroll and the
+//! overlay scroll bar.
 //!
-//! The editor scrolls itself (it is not inside a GPUI scroll container):
-//! `Editor::scroll_y` is how far the content is moved up, in pixels. A scroll
-//! request that needs geometry (bring the caret into view, put a position at
-//! the top) is applied at once when a layout exists and otherwise kept until
-//! the next frame's prepaint.
+//! The editor scrolls itself (it is not inside a GPUI scroll container).
+//! The position is anchored to a block (see `layout::ScrollPosition`), so
+//! laying out or editing text above the viewport never moves what is on
+//! screen; [`Editor::scroll_offset`] reports it in pixels for the current
+//! layout.
 //!
-//! Status: skeleton for the parts the implementer adds: scroll bar, smooth
-//! or animated scrolling, drag-selection autoscroll.
+//! A scroll request that needs geometry (bring the caret into view, put a
+//! position at the top) is applied at once when a layout exists, and again
+//! in the next frame's prepaint, after the blocks around the target were
+//! shaped (their heights were estimates before). Without a layout it waits
+//! for the first frame.
 
-use gpui::{Context, Pixels, px};
+use std::time::Duration;
+
+use gpui::{Bounds, Context, Pixels, Task, px};
 use writer_core::Position;
 
-use crate::editor::Editor;
+use crate::{editor::Editor, layout::ScrollPosition};
 
 /// Where a position should end up in the viewport after a change or a
 /// scroll request.
@@ -20,8 +26,8 @@ use crate::editor::Editor;
 pub enum Autoscroll {
     /// Do not scroll.
     None,
-    /// Scroll the least amount that brings the position into view (nothing
-    /// when it already is).
+    /// Scroll the least amount that brings the position into view with a
+    /// little room around it (nothing when it already is).
     #[default]
     Fit,
     /// Put the position's row at the top of the viewport (Vim `zt`).
@@ -37,19 +43,55 @@ pub enum Autoscroll {
 pub(crate) enum PendingScroll {
     /// Bring a position (`None`: the selection head) into view.
     Position(Option<Position>, Autoscroll),
-    /// Put the point `offset` pixels below the top of block `block` at the
-    /// top of the viewport (restoring a saved view).
-    BlockOffset { block: usize, offset: Pixels },
+    /// Put the caret's row `viewport_y` pixels below the top of the
+    /// viewport (page-wise movement, switching between flow and page
+    /// view).
+    CaretAt { viewport_y: Pixels },
 }
 
-/// Space kept between the caret row and the viewport edge by
-/// [`Autoscroll::Fit`].
-const FIT_MARGIN: Pixels = px(8.);
+/// How long the scroll bar stays after the last scroll.
+const SCROLLBAR_LINGER: Duration = Duration::from_millis(1200);
+
+/// Where the scroll bar was in the last frame, in window coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScrollbarGeometry {
+    pub(crate) track: Bounds<Pixels>,
+    pub(crate) thumb: Bounds<Pixels>,
+    pub(crate) max_scroll: Pixels,
+}
+
+/// The overlay scroll bar: shown while scrolling, while the pointer is
+/// over its strip and while its thumb is dragged.
+#[derive(Default)]
+pub(crate) struct Scrollbar {
+    /// Recently scrolled.
+    lingering: bool,
+    hide_task: Option<Task<()>>,
+    /// The pointer is over the strip.
+    pub(crate) hovered: bool,
+    /// The thumb is being dragged: distance from its top to the pointer.
+    pub(crate) drag: Option<Pixels>,
+    /// `None` when the content fits.
+    pub(crate) geometry: Option<ScrollbarGeometry>,
+}
+
+impl Scrollbar {
+    pub(crate) fn is_shown(&self) -> bool {
+        self.lingering || self.hovered || self.drag.is_some()
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.hovered || self.drag.is_some()
+    }
+}
 
 impl Editor {
-    /// How far the content is scrolled, in pixels from its top.
+    /// How far the content is scrolled, in pixels from its top. Blocks
+    /// that were never laid out count with an estimated height, so this
+    /// number can change a little while the background layout catches up
+    /// even though the view does not move.
     pub fn scroll_offset(&self) -> Pixels {
-        self.scroll_y
+        self.with_layout(|lay| lay.scroll_y()).unwrap_or(px(0.))
     }
 
     /// Scrolls so the caret (the selection head) is where `autoscroll`
@@ -94,13 +136,30 @@ impl Editor {
 
     /// Scrolls by pixels (positive: later text comes into view).
     pub fn scroll_by_pixels(&mut self, delta: Pixels, cx: &mut Context<Self>) {
-        let before = self.scroll_y;
         self.pending_scroll = None;
-        self.scroll_y += delta;
-        self.clamp_scroll();
-        if self.scroll_y != before {
+        let moved = self
+            .with_layout(|lay| {
+                let before = lay.scroll_y();
+                let max = lay.layout.max_scroll();
+                let target = (before + delta).clamp(px(0.), max);
+                lay.layout.set_scroll_y(target);
+                target != before
+            })
+            .unwrap_or(false);
+        if moved {
+            self.flash_scrollbar(cx);
             cx.notify();
         }
+    }
+
+    /// Scrolls to an absolute pixel offset (the scroll bar thumb).
+    pub(crate) fn scroll_to_pixels(&mut self, y: Pixels, cx: &mut Context<Self>) {
+        self.pending_scroll = None;
+        self.with_layout(|lay| {
+            let max = lay.layout.max_scroll();
+            lay.layout.set_scroll_y(y.clamp(px(0.), max));
+        });
+        cx.notify();
     }
 
     /// Line height of body text: the unit of [`Editor::scroll_by_rows`].
@@ -111,77 +170,144 @@ impl Editor {
             .map(|env| env.style.base_line_height())
     }
 
-    /// Records a scroll request and applies it now if a layout exists.
+    /// Shows the scroll bar for a moment.
+    pub(crate) fn flash_scrollbar(&mut self, cx: &mut Context<Self>) {
+        self.scrollbar.lingering = true;
+        self.scrollbar.hide_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SCROLLBAR_LINGER).await;
+            this.update(cx, |editor, cx| {
+                editor.scrollbar.lingering = false;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Records a scroll request and applies it now if a layout exists. It
+    /// stays pending so the next frame can apply it again with the blocks
+    /// around the target shaped.
     pub(crate) fn request_scroll(&mut self, request: PendingScroll) {
         if matches!(request, PendingScroll::Position(_, Autoscroll::None)) {
             return;
         }
         self.pending_scroll = Some(request);
-        self.flush_scroll();
+        self.apply_scroll(request);
     }
 
-    /// Applies the pending scroll request if a layout exists. Called by
-    /// [`Editor::request_scroll`] and by the element's prepaint.
-    pub(crate) fn flush_scroll(&mut self) {
-        let Some(request) = self.pending_scroll else {
-            return;
-        };
+    /// Records a scroll request for the next frame without applying it to
+    /// the current layout (the layout is about to change shape).
+    pub(crate) fn defer_scroll(&mut self, request: PendingScroll) {
+        self.pending_scroll = Some(request);
+    }
+
+    /// The caret row's distance from the top of the viewport, when the row
+    /// is on screen.
+    pub(crate) fn caret_viewport_y(&self) -> Option<Pixels> {
+        let viewport = self.viewport_bounds()?;
+        let caret = self.position_bounds(self.state.selection().head)?;
+        (caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom())
+            .then(|| caret.top() - viewport.top())
+    }
+
+    /// Applies a scroll request to the current layout. Returns whether the
+    /// scroll position changed; `None` without a layout.
+    fn apply_scroll(&mut self, request: PendingScroll) -> Option<bool> {
         let head = self.state.selection().head;
         let document = self.state.document();
-        let scroll_y = self.scroll_y;
-        let target = self.with_layout(|layout, env| {
-            let viewport_height = env.viewport.size.height;
-            match request {
-                PendingScroll::BlockOffset { block, offset } => {
-                    Some(layout.block_top(block.min(layout.block_count())) + offset)
-                }
-                PendingScroll::Position(position, mode) => {
-                    let position = document.clamp_position(position.unwrap_or(head));
-                    let block = layout.block(position.block)?;
-                    let row = block.caret_bounds(position.offset);
-                    let top = layout.block_top(position.block) + row.origin.y;
-                    let bottom = top + row.size.height;
-                    let margin = FIT_MARGIN.min(viewport_height / 4.);
-                    match mode {
-                        Autoscroll::None => None,
-                        Autoscroll::Fit => {
-                            if top - margin < scroll_y {
-                                // The first row of the document shows its
-                                // top padding too.
-                                let first_row = position.block == 0
-                                    && block.row_for_offset(position.offset) == 0;
-                                Some(if first_row { px(0.) } else { top - margin })
-                            } else if bottom + margin > scroll_y + viewport_height {
-                                Some(bottom + margin - viewport_height)
-                            } else {
-                                None
-                            }
-                        }
-                        Autoscroll::Top => Some(top),
-                        Autoscroll::Center => Some((top + bottom) / 2. - viewport_height / 2.),
-                        Autoscroll::Bottom => Some(bottom - viewport_height),
+        let compact = self.config.mode.is_compact();
+        self.with_layout(|lay| {
+            let viewport_height = lay.env().viewport.size.height;
+            let (position, mode, viewport_y) = match request {
+                PendingScroll::Position(position, mode) => (position, mode, px(0.)),
+                PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y),
+            };
+            let position = document.clamp_position(position.unwrap_or(head));
+            let Some(placed) = lay.placed(position.block) else {
+                return false;
+            };
+            let row = placed.line_box(position.offset);
+            let (top, bottom) = (row.top(), row.bottom());
+            let scroll_y = lay.scroll_y();
+            // Room kept around the caret row: a line of text, less in a
+            // small viewport.
+            let margin = if compact {
+                px(2.)
+            } else {
+                lay.env().style.base_line_height()
+            };
+            let margin = margin.min(viewport_height / 4.);
+            let target = match mode {
+                Autoscroll::None => None,
+                Autoscroll::Fit => {
+                    if top - margin < scroll_y {
+                        // The first row of the document shows what is above
+                        // it too (padding, the top of the sheet).
+                        let first_row = position.block == 0
+                            && placed.layout.row_for_offset(position.offset) == 0;
+                        Some(if first_row { px(0.) } else { top - margin })
+                    } else if bottom + margin > scroll_y + viewport_height {
+                        Some(bottom + margin - viewport_height)
+                    } else {
+                        None
                     }
                 }
-            }
-        });
-        // No layout yet: keep the request for the first frame.
-        let Some(target) = target else {
-            return;
-        };
-        self.pending_scroll = None;
-        if let Some(target) = target {
-            self.scroll_y = target;
-        }
-        self.clamp_scroll();
+                Autoscroll::Top => Some(top - viewport_y),
+                Autoscroll::Center => Some((top + bottom) / 2. - viewport_height / 2.),
+                Autoscroll::Bottom => Some(bottom - viewport_height),
+            };
+            let Some(target) = target else {
+                return false;
+            };
+            let max = lay.layout.max_scroll();
+            lay.layout.set_scroll_y(target.clamp(px(0.), max));
+            (lay.scroll_y() - scroll_y).abs() > px(0.01)
+        })
     }
 
-    /// Keeps the scroll offset inside the content.
-    pub(crate) fn clamp_scroll(&mut self) {
-        let max = self.with_layout(|layout, env| {
-            (layout.content_height() - env.viewport.size.height).max(px(0.))
-        });
-        if let Some(max) = max {
-            self.scroll_y = self.scroll_y.clamp(px(0.), max);
+    /// Prepaint: shapes what is in the viewport and applies the pending
+    /// scroll request until both agree (shaping changes heights, which
+    /// moves the target).
+    pub(crate) fn settle_scroll(&mut self) {
+        let Some(height) = self.viewport_bounds().map(|viewport| viewport.size.height) else {
+            return;
+        };
+        let stabilize = |editor: &Self| {
+            let mut layout = editor.layout.borrow_mut();
+            layout.stabilize(editor.state.document(), height);
+        };
+        stabilize(self);
+        if let Some(request) = self.pending_scroll.take() {
+            for _ in 0..4 {
+                if self.apply_scroll(request) != Some(true) {
+                    break;
+                }
+                stabilize(self);
+            }
         }
+    }
+
+    /// The scroll position as a block and an offset into it (what a saved
+    /// view stores).
+    pub(crate) fn scroll_anchor(&self) -> (usize, Pixels) {
+        let position = self.layout.borrow().scroll_position();
+        match position {
+            ScrollPosition::Block { block, offset } => (block, offset),
+            ScrollPosition::Top => {
+                // The top is above the first block's box by its padding.
+                let lead = self.with_layout(|lay| lay.layout.top(0)).unwrap_or(px(0.));
+                (0, -lead)
+            }
+        }
+    }
+
+    pub(crate) fn set_scroll_anchor(&mut self, block: usize, offset: Pixels) {
+        self.pending_scroll = None;
+        let count = self.state.document().block_count();
+        self.layout
+            .borrow_mut()
+            .set_scroll_position(ScrollPosition::Block {
+                block: block.min(count.saturating_sub(1)),
+                offset,
+            });
     }
 }

@@ -2,18 +2,17 @@
 //! reply field).
 //!
 //! A compact editor is created with `EditorConfig::compact(..)`. It differs
-//! from the document editor in layout only: interface font and size, no
-//! column and no page view, as wide as its container, as tall as its
-//! content up to `CompactOptions::max_height` (then it scrolls). With
-//! `submit_on_enter`, `enter` emits `EditorEvent::Submitted` and
-//! `shift-enter` inserts a line break. Give it padding and a border by
-//! wrapping it in a styled div.
+//! from the document editor in layout and in what it accepts: interface
+//! font and size, no column and no page view, as wide as its container, as
+//! tall as its content up to `CompactOptions::max_height` (then it
+//! scrolls). It holds plain text: formatting and block commands are
+//! ignored (they propagate to the next binding), paste inserts plain text,
+//! `tab` and `shift-tab` move focus. With `submit_on_enter`, `enter` emits
+//! `EditorEvent::Submitted` and `shift-enter` inserts a line break. Give it
+//! padding and a border by wrapping it in a styled div.
 //!
 //! This module holds the plain-text conveniences and the height
 //! measurement the element uses.
-//!
-//! Status: skeleton for the rest: `tab` still indents (it should move
-//! focus in compact mode), and block-level actions are not disabled.
 
 use gpui::{App, Context, Pixels, Window, px};
 use writer_core::{Document, Fragment};
@@ -69,7 +68,11 @@ impl Editor {
         };
         self.install_layout_env(None, width, window, cx);
         let content = self
-            .with_layout(|layout, _| layout.content_height())
+            .with_layout(|lay| {
+                // A composer is small: its real height, not an estimate.
+                lay.layout.measure_all(lay.document);
+                lay.layout.content_height()
+            })
             .unwrap_or(px(0.));
         content.min(options.max_height)
     }

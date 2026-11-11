@@ -7,17 +7,27 @@
 //! `Editor::edit`. Both end in the mutation seam, so events, layout and
 //! scrolling are handled in one place.
 //!
-//! Status: the handlers are real but simple. Left for the implementer:
-//! `tab` inside a code block (inserts nothing, indents the block),
-//! page-wise movement keeping the caret's viewport row, rich-text (HTML)
-//! clipboard formats.
+//! A compact editor holds plain text: formatting and block commands do
+//! nothing there and let the key travel on to the next binding (see
+//! `Editor::rich_text`).
+//!
+//! The clipboard carries plain text for other apps and the copied fragment
+//! (as JSON in GPUI's clipboard metadata) for pasting back with formatting.
+//! GPUI 0.2.2 cannot write HTML or RTF, so formatting survives only inside
+//! The Writer.
 
 use gpui::{ClipboardItem, Context, Div, Window, prelude::*};
 use writer_core::{
-    Alignment, BlockKind, Choice, Fragment, Highlight, InlineStyle, Movement, Selection,
+    Alignment, BlockKind, Choice, Fragment, Highlight, InlineStyle, Movement, Position, Selection,
+    TextRange, text,
 };
 
-use crate::{actions::*, config::EditorMode, editor::Editor, events::EditorEvent};
+use crate::{
+    actions::*, config::EditorMode, editor::Editor, events::EditorEvent, scroll::PendingScroll,
+};
+
+/// Width of one indentation step in a code block, in spaces.
+const CODE_INDENT: usize = 4;
 
 /// Attaches `$editor.$method(window, cx)` as the listener of each action.
 macro_rules! on_actions {
@@ -163,9 +173,16 @@ impl Editor {
         self.goal_x = Some(step.goal_x);
     }
 
+    /// Moves the caret a viewport page up or down and scrolls by the same
+    /// amount, so the caret keeps its place on screen. One row of the old
+    /// page stays visible for context.
     fn page(&mut self, direction: isize, extend: bool, cx: Cx) {
-        let rows = self.rows_per_page().unwrap_or(1) as isize;
+        let rows = (self.rows_per_page().unwrap_or(2) as isize - 1).max(1);
+        let caret_y = self.caret_viewport_y();
         self.vertical(rows * direction, extend, cx);
+        if let Some(viewport_y) = caret_y {
+            self.request_scroll(PendingScroll::CaretAt { viewport_y });
+        }
     }
 
     fn move_left(&mut self, _: &mut Window, cx: Cx) {
@@ -280,46 +297,72 @@ impl Editor {
         self.user_edit(|state| state.insert_soft_break(), cx);
     }
     fn insert_page_break(&mut self, _: &mut Window, cx: Cx) {
-        if self.config.mode.is_compact() {
-            return;
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.insert_page_break(), cx);
         }
-        self.user_edit(|state| state.insert_page_break(), cx);
     }
     fn insert_divider(&mut self, _: &mut Window, cx: Cx) {
-        if self.config.mode.is_compact() {
-            return;
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.insert_divider(), cx);
         }
-        self.user_edit(|state| state.insert_divider(), cx);
     }
 }
 
 // --- Formatting ---------------------------------------------------------------
 
 impl Editor {
+    /// Whether rich-text commands apply. A compact editor holds plain
+    /// text: there the command does nothing and the key goes on to the
+    /// next binding that wants it.
+    fn rich_text(&self, cx: Cx) -> bool {
+        if self.config.mode.is_compact() {
+            cx.propagate();
+            false
+        } else {
+            true
+        }
+    }
+
     fn toggle_bold(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_style(InlineStyle::Bold), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_style(InlineStyle::Bold), cx);
+        }
     }
     fn toggle_italic(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_style(InlineStyle::Italic), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_style(InlineStyle::Italic), cx);
+        }
     }
     fn toggle_underline(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_style(InlineStyle::Underline), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_style(InlineStyle::Underline), cx);
+        }
     }
     fn toggle_strikethrough(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_style(InlineStyle::Strikethrough), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_style(InlineStyle::Strikethrough), cx);
+        }
     }
     fn toggle_inline_code(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_style(InlineStyle::Code), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_style(InlineStyle::Code), cx);
+        }
     }
     fn toggle_highlight(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_highlight(Highlight::Yellow), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_highlight(Highlight::Yellow), cx);
+        }
     }
     fn clear_formatting(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.clear_formatting(), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.clear_formatting(), cx);
+        }
     }
 
     fn set_kind(&mut self, kind: BlockKind, cx: Cx) {
-        self.user_edit(|state| state.set_block_kind(kind), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.set_block_kind(kind), cx);
+        }
     }
 
     /// Sets `kind` on the touched blocks, or turns them back into
@@ -369,41 +412,203 @@ impl Editor {
         self.toggle_kind(BlockKind::code(), cx)
     }
     fn toggle_todo_checked(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.toggle_todo_checked(), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.toggle_todo_checked(), cx);
+        }
     }
 
     fn align_left(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.set_alignment(Alignment::Left), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.set_alignment(Alignment::Left), cx);
+        }
     }
     fn align_center(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.set_alignment(Alignment::Center), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.set_alignment(Alignment::Center), cx);
+        }
     }
     fn align_right(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.set_alignment(Alignment::Right), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.set_alignment(Alignment::Right), cx);
+        }
     }
     fn align_justify(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.set_alignment(Alignment::Justify), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.set_alignment(Alignment::Justify), cx);
+        }
     }
     fn increase_text_size(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.step_text_size(1), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.step_text_size(1), cx);
+        }
     }
     fn decrease_text_size(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.step_text_size(-1), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.step_text_size(-1), cx);
+        }
     }
     fn reset_text_size(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.reset_text_size(), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.reset_text_size(), cx);
+        }
     }
-    fn indent(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.indent(), cx);
+    /// `tab`: indents the selected blocks; inside a code block it indents
+    /// the text instead; in a compact editor it moves focus on.
+    fn indent(&mut self, window: &mut Window, cx: Cx) {
+        if self.config.mode.is_compact() {
+            window.focus_next();
+        } else if let Some(block) = self.code_block_of_selection() {
+            self.indent_code(block, cx);
+        } else {
+            self.user_edit(|state| state.indent(), cx);
+        }
     }
-    fn outdent(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.outdent(), cx);
+    fn outdent(&mut self, window: &mut Window, cx: Cx) {
+        if self.config.mode.is_compact() {
+            window.focus_prev();
+        } else if let Some(block) = self.code_block_of_selection() {
+            self.outdent_code(block, cx);
+        } else {
+            self.user_edit(|state| state.outdent(), cx);
+        }
+    }
+
+    /// The code block that holds the whole selection, if there is one.
+    fn code_block_of_selection(&self) -> Option<usize> {
+        let selection = self.state.selection();
+        (selection.anchor.block == selection.head.block)
+            .then_some(selection.head.block)
+            .filter(|index| {
+                self.state
+                    .document()
+                    .block(*index)
+                    .is_some_and(|block| block.kind().is_code())
+            })
+    }
+
+    /// The starts of the hard lines the selection touches in block `index`
+    /// (a selection that ends at the start of a line does not touch it).
+    fn selected_line_starts(&self, index: usize) -> Vec<usize> {
+        let selection = self.state.selection();
+        let (from, to) = (selection.start().offset, selection.end().offset);
+        let Some(block) = self.state.document().block(index) else {
+            return Vec::new();
+        };
+        let code = block.text();
+        let first = text::line_start(code, from);
+        let mut starts = vec![first];
+        let mut at = first;
+        while let Some(newline) = code[at..].find('\n') {
+            at += newline + 1;
+            if at >= to {
+                break;
+            }
+            starts.push(at);
+        }
+        starts
+    }
+
+    /// `tab` in a code block: a caret moves to the next indentation stop,
+    /// a selection indents every line it touches.
+    fn indent_code(&mut self, index: usize, cx: Cx) {
+        let selection = self.state.selection();
+        if selection.is_collapsed() {
+            let column = self.state.document().block(index).map_or(0, |block| {
+                let code = block.text();
+                let offset = selection.head.offset.min(code.len());
+                code[text::line_start(code, offset)..offset].chars().count()
+            });
+            let spaces = " ".repeat(CODE_INDENT - column % CODE_INDENT);
+            self.user_edit(|state| state.insert_text(&spaces), cx);
+            return;
+        }
+        let starts = self.selected_line_starts(index);
+        let shift = |offset: usize| {
+            offset + CODE_INDENT * starts.iter().filter(|start| **start < offset).count()
+        };
+        let moved = Selection::new(
+            Position::new(index, shift(selection.anchor.offset)),
+            Position::new(index, shift(selection.head.offset)),
+        );
+        let indent = " ".repeat(CODE_INDENT);
+        self.user_edit(
+            |state| {
+                state.grouped(|state| {
+                    for start in starts.iter().rev() {
+                        state.replace_range(TextRange::in_block(index, *start, *start), &indent);
+                    }
+                    state.set_selection(moved);
+                })
+            },
+            cx,
+        );
+    }
+
+    /// `shift-tab` in a code block: removes one indentation step from
+    /// every line the selection touches.
+    fn outdent_code(&mut self, index: usize, cx: Cx) {
+        let selection = self.state.selection();
+        let starts = self.selected_line_starts(index);
+        // (line start, bytes of indentation to remove)
+        let cuts: Vec<(usize, usize)> = {
+            let Some(block) = self.state.document().block(index) else {
+                return;
+            };
+            let code = block.text().as_bytes();
+            starts
+                .iter()
+                .map(|start| {
+                    let spaces = code[*start..]
+                        .iter()
+                        .take(CODE_INDENT)
+                        .take_while(|byte| **byte == b' ')
+                        .count();
+                    let cut = if spaces == 0 && code.get(*start) == Some(&b'\t') {
+                        1
+                    } else {
+                        spaces
+                    };
+                    (*start, cut)
+                })
+                .filter(|(_, cut)| *cut > 0)
+                .collect()
+        };
+        if cuts.is_empty() {
+            return;
+        }
+        let shift = |offset: usize| {
+            offset
+                - cuts
+                    .iter()
+                    .filter(|(start, _)| *start < offset)
+                    .map(|(start, cut)| (*cut).min(offset - start))
+                    .sum::<usize>()
+        };
+        let moved = Selection::new(
+            Position::new(index, shift(selection.anchor.offset)),
+            Position::new(index, shift(selection.head.offset)),
+        );
+        self.user_edit(
+            |state| {
+                state.grouped(|state| {
+                    for (start, cut) in cuts.iter().rev() {
+                        state.delete_range(TextRange::in_block(index, *start, start + cut));
+                    }
+                    state.set_selection(moved);
+                })
+            },
+            cx,
+        );
     }
     fn move_block_up(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.move_blocks_up(), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.move_blocks_up(), cx);
+        }
     }
     fn move_block_down(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.move_blocks_down(), cx);
+        if self.rich_text(cx) {
+            self.user_edit(|state| state.move_blocks_down(), cx);
+        }
     }
 }
 

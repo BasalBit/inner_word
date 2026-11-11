@@ -1,16 +1,18 @@
 //! Block decorations: what a block kind paints besides its text.
 //!
-//! List markers (bullet, number, checkbox), the quote bar, the code block
-//! panel, the divider rule and the page break label. Everything is added to
-//! the frame plan as quads and single shaped lines; nothing here affects
-//! layout (the gutters the markers sit in come from `layout::style`).
+//! List markers (bullets by indent level, numbers, checkboxes), the quote
+//! bar, the code block panel, the divider rule and the page break marker.
+//! Everything is added to the frame plan as quads, paths and single shaped
+//! lines; nothing here affects layout (the gutters the markers sit in come
+//! from `layout::style`).
 //!
-//! Status: skeleton for polish. The shapes are plain and the metrics are
-//! first guesses; nested bullet styles, the checkbox tick as a path, code
-//! language labels and page view sheets are the implementer's.
+//! A block that continues on the next sheet (page view) is decorated per
+//! segment: the code panel and the quote bar are drawn once for each run of
+//! rows on a sheet.
 
 use gpui::{
-    Bounds, Font, Hsla, Pixels, Point, SharedString, TextRun, Window, fill, point, px, size,
+    Bounds, Font, Hsla, PathBuilder, Pixels, Point, SharedString, TextRun, Window, fill, point, px,
+    size,
 };
 use writer_core::{Block, BlockKind};
 use writer_ui::theme;
@@ -18,163 +20,257 @@ use writer_ui::theme;
 use crate::{
     element::{FramePlan, PlannedMarker},
     layout::{
-        BlockLayout, LayoutEnv,
+        LayoutEnv, Placed,
         style::{CODE_PADDING, MARKER_GUTTER, QUOTE_GUTTER},
     },
+    paint::snap,
 };
 
-/// Side of a to-do checkbox.
-const CHECKBOX_SIZE: Pixels = px(14.);
+/// What `plan_block` needs to know about one block.
+pub(crate) struct BlockContext<'a> {
+    pub(crate) index: usize,
+    pub(crate) block: &'a Block,
+    pub(crate) placed: &'a Placed,
+    /// Window position of (column left, content top).
+    pub(crate) origin: Point<Pixels>,
+    /// Number of a numbered list item.
+    pub(crate) ordinal: Option<usize>,
+    /// The next block is a quote too: the bar runs on to it.
+    pub(crate) quote_continues: bool,
+    pub(crate) env: &'a LayoutEnv,
+}
 
-/// Adds the decorations of one block to the plan. `origin` is the window
-/// position of the block's layout box (x: the column's left edge).
+/// A to-do checkbox on screen: clicking inside `bounds` toggles the block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CheckboxHit {
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) block: usize,
+    pub(crate) checked: bool,
+}
+
+/// Shapes a single line of interface or marker text.
+pub(crate) fn shape_label(
+    window: &Window,
+    text: SharedString,
+    font: Font,
+    font_size: Pixels,
+    color: Hsla,
+) -> gpui::ShapedLine {
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(text, font_size, &[run], None)
+}
+
+/// Adds the decorations of one block to the plan.
 pub(crate) fn plan_block(
     plan: &mut FramePlan,
-    block: &Block,
-    layout: &BlockLayout,
-    origin: Point<Pixels>,
-    ordinal: Option<usize>,
-    env: &LayoutEnv,
+    checkboxes: &mut Vec<CheckboxHit>,
+    cx: &BlockContext,
     window: &Window,
 ) {
-    let colors = env.style.colors;
-    let first_row_y = origin.y + layout.rows[0].y;
-    let last_row = &layout.rows[layout.rows.len() - 1];
-    let text_bottom = origin.y + last_row.y + layout.line_height;
+    let BlockContext {
+        block,
+        placed,
+        origin,
+        env,
+        ..
+    } = cx;
+    let layout = &placed.layout;
+    let style = &env.style;
+    let colors = style.colors;
+    let line_height = layout.line_height;
+    let first_row_y = origin.y + placed.row_top(0);
     let text_left = origin.x + layout.text_left;
-
-    let shape = |text: SharedString, font: Font, font_size: Pixels, color: Hsla| {
-        let run = TextRun {
-            len: text.len(),
-            font,
-            color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        window
-            .text_system()
-            .shape_line(text, font_size, &[run], None)
-    };
+    // The optical middle of lowercase text on the first row.
+    let middle_y = first_row_y + layout.baseline - layout.x_height * 0.55;
 
     match block.kind() {
         BlockKind::BulletItem => {
-            let line = shape(
-                "•".into(),
-                env.style.body_font.clone(),
-                layout.font_size,
-                colors.muted,
+            let level = block.indent() % 3;
+            let diameter = px((f32::from(layout.font_size) * 0.3).round().max(4.));
+            let side = if level == 2 {
+                diameter - px(1.)
+            } else {
+                diameter
+            };
+            let bounds = Bounds::new(
+                point(
+                    snap(text_left - style.px(MARKER_GUTTER * 0.5) - side / 2.),
+                    snap(middle_y - side / 2.),
+                ),
+                size(side, side),
             );
-            plan.markers.push(PlannedMarker {
-                origin: point(text_left - MARKER_GUTTER + px(10.), first_row_y),
-                line_height: layout.line_height,
-                line,
-            });
+            let quad = match level {
+                // Disc, ring, square: the three levels repeat.
+                0 => fill(bounds, colors.muted).corner_radii(side / 2.),
+                1 => fill(bounds, gpui::transparent_black())
+                    .corner_radii(side / 2.)
+                    .border_widths(px(1.))
+                    .border_color(colors.muted),
+                _ => fill(bounds, colors.muted),
+            };
+            plan.back.push(quad);
         }
         BlockKind::NumberedItem => {
-            let label = format!("{}.", ordinal.unwrap_or(1));
-            let line = shape(
+            let label = format!("{}.", cx.ordinal.unwrap_or(1));
+            let line = shape_label(
+                window,
                 label.into(),
-                env.style.body_font.clone(),
+                style.body_font.clone(),
                 layout.font_size,
                 colors.muted,
             );
             // Right-aligned in the gutter so the dots line up.
             plan.markers.push(PlannedMarker {
-                origin: point(text_left - px(8.) - line.width, first_row_y),
-                line_height: layout.line_height,
+                origin: point(text_left - style.px(7.) - line.width, first_row_y),
+                line_height,
                 line,
             });
         }
         BlockKind::TodoItem { checked } => {
-            let top = first_row_y + ((layout.line_height - CHECKBOX_SIZE) / 2.).round();
+            let side = px((f32::from(layout.font_size) * 0.86).round().clamp(10., 28.));
             let bounds = Bounds::new(
-                point(text_left - MARKER_GUTTER + px(6.), top),
-                size(CHECKBOX_SIZE, CHECKBOX_SIZE),
+                point(
+                    snap(text_left - style.px(MARKER_GUTTER) + style.px(3.)),
+                    snap(first_row_y + layout.baseline - layout.x_height * 0.72 - side / 2.),
+                ),
+                size(side, side),
             );
+            let radius = px(f32::from(side) * 0.24);
             let quad = if *checked {
-                fill(bounds, colors.accent)
+                fill(bounds, colors.accent).corner_radii(radius)
             } else {
-                fill(bounds, colors.canvas)
+                fill(bounds, style.surface())
+                    .corner_radii(radius)
                     .border_widths(px(1.5))
                     .border_color(colors.border_strong)
             };
-            plan.back.push(quad.corner_radii(px(3.)));
+            plan.back.push(quad);
             if *checked {
-                let tick = shape(
-                    "✓".into(),
-                    env.style.ui_font.clone(),
-                    theme::UI_TEXT_XS,
-                    colors.on_accent,
+                let at = |x: f32, y: f32| {
+                    point(
+                        bounds.left() + px(f32::from(side) * x),
+                        bounds.top() + px(f32::from(side) * y),
+                    )
+                };
+                let mut tick = PathBuilder::stroke(px((f32::from(side) * 0.12).max(1.4)));
+                tick.move_to(at(0.25, 0.53));
+                tick.line_to(at(0.43, 0.70));
+                tick.line_to(at(0.76, 0.31));
+                if let Ok(path) = tick.build() {
+                    plan.paths.push((path, colors.on_accent));
+                }
+            }
+            checkboxes.push(CheckboxHit {
+                bounds: bounds.dilate(px(3.)),
+                block: cx.index,
+                checked: *checked,
+            });
+        }
+        BlockKind::Quote => {
+            let segments = placed.segments();
+            let last = segments.len() - 1;
+            for (ix, segment) in segments.iter().enumerate() {
+                let mut bottom = segment.bottom;
+                if ix == last && cx.quote_continues {
+                    bottom += px(layout.measure.group_gap);
+                }
+                plan.back.push(
+                    fill(
+                        Bounds::new(
+                            point(
+                                text_left - style.px(QUOTE_GUTTER) + style.px(1.),
+                                origin.y + segment.top,
+                            ),
+                            size(style.px(3.).max(px(2.)), bottom - segment.top),
+                        ),
+                        colors.border_strong,
+                    )
+                    .corner_radii(px(1.5)),
                 );
+            }
+        }
+        BlockKind::CodeBlock { language } => {
+            let padding = style.px(CODE_PADDING);
+            let left = text_left - padding;
+            let width = layout.text_width + padding * 2.;
+            for segment in placed.segments() {
+                plan.back.push(
+                    fill(
+                        Bounds::new(
+                            point(left, origin.y + segment.top),
+                            size(width, segment.bottom - segment.top),
+                        ),
+                        colors.hover,
+                    )
+                    .corner_radii(theme::RADIUS_MD),
+                );
+            }
+            if let Some(language) = language.as_ref().filter(|language| !language.is_empty()) {
+                let label = shape_label(
+                    window,
+                    language.clone().into(),
+                    style.ui_font.clone(),
+                    style.px(f32::from(theme::UI_TEXT_XS)),
+                    colors.faint,
+                );
+                let label_height = style.px(16.);
                 plan.markers.push(PlannedMarker {
                     origin: point(
-                        bounds.left() + ((CHECKBOX_SIZE - tick.width) / 2.).round(),
-                        bounds.top(),
+                        left + width - label.width - style.px(8.),
+                        origin.y + placed.top + style.px(4.),
                     ),
-                    line_height: CHECKBOX_SIZE,
-                    line: tick,
+                    line_height: label_height,
+                    line: label,
                 });
             }
         }
-        BlockKind::Quote => {
-            plan.back.push(
-                fill(
-                    Bounds::new(
-                        point(text_left - QUOTE_GUTTER + px(4.), first_row_y),
-                        size(px(3.), text_bottom - first_row_y),
-                    ),
-                    colors.border_strong,
-                )
-                .corner_radii(px(1.5)),
-            );
-        }
-        BlockKind::CodeBlock { .. } => {
-            plan.back.push(
-                fill(
-                    Bounds::new(
-                        point(text_left - CODE_PADDING, first_row_y - CODE_PADDING),
-                        size(
-                            layout.text_width + CODE_PADDING * 2.,
-                            text_bottom - first_row_y + CODE_PADDING * 2.,
-                        ),
-                    ),
-                    colors.hover,
-                )
-                .corner_radii(theme::RADIUS_MD),
-            );
-        }
         BlockKind::Divider => {
-            let y = first_row_y + (layout.line_height / 2.).round();
+            let y = snap(first_row_y + line_height / 2.);
             plan.back.push(fill(
                 Bounds::new(point(origin.x, y), size(env.column_width, px(1.))),
                 colors.border_strong,
             ));
         }
         BlockKind::PageBreak => {
-            let y = first_row_y + (layout.line_height / 2.).round();
-            plan.back.push(fill(
-                Bounds::new(point(origin.x, y), size(env.column_width, px(1.))),
-                colors.hairline,
-            ));
-            let label = shape(
+            // A quiet marker: a hairline interrupted by a label. In page
+            // view the rest of the sheet below it stays empty.
+            let y = snap(first_row_y + line_height / 2.);
+            let label = shape_label(
+                window,
                 "Page break".into(),
-                env.style.ui_font.clone(),
-                theme::UI_TEXT_XS,
+                style.ui_font.clone(),
+                style.px(f32::from(theme::UI_TEXT_XS)),
                 colors.faint,
             );
-            let label_x = origin.x + ((env.column_width - label.width) / 2.).round();
-            // The label interrupts the rule.
-            plan.back.push(fill(
-                Bounds::new(
-                    point(label_x - px(8.), first_row_y),
-                    size(label.width + px(16.), layout.line_height),
-                ),
-                colors.canvas,
-            ));
+            let gap = style.px(10.);
+            let label_x = (origin.x + (env.column_width - label.width) / 2.).round();
+            let left_width = label_x - gap - origin.x;
+            if left_width > px(0.) {
+                plan.back.push(fill(
+                    Bounds::new(point(origin.x, y), size(left_width, px(1.))),
+                    colors.hairline,
+                ));
+                let right = label_x + label.width + gap;
+                plan.back.push(fill(
+                    Bounds::new(
+                        point(right, y),
+                        size(origin.x + env.column_width - right, px(1.)),
+                    ),
+                    colors.hairline,
+                ));
+            }
             plan.markers.push(PlannedMarker {
                 origin: point(label_x, first_row_y),
-                line_height: layout.line_height,
+                line_height,
                 line: label,
             });
         }

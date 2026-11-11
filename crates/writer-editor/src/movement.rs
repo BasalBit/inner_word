@@ -9,7 +9,8 @@
 //!
 //! Like all geometry, the oracle answers `None` before the first layout and
 //! is otherwise valid for the current document, also right after an edit in
-//! the same handler and for positions that are scrolled out of view.
+//! the same handler and for positions that are scrolled out of view (the
+//! blocks a query walks over are shaped on demand).
 //!
 //! A visual row is one wrapped line of one block. A divider or page break is
 //! one row with a single position. A position at a soft wrap belongs to the
@@ -52,8 +53,8 @@ impl Editor {
     /// The visual row containing `position`.
     pub fn visual_row(&self, position: Position) -> Option<VisualRow> {
         let position = self.state.document().clamp_position(position);
-        self.with_layout(|layout, _| {
-            let block = layout.block(position.block)?;
+        self.with_layout(|lay| {
+            let block = lay.placed(position.block)?.layout;
             let row = &block.rows[block.row_for_offset(position.offset)];
             Some(VisualRow {
                 start: Position::new(position.block, row.range.start),
@@ -67,9 +68,9 @@ impl Editor {
     /// x a vertical move starting there would use.
     pub fn column_x(&self, position: Position) -> Option<Pixels> {
         let position = self.state.document().clamp_position(position);
-        self.with_layout(|layout, _| {
-            let block = layout.block(position.block)?;
-            Some(block.caret_bounds(position.offset).origin.x)
+        self.with_layout(|lay| {
+            let block = lay.placed(position.block)?.layout;
+            Some(block.caret_bounds(position.offset).1.origin.x)
         })
         .flatten()
     }
@@ -96,37 +97,45 @@ impl Editor {
     ) -> Option<RowMove> {
         let document = self.state.document();
         let position = document.clamp_position(position);
-        self.with_layout(|layout, _| {
-            let start = layout.block(position.block)?;
+        self.with_layout(|lay| {
+            let count = lay.count();
+            let start = lay.placed(position.block)?.layout;
             let mut block_ix = position.block;
+            let mut block = start.clone();
             let mut row_ix = start.row_for_offset(position.offset);
-            let goal_x = goal_x.unwrap_or_else(|| start.caret_bounds(position.offset).origin.x);
-            let mut moved = 0;
+            let goal_x = goal_x.unwrap_or_else(|| start.caret_bounds(position.offset).1.origin.x);
+            let mut moved: isize = 0;
             while moved != rows {
-                let block = layout.block(block_ix)?;
                 if rows > 0 {
-                    if row_ix + 1 < block.rows.len() {
-                        row_ix += 1;
-                    } else if block_ix + 1 < layout.block_count() {
+                    // Whole rows left in this block first, then on.
+                    let here = (block.rows.len() - 1 - row_ix) as isize;
+                    let step = here.min(rows - moved);
+                    if step > 0 {
+                        row_ix += step as usize;
+                        moved += step;
+                    } else if block_ix + 1 < count {
                         block_ix += 1;
+                        block = lay.placed(block_ix)?.layout;
                         row_ix = 0;
+                        moved += 1;
                     } else {
                         break;
                     }
-                    moved += 1;
                 } else {
-                    if row_ix > 0 {
-                        row_ix -= 1;
+                    let step = (row_ix as isize).min(moved - rows);
+                    if step > 0 {
+                        row_ix -= step as usize;
+                        moved -= step;
                     } else if block_ix > 0 {
                         block_ix -= 1;
-                        row_ix = layout.block(block_ix)?.rows.len() - 1;
+                        block = lay.placed(block_ix)?.layout;
+                        row_ix = block.rows.len() - 1;
+                        moved -= 1;
                     } else {
                         break;
                     }
-                    moved -= 1;
                 }
             }
-            let block = layout.block(block_ix)?;
             let offset = block.offset_for_x(row_ix, goal_x - block.text_left);
             Some(RowMove {
                 position: document.clamp_position(Position::new(block_ix, offset)),
@@ -153,19 +162,22 @@ impl Editor {
         // Half a pixel of tolerance: a row scrolled exactly to an edge
         // counts as visible despite float rounding.
         let slack = gpui::px(0.5);
-        self.with_layout(|layout, env| {
-            let top = self.scroll_y;
-            let bottom = top + env.viewport.size.height;
-            let first_block = layout.block_at_y(top);
+        self.with_layout(|lay| {
+            let top = lay.scroll_y();
+            let bottom = top + lay.env().viewport.size.height;
+            let count = lay.count();
+            let first_block = lay.block_at(top);
             let mut rows = Vec::new();
-            for block_ix in first_block..layout.block_count() {
-                let block_top = layout.block_top(block_ix);
-                if block_top > bottom {
+            for block_ix in first_block..count {
+                let placed = lay.placed(block_ix)?;
+                if placed.top > bottom {
                     break;
                 }
-                let block = layout.block(block_ix)?;
-                for row in &block.rows {
-                    let row_top = block_top + row.y;
+                let block = &placed.layout;
+                let window = placed.row_at(top)..placed.row_at(bottom) + 1;
+                for row_ix in window {
+                    let row = &block.rows[row_ix];
+                    let row_top = placed.row_top(row_ix);
                     if row_top + slack >= top && row_top + block.line_height <= bottom + slack {
                         rows.push(VisualRow {
                             start: Position::new(block_ix, row.range.start),
@@ -175,8 +187,8 @@ impl Editor {
                 }
             }
             if rows.is_empty() {
-                let block = layout.block(first_block)?;
-                let row = &block.rows[block.row_at_y(top - layout.block_top(first_block))];
+                let placed = lay.placed(first_block)?;
+                let row = &placed.layout.rows[placed.row_at(top)];
                 rows.push(VisualRow {
                     start: Position::new(first_block, row.range.start),
                     end: Position::new(first_block, row.range.end),

@@ -42,4 +42,9 @@ pub enum EditorEvent {
     /// [`crate::Editor::plain_text`] and empty it with
     /// [`crate::Editor::clear`].
     Submitted,
+    /// [`crate::Editor::stats`] has a new result that was counted in the
+    /// background (after a long document was opened or a change rewrote a
+    /// very large part of it). Ordinary edits update the counts before
+    /// `Edited` is emitted and do not emit this.
+    StatsChanged,
 }

@@ -35,7 +35,10 @@ fn slash_in_an_empty_block_opens_and_filters(cx: &mut TestAppContext) {
             "Today's date",
         ]
     );
-    assert_eq!(row(&tools, "Page break", cx).key_hint.as_deref(), Some("⌘↩"));
+    assert_eq!(
+        row(&tools, "Page break", cx).key_hint.as_deref(),
+        Some("⌘↩")
+    );
 
     // What is typed after the slash goes to the document and filters.
     cx.simulate_input("hea");
@@ -210,7 +213,9 @@ fn closes_when_nothing_matches_or_the_caret_leaves(cx: &mut TestAppContext) {
     assert_eq!(text(&editor, cx), "First\n/zz");
 
     // With no row to apply, enter is the document's.
-    editor.update(cx, |editor, cx| editor.set_document(paragraphs(&["First", ""]), cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["First", ""]), cx)
+    });
     caret(&editor, 1, 0, cx);
     cx.simulate_input("/z");
     cx.simulate_keystrokes("enter");
@@ -218,19 +223,30 @@ fn closes_when_nothing_matches_or_the_caret_leaves(cx: &mut TestAppContext) {
     assert_eq!(text(&editor, cx), "First\n/z\n");
 
     // Moving the caret out of the query closes the menu.
-    editor.update(cx, |editor, cx| editor.set_document(paragraphs(&["First", ""]), cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["First", ""]), cx)
+    });
     caret(&editor, 1, 0, cx);
     cx.simulate_input("/he");
     cx.simulate_keystrokes("left");
-    assert_eq!(active(&tools, cx), Some(ToolKind::Insert), "still inside the query");
+    assert_eq!(
+        active(&tools, cx),
+        Some(ToolKind::Insert),
+        "still inside the query"
+    );
     // The query is now "h".
-    assert_eq!(labels(&tools, cx)[..6].join(","), "Heading 1,Heading 2,Heading 3,Heading 4,Heading 5,Heading 6");
+    assert_eq!(
+        labels(&tools, cx)[..6].join(","),
+        "Heading 1,Heading 2,Heading 3,Heading 4,Heading 5,Heading 6"
+    );
     cx.simulate_keystrokes("cmd-up");
     assert_eq!(active(&tools, cx), None);
     assert_eq!(text(&editor, cx), "First\n/he");
 
     // A space right after the slash is ordinary prose.
-    editor.update(cx, |editor, cx| editor.set_document(paragraphs(&["this "]), cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["this "]), cx)
+    });
     caret(&editor, 0, 5, cx);
     cx.simulate_input("/");
     assert_eq!(active(&tools, cx), Some(ToolKind::Insert));

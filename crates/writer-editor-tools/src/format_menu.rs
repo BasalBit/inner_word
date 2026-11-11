@@ -12,9 +12,7 @@ use gpui::{
     Action, App, AppContext, Context, Entity, Focusable, Hsla, Rgba, SharedString, Subscription,
     Window, px,
 };
-use writer_core::{
-    Alignment, BlockKind, Choice, EditorState, FormatState, Highlight, Rgb, Toggle,
-};
+use writer_core::{Alignment, BlockKind, Choice, EditorState, FormatState, Highlight, Rgb, Toggle};
 use writer_editor::{PopupAnchor, actions as editor};
 use writer_ui::{
     KeyHint,
@@ -284,7 +282,12 @@ fn present_values(state: &EditorState, format: &FormatState) -> Present {
             .iter()
             .take(SCAN_LIMIT)
         {
-            if !block.is_void() && !present.kinds.iter().any(|kind| kind.same_type(block.kind())) {
+            if !block.is_void()
+                && !present
+                    .kinds
+                    .iter()
+                    .any(|kind| kind.same_type(block.kind()))
+            {
                 present.kinds.push(block.kind().clone());
             }
             if !present.alignments.contains(&block.alignment()) {
@@ -347,9 +350,27 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
 
     // Inline formatting.
     let text = Section::Text;
-    action(text, "Bold", "strong weight", toggle_mark(format.bold), Rc::new(editor::ToggleBold));
-    action(text, "Italic", "emphasis slanted", toggle_mark(format.italic), Rc::new(editor::ToggleItalic));
-    action(text, "Underline", "", toggle_mark(format.underline), Rc::new(editor::ToggleUnderline));
+    action(
+        text,
+        "Bold",
+        "strong weight",
+        toggle_mark(format.bold),
+        Rc::new(editor::ToggleBold),
+    );
+    action(
+        text,
+        "Italic",
+        "emphasis slanted",
+        toggle_mark(format.italic),
+        Rc::new(editor::ToggleItalic),
+    );
+    action(
+        text,
+        "Underline",
+        "",
+        toggle_mark(format.underline),
+        Rc::new(editor::ToggleUnderline),
+    );
     action(
         text,
         "Strikethrough",
@@ -357,14 +378,25 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         toggle_mark(format.strikethrough),
         Rc::new(editor::ToggleStrikethrough),
     );
-    action(text, "Inline code", "monospace", toggle_mark(format.code), Rc::new(editor::ToggleInlineCode));
+    action(
+        text,
+        "Inline code",
+        "monospace",
+        toggle_mark(format.code),
+        Rc::new(editor::ToggleInlineCode),
+    );
 
     // Block kinds.
-    let kind_mark = |kind: &BlockKind| {
-        choice_mark(&format.kind, &present.kinds, |value| value.same_type(kind))
-    };
+    let kind_mark =
+        |kind: &BlockKind| choice_mark(&format.kind, &present.kinds, |value| value.same_type(kind));
     let turn = Section::TurnInto;
-    action(turn, "Paragraph", "text body normal plain", kind_mark(&BlockKind::Paragraph), Rc::new(editor::SetParagraph));
+    action(
+        turn,
+        "Paragraph",
+        "text body normal plain",
+        kind_mark(&BlockKind::Paragraph),
+        Rc::new(editor::SetParagraph),
+    );
     let headings: [(Rc<dyn Action>, &str, &str); 6] = [
         (Rc::new(editor::SetHeading1), "Heading 1", "h1 title"),
         (Rc::new(editor::SetHeading2), "Heading 2", "h2 section"),
@@ -377,27 +409,101 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         let kind = BlockKind::heading(level as u8 + 1);
         action(turn, label, keywords, kind_mark(&kind), heading);
     }
-    action(turn, "Bullet list", "ul unordered points", kind_mark(&BlockKind::BulletItem), Rc::new(editor::ToggleBulletList));
-    action(turn, "Numbered list", "ol ordered steps", kind_mark(&BlockKind::NumberedItem), Rc::new(editor::ToggleNumberedList));
-    action(turn, "To-do list", "todo task checkbox checklist", kind_mark(&BlockKind::todo()), Rc::new(editor::ToggleTodoList));
-    action(turn, "Quote", "blockquote citation", kind_mark(&BlockKind::Quote), Rc::new(editor::ToggleQuote));
-    action(turn, "Code block", "pre monospace snippet", kind_mark(&BlockKind::code()), Rc::new(editor::ToggleCodeBlock));
+    action(
+        turn,
+        "Bullet list",
+        "ul unordered points",
+        kind_mark(&BlockKind::BulletItem),
+        Rc::new(editor::ToggleBulletList),
+    );
+    action(
+        turn,
+        "Numbered list",
+        "ol ordered steps",
+        kind_mark(&BlockKind::NumberedItem),
+        Rc::new(editor::ToggleNumberedList),
+    );
+    action(
+        turn,
+        "To-do list",
+        "todo task checkbox checklist",
+        kind_mark(&BlockKind::todo()),
+        Rc::new(editor::ToggleTodoList),
+    );
+    action(
+        turn,
+        "Quote",
+        "blockquote citation",
+        kind_mark(&BlockKind::Quote),
+        Rc::new(editor::ToggleQuote),
+    );
+    action(
+        turn,
+        "Code block",
+        "pre monospace snippet",
+        kind_mark(&BlockKind::code()),
+        Rc::new(editor::ToggleCodeBlock),
+    );
 
     // Alignment.
     let align_mark = |alignment: Alignment| {
-        choice_mark(&format.alignment, &present.alignments, |value| *value == alignment)
+        choice_mark(&format.alignment, &present.alignments, |value| {
+            *value == alignment
+        })
     };
     let align = Section::Align;
-    action(align, "Align left", "", align_mark(Alignment::Left), Rc::new(editor::AlignLeft));
-    action(align, "Align centre", "center middle", align_mark(Alignment::Center), Rc::new(editor::AlignCenter));
-    action(align, "Align right", "", align_mark(Alignment::Right), Rc::new(editor::AlignRight));
-    action(align, "Justify", "align both edges", align_mark(Alignment::Justify), Rc::new(editor::AlignJustify));
+    action(
+        align,
+        "Align left",
+        "",
+        align_mark(Alignment::Left),
+        Rc::new(editor::AlignLeft),
+    );
+    action(
+        align,
+        "Align centre",
+        "center middle",
+        align_mark(Alignment::Center),
+        Rc::new(editor::AlignCenter),
+    );
+    action(
+        align,
+        "Align right",
+        "",
+        align_mark(Alignment::Right),
+        Rc::new(editor::AlignRight),
+    );
+    action(
+        align,
+        "Justify",
+        "align both edges",
+        align_mark(Alignment::Justify),
+        Rc::new(editor::AlignJustify),
+    );
 
     // Text size.
     let size = Section::Size;
-    action(size, "Larger text", "bigger increase size", Mark::None, Rc::new(editor::IncreaseTextSize));
-    action(size, "Smaller text", "decrease size", Mark::None, Rc::new(editor::DecreaseTextSize));
-    action(size, "Reset text size", "default normal size", Mark::None, Rc::new(editor::ResetTextSize));
+    action(
+        size,
+        "Larger text",
+        "bigger increase size",
+        Mark::None,
+        Rc::new(editor::IncreaseTextSize),
+    );
+    action(
+        size,
+        "Smaller text",
+        "decrease size",
+        Mark::None,
+        Rc::new(editor::DecreaseTextSize),
+    );
+    action(
+        size,
+        "Reset text size",
+        "default normal size",
+        Mark::None,
+        Rc::new(editor::ResetTextSize),
+    );
 
     // Highlight colours.
     for highlight in Highlight::ALL {

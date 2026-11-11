@@ -65,7 +65,10 @@ fn insert_menu_rows_can_be_clicked(cx: &mut TestAppContext) {
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().blocks()[0].kind().heading_level(), Some(1));
+        assert_eq!(
+            editor.document().blocks()[0].kind().heading_level(),
+            Some(1)
+        );
         assert_eq!(editor.document().blocks()[0].text(), "");
     });
 }
@@ -92,7 +95,10 @@ fn find_bar_buttons_work_and_keep_focus_in_the_field(cx: &mut TestAppContext) {
     assert_eq!(status(cx), "1 of 4");
     // Focus never left the query field.
     cx.simulate_input("x");
-    assert_eq!(tools.read_with(cx, |tools, _| tools.find_query().to_string()), "catx");
+    assert_eq!(
+        tools.read_with(cx, |tools, _| tools.find_query().to_string()),
+        "catx"
+    );
     cx.simulate_keystrokes("backspace");
 
     // The disclosure shows the replace row; its buttons replace.

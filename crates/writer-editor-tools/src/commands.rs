@@ -19,8 +19,11 @@ pub const CATEGORY_SEARCH: &str = "Search";
 /// back in the editor.
 pub fn commands() -> Vec<CommandDescriptor> {
     vec![
-        CommandDescriptor::new("Format Menu", CATEGORY_FORMAT, OpenFormatMenu)
-            .keywords(["style", "contextual", "turn into"]),
+        CommandDescriptor::new("Format Menu", CATEGORY_FORMAT, OpenFormatMenu).keywords([
+            "style",
+            "contextual",
+            "turn into",
+        ]),
         CommandDescriptor::new("Add or Edit Link", CATEGORY_FORMAT, OpenLink)
             .keywords(["url", "hyperlink"]),
         CommandDescriptor::new("Remove Link", CATEGORY_FORMAT, RemoveLink)
@@ -37,10 +40,13 @@ pub fn commands() -> Vec<CommandDescriptor> {
         CommandDescriptor::new("Find and Replace", CATEGORY_SEARCH, FindAndReplace)
             .keywords(["search", "substitute"]),
         CommandDescriptor::new("Find Next", CATEGORY_SEARCH, FindNext).keywords(["search"]),
-        CommandDescriptor::new("Find Previous", CATEGORY_SEARCH, FindPrevious)
-            .keywords(["search"]),
-        CommandDescriptor::new("Toggle Case Sensitive", CATEGORY_SEARCH, ToggleCaseSensitive)
-            .keywords(["find", "match case"]),
+        CommandDescriptor::new("Find Previous", CATEGORY_SEARCH, FindPrevious).keywords(["search"]),
+        CommandDescriptor::new(
+            "Toggle Case Sensitive",
+            CATEGORY_SEARCH,
+            ToggleCaseSensitive,
+        )
+        .keywords(["find", "match case"]),
         CommandDescriptor::new("Toggle Whole Word", CATEGORY_SEARCH, ToggleWholeWord)
             .keywords(["find", "match word"]),
         CommandDescriptor::new("Replace All", CATEGORY_SEARCH, ReplaceAll)

@@ -294,7 +294,11 @@ impl Menu {
         }
     }
 
-    fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    fn render_rows(
+        &mut self,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
         let colors = cx.theme().colors;
         range
             .map(|ix| {
@@ -336,11 +340,7 @@ impl Menu {
                                         .color(colors.accent),
                                 ),
                                 Mark::Mixed => slot.child(
-                                    div()
-                                        .w(px(8.))
-                                        .h(px(2.))
-                                        .rounded(px(1.))
-                                        .bg(colors.muted),
+                                    div().w(px(8.)).h(px(2.)).rounded(px(1.)).bg(colors.muted),
                                 ),
                             }
                         });
@@ -574,8 +574,6 @@ fn keyword_match(query: &str, keywords: &str) -> bool {
     let keywords = keywords.to_lowercase();
     keywords
         .char_indices()
-        .filter(|(index, _)| {
-            *index == 0 || keywords[..*index].ends_with(char::is_whitespace)
-        })
+        .filter(|(index, _)| *index == 0 || keywords[..*index].ends_with(char::is_whitespace))
         .any(|(index, _)| keywords[index..].starts_with(&query))
 }

@@ -113,7 +113,9 @@ fn a_menu_closes_when_focus_goes_elsewhere(cx: &mut TestAppContext) {
     // Replacing the document drops whatever is open.
     cx.simulate_keystrokes("cmd-t");
     assert_eq!(active(&tools, cx), Some(ToolKind::Font));
-    editor.update(cx, |editor, cx| editor.set_document(paragraphs(&["New"]), cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["New"]), cx)
+    });
     cx.run_until_parked();
     assert_eq!(active(&tools, cx), None);
 }
@@ -148,7 +150,10 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
     let all = commands();
     let names: HashSet<&str> = all.iter().map(|command| command.action_name()).collect();
     assert_eq!(names.len(), all.len(), "one command per action");
-    assert!(all.iter().all(|command| command.action_name().starts_with("editor_tools::")));
+    assert!(
+        all.iter()
+            .all(|command| command.action_name().starts_with("editor_tools::"))
+    );
 
     let hint = |title: &str, cx: &mut gpui::VisualTestContext| {
         let command = all
@@ -171,7 +176,9 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
     assert_eq!(hint("Insert Menu", cx), None);
     cx.update(|_, cx| {
         assert_eq!(
-            KeyHint::for_action(&actions::OpenLinkInBrowser, cx).map(|hint| hint.text()).as_deref(),
+            KeyHint::for_action(&actions::OpenLinkInBrowser, cx)
+                .map(|hint| hint.text())
+                .as_deref(),
             Some("⌘↩")
         );
     });
@@ -206,4 +213,71 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
     assert!(tools.read_with(cx, |tools, _| !tools.find_options().case_sensitive));
     cx.dispatch_action(actions::ToggleWholeWord);
     assert!(tools.read_with(cx, |tools, _| !tools.find_options().whole_word));
+}
+
+#[gpui::test]
+fn switching_to_another_app_keeps_the_open_tool(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["Some text", ""]), cx);
+    select(&editor, TextRange::in_block(0, 0, 4), cx);
+
+    // The link popover survives the trip to the browser.
+    cx.simulate_keystrokes("cmd-k");
+    cx.simulate_input("example.com");
+    cx.simulate_keystrokes("cmd-enter");
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert_eq!(active(&tools, cx), Some(ToolKind::Link));
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(active(&tools, cx), Some(ToolKind::Link));
+    cx.simulate_input("/a");
+    assert_eq!(
+        tools
+            .read_with(cx, |tools, cx| tools.link_field_text(cx))
+            .as_deref(),
+        Some("example.com/a"),
+        "the field still has the keyboard"
+    );
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.document().blocks()[0]
+                .attrs_at(0)
+                .unwrap()
+                .link
+                .as_deref(),
+            Some("https://example.com/a")
+        );
+    });
+
+    // So does a menu with a filter field.
+    cx.simulate_keystrokes("cmd-.");
+    cx.deactivate_window();
+    cx.run_until_parked();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(active(&tools, cx), Some(ToolKind::Format));
+    cx.simulate_input("bold");
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.document().blocks()[0].attrs_at(0).unwrap().bold);
+    });
+    assert!(editor_focused(&editor, cx));
+
+    // And the insert menu, which lives on the editor's focus.
+    caret(&editor, 1, 0, cx);
+    cx.simulate_input("/quo");
+    cx.deactivate_window();
+    cx.run_until_parked();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(active(&tools, cx), Some(ToolKind::Insert));
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.document().blocks()[1].kind(),
+            &writer_core::BlockKind::Quote
+        );
+    });
 }

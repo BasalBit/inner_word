@@ -86,18 +86,78 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
     };
     let hint = |action: &dyn gpui::Action| KeyHint::for_action(action, cx);
     vec![
-        kind("Paragraph", "text body plain normal", BlockKind::Paragraph, hint(&editor::SetParagraph)),
-        kind("Heading 1", "h1 title", BlockKind::heading(1), hint(&editor::SetHeading1)),
-        kind("Heading 2", "h2 section", BlockKind::heading(2), hint(&editor::SetHeading2)),
-        kind("Heading 3", "h3 subsection", BlockKind::heading(3), hint(&editor::SetHeading3)),
-        kind("Heading 4", "h4", BlockKind::heading(4), hint(&editor::SetHeading4)),
-        kind("Heading 5", "h5", BlockKind::heading(5), hint(&editor::SetHeading5)),
-        kind("Heading 6", "h6", BlockKind::heading(6), hint(&editor::SetHeading6)),
-        kind("Bullet list", "ul unordered points", BlockKind::BulletItem, hint(&editor::ToggleBulletList)),
-        kind("Numbered list", "ol ordered steps", BlockKind::NumberedItem, hint(&editor::ToggleNumberedList)),
-        kind("To-do list", "todo task checkbox checklist", BlockKind::todo(), hint(&editor::ToggleTodoList)),
-        kind("Quote", "blockquote citation", BlockKind::Quote, hint(&editor::ToggleQuote)),
-        kind("Code block", "pre snippet monospace", BlockKind::code(), hint(&editor::ToggleCodeBlock)),
+        kind(
+            "Paragraph",
+            "text body plain normal",
+            BlockKind::Paragraph,
+            hint(&editor::SetParagraph),
+        ),
+        kind(
+            "Heading 1",
+            "h1 title",
+            BlockKind::heading(1),
+            hint(&editor::SetHeading1),
+        ),
+        kind(
+            "Heading 2",
+            "h2 section",
+            BlockKind::heading(2),
+            hint(&editor::SetHeading2),
+        ),
+        kind(
+            "Heading 3",
+            "h3 subsection",
+            BlockKind::heading(3),
+            hint(&editor::SetHeading3),
+        ),
+        kind(
+            "Heading 4",
+            "h4",
+            BlockKind::heading(4),
+            hint(&editor::SetHeading4),
+        ),
+        kind(
+            "Heading 5",
+            "h5",
+            BlockKind::heading(5),
+            hint(&editor::SetHeading5),
+        ),
+        kind(
+            "Heading 6",
+            "h6",
+            BlockKind::heading(6),
+            hint(&editor::SetHeading6),
+        ),
+        kind(
+            "Bullet list",
+            "ul unordered points",
+            BlockKind::BulletItem,
+            hint(&editor::ToggleBulletList),
+        ),
+        kind(
+            "Numbered list",
+            "ol ordered steps",
+            BlockKind::NumberedItem,
+            hint(&editor::ToggleNumberedList),
+        ),
+        kind(
+            "To-do list",
+            "todo task checkbox checklist",
+            BlockKind::todo(),
+            hint(&editor::ToggleTodoList),
+        ),
+        kind(
+            "Quote",
+            "blockquote citation",
+            BlockKind::Quote,
+            hint(&editor::ToggleQuote),
+        ),
+        kind(
+            "Code block",
+            "pre snippet monospace",
+            BlockKind::code(),
+            hint(&editor::ToggleCodeBlock),
+        ),
         InsertItem {
             label: "Divider".into(),
             keywords: "hr rule line separator",
@@ -151,7 +211,11 @@ impl EditorTools {
 
     /// Called after an edit that followed a `/` key press: opens the menu
     /// when the slash landed at the start of a block or after whitespace.
-    pub(crate) fn open_insert_menu_after_slash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_insert_menu_after_slash(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let editor = self.editor.read(cx);
         let selection = editor.selection();
         if editor.is_read_only() || !selection.is_collapsed() {
@@ -212,20 +276,24 @@ impl EditorTools {
                 cx,
             )
         });
-        let keys = self.editor.read(cx).intercept_keys(InterceptPriority::OVERLAY, {
-            let tools = cx.weak_entity();
-            move |key, window, cx| {
-                let is_menu_key = !key.modifiers.modified()
-                    && matches!(key.key.as_str(), "up" | "down" | "enter" | "tab" | "escape");
-                if !is_menu_key {
-                    return KeyDisposition::Pass;
+        let keys = self
+            .editor
+            .read(cx)
+            .intercept_keys(InterceptPriority::OVERLAY, {
+                let tools = cx.weak_entity();
+                move |key, window, cx| {
+                    let is_menu_key = !key.modifiers.modified()
+                        && matches!(key.key.as_str(), "up" | "down" | "enter" | "tab" | "escape");
+                    if !is_menu_key {
+                        return KeyDisposition::Pass;
+                    }
+                    match tools.update(cx, |tools, cx| tools.insert_menu_key(&key.key, window, cx))
+                    {
+                        Ok(true) => KeyDisposition::Consumed,
+                        _ => KeyDisposition::Pass,
+                    }
                 }
-                match tools.update(cx, |tools, cx| tools.insert_menu_key(&key.key, window, cx)) {
-                    Ok(true) => KeyDisposition::Consumed,
-                    _ => KeyDisposition::Pass,
-                }
-            }
-        });
+            });
         let tool = InsertMenu {
             menu: menu.clone(),
             items: insert_items(cx),

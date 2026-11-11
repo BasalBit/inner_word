@@ -39,7 +39,10 @@ fn finds_counts_and_steps_through_matches(cx: &mut TestAppContext) {
     // Live: every match is highlighted, the first one from the caret is
     // current and selected in the editor.
     cx.simulate_input("the");
-    assert_eq!(text(&editor, cx).lines().next(), Some("The cat sat on the mat."));
+    assert_eq!(
+        text(&editor, cx).lines().next(),
+        Some("The cat sat on the mat.")
+    );
     tools.read_with(cx, |tools, _| {
         assert_eq!(tools.find_query(), "the");
         assert_eq!(tools.find_match_count(), 8);
@@ -47,7 +50,10 @@ fn finds_counts_and_steps_through_matches(cx: &mut TestAppContext) {
     });
     assert_eq!(status(&tools, cx), "1 of 8");
     assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 8);
-    assert_eq!(layer(&editor, FIND_CURRENT_LAYER, cx), [TextRange::in_block(0, 0, 3)]);
+    assert_eq!(
+        layer(&editor, FIND_CURRENT_LAYER, cx),
+        [TextRange::in_block(0, 0, 3)]
+    );
     assert_eq!(selection(&editor, cx), TextRange::in_block(0, 0, 3));
 
     // enter / shift-enter and cmd-g / cmd-shift-g.
@@ -57,7 +63,10 @@ fn finds_counts_and_steps_through_matches(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-g");
     assert_eq!(status(&tools, cx), "3 of 8");
     assert_eq!(selection(&editor, cx), TextRange::in_block(1, 0, 3));
-    assert_eq!(layer(&editor, FIND_CURRENT_LAYER, cx), [TextRange::in_block(1, 0, 3)]);
+    assert_eq!(
+        layer(&editor, FIND_CURRENT_LAYER, cx),
+        [TextRange::in_block(1, 0, 3)]
+    );
     cx.simulate_keystrokes("shift-enter");
     assert_eq!(status(&tools, cx), "2 of 8");
     cx.simulate_keystrokes("cmd-shift-g cmd-shift-g");
@@ -78,7 +87,11 @@ fn finds_counts_and_steps_through_matches(cx: &mut TestAppContext) {
     assert_eq!(status(&tools, cx), "No matches");
     assert!(layer(&editor, FIND_LAYER, cx).is_empty());
     assert!(layer(&editor, FIND_CURRENT_LAYER, cx).is_empty());
-    assert_eq!(selection(&editor, cx), TextRange::in_block(1, 0, 4), "selection stays");
+    assert_eq!(
+        selection(&editor, cx),
+        TextRange::in_block(1, 0, 4),
+        "selection stays"
+    );
 }
 
 #[gpui::test]
@@ -192,7 +205,10 @@ fn replaces_one_and_all(cx: &mut TestAppContext) {
 
     // Enter in the replace field replaces the current match and moves on.
     cx.simulate_keystrokes("enter");
-    assert_eq!(text(&editor, cx).lines().next(), Some("The lion sat on the mat."));
+    assert_eq!(
+        text(&editor, cx).lines().next(),
+        Some("The lion sat on the mat.")
+    );
     assert_eq!(status(&tools, cx), "1 of 1");
     assert_eq!(selection(&editor, cx), TextRange::in_block(1, 15, 18));
     cx.simulate_keystrokes("enter");
@@ -240,7 +256,10 @@ fn replaces_one_and_all(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab cmd-a");
     cx.simulate_input("cat cat");
     cx.simulate_keystrokes("enter");
-    assert_eq!(text(&editor, cx).lines().next(), Some("The cat cat sat on the mat."));
+    assert_eq!(
+        text(&editor, cx).lines().next(),
+        Some("The cat cat sat on the mat.")
+    );
     assert_eq!(selection(&editor, cx), TextRange::in_block(1, 15, 18));
 }
 
@@ -257,12 +276,19 @@ fn results_follow_document_changes(cx: &mut TestAppContext) {
     // and the highlights without moving the caret.
     cx.update(|window, cx| editor.read(cx).focus(window));
     caret(&editor, 2, 13, cx);
-    assert_eq!(status(&tools, cx), "2 matches", "the selection is no longer on a match");
+    assert_eq!(
+        status(&tools, cx),
+        "2 matches",
+        "the selection is no longer on a match"
+    );
     assert!(layer(&editor, FIND_CURRENT_LAYER, cx).is_empty());
     cx.simulate_input(" A cat.");
     assert_eq!(tools.read_with(cx, |tools, _| tools.find_match_count()), 3);
     assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 3);
-    assert_eq!(layer(&editor, FIND_LAYER, cx)[2], TextRange::in_block(2, 16, 19));
+    assert_eq!(
+        layer(&editor, FIND_LAYER, cx)[2],
+        TextRange::in_block(2, 16, 19)
+    );
     assert_eq!(
         editor.read_with(cx, |editor, _| editor.selection()),
         Selection::caret(Position::new(2, 20))
@@ -279,10 +305,15 @@ fn results_follow_document_changes(cx: &mut TestAppContext) {
     assert_eq!(status(&tools, cx), "2 of 3");
 
     // A new document: searched again.
-    editor.update(cx, |editor, cx| editor.set_document(paragraphs(&["one cat"]), cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(&["one cat"]), cx)
+    });
     cx.run_until_parked();
     assert_eq!(tools.read_with(cx, |tools, _| tools.find_match_count()), 1);
-    assert_eq!(layer(&editor, FIND_LAYER, cx), [TextRange::in_block(0, 4, 7)]);
+    assert_eq!(
+        layer(&editor, FIND_LAYER, cx),
+        [TextRange::in_block(0, 4, 7)]
+    );
 }
 
 #[gpui::test]

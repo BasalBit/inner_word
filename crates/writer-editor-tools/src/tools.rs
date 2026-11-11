@@ -146,22 +146,20 @@ impl EditorTools {
             cx.subscribe_in(&editor, window, Self::on_editor_event),
             // Sees every key that reaches the document (after an open menu
             // and after Vim): remembers whether the last one typed a slash.
-            editor
-                .read(cx)
-                .intercept_keys(InterceptPriority::DEFAULT, {
-                    let slash_typed = slash_typed.clone();
-                    move |key, _, _| {
-                        let modifiers = key.modifiers;
-                        slash_typed.set(
-                            !modifiers.platform
-                                && !modifiers.control
-                                && !modifiers.function
-                                && (key.key_char.as_deref() == Some("/")
-                                    || (key.key_char.is_none() && key.key == "/")),
-                        );
-                        KeyDisposition::Pass
-                    }
-                }),
+            editor.read(cx).intercept_keys(InterceptPriority::DEFAULT, {
+                let slash_typed = slash_typed.clone();
+                move |key, _, _| {
+                    let modifiers = key.modifiers;
+                    slash_typed.set(
+                        !modifiers.platform
+                            && !modifiers.control
+                            && !modifiers.function
+                            && (key.key_char.as_deref() == Some("/")
+                                || (key.key_char.is_none() && key.key == "/")),
+                    );
+                    KeyDisposition::Pass
+                }
+            }),
             // Highlight colours come from the theme.
             cx.observe_global::<GlobalTheme>(|this, cx| {
                 if this.find_bar.is_some() {
@@ -211,7 +209,10 @@ impl EditorTools {
     pub fn is_open(&self, kind: ToolKind) -> bool {
         match kind {
             ToolKind::Find => self.find_bar.is_some(),
-            _ => self.popup.as_ref().is_some_and(|popup| popup.kind() == kind),
+            _ => self
+                .popup
+                .as_ref()
+                .is_some_and(|popup| popup.kind() == kind),
         }
     }
 
@@ -272,7 +273,12 @@ impl EditorTools {
     /// Makes room for a tool that is about to open: closes the open popup
     /// tool and, unless `keep_find`, the find bar. Focus is left alone (the
     /// new tool decides).
-    pub(crate) fn make_room(&mut self, keep_find: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn make_room(
+        &mut self,
+        keep_find: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_popup(false, window, cx);
         if !keep_find {
             self.close_find_bar(cx);
@@ -298,7 +304,12 @@ impl EditorTools {
 
     /// Closes the open popup tool, if any. With `refocus`, focus goes back
     /// to the editor.
-    pub(crate) fn close_popup(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_popup(
+        &mut self,
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tool) = self.popup.take() else {
             return;
         };
@@ -350,10 +361,25 @@ impl EditorTools {
                 _ => {}
             },
             MenuEvent::Dismissed => self.close_popup(true, window, cx),
-            // Focus went somewhere else (a click in the document, another
-            // panel): close without pulling focus back.
-            MenuEvent::Blurred => self.close_popup(false, window, cx),
+            MenuEvent::Blurred => self.popup_lost_focus(window, cx),
         }
+    }
+
+    /// The field of the open popup tool lost focus.
+    ///
+    /// GPUI reports a blur both when focus moves inside the window and when
+    /// the window is deactivated. Switching to another app must not close
+    /// the tool (the link popover has just opened the browser, say): it
+    /// keeps its focus and is still there when the user comes back. When
+    /// focus moved somewhere else in the window (a click in the document,
+    /// another panel), the tool closes without pulling focus back; when
+    /// focus went nowhere, it goes to the editor.
+    pub(crate) fn popup_lost_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !window.is_window_active() {
+            return;
+        }
+        let nowhere = window.focused(cx).is_none();
+        self.close_popup(nowhere, window, cx);
     }
 
     // -----------------------------------------------------------------
@@ -390,8 +416,9 @@ impl EditorTools {
                 }
             }
             EditorEvent::Blurred => {
-                // The insert menu lives on the editor's keyboard focus.
-                if matches!(self.popup, Some(PopupTool::Insert(_))) {
+                // The insert menu lives on the editor's keyboard focus. A
+                // deactivated window is not a reason to close it.
+                if matches!(self.popup, Some(PopupTool::Insert(_))) && window.is_window_active() {
                     self.close_popup(false, window, cx);
                 }
             }
@@ -434,9 +461,11 @@ impl Render for EditorTools {
             .on_action(cx.listener(|this, _: &OpenFormatMenu, window, cx| {
                 this.toggle_format_menu(window, cx)
             }))
-            .on_action(cx.listener(|this, _: &OpenInsertMenu, window, cx| {
-                this.open_insert_menu(window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &OpenInsertMenu, window, cx| {
+                    this.open_insert_menu(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &OpenLink, window, cx| this.toggle_link(window, cx)))
             .on_action(cx.listener(|this, _: &RemoveLink, window, cx| this.remove_link(window, cx)))
             .on_action(cx.listener(|this, _: &OpenLinkInBrowser, window, cx| {
@@ -447,20 +476,24 @@ impl Render for EditorTools {
             }))
             .on_action(cx.listener(|this, _: &InsertDate, _, cx| this.insert_date(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(false, window, cx)))
-            .on_action(cx.listener(|this, _: &FindAndReplace, window, cx| {
-                this.open_find(true, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &FindAndReplace, window, cx| {
+                    this.open_find(true, window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &FindNext, window, cx| this.find_next(window, cx)))
             .on_action(
                 cx.listener(|this, _: &FindPrevious, window, cx| this.find_previous(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &ToggleCaseSensitive, _, cx| {
-                this.toggle_case_sensitive(cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleCaseSensitive, _, cx| this.toggle_case_sensitive(cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleWholeWord, _, cx| this.toggle_whole_word(cx)))
-            .on_action(cx.listener(|this, _: &ReplaceCurrent, window, cx| {
-                this.replace_current(window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &ReplaceCurrent, window, cx| {
+                    this.replace_current(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ReplaceAll, _, cx| this.replace_all(cx)))
             .on_action(cx.listener(|this, _: &FocusNextField, window, cx| {
                 this.focus_other_find_field(window, cx)

@@ -101,7 +101,9 @@ fn has_scheme(url: &str) -> bool {
         return false;
     };
     let mut chars = scheme.chars();
-    let valid = chars.next().is_some_and(|first| first.is_ascii_alphabetic())
+    let valid = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
         && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'));
     if !valid {
         return false;

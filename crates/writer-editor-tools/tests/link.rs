@@ -48,12 +48,22 @@ fn links_the_selection(cx: &mut TestAppContext) {
     assert_eq!(field(&tools, cx).as_deref(), Some(""));
 
     cx.simulate_input("example.com/manual");
-    assert_eq!(text(&editor, cx), "Read the manual first", "typing goes to the field");
+    assert_eq!(
+        text(&editor, cx),
+        "Read the manual first",
+        "typing goes to the field"
+    );
     cx.simulate_keystrokes("enter");
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
-    assert_eq!(link_at(&editor, 9, cx).as_deref(), Some("https://example.com/manual"));
-    assert_eq!(link_at(&editor, 14, cx).as_deref(), Some("https://example.com/manual"));
+    assert_eq!(
+        link_at(&editor, 9, cx).as_deref(),
+        Some("https://example.com/manual")
+    );
+    assert_eq!(
+        link_at(&editor, 14, cx).as_deref(),
+        Some("https://example.com/manual")
+    );
     assert_eq!(link_at(&editor, 8, cx), None);
     assert_eq!(link_at(&editor, 15, cx), None);
     assert_eq!(text(&editor, cx), "Read the manual first");
@@ -76,7 +86,10 @@ fn edits_and_removes_the_link_at_the_caret(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     // The whole link changed, the text and the caret did not.
     for offset in 4..12 {
-        assert_eq!(link_at(&editor, offset, cx).as_deref(), Some("https://new.example/a"));
+        assert_eq!(
+            link_at(&editor, offset, cx).as_deref(),
+            Some("https://new.example/a")
+        );
     }
     assert_eq!(link_at(&editor, 3, cx), None);
     assert_eq!(link_at(&editor, 12, cx), None);
@@ -93,7 +106,10 @@ fn edits_and_removes_the_link_at_the_caret(cx: &mut TestAppContext) {
     assert!(editor_focused(&editor, cx));
     assert_eq!(link_at(&editor, 7, cx), None);
     cx.simulate_keystrokes("cmd-z");
-    assert_eq!(link_at(&editor, 7, cx).as_deref(), Some("https://new.example/a"));
+    assert_eq!(
+        link_at(&editor, 7, cx).as_deref(),
+        Some("https://new.example/a")
+    );
 
     // Remove straight from the editor.
     cx.simulate_keystrokes("cmd-shift-k");
@@ -117,7 +133,10 @@ fn inserts_the_url_as_linked_text_at_a_collapsed_caret(cx: &mut TestAppContext) 
     cx.simulate_input("https://example.org/paper");
     cx.simulate_keystrokes("enter");
     assert_eq!(text(&editor, cx), "Source: https://example.org/paper");
-    assert_eq!(link_at(&editor, 8, cx).as_deref(), Some("https://example.org/paper"));
+    assert_eq!(
+        link_at(&editor, 8, cx).as_deref(),
+        Some("https://example.org/paper")
+    );
     assert_eq!(link_at(&editor, 0, cx), None);
     assert!(editor_focused(&editor, cx));
     // One undo step for the insertion.
@@ -144,12 +163,19 @@ fn escape_cancels_and_cmd_enter_opens_the_browser(cx: &mut TestAppContext) {
     cx.simulate_input("changed.example");
     cx.simulate_keystrokes("cmd-enter");
     assert_eq!(cx.opened_url().as_deref(), Some("https://changed.example"));
-    assert_eq!(active(&tools, cx), Some(ToolKind::Link), "opening does not apply or close");
+    assert_eq!(
+        active(&tools, cx),
+        Some(ToolKind::Link),
+        "opening does not apply or close"
+    );
 
     cx.simulate_keystrokes("escape");
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
-    assert_eq!(link_at(&editor, 7, cx).as_deref(), Some("https://old.example"));
+    assert_eq!(
+        link_at(&editor, 7, cx).as_deref(),
+        Some("https://old.example")
+    );
     editor.read_with(cx, |editor, _| {
         assert!(!editor.has_popup());
         assert!(!editor.state().can_undo(), "nothing was changed");
@@ -172,6 +198,9 @@ fn a_selected_url_is_prefilled(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-k");
     assert_eq!(field(&tools, cx).as_deref(), Some("www.example.com"));
     cx.simulate_keystrokes("enter");
-    assert_eq!(link_at(&editor, 6, cx).as_deref(), Some("https://www.example.com"));
+    assert_eq!(
+        link_at(&editor, 6, cx).as_deref(),
+        Some("https://www.example.com")
+    );
     assert_eq!(text(&editor, cx), "go to www.example.com today");
 }

@@ -11,8 +11,15 @@ fn install_fonts(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let mut families: Vec<String> = (0..600).map(|n| format!("Family {n:03}")).collect();
         families.extend(
-            ["Avenir Next", "Baskerville", "Charter", "Georgia", "Helvetica Neue", "Menlo"]
-                .map(String::from),
+            [
+                "Avenir Next",
+                "Baskerville",
+                "Charter",
+                "Georgia",
+                "Helvetica Neue",
+                "Menlo",
+            ]
+            .map(String::from),
         );
         families.sort();
         set_font_families(families, cx);
@@ -43,15 +50,25 @@ fn lists_filters_and_applies_to_the_selection(cx: &mut TestAppContext) {
     assert!(!editor_focused(&editor, cx));
     let all = rows(&tools, cx);
     assert_eq!(all[0].label, "Document default");
-    assert_eq!(all[0].mark, Mark::Check, "the selection has no font of its own");
+    assert_eq!(
+        all[0].mark,
+        Mark::Check,
+        "the selection has no font of its own"
+    );
     assert!(all[0].selected);
-    assert!(all[1].header && all[1].label == "All fonts", "no recent fonts yet");
+    assert!(
+        all[1].header && all[1].label == "All fonts",
+        "no recent fonts yet"
+    );
     assert_eq!(all.len(), 2 + 606);
 
     // Fuzzy filter over hundreds of families.
     let started = std::time::Instant::now();
     cx.simulate_input("bask");
-    eprintln!("font filter keystrokes over 606 families: {:?}", started.elapsed());
+    eprintln!(
+        "font filter keystrokes over 606 families: {:?}",
+        started.elapsed()
+    );
     assert_eq!(selected(&tools, cx).as_deref(), Some("Baskerville"));
     assert!(rows(&tools, cx).iter().all(|row| !row.header));
     cx.simulate_keystrokes("cmd-a backspace");
@@ -126,7 +143,11 @@ fn cmd_enter_sets_the_document_font(cx: &mut TestAppContext) {
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
     assert_eq!(body_font(cx), "Georgia");
-    assert_eq!(font_at(&editor, 0, cx), None, "the selection keeps no font of its own");
+    assert_eq!(
+        font_at(&editor, 0, cx),
+        None,
+        "the selection keeps no font of its own"
+    );
 
     // The default row shows the document font and resets it with cmd-enter.
     cx.simulate_keystrokes("cmd-t");
@@ -181,5 +202,8 @@ fn recent_fonts_are_kept_short_and_escape_changes_nothing(cx: &mut TestAppContex
     }
     let recent = cx.update(|_, cx| recent_fonts(cx));
     assert_eq!(recent.len(), RECENT_FONT_LIMIT);
-    assert_eq!(recent[0].as_ref(), format!("Family 0{:02}", RECENT_FONT_LIMIT + 1));
+    assert_eq!(
+        recent[0].as_ref(),
+        format!("Family 0{:02}", RECENT_FONT_LIMIT + 1)
+    );
 }

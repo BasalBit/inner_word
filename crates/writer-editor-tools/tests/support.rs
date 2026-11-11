@@ -37,7 +37,10 @@ pub fn paragraphs(lines: &[&str]) -> Document {
 
 pub fn select(editor: &Entity<Editor>, range: TextRange, cx: &mut VisualTestContext) {
     editor.update(cx, |editor, cx| {
-        editor.edit(|state| state.set_selection(Selection::from_range(range)), cx)
+        editor.edit(
+            |state| state.set_selection(Selection::from_range(range)),
+            cx,
+        )
     });
     cx.run_until_parked();
 }

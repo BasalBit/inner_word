@@ -12,7 +12,10 @@ fn opens_with_inline_formatting_first_on_a_selection(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-.");
     assert_eq!(active(&tools, cx), Some(ToolKind::Format));
-    assert!(!editor_focused(&editor, cx), "focus moves into the menu's filter");
+    assert!(
+        !editor_focused(&editor, cx),
+        "focus moves into the menu's filter"
+    );
 
     let rows = rows(&tools, cx);
     assert!(rows[0].header && rows[0].label == "Text");
@@ -50,11 +53,17 @@ fn opens_with_inline_formatting_first_on_a_selection(cx: &mut TestAppContext) {
         "Smaller text",
         "Reset text size",
     ] {
-        assert!(labels.iter().any(|label| label == expected), "missing {expected}");
+        assert!(
+            labels.iter().any(|label| label == expected),
+            "missing {expected}"
+        );
     }
     let position = |label: &str| labels.iter().position(|other| other == label).unwrap();
     assert!(position("Bold") < position("Heading 1"));
-    assert_eq!(row(&tools, "Heading 1", cx).key_hint.as_deref(), Some("⌥⌘1"));
+    assert_eq!(
+        row(&tools, "Heading 1", cx).key_hint.as_deref(),
+        Some("⌥⌘1")
+    );
     assert_eq!(row(&tools, "Link", cx).key_hint.as_deref(), Some("⌘K"));
     assert_eq!(row(&tools, "Font", cx).key_hint.as_deref(), Some("⌘T"));
 
@@ -85,7 +94,11 @@ fn leads_with_block_options_on_a_collapsed_caret(cx: &mut TestAppContext) {
     let rows = rows(&tools, cx);
     assert!(rows[0].header && rows[0].label == "Turn into");
     assert_eq!(rows[1].label, "Paragraph");
-    assert_eq!(rows[1].mark, Mark::Check, "the caret's block is a paragraph");
+    assert_eq!(
+        rows[1].mark,
+        Mark::Check,
+        "the caret's block is a paragraph"
+    );
     let labels = labels(&tools, cx);
     let position = |label: &str| labels.iter().position(|other| other == label).unwrap();
     assert!(position("Heading 1") < position("Align left"));
@@ -99,7 +112,10 @@ fn leads_with_block_options_on_a_collapsed_caret(cx: &mut TestAppContext) {
     assert_eq!(selected(&tools, cx).as_deref(), Some("Heading 1"));
     cx.simulate_keystrokes("enter");
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().blocks()[0].kind().heading_level(), Some(1));
+        assert_eq!(
+            editor.document().blocks()[0].kind().heading_level(),
+            Some(1)
+        );
         assert_eq!(editor.document().blocks()[1].kind(), &BlockKind::Paragraph);
     });
     assert!(editor_focused(&editor, cx));
@@ -123,7 +139,10 @@ fn typing_filters_and_escape_closes(cx: &mut TestAppContext) {
     cx.simulate_input("quo");
     let filtered = labels(&tools, cx);
     assert_eq!(filtered.first().map(String::as_str), Some("Quote"));
-    assert!(rows(&tools, cx).iter().all(|row| !row.header), "no headers while filtering");
+    assert!(
+        rows(&tools, cx).iter().all(|row| !row.header),
+        "no headers while filtering"
+    );
     // The text went to the filter, not to the document.
     assert_eq!(text(&editor, cx), "One\nTwo");
 
@@ -190,7 +209,10 @@ fn shows_checks_and_mixed_state(cx: &mut TestAppContext) {
     // highlight in a part.
     select(
         &editor,
-        TextRange::new(writer_core::Position::new(0, 0), writer_core::Position::new(1, 6)),
+        TextRange::new(
+            writer_core::Position::new(0, 0),
+            writer_core::Position::new(1, 6),
+        ),
         cx,
     );
     cx.simulate_keystrokes("cmd-.");
@@ -233,9 +255,16 @@ fn applies_highlight_and_text_colours(cx: &mut TestAppContext) {
     cx.simulate_input("blue text");
     assert_eq!(selected(&tools, cx).as_deref(), Some("Blue text"));
     cx.simulate_keystrokes("enter");
-    let blue = TEXT_COLORS.iter().find(|(name, _)| *name == "Blue").unwrap().1;
+    let blue = TEXT_COLORS
+        .iter()
+        .find(|(name, _)| *name == "Blue")
+        .unwrap()
+        .1;
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().blocks()[0].attrs_at(0).unwrap().color, Some(blue));
+        assert_eq!(
+            editor.document().blocks()[0].attrs_at(0).unwrap().color,
+            Some(blue)
+        );
     });
 
     // Choosing the checked highlight again removes it (a toggle).
@@ -244,7 +273,10 @@ fn applies_highlight_and_text_colours(cx: &mut TestAppContext) {
     cx.simulate_input("green hi");
     cx.simulate_keystrokes("enter");
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().blocks()[0].attrs_at(0).unwrap().highlight, None);
+        assert_eq!(
+            editor.document().blocks()[0].attrs_at(0).unwrap().highlight,
+            None
+        );
     });
 
     // Back to the default colour.
@@ -252,7 +284,10 @@ fn applies_highlight_and_text_colours(cx: &mut TestAppContext) {
     cx.simulate_input("default");
     cx.simulate_keystrokes("enter");
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().blocks()[0].attrs_at(0).unwrap().color, None);
+        assert_eq!(
+            editor.document().blocks()[0].attrs_at(0).unwrap().color,
+            None
+        );
     });
     assert!(editor_focused(&editor, cx));
 }

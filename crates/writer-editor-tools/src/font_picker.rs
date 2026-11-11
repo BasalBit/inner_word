@@ -307,7 +307,10 @@ impl EditorTools {
                     cx,
                 );
             } else {
-                editor.edit(|state| state.set_font_family(family.as_ref().map(|family| family.as_ref())), cx);
+                editor.edit(
+                    |state| state.set_font_family(family.as_ref().map(|family| family.as_ref())),
+                    cx,
+                );
             }
         });
         if let Some(family) = &family {

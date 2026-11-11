@@ -98,7 +98,13 @@ impl Render for LinkPopover {
         let colors = theme.colors;
         let shadow = theme.shadow_popover();
         let font = theme.fonts.ui.clone();
-        let apply = self.footer_action("link-apply", KeyHint::parse("enter"), "Apply", LinkEvent::Apply, cx);
+        let apply = self.footer_action(
+            "link-apply",
+            KeyHint::parse("enter"),
+            "Apply",
+            LinkEvent::Apply,
+            cx,
+        );
         let open = self.footer_action(
             "link-open",
             KeyHint::for_action(&OpenLinkInBrowser, cx),
@@ -115,7 +121,13 @@ impl Render for LinkPopover {
                 cx,
             )
         });
-        let cancel = self.footer_action("link-cancel", KeyHint::parse("escape"), "Cancel", LinkEvent::Cancel, cx);
+        let cancel = self.footer_action(
+            "link-cancel",
+            KeyHint::parse("escape"),
+            "Cancel",
+            LinkEvent::Cancel,
+            cx,
+        );
         div()
             .key_context(LINK_CONTEXT)
             .occlude()
@@ -273,7 +285,7 @@ impl EditorTools {
             LinkEvent::Open => self.open_link_in_browser(window, cx),
             LinkEvent::Remove => self.remove_link(window, cx),
             LinkEvent::Cancel => self.close_popup(true, window, cx),
-            LinkEvent::Blurred => self.close_popup(false, window, cx),
+            LinkEvent::Blurred => self.popup_lost_focus(window, cx),
         }
     }
 

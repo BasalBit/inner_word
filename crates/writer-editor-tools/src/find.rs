@@ -20,8 +20,7 @@ use writer_ui::{
 
 use crate::{
     actions::{
-        FIND_BAR_CONTEXT, FindNext, FindPrevious, ReplaceAll, ToggleCaseSensitive,
-        ToggleWholeWord,
+        FIND_BAR_CONTEXT, FindNext, FindPrevious, ReplaceAll, ToggleCaseSensitive, ToggleWholeWord,
     },
     tools::{EditorTools, ToolKind, ToolsEvent},
 };
@@ -84,7 +83,11 @@ fn previous_match(matches: &[TextRange], selection: TextRange) -> Option<usize> 
         return None;
     }
     let index = matches.partition_point(|found| found.start < selection.start);
-    Some(if index == 0 { matches.len() - 1 } else { index - 1 })
+    Some(if index == 0 {
+        matches.len() - 1
+    } else {
+        index - 1
+    })
 }
 
 impl EditorTools {
@@ -127,8 +130,12 @@ impl EditorTools {
     }
 
     /// What the bar shows next to the query: "3 of 17", "17 matches",
-    /// "No matches", "Replaced 12", or nothing for an empty query.
+    /// "No matches", "Replaced 12", or nothing for an empty query (and
+    /// while the bar is closed).
     pub fn find_status(&self) -> String {
+        if self.find_bar.is_none() {
+            return String::new();
+        }
         if let Some(notice) = &self.find.notice {
             return notice.to_string();
         }
@@ -288,26 +295,33 @@ impl EditorTools {
     /// alone and the current match is whichever one it is on.
     pub(crate) fn refresh_find(&mut self, reveal: bool, cx: &mut Context<Self>) {
         self.find.matches = self.search(cx);
-        let from = self.editor.read(cx).selection().start();
-        match match_at_or_after(&self.find.matches, from) {
-            Some(index) if reveal => self.go_to_match(index, cx),
-            _ => self.sync_find_current(cx),
+        if reveal {
+            let from = self.editor.read(cx).selection().start();
+            if let Some(index) = match_at_or_after(&self.find.matches, from) {
+                self.select_match(self.find.matches[index], cx);
+            }
         }
+        self.find.current = self.match_under_selection(cx);
+        self.apply_find_highlights(cx);
         cx.notify();
     }
 
-    /// Recomputes which match the editor's selection is on.
-    pub(crate) fn sync_find_current(&mut self, cx: &mut Context<Self>) {
+    /// The match the editor's selection is exactly on.
+    fn match_under_selection(&self, cx: &App) -> Option<usize> {
         let selection = self.editor.read(cx).selection().range();
-        let current = self
-            .find
+        self.find
             .matches
             .binary_search_by(|found| found.start.cmp(&selection.start))
             .ok()
-            .filter(|index| self.find.matches[*index] == selection);
-        if self.find.current != current || self.find_bar.is_some() {
+            .filter(|index| self.find.matches[*index] == selection)
+    }
+
+    /// The selection moved: recomputes which match it is on.
+    pub(crate) fn sync_find_current(&mut self, cx: &mut Context<Self>) {
+        let current = self.match_under_selection(cx);
+        if self.find.current != current {
             self.find.current = current;
-            self.apply_find_highlights(cx);
+            self.paint_current_match(cx);
             cx.notify();
         }
     }
@@ -317,27 +331,27 @@ impl EditorTools {
         if self.find_bar.is_none() {
             return;
         }
-        let colors = cx.theme().colors;
+        let style = HighlightStyle::background(cx.theme().colors.find_match);
         let matches = self.find.matches.clone();
+        self.editor.update(cx, |editor, cx| {
+            editor.set_highlights(FIND_LAYER, matches, style, cx);
+        });
+        self.paint_current_match(cx);
+    }
+
+    fn paint_current_match(&mut self, cx: &mut Context<Self>) {
+        if self.find_bar.is_none() {
+            return;
+        }
+        let style = HighlightStyle::background(cx.theme().colors.find_match_current);
         let current: Vec<TextRange> = self
             .find
             .current
-            .and_then(|index| matches.get(index).copied())
+            .and_then(|index| self.find.matches.get(index).copied())
             .into_iter()
             .collect();
         self.editor.update(cx, |editor, cx| {
-            editor.set_highlights(
-                FIND_LAYER,
-                matches,
-                HighlightStyle::background(colors.find_match),
-                cx,
-            );
-            editor.set_highlights(
-                FIND_CURRENT_LAYER,
-                current,
-                HighlightStyle::background(colors.find_match_current),
-                cx,
-            );
+            editor.set_highlights(FIND_CURRENT_LAYER, current, style, cx);
         });
     }
 
@@ -361,6 +375,7 @@ impl EditorTools {
         self.find.notice = None;
         self.select_match(found, cx);
         self.sync_find_current(cx);
+        cx.notify();
     }
 
     /// Goes to the next match (wrapping). With the bar closed it searches
@@ -457,10 +472,11 @@ impl EditorTools {
         let after = self.editor.read(cx).selection().head;
         self.find.matches = self.search(cx);
         self.find.notice = None;
-        match match_at_or_after(&self.find.matches, after) {
-            Some(index) => self.go_to_match(index, cx),
-            None => self.sync_find_current(cx),
+        if let Some(index) = match_at_or_after(&self.find.matches, after) {
+            self.select_match(self.find.matches[index], cx);
         }
+        self.find.current = self.match_under_selection(cx);
+        self.apply_find_highlights(cx);
         cx.notify();
     }
 
@@ -565,11 +581,17 @@ impl EditorTools {
         let count = div()
             .flex_none()
             .text_size(UI_TEXT_SM)
-            .text_color(if no_matches { colors.danger } else { colors.muted })
+            .text_color(if no_matches {
+                colors.danger
+            } else {
+                colors.muted
+            })
             .child(status);
 
         let case = toggle_button("find-case", "Aa", options.case_sensitive, cx)
-            .children(KeyHint::for_action(&ToggleCaseSensitive, cx).map(|hint| hint.size(UI_TEXT_XS)))
+            .children(
+                KeyHint::for_action(&ToggleCaseSensitive, cx).map(|hint| hint.size(UI_TEXT_XS)),
+            )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_case_sensitive(cx)));
         let word = toggle_button("find-word", "Word", options.whole_word, cx)
             .children(KeyHint::for_action(&ToggleWholeWord, cx).map(|hint| hint.size(UI_TEXT_XS)))
@@ -692,7 +714,11 @@ fn toggle_button(
     bar_button(id, cx)
         .px(px(6.))
         .border_1()
-        .border_color(if on { colors.accent } else { gpui::transparent_black() })
+        .border_color(if on {
+            colors.accent
+        } else {
+            gpui::transparent_black()
+        })
         .when(on, |el| el.bg(colors.accent_subtle))
         .child(
             div()

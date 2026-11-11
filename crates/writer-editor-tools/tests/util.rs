@@ -21,17 +21,38 @@ fn urls_are_cleaned_up() {
     let url = |input: &str| normalize_url(input);
     assert_eq!(url("   "), None);
     assert_eq!(url(""), None);
-    assert_eq!(url(" example.com/a ").as_deref(), Some("https://example.com/a"));
-    assert_eq!(url("www.example.com").as_deref(), Some("https://www.example.com"));
+    assert_eq!(
+        url(" example.com/a ").as_deref(),
+        Some("https://example.com/a")
+    );
+    assert_eq!(
+        url("www.example.com").as_deref(),
+        Some("https://www.example.com")
+    );
     assert_eq!(url("http://x.org").as_deref(), Some("http://x.org"));
-    assert_eq!(url("HTTPS://X.org/Path?q=1#f").as_deref(), Some("HTTPS://X.org/Path?q=1#f"));
-    assert_eq!(url("me@example.com").as_deref(), Some("mailto:me@example.com"));
-    assert_eq!(url("mailto:me@example.com").as_deref(), Some("mailto:me@example.com"));
+    assert_eq!(
+        url("HTTPS://X.org/Path?q=1#f").as_deref(),
+        Some("HTTPS://X.org/Path?q=1#f")
+    );
+    assert_eq!(
+        url("me@example.com").as_deref(),
+        Some("mailto:me@example.com")
+    );
+    assert_eq!(
+        url("mailto:me@example.com").as_deref(),
+        Some("mailto:me@example.com")
+    );
     assert_eq!(url("tel:+15551234").as_deref(), Some("tel:+15551234"));
     assert_eq!(url("#chapter-2").as_deref(), Some("#chapter-2"));
     assert_eq!(url("/notes/today").as_deref(), Some("/notes/today"));
     // A host with a port is not a scheme.
-    assert_eq!(url("localhost:8080/x").as_deref(), Some("https://localhost:8080/x"));
-    assert_eq!(url("example.com:443").as_deref(), Some("https://example.com:443"));
+    assert_eq!(
+        url("localhost:8080/x").as_deref(),
+        Some("https://localhost:8080/x")
+    );
+    assert_eq!(
+        url("example.com:443").as_deref(),
+        Some("https://example.com:443")
+    );
     assert_eq!(url("writer://doc/12").as_deref(), Some("writer://doc/12"));
 }

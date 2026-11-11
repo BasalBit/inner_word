@@ -513,10 +513,19 @@ fn closing(cx: &mut TestAppContext) {
     cx.simulate_click(button, Modifiers::none());
     assert_eq!(*log.borrow(), ["button"]);
 
+    // a release that never comes (let go outside the window) is forgotten
+    // at the next press: that click is an ordinary one too
+    open(cx);
+    cx.simulate_mouse_down(FAR, MouseButton::Left, Modifiers::none());
+    assert!(!is_open(cx));
+    cx.simulate_click(button, Modifiers::none());
+    assert_eq!(*log.borrow(), ["button", "button"]);
+    log.borrow_mut().pop();
+
     // a right-click outside closes it and opens the menu of what was clicked
     open(cx);
     right_click(cx, ROW2);
-    assert_eq!(*dismissed.borrow(), 3);
+    assert_eq!(*dismissed.borrow(), 4);
     let labels = menu(cx).unwrap().read_with(cx, |menu, _| menu.labels());
     assert_eq!(labels, ["Only here"]);
     cx.simulate_keystrokes("escape");
@@ -535,7 +544,7 @@ fn closing(cx: &mut TestAppContext) {
     assert!(is_open(cx));
     cx.simulate_event(wheel(FAR));
     assert!(!is_open(cx));
-    assert_eq!(*dismissed.borrow(), 4);
+    assert_eq!(*dismissed.borrow(), 5);
 
     // a cmd chord closes the menu and does what it always does
     open(cx);

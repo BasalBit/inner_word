@@ -628,6 +628,9 @@ impl Element for Placed {
         let Some(watch) = self.watch.take() else {
             return;
         };
+        // Before the listeners below: a press first forgets a release that
+        // never came, then may ask for its own to be eaten.
+        install_mouse_up_swallow(window);
         let inside = move |position: Point<Pixels>| {
             watch
                 .iter()
@@ -653,7 +656,6 @@ impl Element for Placed {
                 ContextMenu::dismiss(window, cx);
             }
         });
-        install_mouse_up_swallow(window);
     }
 }
 
@@ -685,8 +687,18 @@ fn swallow_next_mouse_up(window: &Window, cx: &mut App) {
 }
 
 /// Registers, for this frame, the listener that eats the mouse release
-/// following a click that closed a menu.
+/// following a click that closed a menu. A release that never arrives (the
+/// button was let go outside the window) is forgotten at the next press.
 fn install_mouse_up_swallow(window: &mut Window) {
+    window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Capture
+            && let Some(registry) = cx.try_global::<Registry>()
+            && registry.swallow_mouse_up.contains(&window_id(window))
+        {
+            let id = window_id(window);
+            cx.global_mut::<Registry>().swallow_mouse_up.remove(&id);
+        }
+    });
     window.on_mouse_event(|event: &MouseUpEvent, phase, window, cx| {
         if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
             return;

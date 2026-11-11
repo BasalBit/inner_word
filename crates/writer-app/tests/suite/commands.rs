@@ -57,9 +57,32 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
         );
     }
 
+    // Under a category heading the row does not repeat the category.
+    let details = |palette: &Entity<CommandPalette>, cx: &mut VisualTestContext| {
+        palette.read_with(cx, |palette, cx| {
+            use writer_ui::{PickerDelegate, PickerEntry};
+            (0..palette.delegate.entry_count())
+                .filter_map(|ix| match palette.delegate.entry(ix, cx) {
+                    PickerEntry::Item(item) => Some((
+                        item.label.to_string(),
+                        item.detail.map(|detail| detail.to_string()),
+                        item.key_hint.map(|hint| hint.text()),
+                    )),
+                    PickerEntry::Header(_) => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert!(details(&palette, vcx).iter().all(|(_, detail, _)| detail.is_none()));
+
     vcx.simulate_input("bold");
     let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
     assert_eq!(titles.first().map(String::as_str), Some("Bold"));
+    // In search results the category and the real key are beside the title.
+    assert_eq!(
+        details(&palette, vcx)[0],
+        ("Bold".to_string(), Some("Format".to_string()), Some("⌘B".to_string()))
+    );
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
 

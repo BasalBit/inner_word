@@ -192,7 +192,7 @@ impl PickerDelegate for ShortcutsDelegate {
                     .positions(positions.clone())
                     .key_hint(shortcut.hint.clone());
                 // Headers already name the group while browsing.
-                if positions.is_empty() && matches!(self.rows.first(), Some(Row::Header(_))) {
+                if matches!(self.rows.first(), Some(Row::Header(_))) {
                     item.into()
                 } else {
                     item.detail(shortcut.category.clone()).into()

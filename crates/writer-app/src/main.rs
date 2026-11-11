@@ -76,7 +76,7 @@ fn seed_demo(library: &gpui::Entity<Library>, cx: &mut App) {
     if !empty {
         return;
     }
-    if let Err(error) = library.update(cx, |library, cx| welcome::seed_demo_library(library, cx)) {
+    if let Err(error) = library.update(cx, welcome::seed_demo_library) {
         eprintln!("The Writer: could not create the demo library: {error}");
     }
 }

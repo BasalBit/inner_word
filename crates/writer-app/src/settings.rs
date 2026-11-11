@@ -60,6 +60,25 @@ pub mod keys {
     /// `document.custom_title.<id>` holds `true`.
     pub const CUSTOM_TITLE_PREFIX: &str = "document.custom_title.";
 
+    /// The keys behind [`super::Settings`]: a change to one of them is a
+    /// change of the user settings.
+    pub const USER_SETTINGS: [&str; 14] = [
+        THEME,
+        VIM_MODE,
+        INPUT_RULES,
+        SMART_PUNCTUATION,
+        COMMENTS_VISIBLE,
+        COMMENT_AUTHOR,
+        NEW_DOCUMENT_FONT,
+        NEW_DOCUMENT_SIZE,
+        NEW_DOCUMENT_LINE_HEIGHT,
+        NEW_DOCUMENT_PAGE_VIEW,
+        NEW_DOCUMENT_PAPER,
+        CHARACTER_LIMIT,
+        SIDEBAR_VISIBLE,
+        SIDEBAR_WIDTH,
+    ];
+
     /// The key of the custom-title flag of document `id`.
     pub fn custom_title(id: writer_library::DocumentId) -> String {
         format!("{CUSTOM_TITLE_PREFIX}{}", id.0)
@@ -215,14 +234,51 @@ impl Default for Settings {
     }
 }
 
-/// The login name, capitalised, as a first guess for the comment author.
+/// A first guess for the comment author: the account's full name as macOS
+/// knows it, else the login name, else "Me". Looked up once.
 fn default_author() -> String {
-    let user = std::env::var("USER").unwrap_or_default();
-    let mut chars = user.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => "Me".to_string(),
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        full_user_name()
+            .or_else(|| std::env::var("USER").ok())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Me".to_string())
+    })
+    .clone()
+}
+
+/// `NSFullUserName()`: the name shown on the login screen.
+#[cfg(target_os = "macos")]
+// objc 0.2's msg_send! expands to a `cfg(feature = "cargo-clippy")` check.
+#[allow(unexpected_cfgs)]
+fn full_user_name() -> Option<String> {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    use std::{ffi::CStr, os::raw::c_char};
+
+    #[link(name = "Foundation", kind = "framework")]
+    unsafe extern "C" {
+        fn NSFullUserName() -> *mut Object;
     }
+    // SAFETY: NSFullUserName has no preconditions and returns an
+    // autoreleased NSString (or nil); UTF8String returns a NUL-terminated
+    // buffer that lives as long as the string, and it is copied right away.
+    unsafe {
+        let name = NSFullUserName();
+        if name.is_null() {
+            return None;
+        }
+        let utf8: *const c_char = msg_send![name, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(utf8).to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn full_user_name() -> Option<String> {
+    None
 }
 
 impl Settings {

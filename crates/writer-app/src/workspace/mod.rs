@@ -542,7 +542,10 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = PaletteDelegate::new(workspace, recent, cx);
-                Picker::modal(delegate, window, cx).width(px(600.))
+                let rows = picker_rows(window, 14);
+                Picker::modal(delegate, window, cx)
+                    .width(px(600.))
+                    .max_visible_rows(rows)
             });
         });
     }
@@ -554,7 +557,10 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = QuickOpenDelegate::new(workspace, &library, cx);
-                Picker::modal(delegate, window, cx).width(px(600.))
+                let rows = picker_rows(window, 14);
+                Picker::modal(delegate, window, cx)
+                    .width(px(600.))
+                    .max_visible_rows(rows)
             });
         });
     }
@@ -566,7 +572,10 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = LibrarySearchDelegate::new(workspace, library);
-                Picker::modal(delegate, window, cx).width(px(720.))
+                let rows = picker_rows(window, 14);
+                Picker::modal(delegate, window, cx)
+                    .width(px(720.))
+                    .max_visible_rows(rows)
             });
         });
     }
@@ -577,9 +586,10 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = ShortcutsDelegate::new(workspace, cx);
+                let rows = picker_rows(window, 20);
                 Picker::modal(delegate, window, cx)
                     .width(px(600.))
-                    .max_visible_rows(16)
+                    .max_visible_rows(rows)
             });
         });
     }
@@ -595,7 +605,8 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = ExportDelegate::new(workspace, folder);
-                Picker::modal(delegate, window, cx)
+                let rows = picker_rows(window, 12);
+                Picker::modal(delegate, window, cx).max_visible_rows(rows)
             });
         });
     }
@@ -674,7 +685,13 @@ impl Workspace {
             env!("CARGO_PKG_VERSION")
         );
         // The answer does not matter; dropping the receiver is fine.
-        let _ = window.prompt(PromptLevel::Info, "The Writer", Some(&detail), &["OK"], cx);
+        drop(window.prompt(
+            PromptLevel::Info,
+            "The Writer",
+            Some(&detail),
+            &["OK"],
+            cx,
+        ));
     }
 
     // ----- events ----------------------------------------------------------------
@@ -688,12 +705,6 @@ impl Workspace {
     ) {
         match event {
             EditorEvent::Edited { .. } | EditorEvent::SettingsChanged => self.mark_dirty(cx),
-            EditorEvent::SelectionChanged => {
-                if let Some(session) = self.session.as_mut() {
-                    session.view_dirty = true;
-                }
-                cx.notify();
-            }
             _ => cx.notify(),
         }
     }
@@ -722,12 +733,7 @@ impl Workspace {
     ) {
         match event {
             LibraryEvent::SettingChanged { key } => {
-                let key = key.as_ref();
-                let internal = key == keys::WINDOW_BOUNDS
-                    || key == keys::LAST_DOCUMENT
-                    || key == keys::RECENT_COMMANDS
-                    || key.starts_with(keys::CUSTOM_TITLE_PREFIX);
-                if !internal {
+                if keys::USER_SETTINGS.contains(&key.as_ref()) {
                     self.reload_settings(cx);
                 }
             }
@@ -979,6 +985,15 @@ impl Workspace {
     ) {
         window.toggle_fullscreen();
     }
+}
+
+/// How many rows a picker modal may show in this window: as many as
+/// `wanted`, fewer when the window is short (the modal starts 12% down and
+/// has a 48px query row).
+fn picker_rows(window: &Window, wanted: usize) -> usize {
+    let height = f32::from(window.viewport_size().height);
+    let available = height * 0.88 - 48. - 8. - 24.;
+    ((available / 32.).floor().max(0.) as usize).clamp(4, wanted.max(4))
 }
 
 fn set_keyed(slots: &mut Vec<(SharedString, AnyView)>, key: SharedString, view: Option<AnyView>) {

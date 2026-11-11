@@ -6938,7 +6938,10 @@ dependencies = [
 name = "writer-library"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui",
+ "objc",
+ "raw-window-handle",
  "serde",
  "tempfile",
  "writer-store",

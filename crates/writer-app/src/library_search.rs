@@ -16,6 +16,17 @@ pub type LibrarySearch = Picker<LibrarySearchDelegate>;
 /// The most hits one search lists.
 pub const MAX_HITS: usize = 60;
 
+/// Titles longer than this are cut in the list so the snippet stays visible.
+pub const MAX_TITLE_CHARS: usize = 36;
+
+fn short_title(title: &str) -> String {
+    if title.chars().count() <= MAX_TITLE_CHARS {
+        return title.to_string();
+    }
+    let cut: String = title.chars().take(MAX_TITLE_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
 /// One listed hit, ready to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HitRow {
@@ -99,7 +110,7 @@ impl PickerDelegate for LibrarySearchDelegate {
 
     fn entry(&self, ix: usize, _: &App) -> PickerEntry {
         let hit = &self.hits[ix];
-        PickerItem::new(hit.title.clone())
+        PickerItem::new(short_title(&hit.title))
             .detail(hit.snippet.clone())
             .detail_positions(hit.positions.clone())
             .icon(IconName::Document)

@@ -148,11 +148,24 @@ impl PickerDelegate for PaletteDelegate {
             Row::Header(title) => PickerEntry::Header(title.clone()),
             Row::Command { index, positions } => {
                 let command = &self.commands[*index];
-                PickerItem::new(command.title.clone())
+                let item = PickerItem::new(command.title.clone())
                     .positions(positions.clone())
-                    .detail(command.category.clone())
-                    .key_hint(command.key_hint(cx))
-                    .into()
+                    .key_hint(command.key_hint(cx));
+                // While browsing, the headers name the category; in the
+                // recent group and in search results the row has to.
+                let under_category_header = self.rows[..ix]
+                    .iter()
+                    .rev()
+                    .find_map(|row| match row {
+                        Row::Header(title) => Some(*title == command.category),
+                        Row::Command { .. } => None,
+                    })
+                    .unwrap_or(false);
+                if under_category_header {
+                    item.into()
+                } else {
+                    item.detail(command.category.clone()).into()
+                }
             }
         }
     }

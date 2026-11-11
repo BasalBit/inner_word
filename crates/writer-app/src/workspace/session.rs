@@ -59,8 +59,8 @@ pub(crate) struct Session {
     pub custom_title: bool,
     /// The text changed since the last successful save.
     pub dirty: bool,
-    /// The caret or scroll position changed since it was last stored.
-    pub view_dirty: bool,
+    /// The view state (caret, scroll) as last written to the library.
+    pub stored_view_state: Option<String>,
     /// The message of the last failed save, while it has not succeeded since.
     pub failure: Option<String>,
     /// The pending autosave or retry.
@@ -204,7 +204,7 @@ impl Workspace {
             title: stored.meta.title.clone(),
             custom_title,
             dirty: false,
-            view_dirty: false,
+            stored_view_state: stored.view_state.clone(),
             failure: None,
             save_task: None,
         });
@@ -375,7 +375,6 @@ impl Workspace {
             return;
         };
         session.dirty = true;
-        session.view_dirty = true;
         // While a save is failing, keep the retry rhythm instead of
         // hammering the store on every keystroke.
         let delay = if session.failure.is_some() {
@@ -478,25 +477,27 @@ impl Workspace {
         }
     }
 
+    /// Writes the caret and scroll position when they differ from what the
+    /// library has. Cheap enough to call at every flush point.
     fn save_view_state(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.as_mut() else {
+        let Some(session) = self.session.as_ref() else {
             return;
         };
-        if !session.view_dirty {
-            return;
-        }
         let id = session.id;
         let view_state = self.editor.read(cx).view_state();
         let Ok(json) = serde_json::to_string(&view_state) else {
             return;
         };
+        if session.stored_view_state.as_deref() == Some(json.as_str()) {
+            return;
+        }
         let saved = self
             .library
             .update(cx, |library, _| library.save_view_state(id, &json));
         if saved.is_ok()
             && let Some(session) = self.session.as_mut()
         {
-            session.view_dirty = false;
+            session.stored_view_state = Some(json);
         }
     }
 

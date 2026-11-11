@@ -37,6 +37,7 @@ objc = "0.2"
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+writer-editor.workspace = true
 
 # One integration-test binary (tests/main.rs with submodules): each GPUI test
 # binary costs about 150 MB of disk.

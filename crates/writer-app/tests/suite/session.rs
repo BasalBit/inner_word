@@ -84,6 +84,18 @@ fn autosave_is_debounced_and_the_session_is_restored(cx: &mut TestAppContext) {
         1
     );
     let caret = editor.read_with(vcx, |editor, _| editor.selection().head);
+    // Moving the caret alone (no edit) is remembered at the next flush too.
+    editor.update(vcx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(1, 3)), cx);
+    });
+    workspace.update(vcx, |workspace, cx| workspace.flush(cx));
+    let stored_view = library.read_with(vcx, |library, _| library.view_state(id).unwrap());
+    let stored_view: writer_editor::ViewState =
+        serde_json::from_str(&stored_view.expect("a view state was stored")).unwrap();
+    assert_eq!(stored_view.selection().head, Position::new(1, 3));
+    editor.update(vcx, |editor, cx| {
+        editor.edit(|state| state.set_caret(caret), cx);
+    });
 
     // "Quit and relaunch": a second workspace over the same library opens
     // the same document with the caret where it was.

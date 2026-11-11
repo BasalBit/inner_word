@@ -1,8 +1,17 @@
-//! Randomised tests: long seeded sequences of commands on random selections.
-//! Invariants are checked after every step, change reports are checked
-//! against block revision stamps, then everything is undone (must equal the
-//! original document) and redone (must equal the final one). Documents and
-//! fragments round-trip through JSON.
+//! Randomised tests: long seeded sequences of commands on random (often
+//! out-of-range or mid-character) selections.
+//!
+//! - `random_command_sequences` / `long_random_sequences`: invariants are
+//!   checked after every step, change reports are checked against block
+//!   revision stamps, then everything is undone (must equal the original
+//!   document) and redone (must equal the final one).
+//! - `every_command_undoes_exactly`: every single command is undone and
+//!   redone on the spot, and must restore the document, the selection and
+//!   every block's `(id, revision)` exactly.
+//! - Documents and fragments round-trip through JSON; corrupted JSON never
+//!   panics.
+//!
+//! `WRITER_CORE_SEEDS=n` runs `n` seeds instead of the default.
 
 use std::collections::HashMap;
 
@@ -38,16 +47,24 @@ impl Rng {
     }
 }
 
+fn seeds(default: u64) -> u64 {
+    std::env::var("WRITER_CORE_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
 const PIECES: &[&str] = &[
     "a", "b", "word", " ", "  ", "é", "e\u{301}", "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}",
     "中文", "שלום", "\n", "\u{1100}", "\u{1161}", "\u{1F1EB}\u{1F1F7}", "*", "**", "_", "`", "#",
-    "-", "\"", "'", ".", "=", "~", "1.", "[ ]", ">", "x", "\t", "\r\n",
+    "-", "\"", "'", ".", "=", "~", "1.", "[ ]", ">", "x", "\t", "\r\n", "Σ", "ς", "İ", "  \n",
+    "\u{0}", "\u{2028}", "a\u{308}\u{301}",
 ];
 
 const TYPED: &[&str] = &[
     "a", "b", "c", " ", " ", " ", "*", "_", "`", "~", "=", "#", "-", "\"", "'", ".", "1", ")",
     "[", "]", "x", ">", "é", "\u{301}", "中", "ש", "\u{1F600}", "\u{200D}", "\u{1100}",
-    "\u{1161}", "+",
+    "\u{1161}", "+", "\u{1F1EB}", "(", "\t",
 ];
 
 fn random_kind(r: &mut Rng) -> BlockKind {
@@ -83,10 +100,14 @@ fn random_attrs(r: &mut Rng) -> InlineAttrs {
         a.color = Some(Rgb::new(r.below(256) as u8, 0, 9));
     }
     if r.chance(10) {
-        a.font = Some("Menlo".into());
+        a.font = Some(if r.chance(80) { "Menlo".into() } else { "  ".into() });
     }
     if r.chance(10) {
         a.link = Some(format!("https://example.com/{}", r.below(3)));
+    }
+    if r.chance(5) {
+        // Anchors to threads that do not exist: must be removed on load.
+        a.comments.insert(CommentId(r.below(4) as u64));
     }
     a
 }
@@ -113,14 +134,46 @@ fn random_document(r: &mut Rng) -> Document {
     Document::from_blocks(blocks)
 }
 
+/// A position that is often invalid: past the last block, past the end of
+/// the text, inside a multi-byte character or a grapheme cluster.
 fn random_position(r: &mut Rng, d: &Document) -> Position {
-    let b = r.below(d.block_count() + 1); // may be out of range
+    if r.chance(2) {
+        return Position::new(usize::MAX, usize::MAX);
+    }
+    let b = r.below(d.block_count() + 1);
     let len = d.block(b.min(d.block_count() - 1)).map_or(0, |b| b.len());
-    Position::new(b, r.below(len + 3)) // may be out of range or inside a char
+    Position::new(b, r.below(len + 3))
+}
+
+fn random_range(r: &mut Rng, d: &Document) -> TextRange {
+    let a = random_position(r, d);
+    let b = if r.chance(50) {
+        Position::new(a.block, r.below(a.offset.saturating_add(6).min(1 << 20)))
+    } else {
+        random_position(r, d)
+    };
+    TextRange::new(a, b)
+}
+
+fn random_block_range(r: &mut Rng, d: &Document) -> std::ops::Range<usize> {
+    let a = r.below(d.block_count() + 2);
+    let b = a + r.below(4);
+    a..b
 }
 
 fn stamps(d: &Document) -> Vec<(BlockId, u64)> {
     d.blocks().iter().map(|b| (b.id(), b.revision())).collect()
+}
+
+/// Whether a command goes through the undo history.
+#[derive(PartialEq)]
+enum Undoable {
+    Yes,
+    /// Settings changes are not undoable by design.
+    No,
+    /// Several commands, the first of which only moves the selection: undo
+    /// restores the document but the selection only to after that move.
+    Compound,
 }
 
 struct Runner {
@@ -143,16 +196,17 @@ impl Runner {
         }
     }
 
-    fn step(&mut self) -> String {
+    /// One random public command (never undo/redo/grouping).
+    fn command(&mut self) -> (String, Undoable) {
         let r = &mut self.r;
         let e = &mut self.e;
-        let op = r.below(120);
-        match op {
+        let op = r.below(118);
+        let name: String = match op {
             0..=9 => {
                 let a = random_position(r, e.document());
                 let h = match r.below(10) {
                     0..=6 => a,
-                    7..=8 => Position::new(a.block, r.below(a.offset + 8)),
+                    7..=8 => Position::new(a.block, r.below(a.offset.saturating_add(8).min(1 << 20))),
                     _ => random_position(r, e.document()),
                 };
                 e.set_selection(Selection::new(a, h));
@@ -196,11 +250,12 @@ impl Runner {
                 "delete".into()
             }
             45 => {
-                match r.below(4) {
+                match r.below(5) {
                     0 => e.delete_word_backward(),
                     1 => e.delete_word_forward(),
                     2 => e.delete_to_line_start(),
-                    _ => e.delete_to_line_end(),
+                    3 => e.delete_to_line_end(),
+                    _ => e.delete_selection(),
                 };
                 "word/line delete".into()
             }
@@ -222,37 +277,53 @@ impl Runner {
                 format!("move {m:?} {ext}")
             }
             51 => {
-                match r.below(3) {
+                match r.below(5) {
                     0 => e.select_all(),
                     1 => {
                         let p = random_position(r, e.document());
                         e.select_word_at(p)
                     }
-                    _ => {
+                    2 => {
                         let i = r.below(e.document().block_count() + 1);
                         e.select_block(i)
+                    }
+                    3 => {
+                        let br = random_block_range(r, e.document());
+                        e.select_blocks(br)
+                    }
+                    _ => {
+                        let t = random_range(r, e.document());
+                        e.select_range(t)
                     }
                 }
                 "select special".into()
             }
             52..=55 => {
                 let s = *r.pick(&InlineStyle::ALL);
-                e.toggle_style(s);
+                match r.below(6) {
+                    0 => e.toggle_bold(),
+                    1 => e.toggle_italic(),
+                    2 => e.toggle_underline(),
+                    3 => e.toggle_strikethrough(),
+                    4 => e.toggle_code(),
+                    _ => e.toggle_style(s),
+                };
                 format!("toggle {s:?}")
             }
             56 => {
-                match r.below(6) {
+                match r.below(8) {
                     0 => e.set_highlight(if r.chance(70) { Some(*r.pick(&Highlight::ALL)) } else { None }),
                     1 => e.set_text_color(if r.chance(70) { Some(Rgb::new(1, 2, 3)) } else { None }),
-                    2 => e.set_font_family(if r.chance(70) { Some("Georgia") } else { None }),
-                    3 => e.set_link("https://l.ink"),
+                    2 => e.set_font_family(if r.chance(70) { Some("Georgia") } else { Some(" ") }),
+                    3 => e.set_link(if r.chance(80) { "https://l.ink" } else { "  " }),
                     4 => e.remove_link(),
+                    5 => e.toggle_highlight(*r.pick(&Highlight::ALL)),
                     _ => e.clear_formatting(),
                 };
                 "attr".into()
             }
             57 => {
-                e.insert_link("link", "https://x.y");
+                e.insert_link(if r.chance(80) { "link" } else { "a\nb" }, "https://x.y");
                 "insert link".into()
             }
             58..=61 => {
@@ -261,12 +332,14 @@ impl Runner {
                 format!("kind {k:?}")
             }
             62 => {
-                match r.below(5) {
+                match r.below(7) {
                     0 => e.toggle_todo_checked(),
                     1 => e.set_alignment(*r.pick(&[Alignment::Left, Alignment::Center, Alignment::Justify])),
-                    2 => e.step_text_size(if r.chance(50) { 1 } else { -2 }),
-                    3 => e.set_text_size(Some(r.below(200) as f32)),
-                    _ => e.set_code_language(Some("py")),
+                    2 => e.step_text_size(*r.pick(&[1, -2, 30, i32::MIN])),
+                    3 => e.set_text_size(Some(*r.pick(&[0.0, 13.0, 500.0, f32::NAN]))),
+                    4 => e.reset_text_size(),
+                    5 => e.set_code_language(if r.chance(70) { Some("py") } else { None }),
+                    _ => e.set_alignment(Alignment::Right),
                 };
                 "block attr".into()
             }
@@ -297,28 +370,46 @@ impl Runner {
                 "insert block".into()
             }
             68..=69 => {
-                let f = if r.chance(70) { e.copy() } else { e.cut() };
+                let f = match r.below(4) {
+                    0 => e.cut(),
+                    1 => {
+                        let br = random_block_range(r, e.document());
+                        e.document().block_fragment(br)
+                    }
+                    2 => {
+                        let t = random_range(r, e.document());
+                        e.document().fragment(t)
+                    }
+                    _ => e.copy(),
+                };
                 // Round-trip through JSON as the clipboard would.
                 let back = Fragment::from_json(&f.to_json()).expect("fragment json");
                 assert_eq!(back, f);
+                assert_eq!(Fragment::from_plain_text(&f.to_plain_text()).to_plain_text(), f.to_plain_text());
                 self.clipboard.push(f);
                 "copy/cut".into()
             }
             70..=72 => {
                 if !self.clipboard.is_empty() {
                     let f = r.pick(&self.clipboard).clone();
-                    if r.chance(80) {
-                        e.paste(&f);
-                    } else {
-                        let i = r.below(e.document().block_count() + 2);
-                        e.insert_blocks_at(i, &f);
+                    match r.below(5) {
+                        0 => {
+                            let i = r.below(e.document().block_count() + 2);
+                            e.insert_blocks_at(i, &f);
+                        }
+                        1 => {
+                            e.paste_plain_text(&f.to_plain_text());
+                        }
+                        _ => {
+                            e.paste(&f);
+                        }
                     }
                 }
                 "paste".into()
             }
             73..=75 => {
                 self.now += 1;
-                e.add_comment("note", "me", self.now);
+                e.add_comment("note", " me ", self.now);
                 "add comment".into()
             }
             76..=78 => {
@@ -327,7 +418,7 @@ impl Runner {
                 let e = &mut self.e;
                 match r.below(7) {
                     0 => {
-                        e.edit_comment(id, "edited");
+                        e.edit_comment(id, "edited\r\n");
                     }
                     1 => {
                         e.add_reply(id, "reply", "you", 7);
@@ -365,65 +456,69 @@ impl Runner {
                 "comment op".into()
             }
             79..=80 => {
-                let q = *r.pick(&["a", "word", " ", "é", "中"]);
-                let rep = *r.pick(&["", "z", "longer text", "\u{1F600}"]);
+                let q = *r.pick(&["a", "word", " ", "é", "中", "σ", "A", "\n", "e\u{301}"]);
+                let rep = *r.pick(&["", "z", "longer text", "\u{1F600}", "Z", "a\nb"]);
                 let opts = SearchOptions {
                     case_sensitive: r.chance(50),
                     whole_word: r.chance(30),
                 };
-                if r.chance(50) {
-                    e.replace_all(q, opts, rep);
-                } else {
-                    let m = e.document().find_all(q, opts);
-                    if !m.is_empty() {
-                        let t = m[r.below(m.len())];
+                match r.below(3) {
+                    0 => {
+                        e.replace_all(q, opts, rep);
+                    }
+                    1 => {
+                        let m = e.document().find_all(q, opts);
+                        if !m.is_empty() {
+                            let t = m[r.below(m.len())];
+                            e.replace_range(t, rep);
+                        }
+                    }
+                    _ => {
+                        let t = random_range(r, e.document());
                         e.replace_range(t, rep);
                     }
                 }
                 "replace".into()
             }
-            81..=86 => {
-                e.undo();
-                self.depth = 0;
-                "undo".into()
-            }
-            87..=89 => {
-                e.redo();
-                self.depth = 0;
-                "redo".into()
-            }
-            90..=91 => {
-                e.break_undo_group();
-                "break".into()
-            }
-            92 => {
-                if self.depth < 2 {
-                    e.begin_undo_group();
-                    self.depth += 1;
-                }
-                "begin group".into()
-            }
-            93 => {
-                if self.depth > 0 {
-                    e.end_undo_group();
-                    self.depth -= 1;
-                }
-                "end group".into()
-            }
-            94 => {
+            81 => {
                 e.set_options(EditorOptions {
                     input_rules: r.chance(70),
                     smart_punctuation: r.chance(70),
                 });
                 "options".into()
             }
-            95 => {
-                let p = random_position(r, e.document());
-                let q = random_position(r, e.document());
-                e.delete_range(TextRange::new(p, q));
+            82 => {
+                let t = random_range(r, e.document());
+                e.delete_range(t);
                 "delete range".into()
             }
-            100..=111 => {
+            83 => {
+                // An IME composition: marked text replaced a few times, then
+                // committed, as one undo step.
+                let at = e.selection().head;
+                e.begin_undo_group();
+                let mut range = TextRange::empty(at);
+                for s in ["k", "ka", "\u{304B}"] {
+                    e.replace_range(range, s);
+                    let end = e.selection().head;
+                    range = TextRange::new(Position::new(end.block, end.offset - s.len().min(end.offset)), end);
+                }
+                e.end_undo_group();
+                "ime".into()
+            }
+            84 => {
+                let d = e.document().clone();
+                let mut s = d.settings().clone();
+                s.page_view = !s.page_view;
+                s.typography.base_size = *r.pick(&[17.0, 1.0, 1e9]);
+                if r.chance(50) {
+                    e.set_page_view(!d.settings().page_view);
+                } else {
+                    e.set_settings(s);
+                }
+                return ("settings".into(), Undoable::No);
+            }
+            85..=96 => {
                 // Grow the document: several pieces, sometimes multi-line.
                 let mut s = String::new();
                 for _ in 0..2 + r.below(8) {
@@ -433,50 +528,123 @@ impl Runner {
                 e.paste_plain_text(&s);
                 format!("grow {s:?}")
             }
-            112..=115 => {
+            97..=100 => {
                 // Comment a random word.
                 let p = random_position(r, e.document());
                 e.select_word_at(p);
                 self.now += 1;
                 e.add_comment("word note", "me", self.now);
                 e.move_caret(Movement::Right, false);
-                "comment word".into()
+                return ("comment word".into(), Undoable::Compound);
+            }
+            101..=103 => {
+                // Toggle a style on a collapsed caret, then type: pending attrs.
+                let s = *r.pick(&InlineStyle::ALL);
+                e.toggle_style(s);
+                if r.chance(30) {
+                    let id = self.comment_id();
+                    self.e.delete_comment(id);
+                }
+                let t = *self.r.pick(TYPED);
+                self.e.insert_text(t);
+                "pending then type".into()
             }
             _ => {
-                let d = e.document();
-                let _ = d.title();
-                let _ = d.stats();
-                let _ = e.selection_stats();
-                let _ = e.format_state();
-                let _ = d.numbered_ordinals(0..d.block_count());
-                let p = random_position(r, d);
-                let _ = d.link_at(p);
-                let _ = d.text_in(TextRange::new(p, d.end()));
-                let s = e.stats();
-                assert_eq!(s, e.document().stats());
-                // Cross-checks between related queries.
-                let d = e.document();
-                let all = d.numbered_ordinals(0..d.block_count());
-                for (i, o) in all.iter().enumerate() {
-                    assert_eq!(*o, d.numbered_ordinal(i));
-                }
-                let flat = d.plain_text();
-                let p = d.clamp_position(random_position(r, d));
-                assert_eq!(d.position_from_flat(d.flat_offset(p)), p);
-                assert_eq!(&flat[d.flat_offset(Position::ZERO)..d.flat_offset(p)], d.text_in(TextRange::new(Position::ZERO, p)));
-                for m in d.find_all("a", SearchOptions::default()) {
-                    assert!(d.is_valid_position(m.start) && d.is_valid_position(m.end));
-                    assert_eq!(d.text_in(m).to_lowercase(), "a");
-                }
-                for (id, range) in d.all_comment_ranges() {
-                    assert!(d.comment(id).is_some());
-                    assert!(!d.is_orphaned(id));
-                    assert!(!range.is_empty());
-                }
-                for t in d.comments() {
-                    assert_eq!(d.is_orphaned(t.id), d.comment_ranges(t.id).is_empty());
-                }
+                self.queries();
                 "queries".into()
+            }
+        };
+        (name, Undoable::Yes)
+    }
+
+    /// Read-only queries with cross-checks between related answers.
+    fn queries(&mut self) {
+        let r = &mut self.r;
+        let e = &mut self.e;
+        let d = e.document();
+        let _ = d.title();
+        let _ = e.selection_stats();
+        let _ = e.format_state();
+        let _ = e.current_attrs();
+        let p = random_position(r, d);
+        let _ = d.link_at(p);
+        let _ = d.text_in(TextRange::new(p, d.end()));
+        let _ = d.moved(p, Movement::WordLeft);
+        let _ = d.find_in_block(p.block, "a", SearchOptions::default());
+        let s = e.stats();
+        assert_eq!(s, e.document().stats());
+        let d = e.document();
+        let all = d.numbered_ordinals(0..d.block_count());
+        for (i, o) in all.iter().enumerate() {
+            assert_eq!(*o, d.numbered_ordinal(i));
+        }
+        let from = r.below(d.block_count() + 1);
+        assert_eq!(d.numbered_ordinals(from..d.block_count() + 3), all[from.min(all.len())..].to_vec());
+        let flat = d.plain_text();
+        let p = d.clamp_position(random_position(r, d));
+        assert_eq!(d.position_from_flat(d.flat_offset(p)), p);
+        assert_eq!(
+            &flat[d.flat_offset(Position::ZERO)..d.flat_offset(p)],
+            d.text_in(TextRange::new(Position::ZERO, p))
+        );
+        let b = d.block(p.block).unwrap();
+        let u = b.offset_to_utf16(p.offset);
+        assert_eq!(b.utf16_to_offset(u), p.offset);
+        for m in d.find_all("a", SearchOptions::default()) {
+            assert!(d.is_valid_position(m.start) && d.is_valid_position(m.end));
+            assert_eq!(d.text_in(m).to_lowercase(), "a");
+        }
+        for (id, range) in d.all_comment_ranges() {
+            assert!(d.comment(id).is_some());
+            assert!(!d.is_orphaned(id));
+            assert!(!range.is_empty());
+        }
+        for t in d.comments() {
+            assert_eq!(d.is_orphaned(t.id), d.comment_ranges(t.id).is_empty());
+        }
+        let order = d.threads_in_order();
+        assert_eq!(order.len(), d.comment_count());
+    }
+
+    fn step(&mut self) -> String {
+        let op = self.r.below(100);
+        match op {
+            0..=5 => {
+                self.e.undo();
+                self.depth = 0;
+                "undo".into()
+            }
+            6..=8 => {
+                self.e.redo();
+                self.depth = 0;
+                "redo".into()
+            }
+            9..=10 => {
+                self.e.break_undo_group();
+                "break".into()
+            }
+            11 => {
+                if self.depth < 2 {
+                    self.e.begin_undo_group();
+                    self.depth += 1;
+                }
+                "begin group".into()
+            }
+            12 => {
+                if self.depth > 0 {
+                    self.e.end_undo_group();
+                    self.depth -= 1;
+                }
+                "end group".into()
+            }
+            _ => {
+                let (name, undoable) = self.command();
+                if undoable == Undoable::No {
+                    // Keep the undo-everything check meaningful: put the
+                    // settings back (not undoable by design).
+                    self.e.set_settings(writer_core::DocumentSettings::default());
+                }
+                name
             }
         }
     }
@@ -494,7 +662,7 @@ impl Runner {
     }
 }
 
-fn run_seed(seed: u64, steps: usize) {
+fn runner(seed: u64) -> (Runner, Document) {
     let mut r = Rng::new(seed);
     let original = random_document(&mut r);
     original.check_invariants().unwrap();
@@ -502,7 +670,7 @@ fn run_seed(seed: u64, steps: usize) {
     assert_eq!(Document::from_json(&original.to_json()).unwrap(), original);
     let mut e = EditorState::new(original.clone());
     e.set_undo_limit(usize::MAX);
-    let mut run = Runner {
+    let run = Runner {
         r,
         e,
         clipboard: Vec::new(),
@@ -510,6 +678,11 @@ fn run_seed(seed: u64, steps: usize) {
         versions: HashMap::new(),
         now: 0,
     };
+    (run, original)
+}
+
+fn run_seed(seed: u64, steps: usize) {
+    let (mut run, original) = runner(seed);
     run.record_versions();
     let mut log: Vec<String> = Vec::new();
     for step in 0..steps {
@@ -532,6 +705,7 @@ fn run_seed(seed: u64, steps: usize) {
             }
             Some(c) => {
                 assert!(run.e.revision() > rev_before);
+                assert_eq!(c.revision, run.e.revision());
                 if let Some(s) = c.blocks {
                     assert_eq!(before.len() - s.old_len + s.new_len, after.len());
                     assert_eq!(before[..s.start], after[..s.start], "seed {seed} step {step}");
@@ -586,7 +760,7 @@ fn run_seed(seed: u64, steps: usize) {
 
 #[test]
 fn random_command_sequences() {
-    for seed in 1..=150 {
+    for seed in 1..=seeds(150) {
         run_seed(seed, 500);
     }
 }
@@ -595,6 +769,56 @@ fn random_command_sequences() {
 fn long_random_sequences() {
     run_seed(0xC0FFEE, 4000);
     run_seed(0xBADC0DE, 4000);
+}
+
+/// Every command, undone and redone on the spot, restores the document,
+/// the selection and the block stamps exactly.
+#[test]
+fn every_command_undoes_exactly() {
+    for seed in 1..=seeds(150) {
+        let (mut run, _) = runner(seed ^ 0x5EED);
+        for step in 0..300 {
+            run.e.break_undo_group();
+            let doc0 = run.e.document().clone();
+            let sel0 = run.e.selection();
+            let stamps0 = stamps(&doc0);
+            let depth0 = run.e.undo_depth();
+            let (what, undoable) = run.command();
+            run.e.check_invariants().unwrap_or_else(|err| panic!("seed {seed} step {step} {what}: {err}"));
+            if undoable == Undoable::No {
+                continue;
+            }
+            let doc1 = run.e.document().clone();
+            let sel1 = run.e.selection();
+            let stamps1 = stamps(&doc1);
+            let k = run.e.undo_depth() - depth0;
+            if doc1 != doc0 {
+                assert!(k >= 1, "seed {seed} step {step} {what}: change without an undo step");
+            }
+            if k == 0 || run.r.chance(30) {
+                continue;
+            }
+            for _ in 0..k {
+                assert!(run.e.undo());
+                run.e.check_invariants().unwrap();
+            }
+            let ctx = format!("seed {seed} step {step} {what} ({k} undo steps)");
+            assert_eq!(run.e.document(), &doc0, "{ctx}: undo document");
+            if undoable == Undoable::Yes {
+                assert_eq!(run.e.selection(), run.e.document().clamp_selection(sel0), "{ctx}: undo selection");
+            }
+            assert_eq!(stamps(run.e.document()), stamps0, "{ctx}: undo stamps");
+            for _ in 0..k {
+                assert!(run.e.redo());
+                run.e.check_invariants().unwrap();
+            }
+            assert_eq!(run.e.document(), &doc1, "{ctx}: redo document");
+            if undoable == Undoable::Yes {
+                assert_eq!(run.e.selection(), sel1, "{ctx}: redo selection");
+            }
+            assert_eq!(stamps(run.e.document()), stamps1, "{ctx}: redo stamps");
+        }
+    }
 }
 
 #[test]
@@ -608,13 +832,15 @@ fn random_documents_round_trip() {
         back.check_invariants().unwrap();
         let pretty: Document = serde_json::from_str(&d.to_json_pretty()).unwrap();
         assert_eq!(pretty, d);
+        // A second round trip is byte-identical (stable output).
+        assert_eq!(back.to_json(), json);
     }
 }
 
 #[test]
 fn corrupted_json_never_panics() {
     let mut r = Rng::new(7);
-    for _ in 0..300 {
+    for _ in 0..2000 {
         let d = random_document(&mut r);
         let mut json = d.to_json().into_bytes();
         // Flip, delete or duplicate random bytes.
@@ -624,7 +850,7 @@ fn corrupted_json_never_panics() {
             }
             let i = r.below(json.len());
             match r.below(3) {
-                0 => json[i] = *r.pick(b"0123456789{}[]\",:-tfn \\"),
+                0 => json[i] = *r.pick(b"0123456789{}[]\",:-tfn \\e.E"),
                 1 => {
                     json.remove(i);
                 }
@@ -637,7 +863,19 @@ fn corrupted_json_never_panics() {
         let s = String::from_utf8_lossy(&json);
         if let Ok(doc) = Document::from_json(&s) {
             doc.check_invariants().unwrap();
+            // A repaired document is editable and round-trips.
+            let back = Document::from_json(&doc.to_json()).unwrap();
+            assert_eq!(back, doc);
+            let mut e = EditorState::new(doc);
+            e.select_all();
+            e.toggle_bold();
+            e.insert_text("x");
+            e.check_invariants().unwrap();
         }
-        let _ = Fragment::from_json(&s);
+        if let Ok(f) = Fragment::from_json(&s) {
+            let mut e = EditorState::new(Document::new());
+            e.paste(&f);
+            e.check_invariants().unwrap();
+        }
     }
 }

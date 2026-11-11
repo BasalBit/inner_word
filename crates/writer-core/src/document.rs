@@ -6,7 +6,7 @@ use std::ops::Range;
 use crate::attrs::CommentId;
 use crate::block::{Block, BlockId, BlockKind};
 use crate::comments::CommentThread;
-use crate::position::{Position, TextRange};
+use crate::position::{Position, Selection, TextRange};
 use crate::settings::DocumentSettings;
 use crate::text;
 
@@ -209,6 +209,14 @@ impl Document {
             text::floor_grapheme_boundary(&b.text, pos.offset)
         };
         Position::new(block, offset)
+    }
+
+    /// Clamps both ends of `selection` (see [`Document::clamp_position`]).
+    pub fn clamp_selection(&self, selection: Selection) -> Selection {
+        Selection::new(
+            self.clamp_position(selection.anchor),
+            self.clamp_position(selection.head),
+        )
     }
 
     /// Whether `pos` is a valid caret position (see [`Document::clamp_position`]).

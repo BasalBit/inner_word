@@ -81,7 +81,8 @@ fn word_under_the_caret() {
             "*",
             "don\u{2019}t x |don\u{2019}t",
         ),
-        c("|Foo foo Foo", "*", "Foo foo |Foo"),
+        // `*` ignores case whatever the word looks like (no smartcase).
+        c("|Foo foo Foo", "*", "Foo |foo Foo"),
         c("|foo bar foo", "*N", "|foo bar foo"),
         c("fo|o bar foo", "#", "foo bar |foo").message("search hit TOP"),
         c("foo bar fo|o", "#", "|foo bar foo"),

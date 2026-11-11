@@ -538,12 +538,7 @@ impl Vim {
             self.hint_undo(cx, at);
         }
         let ok = self.apply_operator(cx, op, target, info);
-        // After `d$` / `D` Vim still aims for the ends of lines.
-        self.goal = if std::mem::take(&mut self.op_to_eol) && op == Operator::Delete {
-            Some(GoalColumn::EndOfRow)
-        } else {
-            None
-        };
+        self.goal = None;
         if ok {
             self.finish_command(cx, op != Operator::Yank);
         } else {
@@ -615,7 +610,13 @@ impl Vim {
             // moves the marks of deleted lines to the line that takes
             // their place, keeping the columns).
             let doc = cx.ed.document();
-            let (pa, pc) = if lines {
+            let was_line_mode = self.last_visual.is_some_and(|v| v.line);
+            let (pa, pc) = if lines && was_line_mode {
+                (
+                    Position::new(s.block, 0),
+                    Position::new(s.block, usize::MAX),
+                )
+            } else if lines {
                 (
                     Position::new(s.block, a.offset),
                     Position::new(s.block, c.offset),
@@ -630,7 +631,13 @@ impl Vim {
             let (lo, hi) = (pa.min(pc), pa.max(pc));
             if s.block < doc.block_count() {
                 self.marks.insert('<', Mark::at(doc, lo));
-                self.marks.insert('>', Mark::at(doc, hi));
+                self.marks.insert(
+                    '>',
+                    Mark {
+                        offset: hi.offset,
+                        ..Mark::at(doc, hi)
+                    },
+                );
             } else {
                 self.marks.remove(&'<');
                 self.marks.remove(&'>');
@@ -715,8 +722,9 @@ impl Vim {
                 Target::Lines(_) if op == Operator::Yank && m == Motion::LineHere => origin,
                 Target::Lines(_) => origin.min(out.pos),
             };
-            self.op_to_eol = m == Motion::LineEnd;
+            self.op_inclusive = out.kind == MotionKind::Inclusive || m == Motion::LineEnd;
             self.run_operator(cx, op, target, yank_caret, out.big, true);
+            self.op_inclusive = false;
             return;
         }
         if out.jump {
@@ -990,7 +998,10 @@ impl Vim {
                 Tok::Ch('u') => self.operator_key(cx, Operator::Lower),
                 Tok::Ch('U') => self.operator_key(cx, Operator::Upper),
                 Tok::Ch('~') => self.operator_key(cx, Operator::ToggleCase),
-                Tok::Ch('v') if op.is_none() => {
+                Tok::Ch('v') => {
+                    // (With an operator pending Vim drops the operator and
+                    // selects.)
+                    self.pending.operator = None;
                     self.reselect_visual(cx);
                     self.finish_command(cx, false);
                 }
@@ -1142,7 +1153,9 @@ impl Vim {
             };
             // (A delete over several lines with only blanks around it
             // takes the lines, as with a motion.)
+            self.op_inclusive = true;
             self.run_operator(cx, op, target, start, false, true);
+            self.op_inclusive = false;
             return;
         }
         // Visual mode: select the object.
@@ -1158,7 +1171,15 @@ impl Vim {
                     self.base = Base::Visual { line: false };
                 }
             }
-            Found::Range(r) => {
+            Found::Range(mut r) => {
+                if r.is_empty()
+                    && matches!(c, '"' | '\'' | '`')
+                    && let (Some(s), Some(e)) =
+                        (buf::prev_cell(doc, r.start), buf::next_cell(doc, r.end))
+                {
+                    // Nothing between the quotes: Vim selects the quotes.
+                    r = TextRange::new(s, e);
+                }
                 if r.is_empty() {
                     self.fail();
                     return;
@@ -1450,8 +1471,9 @@ impl Vim {
                     Operator::Change
                 };
                 // `D` is `d$`, with its rule for whole lines.
-                self.op_to_eol = true;
+                self.op_inclusive = true;
                 self.run_operator(cx, op, target, cur, false, true);
+                self.op_inclusive = false;
             }
             Tok::Ch('Y') => {
                 let Some(lines) = self.lines_from_cursor(cx, cur, n) else {
@@ -1651,6 +1673,20 @@ impl Vim {
         let c = cx.ed.selection().head;
         self.hint_undo(cx, c);
         self.put(cx, &content, before, n, caret_after);
+        if reg == Some('.') && !caret_after {
+            // The last inserted text is typed again: the caret ends on its
+            // last character (at the start of the line after a line break).
+            let doc = cx.ed.document();
+            if let Some(end) = self.mark_position(cx, ']') {
+                let after = buf::next_cell(doc, end).unwrap_or(end);
+                let p = if buf::is_newline(doc, end) {
+                    after
+                } else {
+                    end
+                };
+                self.set_normal_caret(cx, p);
+            }
+        }
         self.goal = None;
         self.finish_command(cx, true);
     }

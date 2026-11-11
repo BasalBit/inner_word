@@ -173,7 +173,16 @@ impl Vim {
         if !assume_moved && head == before {
             return;
         }
+        // What was typed so far is what `.` repeats, until something is
+        // typed at the new place; that then repeats as a plain insert.
+        let replace = s.replace;
+        let committed = s.record.take().and_then(|mut rec| {
+            let keep_previous = s.resumed && s.actions.is_empty();
+            rec.insert = std::mem::take(&mut s.actions);
+            (!keep_previous).then_some(rec)
+        });
         s.interrupted();
+        s.resumed = true;
         if !assume_moved {
             s.start = head;
         }
@@ -181,6 +190,20 @@ impl Vim {
             // What was typed so far is one undo step, the rest another.
             cx.ed.end_undo_group();
             cx.ed.begin_undo_group();
+        }
+        if !self.replaying {
+            if let Some(rec) = committed {
+                self.last_change = Some(rec);
+            }
+            if let Some(s) = self.insert.as_mut() {
+                s.record = Some(ChangeRecord {
+                    register: None,
+                    count: None,
+                    keys: vec![Key::char(if replace { 'R' } else { 'i' })],
+                    visual: None,
+                    insert: Vec::new(),
+                });
+            }
         }
     }
 
@@ -235,21 +258,30 @@ impl Vim {
                     true
                 }
                 'w' => {
+                    let before = cx.ed.revision();
                     self.insert_delete_word(cx);
-                    self.record_insert(InsertAction::DeleteWord);
+                    if cx.ed.revision() != before {
+                        self.record_insert(InsertAction::DeleteWord);
+                    }
                     true
                 }
                 'u' => {
+                    let before = cx.ed.revision();
                     self.insert_delete_to_line_start(cx);
-                    self.record_insert(InsertAction::DeleteToLineStart);
+                    if cx.ed.revision() != before {
+                        self.record_insert(InsertAction::DeleteToLineStart);
+                    }
                     true
                 }
                 'h' => {
                     if replace {
                         self.replace_backspace(cx);
                     } else {
+                        let before = cx.ed.revision();
                         cx.ed.backspace();
-                        self.record_insert(InsertAction::Backspace);
+                        if cx.ed.revision() != before {
+                            self.record_insert(InsertAction::Backspace);
+                        }
                         self.insert_start_follows(cx);
                     }
                     true
@@ -782,7 +814,10 @@ impl Vim {
             .eol_line
             .and_then(|m| m.resolve(doc))
             .is_some_and(|p| p == Position::new(head.block, ls));
-        if on_last && (same_line || self.goal == Some(GoalColumn::EndOfRow)) {
+        // (A command such as `D` leaves the caret after the end of what is
+        // left of the line.)
+        let left_past_end = self.clamped_from_eol == Some(head);
+        if on_last && (same_line || left_past_end || self.goal == Some(GoalColumn::EndOfRow)) {
             cx.ed.set_caret(Position::new(head.block, le));
         }
         self.begin_insert(cx, r.replace, 1, None, false);

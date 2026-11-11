@@ -225,24 +225,31 @@ impl Vim {
                     Some(super::Operator::Delete | super::Operator::Change)
                 );
                 let mut p = origin;
+                // The motion stepped onto the line break of a line with
+                // text: the range is then taken as it is; otherwise the
+                // usual rules for a motion ending in column one apply.
+                let mut over_break = false;
                 for _ in 0..n {
                     let Some(mut q) = buf::prev_cell(doc, p) else {
                         break;
                     };
-                    // Skip the newline cell of a non-empty line.
-                    if !takes_break && buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
-                        q = buf::prev_cell(doc, q).unwrap_or(q);
+                    if buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
+                        if takes_break {
+                            over_break = true;
+                        } else {
+                            // Skip the newline cell of a non-empty line.
+                            q = buf::prev_cell(doc, q).unwrap_or(q);
+                        }
                     }
                     p = q;
                 }
-                if p == origin {
+                // (With an operator the start of the document is an empty
+                // motion, not an error.)
+                if p == origin && !op_pending {
                     return None;
                 }
                 MotionOut {
-                    // On the line break of a line with text the range is
-                    // taken as it is; from an empty line the usual rules
-                    // for a motion ending in column one apply.
-                    exact: takes_break && buf::is_newline(doc, p) && !buf::is_empty_line(doc, p),
+                    exact: over_break,
                     ..out(p, Exclusive)
                 }
             }
@@ -260,7 +267,7 @@ impl Vim {
                     }
                     p = q;
                 }
-                if p == origin {
+                if p == origin && !op_pending {
                     return None;
                 }
                 out(p, Exclusive)

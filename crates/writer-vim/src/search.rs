@@ -22,6 +22,11 @@ use crate::effect::SearchPattern;
 pub(crate) fn parse_pattern(raw: &str) -> Option<SearchPattern> {
     let mut body = raw;
     let mut whole_word = false;
+    let mut force_case: Option<bool> = None;
+    if let Some(rest) = body.strip_prefix("\\c") {
+        force_case = Some(false);
+        body = rest;
+    }
     if let Some(inner) = body.strip_prefix("\\<")
         && let Some(inner) = inner.strip_suffix("\\>")
     {
@@ -29,7 +34,6 @@ pub(crate) fn parse_pattern(raw: &str) -> Option<SearchPattern> {
         whole_word = true;
     }
     let mut text = String::with_capacity(body.len());
-    let mut force_case: Option<bool> = None;
     let mut chars = body.chars();
     while let Some(c) = chars.next() {
         if c != '\\' {
@@ -58,12 +62,14 @@ pub(crate) fn parse_pattern(raw: &str) -> Option<SearchPattern> {
     })
 }
 
-/// A pattern that finds `text` literally (used by `*` and `#`).
+/// A pattern that finds `text` literally (used by `*` and `#`). Case is
+/// ignored whatever the word looks like: Vim does not apply `smartcase` to
+/// `*` and `#`.
 pub(crate) fn literal_pattern(text: &str, whole_word: bool) -> SearchPattern {
     SearchPattern {
         text: text.to_string(),
         options: SearchOptions {
-            case_sensitive: text.chars().any(char::is_uppercase),
+            case_sensitive: false,
             whole_word,
         },
     }
@@ -72,6 +78,10 @@ pub(crate) fn literal_pattern(text: &str, whole_word: bool) -> SearchPattern {
 /// How a literal is written so that [`parse_pattern`] reads it back.
 pub(crate) fn escape_literal(text: &str, whole_word: bool) -> String {
     let mut out = String::new();
+    if text.chars().any(char::is_uppercase) {
+        // Keep the pattern case-insensitive when it is read back.
+        out.push_str("\\c");
+    }
     if whole_word {
         out.push_str("\\<");
     }

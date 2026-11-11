@@ -342,7 +342,17 @@ impl Vim {
             }
         };
         match target {
-            Target::Chars(_) => {
+            Target::Chars(r) => {
+                if r.is_empty()
+                    && std::mem::take(&mut self.op_inclusive)
+                    && buf::is_empty_line(cx.ed.document(), r.start)
+                {
+                    // `C` or `ciw` on an empty line: nothing goes, and the
+                    // registers hold that nothing.
+                    let content = self.target_content(cx, target);
+                    self.registers
+                        .delete(info.register, content, true, false, cx.host);
+                }
                 let p = self.delete_target(cx, target, info);
                 cx.ed.set_caret(p);
             }
@@ -1052,7 +1062,8 @@ impl Vim {
                 self.set_normal_caret(cx, Position::new(*block, o.min(le)));
             }
         }
-        if !keep {
+        let nothing_replaced = matches!(&target, Target::Chars(r) if r.is_empty());
+        if !keep && !nothing_replaced {
             let small = match &target {
                 Target::Chars(r) => r.start.block == r.end.block,
                 Target::Lines(_) => false,

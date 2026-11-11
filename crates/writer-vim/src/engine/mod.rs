@@ -277,8 +277,14 @@ pub struct Vim {
     /// The Visual-mode delete being executed fills register 1 whatever its
     /// size (backspace).
     pub(crate) visual_big: bool,
-    /// The operator being executed got its range from `$`.
-    pub(crate) op_to_eol: bool,
+    /// The operator being executed got its range from an inclusive motion
+    /// or a text object (`c$`, `ciw`): changing nothing on an empty line
+    /// then still empties the registers, as in Vim.
+    pub(crate) op_inclusive: bool,
+    /// The command being executed left the caret after the last character
+    /// of a line, from where it was put back onto that character (this
+    /// position). After `ctrl-o` typing resumes after the character.
+    pub(crate) clamped_from_eol: Option<Position>,
     /// The document revision when the command being typed started.
     pub(crate) command_revision: u64,
     /// The document revision and selection the engine last left or saw:
@@ -339,7 +345,8 @@ impl Vim {
             redo_carets: Vec::new(),
             keep_redo_carets: false,
             visual_big: false,
-            op_to_eol: false,
+            clamped_from_eol: None,
+            op_inclusive: false,
             command_revision: 0,
             seen: None,
             expect_host: false,
@@ -882,7 +889,8 @@ impl Vim {
 
     /// Places a collapsed caret for Normal mode.
     pub(crate) fn set_normal_caret(&mut self, cx: &mut Cx, p: Position) {
-        let p = buf::clamp_normal(cx.ed.document(), p);
-        cx.ed.set_selection(Selection::caret(p));
+        let on = buf::clamp_normal(cx.ed.document(), p);
+        self.clamped_from_eol = (on != cx.ed.document().clamp_position(p)).then_some(on);
+        cx.ed.set_selection(Selection::caret(on));
     }
 }

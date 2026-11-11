@@ -510,9 +510,11 @@ impl Vim {
                     None => (r.start, r.len().max(2)),
                 };
                 let at = Position::new(first, 0);
-                self.hint_undo(cx, at);
+                // Vim goes to the first line and keeps the column.
+                self.hint_undo(cx, Position::new(first, origin.offset));
+                let has_next = first + 1 < cx.ed.document().block_count();
                 // `:j!` adds and removes no spaces.
-                if self.join_lines(cx, at, count, !parsed.bang) {
+                if has_next && self.join_lines(cx, at, count, !parsed.bang) {
                     // The cursor goes to the first non-blank of the line.
                     let doc = cx.ed.document();
                     let p = buf::unit_first_non_blank(doc, buf::unit_at(doc, at));

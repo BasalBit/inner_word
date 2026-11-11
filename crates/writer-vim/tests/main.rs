@@ -14,6 +14,7 @@ mod motions;
 mod operators;
 mod registers;
 mod repeat;
+mod review;
 mod rich;
 mod scroll;
 mod search;

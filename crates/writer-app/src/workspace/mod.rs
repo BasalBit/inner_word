@@ -32,6 +32,14 @@
 //! | Settings | [`Workspace::settings`], [`crate::WorkspaceEvent::SettingsChanged`], [`crate::settings::keys`] |
 //! | Modals and toasts | [`Workspace::modal_layer`], [`Workspace::toast_layer`], [`Workspace::show_toast`] |
 //!
+//! # Saving
+//!
+//! The session (`session.rs`) marks the document dirty on every edit and
+//! saves it after a pause. For a library on disk the save is written by a
+//! background thread (`saver.rs`): the main thread only copies the
+//! document. [`Workspace::flush`] is the synchronous, complete save used
+//! when another document is opened, the window closes or the app quits.
+//!
 //! # Who takes a key
 //!
 //! With focus in the text: an open insert menu first (it intercepts at the
@@ -988,7 +996,7 @@ impl Workspace {
         // `press_and_hold`): say so when it was made too late for this one.
         if !noted && crate::press_and_hold::state(cx).restart_note_due() {
             let message = if on {
-                "Held keys repeat while typing after The Writer is restarted."
+                "Held keys repeat instead of offering accents after a restart."
             } else {
                 "The accent menu on held keys returns after a restart."
             };

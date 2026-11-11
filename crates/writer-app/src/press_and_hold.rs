@@ -20,10 +20,13 @@
 //!   the next launch. [`relaunch_needed`] is then true and the settings
 //!   say so.
 //!
-//! In Normal and Visual mode a held key repeats either way: Vim takes the
-//! key before the text input system sees it, so the accent menu never
-//! starts. The default decides what a held letter does where text is typed
-//! (Insert mode, the command palette, a rename field).
+//! In Normal and Visual mode a held key should repeat either way: GPUI
+//! gives a printable key to the key interceptors first (`handle_key_event`
+//! in its macOS window code), Vim takes it there, and the text input
+//! system, which is what starts the accent menu, never sees it. This
+//! follows from reading that code; it was not tried on a keyboard. The
+//! default decides what a held letter does where text is typed (Insert
+//! mode, the command palette, a rename field).
 //!
 //! # Who writes the default
 //!

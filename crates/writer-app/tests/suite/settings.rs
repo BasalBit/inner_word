@@ -513,8 +513,12 @@ fn held_keys_follow_vim_mode_from_the_next_launch(cx: &mut TestAppContext) {
     assert_eq!(state(vcx).repeats_now(), Some(false));
     assert!(state(vcx).restart_note_due());
     assert_eq!(toasts(vcx).len(), 1);
-    assert!(toasts(vcx)[0].contains("restarted"), "{:?}", toasts(vcx));
-    assert!(vim_text(vcx).contains("Restart The Writer to make held keys repeat"));
+    assert!(
+        toasts(vcx)[0].contains("after a restart"),
+        "{:?}",
+        toasts(vcx)
+    );
+    assert!(vim_text(vcx).contains("Restart The Writer for held keys to repeat"));
 
     // Off again before any relaunch: back to what this launch does anyway.
     vcx.simulate_keystrokes("cmd-alt-v");

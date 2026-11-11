@@ -17,13 +17,14 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, settings, status bar, autosave, export flow. Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, menu bar. Mounts everything above. |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
 Dependency direction: `app → {editor-tools, vim-mode, comments, library, export}`,
 `{editor-tools, vim-mode, comments} → editor → {ui, core}`, `vim-mode → vim → core`,
-`library → {store, ui}`, `export → core`. Never the reverse.
+`library → {store, ui}`, `export → core`. Never the reverse. Every internal crate has an
+entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
 
 ## Build and test
 
@@ -52,13 +53,35 @@ THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/som
 ./target/debug/the-writer
 ```
 
+Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `action:<name>`, `resize:<w>x<h>`,
+`theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one line: document, save
+state, what the last save cost, focus, modal, Vim, tool, comments, status bar), `dump`,
+`log:<text>`, `quit`, and for measuring `book:<blocks>` (creates and opens a generated
+document), `savecost[:<rounds>]` (every part of a synchronous save, timed) and
+`limitcost[:<rounds>]` (the character-limit count). Useful lines: open a document
+`keys:cmd-p; type:chap 2; keys:enter`; a palette command `keys:cmd-shift-p; type:version
+history; keys:enter`; the settings of the open document `keys:cmd-shift-p; type:document
+settings; keys:enter`.
+
 A scripted run stays in the background and draws its own frames, so it works while the
 window is covered. Do not script anything that writes the system clipboard (copy, cut,
-"Copy as Markdown"): it is the user's clipboard.
+"Copy as Markdown"): it is the user's clipboard. A scripted run does not write user defaults
+either (the accent-menu default below) unless `THE_WRITER_USER_DEFAULTS=1` is set. The window
+manager on this machine sometimes tiles the window and then ignores `resize:`; check with
+`info`.
+
+Measure in a release build (`cargo build --release -p writer-app`, then
+`./target/release/the-writer` with the same variables). What an autosave of a book costs:
+
+```bash
+THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; savecost:7; type:a; wait:1600; state; quit"
+# savecost: the synchronous save, part by part (about 70 ms, the library write is 60 of them)
+# state:    last_save=[main 0.7 ms, background 90 ms, ...] for the autosave after "a"
+```
 
 The story test (`crates/writer-app/tests/suite/story.rs`) walks through the whole product
 headlessly; `tests/suite/keymap.rs` checks every key of the tables below against the
-assembled keymap.
+assembled keymap; `tests/suite/saving.rs` holds the rules of saving in the background.
 
 ## Working rules
 
@@ -99,6 +122,11 @@ assembled keymap.
 3. **One source of truth for shortcuts.** Bindings are registered through GPUI key bindings;
    the shortcuts overlay and palette hints are generated from that registry, not hand-written.
 4. **Never lose text.** Documents autosave (debounced) and on close/quit. No save button.
+   The autosave of a library on disk is written by a background thread through a second
+   connection, so a book does not stutter when it is saved; the flush on switching
+   documents, closing and quitting is synchronous and waits for a save in flight, and an
+   older copy is never written after a newer one (`crates/writer-app/src/workspace/saver.rs`).
+   The library keeps version snapshots; "Version history" in the palette brings one back.
 
 ## Document model in one paragraph
 
@@ -115,8 +143,16 @@ to text through span attributes so they move with edits.
 
 `opt` below is the option key; in GPUI keystroke strings it is spelled `alt`
 (`KeyBinding::new("cmd-alt-s", ..)`; `opt` does not parse). The shortcuts overlay (`cmd-/`)
-is generated from the keymap and lists everything, including the keys of the library, the
-comment list and the find bar that are not repeated here.
+is generated from the keymap and lists everything, grouped by where the keyboard has to be
+("Anywhere", "In the text", "In the find bar", "In the library", "In the comment list", ...),
+including the keys of the panels and overlays that are not repeated here.
+
+Without a key of their own, from the command palette: "Version history" (the snapshots of the
+open document with a preview; `up` / `down` choose, `space` scrolls the text, `enter`
+restores, after keeping the current text as a version) and "Document settings" (the settings
+modal at its "This document" section: page view, paper including a custom size, orientation,
+margins, font, text size, line height, paragraph spacing; lengths are typed, `20mm`, `0.75in`).
+In the settings `up` / `down` move, `left` / `right` change, `space` switches.
 
 Global (work anywhere in the window):
 
@@ -184,6 +220,16 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   a field (format menu, link, font, find bar) and modals have the keyboard themselves.
 - **Vim mode**: `:w` saves at once, `:q` closes the document (the window stays), any other
   ex name is looked up among the palette's commands (`:togglepageview`, `:export`).
+- **Held keys with Vim mode on** repeat instead of opening the macOS accent menu: the app
+  stores `ApplePressAndHoldEnabled = false` in its own user defaults while Vim mode is on
+  and removes it when it is off (`crates/writer-app/src/press_and_hold.rs`). macOS reads
+  that default once per launch, so a change made while the app runs acts from the next
+  launch; the settings say so. In Normal mode a held key should repeat either way, because
+  Vim takes the key before the text input system sees it (read from GPUI's key path, not
+  tried on a keyboard).
+- **The Edit menu** (undo, redo, cut, copy, paste, select all) carries the editor's actions.
+  The workspace turns them into the text field's own when a field has the keyboard, so the
+  menu works in the palette, a rename field, the find bar and the settings.
 
 ## Design language
 

@@ -553,8 +553,8 @@ impl SettingsView {
                     "Modal editing with Vim keys. Held keys repeat instead of offering accents."
                         .into()
                 } else if state.repeats_next() == Some(true) {
-                    "Modal editing with Vim keys. Restart The Writer to make held keys repeat \
-                     while you type, too."
+                    "Modal editing with Vim keys. Restart The Writer for held keys to repeat \
+                     instead of offering accents."
                         .into()
                 } else {
                     "Modal editing with Vim keys. Restart The Writer to get the accent menu on \

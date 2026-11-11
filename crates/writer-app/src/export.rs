@@ -417,23 +417,33 @@ impl Workspace {
                 Err(_) => self.toast_error("Could not export: this format is not text", cx),
             },
             ExportDestination::File => {
-                let directory = self.export_directory(cx);
-                let receiver = cx.prompt_for_new_path(&directory, Some(&prepared.file_name));
+                // A scripted run cannot drive the native save panel: it
+                // names the directory instead and the suggested file name
+                // is used as it is.
+                let scripted = crate::automation::export_directory();
+                let receiver = scripted.is_none().then(|| {
+                    let directory = self.export_directory(cx);
+                    cx.prompt_for_new_path(&directory, Some(&prepared.file_name))
+                });
                 cx.spawn_in(window, async move |this, cx| {
-                    let chosen = match receiver.await {
-                        Ok(Ok(Some(path))) => path,
-                        // Cancelled.
-                        Ok(Ok(None)) | Err(_) => return,
-                        Ok(Err(error)) => {
-                            this.update(cx, |this, cx| {
-                                this.toast_error(
-                                    format!("Could not open the save panel: {error}"),
-                                    cx,
-                                );
-                            })
-                            .ok();
-                            return;
-                        }
+                    let chosen = match (scripted, receiver) {
+                        (Some(directory), _) => directory.join(&prepared.file_name),
+                        (None, Some(receiver)) => match receiver.await {
+                            Ok(Ok(Some(path))) => path,
+                            // Cancelled.
+                            Ok(Ok(None)) | Err(_) => return,
+                            Ok(Err(error)) => {
+                                this.update(cx, |this, cx| {
+                                    this.toast_error(
+                                        format!("Could not open the save panel: {error}"),
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                                return;
+                            }
+                        },
+                        (None, None) => return,
                     };
                     let path = with_extension(chosen, prepared.format);
                     let bytes = prepared.bytes;

@@ -41,6 +41,16 @@
 //! `THE_WRITER_SEED_DEMO=1` (see [`crate::welcome`]) fills an empty library
 //! with a few folders and documents before the window opens.
 //!
+//! `THE_WRITER_EXPORT_DIR=<dir>`: file exports of a scripted run are written
+//! there under the suggested name, without the native save panel (which a
+//! script cannot drive).
+//!
+//! While the window is completely covered by other windows macOS stops
+//! GPUI's display link and nothing is drawn. The script therefore draws a
+//! frame itself after every keystroke and before every capture
+//! ([`crate::screenshot::force_frame`]), so a covered window behaves and
+//! looks as a visible one.
+//!
 //! There are no mouse steps: `Window::dispatch_event` is public in gpui 0.2.2
 //! but returns a crate-private type, so it cannot be called from outside gpui.
 //! Drive everything through the keyboard (which the product requires anyway).
@@ -69,6 +79,20 @@ pub const AUTOMATION_ENV: &str = "THE_WRITER_AUTOMATION";
 /// not, so the script never takes keyboard focus from the person at the
 /// machine (their typing would otherwise land in the app under test).
 pub const FOREGROUND_ENV: &str = "THE_WRITER_AUTOMATION_FOREGROUND";
+
+/// Environment variable: a directory that file exports of a scripted run
+/// are written to, under the suggested file name, instead of asking in the
+/// native save panel (which a script cannot drive). Only read while
+/// [`AUTOMATION_ENV`] is set.
+pub const EXPORT_DIR_ENV: &str = "THE_WRITER_EXPORT_DIR";
+
+/// The directory of [`EXPORT_DIR_ENV`], in a scripted run.
+pub fn export_directory() -> Option<PathBuf> {
+    std::env::var_os(AUTOMATION_ENV).filter(|script| !script.is_empty())?;
+    std::env::var_os(EXPORT_DIR_ENV)
+        .filter(|directory| !directory.is_empty())
+        .map(PathBuf::from)
+}
 
 /// Whether [`FOREGROUND_ENV`] asks for the app to come to the front.
 pub fn foreground_requested() -> bool {

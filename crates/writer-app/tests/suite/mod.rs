@@ -3,6 +3,7 @@
 
 mod commands;
 mod export;
+mod keymap;
 mod session;
 mod settings;
 mod shell;

@@ -255,6 +255,12 @@ pub fn humanize_action_name(name: &str) -> String {
     out
 }
 
+/// A title made from an action name, in the words the rest of the app
+/// uses: the code says "thread" where the interface says "comment".
+fn plain_words(title: &str) -> String {
+    title.replace(" thread", " comment")
+}
+
 /// Every shortcut, in the order the overlay lists them: by place, within a
 /// place by heading (the commands' categories in registration order, then
 /// the undescribed keys of the [`KEY_GROUPS`] namespaces).
@@ -313,7 +319,7 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
                 continue;
             };
             shortcuts.push(Shortcut {
-                title: humanize_action_name(action.name()).into(),
+                title: plain_words(&humanize_action_name(action.name())).into(),
                 category: category.into(),
                 place,
                 heading: place.heading(category).into(),

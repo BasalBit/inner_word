@@ -985,3 +985,67 @@ fn the_welcome_document_and_the_overlay_speak_of_the_mouse(cx: &mut TestAppConte
     assert!(title.contains("start of a line"), "{title}");
     assert_eq!(keys, "/");
 }
+
+#[gpui::test]
+fn tooltips_say_what_a_control_is_and_keep_out_of_the_way_of_its_menu(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Tip", "Some text here."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let rest = std::time::Duration::from_millis(800);
+
+    // Resting the pointer on an item of the status bar says what it is.
+    let item = bounds_of(MenuKind::Save.selector(), vcx);
+    vcx.simulate_mouse_move(item.center(), None, Modifiers::default());
+    vcx.executor().advance_clock(rest);
+    vcx.run_until_parked();
+    let before = vcx.debug_bounds("tooltip").expect("a tooltip is shown");
+
+    // A click opens the menu above the item. The pointer is still on the
+    // item; no tooltip comes back over the menu.
+    vcx.simulate_click(item.center(), Modifiers::default());
+    vcx.run_until_parked();
+    let menu = vcx.update(|window, cx| {
+        ContextMenu::current(window, cx)
+            .expect("the save menu is open")
+            .read(cx)
+            .bounds()
+            .expect("the menu is drawn")
+    });
+    assert!(menu.bottom() <= item.top(), "{menu:?} above {item:?}");
+    assert!(
+        before.intersects(&menu),
+        "the tooltip would have covered the menu: {before:?} over {menu:?}"
+    );
+    // (A tooltip is drawn where the pointer is when it comes up: one that
+    // came up now would be somewhere else than the one before.)
+    vcx.simulate_mouse_move(
+        item.center() + point(px(12.), px(0.)),
+        None,
+        Modifiers::default(),
+    );
+    vcx.executor().advance_clock(rest);
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.debug_bounds("tooltip"),
+        Some(before),
+        "a tooltip came up while the menu is open"
+    );
+
+    // With the menu closed the tooltip is back.
+    vcx.simulate_keystrokes("escape");
+    vcx.simulate_mouse_move(
+        item.center() + point(px(-12.), px(0.)),
+        None,
+        Modifiers::default(),
+    );
+    vcx.executor().advance_clock(rest);
+    vcx.run_until_parked();
+    assert_ne!(vcx.debug_bounds("tooltip"), Some(before));
+    let _ = workspace;
+}

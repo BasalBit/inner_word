@@ -257,7 +257,12 @@ impl Workspace {
         }
     }
 
-    fn render_titlebar(&mut self, sidebar_visible: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_titlebar(
+        &mut self,
+        sidebar_visible: bool,
+        tips: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let colors = cx.theme().colors;
         // Text that has scrolled under the title band is cut at its lower
         // edge: draw that edge then, so the title never seems to touch the
@@ -294,14 +299,14 @@ impl Workspace {
                     window.titlebar_double_click();
                 }
             })
-            .child(self.render_title(cx))
+            .child(self.render_title(tips, cx))
             .into_any_element()
     }
 
     /// The title of the open document, with its menu: a right-click on the
     /// title opens it, and so does the small chevron beside it (a
     /// right-click is not something one stumbles on).
-    fn render_title(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_title(&mut self, tips: bool, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         let title = div()
             .min_w_0()
@@ -328,7 +333,9 @@ impl Workspace {
                     .size(px(12.))
                     .color(colors.faint),
             )
-            .tooltip(Tooltip::text("Rename, export, versions, settings"))
+            .when(tips, |el| {
+                el.tooltip(Tooltip::text("Rename, export, versions, settings"))
+            })
             .on_mouse_down(MouseButton::Left, |_, window, cx| {
                 // The keyboard stays in the text; the band under the
                 // chevron does not take the press for a window drag.
@@ -507,11 +514,15 @@ impl Workspace {
     /// the pointer, says what it is in a tooltip, and opens its menu on a
     /// right-click (at the pointer). What a plain click does is the
     /// caller's: most open the same menu above the item.
+    ///
+    /// `tooltip` is `None` while a context menu is open: the pointer
+    /// rests on the item whose menu has just opened above it, and a
+    /// tooltip would come up over the menu.
     fn status_item(
         &self,
         kind: MenuKind,
         id: &'static str,
-        tooltip: &'static str,
+        tooltip: Option<&'static str>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let colors = cx.theme().colors;
@@ -528,7 +539,7 @@ impl Workspace {
             .whitespace_nowrap()
             .cursor_pointer()
             .hover(|style| style.bg(colors.hover).text_color(colors.ink))
-            .tooltip(Tooltip::text(tooltip))
+            .when_some(tooltip, |el, tooltip| el.tooltip(Tooltip::text(tooltip)))
             .child(self.anchors.track(kind))
             .on_mouse_down(
                 MouseButton::Right,
@@ -539,8 +550,9 @@ impl Workspace {
             )
     }
 
-    fn render_status_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_status_bar(&mut self, tips: bool, cx: &mut Context<Self>) -> AnyElement {
         let status = self.status_line(cx);
+        let tip = |text: &'static str| tips.then_some(text);
         let colors = cx.theme().colors;
         let weak = cx.weak_entity();
         let opens_menu = move |kind: MenuKind| {
@@ -561,7 +573,7 @@ impl Workspace {
             self.status_item(
                 MenuKind::Save,
                 "status-save",
-                "Saved as you write. Click to save now or see earlier versions",
+                tip("Saved as you write. Click to save now"),
                 cx,
             )
             .debug_selector(|| MenuKind::Save.selector().into())
@@ -591,7 +603,7 @@ impl Workspace {
             self.status_item(
                 MenuKind::Limit,
                 "status-limit",
-                "Characters as the network counts them. Click to change the limit",
+                tip("Counted as the network counts. Click to change"),
                 cx,
             )
             .debug_selector(|| MenuKind::Limit.selector().into())
@@ -607,7 +619,7 @@ impl Workspace {
             self.status_item(
                 MenuKind::Page,
                 "status-page",
-                "Page view. Click to go back to one column",
+                tip("Page view. Click for one column"),
                 cx,
             )
             .debug_selector(|| MenuKind::Page.selector().into())
@@ -626,7 +638,7 @@ impl Workspace {
             self.status_item(
                 MenuKind::Statistics,
                 "status-statistics",
-                "Click to choose what is counted here",
+                tip("Click to choose what is counted"),
                 cx,
             )
             .debug_selector(|| MenuKind::Statistics.selector().into())
@@ -796,9 +808,12 @@ impl Render for Workspace {
         self.toast_layer
             .update(cx, |layer, cx| layer.set_insets(insets, cx));
 
-        let titlebar = self.render_titlebar(layout.sidebar.is_some(), cx);
+        // No tooltips while a context menu is open (they would come up
+        // over it).
+        let tips = !writer_ui::ContextMenu::is_open(window, cx);
+        let titlebar = self.render_titlebar(layout.sidebar.is_some(), tips, cx);
         let editor_area = self.render_editor_area(cx);
-        let status_bar = self.render_status_bar(cx);
+        let status_bar = self.render_status_bar(tips, cx);
         let picker_close = self.render_picker_close(window, cx);
         let sidebar = layout.sidebar.map(|width| self.render_sidebar(width, cx));
         let resize_handle = layout

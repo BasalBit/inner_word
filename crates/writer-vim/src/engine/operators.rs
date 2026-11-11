@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use writer_core::{Block, BlockKind, Fragment, Position, TextRange};
+use writer_core::{Block, BlockKind, Fragment, InlineAttrs, InlineStyle, Position, TextRange};
 
 use crate::buf::{self, Lines};
 use crate::register::RegisterContent;
@@ -266,6 +266,20 @@ impl Vim {
     /// its kind, so `cc` on a heading or a list item keeps that structure.
     fn change_target(&mut self, cx: &mut Cx, target: &Target, info: OpInfo) {
         cx.ed.begin_undo_group();
+        // What is typed instead takes the formatting of the first changed
+        // character, as typing over a selection does in the editor.
+        let first = match target {
+            Target::Chars(r) => r.start,
+            Target::Lines(l) => l.start(),
+        };
+        let carry = {
+            let block = &cx.ed.document().blocks()[first.block];
+            if block.kind().is_code() {
+                None
+            } else {
+                block.attrs_at(first.offset).cloned()
+            }
+        };
         match target {
             Target::Chars(_) => {
                 let p = self.delete_target(cx, target, info);
@@ -315,7 +329,31 @@ impl Vim {
         }
         let c = cx.ed.selection().head;
         self.set_change_marks(cx, c, c);
+        if let Some(wanted) = carry {
+            Self::carry_format(cx, &wanted);
+        }
         self.begin_insert(cx, false, 1, None, true);
+    }
+
+    /// Makes the next typed text take the character formatting of `wanted`
+    /// (styles, highlight, colour, font). Links and comment anchors are
+    /// left to the editor's rule: they continue only inside themselves.
+    fn carry_format(cx: &mut Cx, wanted: &InlineAttrs) {
+        let now = cx.ed.current_attrs();
+        for style in InlineStyle::ALL {
+            if now.has_style(style) != wanted.has_style(style) {
+                cx.ed.toggle_style(style);
+            }
+        }
+        if now.highlight != wanted.highlight {
+            cx.ed.set_highlight(wanted.highlight);
+        }
+        if now.color != wanted.color {
+            cx.ed.set_text_color(wanted.color);
+        }
+        if now.font != wanted.font {
+            cx.ed.set_font_family(wanted.font.as_deref());
+        }
     }
 
     /// `>` and `<`: block indent for blocks, leading spaces for the lines

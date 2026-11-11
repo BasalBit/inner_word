@@ -268,14 +268,39 @@ impl Vim {
         }
         s.push_text(typed);
         if s.replace {
-            let n = text::grapheme_count(typed);
-            for _ in 0..n {
-                let over = Self::overwrite_one(cx);
-                if let Some(s) = self.insert.as_mut() {
-                    s.overwritten.push(over);
-                }
+            let over = Self::overwrite(cx, typed);
+            if let Some(s) = self.insert.as_mut() {
+                s.overwritten.extend(over);
             }
         }
+    }
+
+    /// Replace mode: makes the just typed `typed` overwrite what follows
+    /// the caret (never a line break). Returns what each typed character
+    /// overwrote.
+    ///
+    /// A single character that is already in the document takes the place
+    /// of the character after it, formatting included: bold text
+    /// overwritten in Replace mode stays bold.
+    fn overwrite(cx: &mut Cx, typed: &str) -> Vec<Option<String>> {
+        let p = cx.ed.selection().head;
+        let doc = cx.ed.document();
+        let t = buf::text_of(doc, p.block);
+        let single = text::grapheme_count(typed) == 1;
+        if single && !buf::is_newline(doc, p) && t[..p.offset].ends_with(typed) {
+            let old = buf::grapheme_at(doc, p).to_string();
+            let start = p.offset - typed.len();
+            cx.ed
+                .delete_range(TextRange::in_block(p.block, start, p.offset));
+            cx.ed.replace_range(
+                TextRange::in_block(p.block, start, start + old.len()),
+                typed,
+            );
+            return vec![Some(old)];
+        }
+        (0..text::grapheme_count(typed))
+            .map(|_| Self::overwrite_one(cx))
+            .collect()
     }
 
     /// Replace mode: removes the character after the caret (not a line
@@ -410,7 +435,7 @@ impl Vim {
                         }
                         cx.ed.insert_text(g);
                         if replace {
-                            Self::overwrite_one(cx);
+                            Self::overwrite(cx, g);
                         }
                     }
                 }

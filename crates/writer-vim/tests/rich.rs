@@ -21,6 +21,23 @@ fn inline_formatting() {
         c("**|foo** bar", ":s/foo/quux/<CR>", "**|quux** bar"),
         c("f**o**|o", ":s/foo/bar/<CR>", "|b**a**r"),
         c("x **|ab** y", "vly$p", "x **ab** y**a|b**"),
+        // A change takes the formatting of what it replaces.
+        c("a **|bold** move", "cwbrave<Esc>", "a **brav|e** move"),
+        c("a **b|old** move", "ciwbrave<Esc>", "a **brav|e** move"),
+        c("**|bold** move", "cwbrave<Esc>", "**brav|e** move"),
+        c("a __**|x**__ b", "sy<Esc>", "a **__|y**__ b"),
+        c("**|all bold**", "ccnew<Esc>", "**ne|w**"),
+        c("**|all bold**", "Cnew<Esc>", "**ne|w**"),
+        c("plain **|bold**", "cbx<Esc>", "|x**bold**"),
+        c("**|bold** plain", "wcwx<Esc>", "**bold** |x"),
+        // Not once the caret has moved on.
+        c("a **|bold** move", "cw<Esc>ix<Esc>", "a|x  move"),
+        c("a **|bold** move", "cwbrave<Esc>w.", "a **brave** brav|e"),
+        // Replace mode keeps the formatting of what it overwrites.
+        c("a **|bold** move", "Rcalm<Esc>", "a **cal|m** move"),
+        c("**|ab**cd", "Rwxyz<Esc>", "**wx**y|z"),
+        c("**|ab**cd", "Rwx<BS><BS><Esc>", "**|ab**cd"),
+        c("**|ab**cd", "Rwx<Esc>l.", "**wx**w|x"),
         // Mixed formatting inside one yank.
         c("|a**b**__c__", "y$$p", "a**b**__c__a**b**__|c__"),
         c("**stra|ße** x", "gUiw", "**|STRASSE** x"),

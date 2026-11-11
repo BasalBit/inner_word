@@ -5,6 +5,7 @@ mod harness;
 
 mod api;
 mod code;
+mod everyday;
 mod ex;
 mod fuzz;
 mod insert;

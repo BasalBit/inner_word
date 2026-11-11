@@ -223,6 +223,22 @@
 //!   line, `J` removes it, typing on it starts a paragraph after it, and
 //!   commands that need a character (`x`, `r`, `~`) do nothing.
 //!
+//! # Rich text
+//!
+//! - Registers hold [`writer_core::Fragment`]s: a yank and a put carry
+//!   character formatting and links, and a linewise register carries block
+//!   kinds, indent and alignment. Comment anchors never travel in
+//!   fragments (a rule of the document model), so text that is deleted and
+//!   put back elsewhere leaves its comment thread behind.
+//! - `r`, `~`, `gu`, `gU`, `g~` and same-length `:s` replacements keep the
+//!   formatting of every character, comment anchors included.
+//! - A change (`c`, `s`, `S`, `C`) types in the formatting of the first
+//!   changed character, as typing over a selection does in the editor;
+//!   Replace mode gives each typed character the formatting of the one it
+//!   overwrites.
+//! - Text put inside a block takes that block's kind; whole lines keep
+//!   their own.
+//!
 //! # Supported commands
 //!
 //! Counts work everywhere Vim takes them, before and after an operator

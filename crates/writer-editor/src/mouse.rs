@@ -50,10 +50,10 @@ impl Editor {
         self.drag.is_some() || self.scrollbar.drag.is_some()
     }
 
-    /// Something depends on where the pointer is: the scroll bar strip or a
-    /// link cursor.
+    /// Something depends on where the pointer is: the scroll bar strip, a
+    /// link cursor or a link tooltip.
     pub(crate) fn has_hover_state(&self) -> bool {
-        self.scrollbar.hovered || self.link_hover
+        self.scrollbar.hovered || self.link_hover || self.link_tip.is_some()
     }
 
     /// A left mouse button press inside the editor.
@@ -65,6 +65,7 @@ impl Editor {
     ) {
         window.focus(&self.focus_handle);
         self.restart_blink(cx);
+        self.hide_link_tip(cx);
 
         // The scroll bar strip: grab the thumb, or jump to the click.
         if let Some(geometry) = self.scrollbar.geometry
@@ -164,6 +165,7 @@ impl Editor {
         };
         window.focus(&self.focus_handle);
         self.restart_blink(cx);
+        self.hide_link_tip(cx);
         self.end_composition();
 
         let checkbox = self
@@ -217,20 +219,13 @@ impl Editor {
                 upstream && word.is_none() && checkbox.is_none() && self.caret_has_affinity();
         }
 
+        let link = if checkbox.is_some() {
+            None
+        } else {
+            self.link_under_point(event.position)
+        };
         let document = self.state.document();
         let attrs = under.and_then(|under| document.block(under.block)?.attrs_at(under.offset));
-        let link = attrs.and_then(|attrs| attrs.link.clone());
-        // `link_at` looks at the character before a position first.
-        let link_range = link.as_ref().and_then(|url| {
-            let under = under?;
-            let after = document
-                .block(under.block)
-                .map(|block| text::next_grapheme_boundary(block.text(), under.offset))?;
-            document
-                .link_at(Position::new(under.block, after))
-                .filter(|info| &info.url == url)
-                .map(|info| info.range)
-        });
         let comments = attrs
             .map(|attrs| {
                 attrs
@@ -246,8 +241,8 @@ impl Editor {
             document_position: position,
             block: position.block,
             has_selection: !self.state.selection().is_collapsed(),
-            link,
-            link_range,
+            link: link.as_ref().map(|info| info.url.clone()),
+            link_range: link.map(|info| info.range),
             comments,
             on_checkbox: checkbox.is_some(),
             from_keyboard: false,
@@ -320,15 +315,20 @@ impl Editor {
             && self.scrollbar.geometry.is_some_and(|geometry| {
                 event.position.x >= geometry.track.right() + px(3.) - SCROLLBAR_ZONE
             });
-        let over_link = hovered
-            && !over_scrollbar
-            && event.modifiers.platform
-            && self.link_at_point(event.position).is_some();
+        // A popup over the text (a menu, the link field) has the user's
+        // attention: no tooltips under it.
+        let link = if hovered && !over_scrollbar && self.popup.is_none() {
+            self.link_under_point(event.position)
+        } else {
+            None
+        };
+        let over_link = link.is_some() && event.modifiers.platform;
         if over_scrollbar != self.scrollbar.hovered || over_link != self.link_hover {
             self.scrollbar.hovered = over_scrollbar;
             self.link_hover = over_link;
             cx.notify();
         }
+        self.update_link_tip(link, event.position, cx);
     }
 
     /// The left button was released (anywhere).
@@ -349,6 +349,7 @@ impl Editor {
         // A positive wheel delta moves the content down (towards the top).
         // Whole half pixels keep rules and text on device pixels.
         let delta = px((f32::from(delta_y) * 2.).round() / 2.);
+        self.hide_link_tip(cx);
         self.scroll_by_pixels(-delta, cx);
     }
 

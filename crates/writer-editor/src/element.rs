@@ -695,6 +695,7 @@ impl Element for EditorElement {
             editor.install_layout_env(Some(bounds), bounds.size.width, window, cx);
             editor.settle_scroll();
             let plan = editor.plan_frame(hitbox, window);
+            editor.prepaint_link_tip(window);
             editor.after_frame(started.elapsed(), cx);
             plan
         })
@@ -847,8 +848,14 @@ impl EditorElement {
         });
 
         let editor = self.editor.clone();
-        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble && editor.read(cx).mouse_busy() {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+            // Only the button that started the drag ends it. (A release
+            // GPUI reports as another button, the left one let go with
+            // `ctrl` held, is caught by the next mouse move.)
+            if phase == DispatchPhase::Bubble
+                && event.button == MouseButton::Left
+                && editor.read(cx).mouse_busy()
+            {
                 editor.update(cx, |editor, cx| editor.mouse_up(cx));
             }
         });

@@ -10,7 +10,7 @@ use gpui::{
 use writer_core::{Block, BlockKind, Document, InlineAttrs, Position, Selection, TextRange};
 
 use super::slice::{open, setup};
-use crate::{ContextMenuRequest, Editor, EditorConfig, EditorEvent};
+use crate::{ContextMenuRequest, Editor, EditorConfig, EditorEvent, link_tip::LINK_TIP_DELAY};
 
 fn paragraphs(count: usize) -> Document {
     Document::from_blocks(
@@ -1010,4 +1010,318 @@ fn ctrl_enter_far_from_the_viewport_scrolls_to_the_caret(cx: &mut TestAppContext
     let caret = editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap());
     assert_eq!(request.position, point(caret.left(), caret.bottom()));
     assert!(editor.read_with(cx, |editor, _| editor.scroll_offset()) < px(100.));
+}
+
+// --- The link tooltip -------------------------------------------------------
+
+#[gpui::test]
+fn resting_on_a_link_shows_its_address(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(context_document(), EditorConfig::full(), cx);
+    let on = |cx: &mut VisualTestContext, block, offset| {
+        editor.read_with(cx, |editor, _| {
+            point_of(editor, block, offset) + point(px(3.), px(0.))
+        })
+    };
+    let tip = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, cx| editor.link_tooltip(cx))
+    };
+    let rest = |cx: &mut VisualTestContext| {
+        cx.executor()
+            .advance_clock(LINK_TIP_DELAY + Duration::from_millis(20));
+        cx.run_until_parked();
+    };
+    let (on_link, further, off_link) = (on(cx, 1, 6), on(cx, 1, 10), on(cx, 1, 15));
+
+    // Not at once, and not at all when the pointer only passes over.
+    cx.simulate_mouse_move(on_link, None, Modifiers::none());
+    assert_eq!(tip(cx), None);
+    cx.simulate_mouse_move(off_link, None, Modifiers::none());
+    rest(cx);
+    assert_eq!(tip(cx), None);
+
+    // After a moment on the link: the address and how to open it, under
+    // the row, inside the window.
+    cx.simulate_mouse_move(on_link, None, Modifiers::none());
+    rest(cx);
+    assert_eq!(
+        tip(cx).as_deref(),
+        Some("https://example.com/page \u{2318}-click to open")
+    );
+    let row = editor.read_with(cx, |editor, _| {
+        editor.position_bounds(Position::new(1, 6)).unwrap()
+    });
+    let panel = cx.debug_bounds("link-tip").expect("the tooltip is drawn");
+    assert!(panel.top() >= row.bottom(), "{panel:?} under {row:?}");
+    assert!(panel.top() - row.bottom() < px(8.));
+    assert!(panel.left() >= on_link.x && panel.left() - on_link.x < px(4.));
+    assert!(panel.size.width > px(200.));
+    // It stays while the pointer moves along the same link, and does not
+    // follow it.
+    cx.simulate_mouse_move(further, None, Modifiers::none());
+    assert!(tip(cx).is_some());
+    assert_eq!(cx.debug_bounds("link-tip").unwrap(), panel);
+    // The cursor only turns into a hand with cmd held; the tooltip does
+    // not need it.
+    editor.read_with(cx, |editor, _| assert!(!editor.link_hover));
+
+    // Leaving the link takes it away.
+    cx.simulate_mouse_move(off_link, None, Modifiers::none());
+    assert_eq!(tip(cx), None);
+
+    // So do a click, the wheel, typing and moving the caret.
+    let show = |cx: &mut VisualTestContext| {
+        cx.simulate_mouse_move(off_link, None, Modifiers::none());
+        cx.simulate_mouse_move(on_link, None, Modifiers::none());
+        rest(cx);
+        assert!(tip(cx).is_some());
+    };
+    show(cx);
+    click(cx, on_link, 1, Modifiers::none());
+    assert_eq!(tip(cx), None);
+    // (The pointer has to move again before it comes back.)
+    rest(cx);
+    assert_eq!(tip(cx), None);
+    show(cx);
+    right_click(cx, on_link);
+    assert_eq!(tip(cx), None);
+    show(cx);
+    cx.simulate_event(ScrollWheelEvent {
+        position: on_link,
+        delta: ScrollDelta::Pixels(point(px(0.), px(-10.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    assert_eq!(tip(cx), None);
+    show(cx);
+    cx.simulate_keystrokes("right");
+    assert_eq!(tip(cx), None);
+    show(cx);
+    cx.simulate_input("x");
+    assert_eq!(tip(cx), None);
+
+    // And another document.
+    show(cx);
+    editor.update(cx, |editor, cx| {
+        editor.set_document(paragraphs(3), cx);
+    });
+    assert_eq!(tip(cx), None);
+}
+
+#[gpui::test]
+fn the_link_tooltip_shows_on_a_sheet_and_not_under_a_popup(cx: &mut TestAppContext) {
+    setup(cx);
+    let mut blocks = context_document().blocks().to_vec();
+    blocks.extend(paragraphs(200).blocks().iter().cloned());
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.set_page_view(true, cx));
+    cx.run_until_parked();
+    let on_link = editor.read_with(cx, |editor, _| {
+        point_of(editor, 1, 6) + point(px(3.), px(0.))
+    });
+    let off_link = editor.read_with(cx, |editor, _| {
+        point_of(editor, 1, 15) + point(px(3.), px(0.))
+    });
+    let rest = |cx: &mut VisualTestContext| {
+        cx.executor()
+            .advance_clock(LINK_TIP_DELAY + Duration::from_millis(20));
+        cx.run_until_parked();
+    };
+    cx.simulate_mouse_move(on_link, None, Modifiers::none());
+    rest(cx);
+    editor.read_with(cx, |editor, cx| assert!(editor.link_tooltip(cx).is_some()));
+    assert!(cx.debug_bounds("link-tip").is_some());
+
+    // The text scrolls away under the resting pointer (a key, a command):
+    // the frame that shows it has no tooltip.
+    editor.update(cx, |editor, cx| editor.scroll_by_pixels(px(80.), cx));
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, cx| assert_eq!(editor.link_tooltip(cx), None));
+    editor.update(cx, |editor, cx| editor.scroll_by_pixels(px(-80.), cx));
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, cx| assert_eq!(editor.link_tooltip(cx), None));
+
+    // While a popup is open over the text, no tooltip comes up.
+    cx.simulate_mouse_move(off_link, None, Modifiers::none());
+    let popup = cx.update(|_, cx| gpui::AppContext::new(cx, |_| gpui::Empty));
+    editor.update(cx, |editor, cx| {
+        editor.show_popup(
+            popup.into(),
+            crate::PopupAnchor::Caret,
+            crate::PopupPlacement::Below,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.simulate_mouse_move(on_link, None, Modifiers::none());
+    rest(cx);
+    editor.read_with(cx, |editor, cx| assert_eq!(editor.link_tooltip(cx), None));
+}
+
+// --- The mouse while a modal key layer (Vim) is attached --------------------
+
+/// Everything a non-keyboard user does in the text, with the editor set up
+/// the way the Vim glue sets it up in Normal mode: a block caret, no text
+/// input, every key without `cmd` consumed by an interceptor. In flow view
+/// and on sheets.
+#[gpui::test]
+fn the_mouse_works_under_a_modal_key_layer(cx: &mut TestAppContext) {
+    for (page_view, vim) in [(false, false), (false, true), (true, false), (true, true)] {
+        let case = format!("page view {page_view}, modal keys {vim}");
+        setup(cx);
+        let link = InlineAttrs {
+            link: Some("https://example.com/page".into()),
+            ..InlineAttrs::default()
+        };
+        let mut blocks = vec![
+            Block::paragraph("alpha beta gamma"),
+            Block::with_text(BlockKind::todo(), "buy milk"),
+            Block::new(BlockKind::Paragraph)
+                .with_span("see ", InlineAttrs::default())
+                .with_span("the page", link)
+                .with_span(" for more", InlineAttrs::default()),
+        ];
+        blocks.extend(paragraphs(300).blocks().iter().cloned());
+        let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+        let consumed = Rc::new(RefCell::new(Vec::new()));
+        editor.update(cx, |editor, cx| {
+            editor.set_page_view(page_view, cx);
+            if vim {
+                editor.set_caret_style(crate::CaretStyle::Block, cx);
+                editor.set_text_input_enabled(false, cx);
+                let consumed = consumed.clone();
+                editor
+                    .intercept_keys(crate::InterceptPriority::MODAL, move |keystroke, _, _| {
+                        if keystroke.modifiers.platform {
+                            return crate::KeyDisposition::Pass;
+                        }
+                        consumed.borrow_mut().push(keystroke.unparse());
+                        crate::KeyDisposition::Consumed
+                    })
+                    .detach();
+            }
+        });
+        cx.run_until_parked();
+        let take = record_events(&editor, cx);
+        let on = |cx: &mut VisualTestContext, block, offset| {
+            editor.read_with(cx, |editor, _| {
+                point_of(editor, block, offset) + point(px(3.), px(0.))
+            })
+        };
+        let selection =
+            |cx: &mut VisualTestContext| editor.read_with(cx, |editor, _| editor.selection());
+        let selected = |cx: &mut VisualTestContext| {
+            editor.read_with(cx, |editor, _| editor.state().selected_text())
+        };
+
+        // Click and shift-click.
+        let (a, b) = (on(cx, 0, 2), on(cx, 0, 8));
+        click(cx, a, 1, Modifiers::none());
+        assert_eq!(
+            selection(cx),
+            Selection::caret(Position::new(0, 2)),
+            "{case}"
+        );
+        click(cx, b, 1, Modifiers::shift());
+        assert_eq!(
+            selection(cx),
+            Selection::new(Position::new(0, 2), Position::new(0, 8)),
+            "{case}"
+        );
+        // Drag over two blocks.
+        let (from, to) = (on(cx, 0, 6), on(cx, 2, 3));
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            selection(cx),
+            Selection::new(Position::new(0, 6), Position::new(2, 3)),
+            "{case}"
+        );
+        // Double and triple click.
+        let word = on(cx, 0, 7);
+        click(cx, word, 2, Modifiers::none());
+        assert_eq!(selected(cx), "beta", "{case}");
+        click(cx, word, 3, Modifiers::none());
+        assert_eq!(selected(cx), "alpha beta gamma", "{case}");
+        // The to-do checkbox.
+        let boxes = editor.read_with(cx, |editor, _| editor.checkbox_hits.clone());
+        assert_eq!(boxes.len(), 1, "{case}");
+        click(cx, boxes[0].bounds.center(), 1, Modifiers::none());
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(
+                editor.document().blocks()[1].kind(),
+                &BlockKind::TodoItem { checked: true },
+                "{case}"
+            );
+        });
+        // cmd-click on a link; resting on it.
+        let on_link = on(cx, 2, 6);
+        click(cx, on_link, 1, Modifiers::command());
+        assert_eq!(
+            cx.opened_url().as_deref(),
+            Some("https://example.com/page"),
+            "{case}"
+        );
+        cx.simulate_mouse_move(on_link, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(LINK_TIP_DELAY + Duration::from_millis(20));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, cx| {
+            assert!(editor.link_tooltip(cx).is_some(), "{case}")
+        });
+        // The right button: inside the selection (the triple-clicked
+        // block) it keeps it; after a click elsewhere it takes the word.
+        take(cx);
+        right_click(cx, word);
+        let request = request_in(&take(cx));
+        assert!(request.has_selection, "{case}");
+        assert_eq!(selected(cx), "alpha beta gamma", "{case}");
+        click(cx, a, 1, Modifiers::none());
+        take(cx);
+        right_click(cx, word);
+        let request = request_in(&take(cx));
+        assert!(request.has_selection, "{case}");
+        assert_eq!(selected(cx), "beta", "{case}");
+        // The wheel.
+        let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+        cx.simulate_event(ScrollWheelEvent {
+            position: viewport.center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+            modifiers: Modifiers::none(),
+            touch_phase: TouchPhase::Moved,
+        });
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.scroll_offset(), px(300.), "{case}")
+        });
+        // A drag that leaves the viewport scrolls and keeps selecting.
+        let start = point(viewport.center().x - px(100.), viewport.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        let anchor = selection(cx).anchor;
+        cx.simulate_mouse_move(
+            point(start.x, viewport.bottom() + px(60.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        let first = selection(cx).head;
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_millis(35));
+        }
+        editor.read_with(cx, |editor, _| {
+            assert!(editor.scroll_offset() > px(400.), "{case}");
+            assert!(editor.selection().head > first, "{case}");
+            assert_eq!(editor.selection().anchor, anchor, "{case}");
+        });
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
+
+        // The keyboard path to the menu is the modal layer's to pass on.
+        take(cx);
+        cx.simulate_keystrokes("ctrl-enter");
+        let asked = take(cx)
+            .iter()
+            .any(|event| matches!(event, EditorEvent::ContextMenuRequested(_)));
+        assert_eq!(asked, !vim, "{case}");
+        assert_eq!(consumed.borrow().len(), usize::from(vim), "{case}");
+    }
 }

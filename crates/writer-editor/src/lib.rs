@@ -123,7 +123,8 @@
 //! | `actions`, `handlers` | actions and key bindings; what each action does |
 //! | `commands` | command descriptors for the palette |
 //! | `movement` | the visual-row oracle |
-//! | `mouse` | click, drag, checkboxes, links, wheel, scroll bar drag |
+//! | `mouse` | click, drag, checkboxes, links, the context menu request, wheel, scroll bar drag |
+//! | `link_tip` | the tooltip of a link under the pointer |
 //! | `scroll` | scroll position, requests, autoscroll, the overlay scroll bar |
 //! | `geometry` | positions to window rectangles and back |
 //! | `highlights` | highlight layers |
@@ -158,6 +159,7 @@ mod highlights;
 mod input;
 mod intercept;
 mod layout;
+mod link_tip;
 mod mouse;
 mod movement;
 mod paint;

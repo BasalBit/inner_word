@@ -32,6 +32,7 @@ use crate::{
     input::MarkedText,
     intercept::{self, InterceptPriority, Interceptors, KeyDisposition},
     layout::{DocumentLayout, ScrollPosition},
+    link_tip::LinkTip,
     mouse::Drag,
     movement::RowOracle,
     popup::{Popup, PopupElement},
@@ -136,6 +137,8 @@ pub struct Editor {
     pub(crate) checkbox_hits: Vec<CheckboxHit>,
     /// The pointer is over a link with `cmd` held.
     pub(crate) link_hover: bool,
+    /// The link the pointer rests on, and its tooltip (see `link_tip`).
+    pub(crate) link_tip: Option<LinkTip>,
     /// The editor's focus handle is focused (as of the last focus event).
     focused: bool,
     /// Paint the caret and the selection as in an active window even while
@@ -229,6 +232,7 @@ impl Editor {
                 this.drag_scroll = None;
                 this.drag_scrolling = false;
                 this.link_hover = false;
+                this.link_tip = None;
                 this.state.break_undo_group();
                 if this.popup_scope.contains_focused(window, cx) {
                     // Into the editor's own popup (a link field, the
@@ -319,6 +323,7 @@ impl Editor {
             scrollbar: Scrollbar::default(),
             checkbox_hits: Vec::new(),
             link_hover: false,
+            link_tip: None,
             focused: false,
             // A scripted run stays in the background (so it does not take
             // the keyboard from whoever is at the machine); its screenshots
@@ -484,6 +489,7 @@ impl Editor {
         self.active_comment = None;
         self.hidden_comments.clear();
         self.popup = None;
+        self.link_tip = None;
         self.selection_stats.set(None);
         self.counting.clear();
         self.start_background_work(cx);
@@ -663,6 +669,8 @@ impl Editor {
         if change.is_none() && !selection_changed {
             return;
         }
+        // Whoever types or moves the caret is not reading a tooltip.
+        self.link_tip = None;
         // The caret's affinity belongs to where the head was put: it goes
         // when the head moves or the text under it changes. (Whoever moved
         // the head to the end of a wrapped row sets it again afterwards.)

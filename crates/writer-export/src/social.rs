@@ -100,7 +100,11 @@ impl SocialNetwork {
             SocialNetwork::X => x_length(text),
             SocialNetwork::Mastodon => split_links(text)
                 .map(|(part, is_link)| {
-                    if is_link { LINK_LENGTH } else { part.graphemes(true).count() }
+                    if is_link {
+                        LINK_LENGTH
+                    } else {
+                        part.graphemes(true).count()
+                    }
                 })
                 .sum(),
             _ => social_length(text),
@@ -155,12 +159,18 @@ fn split_links(text: &str) -> impl Iterator<Item = (&str, bool)> {
     while i < text.len() {
         let rest = &text[i..];
         let scheme = ["https://", "http://"].into_iter().find(|s| {
-            rest.len() > s.len() && rest.is_char_boundary(s.len()) && rest[..s.len()].eq_ignore_ascii_case(s)
+            rest.len() > s.len()
+                && rest.is_char_boundary(s.len())
+                && rest[..s.len()].eq_ignore_ascii_case(s)
         });
-        let at_word_start = text[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+        let at_word_start = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
         if let (Some(scheme), true) = (scheme, at_word_start) {
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            let link = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'']);
+            let link =
+                rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'']);
             if link.len() > scheme.len() {
                 if plain_start < i {
                     parts.push((&text[plain_start..i], false));
@@ -181,16 +191,14 @@ fn split_links(text: &str) -> impl Iterator<Item = (&str, bool)> {
 
 /// Whether a grapheme cluster is an emoji as X counts them.
 fn is_emoji_grapheme(g: &str) -> bool {
-    g.chars().any(|c| {
-        c == '\u{fe0f}' || c == '\u{20e3}' || (!c.is_ascii() && c.is_emoji_char())
-    })
+    g.chars()
+        .any(|c| c == '\u{fe0f}' || c == '\u{20e3}' || (!c.is_ascii() && c.is_emoji_char()))
 }
 
 fn x_length(text: &str) -> usize {
     // Weights in hundredths, as in X's published configuration.
-    let light = |c: char| {
-        matches!(u32::from(c), 0..=4351 | 8192..=8205 | 8208..=8223 | 8242..=8247)
-    };
+    let light =
+        |c: char| matches!(u32::from(c), 0..=4351 | 8192..=8205 | 8208..=8223 | 8242..=8247);
     let mut weight = 0usize;
     for (part, is_link) in split_links(text) {
         if is_link {
@@ -201,7 +209,10 @@ fn x_length(text: &str) -> usize {
             if is_emoji_grapheme(g) {
                 weight += 200;
             } else {
-                weight += g.chars().map(|c| if light(c) { 100 } else { 200 }).sum::<usize>();
+                weight += g
+                    .chars()
+                    .map(|c| if light(c) { 100 } else { 200 })
+                    .sum::<usize>();
             }
         }
     }
@@ -271,7 +282,10 @@ mod tests {
         let c = SocialNetwork::Bluesky.count("日本語 👍");
         assert_eq!(c.length, 5);
         assert!(c.fits());
-        assert_eq!(SocialNetwork::Mastodon.length("a https://example.com/long/long/long b"), 2 + 23 + 2);
+        assert_eq!(
+            SocialNetwork::Mastodon.length("a https://example.com/long/long/long b"),
+            2 + 23 + 2
+        );
         assert_eq!(SocialNetwork::LinkedIn.length("https://example.com"), 19);
     }
 }

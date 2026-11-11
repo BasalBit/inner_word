@@ -54,7 +54,9 @@ impl Para {
             p.push_str(&format!("<w:pStyle w:val=\"{style}\"/>"));
         }
         if let Some((num, level)) = self.numbering {
-            p.push_str(&format!("<w:numPr><w:ilvl w:val=\"{level}\"/><w:numId w:val=\"{num}\"/></w:numPr>"));
+            p.push_str(&format!(
+                "<w:numPr><w:ilvl w:val=\"{level}\"/><w:numId w:val=\"{num}\"/></w:numPr>"
+            ));
         }
         if self.rule {
             p.push_str(&format!(
@@ -66,7 +68,9 @@ impl Para {
         }
         if let Some((left, hanging)) = self.indent {
             if hanging > 0 {
-                p.push_str(&format!("<w:ind w:left=\"{left}\" w:hanging=\"{hanging}\"/>"));
+                p.push_str(&format!(
+                    "<w:ind w:left=\"{left}\" w:hanging=\"{hanging}\"/>"
+                ));
             } else {
                 p.push_str(&format!("<w:ind w:left=\"{left}\"/>"));
             }
@@ -75,7 +79,9 @@ impl Para {
             p.push_str(&format!("<w:jc w:val=\"{align}\"/>"));
         }
         if let Some(size) = self.mark_size {
-            p.push_str(&format!("<w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr>"));
+            p.push_str(&format!(
+                "<w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr>"
+            ));
         }
         if let Some(section) = &self.section {
             p.push_str(section);
@@ -120,7 +126,9 @@ impl RunProps {
         }
         if let Some(font) = &self.font {
             let f = attr(font);
-            p.push_str(&format!("<w:rFonts w:ascii=\"{f}\" w:hAnsi=\"{f}\" w:cs=\"{f}\"/>"));
+            p.push_str(&format!(
+                "<w:rFonts w:ascii=\"{f}\" w:hAnsi=\"{f}\" w:cs=\"{f}\"/>"
+            ));
         }
         if self.bold {
             p.push_str("<w:b/><w:bCs/>");
@@ -138,18 +146,26 @@ impl RunProps {
             p.push_str(&format!("<w:color w:val=\"{color}\"/>"));
         }
         if let Some(size) = self.size {
-            p.push_str(&format!("<w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/>"));
+            p.push_str(&format!(
+                "<w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/>"
+            ));
         }
         if self.underline {
             p.push_str("<w:u w:val=\"single\"/>");
         }
         if let Some(fill) = &self.shade {
-            p.push_str(&format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{fill}\"/>"));
+            p.push_str(&format!(
+                "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{fill}\"/>"
+            ));
         }
         if self.rtl {
             p.push_str("<w:rtl/>");
         }
-        if p.is_empty() { String::new() } else { format!("<w:rPr>{p}</w:rPr>") }
+        if p.is_empty() {
+            String::new()
+        } else {
+            format!("<w:rPr>{p}</w:rPr>")
+        }
     }
 }
 
@@ -266,16 +282,26 @@ impl Builder<'_> {
             return markers;
         }
         for (id, range) in first_comment_ranges(doc) {
-            let Some(thread) = doc.comment(id) else { continue };
+            let Some(thread) = doc.comment(id) else {
+                continue;
+            };
             let root = self.comments.len() as u32;
             let mut starts = String::new();
             let mut ends = String::new();
             for (i, (author, body)) in thread_entries(thread).into_iter().enumerate() {
                 let cid = root + i as u32;
-                let date = if i == 0 { thread.created_at } else { thread.replies[i - 1].created_at };
+                let date = if i == 0 {
+                    thread.created_at
+                } else {
+                    thread.replies[i - 1].created_at
+                };
                 self.comments.push(Comment {
                     id: cid,
-                    author: if author.is_empty() { "Author".to_string() } else { author.to_string() },
+                    author: if author.is_empty() {
+                        "Author".to_string()
+                    } else {
+                        author.to_string()
+                    },
                     date,
                     body: body.to_string(),
                     parent: (i > 0).then_some(root),
@@ -319,9 +345,16 @@ impl Builder<'_> {
             italic: attrs.italic,
             strike: attrs.strikethrough,
             underline: attrs.underline,
-            color: attrs.color.map(|c| c.to_hex().trim_start_matches('#').to_uppercase()),
+            color: attrs
+                .color
+                .map(|c| c.to_hex().trim_start_matches('#').to_uppercase()),
             font: attrs.font.clone(),
-            shade: attrs.highlight.map(|h| h.reference_rgb().to_hex().trim_start_matches('#').to_uppercase()),
+            shade: attrs.highlight.map(|h| {
+                h.reference_rgb()
+                    .to_hex()
+                    .trim_start_matches('#')
+                    .to_uppercase()
+            }),
             size,
             ..RunProps::default()
         };
@@ -344,10 +377,23 @@ impl Builder<'_> {
         for (range, span_text, attrs) in block.text_spans() {
             // Cut the span where markers fall inside it.
             let mut cuts = vec![range.start];
-            cuts.extend(markers.iter().map(|m| m.offset).filter(|o| *o > range.start && *o < range.end));
+            cuts.extend(
+                markers
+                    .iter()
+                    .map(|m| m.offset)
+                    .filter(|o| *o > range.start && *o < range.end),
+            );
             cuts.push(range.end);
             cuts.dedup();
-            let link = if code_block { None } else { attrs.link.as_deref().map(str::trim).filter(|u| !u.is_empty()) };
+            let link = if code_block {
+                None
+            } else {
+                attrs
+                    .link
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|u| !u.is_empty())
+            };
             for w in cuts.windows(2) {
                 let has_marker = markers.get(next_marker).is_some_and(|m| m.offset <= w[0]);
                 // A hyperlink element ends where the target changes; markers
@@ -361,7 +407,10 @@ impl Builder<'_> {
                         next_marker += 1;
                     }
                     if let Some(url) = link {
-                        out.push_str(&format!("<w:hyperlink r:id=\"{}\" w:history=\"1\">", self.link_rel(url)));
+                        out.push_str(&format!(
+                            "<w:hyperlink r:id=\"{}\" w:history=\"1\">",
+                            self.link_rel(url)
+                        ));
                         open_link = Some(url.to_string());
                     }
                 } else if has_marker {
@@ -420,7 +469,9 @@ impl Builder<'_> {
                 continue;
             }
             let level = block.indent().min(8);
-            let size = block.text_size().map(|_| self.metrics.half_points(typography.size_of(block)));
+            let size = block
+                .text_size()
+                .map(|_| self.metrics.half_points(typography.size_of(block)));
             let block_markers = markers.get(&index).unwrap_or(&none);
             let bidi = starts_rtl(block.text());
             let mut para = Para {
@@ -442,13 +493,18 @@ impl Builder<'_> {
             match block.kind() {
                 BlockKind::Paragraph => para.indent = indented,
                 BlockKind::Heading { level: n } => {
-                    para.style = Some(["Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6"][(*n).clamp(1, 6) as usize - 1]);
+                    para.style = Some(
+                        [
+                            "Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6",
+                        ][(*n).clamp(1, 6) as usize - 1],
+                    );
                     para.indent = indented;
                 }
                 BlockKind::Quote => {
                     para.style = Some("Quote");
                     // The style already keeps the text clear of the bar.
-                    para.indent = (level > 0).then(|| (self.metrics.indent(level) + self.metrics.quote_gutter(), 0));
+                    para.indent = (level > 0)
+                        .then(|| (self.metrics.indent(level) + self.metrics.quote_gutter(), 0));
                 }
                 BlockKind::CodeBlock { .. } => {
                     para.style = Some("Code");
@@ -494,7 +550,8 @@ impl Builder<'_> {
                     if *checked { '\u{2611}' } else { '\u{2610}' }
                 ));
             }
-            para.content.push_str(&self.runs(block, block_markers, size));
+            para.content
+                .push_str(&self.runs(block, block_markers, size));
             paras.push(para);
         }
         if pending_break {
@@ -517,7 +574,11 @@ fn section_xml(doc: &Document, page_numbers: bool) -> String {
         Orientation::Landscape => " w:orient=\"landscape\"",
         Orientation::Portrait => "",
     };
-    let footer = if page_numbers { format!("<w:footerReference w:type=\"default\" r:id=\"{FOOTER_REL}\"/>") } else { String::new() };
+    let footer = if page_numbers {
+        format!("<w:footerReference w:type=\"default\" r:id=\"{FOOTER_REL}\"/>")
+    } else {
+        String::new()
+    };
     // The header and footer sit in the middle of their margin.
     let edge = |margin: f32| page_twips(margin / 2.0).clamp(0, 720);
     format!(
@@ -545,7 +606,9 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
         comments: Vec::new(),
     };
     let mut xml = String::from(DECLARATION);
-    xml.push_str(&format!("<w:document xmlns:w=\"{W_NS}\" xmlns:r=\"{R_NS}\"><w:body>"));
+    xml.push_str(&format!(
+        "<w:document xmlns:w=\"{W_NS}\" xmlns:r=\"{R_NS}\"><w:body>"
+    ));
     let parts = source.parts();
     let mut last_section = None;
     for (i, part) in parts.iter().enumerate() {
@@ -592,7 +655,10 @@ mod tests {
     fn directions() {
         assert_eq!(direction_runs("hello world"), vec![("hello world", false)]);
         assert_eq!(direction_runs("שלום עולם"), vec![("שלום עולם", true)]);
-        assert_eq!(direction_runs("say שלום, world!"), vec![("say ", false), ("שלום, ", true), ("world!", false)]);
+        assert_eq!(
+            direction_runs("say שלום, world!"),
+            vec![("say ", false), ("שלום, ", true), ("world!", false)]
+        );
         assert_eq!(direction_runs("123 !?"), vec![("123 !?", false)]);
         assert_eq!(direction_runs(""), Vec::<(&str, bool)>::new());
         assert!(starts_rtl("  123 مرحبا world"));
@@ -603,7 +669,10 @@ mod tests {
     #[test]
     fn run_text() {
         let plain = RunProps::default();
-        assert_eq!(text_runs("a<b", &plain), "<w:r><w:t xml:space=\"preserve\">a&lt;b</w:t></w:r>");
+        assert_eq!(
+            text_runs("a<b", &plain),
+            "<w:r><w:t xml:space=\"preserve\">a&lt;b</w:t></w:r>"
+        );
         assert_eq!(
             text_runs("a\n\tb", &plain),
             "<w:r><w:t xml:space=\"preserve\">a</w:t><w:br/><w:tab/><w:t xml:space=\"preserve\">b</w:t></w:r>"

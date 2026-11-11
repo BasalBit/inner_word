@@ -9,12 +9,12 @@
 //! `sample-social.txt`, `sample.docx`, `book.docx`, `book.md`.
 
 use writer_core::{
-    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs, InlineStyle,
-    Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
+    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
 };
 use writer_export::{
-    DocxOptions, ExportFormat, ExportSource, MarkdownComments, MarkdownOptions, PlainTextOptions, export,
-    suggested_file_name, to_docx, to_markdown, to_plain_text,
+    DocxOptions, ExportFormat, ExportSource, MarkdownComments, MarkdownOptions, PlainTextOptions,
+    export, suggested_file_name, to_docx, to_markdown, to_plain_text,
 };
 
 fn plain() -> InlineAttrs {
@@ -134,8 +134,15 @@ fn sample() -> Document {
     };
     let mut ed = EditorState::new(Document::from_blocks(blocks).with_settings(settings));
     let last = ed.document().block_count() - 1;
-    ed.set_selection(Selection::new(Position::new(last, 5), Position::new(last, 14)));
-    let thread = ed.add_comment("Is \"paragraph\" the right word here?\nMaybe \"section\".", "Ada Lovelace", 1_794_391_505_000);
+    ed.set_selection(Selection::new(
+        Position::new(last, 5),
+        Position::new(last, 14),
+    ));
+    let thread = ed.add_comment(
+        "Is \"paragraph\" the right word here?\nMaybe \"section\".",
+        "Ada Lovelace",
+        1_794_391_505_000,
+    );
     if let Some(thread) = thread {
         ed.add_reply(thread, "It is. Leave it.", "Ben Example", 1_794_395_105_000);
     }
@@ -159,25 +166,48 @@ fn main() -> std::io::Result<()> {
         ..DocxOptions::default()
     };
 
-    std::fs::write(dir.join("sample.md"), to_markdown(&source, &MarkdownOptions::default()))?;
+    std::fs::write(
+        dir.join("sample.md"),
+        to_markdown(&source, &MarkdownOptions::default()),
+    )?;
     let footnotes = MarkdownOptions {
         comments: MarkdownComments::Footnotes,
         ..MarkdownOptions::default()
     };
-    std::fs::write(dir.join("sample-footnotes.md"), to_markdown(&source, &footnotes))?;
-    std::fs::write(dir.join("sample.txt"), to_plain_text(&source, &PlainTextOptions::default()))?;
-    std::fs::write(dir.join("sample-social.txt"), to_plain_text(&source, &PlainTextOptions::social()))?;
+    std::fs::write(
+        dir.join("sample-footnotes.md"),
+        to_markdown(&source, &footnotes),
+    )?;
+    std::fs::write(
+        dir.join("sample.txt"),
+        to_plain_text(&source, &PlainTextOptions::default()),
+    )?;
+    std::fs::write(
+        dir.join("sample-social.txt"),
+        to_plain_text(&source, &PlainTextOptions::social()),
+    )?;
     std::fs::write(dir.join("sample.docx"), to_docx(&source, &docx))?;
 
     // A folder exported as one file: three chapters, the second in landscape.
     let chapter = |n: usize, with_heading: bool| {
         let mut blocks = Vec::new();
         if with_heading {
-            blocks.push(Block::with_text(BlockKind::heading(1), &format!("Chapter {n}")));
+            blocks.push(Block::with_text(
+                BlockKind::heading(1),
+                &format!("Chapter {n}"),
+            ));
         }
-        blocks.push(Block::paragraph(&format!("The text of chapter {n} starts here.")));
-        blocks.push(Block::with_text(BlockKind::NumberedItem, "A numbered point"));
-        blocks.push(Block::with_text(BlockKind::NumberedItem, "Another numbered point"));
+        blocks.push(Block::paragraph(&format!(
+            "The text of chapter {n} starts here."
+        )));
+        blocks.push(Block::with_text(
+            BlockKind::NumberedItem,
+            "A numbered point",
+        ));
+        blocks.push(Block::with_text(
+            BlockKind::NumberedItem,
+            "Another numbered point",
+        ));
         Document::from_blocks(blocks)
     };
     let one = chapter(1, true);
@@ -189,11 +219,24 @@ fn main() -> std::io::Result<()> {
         ..Default::default()
     });
     let three = chapter(3, true);
-    let book = ExportSource::collection("A Small Book", [("Chapter 1", &one), ("Chapter 2", &two), ("Chapter 3", &three)]);
+    let book = ExportSource::collection(
+        "A Small Book",
+        [
+            ("Chapter 1", &one),
+            ("Chapter 2", &two),
+            ("Chapter 3", &three),
+        ],
+    );
     std::fs::write(dir.join("book.docx"), to_docx(&book, &docx))?;
-    std::fs::write(dir.join("book.md"), export(&book, ExportFormat::Markdown, &Default::default()))?;
+    std::fs::write(
+        dir.join("book.md"),
+        export(&book, ExportFormat::Markdown, &Default::default()),
+    )?;
 
     println!("wrote samples to {}", dir.display());
-    println!("suggested name: {}", suggested_file_name(source.title(), ExportFormat::Docx));
+    println!(
+        "suggested name: {}",
+        suggested_file_name(source.title(), ExportFormat::Docx)
+    );
     Ok(())
 }

@@ -161,11 +161,19 @@ const QUOTE_GUTTER: f32 = 20.0;
 
 impl Metrics {
     fn new(options: &DocxOptions) -> Metrics {
-        let scale = if options.text_scale.is_finite() { options.text_scale.clamp(0.1, 10.0) } else { 1.0 };
+        let scale = if options.text_scale.is_finite() {
+            options.text_scale.clamp(0.1, 10.0)
+        } else {
+            1.0
+        };
         let code_font = options.code_font.trim();
         Metrics {
             scale,
-            code_font: if code_font.is_empty() { "Menlo".to_string() } else { code_font.to_string() },
+            code_font: if code_font.is_empty() {
+                "Menlo".to_string()
+            } else {
+                code_font.to_string()
+            },
         }
     }
 
@@ -232,21 +240,39 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
     let has_comments = !body.comments.is_empty();
 
     let mut zip = zip::ZipWriter::new(options.modified);
-    zip.add(parts::CONTENT_TYPES, content_types(options.page_numbers, has_comments).as_bytes());
+    zip.add(
+        parts::CONTENT_TYPES,
+        content_types(options.page_numbers, has_comments).as_bytes(),
+    );
     zip.add(parts::ROOT_RELS, root_rels().as_bytes());
-    zip.add(parts::CORE, core_properties(source.title(), options).as_bytes());
+    zip.add(
+        parts::CORE,
+        core_properties(source.title(), options).as_bytes(),
+    );
     zip.add(parts::APP, app_properties().as_bytes());
     zip.add(parts::DOCUMENT, body.document.as_bytes());
-    zip.add(parts::DOCUMENT_RELS, document_rels(options.page_numbers, has_comments, &body.links).as_bytes());
-    zip.add(parts::STYLES, styles::styles_xml(&first_settings.typography, &metrics).as_bytes());
-    zip.add(parts::NUMBERING, styles::numbering_xml(&metrics, body.numbered_lists).as_bytes());
+    zip.add(
+        parts::DOCUMENT_RELS,
+        document_rels(options.page_numbers, has_comments, &body.links).as_bytes(),
+    );
+    zip.add(
+        parts::STYLES,
+        styles::styles_xml(&first_settings.typography, &metrics).as_bytes(),
+    );
+    zip.add(
+        parts::NUMBERING,
+        styles::numbering_xml(&metrics, body.numbered_lists).as_bytes(),
+    );
     zip.add(parts::SETTINGS, settings_xml().as_bytes());
     if options.page_numbers {
         zip.add(parts::FOOTER, footer_xml().as_bytes());
     }
     if has_comments {
         zip.add(parts::COMMENTS, comments_xml(&body.comments).as_bytes());
-        zip.add(parts::COMMENTS_EXTENDED, comments_extended_xml(&body.comments).as_bytes());
+        zip.add(
+            parts::COMMENTS_EXTENDED,
+            comments_extended_xml(&body.comments).as_bytes(),
+        );
     }
     zip.finish()
 }
@@ -259,7 +285,9 @@ fn content_types(footer: bool, comments: bool) -> String {
          <Default Extension=\"xml\" ContentType=\"application/xml\"/>",
     );
     let mut part = |name: &str, content_type: &str| {
-        s.push_str(&format!("<Override PartName=\"/{name}\" ContentType=\"{content_type}\"/>"));
+        s.push_str(&format!(
+            "<Override PartName=\"/{name}\" ContentType=\"{content_type}\"/>"
+        ));
     };
     part(parts::DOCUMENT, &format!("{WML}.document.main+xml"));
     part(parts::STYLES, &format!("{WML}.styles+xml"));
@@ -270,15 +298,25 @@ fn content_types(footer: bool, comments: bool) -> String {
     }
     if comments {
         part(parts::COMMENTS, &format!("{WML}.comments+xml"));
-        part(parts::COMMENTS_EXTENDED, &format!("{WML}.commentsExtended+xml"));
+        part(
+            parts::COMMENTS_EXTENDED,
+            &format!("{WML}.commentsExtended+xml"),
+        );
     }
-    part(parts::CORE, "application/vnd.openxmlformats-package.core-properties+xml");
-    part(parts::APP, "application/vnd.openxmlformats-officedocument.extended-properties+xml");
+    part(
+        parts::CORE,
+        "application/vnd.openxmlformats-package.core-properties+xml",
+    );
+    part(
+        parts::APP,
+        "application/vnd.openxmlformats-officedocument.extended-properties+xml",
+    );
     s.push_str("</Types>");
     s
 }
 
-const RELATIONSHIPS_OPEN: &str = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
+const RELATIONSHIPS_OPEN: &str =
+    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
 
 fn root_rels() -> String {
     format!(
@@ -298,7 +336,9 @@ fn document_rels(footer: bool, comments: bool, links: &[String]) -> String {
          <Relationship Id=\"{SETTINGS_REL}\" Type=\"{REL_BASE}/settings\" Target=\"settings.xml\"/>"
     );
     if footer {
-        s.push_str(&format!("<Relationship Id=\"{FOOTER_REL}\" Type=\"{REL_BASE}/footer\" Target=\"footer1.xml\"/>"));
+        s.push_str(&format!(
+            "<Relationship Id=\"{FOOTER_REL}\" Type=\"{REL_BASE}/footer\" Target=\"footer1.xml\"/>"
+        ));
     }
     if comments {
         s.push_str(&format!(
@@ -403,7 +443,10 @@ fn comments_xml(comments: &[Comment]) -> String {
             if i > 0 {
                 s.push_str("<w:br/>");
             }
-            s.push_str(&format!("<w:t xml:space=\"preserve\">{}</w:t></w:r>", text(&line.replace('\t', " "))));
+            s.push_str(&format!(
+                "<w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                text(&line.replace('\t', " "))
+            ));
         }
         s.push_str("</w:p></w:comment>");
     }
@@ -412,7 +455,9 @@ fn comments_xml(comments: &[Comment]) -> String {
 }
 
 fn comments_extended_xml(comments: &[Comment]) -> String {
-    let mut s = format!("{DECLARATION}<w15:commentsEx xmlns:w15=\"{W15_NS}\" xmlns:mc=\"{MC_NS}\" mc:Ignorable=\"w15\">");
+    let mut s = format!(
+        "{DECLARATION}<w15:commentsEx xmlns:w15=\"{W15_NS}\" xmlns:mc=\"{MC_NS}\" mc:Ignorable=\"w15\">"
+    );
     for c in comments {
         let parent = c
             .parent
@@ -439,7 +484,15 @@ mod tests {
         assert_eq!(m.twips(12.0), 240);
         assert_eq!(m.line(1.6), 320);
         assert_eq!(m.line(1.2), 240);
-        assert_eq!((m.indent(0), m.indent(2), m.marker_gutter(), m.quote_gutter()), (0, 960, 560, 400));
+        assert_eq!(
+            (
+                m.indent(0),
+                m.indent(2),
+                m.marker_gutter(),
+                m.quote_gutter()
+            ),
+            (0, 960, 560, 400)
+        );
         assert_eq!(page_twips(595.276), 11906);
         assert_eq!(page_twips(841.89), 16838);
         let scaled = Metrics::new(&DocxOptions {

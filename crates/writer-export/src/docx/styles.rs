@@ -155,7 +155,9 @@ pub(crate) fn numbering_xml(m: &Metrics, numbered_lists: u32) -> String {
             nsid(FIRST_DECIMAL_ABSTRACT + i),
         ));
     }
-    s.push_str(&format!("<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"{BULLET_ABSTRACT}\"/></w:num>"));
+    s.push_str(&format!(
+        "<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"{BULLET_ABSTRACT}\"/></w:num>"
+    ));
     for i in 0..numbered_lists {
         s.push_str(&format!(
             "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"{}\"/></w:num>",

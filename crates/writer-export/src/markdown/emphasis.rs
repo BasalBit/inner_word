@@ -24,7 +24,10 @@ pub(crate) enum Piece {
     /// The `](url)` of a link.
     LinkClose,
     /// Anything else, with its first and last character.
-    Other { first: Option<char>, last: Option<char> },
+    Other {
+        first: Option<char>,
+        last: Option<char>,
+    },
 }
 
 /// A maximal run of the same delimiter character.
@@ -208,7 +211,9 @@ pub(crate) fn first_mismatch(pieces: &[Piece], ends: &[Option<(usize, usize)>]) 
     let mut intended: Vec<(usize, (usize, usize, usize))> = Vec::new();
     for (mark, e) in ends.iter().enumerate() {
         let Some((open, close)) = *e else { continue };
-        if let (Some(Piece::Delimiter { len, .. }), Some(o), Some(c)) = (pieces.get(open), run_of[open], run_of[close]) {
+        if let (Some(Piece::Delimiter { len, .. }), Some(o), Some(c)) =
+            (pieces.get(open), run_of[open], run_of[close])
+        {
             intended.push((mark, (o, c, *len)));
         }
     }
@@ -353,7 +358,10 @@ mod tests {
 
     #[test]
     fn links_are_separate_scopes() {
-        assert_eq!(check(&["B(", "a ", "[", "I(", "b", ")I", "]", " c", ")B"]), None);
+        assert_eq!(
+            check(&["B(", "a ", "[", "I(", "b", ")I", "]", " c", ")B"]),
+            None
+        );
         assert_eq!(check(&["[", "B(", "b", ")B", "]"]), None);
     }
 }

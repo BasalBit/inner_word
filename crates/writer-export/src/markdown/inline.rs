@@ -71,7 +71,11 @@ const FAMILIES: usize = 7;
 
 /// The marks of one attribute run, one slot per family in rank order.
 fn marks_of(attrs: &InlineAttrs, options: &MarkdownOptions) -> [Option<Mark>; FAMILIES] {
-    let link = attrs.link.as_deref().map(str::trim).filter(|u| !u.is_empty());
+    let link = attrs
+        .link
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
     let mut style = String::new();
     if options.colors
         && let Some(c) = attrs.color
@@ -95,7 +99,8 @@ fn marks_of(attrs: &InlineAttrs, options: &MarkdownOptions) -> [Option<Mark>; FA
     [
         link.map(|u| Mark::Link(u.to_string())),
         (!style.is_empty()).then_some(Mark::Span(style)),
-        (attrs.highlight.is_some() && options.highlight != MarkdownHighlight::Drop).then_some(Mark::Highlight),
+        (attrs.highlight.is_some() && options.highlight != MarkdownHighlight::Drop)
+            .then_some(Mark::Highlight),
         (attrs.underline && options.underline_html).then_some(Mark::Underline),
         attrs.strikethrough.then_some(Mark::Strike),
         attrs.bold.then_some(Mark::Bold),
@@ -378,7 +383,10 @@ fn autolink(prepared: &Prepared, ivs: &[Interval], index: usize, url: &str) -> b
         && cells.iter().all(|c| !c.code)
         && cells.iter().map(|c| c.ch).eq(url.chars())
         && ivs.get(index + 1).is_none_or(|n| n.start >= iv.end)
-        && prepared.anchors.iter().all(|(i, _)| *i <= iv.start || *i >= iv.end)
+        && prepared
+            .anchors
+            .iter()
+            .all(|(i, _)| *i <= iv.start || *i >= iv.end)
 }
 
 /// A code span holding `content` literally.
@@ -394,7 +402,11 @@ pub(crate) fn code_span(content: &str) -> String {
     let pad = content.starts_with('`')
         || content.ends_with('`')
         || (content.starts_with(' ') && content.ends_with(' ') && !all_spaces);
-    if pad { format!("{fence} {content} {fence}") } else { format!("{fence}{content}{fence}") }
+    if pad {
+        format!("{fence} {content} {fence}")
+    } else {
+        format!("{fence}{content}{fence}")
+    }
 }
 
 fn open_text(iv: &Interval, options: &MarkdownOptions) -> String {
@@ -426,7 +438,13 @@ fn close_text(iv: &Interval, options: &MarkdownOptions) -> String {
 }
 
 /// The literal text of every token.
-fn render(tokens: &[Token], ivs: &[Interval], options: &MarkdownOptions, heading: bool, ctx: TextContext) -> Vec<String> {
+fn render(
+    tokens: &[Token],
+    ivs: &[Interval],
+    options: &MarkdownOptions,
+    heading: bool,
+    ctx: TextContext,
+) -> Vec<String> {
     let mut link_depth = 0usize;
     let mut out = Vec::with_capacity(tokens.len());
     for (i, token) in tokens.iter().enumerate() {
@@ -437,7 +455,8 @@ fn render(tokens: &[Token], ivs: &[Interval], options: &MarkdownOptions, heading
                     line_end: i + 1 == tokens.len() || matches!(tokens[i + 1], Token::Break),
                     in_link: link_depth > 0,
                     heading_end: heading && i + 1 == tokens.len(),
-                    after_bracket: i > 0 && matches!(&tokens[i - 1], Token::Raw(raw) if raw.ends_with(']')),
+                    after_bracket: i > 0
+                        && matches!(&tokens[i - 1], Token::Raw(raw) if raw.ends_with(']')),
                     before_bracket: match tokens.get(i + 1) {
                         Some(Token::Open(iv)) => matches!(ivs[*iv].mark, Mark::Link(_)),
                         Some(Token::Raw(raw)) => raw.starts_with('['),
@@ -501,12 +520,18 @@ fn pieces(tokens: &[Token], ivs: &[Interval], strings: &[String]) -> Vec<Piece> 
 /// the block come out as hard breaks (a backslash and a newline); the
 /// caller adds the container prefix after each newline. `heading` makes it
 /// one line. The result is empty when the block has no visible text.
-pub(crate) fn render_inline(block: &Block, anchors: &[Anchor], options: &MarkdownOptions, heading: bool) -> String {
+pub(crate) fn render_inline(
+    block: &Block,
+    anchors: &[Anchor],
+    options: &MarkdownOptions,
+    heading: bool,
+) -> String {
     let mut prepared = prepare(block, anchors, heading);
     if prepared.cells.is_empty() {
         return String::new();
     }
-    let span_marks: Vec<[Option<Mark>; FAMILIES]> = block.spans().map(|(_, a)| marks_of(a, options)).collect();
+    let span_marks: Vec<[Option<Mark>; FAMILIES]> =
+        block.spans().map(|(_, a)| marks_of(a, options)).collect();
     let mut ivs = intervals(&prepared.cells, &span_marks);
     // A footnote reference inside link text would break the link, and one
     // right before a link would be read together with it: anchors inside
@@ -526,13 +551,22 @@ pub(crate) fn render_inline(block: &Block, anchors: &[Anchor], options: &Markdow
     let plain = |c: &&Cell| !c.code;
     let ctx = TextContext {
         tildes: ivs.iter().any(|iv| iv.mark == Mark::Strike)
-            || prepared.cells.iter().filter(plain).filter(|c| c.ch == '~').count() > 1,
+            || prepared
+                .cells
+                .iter()
+                .filter(plain)
+                .filter(|c| c.ch == '~')
+                .count()
+                > 1,
         brackets: prepared.cells.iter().filter(plain).any(|c| c.ch == ']'),
     };
 
     // Replace delimiters a parser would not pair as intended with HTML
     // tags, one mark at a time, until the simulation agrees.
-    let delimited = ivs.iter().filter(|iv| iv.mark.delimiter().is_some()).count();
+    let delimited = ivs
+        .iter()
+        .filter(|iv| iv.mark.delimiter().is_some())
+        .count();
     let mut strings = render(&tokens, &ivs, options, heading, ctx);
     for _ in 0..=delimited {
         let view = pieces(&tokens, &ivs, &strings);

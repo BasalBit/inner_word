@@ -79,8 +79,11 @@ pub enum ExportFormat {
 
 impl ExportFormat {
     /// Every format, in menu order.
-    pub const ALL: [ExportFormat; 3] =
-        [ExportFormat::Markdown, ExportFormat::Docx, ExportFormat::PlainText];
+    pub const ALL: [ExportFormat; 3] = [
+        ExportFormat::Markdown,
+        ExportFormat::Docx,
+        ExportFormat::PlainText,
+    ];
 
     /// The file extension without the dot: `"md"`, `"txt"` or `"docx"`.
     pub fn extension(self) -> &'static str {
@@ -120,7 +123,10 @@ impl ExportFormat {
     /// The format with the given extension (case-insensitive, with or
     /// without the dot; `"markdown"` and `"text"` are accepted too).
     pub fn from_extension(extension: &str) -> Option<ExportFormat> {
-        let e = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+        let e = extension
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
         match e.as_str() {
             "md" | "markdown" => Some(ExportFormat::Markdown),
             "txt" | "text" => Some(ExportFormat::PlainText),
@@ -208,7 +214,11 @@ impl<'a> From<&'a Document> for ExportSource<'a> {
 
 fn clean_title(title: &str) -> String {
     let t = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if t.is_empty() { UNTITLED.to_string() } else { t }
+    if t.is_empty() {
+        UNTITLED.to_string()
+    } else {
+        t
+    }
 }
 
 /// When the title of a document in a collection is written as a level-1
@@ -311,8 +321,8 @@ fn file_stem(title: &str) -> String {
     let out = out.trim_end_matches(['.', ' ', '-']);
     // Device names Windows reserves, with or without an extension.
     const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     if out.is_empty() {
         UNTITLED.to_string()
@@ -338,7 +348,10 @@ mod tests {
             assert!(!f.display_name().is_empty());
             assert!(f.mime_type().contains('/'));
         }
-        assert_eq!(ExportFormat::from_extension(".MD"), Some(ExportFormat::Markdown));
+        assert_eq!(
+            ExportFormat::from_extension(".MD"),
+            Some(ExportFormat::Markdown)
+        );
         assert_eq!(ExportFormat::from_extension("pdf"), None);
         assert!(ExportFormat::Markdown.is_text());
         assert!(!ExportFormat::Docx.is_text());
@@ -392,7 +405,10 @@ mod tests {
         assert_eq!(export(&s, ExportFormat::Markdown, &o), b"Hi\n");
         assert_eq!(export(&s, ExportFormat::PlainText, &o), b"Hi\n");
         assert_eq!(&export(&s, ExportFormat::Docx, &o)[..4], b"PK\x03\x04");
-        assert_eq!(export_text(&s, ExportFormat::Markdown, &o).as_deref(), Some("Hi\n"));
+        assert_eq!(
+            export_text(&s, ExportFormat::Markdown, &o).as_deref(),
+            Some("Hi\n")
+        );
         assert_eq!(export_text(&s, ExportFormat::Docx, &o), None);
     }
 }

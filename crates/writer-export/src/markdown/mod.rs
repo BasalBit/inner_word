@@ -44,7 +44,9 @@ use std::collections::BTreeMap;
 
 use writer_core::{Alignment, Block, BlockKind, CommentThread, Document};
 
-use crate::common::{first_comment_ranges, is_blank_text, ordinals, part_needs_title, thread_entries};
+use crate::common::{
+    first_comment_ranges, is_blank_text, ordinals, part_needs_title, thread_entries,
+};
 use crate::{ExportSource, PartTitles};
 use escape::escape_line;
 use inline::{Anchor, render_inline};
@@ -169,7 +171,11 @@ pub fn to_markdown(source: &ExportSource<'_>, options: &MarkdownOptions) -> Stri
             parts.push(text);
         }
     }
-    let separator = if options.part_rule { "\n\n---\n\n" } else { "\n\n" };
+    let separator = if options.part_rule {
+        "\n\n---\n\n"
+    } else {
+        "\n\n"
+    };
     let mut out = parts.join(separator);
     for note in &footnotes {
         if !out.is_empty() {
@@ -205,9 +211,14 @@ struct Level {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ChunkKind {
     /// A list item; `separate` puts a blank line before it.
-    Item { separate: bool },
+    Item {
+        separate: bool,
+    },
     /// A quote written with this prefix, from the block at this index.
-    Quote { prefix: String, block: usize },
+    Quote {
+        prefix: String,
+        block: usize,
+    },
     Other,
 }
 
@@ -235,7 +246,11 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(doc: &'a Document, options: &'a MarkdownOptions, footnotes: &'a mut Vec<String>) -> Writer<'a> {
+    fn new(
+        doc: &'a Document,
+        options: &'a MarkdownOptions,
+        footnotes: &'a mut Vec<String>,
+    ) -> Writer<'a> {
         let mut writer = Writer {
             doc,
             options,
@@ -256,7 +271,9 @@ impl<'a> Writer<'a> {
             return;
         }
         for (id, range) in first_comment_ranges(self.doc) {
-            let Some(thread) = self.doc.comment(id) else { continue };
+            let Some(thread) = self.doc.comment(id) else {
+                continue;
+            };
             // The note goes at the end of the commented text. When the
             // range ends in a block with nothing to show, step back to the
             // last block of the range that has text.
@@ -282,7 +299,10 @@ impl<'a> Writer<'a> {
             if target.kind().is_code() {
                 self.block_anchors.entry(block).or_default().push(raw);
             } else {
-                self.inline_anchors.entry(block).or_default().push(Anchor { offset, raw });
+                self.inline_anchors
+                    .entry(block)
+                    .or_default()
+                    .push(Anchor { offset, raw });
             }
         }
     }
@@ -324,7 +344,10 @@ impl<'a> Writer<'a> {
         while self.stack.last().is_some_and(|l| l.indent >= indent) {
             self.stack.pop();
         }
-        self.stack.last().map(|l| l.prefix.clone()).unwrap_or_default()
+        self.stack
+            .last()
+            .map(|l| l.prefix.clone())
+            .unwrap_or_default()
     }
 
     fn document(&mut self) {
@@ -338,7 +361,11 @@ impl<'a> Writer<'a> {
                 _ => self.block(index, block),
             }
             if let Some(raws) = self.block_anchors.remove(&index) {
-                let prefix = self.stack.last().map(|l| l.prefix.clone()).unwrap_or_default();
+                let prefix = self
+                    .stack
+                    .last()
+                    .map(|l| l.prefix.clone())
+                    .unwrap_or_default();
                 self.push_other(format!("{prefix}{}", raws.concat()));
             }
         }
@@ -351,7 +378,11 @@ impl<'a> Writer<'a> {
     }
 
     fn list_item(&mut self, index: usize, block: &Block, ordinal: Option<usize>) {
-        let family = if matches!(block.kind(), BlockKind::NumberedItem) { Family::Ordered } else { Family::Bullet };
+        let family = if matches!(block.kind(), BlockKind::NumberedItem) {
+            Family::Ordered
+        } else {
+            Family::Bullet
+        };
         // The item that was open at the depth this one lands on, if any.
         let before: Vec<Level> = self.stack.clone();
         let parent_prefix = self.close_levels(block.indent());
@@ -360,7 +391,9 @@ impl<'a> Writer<'a> {
         // even when an item of the same kind is open at this depth (items
         // at different indent levels can land on the same depth).
         let restarts = family == Family::Ordered && ordinal == Some(1);
-        let sibling = before.get(depth).filter(|l| l.family == family && !restarts);
+        let sibling = before
+            .get(depth)
+            .filter(|l| l.family == family && !restarts);
         if self.last_list.len() <= depth {
             self.last_list.resize(depth + 1, None);
         }
@@ -375,7 +408,11 @@ impl<'a> Writer<'a> {
             },
         };
         let marker = match (family, block.kind()) {
-            (Family::Ordered, _) => format!("{}{}", ordinal.unwrap_or(1), if alternate { ')' } else { '.' }),
+            (Family::Ordered, _) => format!(
+                "{}{}",
+                ordinal.unwrap_or(1),
+                if alternate { ')' } else { '.' }
+            ),
             _ => if alternate { "*" } else { "-" }.to_string(),
         };
         let task = match block.kind() {
@@ -385,10 +422,14 @@ impl<'a> Writer<'a> {
         };
         let child_prefix = format!("{parent_prefix}{}", " ".repeat(marker.len() + 1));
         let text = self.inline(index, block, false);
-        let line = format!("{parent_prefix}{marker} {task}{}", text.replace('\n', &format!("\n{child_prefix}")));
+        let line = format!(
+            "{parent_prefix}{marker} {task}{}",
+            text.replace('\n', &format!("\n{child_prefix}"))
+        );
         // An empty item directly under its parent's text would be read as
         // the underline of a setext heading ("-") or as more text ("1.").
-        let empty_first_child = text.is_empty() && self.prev_item.is_some_and(|(d, empty)| d < depth && !empty);
+        let empty_first_child =
+            text.is_empty() && self.prev_item.is_some_and(|(d, empty)| d < depth && !empty);
         self.chunks.push(Chunk {
             text: line.trim_end().to_string(),
             kind: ChunkKind::Item {
@@ -424,15 +465,24 @@ impl<'a> Writer<'a> {
                 }
                 MarkdownPageBreak::Omit => return,
             },
-            BlockKind::CodeBlock { language } => code_block(block.text(), language.as_deref(), &prefix),
+            BlockKind::CodeBlock { language } => {
+                code_block(block.text(), language.as_deref(), &prefix)
+            }
             BlockKind::Quote => {
                 let quote_prefix = format!("{prefix}> ");
                 let text = self.inline(index, block, false);
-                let lines = format!("{quote_prefix}{}", text.replace('\n', &format!("\n{quote_prefix}")));
+                let lines = format!(
+                    "{quote_prefix}{}",
+                    text.replace('\n', &format!("\n{quote_prefix}"))
+                );
                 // Quote blocks in a row are the paragraphs of one quote.
                 if let Some(Chunk {
                     text: previous,
-                    kind: ChunkKind::Quote { prefix: p, block: b },
+                    kind:
+                        ChunkKind::Quote {
+                            prefix: p,
+                            block: b,
+                        },
                     ..
                 }) = self.chunks.last_mut()
                     && *p == quote_prefix
@@ -533,7 +583,11 @@ fn html_comment(thread: &CommentThread) -> String {
         .map(|(author, body)| {
             let body = comment_safe(body);
             let author = comment_safe(author);
-            if author.is_empty() { body } else { format!("{author}: {body}") }
+            if author.is_empty() {
+                body
+            } else {
+                format!("{author}: {body}")
+            }
         })
         .collect();
     let resolved = if thread.resolved { " (resolved)" } else { "" };
@@ -550,14 +604,22 @@ fn footnote(label: usize, thread: &CommentThread) -> String {
             .map(|l| escape_line(l, false))
             .collect();
         let mut text = lines.join("\\\n    ");
-        let resolved = if i == 0 && thread.resolved { " (resolved)" } else { "" };
+        let resolved = if i == 0 && thread.resolved {
+            " (resolved)"
+        } else {
+            ""
+        };
         let author = author.split_whitespace().collect::<Vec<_>>().join(" ");
         if !author.is_empty() {
             let name = escape_line(&author, false);
             // The name is its own chunk; the delimiters sit against a line
             // start and a colon, which always pair.
             let head = format!("**{name}{resolved}:**");
-            text = if text.is_empty() { head } else { format!("{head} {text}") };
+            text = if text.is_empty() {
+                head
+            } else {
+                format!("{head} {text}")
+            };
         } else if !resolved.is_empty() {
             text = format!("{text}{resolved}").trim().to_string();
         }

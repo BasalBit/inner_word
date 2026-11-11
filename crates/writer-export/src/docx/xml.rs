@@ -41,7 +41,8 @@ pub(crate) fn attr(s: &str) -> String {
 }
 
 /// The XML declaration every part starts with.
-pub(crate) const DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+pub(crate) const DECLARATION: &str =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 
 /// A hyperlink target Word accepts: whitespace, control characters and the
 /// characters URIs forbid are percent-encoded. Word refuses to open a
@@ -67,7 +68,8 @@ pub(crate) fn uri(s: &str) -> String {
     let mut fixed = String::with_capacity(out.len());
     for (i, c) in out.char_indices() {
         if c == '%' {
-            let valid = bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit) && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
+            let valid = bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+                && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
             if !valid {
                 fixed.push_str("%25");
                 continue;
@@ -84,16 +86,28 @@ mod tests {
 
     #[test]
     fn escaping() {
-        assert_eq!(text("a < b && c > d \"q\" 'r'"), "a &lt; b &amp;&amp; c &gt; d \"q\" 'r'");
+        assert_eq!(
+            text("a < b && c > d \"q\" 'r'"),
+            "a &lt; b &amp;&amp; c &gt; d \"q\" 'r'"
+        );
         assert_eq!(attr("a < \"b\" & c\nd"), "a &lt; &quot;b&quot; &amp; c d");
-        assert_eq!(text("a\u{0}b\u{1}c\u{b}d\u{c}e\u{1f}f\u{fffe}g\u{ffff}h\ri"), "abcdefghi");
-        assert_eq!(text("tab\tnl\nemoji 😀 rtl שלום"), "tab\tnl\nemoji 😀 rtl שלום");
+        assert_eq!(
+            text("a\u{0}b\u{1}c\u{b}d\u{c}e\u{1f}f\u{fffe}g\u{ffff}h\ri"),
+            "abcdefghi"
+        );
+        assert_eq!(
+            text("tab\tnl\nemoji 😀 rtl שלום"),
+            "tab\tnl\nemoji 😀 rtl שלום"
+        );
         assert_eq!(attr("\u{7}x"), "x");
     }
 
     #[test]
     fn uris() {
-        assert_eq!(uri("https://example.com/a?b=c&d=e#f"), "https://example.com/a?b=c&d=e#f");
+        assert_eq!(
+            uri("https://example.com/a?b=c&d=e#f"),
+            "https://example.com/a?b=c&d=e#f"
+        );
         assert_eq!(uri(" a b\tc "), "a%20b%09c");
         assert_eq!(uri("x<y>\"{z}|\\^`"), "x%3Cy%3E%22%7Bz%7D%7C%5C%5E%60");
         assert_eq!(uri("100%"), "100%25");

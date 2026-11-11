@@ -7,8 +7,8 @@ use std::io::Read;
 
 use roxmltree::Node;
 use writer_core::{
-    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs, InlineStyle,
-    Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection, Typography,
+    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection, Typography,
 };
 use writer_export::docx::parts;
 use writer_export::{DocxOptions, ExportSource, PartTitles, to_docx};
@@ -23,13 +23,19 @@ const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 /// The parts of a package: name to XML text. Also checks the archive
 /// itself: CRCs (the reader verifies them), no duplicate names.
 fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("a valid ZIP archive");
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("a valid ZIP archive");
     let mut parts = BTreeMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("a readable entry");
         let mut content = String::new();
-        file.read_to_string(&mut content).expect("UTF-8 content with a valid CRC");
-        assert!(parts.insert(file.name().to_string(), content).is_none(), "duplicate part {}", file.name());
+        file.read_to_string(&mut content)
+            .expect("UTF-8 content with a valid CRC");
+        assert!(
+            parts.insert(file.name().to_string(), content).is_none(),
+            "duplicate part {}",
+            file.name()
+        );
     }
     parts
 }
@@ -41,7 +47,9 @@ struct Package {
 impl Package {
     fn new(source: &ExportSource<'_>, options: &DocxOptions) -> Package {
         let bytes = to_docx(source, options);
-        let package = Package { parts: unzip(&bytes) };
+        let package = Package {
+            parts: unzip(&bytes),
+        };
         package.check();
         package
     }
@@ -51,7 +59,9 @@ impl Package {
     }
 
     fn part(&self, name: &str) -> &str {
-        self.parts.get(name).unwrap_or_else(|| panic!("missing part {name}"))
+        self.parts
+            .get(name)
+            .unwrap_or_else(|| panic!("missing part {name}"))
     }
 
     fn has(&self, name: &str) -> bool {
@@ -63,7 +73,12 @@ impl Package {
         let doc = roxmltree::Document::parse(self.part(name)).unwrap();
         doc.root_element()
             .children()
-            .filter(|n| n.has_tag_name(("http://schemas.openxmlformats.org/package/2006/relationships", "Relationship")))
+            .filter(|n| {
+                n.has_tag_name((
+                    "http://schemas.openxmlformats.org/package/2006/relationships",
+                    "Relationship",
+                ))
+            })
             .map(|n| {
                 (
                     n.attribute("Id").unwrap().to_string(),
@@ -81,8 +96,12 @@ impl Package {
     fn check(&self) {
         // Every part is well-formed XML with a declaration.
         for (name, xml) in &self.parts {
-            assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\""), "{name} has no declaration");
-            roxmltree::Document::parse(xml).unwrap_or_else(|e| panic!("{name} is not well-formed: {e}\n{xml}"));
+            assert!(
+                xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\""),
+                "{name} has no declaration"
+            );
+            roxmltree::Document::parse(xml)
+                .unwrap_or_else(|e| panic!("{name} is not well-formed: {e}\n{xml}"));
         }
         // Required parts.
         for name in [
@@ -103,8 +122,18 @@ impl Package {
         let overrides: BTreeSet<String> = types
             .root_element()
             .children()
-            .filter(|n| n.has_tag_name(("http://schemas.openxmlformats.org/package/2006/content-types", "Override")))
-            .map(|n| n.attribute("PartName").unwrap().trim_start_matches('/').to_string())
+            .filter(|n| {
+                n.has_tag_name((
+                    "http://schemas.openxmlformats.org/package/2006/content-types",
+                    "Override",
+                ))
+            })
+            .map(|n| {
+                n.attribute("PartName")
+                    .unwrap()
+                    .trim_start_matches('/')
+                    .to_string()
+            })
             .collect();
         for name in self.parts.keys() {
             if name != parts::CONTENT_TYPES && !name.ends_with(".rels") {
@@ -116,15 +145,24 @@ impl Package {
         }
         // Relationship targets exist.
         for (_, (_, target, external)) in self.rels(parts::ROOT_RELS) {
-            assert!(!external && self.has(&target), "root relationship to missing {target}");
+            assert!(
+                !external && self.has(&target),
+                "root relationship to missing {target}"
+            );
         }
         let rels = self.rels(parts::DOCUMENT_RELS);
         for (_, target, external) in rels.values() {
             if !external {
-                assert!(self.has(&format!("word/{target}")), "relationship to missing word/{target}");
+                assert!(
+                    self.has(&format!("word/{target}")),
+                    "relationship to missing word/{target}"
+                );
             }
         }
-        let kinds: BTreeSet<&str> = rels.values().map(|(t, _, _)| t.rsplit('/').next().unwrap()).collect();
+        let kinds: BTreeSet<&str> = rels
+            .values()
+            .map(|(t, _, _)| t.rsplit('/').next().unwrap())
+            .collect();
         for kind in ["styles", "numbering", "settings"] {
             assert!(kinds.contains(kind), "no {kind} relationship");
         }
@@ -132,11 +170,26 @@ impl Package {
         // refers to exists.
         let document = roxmltree::Document::parse(self.part(parts::DOCUMENT)).unwrap();
         let styles = roxmltree::Document::parse(self.part(parts::STYLES)).unwrap();
-        let style_ids: BTreeSet<&str> = styles.descendants().filter(|n| n.has_tag_name((W, "style"))).filter_map(|n| n.attribute((W, "styleId"))).collect();
+        let style_ids: BTreeSet<&str> = styles
+            .descendants()
+            .filter(|n| n.has_tag_name((W, "style")))
+            .filter_map(|n| n.attribute((W, "styleId")))
+            .collect();
         let numbering = roxmltree::Document::parse(self.part(parts::NUMBERING)).unwrap();
-        let num_ids: BTreeSet<&str> = numbering.descendants().filter(|n| n.has_tag_name((W, "num"))).filter_map(|n| n.attribute((W, "numId"))).collect();
-        let abstract_ids: BTreeSet<&str> = numbering.descendants().filter(|n| n.has_tag_name((W, "abstractNum"))).filter_map(|n| n.attribute((W, "abstractNumId"))).collect();
-        for n in numbering.descendants().filter(|n| n.has_tag_name((W, "abstractNumId"))) {
+        let num_ids: BTreeSet<&str> = numbering
+            .descendants()
+            .filter(|n| n.has_tag_name((W, "num")))
+            .filter_map(|n| n.attribute((W, "numId")))
+            .collect();
+        let abstract_ids: BTreeSet<&str> = numbering
+            .descendants()
+            .filter(|n| n.has_tag_name((W, "abstractNum")))
+            .filter_map(|n| n.attribute((W, "abstractNumId")))
+            .collect();
+        for n in numbering
+            .descendants()
+            .filter(|n| n.has_tag_name((W, "abstractNumId")))
+        {
             assert!(abstract_ids.contains(n.attribute((W, "val")).unwrap()));
         }
         let mut starts = Vec::new();
@@ -164,18 +217,32 @@ impl Package {
             }
         }
         // Styles refer to styles that exist.
-        for n in styles.descendants().filter(|n| n.has_tag_name((W, "basedOn")) || n.has_tag_name((W, "next"))) {
+        for n in styles
+            .descendants()
+            .filter(|n| n.has_tag_name((W, "basedOn")) || n.has_tag_name((W, "next")))
+        {
             assert!(style_ids.contains(n.attribute((W, "val")).unwrap()));
         }
         // Comments: each one has exactly one start, end and reference, in
         // that order, and an entry in both comment parts.
         let comment_ids: Vec<String> = if self.has(parts::COMMENTS) {
             let comments = roxmltree::Document::parse(self.part(parts::COMMENTS)).unwrap();
-            let ids: Vec<String> = comments.descendants().filter(|n| n.has_tag_name((W, "comment"))).map(|n| n.attribute((W, "id")).unwrap().to_string()).collect();
-            let para_ids: BTreeSet<String> = comments.descendants().filter_map(|n| n.attribute((W14, "paraId"))).map(str::to_string).collect();
+            let ids: Vec<String> = comments
+                .descendants()
+                .filter(|n| n.has_tag_name((W, "comment")))
+                .map(|n| n.attribute((W, "id")).unwrap().to_string())
+                .collect();
+            let para_ids: BTreeSet<String> = comments
+                .descendants()
+                .filter_map(|n| n.attribute((W14, "paraId")))
+                .map(str::to_string)
+                .collect();
             assert_eq!(para_ids.len(), ids.len(), "one paragraph id per comment");
             let extended = roxmltree::Document::parse(self.part(parts::COMMENTS_EXTENDED)).unwrap();
-            let ex: Vec<Node> = extended.descendants().filter(|n| n.has_tag_name((W15, "commentEx"))).collect();
+            let ex: Vec<Node> = extended
+                .descendants()
+                .filter(|n| n.has_tag_name((W15, "commentEx")))
+                .collect();
             assert_eq!(ex.len(), ids.len());
             for e in ex {
                 assert!(para_ids.contains(e.attribute((W15, "paraId")).unwrap()));
@@ -197,16 +264,31 @@ impl Package {
         assert_eq!(sorted(refs), sorted(comment_ids));
         let xml = self.part(parts::DOCUMENT);
         for id in &starts {
-            let s = xml.find(&format!("<w:commentRangeStart w:id=\"{id}\"/>")).unwrap();
-            let e = xml.find(&format!("<w:commentRangeEnd w:id=\"{id}\"/>")).unwrap();
+            let s = xml
+                .find(&format!("<w:commentRangeStart w:id=\"{id}\"/>"))
+                .unwrap();
+            let e = xml
+                .find(&format!("<w:commentRangeEnd w:id=\"{id}\"/>"))
+                .unwrap();
             assert!(s < e, "comment {id} ends before it starts");
         }
         // The body ends with section properties, and every paragraph and
         // run holds only elements that may be there.
-        let body = document.descendants().find(|n| n.has_tag_name((W, "body"))).unwrap();
-        assert!(body.last_element_child().unwrap().has_tag_name((W, "sectPr")));
+        let body = document
+            .descendants()
+            .find(|n| n.has_tag_name((W, "body")))
+            .unwrap();
+        assert!(
+            body.last_element_child()
+                .unwrap()
+                .has_tag_name((W, "sectPr"))
+        );
         for p in body.children().filter(Node::is_element) {
-            assert!(p.has_tag_name((W, "p")) || p.has_tag_name((W, "sectPr")), "unexpected {:?} in body", p.tag_name());
+            assert!(
+                p.has_tag_name((W, "p")) || p.has_tag_name((W, "sectPr")),
+                "unexpected {:?} in body",
+                p.tag_name()
+            );
         }
         // No character XML forbids, anywhere.
         for (name, xml) in &self.parts {
@@ -220,8 +302,14 @@ impl Package {
     fn paragraphs(&self) -> Vec<P> {
         let rels = self.rels(parts::DOCUMENT_RELS);
         let document = roxmltree::Document::parse(self.part(parts::DOCUMENT)).unwrap();
-        let body = document.descendants().find(|n| n.has_tag_name((W, "body"))).unwrap();
-        body.children().filter(|n| n.has_tag_name((W, "p"))).map(|p| P::read(p, &rels)).collect()
+        let body = document
+            .descendants()
+            .find(|n| n.has_tag_name((W, "body")))
+            .unwrap();
+        body.children()
+            .filter(|n| n.has_tag_name((W, "p")))
+            .map(|p| P::read(p, &rels))
+            .collect()
     }
 
     /// The `w:sectPr` elements in document order.
@@ -237,7 +325,9 @@ impl Package {
                 (
                     num(size, "w"),
                     num(size, "h"),
-                    size.attribute((W, "orient")).unwrap_or("portrait").to_string(),
+                    size.attribute((W, "orient"))
+                        .unwrap_or("portrait")
+                        .to_string(),
                     num(mar, "top"),
                     num(mar, "right"),
                     num(mar, "bottom"),
@@ -298,7 +388,10 @@ impl P {
         if let Some(ppr) = child(p, "pPr") {
             out.style = val(ppr, "pStyle").unwrap_or("").to_string();
             if let Some(num) = child(ppr, "numPr") {
-                out.num = Some((val(num, "numId").unwrap().parse().unwrap(), val(num, "ilvl").unwrap().parse().unwrap()));
+                out.num = Some((
+                    val(num, "numId").unwrap().parse().unwrap(),
+                    val(num, "ilvl").unwrap().parse().unwrap(),
+                ));
             }
             if let Some(ind) = child(ppr, "ind") {
                 out.left = ind.attribute((W, "left")).map(|v| v.parse().unwrap());
@@ -318,21 +411,31 @@ impl P {
                 match c.tag_name().name() {
                     "rPr" => {
                         run.bold = child(c, "b").is_some();
-                        assert_eq!(run.bold, child(c, "bCs").is_some(), "bold needs its complex-script twin");
+                        assert_eq!(
+                            run.bold,
+                            child(c, "bCs").is_some(),
+                            "bold needs its complex-script twin"
+                        );
                         run.italic = child(c, "i").is_some();
                         run.underline = child(c, "u").is_some();
                         run.strike = child(c, "strike").is_some();
                         run.rtl = child(c, "rtl").is_some();
                         run.color = val(c, "color").map(str::to_string);
-                        run.font = child(c, "rFonts").and_then(|f| f.attribute((W, "ascii"))).map(str::to_string);
+                        run.font = child(c, "rFonts")
+                            .and_then(|f| f.attribute((W, "ascii")))
+                            .map(str::to_string);
                         run.size = val(c, "sz").map(|v| v.parse().unwrap());
                         assert_eq!(run.size, val(c, "szCs").map(|v| v.parse().unwrap()));
-                        run.shade = child(c, "shd").and_then(|f| f.attribute((W, "fill"))).map(str::to_string);
+                        run.shade = child(c, "shd")
+                            .and_then(|f| f.attribute((W, "fill")))
+                            .map(str::to_string);
                         run.style = val(c, "rStyle").map(str::to_string);
                     }
                     "t" => {
                         let t = c.text().unwrap_or("");
-                        if c.attribute(("http://www.w3.org/XML/1998/namespace", "space")) != Some("preserve") {
+                        if c.attribute(("http://www.w3.org/XML/1998/namespace", "space"))
+                            != Some("preserve")
+                        {
                             assert_eq!(t, t.trim(), "whitespace needs xml:space");
                         }
                         run.text.push_str(t);
@@ -394,8 +497,13 @@ fn package_parts_and_order() {
     let bytes = to_docx(&ExportSource::single("T", &doc), &DocxOptions::default());
     assert_eq!(&bytes[..4], b"PK\x03\x04");
     // The first entry is the content types, as packages conventionally start.
-    assert_eq!(&bytes[30..30 + parts::CONTENT_TYPES.len()], parts::CONTENT_TYPES.as_bytes());
-    let package = Package { parts: unzip(&bytes) };
+    assert_eq!(
+        &bytes[30..30 + parts::CONTENT_TYPES.len()],
+        parts::CONTENT_TYPES.as_bytes()
+    );
+    let package = Package {
+        parts: unzip(&bytes),
+    };
     package.check();
     let names: Vec<&str> = package.parts.keys().map(String::as_str).collect();
     assert_eq!(
@@ -427,7 +535,10 @@ fn package_parts_and_order() {
 
 #[test]
 fn output_is_deterministic() {
-    let doc = Document::from_blocks(vec![Block::paragraph("Same"), Block::with_text(BlockKind::NumberedItem, "x")]);
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("Same"),
+        Block::with_text(BlockKind::NumberedItem, "x"),
+    ]);
     let o = DocxOptions {
         created: 1_794_391_505_000,
         modified: 1_794_391_505_000,
@@ -446,15 +557,28 @@ fn core_properties() {
         modified: 1_794_391_505_999,
         ..Default::default()
     };
-    let package = Package::new(&ExportSource::single("Fish & <Chips>\u{0} \"quoted\"", &doc), &o);
+    let package = Package::new(
+        &ExportSource::single("Fish & <Chips>\u{0} \"quoted\"", &doc),
+        &o,
+    );
     let core = roxmltree::Document::parse(package.part(parts::CORE)).unwrap();
-    let get = |name: &str| core.descendants().find(|n| n.tag_name().name() == name).and_then(|n| n.text()).unwrap_or("").to_string();
+    let get = |name: &str| {
+        core.descendants()
+            .find(|n| n.tag_name().name() == name)
+            .and_then(|n| n.text())
+            .unwrap_or("")
+            .to_string()
+    };
     assert_eq!(get("title"), "Fish & <Chips> \"quoted\"");
     assert_eq!(get("creator"), "Ada <Lovelace> & Co");
     assert_eq!(get("lastModifiedBy"), "Ada <Lovelace> & Co");
     assert_eq!(get("created"), "1970-01-01T00:00:00Z");
     assert_eq!(get("modified"), "2026-11-11T10:05:05Z");
-    assert!(package.part(parts::APP).contains("<Application>The Writer</Application>"));
+    assert!(
+        package
+            .part(parts::APP)
+            .contains("<Application>The Writer</Application>")
+    );
     assert!(package.part(parts::SETTINGS).contains("compatibilityMode"));
 }
 
@@ -472,11 +596,19 @@ fn styles_follow_the_typography() {
     let doc = Document::from_blocks(vec![Block::paragraph("x")]).with_settings(settings);
     let package = Package::of(&doc);
     let styles = roxmltree::Document::parse(package.part(parts::STYLES)).unwrap();
-    let style = |id: &str| styles.descendants().find(|n| n.has_tag_name((W, "style")) && n.attribute((W, "styleId")) == Some(id)).unwrap_or_else(|| panic!("no style {id}"));
+    let style = |id: &str| {
+        styles
+            .descendants()
+            .find(|n| n.has_tag_name((W, "style")) && n.attribute((W, "styleId")) == Some(id))
+            .unwrap_or_else(|| panic!("no style {id}"))
+    };
     let normal = style("Normal");
     assert_eq!(normal.attribute((W, "default")), Some("1"));
     let rpr = child(normal, "rPr").unwrap();
-    assert_eq!(child(rpr, "rFonts").unwrap().attribute((W, "ascii")), Some("Iowan \"Old\" Style"));
+    assert_eq!(
+        child(rpr, "rFonts").unwrap().attribute((W, "ascii")),
+        Some("Iowan \"Old\" Style")
+    );
     assert_eq!(val(rpr, "sz"), Some("24"));
     let spacing = child(child(normal, "pPr").unwrap(), "spacing").unwrap();
     assert_eq!(spacing.attribute((W, "after")), Some("120"));
@@ -489,15 +621,32 @@ fn styles_follow_the_typography() {
         assert_eq!(val(h, "name"), Some(format!("heading {level}").as_str()));
         assert_eq!(val(h, "basedOn"), Some("Normal"));
         let size = (t.size_for(&BlockKind::heading(level)) * 2.0) as u32;
-        assert_eq!(val(child(h, "rPr").unwrap(), "sz"), Some(size.to_string().as_str()));
-        assert_eq!(val(child(h, "pPr").unwrap(), "outlineLvl"), Some((level - 1).to_string().as_str()));
+        assert_eq!(
+            val(child(h, "rPr").unwrap(), "sz"),
+            Some(size.to_string().as_str())
+        );
+        assert_eq!(
+            val(child(h, "pPr").unwrap(), "outlineLvl"),
+            Some((level - 1).to_string().as_str())
+        );
     }
     assert_eq!(val(style("Heading1"), "name"), Some("heading 1"));
-    for id in ["Quote", "Code", "ListParagraph", "Hyperlink", "Footer", "CommentReference", "CommentText"] {
+    for id in [
+        "Quote",
+        "Code",
+        "ListParagraph",
+        "Hyperlink",
+        "Footer",
+        "CommentReference",
+        "CommentText",
+    ] {
         style(id);
     }
     let code = child(style("Code"), "rPr").unwrap();
-    assert_eq!(child(code, "rFonts").unwrap().attribute((W, "ascii")), Some("Menlo"));
+    assert_eq!(
+        child(code, "rFonts").unwrap().attribute((W, "ascii")),
+        Some("Menlo")
+    );
     assert_eq!(val(code, "sz"), Some("22"));
     assert!(child(child(style("Code"), "pPr").unwrap(), "shd").is_some());
     assert_eq!(style("Hyperlink").attribute((W, "type")), Some("character"));
@@ -526,10 +675,18 @@ fn headings_paragraphs_quotes_and_code() {
         Block::paragraph("Body"),
         Block::paragraph(""),
         Block::with_text(BlockKind::Quote, "Wise\nwords"),
-        Block::with_text(BlockKind::CodeBlock { language: Some("rust".into()) }, "fn main() {\n\tlet x  =  1;\n}\n"),
+        Block::with_text(
+            BlockKind::CodeBlock {
+                language: Some("rust".into()),
+            },
+            "fn main() {\n\tlet x  =  1;\n}\n",
+        ),
     ]);
     let styles: Vec<&str> = ps.iter().map(|p| p.style.as_str()).collect();
-    assert_eq!(styles, vec!["Heading1", "Heading6", "", "", "Quote", "Code"]);
+    assert_eq!(
+        styles,
+        vec!["Heading1", "Heading6", "", "", "Quote", "Code"]
+    );
     assert_eq!(ps[0].text(), "One");
     assert_eq!(ps[2].text(), "Body");
     // Empty paragraphs are kept: they are the writer's spacing.
@@ -580,34 +737,89 @@ fn numbering_restarts_for_each_separate_list() {
     // What the document says the numbers are.
     assert_eq!(
         doc.numbered_ordinals(0..9),
-        vec![Some(1), Some(2), None, Some(1), Some(1), None, Some(1), None, Some(2)]
+        vec![
+            Some(1),
+            Some(2),
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            None,
+            Some(2)
+        ]
     );
     let package = Package::of(&doc);
     let ps = package.paragraphs();
     let nums: Vec<Option<(u32, u32)>> = ps.iter().map(|p| p.num).collect();
     assert_eq!(
         nums,
-        vec![Some((2, 0)), Some((2, 0)), None, Some((3, 0)), Some((4, 1)), Some((1, 1)), Some((5, 1)), None, Some((3, 0))]
+        vec![
+            Some((2, 0)),
+            Some((2, 0)),
+            None,
+            Some((3, 0)),
+            Some((4, 1)),
+            Some((1, 1)),
+            Some((5, 1)),
+            None,
+            Some((3, 0))
+        ]
     );
     // Every numbered list has a numbering instance and a definition of its
     // own, so each counts from 1; instance 1 is the bullets.
     let numbering = roxmltree::Document::parse(package.part(parts::NUMBERING)).unwrap();
-    let nums: Vec<Node> = numbering.descendants().filter(|n| n.has_tag_name((W, "num"))).collect();
+    let nums: Vec<Node> = numbering
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "num")))
+        .collect();
     assert_eq!(nums.len(), 5);
-    let definitions: BTreeSet<&str> = nums.iter().map(|n| val(*n, "abstractNumId").unwrap()).collect();
+    let definitions: BTreeSet<&str> = nums
+        .iter()
+        .map(|n| val(*n, "abstractNumId").unwrap())
+        .collect();
     assert_eq!(definitions.len(), 5);
-    let abstracts: Vec<Node> = numbering.descendants().filter(|n| n.has_tag_name((W, "abstractNum"))).collect();
+    let abstracts: Vec<Node> = numbering
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "abstractNum")))
+        .collect();
     assert_eq!(abstracts.len(), 5);
     for (i, a) in abstracts.iter().enumerate() {
         let format = if i == 0 { "bullet" } else { "decimal" };
-        let levels: Vec<Node> = a.children().filter(|n| n.has_tag_name((W, "lvl"))).collect();
+        let levels: Vec<Node> = a
+            .children()
+            .filter(|n| n.has_tag_name((W, "lvl")))
+            .collect();
         assert_eq!(levels.len(), 9);
-        assert!(levels.iter().all(|l| val(*l, "numFmt") == Some(format) && val(*l, "start") == Some("1")));
+        assert!(
+            levels
+                .iter()
+                .all(|l| val(*l, "numFmt") == Some(format) && val(*l, "start") == Some("1"))
+        );
         // Deeper levels are indented further.
-        let lefts: Vec<i32> = levels.iter().map(|l| child(child(*l, "pPr").unwrap(), "ind").unwrap().attribute((W, "left")).unwrap().parse().unwrap()).collect();
+        let lefts: Vec<i32> = levels
+            .iter()
+            .map(|l| {
+                child(child(*l, "pPr").unwrap(), "ind")
+                    .unwrap()
+                    .attribute((W, "left"))
+                    .unwrap()
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
         assert!(lefts.windows(2).all(|w| w[1] > w[0]));
     }
-    assert_eq!(val(abstracts[1].children().find(|n| n.has_tag_name((W, "lvl"))).unwrap(), "lvlText"), Some("%1."));
+    assert_eq!(
+        val(
+            abstracts[1]
+                .children()
+                .find(|n| n.has_tag_name((W, "lvl")))
+                .unwrap(),
+            "lvlText"
+        ),
+        Some("%1.")
+    );
     // All definitions come before all instances, as the schema requires.
     let xml = package.part(parts::NUMBERING);
     assert!(xml.rfind("<w:abstractNum ").unwrap() < xml.find("<w:num ").unwrap());
@@ -671,10 +883,22 @@ fn alignment_and_indent() {
         Block::paragraph("justify").with_alignment(Alignment::Justify),
         Block::paragraph("in").with_indent(2),
         Block::with_text(BlockKind::Quote, "quote in").with_indent(1),
-        Block::with_text(BlockKind::heading(2), "centred heading").with_alignment(Alignment::Center),
+        Block::with_text(BlockKind::heading(2), "centred heading")
+            .with_alignment(Alignment::Center),
     ]);
     let aligns: Vec<Option<&str>> = ps.iter().map(|p| p.align.as_deref()).collect();
-    assert_eq!(aligns, vec![None, Some("center"), Some("right"), Some("both"), None, None, Some("center")]);
+    assert_eq!(
+        aligns,
+        vec![
+            None,
+            Some("center"),
+            Some("right"),
+            Some("both"),
+            None,
+            None,
+            Some("center")
+        ]
+    );
     assert_eq!(ps[4].left, Some(960));
     assert_eq!(ps[5].left, Some(880));
     assert_eq!(ps[0].left, None);
@@ -693,13 +917,37 @@ fn run_formatting() {
             .with_span("under", style(InlineStyle::Underline))
             .with_span("strike", style(InlineStyle::Strikethrough))
             .with_span("code", style(InlineStyle::Code))
-            .with_span("marked", InlineAttrs { highlight: Some(Highlight::Yellow), ..plain() })
-            .with_span("red", InlineAttrs { color: Some(Rgb::new(0xcc, 0x33, 0x00)), ..plain() })
-            .with_span("font", InlineAttrs { font: Some("Georgia".into()), ..plain() }),
+            .with_span(
+                "marked",
+                InlineAttrs {
+                    highlight: Some(Highlight::Yellow),
+                    ..plain()
+                },
+            )
+            .with_span(
+                "red",
+                InlineAttrs {
+                    color: Some(Rgb::new(0xcc, 0x33, 0x00)),
+                    ..plain()
+                },
+            )
+            .with_span(
+                "font",
+                InlineAttrs {
+                    font: Some("Georgia".into()),
+                    ..plain()
+                },
+            ),
     ]);
     let r = &ps[0].runs;
     assert_eq!(r.len(), 9);
-    assert_eq!(r[0], Run { text: "plain ".into(), ..Run::default() });
+    assert_eq!(
+        r[0],
+        Run {
+            text: "plain ".into(),
+            ..Run::default()
+        }
+    );
     assert!(r[1].bold && !r[1].italic);
     assert!(r[2].italic);
     assert!(r[3].underline);
@@ -726,7 +974,13 @@ fn every_attribute_at_once() {
         link: Some("https://example.com/all".into()),
         ..plain()
     };
-    let ps = paragraphs(vec![Block::new(BlockKind::heading(2)).with_span("every\nthing", all).with_text_size(Some(20.0)).with_alignment(Alignment::Right).with_indent(1)]);
+    let ps = paragraphs(vec![
+        Block::new(BlockKind::heading(2))
+            .with_span("every\nthing", all)
+            .with_text_size(Some(20.0))
+            .with_alignment(Alignment::Right)
+            .with_indent(1),
+    ]);
     assert_eq!(ps[0].style, "Heading2");
     assert_eq!(ps[0].align.as_deref(), Some("right"));
     assert_eq!(ps[0].left, Some(480));
@@ -754,9 +1008,12 @@ fn every_attribute_at_once() {
 #[test]
 fn block_text_size_is_on_every_run() {
     let ps = paragraphs(vec![
-        Block::paragraph("big ").with_span("bold", plain().with(InlineStyle::Bold)).with_text_size(Some(24.0)),
+        Block::paragraph("big ")
+            .with_span("bold", plain().with(InlineStyle::Bold))
+            .with_text_size(Some(24.0)),
         Block::paragraph("normal"),
-        Block::with_text(BlockKind::TodoItem { checked: false }, "small").with_text_size(Some(10.0)),
+        Block::with_text(BlockKind::TodoItem { checked: false }, "small")
+            .with_text_size(Some(10.0)),
     ]);
     assert!(ps[0].runs.iter().all(|r| r.size == Some(48)));
     assert!(ps[1].runs.iter().all(|r| r.size.is_none()));
@@ -768,7 +1025,13 @@ fn hyperlinks_go_through_relationships() {
     let package = Package::of(&Document::from_blocks(vec![
         Block::paragraph("See ")
             .with_span("this ", link("https://example.com/a?b=1&c=2"))
-            .with_span("bold part", InlineAttrs { bold: true, ..link("https://example.com/a?b=1&c=2") })
+            .with_span(
+                "bold part",
+                InlineAttrs {
+                    bold: true,
+                    ..link("https://example.com/a?b=1&c=2")
+                },
+            )
             .with_span(" and ", plain())
             .with_span("that", link("my file <1>.txt"))
             .with_span("again", link("https://example.com/a?b=1&c=2"))
@@ -791,11 +1054,20 @@ fn hyperlinks_go_through_relationships() {
     assert!(ps[0].runs[1].style.as_deref() == Some("Hyperlink") && ps[0].runs[2].bold);
     // One relationship per distinct target, all external.
     let rels = package.rels(parts::DOCUMENT_RELS);
-    let hyper: Vec<_> = rels.values().filter(|(t, _, _)| t.ends_with("/hyperlink")).collect();
+    let hyper: Vec<_> = rels
+        .values()
+        .filter(|(t, _, _)| t.ends_with("/hyperlink"))
+        .collect();
     assert_eq!(hyper.len(), 2);
     assert!(hyper.iter().all(|(_, _, external)| *external));
     // The two runs of the first link share one hyperlink element.
-    assert_eq!(package.part(parts::DOCUMENT).matches("<w:hyperlink ").count(), 3);
+    assert_eq!(
+        package
+            .part(parts::DOCUMENT)
+            .matches("<w:hyperlink ")
+            .count(),
+        3
+    );
 }
 
 #[test]
@@ -808,8 +1080,15 @@ fn right_to_left_text() {
     ]);
     assert!(ps[0].bidi && ps[0].runs.iter().all(|r| r.rtl));
     assert!(!ps[1].bidi);
-    let dirs: Vec<(&str, bool)> = ps[1].runs.iter().map(|r| (r.text.as_str(), r.rtl)).collect();
-    assert_eq!(dirs, vec![("Latin with ", false), ("עברית ", true), ("inside", false)]);
+    let dirs: Vec<(&str, bool)> = ps[1]
+        .runs
+        .iter()
+        .map(|r| (r.text.as_str(), r.rtl))
+        .collect();
+    assert_eq!(
+        dirs,
+        vec![("Latin with ", false), ("עברית ", true), ("inside", false)]
+    );
     // "Right" in a right-to-left paragraph is its leading edge.
     assert!(ps[2].bidi && ps[2].align.as_deref() == Some("left"));
     assert!(!ps[3].bidi && ps[3].align.as_deref() == Some("right"));
@@ -821,19 +1100,34 @@ fn hostile_text_is_escaped_and_cleaned() {
     let ps = paragraphs(vec![
         Block::paragraph(s),
         Block::with_text(BlockKind::code(), "</w:t></w:r></w:p> & <script>"),
-        Block::new(BlockKind::Paragraph).with_span("x", InlineAttrs { font: Some("A\"<&>'B".into()), ..link("https://x.test/?q=\"<a>\"&r='b'") }),
+        Block::new(BlockKind::Paragraph).with_span(
+            "x",
+            InlineAttrs {
+                font: Some("A\"<&>'B".into()),
+                ..link("https://x.test/?q=\"<a>\"&r='b'")
+            },
+        ),
     ]);
-    assert_eq!(ps[0].text(), "<w:t>&amp; \"quotes\" 'single' ]]> <!-- --> 👨‍👩‍👧 *md* `x`");
+    assert_eq!(
+        ps[0].text(),
+        "<w:t>&amp; \"quotes\" 'single' ]]> <!-- --> 👨‍👩‍👧 *md* `x`"
+    );
     assert_eq!(ps[1].text(), "</w:t></w:r></w:p> & <script>");
     assert_eq!(ps[2].runs[0].font.as_deref(), Some("A\"<&>'B"));
-    assert_eq!(ps[2].runs[0].link.as_deref(), Some("https://x.test/?q=%22%3Ca%3E%22&r='b'"));
+    assert_eq!(
+        ps[2].runs[0].link.as_deref(),
+        Some("https://x.test/?q=%22%3Ca%3E%22&r='b'")
+    );
 }
 
 #[test]
 fn empty_documents() {
     let ps = Package::of(&Document::new()).paragraphs();
     assert_eq!(ps, vec![P::default()]);
-    let package = Package::new(&ExportSource::collection("Empty", Vec::<(String, &Document)>::new()), &DocxOptions::default());
+    let package = Package::new(
+        &ExportSource::collection("Empty", Vec::<(String, &Document)>::new()),
+        &DocxOptions::default(),
+    );
     assert_eq!(package.paragraphs().len(), 1);
     assert_eq!(package.sections().len(), 1);
 }
@@ -844,7 +1138,19 @@ fn empty_documents() {
 fn section_properties_carry_the_page_setup() {
     // The default: A4 portrait with one-inch margins.
     let package = Package::of(&Document::from_blocks(vec![Block::paragraph("x")]));
-    assert_eq!(package.sections(), vec![(11906, 16838, "portrait".to_string(), 1440, 1440, 1440, 1440, true)]);
+    assert_eq!(
+        package.sections(),
+        vec![(
+            11906,
+            16838,
+            "portrait".to_string(),
+            1440,
+            1440,
+            1440,
+            1440,
+            true
+        )]
+    );
 
     let settings = DocumentSettings {
         page: PageSetup {
@@ -865,11 +1171,26 @@ fn section_properties_carry_the_page_setup() {
         ..Default::default()
     };
     let package = Package::new(&ExportSource::single("T", &doc), &o);
-    assert_eq!(package.sections(), vec![(15840, 12240, "landscape".to_string(), 720, 1080, 1800, 2160, false)]);
+    assert_eq!(
+        package.sections(),
+        vec![(
+            15840,
+            12240,
+            "landscape".to_string(),
+            720,
+            1080,
+            1800,
+            2160,
+            false
+        )]
+    );
 
     let custom = DocumentSettings {
         page: PageSetup {
-            paper: PaperSize::Custom { width: 360.0, height: 576.0 },
+            paper: PaperSize::Custom {
+                width: 360.0,
+                height: 576.0,
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -886,7 +1207,10 @@ fn page_number_footer() {
     assert!(footer.contains("<w:instrText xml:space=\"preserve\"> PAGE </w:instrText>"));
     assert!(footer.contains("<w:jc w:val=\"center\"/>"));
     let rels = package.rels(parts::DOCUMENT_RELS);
-    assert!(rels.values().any(|(t, target, _)| t.ends_with("/footer") && target == "footer1.xml"));
+    assert!(
+        rels.values()
+            .any(|(t, target, _)| t.ends_with("/footer") && target == "footer1.xml")
+    );
 }
 
 // ----- collections ------------------------------------------------------------------------
@@ -900,15 +1224,36 @@ fn collections_are_sections_on_new_pages() {
         },
         ..Default::default()
     };
-    let one = Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), "Chapter One"), Block::with_text(BlockKind::NumberedItem, "a")]);
-    let two = Document::from_blocks(vec![Block::paragraph("Second body"), Block::with_text(BlockKind::NumberedItem, "b")]).with_settings(landscape);
+    let one = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Chapter One"),
+        Block::with_text(BlockKind::NumberedItem, "a"),
+    ]);
+    let two = Document::from_blocks(vec![
+        Block::paragraph("Second body"),
+        Block::with_text(BlockKind::NumberedItem, "b"),
+    ])
+    .with_settings(landscape);
     let three = Document::new();
-    let source = ExportSource::collection("The Book", [("Chapter One", &one), ("Chapter Two", &two), ("", &three)]);
+    let source = ExportSource::collection(
+        "The Book",
+        [("Chapter One", &one), ("Chapter Two", &two), ("", &three)],
+    );
     let package = Package::new(&source, &DocxOptions::default());
     let ps = package.paragraphs();
     let texts: Vec<String> = ps.iter().map(P::text).collect();
     // The second and third documents do not open with their titles, so they get them.
-    assert_eq!(texts, vec!["Chapter One", "a", "Chapter Two", "Second body", "b", "Untitled", ""]);
+    assert_eq!(
+        texts,
+        vec![
+            "Chapter One",
+            "a",
+            "Chapter Two",
+            "Second body",
+            "b",
+            "Untitled",
+            ""
+        ]
+    );
     assert_eq!(ps[2].style, "Heading1");
     assert_eq!(ps[5].style, "Heading1");
     // A section ends in the last paragraph of each document but the last.
@@ -917,19 +1262,36 @@ fn collections_are_sections_on_new_pages() {
     let sections = package.sections();
     assert_eq!(sections.len(), 3);
     assert_eq!((sections[0].0, sections[0].2.as_str()), (11906, "portrait"));
-    assert_eq!((sections[1].0, sections[1].2.as_str()), (16838, "landscape"));
-    assert!(package.part(parts::DOCUMENT).matches("<w:type w:val=\"nextPage\"/>").count() == 3);
+    assert_eq!(
+        (sections[1].0, sections[1].2.as_str()),
+        (16838, "landscape")
+    );
+    assert!(
+        package
+            .part(parts::DOCUMENT)
+            .matches("<w:type w:val=\"nextPage\"/>")
+            .count()
+            == 3
+    );
     // Numbering starts again in each document.
     assert_eq!(ps[1].num, Some((2, 0)));
     assert_eq!(ps[4].num, Some((3, 0)));
     // The title of the whole is the document title.
-    assert!(package.part(parts::CORE).contains("<dc:title>The Book</dc:title>"));
+    assert!(
+        package
+            .part(parts::CORE)
+            .contains("<dc:title>The Book</dc:title>")
+    );
 
     let o = DocxOptions {
         part_titles: PartTitles::Never,
         ..Default::default()
     };
-    let texts: Vec<String> = Package::new(&source, &o).paragraphs().iter().map(P::text).collect();
+    let texts: Vec<String> = Package::new(&source, &o)
+        .paragraphs()
+        .iter()
+        .map(P::text)
+        .collect();
     assert_eq!(texts, vec!["Chapter One", "a", "Second body", "b", ""]);
 }
 
@@ -939,14 +1301,23 @@ fn commented() -> Document {
     let mut ed = EditorState::new(Document::from_blocks(vec![
         Block::paragraph("The quick brown fox."),
         Block::new(BlockKind::Divider),
-        Block::paragraph("Second ").with_span("linked", link("https://example.com")).with_span(" paragraph", plain()),
+        Block::paragraph("Second ")
+            .with_span("linked", link("https://example.com"))
+            .with_span(" paragraph", plain()),
         Block::with_text(BlockKind::code(), "let x = 1;"),
         Block::paragraph("Deleted soon"),
     ]));
     // A thread inside one paragraph, with a reply, resolved.
     ed.set_selection(Selection::new(Position::new(0, 4), Position::new(0, 9)));
-    let first = ed.add_comment("Is it <really> quick?\nSecond & line.", "Ada Lovelace", 1_794_391_505_000).unwrap();
-    ed.add_reply(first, "Yes.", "Ben", 1_794_391_506_000).unwrap();
+    let first = ed
+        .add_comment(
+            "Is it <really> quick?\nSecond & line.",
+            "Ada Lovelace",
+            1_794_391_505_000,
+        )
+        .unwrap();
+    ed.add_reply(first, "Yes.", "Ben", 1_794_391_506_000)
+        .unwrap();
     ed.resolve_comment(first);
     // A thread across blocks, starting and ending inside a link's paragraph.
     ed.set_selection(Selection::new(Position::new(0, 16), Position::new(2, 10)));
@@ -967,37 +1338,70 @@ fn comments_are_word_comments_with_replies() {
     let doc = commented();
     let package = Package::of(&doc);
     assert!(package.has(parts::COMMENTS) && package.has(parts::COMMENTS_EXTENDED));
-    assert!(package.part(parts::CONTENT_TYPES).contains("comments+xml") && package.part(parts::CONTENT_TYPES).contains("commentsExtended+xml"));
+    assert!(
+        package.part(parts::CONTENT_TYPES).contains("comments+xml")
+            && package
+                .part(parts::CONTENT_TYPES)
+                .contains("commentsExtended+xml")
+    );
 
     let comments = roxmltree::Document::parse(package.part(parts::COMMENTS)).unwrap();
-    let list: Vec<Node> = comments.descendants().filter(|n| n.has_tag_name((W, "comment"))).collect();
+    let list: Vec<Node> = comments
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "comment")))
+        .collect();
     // Three anchored threads, one with a reply; the orphan is left out.
     assert_eq!(list.len(), 4);
     let attr = |n: Node, a: &str| n.attribute((W, a)).unwrap().to_string();
     let body = |n: Node| -> String {
         n.descendants()
             .filter(|d| d.has_tag_name((W, "t")) || d.has_tag_name((W, "br")))
-            .map(|d| if d.has_tag_name((W, "br")) { "\n" } else { d.text().unwrap_or("") })
+            .map(|d| {
+                if d.has_tag_name((W, "br")) {
+                    "\n"
+                } else {
+                    d.text().unwrap_or("")
+                }
+            })
             .collect()
     };
     assert_eq!(attr(list[0], "author"), "Ada Lovelace");
     assert_eq!(attr(list[0], "initials"), "AL");
     assert_eq!(attr(list[0], "date"), "2026-11-11T10:05:05Z");
     assert_eq!(body(list[0]), "Is it <really> quick?\nSecond & line.");
-    assert_eq!((attr(list[1], "author"), body(list[1])), ("Ben".to_string(), "Yes.".to_string()));
+    assert_eq!(
+        (attr(list[1], "author"), body(list[1])),
+        ("Ben".to_string(), "Yes.".to_string())
+    );
     assert_eq!(attr(list[1], "date"), "2026-11-11T10:05:06Z");
-    assert_eq!((attr(list[2], "author"), body(list[2])), ("Author".to_string(), "Spans blocks".to_string()));
+    assert_eq!(
+        (attr(list[2], "author"), body(list[2])),
+        ("Author".to_string(), "Spans blocks".to_string())
+    );
     assert_eq!(body(list[3]), "Rename");
-    assert!(list.iter().all(|c| c.descendants().any(|d| d.has_tag_name((W, "annotationRef")))));
+    assert!(list.iter().all(|c| {
+        c.descendants()
+            .any(|d| d.has_tag_name((W, "annotationRef")))
+    }));
 
     // Threading and resolved state.
     let extended = roxmltree::Document::parse(package.part(parts::COMMENTS_EXTENDED)).unwrap();
     let ex: Vec<(Option<&str>, &str)> = extended
         .descendants()
         .filter(|n| n.has_tag_name((W15, "commentEx")))
-        .map(|n| (n.attribute((W15, "paraIdParent")), n.attribute((W15, "done")).unwrap()))
+        .map(|n| {
+            (
+                n.attribute((W15, "paraIdParent")),
+                n.attribute((W15, "done")).unwrap(),
+            )
+        })
         .collect();
-    let para_id = |n: Node| n.descendants().find_map(|d| d.attribute((W14, "paraId"))).unwrap().to_string();
+    let para_id = |n: Node| {
+        n.descendants()
+            .find_map(|d| d.attribute((W14, "paraId")))
+            .unwrap()
+            .to_string()
+    };
     assert_eq!(ex[0], (None, "1"));
     assert_eq!(ex[1], (Some(para_id(list[0]).as_str()), "1"));
     assert_eq!(ex[2], (None, "0"));
@@ -1012,7 +1416,16 @@ fn comments_are_word_comments_with_replies() {
     assert!(xml.contains("<w:commentRangeStart w:id=\"3\"/><w:r><w:t xml:space=\"preserve\">x</w:t></w:r><w:commentRangeEnd w:id=\"3\"/>"));
     // The text is unchanged by the anchors.
     let texts: Vec<String> = package.paragraphs().iter().map(P::text).collect();
-    assert_eq!(texts, vec!["The quick brown fox.", "", "Second linked paragraph", "let x = 1;", " soon"]);
+    assert_eq!(
+        texts,
+        vec![
+            "The quick brown fox.",
+            "",
+            "Second linked paragraph",
+            "let x = 1;",
+            " soon"
+        ]
+    );
     // The thread across blocks starts in the first paragraph and ends inside the third, in the link.
     let s = xml.find("<w:commentRangeStart w:id=\"2\"/>").unwrap();
     let e = xml.find("<w:commentRangeEnd w:id=\"2\"/>").unwrap();
@@ -1055,13 +1468,43 @@ impl Rng {
 }
 
 const PIECES: &[&str] = &[
-    "word", " ", " two words ", "\n", "\t", "<", ">", "&", "\"", "'", "]]>", "<!--", "&amp;", "&#0;", "</w:t>", "😀", "👨‍👩‍👧",
-    "שלום", "مرحبا", "日本語", "é", "\u{a0}", "\u{200b}", "\u{202e}", "\u{feff}", "*", "`", "1.", "☐",
+    "word",
+    " ",
+    " two words ",
+    "\n",
+    "\t",
+    "<",
+    ">",
+    "&",
+    "\"",
+    "'",
+    "]]>",
+    "<!--",
+    "&amp;",
+    "&#0;",
+    "</w:t>",
+    "😀",
+    "👨‍👩‍👧",
+    "שלום",
+    "مرحبا",
+    "日本語",
+    "é",
+    "\u{a0}",
+    "\u{200b}",
+    "\u{202e}",
+    "\u{feff}",
+    "*",
+    "`",
+    "1.",
+    "☐",
 ];
 
 #[test]
 fn random_documents_are_valid_packages_and_keep_their_text() {
-    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(400);
     for seed in 1..=seeds.min(5000) {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let mut blocks = Vec::new();
@@ -1071,7 +1514,9 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
                 4 => BlockKind::heading(1 + rng.below(6) as u8),
                 5 => BlockKind::BulletItem,
                 6 => BlockKind::NumberedItem,
-                7 => BlockKind::TodoItem { checked: rng.chance(50) },
+                7 => BlockKind::TodoItem {
+                    checked: rng.chance(50),
+                },
                 8 => BlockKind::Quote,
                 9 => BlockKind::code(),
                 10 => BlockKind::Divider,
@@ -1079,14 +1524,25 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
             };
             let mut block = Block::new(kind).with_indent(rng.below(9) as u8);
             for _ in 0..rng.below(5) {
-                let text: String = (0..1 + rng.below(4)).map(|_| PIECES[rng.below(PIECES.len())]).collect();
+                let text: String = (0..1 + rng.below(4))
+                    .map(|_| PIECES[rng.below(PIECES.len())])
+                    .collect();
                 let mut a = plain();
                 a.bold = rng.chance(30);
                 a.italic = rng.chance(30);
                 a.code = rng.chance(15);
                 a.underline = rng.chance(15);
                 if rng.chance(20) {
-                    a.link = Some(["https://example.com", "a b<c>", "#x", "mailto:a@b.c", "%zz \"q\""][rng.below(5)].to_string());
+                    a.link = Some(
+                        [
+                            "https://example.com",
+                            "a b<c>",
+                            "#x",
+                            "mailto:a@b.c",
+                            "%zz \"q\"",
+                        ][rng.below(5)]
+                        .to_string(),
+                    );
                 }
                 if rng.chance(15) {
                     a.highlight = Some(Highlight::ALL[rng.below(6)]);
@@ -1107,7 +1563,8 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
             let pick = |rng: &mut Rng, ed: &EditorState| {
                 let b = rng.below(count);
                 let len = ed.document().blocks()[b].len();
-                ed.document().clamp_position(Position::new(b, rng.below(len + 1)))
+                ed.document()
+                    .clamp_position(Position::new(b, rng.below(len + 1)))
             };
             let (a, b) = (pick(&mut rng, &ed), pick(&mut rng, &ed));
             ed.set_selection(Selection::new(a, b));
@@ -1121,7 +1578,10 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
             }
         }
         let doc = ed.into_document();
-        let package = Package::new(&ExportSource::single("T <&>", &doc), &DocxOptions::default());
+        let package = Package::new(
+            &ExportSource::single("T <&>", &doc),
+            &DocxOptions::default(),
+        );
         // The text of every block comes back from the runs.
         let ps = package.paragraphs();
         let mut ps = ps.iter().peekable();
@@ -1134,13 +1594,22 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
                 pending_break = true;
                 continue;
             }
-            let p = ps.next().unwrap_or_else(|| panic!("seed {seed}: a paragraph is missing"));
+            let p = ps
+                .next()
+                .unwrap_or_else(|| panic!("seed {seed}: a paragraph is missing"));
             let mut text = p.text();
-            assert_eq!(p.runs.first().is_some_and(|r| r.page_break), pending_break, "seed {seed}");
+            assert_eq!(
+                p.runs.first().is_some_and(|r| r.page_break),
+                pending_break,
+                "seed {seed}"
+            );
             pending_break = false;
             if let BlockKind::TodoItem { checked } = block.kind() {
                 let mark = if *checked { "\u{2611}\t" } else { "\u{2610}\t" };
-                text = text.strip_prefix(mark).unwrap_or_else(|| panic!("seed {seed}: no ballot box")).to_string();
+                text = text
+                    .strip_prefix(mark)
+                    .unwrap_or_else(|| panic!("seed {seed}: no ballot box"))
+                    .to_string();
             }
             assert_eq!(text, block.text(), "seed {seed}");
         }

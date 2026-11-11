@@ -109,7 +109,9 @@ fn line_start_escape(chars: &[char], line_end: bool) -> Option<usize> {
             return Some(0);
         }
         // A table delimiter row such as `|---|:-:|`.
-        if chars.iter().all(|c| matches!(c, '|' | ':' | '-' | ' ' | '\t'))
+        if chars
+            .iter()
+            .all(|c| matches!(c, '|' | ':' | '-' | ' ' | '\t'))
             && chars.contains(&'-')
             && chars.iter().any(|c| matches!(c, '|' | ':'))
         {
@@ -124,7 +126,11 @@ fn line_start_escape(chars: &[char], line_end: bool) -> Option<usize> {
 /// break. Chunk edges that touch markup are escaped conservatively.
 pub(crate) fn escape_text(text: &str, pos: ChunkPosition, ctx: TextContext) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let line_escape = if pos.line_start { line_start_escape(&chars, pos.line_end) } else { None };
+    let line_escape = if pos.line_start {
+        line_start_escape(&chars, pos.line_end)
+    } else {
+        None
+    };
     // The last `#` run of a heading would be read as its closing sequence.
     let heading_escape = if pos.heading_end && chars.last() == Some(&'#') {
         let run = chars.iter().rev().take_while(|c| **c == '#').count();
@@ -151,7 +157,10 @@ pub(crate) fn escape_text(text: &str, pos: ChunkPosition, ctx: TextContext) -> S
                 '\\' => next.is_none_or(|n| n.is_ascii_punctuation()),
                 '`' => true,
                 '*' => !(is_space(prev) && is_space(next)),
-                '_' => !(prev.is_some_and(char::is_alphanumeric) && next.is_some_and(char::is_alphanumeric)),
+                '_' => {
+                    !(prev.is_some_and(char::is_alphanumeric)
+                        && next.is_some_and(char::is_alphanumeric))
+                }
                 '~' => ctx.tildes,
                 '[' => pos.in_link || ctx.brackets,
                 ']' => pos.in_link,
@@ -217,9 +226,13 @@ pub(crate) fn is_autolinkable(url: &str) -> bool {
     };
     (2..=32).contains(&scheme.len())
         && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
         && !rest.is_empty()
-        && url.chars().all(|c| !c.is_whitespace() && !c.is_control() && c != '<' && c != '>')
+        && url
+            .chars()
+            .all(|c| !c.is_whitespace() && !c.is_control() && c != '<' && c != '>')
 }
 
 /// How a character counts for the flanking rules of emphasis delimiters.
@@ -248,7 +261,9 @@ pub(crate) fn char_class(c: Option<char>) -> CharClass {
         return CharClass::Punctuation;
     }
     match c.general_category_group() {
-        GeneralCategoryGroup::Separator if c.general_category() == unicode_properties::GeneralCategory::SpaceSeparator => {
+        GeneralCategoryGroup::Separator
+            if c.general_category() == unicode_properties::GeneralCategory::SpaceSeparator =>
+        {
             CharClass::Whitespace
         }
         GeneralCategoryGroup::Punctuation => CharClass::Punctuation,
@@ -288,14 +303,23 @@ mod tests {
     fn inline_markup_is_escaped() {
         assert_eq!(mid("a *b* c"), "a \\*b\\* c");
         assert_eq!(mid("**bold**"), "\\*\\*bold\\*\\*");
-        assert_eq!(mid("_em_ and __strong__"), "\\_em\\_ and \\_\\_strong\\_\\_");
+        assert_eq!(
+            mid("_em_ and __strong__"),
+            "\\_em\\_ and \\_\\_strong\\_\\_"
+        );
         assert_eq!(mid("`code`"), "\\`code\\`");
         assert_eq!(mid("[text](url)"), "\\[text](url)");
         assert_eq!(mid("![img](url)"), "!\\[img](url)");
         assert_eq!(mid("a [ b"), "a [ b");
-        assert_eq!(mid("<b>bold</b> <!-- c --> <?php"), "\\<b>bold\\</b> \\<!-- c --> \\<?php");
+        assert_eq!(
+            mid("<b>bold</b> <!-- c --> <?php"),
+            "\\<b>bold\\</b> \\<!-- c --> \\<?php"
+        );
         assert_eq!(mid("<https://x.y>"), "\\<https://x.y>");
-        assert_eq!(mid("&amp; &#123; &#x1F600; &copy"), "\\&amp; \\&#123; \\&#x1F600; &copy");
+        assert_eq!(
+            mid("&amp; &#123; &#x1F600; &copy"),
+            "\\&amp; \\&#123; \\&#x1F600; &copy"
+        );
         assert_eq!(mid("a\\*b \\ c\\"), "a\\\\\\*b \\ c\\\\");
         assert_eq!(mid("~~no~~"), "\\~\\~no\\~\\~");
         assert_eq!(mid("~one"), "~one");
@@ -356,13 +380,22 @@ mod tests {
             in_link: true,
             ..Default::default()
         };
-        assert_eq!(escape_text("a ] b [ c", pos, TextContext::default()), "a \\] b \\[ c");
+        assert_eq!(
+            escape_text("a ] b [ c", pos, TextContext::default()),
+            "a \\] b \\[ c"
+        );
     }
 
     #[test]
     fn destinations() {
-        assert_eq!(link_destination("https://example.com/a?b=c&d=e"), "https://example.com/a?b=c&d=e");
-        assert_eq!(link_destination("https://en.wikipedia.org/wiki/A_(b)"), "https://en.wikipedia.org/wiki/A_\\(b\\)");
+        assert_eq!(
+            link_destination("https://example.com/a?b=c&d=e"),
+            "https://example.com/a?b=c&d=e"
+        );
+        assert_eq!(
+            link_destination("https://en.wikipedia.org/wiki/A_(b)"),
+            "https://en.wikipedia.org/wiki/A_\\(b\\)"
+        );
         assert_eq!(link_destination("a b\tc"), "a%20b%09c");
         assert_eq!(link_destination("<x>\\"), "\\<x\\>\\\\");
         assert_eq!(link_destination("?a=1&amp;b"), "?a=1\\&amp;b");

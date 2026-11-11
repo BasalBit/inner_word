@@ -36,7 +36,14 @@ fn shows_title(doc: &Document, title: &str) -> bool {
     if title.is_empty() {
         return true;
     }
-    let first_line = |b: &Block| fold(b.text().lines().find(|l| !l.trim().is_empty()).unwrap_or(""));
+    let first_line = |b: &Block| {
+        fold(
+            b.text()
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or(""),
+        )
+    };
     let mut first_text = true;
     for b in doc.blocks() {
         if b.text().trim().is_empty() {
@@ -66,7 +73,12 @@ pub(crate) fn first_comment_ranges(doc: &Document) -> Vec<(CommentId, TextRange)
 /// the replies in order.
 pub(crate) fn thread_entries(thread: &CommentThread) -> Vec<(&str, &str)> {
     let mut v = vec![(thread.author.trim(), thread.body.as_str())];
-    v.extend(thread.replies.iter().map(|r| (r.author.trim(), r.body.as_str())));
+    v.extend(
+        thread
+            .replies
+            .iter()
+            .map(|r| (r.author.trim(), r.body.as_str())),
+    );
     v
 }
 
@@ -97,7 +109,9 @@ pub(crate) fn ordinals(doc: &Document) -> Vec<Option<usize>> {
 
 /// Whether the block has no visible text (void blocks are not "blank").
 pub(crate) fn is_blank_text(block: &Block) -> bool {
-    !block.is_void() && !matches!(block.kind(), BlockKind::CodeBlock { .. }) && block.text().trim().is_empty()
+    !block.is_void()
+        && !matches!(block.kind(), BlockKind::CodeBlock { .. })
+        && block.text().trim().is_empty()
 }
 
 /// Civil date and time (UTC) of a timestamp in milliseconds since the Unix

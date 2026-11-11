@@ -4,11 +4,12 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use writer_core::{
-    Alignment, Block, BlockKind, Document, EditorState, Highlight, InlineAttrs, InlineStyle, Position, Rgb,
-    Selection,
+    Alignment, Block, BlockKind, Document, EditorState, Highlight, InlineAttrs, InlineStyle,
+    Position, Rgb, Selection,
 };
 use writer_export::{
-    ExportSource, MarkdownComments, MarkdownHighlight, MarkdownOptions, MarkdownPageBreak, PartTitles, to_markdown,
+    ExportSource, MarkdownComments, MarkdownHighlight, MarkdownOptions, MarkdownPageBreak,
+    PartTitles, to_markdown,
 };
 
 // ----- builders ---------------------------------------------------------------------------
@@ -41,7 +42,9 @@ fn para() -> Block {
     Block::new(BlockKind::Paragraph)
 }
 fn p(spans: &[(&str, InlineAttrs)]) -> Block {
-    spans.iter().fold(para(), |b, (t, a)| b.with_span(t, a.clone()))
+    spans
+        .iter()
+        .fold(para(), |b, (t, a)| b.with_span(t, a.clone()))
 }
 fn md_with(blocks: Vec<Block>, options: &MarkdownOptions) -> String {
     let doc = Document::from_blocks(blocks);
@@ -133,7 +136,10 @@ fn normalize(text: &mut [(char, Style)]) {
 }
 
 fn parser_options() -> Options {
-    Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES
+    Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
 }
 
 fn parse(markdown: &str) -> Vec<Line> {
@@ -143,7 +149,8 @@ fn parse(markdown: &str) -> Vec<Line> {
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut items = 0usize;
     let mut quotes = 0usize;
-    let (mut bold, mut italic, mut strike, mut underline, mut highlight) = (0i32, 0i32, 0i32, 0i32, 0i32);
+    let (mut bold, mut italic, mut strike, mut underline, mut highlight) =
+        (0i32, 0i32, 0i32, 0i32, 0i32);
     let mut links: Vec<String> = Vec::new();
 
     let mut in_footnote = false;
@@ -219,7 +226,9 @@ fn parse(markdown: &str) -> Vec<Line> {
             }
             Event::Html(s) => {
                 if let Some(i) = cur {
-                    lines[i].text.extend(s.chars().map(|c| (c, Style::default())));
+                    lines[i]
+                        .text
+                        .extend(s.chars().map(|c| (c, Style::default())));
                 }
             }
             Event::Rule => {
@@ -317,7 +326,12 @@ fn style_of(attrs: &InlineAttrs, options: &MarkdownOptions) -> Style {
         code: attrs.code,
         underline: attrs.underline && options.underline_html,
         highlight: attrs.highlight.is_some() && options.highlight == MarkdownHighlight::Html,
-        link: attrs.link.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(str::to_string),
+        link: attrs
+            .link
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -384,14 +398,25 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
             BlockKind::CodeBlock { language } => {
                 // The info string is the first word of the language, without
                 // characters that mean something in an info string.
-                let word = language.as_deref().unwrap_or("").split_whitespace().next().unwrap_or("");
-                Kind::Code(word.chars().filter(|c| c.is_alphanumeric() || "+-_#.".contains(*c)).collect())
+                let word = language
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                Kind::Code(
+                    word.chars()
+                        .filter(|c| c.is_alphanumeric() || "+-_#.".contains(*c))
+                        .collect(),
+                )
             }
             BlockKind::Divider => Kind::Rule,
             BlockKind::PageBreak => match options.page_break {
                 MarkdownPageBreak::Comment => Kind::Html("<!-- pagebreak -->".to_string()),
                 MarkdownPageBreak::Rule => Kind::Rule,
-                MarkdownPageBreak::Html => Kind::Html("<div style=\"page-break-after: always\"></div>".to_string()),
+                MarkdownPageBreak::Html => {
+                    Kind::Html("<div style=\"page-break-after: always\"></div>".to_string())
+                }
                 MarkdownPageBreak::Omit => continue,
             },
         };
@@ -419,8 +444,15 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
     // Markdown parser, the text of that item.
     let mut i = 0;
     while i + 1 < lines.len() {
-        let item = matches!(lines[i].kind, Kind::Bullet | Kind::Numbered(_) | Kind::Todo(_));
-        if item && lines[i].text.is_empty() && lines[i + 1].kind == Kind::Para && lines[i + 1].depth == lines[i].depth + 1 {
+        let item = matches!(
+            lines[i].kind,
+            Kind::Bullet | Kind::Numbered(_) | Kind::Todo(_)
+        );
+        if item
+            && lines[i].text.is_empty()
+            && lines[i + 1].kind == Kind::Para
+            && lines[i + 1].depth == lines[i].depth + 1
+        {
             let child = lines.remove(i + 1);
             lines[i].text = child.text;
         }
@@ -438,7 +470,12 @@ fn round_trip_with(doc: &Document, options: &MarkdownOptions) -> String {
     if got != want {
         let mut msg = format!("round trip mismatch\n--- markdown ---\n{out}\n--- document ---\n");
         for b in doc.blocks() {
-            msg.push_str(&format!("{:?} indent {} {:?}\n", b.kind(), b.indent(), b.text()));
+            msg.push_str(&format!(
+                "{:?} indent {} {:?}\n",
+                b.kind(),
+                b.indent(),
+                b.text()
+            ));
             for (r, a) in b.spans() {
                 msg.push_str(&format!("    {r:?} {a:?}\n"));
             }
@@ -455,7 +492,10 @@ fn round_trip_with(doc: &Document, options: &MarkdownOptions) -> String {
     if !out.is_empty() {
         assert!(out.ends_with('\n') && !out.ends_with("\n\n"), "{out:?}");
     }
-    assert!(!out.contains("\n\n\n") || doc.blocks().iter().any(|b| b.kind().is_code()), "{out:?}");
+    assert!(
+        !out.contains("\n\n\n") || doc.blocks().iter().any(|b| b.kind().is_code()),
+        "{out:?}"
+    );
     out
 }
 
@@ -470,8 +510,21 @@ fn round_trip(blocks: Vec<Block>) -> String {
 fn empty_documents() {
     assert_eq!(md(vec![]), "");
     assert_eq!(md(vec![para()]), "");
-    assert_eq!(md(vec![para(), Block::paragraph("  "), Block::with_text(BlockKind::heading(1), "")]), "");
-    assert_eq!(to_markdown(&ExportSource::from(&Document::new()), &MarkdownOptions::default()), "");
+    assert_eq!(
+        md(vec![
+            para(),
+            Block::paragraph("  "),
+            Block::with_text(BlockKind::heading(1), "")
+        ]),
+        ""
+    );
+    assert_eq!(
+        to_markdown(
+            &ExportSource::from(&Document::new()),
+            &MarkdownOptions::default()
+        ),
+        ""
+    );
 }
 
 #[test]
@@ -484,28 +537,59 @@ fn headings_and_paragraphs() {
         para(),
         Block::paragraph("Second paragraph."),
     ]);
-    assert_eq!(out, "# One\n\n## Two\n\n###### Six\n\nFirst paragraph.\n\nSecond paragraph.\n");
+    assert_eq!(
+        out,
+        "# One\n\n## Two\n\n###### Six\n\nFirst paragraph.\n\nSecond paragraph.\n"
+    );
 }
 
 #[test]
 fn heading_edge_cases() {
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::heading(2), "Line one\nline two")]), "## Line one line two\n");
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::heading(1), "C# and F#")]), "# C# and F#\n");
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::heading(1), "Trailing #")]), "# Trailing \\#\n");
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::heading(3), "# hash")]), "### \\# hash\n");
     assert_eq!(
-        round_trip(vec![Block::new(BlockKind::heading(2)).with_span("Bold", bold()).with_span(" title", plain())]),
+        round_trip(vec![Block::with_text(
+            BlockKind::heading(2),
+            "Line one\nline two"
+        )]),
+        "## Line one line two\n"
+    );
+    assert_eq!(
+        round_trip(vec![Block::with_text(BlockKind::heading(1), "C# and F#")]),
+        "# C# and F#\n"
+    );
+    assert_eq!(
+        round_trip(vec![Block::with_text(BlockKind::heading(1), "Trailing #")]),
+        "# Trailing \\#\n"
+    );
+    assert_eq!(
+        round_trip(vec![Block::with_text(BlockKind::heading(3), "# hash")]),
+        "### \\# hash\n"
+    );
+    assert_eq!(
+        round_trip(vec![
+            Block::new(BlockKind::heading(2))
+                .with_span("Bold", bold())
+                .with_span(" title", plain())
+        ]),
         "## **Bold** title\n"
     );
 }
 
 #[test]
 fn soft_breaks_are_hard_breaks() {
-    assert_eq!(round_trip(vec![Block::paragraph("one\ntwo\nthree")]), "one\\\ntwo\\\nthree\n");
-    // Trailing spaces, blank edge lines and inner blank lines.
-    assert_eq!(round_trip(vec![Block::paragraph("\n one  \n\n two \n\n")]), "one\\\n\\\ntwo\n");
     assert_eq!(
-        round_trip(vec![Block::with_text(BlockKind::BulletItem, "a\nb"), Block::with_text(BlockKind::Quote, "c\nd")]),
+        round_trip(vec![Block::paragraph("one\ntwo\nthree")]),
+        "one\\\ntwo\\\nthree\n"
+    );
+    // Trailing spaces, blank edge lines and inner blank lines.
+    assert_eq!(
+        round_trip(vec![Block::paragraph("\n one  \n\n two \n\n")]),
+        "one\\\n\\\ntwo\n"
+    );
+    assert_eq!(
+        round_trip(vec![
+            Block::with_text(BlockKind::BulletItem, "a\nb"),
+            Block::with_text(BlockKind::Quote, "c\nd")
+        ]),
         "- a\\\n  b\n\n> c\\\n> d\n"
     );
 }
@@ -540,9 +624,16 @@ fn lists() {
 
 #[test]
 fn long_numbered_list_keeps_real_ordinals_and_alignment() {
-    let mut blocks: Vec<Block> = (1..=11).map(|i| Block::with_text(BlockKind::NumberedItem, &format!("item {i}"))).collect();
-    blocks.insert(10, Block::with_text(BlockKind::BulletItem, "child").with_indent(1));
-    blocks.push(Block::with_text(BlockKind::BulletItem, "child of eleven\nsecond line").with_indent(1));
+    let mut blocks: Vec<Block> = (1..=11)
+        .map(|i| Block::with_text(BlockKind::NumberedItem, &format!("item {i}")))
+        .collect();
+    blocks.insert(
+        10,
+        Block::with_text(BlockKind::BulletItem, "child").with_indent(1),
+    );
+    blocks.push(
+        Block::with_text(BlockKind::BulletItem, "child of eleven\nsecond line").with_indent(1),
+    );
     let out = round_trip(blocks);
     assert!(out.contains("\n9. item 9\n10. item 10\n    - child\n11. item 11\n    - child of eleven\\\n      second line\n"), "{out}");
 }
@@ -588,7 +679,10 @@ fn list_indent_jumps_are_clamped() {
         Block::with_text(BlockKind::BulletItem, "back").with_indent(2),
         Block::with_text(BlockKind::BulletItem, "deepest").with_indent(8),
     ]);
-    assert_eq!(out, "- deep start\n- top\n  - jump\n  - back\n    - deepest\n");
+    assert_eq!(
+        out,
+        "- deep start\n- top\n  - jump\n  - back\n    - deepest\n"
+    );
 }
 
 #[test]
@@ -598,13 +692,18 @@ fn deeply_nested_lists() {
             let kind = match i % 3 {
                 0 => BlockKind::BulletItem,
                 1 => BlockKind::NumberedItem,
-                _ => BlockKind::TodoItem { checked: i % 2 == 0 },
+                _ => BlockKind::TodoItem {
+                    checked: i % 2 == 0,
+                },
             };
             Block::with_text(kind, &format!("level {i}")).with_indent(i)
         })
         .collect();
     let out = round_trip(blocks);
-    assert!(out.starts_with("- level 0\n  1. level 1\n     - [x] level 2\n       - level 3\n"), "{out}");
+    assert!(
+        out.starts_with("- level 0\n  1. level 1\n     - [x] level 2\n       - level 3\n"),
+        "{out}"
+    );
     assert_eq!(out.lines().count(), 9);
 }
 
@@ -626,7 +725,10 @@ fn blocks_inside_list_items() {
 
 #[test]
 fn quotes() {
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::Quote, "one")]), "> one\n");
+    assert_eq!(
+        round_trip(vec![Block::with_text(BlockKind::Quote, "one")]),
+        "> one\n"
+    );
     // Quote blocks in a row are one quote with several paragraphs.
     assert_eq!(
         round_trip(vec![
@@ -642,7 +744,12 @@ fn quotes() {
 #[test]
 fn code_blocks() {
     assert_eq!(
-        round_trip(vec![Block::with_text(BlockKind::CodeBlock { language: Some("rust".into()) }, "fn main() {\n    let x = 1;\n}")]),
+        round_trip(vec![Block::with_text(
+            BlockKind::CodeBlock {
+                language: Some("rust".into())
+            },
+            "fn main() {\n    let x = 1;\n}"
+        )]),
         "```rust\nfn main() {\n    let x = 1;\n}\n```\n"
     );
     // The fence is longer than any run of backticks inside.
@@ -650,15 +757,29 @@ fn code_blocks() {
         round_trip(vec![Block::with_text(BlockKind::code(), "```\ninner\n```")]),
         "````\n```\ninner\n```\n````\n"
     );
-    assert_eq!(round_trip(vec![Block::with_text(BlockKind::code(), "a `````` b")]), "```````\na `````` b\n```````\n");
+    assert_eq!(
+        round_trip(vec![Block::with_text(BlockKind::code(), "a `````` b")]),
+        "```````\na `````` b\n```````\n"
+    );
     // Markdown inside code is left alone; blank lines survive.
     assert_eq!(
-        round_trip(vec![Block::with_text(BlockKind::code(), "# not a heading\n\n*not* <b>bold</b> &amp;\n")]),
+        round_trip(vec![Block::with_text(
+            BlockKind::code(),
+            "# not a heading\n\n*not* <b>bold</b> &amp;\n"
+        )]),
         "```\n# not a heading\n\n*not* <b>bold</b> &amp;\n\n```\n"
     );
-    assert_eq!(round_trip(vec![Block::new(BlockKind::code())]), "```\n```\n");
+    assert_eq!(
+        round_trip(vec![Block::new(BlockKind::code())]),
+        "```\n```\n"
+    );
     // A hostile language tag cannot break the fence.
-    let out = md(vec![Block::with_text(BlockKind::CodeBlock { language: Some("c++ `x`\n&amp;".into()) }, "x")]);
+    let out = md(vec![Block::with_text(
+        BlockKind::CodeBlock {
+            language: Some("c++ `x`\n&amp;".into()),
+        },
+        "x",
+    )]);
     assert_eq!(out, "```c++\nx\n```\n");
 }
 
@@ -673,48 +794,106 @@ fn dividers_and_page_breaks() {
             Block::new(BlockKind::Divider),
         ]
     };
-    assert_eq!(round_trip(blocks()), "---\n\nmiddle\n\n<!-- pagebreak -->\n\nend\n\n---\n");
+    assert_eq!(
+        round_trip(blocks()),
+        "---\n\nmiddle\n\n<!-- pagebreak -->\n\nend\n\n---\n"
+    );
     let mut o = MarkdownOptions {
         page_break: MarkdownPageBreak::Rule,
         ..Default::default()
     };
     let doc = Document::from_blocks(blocks());
-    assert_eq!(round_trip_with(&doc, &o), "---\n\nmiddle\n\n---\n\nend\n\n---\n");
+    assert_eq!(
+        round_trip_with(&doc, &o),
+        "---\n\nmiddle\n\n---\n\nend\n\n---\n"
+    );
     o.page_break = MarkdownPageBreak::Omit;
     assert_eq!(round_trip_with(&doc, &o), "---\n\nmiddle\n\nend\n\n---\n");
     o.page_break = MarkdownPageBreak::Html;
-    assert!(round_trip_with(&doc, &o).contains("\n\n<div style=\"page-break-after: always\"></div>\n\n"));
+    assert!(
+        round_trip_with(&doc, &o)
+            .contains("\n\n<div style=\"page-break-after: always\"></div>\n\n")
+    );
     // Void blocks only.
-    assert_eq!(round_trip(vec![Block::new(BlockKind::PageBreak)]), "<!-- pagebreak -->\n");
-    assert_eq!(round_trip(vec![Block::new(BlockKind::Divider), Block::new(BlockKind::Divider)]), "---\n\n---\n");
+    assert_eq!(
+        round_trip(vec![Block::new(BlockKind::PageBreak)]),
+        "<!-- pagebreak -->\n"
+    );
+    assert_eq!(
+        round_trip(vec![
+            Block::new(BlockKind::Divider),
+            Block::new(BlockKind::Divider)
+        ]),
+        "---\n\n---\n"
+    );
 }
 
 // ----- exact output: inline ---------------------------------------------------------------
 
 #[test]
 fn basic_marks() {
-    assert_eq!(one(&[("a ", plain()), ("bold", bold()), (" b", plain())]), "a **bold** b");
-    assert_eq!(one(&[("a ", plain()), ("italic", italic()), (" b", plain())]), "a *italic* b");
-    assert_eq!(one(&[("a ", plain()), ("gone", strike()), (" b", plain())]), "a ~~gone~~ b");
-    assert_eq!(one(&[("a ", plain()), ("code", code()), (" b", plain())]), "a `code` b");
-    assert_eq!(one(&[("a ", plain()), ("under", underline()), (" b", plain())]), "a <u>under</u> b");
+    assert_eq!(
+        one(&[("a ", plain()), ("bold", bold()), (" b", plain())]),
+        "a **bold** b"
+    );
+    assert_eq!(
+        one(&[("a ", plain()), ("italic", italic()), (" b", plain())]),
+        "a *italic* b"
+    );
+    assert_eq!(
+        one(&[("a ", plain()), ("gone", strike()), (" b", plain())]),
+        "a ~~gone~~ b"
+    );
+    assert_eq!(
+        one(&[("a ", plain()), ("code", code()), (" b", plain())]),
+        "a `code` b"
+    );
+    assert_eq!(
+        one(&[("a ", plain()), ("under", underline()), (" b", plain())]),
+        "a <u>under</u> b"
+    );
     let hl = InlineAttrs {
         highlight: Some(Highlight::Yellow),
         ..plain()
     };
-    assert_eq!(one(&[("a ", plain()), ("marked", hl), (" b", plain())]), "a <mark>marked</mark> b");
-    assert_eq!(one(&[("see ", plain()), ("the site", link("https://example.com")), (".", plain())]), "see [the site](https://example.com).");
+    assert_eq!(
+        one(&[("a ", plain()), ("marked", hl), (" b", plain())]),
+        "a <mark>marked</mark> b"
+    );
+    assert_eq!(
+        one(&[
+            ("see ", plain()),
+            ("the site", link("https://example.com")),
+            (".", plain())
+        ]),
+        "see [the site](https://example.com)."
+    );
 }
 
 #[test]
 fn whitespace_moves_outside_delimiters() {
-    assert_eq!(one(&[("a", plain()), (" bold ", bold()), ("b", plain())]), "a **bold** b");
-    assert_eq!(one(&[("a", plain()), ("  italic\t", italic()), ("b", plain())]), "a  *italic*\tb");
+    assert_eq!(
+        one(&[("a", plain()), (" bold ", bold()), ("b", plain())]),
+        "a **bold** b"
+    );
+    assert_eq!(
+        one(&[("a", plain()), ("  italic\t", italic()), ("b", plain())]),
+        "a  *italic*\tb"
+    );
     assert_eq!(one(&[("a", plain()), (" ", bold()), ("b", plain())]), "a b");
-    assert_eq!(one(&[("x", plain()), (" link ", link("u:x")), ("y", plain())]), "x [link](u:x) y");
+    assert_eq!(
+        one(&[("x", plain()), (" link ", link("u:x")), ("y", plain())]),
+        "x [link](u:x) y"
+    );
     // Around a line break too.
-    assert_eq!(one(&[("one\n", bold()), ("two", plain())]), "**one**\\\ntwo");
-    assert_eq!(one(&[("one", plain()), ("\ntwo", bold())]), "one\\\n**two**");
+    assert_eq!(
+        one(&[("one\n", bold()), ("two", plain())]),
+        "**one**\\\ntwo"
+    );
+    assert_eq!(
+        one(&[("one", plain()), ("\ntwo", bold())]),
+        "one\\\n**two**"
+    );
     assert_eq!(one(&[("one\ntwo", bold())]), "**one\\\ntwo**");
 }
 
@@ -722,10 +901,22 @@ fn whitespace_moves_outside_delimiters() {
 fn nesting() {
     let bi = bold().with(InlineStyle::Italic);
     assert_eq!(one(&[("both", bi.clone())]), "***both***");
-    assert_eq!(one(&[("bold ", bold()), ("both", bi.clone()), (" bold", bold())]), "**bold *both* bold**");
-    assert_eq!(one(&[("it ", italic()), ("both", bi.clone()), (" it", italic())]), "*it **both** it*");
-    assert_eq!(one(&[("both", bi.clone()), (" bold", bold())]), "***both* bold**");
-    assert_eq!(one(&[("bold ", bold()), ("both", bi.clone())]), "**bold *both***");
+    assert_eq!(
+        one(&[("bold ", bold()), ("both", bi.clone()), (" bold", bold())]),
+        "**bold *both* bold**"
+    );
+    assert_eq!(
+        one(&[("it ", italic()), ("both", bi.clone()), (" it", italic())]),
+        "*it **both** it*"
+    );
+    assert_eq!(
+        one(&[("both", bi.clone()), (" bold", bold())]),
+        "***both* bold**"
+    );
+    assert_eq!(
+        one(&[("bold ", bold()), ("both", bi.clone())]),
+        "**bold *both***"
+    );
     let all = InlineAttrs {
         bold: true,
         italic: true,
@@ -735,39 +926,82 @@ fn nesting() {
         link: Some("https://x.test/".into()),
         ..plain()
     };
-    assert_eq!(one(&[("all", all)]), "[<mark><u>~~***all***~~</u></mark>](https://x.test/)");
-    assert_eq!(one(&[("code", code().with(InlineStyle::Bold))]), "**`code`**");
+    assert_eq!(
+        one(&[("all", all)]),
+        "[<mark><u>~~***all***~~</u></mark>](https://x.test/)"
+    );
+    assert_eq!(
+        one(&[("code", code().with(InlineStyle::Bold))]),
+        "**`code`**"
+    );
 }
 
 #[test]
 fn adjacent_runs_do_not_break_markers() {
-    assert_eq!(one(&[("bold", bold()), ("italic", italic())]), "**bold***italic*");
-    assert_eq!(one(&[("italic", italic()), ("bold", bold())]), "*italic***bold**");
-    assert_eq!(one(&[("a", bold()), ("b", strike()), ("c", italic())]), "**a**~~b~~*c*");
+    assert_eq!(
+        one(&[("bold", bold()), ("italic", italic())]),
+        "**bold***italic*"
+    );
+    assert_eq!(
+        one(&[("italic", italic()), ("bold", bold())]),
+        "*italic***bold**"
+    );
+    assert_eq!(
+        one(&[("a", bold()), ("b", strike()), ("c", italic())]),
+        "**a**~~b~~*c*"
+    );
     // Bold with a differently coloured middle is still one bold span.
     let red = InlineAttrs {
         color: Some(Rgb::new(255, 0, 0)),
         ..bold()
     };
-    assert_eq!(one(&[("one ", bold()), ("two", red), (" three", bold())]), "**one two three**");
+    assert_eq!(
+        one(&[("one ", bold()), ("two", red), (" three", bold())]),
+        "**one two three**"
+    );
     // Partial overlap: the italic part is split, the bold stays whole.
     assert_eq!(
-        one(&[("aaa ", italic()), ("bbb", italic().with(InlineStyle::Bold)), (" ccc", bold())]),
+        one(&[
+            ("aaa ", italic()),
+            ("bbb", italic().with(InlineStyle::Bold)),
+            (" ccc", bold())
+        ]),
         "*aaa* ***bbb* ccc**"
     );
 }
 
 #[test]
 fn intraword_and_punctuation() {
-    assert_eq!(one(&[("un", plain()), ("believ", bold()), ("able", plain())]), "un**believ**able");
-    assert_eq!(one(&[("“", plain()), ("quoted", italic()), ("”", plain())]), "“*quoted*”");
-    assert_eq!(one(&[("(", plain()), ("x", bold()), (")", plain())]), "(**x**)");
+    assert_eq!(
+        one(&[("un", plain()), ("believ", bold()), ("able", plain())]),
+        "un**believ**able"
+    );
+    assert_eq!(
+        one(&[("“", plain()), ("quoted", italic()), ("”", plain())]),
+        "“*quoted*”"
+    );
+    assert_eq!(
+        one(&[("(", plain()), ("x", bold()), (")", plain())]),
+        "(**x**)"
+    );
     // Delimiters that CommonMark would not pair fall back to HTML.
-    assert_eq!(one(&[("a", plain()), ("(b)", bold()), ("c", plain())]), "a<strong>(b)</strong>c");
-    assert_eq!(one(&[("wow!", italic()), ("really", plain())]), "<em>wow!</em>really");
-    assert_eq!(one(&[("x", plain()), ("-y-", strike()), ("z", plain())]), "x<del>-y-</del>z");
+    assert_eq!(
+        one(&[("a", plain()), ("(b)", bold()), ("c", plain())]),
+        "a<strong>(b)</strong>c"
+    );
+    assert_eq!(
+        one(&[("wow!", italic()), ("really", plain())]),
+        "<em>wow!</em>really"
+    );
+    assert_eq!(
+        one(&[("x", plain()), ("-y-", strike()), ("z", plain())]),
+        "x<del>-y-</del>z"
+    );
     // An emoji next to a letter: parsers disagree, so HTML it is.
-    assert_eq!(one(&[("a", plain()), ("😀b", bold())]), "a<strong>😀b</strong>");
+    assert_eq!(
+        one(&[("a", plain()), ("😀b", bold())]),
+        "a<strong>😀b</strong>"
+    );
     assert_eq!(one(&[("a ", plain()), ("😀b", bold())]), "a **😀b**");
 }
 
@@ -776,30 +1010,70 @@ fn inline_code_edge_cases() {
     assert_eq!(one(&[("a`b", code())]), "``a`b``");
     assert_eq!(one(&[("`", code())]), "`` ` ``");
     assert_eq!(one(&[("``x``", code())]), "``` ``x`` ```");
-    assert_eq!(one(&[("say ", plain()), (" x ", code()), (" now", plain())]), "say `  x  ` now");
-    assert_eq!(one(&[("*not* <b> &amp; [x](y) \\", code())]), "`*not* <b> &amp; [x](y) \\`");
+    assert_eq!(
+        one(&[("say ", plain()), (" x ", code()), (" now", plain())]),
+        "say `  x  ` now"
+    );
+    assert_eq!(
+        one(&[("*not* <b> &amp; [x](y) \\", code())]),
+        "`*not* <b> &amp; [x](y) \\`"
+    );
     // A line break inside code splits the span.
     assert_eq!(one(&[("a\nb", code())]), "`a`\\\n`b`");
     // Half bold code.
-    assert_eq!(one(&[("ab", code().with(InlineStyle::Bold)), ("cd", code())]), "**`ab`**`cd`");
+    assert_eq!(
+        one(&[("ab", code().with(InlineStyle::Bold)), ("cd", code())]),
+        "**`ab`**`cd`"
+    );
     // Backticks in ordinary text are escaped.
     assert_eq!(one(&[("use `x` here", plain())]), "use \\`x\\` here");
 }
 
 #[test]
 fn links() {
-    assert_eq!(one(&[("https://example.com/a_b", link("https://example.com/a_b"))]), "<https://example.com/a_b>");
     assert_eq!(
-        one(&[("wiki", link("https://en.wikipedia.org/wiki/Rust_(programming_language)"))]),
+        one(&[("https://example.com/a_b", link("https://example.com/a_b"))]),
+        "<https://example.com/a_b>"
+    );
+    assert_eq!(
+        one(&[(
+            "wiki",
+            link("https://en.wikipedia.org/wiki/Rust_(programming_language)")
+        )]),
         "[wiki](https://en.wikipedia.org/wiki/Rust_\\(programming_language\\))"
     );
     assert_eq!(one(&[("a b", link("my file.txt"))]), "[a b](my%20file.txt)");
     assert_eq!(one(&[("[brackets]", link("u:1"))]), "[\\[brackets\\]](u:1)");
-    assert_eq!(one(&[("bold", InlineAttrs { bold: true, ..link("u:1") }), (" plain", link("u:1"))]), "[**bold** plain](u:1)");
-    assert_eq!(one(&[("one", link("u:1")), ("two", link("u:2"))]), "[one](u:1)[two](u:2)");
+    assert_eq!(
+        one(&[
+            (
+                "bold",
+                InlineAttrs {
+                    bold: true,
+                    ..link("u:1")
+                }
+            ),
+            (" plain", link("u:1"))
+        ]),
+        "[**bold** plain](u:1)"
+    );
+    assert_eq!(
+        one(&[("one", link("u:1")), ("two", link("u:2"))]),
+        "[one](u:1)[two](u:2)"
+    );
     // A link is never split: the bold that crosses its edge is.
     assert_eq!(
-        one(&[("bold ", bold()), ("link", InlineAttrs { bold: true, ..link("u:1") }), (" rest", link("u:1"))]),
+        one(&[
+            ("bold ", bold()),
+            (
+                "link",
+                InlineAttrs {
+                    bold: true,
+                    ..link("u:1")
+                }
+            ),
+            (" rest", link("u:1"))
+        ]),
         "**bold** [**link** rest](u:1)"
     );
     // A blank target is no link at all.
@@ -817,14 +1091,32 @@ fn escaping_in_context() {
     assert_eq!(one(&[("line\n===", plain())]), "line\\\n\\===");
     assert_eq!(one(&[("a | b\n--|--", plain())]), "a | b\\\n\\--|--");
     assert_eq!(one(&[("    indented", plain())]), "indented");
-    assert_eq!(one(&[("*stars* _under_ `ticks`", plain())]), "\\*stars\\* \\_under\\_ \\`ticks\\`");
-    assert_eq!(one(&[("<script>alert(1)</script>", plain())]), "\\<script>alert(1)\\</script>");
-    assert_eq!(one(&[("[not](a link) ![img](x)", plain())]), "\\[not](a link) !\\[img](x)");
-    assert_eq!(one(&[("&copy; &#169; AT&T", plain())]), "\\&copy; \\&#169; AT&T");
+    assert_eq!(
+        one(&[("*stars* _under_ `ticks`", plain())]),
+        "\\*stars\\* \\_under\\_ \\`ticks\\`"
+    );
+    assert_eq!(
+        one(&[("<script>alert(1)</script>", plain())]),
+        "\\<script>alert(1)\\</script>"
+    );
+    assert_eq!(
+        one(&[("[not](a link) ![img](x)", plain())]),
+        "\\[not](a link) !\\[img](x)"
+    );
+    assert_eq!(
+        one(&[("&copy; &#169; AT&T", plain())]),
+        "\\&copy; \\&#169; AT&T"
+    );
     // After bold at the start of a line, a "#" is not a heading.
     assert_eq!(one(&[("x", bold()), ("# y", plain())]), "**x**# y");
     // In list items and quotes the text is at a line start as well.
-    assert_eq!(md(vec![Block::with_text(BlockKind::BulletItem, "- x"), Block::with_text(BlockKind::BulletItem, "[ ] y")]), "- \\- x\n- \\[ ] y\n");
+    assert_eq!(
+        md(vec![
+            Block::with_text(BlockKind::BulletItem, "- x"),
+            Block::with_text(BlockKind::BulletItem, "[ ] y")
+        ]),
+        "- \\- x\n- \\[ ] y\n"
+    );
 }
 
 #[test]
@@ -837,13 +1129,21 @@ fn options_for_things_markdown_cannot_say() {
         ..plain()
     };
     let doc = Document::from_blocks(vec![
-        para().with_span("text", styled).with_alignment(Alignment::Center),
+        para()
+            .with_span("text", styled)
+            .with_alignment(Alignment::Center),
         Block::with_text(BlockKind::heading(1), "Right").with_alignment(Alignment::Right),
         Block::paragraph("left"),
     ]);
     let source = ExportSource::from(&doc);
-    assert_eq!(to_markdown(&source, &MarkdownOptions::default()), "<mark><u>text</u></mark>\n\n# Right\n\nleft\n");
-    assert_eq!(to_markdown(&source, &MarkdownOptions::strict()), "text\n\n# Right\n\nleft\n");
+    assert_eq!(
+        to_markdown(&source, &MarkdownOptions::default()),
+        "<mark><u>text</u></mark>\n\n# Right\n\nleft\n"
+    );
+    assert_eq!(
+        to_markdown(&source, &MarkdownOptions::strict()),
+        "text\n\n# Right\n\nleft\n"
+    );
     let o = MarkdownOptions {
         highlight: MarkdownHighlight::Equals,
         underline_html: false,
@@ -858,7 +1158,10 @@ fn options_for_things_markdown_cannot_say() {
     };
     let out = to_markdown(&source, &o);
     // The wrappers are HTML blocks; what is between them is still Markdown.
-    let lines: Vec<Line> = parse(&out).into_iter().filter(|l| !matches!(l.kind, Kind::Html(_))).collect();
+    let lines: Vec<Line> = parse(&out)
+        .into_iter()
+        .filter(|l| !matches!(l.kind, Kind::Html(_)))
+        .collect();
     assert_eq!(lines, expected(&doc, &o));
     assert_eq!(
         out,
@@ -876,7 +1179,9 @@ fn commented() -> Document {
         Block::paragraph("Last words"),
     ]));
     ed.set_selection(Selection::new(Position::new(0, 4), Position::new(0, 9)));
-    let first = ed.add_comment("Is it -- really --> quick?\nSecond line.", "Ada", 1).unwrap();
+    let first = ed
+        .add_comment("Is it -- really --> quick?\nSecond line.", "Ada", 1)
+        .unwrap();
     ed.add_reply(first, "Yes. *Very*.", "Ben", 2).unwrap();
     ed.resolve_comment(first);
     ed.set_selection(Selection::new(Position::new(1, 4), Position::new(1, 5)));
@@ -889,7 +1194,10 @@ fn commented() -> Document {
 #[test]
 fn comments_are_omitted_by_default() {
     let doc = commented();
-    assert_eq!(round_trip_with(&doc, &MarkdownOptions::default()), "The quick brown fox.\n\n```\nlet x = 1;\n```\n\nLast words\n");
+    assert_eq!(
+        round_trip_with(&doc, &MarkdownOptions::default()),
+        "The quick brown fox.\n\n```\nlet x = 1;\n```\n\nLast words\n"
+    );
 }
 
 #[test]
@@ -902,7 +1210,10 @@ fn comments_as_html_comments() {
     let out = to_markdown(&ExportSource::from(&doc), &o);
     // Apart from the comment after the code block, the text is unchanged.
     let mut lines = parse(&out);
-    assert_eq!(lines.remove(2).kind, Kind::Html("<!-- Rename this -->".to_string()));
+    assert_eq!(
+        lines.remove(2).kind,
+        Kind::Html("<!-- Rename this -->".to_string())
+    );
     assert_eq!(lines, expected(&doc, &o));
     assert_eq!(
         out,
@@ -927,8 +1238,14 @@ fn comments_as_footnotes() {
     );
     // The parser sees three references and three definitions.
     let events: Vec<Event> = Parser::new_ext(&out, parser_options()).collect();
-    let refs = events.iter().filter(|e| matches!(e, Event::FootnoteReference(_))).count();
-    let defs = events.iter().filter(|e| matches!(e, Event::Start(Tag::FootnoteDefinition(_)))).count();
+    let refs = events
+        .iter()
+        .filter(|e| matches!(e, Event::FootnoteReference(_)))
+        .count();
+    let defs = events
+        .iter()
+        .filter(|e| matches!(e, Event::Start(Tag::FootnoteDefinition(_))))
+        .count();
     assert_eq!((refs, defs), (3, 3));
 }
 
@@ -936,10 +1253,16 @@ fn comments_as_footnotes() {
 
 #[test]
 fn collections() {
-    let one = Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), "Chapter One"), Block::paragraph("First.")]);
+    let one = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Chapter One"),
+        Block::paragraph("First."),
+    ]);
     let two = Document::from_blocks(vec![Block::paragraph("Second.")]);
     let empty = Document::new();
-    let source = ExportSource::collection("Book", [("Chapter One", &one), ("# Two", &two), ("Empty", &empty)]);
+    let source = ExportSource::collection(
+        "Book",
+        [("Chapter One", &one), ("# Two", &two), ("Empty", &empty)],
+    );
     assert_eq!(
         to_markdown(&source, &MarkdownOptions::default()),
         "# Chapter One\n\nFirst.\n\n---\n\n# \\# Two\n\nSecond.\n\n---\n\n# Empty\n"
@@ -949,14 +1272,20 @@ fn collections() {
         part_rule: false,
         ..Default::default()
     };
-    assert_eq!(to_markdown(&source, &o), "# Chapter One\n\nFirst.\n\nSecond.\n");
+    assert_eq!(
+        to_markdown(&source, &o),
+        "# Chapter One\n\nFirst.\n\nSecond.\n"
+    );
     let o = MarkdownOptions {
         part_titles: PartTitles::Always,
         ..Default::default()
     };
     assert!(to_markdown(&source, &o).starts_with("# Chapter One\n\n# Chapter One\n\nFirst."));
     // A single document never gets its title written.
-    assert_eq!(to_markdown(&ExportSource::single("Title", &two), &o), "Second.\n");
+    assert_eq!(
+        to_markdown(&ExportSource::single("Title", &two), &o),
+        "Second.\n"
+    );
 }
 
 // ----- round trips ------------------------------------------------------------------------
@@ -996,7 +1325,11 @@ fn hostile_paragraphs_round_trip() {
             BlockKind::Quote,
             BlockKind::code(),
         ] {
-            round_trip(vec![Block::paragraph("before"), Block::with_text(kind.clone(), t), Block::paragraph("after")]);
+            round_trip(vec![
+                Block::paragraph("before"),
+                Block::with_text(kind.clone(), t),
+                Block::paragraph("after"),
+            ]);
             // The same text with every attribute, and split across marks.
             if !kind.is_code() {
                 let all = InlineAttrs {
@@ -1012,7 +1345,10 @@ fn hostile_paragraphs_round_trip() {
                 };
                 round_trip(vec![Block::new(kind.clone()).with_span(t, all.clone())]);
                 round_trip(vec![Block::new(kind.clone()).with_span(t, code())]);
-                let mid = t.char_indices().nth(t.chars().count() / 2).map_or(0, |(i, _)| i);
+                let mid = t
+                    .char_indices()
+                    .nth(t.chars().count() / 2)
+                    .map_or(0, |(i, _)| i);
                 round_trip(vec![
                     Block::new(kind.clone())
                         .with_span(&t[..mid], bold())
@@ -1038,7 +1374,10 @@ fn every_attribute_at_once_round_trips() {
         ..plain()
     };
     let out = round_trip(vec![para().with_span("every`thing", all)]);
-    assert_eq!(out, "[<mark><u>~~***``every`thing``***~~</u></mark>](https://example.com)\n");
+    assert_eq!(
+        out,
+        "[<mark><u>~~***``every`thing``***~~</u></mark>](https://example.com)\n"
+    );
 }
 
 /// A small deterministic generator (xorshift), so failures reproduce.
@@ -1063,13 +1402,88 @@ impl Rng {
 }
 
 const WORDS: &[&str] = &[
-    "word", "two words", "a", "I", "x", "é", "naïve", "日本語", "שלום", "مرحبا", "😀", "👨‍👩‍👧", "€", "™", "5", "42",
+    "word",
+    "two words",
+    "a",
+    "I",
+    "x",
+    "é",
+    "naïve",
+    "日本語",
+    "שלום",
+    "مرحبا",
+    "😀",
+    "👨‍👩‍👧",
+    "€",
+    "™",
+    "5",
+    "42",
 ];
 const HOSTILE: &[&str] = &[
-    "*", "**", "***", "_", "__", "`", "``", "~", "~~", "[", "]", "(", ")", "<", ">", "&", "&amp;", "&#35;", "#", "##",
-    "-", "--", "---", "+", "=", "===", "|", ":", "!", "![", "](", "\\", "\\*", "1.", "2)", "10.", ".", ",", ";", "?",
-    "\"", "'", "“", "”", "—", "…", "<b>", "</b>", "<br>", "<!--", "-->", "http://x.y", "www.x.y", "a@b.c", "[^1]",
-    "[x]", "[ ]", "$", "^", "{", "}", "%", "@", "/",
+    "*",
+    "**",
+    "***",
+    "_",
+    "__",
+    "`",
+    "``",
+    "~",
+    "~~",
+    "[",
+    "]",
+    "(",
+    ")",
+    "<",
+    ">",
+    "&",
+    "&amp;",
+    "&#35;",
+    "#",
+    "##",
+    "-",
+    "--",
+    "---",
+    "+",
+    "=",
+    "===",
+    "|",
+    ":",
+    "!",
+    "![",
+    "](",
+    "\\",
+    "\\*",
+    "1.",
+    "2)",
+    "10.",
+    ".",
+    ",",
+    ";",
+    "?",
+    "\"",
+    "'",
+    "“",
+    "”",
+    "—",
+    "…",
+    "<b>",
+    "</b>",
+    "<br>",
+    "<!--",
+    "-->",
+    "http://x.y",
+    "www.x.y",
+    "a@b.c",
+    "[^1]",
+    "[x]",
+    "[ ]",
+    "$",
+    "^",
+    "{",
+    "}",
+    "%",
+    "@",
+    "/",
 ];
 const SPACES: &[&str] = &[" ", " ", " ", " ", "  ", "\n", "\t", "\u{a0}"];
 
@@ -1102,7 +1516,16 @@ fn random_attrs(rng: &mut Rng) -> InlineAttrs {
         a.color = Some(Rgb::new(10, 20, 30));
     }
     if rng.chance(20) {
-        a.link = Some(rng.pick(&["https://example.com", "u:1", "/path/a_b*c", "https://x.y/(z)?a=1&amp;b=<2>", "#frag"]).to_string());
+        a.link = Some(
+            rng.pick(&[
+                "https://example.com",
+                "u:1",
+                "/path/a_b*c",
+                "https://x.y/(z)?a=1&amp;b=<2>",
+                "#frag",
+            ])
+            .to_string(),
+        );
     }
     a
 }
@@ -1113,10 +1536,14 @@ fn random_block(rng: &mut Rng) -> Block {
         6 => BlockKind::heading(1 + rng.below(6) as u8),
         7 | 8 => BlockKind::BulletItem,
         9 | 10 => BlockKind::NumberedItem,
-        11 => BlockKind::TodoItem { checked: rng.chance(50) },
+        11 => BlockKind::TodoItem {
+            checked: rng.chance(50),
+        },
         12 => BlockKind::Quote,
         13 => BlockKind::CodeBlock {
-            language: rng.chance(50).then(|| rng.pick(&["rust", "c++", "plain text", "`"]).to_string()),
+            language: rng
+                .chance(50)
+                .then(|| rng.pick(&["rust", "c++", "plain text", "`"]).to_string()),
         },
         14 => BlockKind::Divider,
         _ => BlockKind::PageBreak,
@@ -1142,7 +1569,10 @@ fn random_block(rng: &mut Rng) -> Block {
 
 #[test]
 fn random_documents_round_trip() {
-    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000);
     for seed in 1..=seeds {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let n = 1 + rng.below(8);
@@ -1169,7 +1599,10 @@ fn random_documents_round_trip() {
 /// delimiter placement.
 #[test]
 fn random_inline_marks_round_trip() {
-    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000);
     for seed in 1..=seeds {
         let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
         let kind = match rng.below(5) {
@@ -1188,8 +1621,20 @@ fn random_inline_marks_round_trip() {
                 4 => attrs.strikethrough = !attrs.strikethrough,
                 5 => attrs.underline = !attrs.underline,
                 6 => attrs.code = !attrs.code,
-                7 => attrs.link = if attrs.link.is_some() { None } else { Some("https://example.com/a".to_string()) },
-                _ => attrs.highlight = if attrs.highlight.is_some() { None } else { Some(Highlight::Yellow) },
+                7 => {
+                    attrs.link = if attrs.link.is_some() {
+                        None
+                    } else {
+                        Some("https://example.com/a".to_string())
+                    }
+                }
+                _ => {
+                    attrs.highlight = if attrs.highlight.is_some() {
+                        None
+                    } else {
+                        Some(Highlight::Yellow)
+                    }
+                }
             }
             let text = match rng.below(6) {
                 0 => rng.pick(HOSTILE).to_string(),
@@ -1201,10 +1646,16 @@ fn random_inline_marks_round_trip() {
             block = block.with_span(&text, attrs.clone());
         }
         let doc = Document::from_blocks(vec![block]);
-        let options = if seed % 5 == 0 { MarkdownOptions::strict() } else { MarkdownOptions::default() };
+        let options = if seed % 5 == 0 {
+            MarkdownOptions::strict()
+        } else {
+            MarkdownOptions::default()
+        };
         let result = std::panic::catch_unwind(|| round_trip_with(&doc, &options));
         match result {
-            Ok(out) if seed <= 12 && std::env::var("WRITER_EXPORT_SHOW").is_ok() => eprintln!("{out}"),
+            Ok(out) if seed <= 12 && std::env::var("WRITER_EXPORT_SHOW").is_ok() => {
+                eprintln!("{out}")
+            }
             Ok(_) => {}
             Err(e) => {
                 eprintln!("seed {seed} failed");
@@ -1218,7 +1669,10 @@ fn random_inline_marks_round_trip() {
 /// structure must not change, whatever the comment bodies contain.
 #[test]
 fn random_comments_do_not_disturb_the_text() {
-    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000);
     for seed in 1..=seeds.min(20_000) {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
         let n = 1 + rng.below(5);
@@ -1229,7 +1683,8 @@ fn random_comments_do_not_disturb_the_text() {
             let (a, b) = (rng.below(count), rng.below(count));
             let pos = |rng: &mut Rng, block: usize| {
                 let len = ed.document().blocks()[block].len();
-                ed.document().clamp_position(Position::new(block, rng.below(len + 1)))
+                ed.document()
+                    .clamp_position(Position::new(block, rng.below(len + 1)))
             };
             let (start, end) = (pos(&mut rng, a), pos(&mut rng, b));
             ed.set_selection(Selection::new(start, end));
@@ -1262,7 +1717,16 @@ fn random_comments_do_not_disturb_the_text() {
             if let Err(e) = result {
                 eprintln!("seed {seed} failed with {comments:?}:\n{out}");
                 for b in doc.blocks() {
-                    eprintln!("{:?} indent {} {:?} {:?}", b.kind(), b.indent(), b.text(), b.runs().iter().map(|r| (r.len, r.attrs.comments.clone())).collect::<Vec<_>>());
+                    eprintln!(
+                        "{:?} indent {} {:?} {:?}",
+                        b.kind(),
+                        b.indent(),
+                        b.text(),
+                        b.runs()
+                            .iter()
+                            .map(|r| (r.len, r.attrs.comments.clone()))
+                            .collect::<Vec<_>>()
+                    );
                 }
                 std::panic::resume_unwind(e);
             }

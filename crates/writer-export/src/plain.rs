@@ -138,7 +138,11 @@ fn join_chunks(chunks: &[Chunk]) -> String {
     let mut out = String::new();
     for (i, c) in chunks.iter().enumerate() {
         if i > 0 {
-            out.push_str(if c.list && chunks[i - 1].list { "\n" } else { "\n\n" });
+            out.push_str(if c.list && chunks[i - 1].list {
+                "\n"
+            } else {
+                "\n\n"
+            });
         }
         out.push_str(&c.text);
     }
@@ -153,7 +157,10 @@ fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<
             BlockKind::PageBreak => String::new(),
             BlockKind::CodeBlock { .. } => {
                 let code = block.text().trim_end_matches(['\n', ' ', '\t']);
-                code.split('\n').map(str::trim_end).collect::<Vec<_>>().join("\n")
+                code.split('\n')
+                    .map(str::trim_end)
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             kind => {
                 let heading = kind.heading_level().is_some();
@@ -166,14 +173,18 @@ fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<
                     let marker = match kind {
                         BlockKind::BulletItem => format!("{} ", options.bullet),
                         BlockKind::NumberedItem => format!("{}. ", ordinals[i].unwrap_or(1)),
-                        BlockKind::TodoItem { checked: true } => format!("{} ", options.todo_checked),
+                        BlockKind::TodoItem { checked: true } => {
+                            format!("{} ", options.todo_checked)
+                        }
                         BlockKind::TodoItem { checked: false } => {
                             format!("{} ", options.todo_unchecked)
                         }
                         _ => String::new(),
                     };
                     let (first, rest) = match kind {
-                        BlockKind::Quote => (options.quote_prefix.clone(), options.quote_prefix.clone()),
+                        BlockKind::Quote => {
+                            (options.quote_prefix.clone(), options.quote_prefix.clone())
+                        }
                         k if k.is_list_item() => (
                             format!("{level}{marker}"),
                             format!("{level}{}", " ".repeat(marker.chars().count())),
@@ -185,7 +196,9 @@ fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<
                         .iter()
                         .enumerate()
                         .map(|(n, l)| {
-                            format!("{}{l}", if n == 0 { &first } else { &rest }).trim_end().to_string()
+                            format!("{}{l}", if n == 0 { &first } else { &rest })
+                                .trim_end()
+                                .to_string()
                         })
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -211,7 +224,14 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
         let link = spans[i].2.link.as_deref().filter(|u| !u.trim().is_empty());
         let Some(url) = link else {
             let a = spans[i].2;
-            push_styled(&mut out, spans[i].1, options, a.bold || heading, a.italic, a.code);
+            push_styled(
+                &mut out,
+                spans[i].1,
+                options,
+                a.bold || heading,
+                a.italic,
+                a.code,
+            );
             i += 1;
             continue;
         };
@@ -220,7 +240,14 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
         let mut plain = String::new();
         while i < spans.len() && spans[i].2.link.as_deref() == Some(url) {
             let a = spans[i].2;
-            push_styled(&mut text, spans[i].1, options, a.bold || heading, a.italic, a.code);
+            push_styled(
+                &mut text,
+                spans[i].1,
+                options,
+                a.bold || heading,
+                a.italic,
+                a.code,
+            );
             plain.push_str(spans[i].1);
             i += 1;
         }
@@ -230,7 +257,8 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
             || label == url
             || url.strip_prefix("mailto:") == Some(label)
             || ["https://", "http://"].iter().any(|s| {
-                url.strip_prefix(s).map(|u| u.trim_end_matches('/')) == Some(label.trim_end_matches('/'))
+                url.strip_prefix(s).map(|u| u.trim_end_matches('/'))
+                    == Some(label.trim_end_matches('/'))
             });
         let lead = &plain[..plain.len() - plain.trim_start().len()];
         let trail = &plain[plain.trim_end().len()..];
@@ -243,7 +271,11 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
             }
             PlainTextLinks::TextAndUrl if same => {
                 out.push_str(lead);
-                out.push_str(if url.starts_with("mailto:") { label } else { url });
+                out.push_str(if url.starts_with("mailto:") {
+                    label
+                } else {
+                    url
+                });
                 out.push_str(trail);
             }
             PlainTextLinks::TextAndUrl => {
@@ -258,7 +290,14 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
     out
 }
 
-fn push_styled(out: &mut String, text: &str, options: &PlainTextOptions, bold: bool, italic: bool, code: bool) {
+fn push_styled(
+    out: &mut String,
+    text: &str,
+    options: &PlainTextOptions,
+    bold: bool,
+    italic: bool,
+    code: bool,
+) {
     if options.unicode_styles && !code && (bold || italic) {
         out.push_str(&style_text(text, bold, italic));
     } else {
@@ -376,35 +415,63 @@ mod tests {
         let block = || {
             Block::paragraph("See ")
                 .with_span("the ", link("https://example.com/a"))
-                .with_span("docs ", InlineAttrs { bold: true, ..link("https://example.com/a") })
+                .with_span(
+                    "docs ",
+                    InlineAttrs {
+                        bold: true,
+                        ..link("https://example.com/a")
+                    },
+                )
                 .with_span("now", InlineAttrs::default())
         };
-        assert_eq!(plain(vec![block()]), "See the docs (https://example.com/a) now\n");
+        assert_eq!(
+            plain(vec![block()]),
+            "See the docs (https://example.com/a) now\n"
+        );
         let doc = Document::from_blocks(vec![block()]);
         let mut o = PlainTextOptions {
             links: PlainTextLinks::TextOnly,
             ..Default::default()
         };
-        assert_eq!(to_plain_text(&ExportSource::from(&doc), &o), "See the docs now\n");
+        assert_eq!(
+            to_plain_text(&ExportSource::from(&doc), &o),
+            "See the docs now\n"
+        );
         o.links = PlainTextLinks::UrlOnly;
-        assert_eq!(to_plain_text(&ExportSource::from(&doc), &o), "See https://example.com/a now\n");
+        assert_eq!(
+            to_plain_text(&ExportSource::from(&doc), &o),
+            "See https://example.com/a now\n"
+        );
 
         // The text is the URL, with or without the scheme.
         assert_eq!(
-            plain(vec![Block::new(BlockKind::Paragraph).with_span("https://example.com", link("https://example.com"))]),
+            plain(vec![Block::new(BlockKind::Paragraph).with_span(
+                "https://example.com",
+                link("https://example.com")
+            )]),
             "https://example.com\n"
         );
         assert_eq!(
-            plain(vec![Block::new(BlockKind::Paragraph).with_span("example.com", link("https://example.com/"))]),
+            plain(vec![
+                Block::new(BlockKind::Paragraph)
+                    .with_span("example.com", link("https://example.com/"))
+            ]),
             "https://example.com/\n"
         );
         assert_eq!(
-            plain(vec![Block::new(BlockKind::Paragraph).with_span("me@example.com", link("mailto:me@example.com"))]),
+            plain(vec![
+                Block::new(BlockKind::Paragraph)
+                    .with_span("me@example.com", link("mailto:me@example.com"))
+            ]),
             "me@example.com\n"
         );
         // Two different links side by side stay two links.
         assert_eq!(
-            plain(vec![Block::new(BlockKind::Paragraph).with_span("a", link("u:1")).with_span("b", link("u:2"))]),
+            plain(vec![
+                Block::new(BlockKind::Paragraph)
+                    .with_span("a", link("u:1"))
+                    .with_span("b", link("u:2"))
+            ]),
             "a (u:1)b (u:2)\n"
         );
     }
@@ -424,7 +491,12 @@ mod tests {
                 .with_span(" it ", InlineAttrs::default())
                 .with_span("today", InlineAttrs::default().with(InlineStyle::Italic))
                 .with_span(" with ", InlineAttrs::default())
-                .with_span("code()", InlineAttrs::default().with(InlineStyle::Code).with(InlineStyle::Bold)),
+                .with_span(
+                    "code()",
+                    InlineAttrs::default()
+                        .with(InlineStyle::Code)
+                        .with(InlineStyle::Bold),
+                ),
         ]);
         let source = ExportSource::from(&doc);
         assert_eq!(
@@ -448,6 +520,39 @@ mod tests {
     }
 
     #[test]
+    fn deeply_nested_lists() {
+        let blocks: Vec<Block> = (0..=8u8)
+            .map(|i| {
+                let kind = match i % 3 {
+                    0 => BlockKind::BulletItem,
+                    1 => BlockKind::NumberedItem,
+                    _ => BlockKind::TodoItem {
+                        checked: i % 2 == 0,
+                    },
+                };
+                Block::with_text(kind, &format!("level {i}")).with_indent(i)
+            })
+            .collect();
+        let text = plain(blocks);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[0], "• level 0");
+        assert_eq!(lines[1], "  1. level 1");
+        assert_eq!(lines[2], "    ☑ level 2");
+        assert_eq!(lines[8], format!("{}☑ level 8", " ".repeat(16)));
+    }
+
+    #[test]
+    fn right_to_left_and_emoji() {
+        let text = plain(vec![
+            Block::with_text(BlockKind::BulletItem, "שלום עולם"),
+            Block::with_text(BlockKind::NumberedItem, "مرحبا 👨‍👩‍👧‍👦"),
+            Block::with_text(BlockKind::Quote, "日本語 😀"),
+        ]);
+        assert_eq!(text, "• שלום עולם\n1. مرحبا 👨‍👩‍👧‍👦\n\n> 日本語 😀\n");
+    }
+
+    #[test]
     fn every_attribute_at_once() {
         let all = InlineAttrs {
             bold: true,
@@ -461,18 +566,30 @@ mod tests {
             link: Some("https://x.test".into()),
             ..Default::default()
         };
-        let doc = Document::from_blocks(vec![Block::new(BlockKind::Paragraph).with_span("All 1", all)]);
+        let doc = Document::from_blocks(vec![
+            Block::new(BlockKind::Paragraph).with_span("All 1", all),
+        ]);
         let source = ExportSource::from(&doc);
-        assert_eq!(to_plain_text(&source, &PlainTextOptions::default()), "All 1 (https://x.test)\n");
-        assert_eq!(to_plain_text(&source, &PlainTextOptions::social()), "𝘼𝙡𝙡 𝟭 (https://x.test)\n");
+        assert_eq!(
+            to_plain_text(&source, &PlainTextOptions::default()),
+            "All 1 (https://x.test)\n"
+        );
+        assert_eq!(
+            to_plain_text(&source, &PlainTextOptions::social()),
+            "𝘼𝙡𝙡 𝟭 (https://x.test)\n"
+        );
     }
 
     #[test]
     fn collections() {
-        let a = Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), "One"), Block::paragraph("First.")]);
+        let a = Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "One"),
+            Block::paragraph("First."),
+        ]);
         let b = Document::from_blocks(vec![Block::paragraph("Second.")]);
         let empty = Document::new();
-        let source = ExportSource::collection("Book", [("One", &a), ("Empty", &empty), ("Two", &b)]);
+        let source =
+            ExportSource::collection("Book", [("One", &a), ("Empty", &empty), ("Two", &b)]);
         assert_eq!(
             to_plain_text(&source, &PlainTextOptions::default()),
             "One\n\nFirst.\n\n* * *\n\nEmpty\n\n* * *\n\nTwo\n\nSecond.\n"
@@ -483,6 +600,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(to_plain_text(&source, &o), "One\n\nFirst.\n\nSecond.\n");
-        assert_eq!(to_plain_text(&ExportSource::collection("x", Vec::<(String, &Document)>::new()), &o), "");
+        assert_eq!(
+            to_plain_text(
+                &ExportSource::collection("x", Vec::<(String, &Document)>::new()),
+                &o
+            ),
+            ""
+        );
     }
 }

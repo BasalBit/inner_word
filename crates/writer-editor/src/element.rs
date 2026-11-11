@@ -198,7 +198,7 @@ impl Editor {
     /// Builds the paint plan for the blocks in the viewport.
     pub(crate) fn plan_frame(&mut self, hitbox: Hitbox, window: &mut Window) -> FramePlan {
         let focused = self.focus_handle.is_focused(window);
-        let active = window.is_window_active();
+        let active = window.is_window_active() || self.draw_as_active;
         let compact = self.config.mode.is_compact();
         let mut plan = FramePlan::new(hitbox);
         let mut checkboxes: Vec<CheckboxHit> = Vec::new();

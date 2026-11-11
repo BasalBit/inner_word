@@ -20,12 +20,19 @@
 //! | `cmd-alt-h` | highlight layer on every "the" / clear it |
 //! | `cmd-alt-u` | popup at the caret / hide it |
 //! | `cmd-alt-i` | intercept keys: `x` is swallowed while on |
+//! | `cmd-alt-l` | page setup: A4, A4 landscape, US Letter with narrow margins |
+//! | `cmd-alt-x` | print the frame timings collected since the last print |
 //! | `cmd-1` / `cmd-2` | focus the editor / the compact composer |
 //! | `cmd-q` | quit |
 //!
-//! The line under the editor shows the statistics, the selection, the page
-//! and the last event; the compact editor below it is a comment composer
-//! (enter submits, shift-enter breaks the line).
+//! The line under the editor shows the statistics, the selection, the page,
+//! the last frame's cost and the last event; the compact editor below it is
+//! a comment composer (enter submits, shift-enter breaks the line).
+//!
+//! `THE_WRITER_DEMO_BLOCKS=10000` opens a generated book of that many
+//! blocks instead of the sample document, and `THE_WRITER_DEMO_PAGE_VIEW=1`
+//! starts in page view; the demo then prints how long opening and the
+//! background layout took.
 //!
 //! Visual QA (see `docs/gpui-notes.md`): build, then run the binary with
 //! `THE_WRITER_AUTOMATION`, e.g.
@@ -37,18 +44,26 @@
 //!   ./target/debug/examples/demo
 //! ```
 //!
+//! A scripted run does not activate the app, so it never takes the keyboard
+//! (set `THE_WRITER_AUTOMATION_FOREGROUND=1` for a normal activation).
+//!
 //! Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`,
-//! `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`, `quit`.
+//! `typeslow:<text>` (one key per frame, prints what dispatching a key
+//! costs), `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`,
+//! `quit`.
 
 mod automation;
+
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Application, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, SharedString,
     Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
 use writer_core::{
-    Alignment, Block, BlockKind, Document, EditorState, Highlight, InlineAttrs, InlineStyle,
-    Position, Rgb, SearchOptions, TextRange,
+    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, SearchOptions,
+    TextRange,
 };
 use writer_editor::{
     CaretStyle, CompactOptions, Editor, EditorConfig, EditorEvent, HighlightStyle,
@@ -68,6 +83,8 @@ actions!(
         ToggleHighlights,
         TogglePopup,
         ToggleIntercept,
+        CyclePageSetup,
+        LogPerf,
         FocusEditor,
         FocusComposer,
         Quit,
@@ -197,6 +214,52 @@ fn sample_document() -> Document {
     state.into_document()
 }
 
+/// A generated book: chapters with headings, paragraphs of one to a dozen
+/// sentences, a few lists. About 150 bytes per block.
+fn book(blocks: usize) -> Document {
+    let sentences = [
+        "The quick brown fox jumps over the lazy dog and keeps on running. ",
+        "Nobody in the village had seen the river this low before the summer. ",
+        "She put the letter back in the drawer and did not think of it again. ",
+        "It was, by any measure, an ordinary morning: grey, quiet, a little cold. ",
+    ];
+    let mut out = Vec::with_capacity(blocks);
+    for index in 0..blocks {
+        let sentence = sentences[index % sentences.len()];
+        out.push(match index % 40 {
+            0 => Block::with_text(
+                BlockKind::heading(2),
+                &format!("Chapter {}", index / 40 + 1),
+            ),
+            7 | 8 | 9 => Block::with_text(BlockKind::BulletItem, sentence.trim_end()),
+            _ => Block::paragraph(sentence.repeat(1 + index % 3 + (index % 7) / 3).trim_end()),
+        });
+    }
+    Document::from_blocks(out)
+}
+
+/// The document the demo opens: the sample, or a book of
+/// `THE_WRITER_DEMO_BLOCKS` blocks.
+fn initial_document() -> Document {
+    let document = std::env::var("THE_WRITER_DEMO_BLOCKS")
+        .ok()
+        .and_then(|blocks| blocks.trim().parse::<usize>().ok())
+        .map_or_else(sample_document, |blocks| book(blocks.max(1)));
+    if std::env::var("THE_WRITER_DEMO_PAGE_VIEW").is_ok() {
+        document.with_settings(DocumentSettings {
+            page_view: true,
+            ..DocumentSettings::default()
+        })
+    } else {
+        document
+    }
+}
+
+fn median(samples: &mut [Duration]) -> Duration {
+    samples.sort();
+    samples.get(samples.len() / 2).copied().unwrap_or_default()
+}
+
 /// The popup shown by `cmd-alt-u`: any view works.
 struct PopupCard;
 
@@ -232,14 +295,22 @@ struct Demo {
     interceptor: Option<Subscription>,
     last_event: SharedString,
     submitted: Vec<String>,
+    /// When the demo started, for the timings it prints.
+    opened: Instant,
+    first_frame_logged: bool,
+    settled_logged: bool,
+    /// (prepaint, paint) of the editor's frames since the last print.
+    frames: Vec<(Duration, Duration)>,
+    frames_seen: u64,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Demo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let opened = Instant::now();
         let editor = cx.new(|cx| {
             Editor::new(
-                sample_document(),
+                initial_document(),
                 EditorConfig::full().placeholder("Start writing"),
                 window,
                 cx,
@@ -274,6 +345,12 @@ impl Demo {
                 }
                 cx.notify();
             }),
+            // The editor also notifies without an event (the background
+            // layout, the caret blink): the status line follows.
+            cx.observe(&editor, |this: &mut Self, _, cx| {
+                this.sample_frames(cx);
+                cx.notify();
+            }),
         ];
         Self {
             focus_handle: cx.focus_handle(),
@@ -283,6 +360,11 @@ impl Demo {
             interceptor: None,
             last_event: "none".into(),
             submitted: Vec::new(),
+            opened,
+            first_frame_logged: false,
+            settled_logged: false,
+            frames: Vec::new(),
+            frames_seen: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -389,6 +471,72 @@ impl Demo {
         cx.notify();
     }
 
+    fn cycle_page_setup(&mut self, _: &CyclePageSetup, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            let mut settings = editor.document().settings().clone();
+            settings.page = match (settings.page.paper, settings.page.orientation) {
+                (PaperSize::A4, Orientation::Portrait) => PageSetup {
+                    orientation: Orientation::Landscape,
+                    ..settings.page
+                },
+                (PaperSize::A4, Orientation::Landscape) => PageSetup {
+                    paper: PaperSize::UsLetter,
+                    orientation: Orientation::Portrait,
+                    margins: Margins::uniform(36.),
+                },
+                _ => PageSetup::default(),
+            };
+            editor.edit(|state| state.set_settings(settings), cx);
+        });
+    }
+
+    /// Collects the cost of the editor's frames, and prints the timings of
+    /// opening once they are known.
+    fn sample_frames(&mut self, cx: &App) {
+        let editor = self.editor.read(cx);
+        let perf = editor.frame_perf();
+        if perf.frames != self.frames_seen {
+            self.frames_seen = perf.frames;
+            self.frames.push((perf.prepaint, perf.paint));
+        }
+        if !self.first_frame_logged && perf.frames > 0 && !perf.paint.is_zero() {
+            self.first_frame_logged = true;
+            eprintln!(
+                "[demo] {} blocks: first frame done {:?} after start (prepaint {:?}, paint {:?})",
+                editor.document().block_count(),
+                self.opened.elapsed(),
+                perf.prepaint,
+                perf.paint,
+            );
+        }
+        if !self.settled_logged && perf.frames > 0 && !editor.layout_pending() {
+            self.settled_logged = true;
+            eprintln!(
+                "[demo] background layout done {:?} after start; {} words, pages {:?}",
+                self.opened.elapsed(),
+                editor.stats().words,
+                editor.page_count(),
+            );
+        }
+    }
+
+    fn log_perf(&mut self, _: &LogPerf, _: &mut Window, cx: &mut Context<Self>) {
+        self.sample_frames(cx);
+        let mut prepaint: Vec<Duration> = self.frames.iter().map(|frame| frame.0).collect();
+        let mut paint: Vec<Duration> = self.frames.iter().map(|frame| frame.1).collect();
+        let mut total: Vec<Duration> = self.frames.iter().map(|frame| frame.0 + frame.1).collect();
+        eprintln!(
+            "[demo] {} editor frames: prepaint median {:?}, paint median {:?}, \
+             both median {:?}, both max {:?}",
+            self.frames.len(),
+            median(&mut prepaint),
+            median(&mut paint),
+            median(&mut total),
+            total.iter().max().copied().unwrap_or_default(),
+        );
+        self.frames.clear();
+    }
+
     fn focus_editor(&mut self, _: &FocusEditor, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.read(cx).focus(window);
     }
@@ -415,6 +563,14 @@ impl Demo {
         if let (Some(page), Some(pages)) = (editor.caret_page(), editor.page_count()) {
             status.push_str(&format!("  |  page {page} of {pages}"));
         }
+        if editor.layout_pending() {
+            status.push_str("  |  laying out");
+        }
+        let perf = editor.frame_perf();
+        status.push_str(&format!(
+            "  |  frame {:.1} ms",
+            (perf.prepaint + perf.paint).as_secs_f64() * 1000.
+        ));
         if editor.is_read_only() {
             status.push_str("  |  read-only");
         }
@@ -450,6 +606,8 @@ impl Render for Demo {
             .on_action(cx.listener(Self::toggle_highlights))
             .on_action(cx.listener(Self::toggle_popup))
             .on_action(cx.listener(Self::toggle_intercept))
+            .on_action(cx.listener(Self::cycle_page_setup))
+            .on_action(cx.listener(Self::log_perf))
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::focus_composer))
             .size_full()
@@ -523,6 +681,8 @@ fn main() {
                 KeyBinding::new("cmd-alt-h", ToggleHighlights, None),
                 KeyBinding::new("cmd-alt-u", TogglePopup, None),
                 KeyBinding::new("cmd-alt-i", ToggleIntercept, None),
+                KeyBinding::new("cmd-alt-l", CyclePageSetup, None),
+                KeyBinding::new("cmd-alt-x", LogPerf, None),
                 KeyBinding::new("cmd-1", FocusEditor, None),
                 KeyBinding::new("cmd-2", FocusComposer, None),
                 KeyBinding::new("cmd-q", Quit, None),
@@ -560,7 +720,15 @@ fn main() {
                     },
                 )
                 .expect("open demo window");
-            cx.activate(true);
+            // A scripted run stays in the background: it must not take the
+            // keyboard from whoever is using the machine (their typing
+            // would land in this window). The script's keys are dispatched
+            // inside the app and do not need it to be frontmost.
+            if std::env::var_os(automation::ENV).is_none()
+                || std::env::var_os("THE_WRITER_AUTOMATION_FOREGROUND").is_some()
+            {
+                cx.activate(true);
+            }
             automation::run_from_env(window.into(), cx);
         });
 }

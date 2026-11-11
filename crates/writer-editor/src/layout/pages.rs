@@ -17,7 +17,8 @@
 //! - a block may continue on the next sheet at any row boundary, unless
 //!   its measure says [`Measure::keep_together`] and it fits on one sheet;
 //! - a heading moves to the next sheet together with the first row of the
-//!   block after it ([`Measure::keep_with_next`]);
+//!   block after it, and a run of headings moves together
+//!   ([`Measure::keep_with_next`], [`kept_height`]);
 //! - the block after a page break starts a new sheet.
 //!
 //! A block that continues on later sheets keeps one box top; its later
@@ -43,6 +44,9 @@ const MIN_SCALE: f32 = 0.2;
 /// Tolerance for "fits on the page" comparisons (scaled layouts are not
 /// whole pixels).
 const EPSILON: f32 = 0.01;
+/// How many blocks after a heading can decide where the heading goes (a
+/// run of headings is kept together with the text after it).
+pub(crate) const KEEP_LOOKAHEAD: usize = 4;
 
 /// The sheets of page view for one viewport, in layout pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,6 +174,30 @@ pub(crate) fn gap(previous: &Measure, next: &Measure) -> f32 {
     }
 }
 
+/// The room a block that is kept with what follows needs on a sheet: its
+/// own box, every heading directly after it, and the first row of the
+/// first block that is not a heading. `None` for a block that is not kept
+/// with anything.
+pub(crate) fn kept_height<'a>(
+    measure: &Measure,
+    following: impl Iterator<Item = &'a Measure>,
+) -> Option<f32> {
+    if !measure.keep_with_next {
+        return None;
+    }
+    let mut total = measure.height();
+    let mut previous = measure;
+    for next in following.take(KEEP_LOOKAHEAD) {
+        total += gap(previous, next);
+        if !next.keep_with_next {
+            return Some(total + next.pad_top + next.line_height);
+        }
+        total += next.height();
+        previous = next;
+    }
+    Some(total)
+}
+
 /// Flow view: the box follows the previous one.
 pub(crate) fn place_flow(previous: Option<Previous>, measure: &Measure, pad_top: f32) -> Placement {
     let top = match previous {
@@ -185,13 +213,14 @@ pub(crate) fn place_flow(previous: Option<Previous>, measure: &Measure, pad_top:
     }
 }
 
-/// Page view: the rows are distributed over sheets.
+/// Page view: the rows are distributed over sheets. `kept` is the block's
+/// [`kept_height`].
 pub(crate) fn place_paged(
     geometry: &PageGeometry,
     pad_top: f32,
     previous: Option<Previous>,
     measure: &Measure,
-    next: Option<&Measure>,
+    kept: Option<f32>,
 ) -> Placement {
     let page_height = f32::from(geometry.content_height);
     let pitch = f32::from(geometry.pitch());
@@ -214,13 +243,10 @@ pub(crate) fn place_paged(
         if measure.keep_together && whole <= page_height + EPSILON {
             needed = whole;
         }
-        if measure.keep_with_next
-            && let Some(next) = next
+        if let Some(kept) = kept
+            && kept <= page_height + EPSILON
         {
-            let with_next = whole + gap(measure, next) + next.pad_top + next.line_height;
-            if with_next <= page_height + EPSILON {
-                needed = needed.max(with_next);
-            }
+            needed = needed.max(kept);
         }
         if y + needed > page_height + EPSILON {
             page += 1;
@@ -307,7 +333,13 @@ mod tests {
                 end: placed[prev].end,
                 end_page: placed[prev].end_page,
             });
-            let placement = place_paged(geometry, pad_top, previous, measure, measures.get(ix + 1));
+            let placement = place_paged(
+                geometry,
+                pad_top,
+                previous,
+                measure,
+                kept_height(measure, measures[ix + 1..].iter()),
+            );
             let mut rows = Vec::new();
             for row in 0..measure.rows as usize {
                 let y = placement.top
@@ -384,6 +416,17 @@ mod tests {
         let rows = rows_of(&geometry, &[paragraph(7), loose, paragraph(3)]);
         assert_eq!(rows[1][0].0, 0);
         assert_eq!(rows[2][0].0, 1);
+
+        // A run of headings moves as one: the first would fit together
+        // with the second (130 + 40 + 10 + 20 = 200), but the text after
+        // the second would not.
+        let rows = rows_of(&geometry, &[paragraph(6), heading, heading, paragraph(3)]);
+        assert_eq!((rows[1][0].0, rows[1][0].1), (1, 0.));
+        assert_eq!(rows[2][0].0, 1);
+        assert_eq!(rows[3][0].0, 1);
+        // With room for all of it nothing moves.
+        let rows = rows_of(&geometry, &[paragraph(2), heading, heading, paragraph(3)]);
+        assert!(rows.iter().all(|block| block[0].0 == 0));
 
         // A block that fills a sheet exactly leaves the next one on the
         // following sheet at its top, without the gap.

@@ -56,7 +56,9 @@ pub(crate) use block::{BlockLayout, Measure};
 pub(crate) use pages::PageGeometry;
 pub(crate) use style::LayoutStyle;
 
-use pages::{Placement, Previous, RowShift, place_flow, place_paged, row_shift};
+use pages::{
+    KEEP_LOOKAHEAD, Placement, Previous, RowShift, kept_height, place_flow, place_paged, row_shift,
+};
 
 /// Shaped layouts kept after an eviction pass.
 const LAYOUT_CACHE_KEEP: usize = 500;
@@ -351,8 +353,8 @@ impl DocumentLayout {
             added.push(slot);
         }
         self.slots.splice(splice.start..splice.start, added);
-        // The block before the change may be a heading kept with it.
-        self.placed = self.placed.min(splice.start.saturating_sub(1));
+        // Headings just before the change are kept with it.
+        self.placed = self.placed.min(splice.start.saturating_sub(KEEP_LOOKAHEAD));
         self.revision = revision;
         self.refine_cursor = self.refine_cursor.min(splice.start);
         self.count_cursor = self.count_cursor.min(splice.start);
@@ -440,7 +442,7 @@ impl DocumentLayout {
             }
         }
         if let Some(first) = first {
-            self.placed = self.placed.min(first.saturating_sub(1));
+            self.placed = self.placed.min(first.saturating_sub(KEEP_LOOKAHEAD));
             self.measure_changes += 1;
         }
     }
@@ -482,8 +484,8 @@ impl DocumentLayout {
         }
         if slot.measure != measure {
             slot.measure = measure;
-            // The block before may be a heading kept with this one.
-            self.placed = self.placed.min(index.saturating_sub(1));
+            // Headings just before are kept with this block.
+            self.placed = self.placed.min(index.saturating_sub(KEEP_LOOKAHEAD));
             self.measure_changes += 1;
         }
     }
@@ -653,7 +655,10 @@ impl DocumentLayout {
                 pad_top,
                 previous,
                 measure,
-                self.slots.get(index + 1).map(|slot| &slot.measure),
+                kept_height(
+                    measure,
+                    self.slots[index + 1..].iter().map(|slot| &slot.measure),
+                ),
             ),
             None => place_flow(previous, measure, pad_top),
         };

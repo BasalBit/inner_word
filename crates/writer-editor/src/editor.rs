@@ -120,6 +120,9 @@ pub struct Editor {
     pub(crate) link_hover: bool,
     /// The editor's focus handle is focused (as of the last focus event).
     focused: bool,
+    /// Paint the caret and the selection as in an active window even while
+    /// the window is in the background.
+    pub(crate) draw_as_active: bool,
     /// The caret is in the visible half of its blink.
     pub(crate) blink_on: bool,
     blink_task: Option<Task<()>>,
@@ -251,6 +254,10 @@ impl Editor {
             checkbox_hits: Vec::new(),
             link_hover: false,
             focused: false,
+            // A scripted run stays in the background (so it does not take
+            // the keyboard from whoever is at the machine); its screenshots
+            // should still show the caret.
+            draw_as_active: std::env::var_os("THE_WRITER_AUTOMATION").is_some(),
             blink_on: true,
             blink_task: None,
             typing_pause: None,
@@ -311,6 +318,20 @@ impl Editor {
     /// Whether the user can change the document.
     pub fn is_read_only(&self) -> bool {
         self.config.read_only
+    }
+
+    /// Paints the caret and the active selection colour even while the
+    /// window is in the background. A background window normally shows no
+    /// caret and a grey selection, as macOS text views do. Scripted runs
+    /// (the `THE_WRITER_AUTOMATION` environment variable is set) stay in
+    /// the background on purpose and take screenshots, so there this is on
+    /// from the start; the caret then does not blink either, because focus
+    /// events only reach active windows.
+    pub fn set_draw_as_active(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.draw_as_active != on {
+            self.draw_as_active = on;
+            cx.notify();
+        }
     }
 
     /// Replaces the whole document: new undo history, caret at the start,

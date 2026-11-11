@@ -1,10 +1,16 @@
 //! A small copy of writer-app's visual-QA hook (writer-editor cannot depend on
 //! writer-app). Same script syntax, subset of steps:
-//! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `theme:<light|dark|system>`,
-//! `screenshot:<path>`, `log:<text>`, `quit`. Steps are separated by `;` or
-//! newlines; `THE_WRITER_AUTOMATION=@file` reads a file.
+//! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `typeslow:<text>`,
+//! `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`, `quit`.
+//! Steps are separated by `;` or newlines; `THE_WRITER_AUTOMATION=@file`
+//! reads a file. `typeslow` leaves a frame between keys and prints what
+//! dispatching one key costs (handlers and events, without the frame).
 
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use gpui::{AnyWindowHandle, App, Keystroke, Modifiers, Window};
@@ -17,6 +23,7 @@ enum Step {
     Wait(Duration),
     Keys(Vec<Keystroke>),
     Type(String),
+    TypeSlow(String),
     Theme(ThemeMode),
     Screenshot(PathBuf),
     Log(String),
@@ -39,6 +46,7 @@ fn parse(source: &str) -> Result<Vec<Step>> {
                     .collect::<Result<_>>()?,
             ),
             "type" => Step::Type(arg.replace("\\s", " ")),
+            "typeslow" => Step::TypeSlow(arg.replace("\\s", " ")),
             "theme" => {
                 Step::Theme(ThemeMode::parse(arg).ok_or_else(|| anyhow!("unknown theme {arg:?}"))?)
             }
@@ -107,6 +115,26 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                         cx.background_executor()
                             .timer(Duration::from_millis(60))
                             .await;
+                    }
+                    Step::TypeSlow(text) => {
+                        let mut costs = Vec::new();
+                        for ch in text.chars() {
+                            let started = Instant::now();
+                            window.update(cx, |_, window, cx| {
+                                window.dispatch_keystroke(keystroke_for_char(ch), cx);
+                            })?;
+                            costs.push(started.elapsed());
+                            cx.background_executor()
+                                .timer(Duration::from_millis(24))
+                                .await;
+                        }
+                        costs.sort();
+                        eprintln!(
+                            "[automation] typeslow {} keys: dispatch median {:?}, max {:?}",
+                            costs.len(),
+                            costs.get(costs.len() / 2).copied().unwrap_or_default(),
+                            costs.last().copied().unwrap_or_default(),
+                        );
                     }
                     Step::Theme(mode) => {
                         cx.update(|cx| theme::set_theme_mode(mode, cx))?;

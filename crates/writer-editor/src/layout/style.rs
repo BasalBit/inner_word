@@ -227,8 +227,8 @@ impl LayoutStyle {
                 let (before, after) = match level {
                     1 => (0.9, 0.5),
                     2 => (0.9, 0.35),
-                    3 => (0.75, 0.25),
-                    _ => (0.6, 0.15),
+                    3 => (0.75, 0.3),
+                    _ => (0.6, 0.3),
                 };
                 space_before = (base_line * before).round();
                 space_after = (base_line * after).round();

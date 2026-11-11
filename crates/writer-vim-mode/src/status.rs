@@ -66,6 +66,11 @@ pub struct VimStatus {
     /// third of a second, or until the next command. The status item
     /// flashes its mode chip; a status bar of its own can do the same.
     pub bell: bool,
+    /// The marked text of a dead key or an input method that is being
+    /// composed for the command line or for a command waiting for a
+    /// character (`option-e` shows its accent here until the letter
+    /// follows). The command line draws it at its cursor.
+    pub composing: Option<String>,
 }
 
 impl Default for VimStatus {
@@ -80,19 +85,24 @@ impl Default for VimStatus {
             caret: CaretShape::Block,
             search_highlighted: false,
             bell: false,
+            composing: None,
         }
     }
 }
 
 impl VimStatus {
     /// The mode as a status bar shows it: `"NORMAL"`, `"INSERT"`,
-    /// `"REPLACE"`, `"VISUAL"`, `"VISUAL LINE"`, `"PENDING"`, `"COMMAND"`,
-    /// and `"(INSERT)"` while the one command of `ctrl-o` is awaited.
+    /// `"REPLACE"`, `"VISUAL"`, `"VISUAL LINE"`, `"COMMAND"`, and
+    /// `"(INSERT)"` while the one command of `ctrl-o` is awaited.
+    ///
+    /// An operator waiting for its motion is still `"NORMAL"`, as in Vim:
+    /// what was typed so far is in [`VimStatus::pending_keys`], and a
+    /// status bar shows it beside the mode.
     pub fn mode_label(&self) -> &'static str {
-        if self.insert_pending && self.mode == Mode::Normal {
-            "(INSERT)"
-        } else {
-            self.mode.label()
+        match self.mode {
+            Mode::Normal | Mode::OperatorPending if self.insert_pending => "(INSERT)",
+            Mode::OperatorPending => Mode::Normal.label(),
+            mode => mode.label(),
         }
     }
 }

@@ -630,3 +630,17 @@ fn commands_work_on_other_keyboard_layouts(cx: &mut TestAppContext) {
         assert_eq!(vim.engine().last_inserted_text(), "о");
     });
 }
+
+#[gpui::test]
+fn an_operator_waiting_for_its_motion_is_still_normal_mode_in_the_status(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["alpha beta"]), cx);
+    cx.simulate_keystrokes("2 d");
+    let status = rig.status(cx);
+    assert_eq!(status.mode, Mode::OperatorPending);
+    // As in Vim: the mode name does not change, the keys are shown.
+    assert_eq!(status.mode_label(), "NORMAL");
+    assert_eq!(status.pending_keys, "2d");
+    cx.simulate_keystrokes("escape /");
+    assert_eq!(rig.status(cx).mode_label(), "COMMAND");
+}

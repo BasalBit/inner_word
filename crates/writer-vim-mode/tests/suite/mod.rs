@@ -3,6 +3,8 @@
 mod integration;
 mod measure;
 mod modes;
+mod mouse;
+mod platform_input;
 mod rows;
 mod seams;
 mod search;

@@ -177,6 +177,7 @@
 //!   `escape`.
 
 mod host;
+mod input;
 mod mode;
 mod search;
 mod status;

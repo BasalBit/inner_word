@@ -138,6 +138,11 @@ pub struct VimMode {
     /// looked: a change report that finds them unchanged needs no sync.
     seen: Option<(u64, Selection)>,
     layout_fallbacks: usize,
+    /// The marked text of a dead key or an input method while the command
+    /// line or a command waiting for a character has the keyboard (see the
+    /// `input` module). It is in neither the document nor the command
+    /// line yet.
+    pub(crate) composition: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -169,6 +174,7 @@ impl VimMode {
             bell: None,
             seen: None,
             layout_fallbacks: 0,
+            composition: None,
             _subscriptions: subscriptions,
         }
     }
@@ -294,6 +300,7 @@ impl VimMode {
         self.keys = None;
         self.seen = None;
         self.bell = None;
+        self.composition = None;
         self.search = SearchMatches::default();
         self.status = VimStatus::default();
         let saved = self.saved.take();
@@ -368,6 +375,20 @@ impl VimMode {
             return KeyDisposition::Pass;
         }
         let modifiers = keystroke.modifiers;
+        if self.composition.is_some() {
+            // So do the keys of a composition for the command line or for
+            // a character argument. The platform asks the input method
+            // before it dispatches a key, so only what the input method
+            // did not want arrives here: a character goes on to the text
+            // input, any other key ends the composition and is used up by
+            // that (it must not reach the document).
+            let printable = keystroke.key_char.is_some() && !modifiers.control;
+            if printable && !modifiers.platform {
+                return KeyDisposition::Pass;
+            }
+            self.set_composition(None, cx);
+            return KeyDisposition::Consumed;
+        }
         if modifiers.platform {
             // Application and editor shortcuts, in every mode. One
             // exception: paste goes into an open command line.
@@ -386,6 +407,17 @@ impl VimMode {
             return KeyDisposition::Pass;
         }
         if modifiers.function {
+            return KeyDisposition::Pass;
+        }
+        // The key of the context menu (the editor's `ctrl-enter`, as in
+        // macOS) is no Vim command in any mode; to the engine it would be
+        // `enter`. An open command line keeps it.
+        if keystroke.key == "enter"
+            && modifiers.control
+            && !modifiers.alt
+            && !modifiers.shift
+            && self.vim.mode() != Mode::CommandLine
+        {
             return KeyDisposition::Pass;
         }
         if let Some(typed) = self.typed_into_popup(keystroke, cx) {
@@ -478,6 +510,18 @@ impl VimMode {
             // The keyboard went elsewhere: a half-typed command must not
             // wait there for the first key after coming back.
             EditorEvent::Blurred => {
+                self.set_composition(None, cx);
+                let outcome = self.vim.cancel_pending_command();
+                self.apply(outcome, false, cx);
+                self.present_caret(cx);
+            }
+            // A context menu opens over the text (a right-click, or
+            // `ctrl-enter`). The selection it is for has arrived already
+            // (`SelectionChanged` comes first): a word the right-click
+            // selected is a Visual selection by now. A half-typed command
+            // must not wait behind the menu for the first key after it.
+            EditorEvent::ContextMenuRequested(_) => {
+                self.set_composition(None, cx);
                 let outcome = self.vim.cancel_pending_command();
                 self.apply(outcome, false, cx);
                 self.present_caret(cx);
@@ -644,6 +688,12 @@ impl VimMode {
                 }
             }
         }
+        if self.composition.is_some() && !self.wants_text_input() {
+            // What the composition was for is gone (a click closed the
+            // command line).
+            self.composition = None;
+        }
+        self.status.composing = self.composition.clone();
         self.status.insert_pending = self.vim.insert_pending();
         self.status.caret = self.vim.caret_shape();
         self.status.search_highlighted = self.search.pattern().is_some();
@@ -858,6 +908,52 @@ fn key_from_keystroke(keystroke: &Keystroke, literal: bool) -> Option<Key> {
         modifiers.alt && !typed_with_option,
         modifiers.shift,
     )
+}
+
+impl VimMode {
+    /// Whether text from the platform's text input (a dead key such as
+    /// `option-e` followed by `e`, an input method, the emoji palette) has
+    /// somewhere to go that is not the document: the command line while it
+    /// is open, or a command that waits for a character (`f`, `t`, `r`).
+    /// [`crate::VimCommandLine`] registers this entity as the window's
+    /// input handler for as long as this holds and the editor is focused.
+    pub fn wants_text_input(&self) -> bool {
+        self.attached && !self.vim.mode().is_insert() && wants_literal_key(&self.vim)
+    }
+
+    /// The marked text of a composition in progress (the accent of a dead
+    /// key before its letter), also in [`VimStatus::composing`].
+    pub fn composing(&self) -> Option<&str> {
+        self.composition.as_deref()
+    }
+
+    pub(crate) fn set_composition(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        let text = text.filter(|text| !text.is_empty());
+        if self.composition != text {
+            self.composition = text.clone();
+            self.status.composing = text;
+            cx.emit(VimEvent::StatusChanged);
+            cx.notify();
+        }
+    }
+
+    /// Text that the platform's text input delivered while
+    /// [`VimMode::wants_text_input`]: it goes into the command line, or its
+    /// first character is the argument the pending command waits for.
+    pub(crate) fn text_from_platform(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.set_composition(None, cx);
+        if !self.wants_text_input() || text.is_empty() {
+            return;
+        }
+        if self.vim.mode() == Mode::CommandLine {
+            let line: String = text.chars().filter(|c| !c.is_control()).collect();
+            let outcome = self.engine_call(Call::CommandLineInput(&line), cx);
+            self.apply(outcome, false, cx);
+        } else if let Some(character) = text.chars().find(|c| !c.is_control()) {
+            let outcome = self.engine_call(Call::Key(Key::char(character)), cx);
+            self.apply(outcome, true, cx);
+        }
+    }
 }
 
 /// Whether the engine takes the next key as a character rather than as a

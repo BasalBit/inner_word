@@ -34,6 +34,8 @@ use crate::{ExportSource, PartTitles};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlainTextLinks {
     /// `text (url)`; only the URL when the text is the URL. The default.
+    /// A `mailto:` or `tel:` link is written as its address, and a space
+    /// inside a URL as `%20`.
     #[default]
     TextAndUrl,
     /// Only the link text.
@@ -48,8 +50,10 @@ pub struct PlainTextOptions {
     /// Write bold and italic text (and headings, as bold) with the Unicode
     /// mathematical sans-serif alphabets, which social networks show as
     /// styled text. Only ASCII letters and digits have such forms; other
-    /// characters stay as they are. Off by default: screen readers and
-    /// search do not treat these characters as letters.
+    /// characters stay as they are. Links, e-mail addresses, `@mentions`
+    /// and `#hashtags` in styled text keep their plain letters, so they
+    /// still work. Off by default: screen readers and search do not treat
+    /// these characters as letters.
     pub unicode_styles: bool,
     /// The marker of a bullet item (default `"•"`).
     pub bullet: String,
@@ -251,15 +255,17 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
             plain.push_str(spans[i].1);
             i += 1;
         }
-        let url = url.trim();
         let label = plain.trim();
-        let same = label.is_empty()
-            || label == url
-            || url.strip_prefix("mailto:") == Some(label)
-            || ["https://", "http://"].iter().any(|s| {
-                url.strip_prefix(s).map(|u| u.trim_end_matches('/'))
-                    == Some(label.trim_end_matches('/'))
-            });
+        let same = label.is_empty() || {
+            let url = url.trim();
+            label == url
+                || address(url) == Some(label)
+                || ["https://", "http://"].iter().any(|s| {
+                    url.strip_prefix(s).map(|u| u.trim_end_matches('/'))
+                        == Some(label.trim_end_matches('/'))
+                })
+        };
+        let url = &written_url(url);
         let lead = &plain[..plain.len() - plain.trim_start().len()];
         let trail = &plain[plain.trim_end().len()..];
         match options.links {
@@ -271,11 +277,7 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
             }
             PlainTextLinks::TextAndUrl if same => {
                 out.push_str(lead);
-                out.push_str(if url.starts_with("mailto:") {
-                    label
-                } else {
-                    url
-                });
+                out.push_str(url);
                 out.push_str(trail);
             }
             PlainTextLinks::TextAndUrl => {
@@ -290,6 +292,59 @@ fn inline_text(block: &Block, options: &PlainTextOptions, heading: bool) -> Stri
     out
 }
 
+/// The address of a `mailto:` or `tel:` target: what a reader of plain
+/// text can use.
+fn address(url: &str) -> Option<&str> {
+    ["mailto:", "tel:"].iter().find_map(|scheme| {
+        let head = url.get(..scheme.len())?;
+        head.eq_ignore_ascii_case(scheme)
+            .then(|| url[scheme.len()..].split('?').next().unwrap_or("").trim())
+            .filter(|a| !a.is_empty())
+    })
+}
+
+/// A link target as plain text shows it: a `mailto:` or `tel:` target is
+/// its address, and white space inside any other target is
+/// percent-encoded, because a URL ends at the first space wherever plain
+/// text is turned into links.
+fn written_url(url: &str) -> String {
+    let url = url.trim();
+    if let Some(address) = address(url) {
+        return address.to_string();
+    }
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        match c {
+            ' ' | '\u{a0}' => out.push_str("%20"),
+            '\t' => out.push_str("%09"),
+            '\n' | '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether a word must keep its plain letters to keep working where the
+/// text is posted: a link, an e-mail address, a `@mention` or a
+/// `#hashtag`. The styled alphabets are different characters, and a
+/// network does not recognise a link or a tag written in them.
+fn is_functional(word: &str) -> bool {
+    let word = word.trim_start_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '@' | '#'));
+    let tag = |marker: char| {
+        word.strip_prefix(marker)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    };
+    tag('@')
+        || tag('#')
+        || !crate::social::find_links(word, true).is_empty()
+        || word.split_once('@').is_some_and(|(name, host)| {
+            name.chars().next_back().is_some_and(char::is_alphanumeric)
+                && host.contains('.')
+                && host.starts_with(|c: char| c.is_alphanumeric())
+        })
+}
+
 fn push_styled(
     out: &mut String,
     text: &str,
@@ -298,10 +353,25 @@ fn push_styled(
     italic: bool,
     code: bool,
 ) {
-    if options.unicode_styles && !code && (bold || italic) {
-        out.push_str(&style_text(text, bold, italic));
-    } else {
+    if !(options.unicode_styles && !code && (bold || italic)) {
         out.push_str(text);
+        return;
+    }
+    // Word by word, so that links, addresses, mentions and hashtags in
+    // styled text keep their plain letters.
+    let mut rest = text;
+    while !rest.is_empty() {
+        let space = rest.len() - rest.trim_start().len();
+        out.push_str(&rest[..space]);
+        rest = &rest[space..];
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let word = &rest[..end];
+        if is_functional(word) {
+            out.push_str(word);
+        } else {
+            out.push_str(&style_text(word, bold, italic));
+        }
+        rest = &rest[end..];
     }
 }
 
@@ -311,6 +381,11 @@ fn push_styled(
 /// There are no italic digits in Unicode: they stay plain in italic text and
 /// are bold in bold italic text. Characters without a styled form (accented
 /// letters, other scripts, punctuation) are returned unchanged.
+///
+/// This styles every letter it is given. [`to_plain_text`] with
+/// [`PlainTextOptions::unicode_styles`] leaves links, e-mail addresses,
+/// `@mentions` and `#hashtags` inside bold or italic text as they are,
+/// because they stop working when written in these alphabets.
 pub fn unicode_styled(text: &str, bold: bool, italic: bool) -> String {
     style_text(text, bold, italic)
 }
@@ -465,6 +540,24 @@ mod tests {
             ]),
             "me@example.com\n"
         );
+        // An address behind other text: without the scheme.
+        assert_eq!(
+            plain(vec![
+                Block::paragraph("Write to ")
+                    .with_span("me", link("mailto:me@example.com?subject=Hi"))
+                    .with_span(" or call ", InlineAttrs::default())
+                    .with_span("the office", link("tel:+1-555-0100"))
+            ]),
+            "Write to me (me@example.com) or call the office (+1-555-0100)\n"
+        );
+        // A space would end the URL wherever the text is posted.
+        assert_eq!(
+            plain(vec![
+                Block::paragraph("The ")
+                    .with_span("file", link(" https://example.com/my file.pdf "))
+            ]),
+            "The file (https://example.com/my%20file.pdf)\n"
+        );
         // Two different links side by side stay two links.
         assert_eq!(
             plain(vec![
@@ -506,6 +599,56 @@ mod tests {
         assert_eq!(
             to_plain_text(&source, &PlainTextOptions::default()),
             "Big News\n\nWe shipped it today with code()\n"
+        );
+    }
+
+    #[test]
+    fn unicode_styles_leave_links_mentions_and_hashtags_working() {
+        let bold = || InlineAttrs::default().with(InlineStyle::Bold);
+        let social = |blocks: Vec<Block>| {
+            let doc = Document::from_blocks(blocks);
+            to_plain_text(&ExportSource::from(&doc), &PlainTextOptions::social())
+        };
+        assert_eq!(
+            social(vec![Block::new(BlockKind::Paragraph).with_span(
+                "Read https://example.com/Post_1 now, thanks @ada_l and #RustLang!",
+                bold()
+            )]),
+            "𝗥𝗲𝗮𝗱 https://example.com/Post_1 𝗻𝗼𝘄, 𝘁𝗵𝗮𝗻𝗸𝘀 @ada_l 𝗮𝗻𝗱 #RustLang!\n"
+        );
+        // Bare domains, addresses, and tags behind punctuation.
+        assert_eq!(
+            social(vec![Block::new(BlockKind::Paragraph).with_span(
+                "See example.com/a (or www.example.org), mail me@example.com. Tags: (#one) “@two”",
+                InlineAttrs::default().with(InlineStyle::Italic)
+            )]),
+            "𝘚𝘦𝘦 example.com/a (𝘰𝘳 www.example.org), 𝘮𝘢𝘪𝘭 me@example.com. 𝘛𝘢𝘨𝘴: (#one) “@two”\n"
+        );
+        // A heading is bold: its link and tag survive too.
+        assert_eq!(
+            social(vec![Block::with_text(
+                BlockKind::heading(1),
+                "Launch #1 at https://example.com"
+            )]),
+            "𝗟𝗮𝘂𝗻𝗰𝗵 #1 𝗮𝘁 https://example.com\n"
+        );
+        // Not tags: a lone marker, a marker inside a word, a price.
+        assert_eq!(
+            social(vec![
+                Block::new(BlockKind::Paragraph).with_span("# 1 a#b @ c 5.5 v1.2", bold())
+            ]),
+            "# 𝟭 𝗮#𝗯 @ 𝗰 𝟱.𝟱 𝘃𝟭.𝟮\n"
+        );
+        // A bold link whose text is its URL is the plain URL.
+        assert_eq!(
+            social(vec![Block::new(BlockKind::Paragraph).with_span(
+                "https://example.com/x",
+                InlineAttrs {
+                    bold: true,
+                    ..link("https://example.com/x")
+                }
+            )]),
+            "https://example.com/x\n"
         );
     }
 

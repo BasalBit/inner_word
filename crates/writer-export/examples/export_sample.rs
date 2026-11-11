@@ -221,7 +221,10 @@ fn long_book(sections: usize) -> Document {
                 &format!("Chapter {}", i / 20 + 1),
             ));
         }
-        blocks.push(Block::with_text(BlockKind::heading(2), &format!("Section {i}")));
+        blocks.push(Block::with_text(
+            BlockKind::heading(2),
+            &format!("Section {i}"),
+        ));
         blocks.push(Block::paragraph(
             "The quick brown fox jumps over the lazy dog, and then the dog, being lazy, does nothing at all \
              about it, which is exactly what the fox was counting on when it planned the jump.",
@@ -232,10 +235,16 @@ fn long_book(sections: usize) -> Document {
             blocks.extend([n(1, 1), n(2, 1)]);
         }
         if i % 7 == 0 {
-            blocks.push(Block::with_text(BlockKind::Quote, "A quote between the lists."));
+            blocks.push(Block::with_text(
+                BlockKind::Quote,
+                "A quote between the lists.",
+            ));
         }
         if i % 11 == 0 {
-            blocks.push(Block::with_text(BlockKind::code(), "let x = 1;\nlet y = 2;"));
+            blocks.push(Block::with_text(
+                BlockKind::code(),
+                "let x = 1;\nlet y = 2;",
+            ));
         }
     }
     Document::from_blocks(blocks)

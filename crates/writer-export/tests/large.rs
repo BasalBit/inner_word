@@ -4,7 +4,9 @@
 use std::time::Instant;
 
 use writer_core::{Block, BlockKind, Document, InlineAttrs, InlineStyle};
-use writer_export::{ExportFormat, ExportOptions, ExportSource, export};
+use writer_export::{
+    ExportFormat, ExportOptions, ExportSource, SocialNetwork, export, export_text,
+};
 
 fn book(blocks: usize) -> Document {
     let plain = InlineAttrs::default;
@@ -230,5 +232,21 @@ fn a_varied_book_and_a_dense_paragraph_export_quickly() {
             }
         }
         println!("{line}");
+        // The status bar counts the text against a network's limit while
+        // the writer types: that must stay quick for a whole book too.
+        let text = export_text(&source, ExportFormat::PlainText, &options).unwrap();
+        let start = Instant::now();
+        let counts: Vec<usize> = SocialNetwork::ALL
+            .into_iter()
+            .map(|n| n.length(&text))
+            .collect();
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "{name}: social counts of {} KB in {:.0} ms {counts:?}",
+            text.len() / 1024,
+            secs * 1000.0
+        );
+        assert!(secs < 20.0, "{name}: counting took {secs:.1} s");
+        assert!(counts.iter().all(|c| *c > 0));
     }
 }

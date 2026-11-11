@@ -394,6 +394,66 @@ pub(crate) fn sentence(
     Some(TextRange::in_block(at.block, start, end))
 }
 
+/// A sentence object in Visual mode when the cursor is the *start* of a
+/// selection of more than one character: the selection grows backwards,
+/// after Vim's `current_sent`. Pieces alternate between sentences and the
+/// white space before them; `as` takes two pieces for each count. Returns
+/// where the cursor goes. Stays inside the block, as every sentence
+/// command here does.
+pub(crate) fn sentence_extend_back(
+    doc: &Document,
+    cursor: Position,
+    around: bool,
+    count: usize,
+) -> Position {
+    let t = text_of(doc, cursor.block);
+    let starts: Vec<usize> = sentences(t).iter().map(|s| s.start).collect();
+    let orig = cursor.offset.min(t.len());
+    let white = |o: usize| matches!(t[o..].chars().next(), Some(' ' | '\t'));
+    let prev_char = |o: usize| writer_core::text::prev_grapheme_boundary(t, o);
+    // The start of the sentence before `o`, or `o` where there is none.
+    let back = |o: usize| starts.iter().rev().find(|s| **s < o).copied().unwrap_or(o);
+    // The start of the next sentence after `o`, or the end of the block.
+    let next = starts
+        .iter()
+        .find(|s| **s > orig)
+        .copied()
+        .unwrap_or(t.len());
+    // Back over the white space before `o`, to its first blank.
+    let first_blank = |o: usize| {
+        let mut p = o;
+        while p > 0 && white(prev_char(p)) {
+            p = prev_char(p);
+        }
+        p
+    };
+
+    // Where is the cursor: in the white space before a sentence, at the
+    // start of one, or inside one?
+    let from = if orig > 0 { prev_char(orig) } else { orig };
+    let mut at_start = t[from..next].chars().all(|c| c == ' ' || c == '\t');
+    let mut cur = next;
+    if !at_start && back(next) == orig {
+        at_start = true;
+        cur = orig;
+    }
+    let pieces = if around {
+        count.max(1) * 2
+    } else {
+        count.max(1)
+    };
+    for _ in 0..pieces {
+        if at_start {
+            cur = first_blank(cur);
+        }
+        if !at_start || (!around && !white(cur)) {
+            cur = back(cur);
+        }
+        at_start = !at_start;
+    }
+    Position::new(cursor.block, cur)
+}
+
 /// Whether block `b` is a white line for the paragraph objects: an empty
 /// block or one that holds only white space (Vim's `linewhite()`).
 fn white(doc: &Document, b: usize) -> bool {
@@ -766,6 +826,188 @@ pub(crate) fn quote(
         start -= before;
     }
     Some(TextRange::in_block(at.block, start, end))
+}
+
+/// A quote object in Visual mode with more than one character selected,
+/// after Vim's `current_quote`: `vi"` again takes the quotes, a selection
+/// that ends on a quote goes on to the next string, and so on. `anchor`
+/// and `cursor` are the two ends of the selection (the cursor is the one
+/// that moves); the result is the new pair. `None` when there is nothing
+/// to select (also when the selection spans more than one line, as in
+/// Vim).
+///
+/// Only the straight quote characters are handled here; the caller falls
+/// back to [`quote`] for a line that has none (typographic pairs).
+pub(crate) fn quote_extend(
+    doc: &Document,
+    anchor: Position,
+    cursor: Position,
+    q: char,
+    around: bool,
+    count: usize,
+) -> Option<(Position, Position)> {
+    if anchor.block != cursor.block || !q.is_ascii() {
+        return None;
+    }
+    let t = text_of(doc, cursor.block);
+    let ls = buf::line_start(doc, cursor);
+    let le = buf::line_end(doc, cursor);
+    if anchor.offset < ls || anchor.offset > le || cursor.offset > le {
+        return None;
+    }
+    let hard_line = &t[ls..le];
+    let line = hard_line.as_bytes();
+    let quote = q as u8;
+    // The byte at a column; 0 past the end of the line, as in a C string.
+    let at = |i: usize| line.get(i).copied().unwrap_or(0);
+    let next_char =
+        |i: usize| writer_core::text::next_grapheme_boundary(hard_line, i.min(hard_line.len()));
+    let prev_char =
+        |i: usize| writer_core::text::prev_grapheme_boundary(hard_line, i.min(hard_line.len()));
+    // The next quote at or after `col`, skipping `\"` when `escapes`.
+    let find_next = |mut col: usize, escapes: bool| -> Option<usize> {
+        loop {
+            let c = at(col);
+            if c == 0 {
+                return None;
+            }
+            if escapes && c == b'\\' {
+                col += 1;
+                if at(col) == 0 {
+                    return None;
+                }
+            } else if c == quote {
+                return Some(col);
+            }
+            col = next_char(col).max(col + 1);
+        }
+    };
+    // The quote before `col`; where it stopped (column 0) when there is
+    // none, which the caller checks.
+    let find_prev = |mut col: usize, escapes: bool| -> usize {
+        while col > 0 {
+            col = prev_char(col);
+            let mut n = 0;
+            if escapes {
+                while col > n && at(col - n - 1) == b'\\' {
+                    n += 1;
+                }
+            }
+            if n % 2 == 1 {
+                col -= n;
+            } else if at(col) == quote {
+                break;
+            }
+        }
+        col
+    };
+
+    let vis = anchor.offset - ls;
+    let cur = cursor.offset - ls;
+    let vis_before = vis < cur;
+    // Does the selection span exactly the text inside a pair of quotes?
+    let (inside_quotes, from, to) = if vis_before {
+        (
+            vis > 0 && at(vis - 1) == quote && at(cur) != 0 && at(cur + 1) == quote,
+            vis,
+            cur,
+        )
+    } else {
+        (
+            cur > 0 && at(cur - 1) == quote && at(vis) != 0 && at(vis + 1) == quote,
+            cur,
+            vis,
+        )
+    };
+    let selected_quote = (from..=to)
+        .take_while(|i| at(*i) != 0)
+        .any(|i| at(i) == quote);
+
+    let (mut col_start, mut col_end);
+    if at(cur) == quote {
+        // On a quote with something selected: the next string.
+        if vis_before {
+            col_start = find_next(cur + 1, false)?;
+            match find_next(col_start + 1, true) {
+                Some(end) => col_end = end,
+                None => {
+                    // The cursor was on an opening quote after all.
+                    col_end = col_start;
+                    col_start = cur;
+                }
+            }
+        } else {
+            col_end = find_prev(cur, false);
+            if at(col_end) != quote {
+                return None;
+            }
+            col_start = find_prev(col_end, true);
+            if at(col_start) != quote {
+                col_start = col_end;
+                col_end = cur;
+            }
+        }
+    } else {
+        let first = if vis_before {
+            find_next(cur, false)?
+        } else {
+            find_prev(cur, false)
+        };
+        // Which pair, counted from the start of the line, holds it?
+        col_start = 0;
+        loop {
+            col_start = find_next(col_start, false)?;
+            if col_start > first {
+                return None;
+            }
+            col_end = find_next(col_start + 1, true)?;
+            if col_start <= first && first <= col_end {
+                break;
+            }
+            col_start = col_end + 1;
+        }
+    }
+    let white = |i: usize| matches!(at(i), b' ' | b'\t');
+    if around {
+        if white(col_end + 1) {
+            while white(col_end + 1) {
+                col_end += 1;
+            }
+        } else {
+            while col_start > 0 && white(col_start - 1) {
+                col_start -= 1;
+            }
+        }
+    }
+    // After `vi"` another `i"` takes the quotes; `v2i"` too.
+    if !around && count < 2 && !inside_quotes {
+        col_start += 1;
+    }
+    let mut new_vis = vis;
+    if vis_before
+        && !selected_quote
+        && (inside_quotes || (at(vis) != quote && (vis == 0 || at(vis - 1) != quote)))
+    {
+        new_vis = col_start;
+    }
+    let mut end = col_end;
+    if around || count > 1 || inside_quotes {
+        end = next_char(end);
+    }
+    let new_cur = if vis_before {
+        prev_char(end)
+    } else {
+        // The cursor is the start of the selection: the other end moves
+        // when it was just inside the quotes or did not end at one.
+        if inside_quotes
+            || (!selected_quote && at(vis) != quote && (at(vis) == 0 || at(vis + 1) != quote))
+        {
+            new_vis = prev_char(end);
+        }
+        col_start
+    };
+    let position = |col: usize| Position::new(cursor.block, ls + col.min(hard_line.len()));
+    Some((position(new_vis), position(new_cur)))
 }
 
 // ----- brackets -------------------------------------------------------------------------------

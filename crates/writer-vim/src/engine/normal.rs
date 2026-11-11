@@ -1146,7 +1146,29 @@ impl Vim {
                     end += 1;
                 }
                 // (No text after them: no sentence to go by, as in Vim.)
-                (end < doc.block_count()).then_some(Found::Blocks(cursor.block..end))
+                if end >= doc.block_count() {
+                    None
+                } else if visual && end == cursor.block + 1 {
+                    // One empty line selected in Visual mode stays a
+                    // characterwise selection: the line and its break.
+                    Some(Found::Text(textobj::Object {
+                        start: Some(cursor),
+                        end: cursor,
+                        inclusive: true,
+                    }))
+                } else {
+                    Some(Found::Blocks(cursor.block..end))
+                }
+            }
+            's' if anchor.is_some_and(|a| a > cursor) => {
+                // The cursor is the start of the selection: it grows
+                // backwards.
+                let end = textobj::sentence_extend_back(doc, cursor, around, count);
+                Some(Found::Text(textobj::Object {
+                    start: None,
+                    end,
+                    inclusive: true,
+                }))
             }
             's' => {
                 // With something selected, the next sentence is added.
@@ -1198,7 +1220,28 @@ impl Vim {
                     }
                 })
             }
-            '"' | '\'' | '`' => textobj::quote(doc, cursor, c, around, count).map(Found::Range),
+            '"' | '\'' | '`' => {
+                // With more than one character selected Vim's rules for
+                // extending apply; they know the straight quotes only.
+                let extends = anchor.filter(|a| {
+                    let line = buf::line_start(doc, cursor)..buf::line_end(doc, cursor);
+                    a.block != cursor.block
+                        || !(line.start..=line.end).contains(&a.offset)
+                        || buf::text_of(doc, cursor.block)[line].contains(c)
+                });
+                match extends {
+                    Some(a) => textobj::quote_extend(doc, a, cursor, c, around, count).map(
+                        |(start, end)| {
+                            Found::Text(textobj::Object {
+                                start: Some(start),
+                                end,
+                                inclusive: true,
+                            })
+                        },
+                    ),
+                    None => textobj::quote(doc, cursor, c, around, count).map(Found::Range),
+                }
+            }
             _ => match brackets(c) {
                 Some((o, cl)) => {
                     textobj::bracket(doc, cursor, anchor, o, cl, around, count).map(Found::Text)
@@ -1241,20 +1284,27 @@ impl Vim {
                 }
             }
             Found::Range(mut r) => {
+                let mut backwards = false;
                 if r.is_empty()
                     && matches!(c, '"' | '\'' | '`')
                     && let (Some(s), Some(e)) =
                         (buf::prev_cell(doc, r.start), buf::next_cell(doc, r.end))
                 {
-                    // Nothing between the quotes: Vim selects the quotes.
+                    // Nothing between the quotes: Vim selects the quotes,
+                    // with the cursor on the opening one.
                     r = TextRange::new(s, e);
+                    backwards = true;
                 }
                 if r.is_empty() {
                     self.fail();
                     return;
                 }
-                self.visual.anchor = r.start;
-                self.visual.cursor = buf::prev_cell(doc, r.end).unwrap_or(r.start).max(r.start);
+                let last = buf::prev_cell(doc, r.end).unwrap_or(r.start).max(r.start);
+                (self.visual.anchor, self.visual.cursor) = if backwards {
+                    (last, r.start)
+                } else {
+                    (r.start, last)
+                };
                 if matches!(self.base, Base::Visual { line: true }) {
                     self.base = Base::Visual { line: false };
                 }

@@ -1,0 +1,29 @@
+[package]
+name = "writer-editor-tools"
+description = "Contextual editor overlays for The Writer: format menu, insert menu, link popover, font picker, find and replace."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+# tests/main.rs is the one test binary; the other files in tests/ are its modules.
+autotests = false
+
+[lib]
+# All tests live in tests/main.rs, so the crate links one GPUI test binary.
+test = false
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+# localtime_r for "today's date" (already in the lock tree through gpui).
+libc = "0.2"
+writer-core.workspace = true
+writer-editor.workspace = true
+writer-ui.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+gpui = { workspace = true, features = ["test-support"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

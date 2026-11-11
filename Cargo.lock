@@ -6867,6 +6867,23 @@ dependencies = [
  "gpui",
  "objc",
  "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "writer-core",
+ "writer-editor",
+ "writer-export",
+ "writer-library",
+ "writer-ui",
+]
+
+[[package]]
+name = "writer-comments"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "writer-core",
+ "writer-editor",
  "writer-ui",
 ]
 
@@ -6890,6 +6907,17 @@ dependencies = [
  "serde",
  "serde_json",
  "writer-core",
+ "writer-ui",
+]
+
+[[package]]
+name = "writer-editor-tools"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "libc",
+ "writer-core",
+ "writer-editor",
  "writer-ui",
 ]
 

@@ -318,3 +318,37 @@ fn rusqlite_lock(path: &std::path::Path) -> impl Drop {
     assert_eq!(line.trim(), "locked");
     Lock(child)
 }
+
+#[gpui::test]
+fn the_measuring_steps_measure_the_open_document(cx: &mut TestAppContext) {
+    init(cx);
+    let (_dir, library) = file_library(cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    // Nothing open: nothing to measure.
+    let lines = workspace.update(vcx, |workspace, cx| workspace.measure_save_cost(2, cx));
+    assert_eq!(lines, ["no document is open"]);
+
+    let title = workspace
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.open_generated_book(120, window, cx)
+        })
+        .unwrap();
+    assert_eq!(title, "Chapter 1");
+    assert!(editor_focused(&workspace, vcx));
+    let blocks = workspace.read_with(vcx, |w, cx| w.editor().read(cx).document().block_count());
+    assert_eq!(blocks, 120);
+
+    let lines = workspace.update(vcx, |workspace, cx| workspace.measure_save_cost(3, cx));
+    assert_eq!(lines.len(), 9, "{lines:?}");
+    assert!(lines[0].starts_with("120 blocks, "), "{lines:?}");
+    assert!(lines[1..].iter().all(|line| line.contains("median")));
+    assert!(lines[8].starts_with("whole save on the main thread"));
+
+    // The count by blocks is checked against the whole count inside.
+    let text = editor_text(&workspace, vcx);
+    let lines = workspace.update(vcx, |workspace, cx| workspace.measure_limit_cost(3, cx));
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines[3].starts_with("block by block, after an edit"));
+    // It typed one character per round to have something to recount.
+    assert_eq!(editor_text(&workspace, vcx).len(), text.len() + 3);
+}

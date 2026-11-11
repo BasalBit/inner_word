@@ -115,7 +115,7 @@ fn version_history_lists_previews_and_restores(cx: &mut TestAppContext) {
     assert!(
         toasts
             .iter()
-            .any(|message| message.starts_with("Restored the version of Today ")),
+            .any(|message| message.starts_with("Restored Today ")),
         "{toasts:?}"
     );
 

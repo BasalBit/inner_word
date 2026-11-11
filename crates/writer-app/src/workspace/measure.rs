@@ -1,5 +1,6 @@
-//! Measuring what a save costs (the `book` and `savecost` steps of the
-//! automation script). Not used by the app itself.
+//! Measuring what a save and the character-limit indicator cost (the
+//! `book`, `savecost` and `limitcost` steps of the automation script). Not
+//! used by the app itself.
 //!
 //! `savecost` times every part of the synchronous save on the main thread:
 //! the same work [`Workspace::flush`] does when a document is closed. The
@@ -151,6 +152,65 @@ impl Workspace {
             summary("version snapshot", &mut snapshot),
             summary("view state write", &mut view_state),
             summary("whole save on the main thread", &mut total),
+        ]
+    }
+
+    /// Times the character-limit indicator on the open document: counting
+    /// the whole text (what every revision used to cost) against the
+    /// block-by-block counter after an edit of one block. One line each.
+    pub fn measure_limit_cost(&mut self, rounds: usize, cx: &mut Context<Self>) -> Vec<String> {
+        use crate::character_limit::LimitCounter;
+        use writer_export::SocialNetwork;
+
+        if self.open_document_id().is_none() {
+            return vec!["no document is open".to_string()];
+        }
+        let rounds = rounds.max(1);
+        let network = SocialNetwork::X;
+        let mut whole = Vec::new();
+        let mut first = Vec::new();
+        let mut after_edit = Vec::new();
+        let mut counter = LimitCounter::new(network);
+        let mut blocks = 0;
+        for round in 0..rounds {
+            let editor = self.editor.clone();
+            {
+                let editor = editor.read(cx);
+                let document = editor.document();
+                blocks = document.block_count();
+                let at = Instant::now();
+                let counted = network.count(&document.plain_text());
+                whole.push(at.elapsed());
+                if round == 0 {
+                    let at = Instant::now();
+                    let by_block = counter.count(document);
+                    first.push(at.elapsed());
+                    assert_eq!(by_block, counted);
+                }
+            }
+            // One keystroke somewhere in the middle, then count again.
+            editor.update(cx, |editor, cx| {
+                editor.edit_with(
+                    writer_editor::Autoscroll::None,
+                    |state| {
+                        let middle = state.document().block_count() / 2;
+                        state.set_caret(writer_core::Position::new(middle, 0));
+                        state.insert_text("x");
+                    },
+                    cx,
+                );
+            });
+            let editor = editor.read(cx);
+            let at = Instant::now();
+            let by_block = counter.count(editor.document());
+            after_edit.push(at.elapsed());
+            assert_eq!(by_block, network.count(&editor.document().plain_text()));
+        }
+        vec![
+            format!("{blocks} blocks, {rounds} rounds"),
+            summary("counting the whole text", &mut whole),
+            summary("block by block, the first time", &mut first),
+            summary("block by block, after an edit", &mut after_edit),
         ]
     }
 }

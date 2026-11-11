@@ -393,8 +393,9 @@ impl Workspace {
         let text = |text: String| div().flex_none().whitespace_nowrap().child(text);
 
         // The Vim indicator draws nothing while Vim mode is off; leave it
-        // out then, or the gap before the next text would be doubled.
-        let vim_on = self.vim.read(cx).is_attached();
+        // out then, or the gap before the next text would be doubled. With
+        // no document open there is no mode to show either.
+        let vim_on = self.vim.read(cx).is_attached() && self.session.is_some();
         let left = div()
             .flex()
             .items_center()

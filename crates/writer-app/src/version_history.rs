@@ -256,12 +256,19 @@ impl VersionHistory {
         let labels = versions
             .iter()
             .map(|version| {
-                let when = version_time_label(LocalTime::from_unix_ms(version.created_at), now);
-                let detail = format!(
-                    "{} \u{b7} {}",
-                    writer_comments::time::relative_time(version.created_at, now_ms),
-                    counted(version.word_count as usize, "word", "words"),
-                );
+                let then = LocalTime::from_unix_ms(version.created_at);
+                let when = version_time_label(then, now);
+                let words = counted(version.word_count as usize, "word", "words");
+                // "2 hours ago" helps for today's versions; an older one
+                // already says its day.
+                let detail = if then.day_number() == now.day_number() {
+                    format!(
+                        "{} \u{b7} {words}",
+                        writer_comments::time::relative_time(version.created_at, now_ms)
+                    )
+                } else {
+                    words
+                };
                 (when.into(), detail.into())
             })
             .collect();

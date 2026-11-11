@@ -60,6 +60,41 @@ mod automation {
     }
 
     #[test]
+    fn measuring_steps() {
+        assert_eq!(
+            Script::parse("book:10000; savecost; savecost:3; limitcost; limitcost:7")
+                .unwrap()
+                .steps,
+            vec![
+                Step::Book(10_000),
+                Step::SaveCost(5),
+                Step::SaveCost(3),
+                Step::LimitCost(5),
+                Step::LimitCost(7),
+            ]
+        );
+        assert!(Script::parse("book").is_err());
+        assert!(Script::parse("book:many").is_err());
+        assert!(Script::parse("savecost:often").is_err());
+    }
+
+    #[test]
+    fn the_generated_book_is_a_valid_document() {
+        let book = writer_app::welcome::book_document(400);
+        assert_eq!(book.block_count(), 400);
+        book.check_invariants().unwrap();
+        assert_eq!(book.title().as_deref(), Some("Chapter 1"));
+        assert!(book.stats().words > 400 * 20);
+        // The same every time, so measurements can be compared.
+        assert_eq!(
+            book.plain_text(),
+            writer_app::welcome::book_document(400).plain_text()
+        );
+        // The save and the count can be measured on any open document.
+        assert_eq!(writer_app::welcome::book_document(0).block_count(), 1);
+    }
+
+    #[test]
     fn keystrokes_for_characters() {
         let upper = keystroke_for_char('H');
         assert!(upper.modifiers.shift);
@@ -749,8 +784,8 @@ mod panel_layout {
         let tight = both(900., SidePanel::Right);
         let (sidebar, right) = (tight.sidebar.unwrap(), tight.right.unwrap());
         assert!((sidebar + right + MIN_EDITOR_WIDTH - 900.).abs() < 0.01);
-        assert!(sidebar >= 200. && sidebar < 260.);
-        assert!(right >= MIN_RIGHT_PANEL_WIDTH && right < 320.);
+        assert!((200. ..260.).contains(&sidebar));
+        assert!((MIN_RIGHT_PANEL_WIDTH..320.).contains(&right));
         // At the point where both are at their minimum.
         assert_eq!(
             both(780., SidePanel::Library),
@@ -805,6 +840,33 @@ mod panel_layout {
                 );
                 assert!(layout.sidebar.is_some() || layout.right.is_some());
             }
+        }
+    }
+}
+
+mod command_titles {
+    use writer_app::commands::sentence_case;
+
+    #[test]
+    fn titles_are_brought_to_sentence_case() {
+        for (given, expected) in [
+            ("Bold", "Bold"),
+            ("Code Block", "Code block"),
+            ("Toggle To-do Checked", "Toggle to-do checked"),
+            ("Paste as Plain Text", "Paste as plain text"),
+            ("Open Link in Browser", "Open link in browser"),
+            ("Today's Date", "Today's date"),
+            ("Heading 1", "Heading 1"),
+            ("Align Centre", "Align centre"),
+            // Already in sentence case, names and abbreviations included.
+            ("Move to trash", "Move to trash"),
+            ("Toggle Vim mode", "Toggle Vim mode"),
+            ("Copy as Markdown", "Copy as Markdown"),
+            ("Export as DOCX", "Export as DOCX"),
+            ("Open a Word Document", "Open a Word document"),
+            ("", ""),
+        ] {
+            assert_eq!(sentence_case(given), expected);
         }
     }
 }

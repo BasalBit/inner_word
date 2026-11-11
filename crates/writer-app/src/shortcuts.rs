@@ -176,13 +176,22 @@ pub struct Shortcut {
     hint: KeyHint,
 }
 
-/// The binding the keymap prefers for `action` (the one added last), as a
-/// key hint and the place it works in.
+/// The binding to list for `action`, as a key hint and the place it works
+/// in. An action can be bound in several places (undo in the text and in
+/// the comment list); it is listed once, in the widest of them (the order
+/// of [`Place`]), and among the bindings there with the one the keymap
+/// prefers, which is the one added last.
 fn preferred_binding(action: &dyn Action, cx: &App) -> Option<(KeyHint, Place)> {
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
-    let binding = keymap.bindings_for_action(action).last()?;
-    Some((KeyHint::from_binding(binding), binding_place(binding)))
+    let mut best: Option<(&gpui::KeyBinding, Place)> = None;
+    for binding in keymap.bindings_for_action(action) {
+        let place = binding_place(binding);
+        if best.is_none_or(|(_, best_place)| place <= best_place) {
+            best = Some((binding, place));
+        }
+    }
+    best.map(|(binding, place)| (KeyHint::from_binding(binding), place))
 }
 
 fn binding_place(binding: &gpui::KeyBinding) -> Place {
@@ -250,34 +259,34 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
         }
     }
 
-    // Keys without a descriptor, straight from the keymap. Later bindings
-    // take precedence, so walk backwards and keep the first of each action.
+    // Keys without a descriptor, straight from the keymap, one row per
+    // action, in the order the actions were first bound.
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
+    let mut undescribed: Vec<Box<dyn Action>> = Vec::new();
     for (namespace, category) in KEY_GROUPS {
         let prefix = format!("{namespace}::");
         let mut seen: HashSet<&'static str> = HashSet::new();
-        let mut group = Vec::new();
-        for binding in keymap.bindings().rev() {
+        for binding in keymap.bindings() {
             let name = binding.action().name();
-            if !name.starts_with(&prefix) || described.contains(name) || !seen.insert(name) {
-                continue;
+            if name.starts_with(&prefix) && !described.contains(name) && seen.insert(name) {
+                undescribed.push(binding.action().boxed_clone());
             }
-            let hint = KeyHint::from_binding(binding);
-            let place = binding_place(binding);
-            group.push(Shortcut {
-                title: humanize_action_name(name).into(),
+        }
+        for action in undescribed.drain(..) {
+            let Some((hint, place)) = preferred_binding(action.as_ref(), cx) else {
+                continue;
+            };
+            shortcuts.push(Shortcut {
+                title: humanize_action_name(action.name()).into(),
                 category: category.into(),
                 place,
                 heading: place.heading(category).into(),
                 keys: hint.text(),
-                action: binding.action().boxed_clone(),
+                action,
                 hint,
             });
         }
-        // Back to keymap (declaration) order.
-        group.reverse();
-        shortcuts.extend(group);
     }
     drop(keymap);
 

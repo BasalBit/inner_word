@@ -68,6 +68,20 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
         );
     }
 
+    // One way of writing titles, whichever crate a command comes from.
+    for expected in [
+        "Code block",
+        "Paste as plain text",
+        "Add or edit link",
+        "Find next",
+    ] {
+        assert!(
+            titles.iter().any(|title| title == expected),
+            "{expected} is listed in {titles:?}"
+        );
+    }
+    assert!(!titles.iter().any(|title| title == "Code Block"));
+
     // One "New document" and one "New folder": the app's, which work from
     // anywhere. The library panel's own are its keys in the sidebar.
     for once in ["New document", "New folder", "Toggle Vim mode"] {
@@ -434,6 +448,16 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
         (Place::Library, "In the library".into())
     );
     assert_eq!(place("Add comment", "⌥⌘M").0, Place::Anywhere);
+    // A command with keys in several places is listed once, in the widest
+    // of them: undo also works in the comment list, but it is the text's.
+    assert_eq!(
+        place("Undo", "⌘Z"),
+        (Place::Text, "In the text \u{b7} Edit".into())
+    );
+    assert_eq!(
+        placed.iter().filter(|(title, ..)| title == "Undo").count(),
+        1
+    );
     assert!(
         placed
             .iter()

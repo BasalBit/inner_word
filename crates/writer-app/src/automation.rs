@@ -28,6 +28,7 @@
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
+//! | `limitcost[:<rounds>]` | times the character-limit count: whole text against block by block |
 //! | `quit`                | quits the app (runs the quit hooks)                          |
 //!
 //! `THE_WRITER_AUTOMATION=@/path/to/script.txt` reads the script from a file.
@@ -117,6 +118,7 @@ pub enum Step {
     Dump,
     Book(usize),
     SaveCost(usize),
+    LimitCost(usize),
     Quit,
 }
 
@@ -255,6 +257,11 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         "dump" => Step::Dump,
         "book" => Step::Book(arg.parse().context("expected a number of blocks")?),
         "savecost" => Step::SaveCost(if arg.is_empty() {
+            5
+        } else {
+            arg.parse().context("expected a number of rounds")?
+        }),
+        "limitcost" => Step::LimitCost(if arg.is_empty() {
             5
         } else {
             arg.parse().context("expected a number of rounds")?
@@ -439,6 +446,14 @@ async fn execute(
             })?;
             for line in report {
                 eprintln!("[automation] savecost: {line}");
+            }
+        }
+        Step::LimitCost(rounds) => {
+            let report = workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                workspace.measure_limit_cost(rounds, cx)
+            })?;
+            for line in report {
+                eprintln!("[automation] limitcost: {line}");
             }
         }
         Step::Quit => return Ok(StepOutcome::Quit),

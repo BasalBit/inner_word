@@ -226,12 +226,14 @@ impl Workspace {
             self.library
                 .update(cx, |library, cx| library.create_snapshot(id, cx))
                 .ok();
+            // Toasts are one line: say what happened to the text, and keep
+            // the reason for the log.
+            eprintln!(
+                "The Writer: “{}” could not be read as a document: {error}",
+                display_title(&stored.meta.title)
+            );
             self.toast_error(
-                format!(
-                    "“{}” could not be read as a document ({error}). It is shown as plain \
-                     text; the original is kept in its version history.",
-                    display_title(&stored.meta.title)
-                ),
+                "Unreadable document: shown as plain text, the original is kept.",
                 cx,
             );
         }
@@ -738,10 +740,9 @@ impl Workspace {
         let first_failure = session.failure.is_none();
         session.failure = Some(message.clone());
         if first_failure {
+            // One line: what matters to the writer first, the reason after.
             self.toast_error(
-                format!(
-                    "Could not save: {message}. Your text is kept here and the save is retried."
-                ),
+                format!("Not saved yet. Your text is kept and the save is retried. ({message})"),
                 cx,
             );
         }
@@ -807,7 +808,7 @@ impl Workspace {
                 .is_ok();
         if !kept {
             self.toast_error(
-                "The text as it is now could not be kept as a version, so nothing was restored.",
+                "Nothing was restored: the text as it is now could not be saved.",
                 cx,
             );
             return false;
@@ -834,8 +835,7 @@ impl Workspace {
             );
             self.show_toast(
                 Toast::new(format!(
-                    "Restored the version of {when}. The text from before is in the version \
-                     history."
+                    "Restored {when}. The text from before is kept as a version."
                 ))
                 .success()
                 .duration(Duration::from_secs(6)),

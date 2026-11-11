@@ -343,6 +343,19 @@ fn this_document_section_changes_the_open_document(cx: &mut TestAppContext) {
     // Margins: millimetres by default, another unit when it is named.
     vcx.simulate_keystrokes("down cmd-a");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentMarginTop));
+    // The row that is typed into says so while the keyboard is in it.
+    let help = |focused: bool, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.description(SettingRow::DocumentMarginTop, focused, cx)
+                .to_string()
+        })
+    };
+    assert!(
+        help(true, vcx).starts_with("In millimetres."),
+        "{}",
+        help(true, vcx)
+    );
+    assert_eq!(help(false, vcx), "");
     vcx.simulate_input("20");
     vcx.simulate_keystrokes("down cmd-a");
     vcx.simulate_input("0.5in");
@@ -479,7 +492,7 @@ fn held_keys_follow_vim_mode_from_the_next_launch(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("cmd-,");
         let view = settings_view(&workspace, cx).expect("settings are open");
         let text = view.read_with(cx, |view, cx| {
-            view.description(SettingRow::VimMode, cx).to_string()
+            view.description(SettingRow::VimMode, false, cx).to_string()
         });
         cx.simulate_keystrokes("escape");
         text

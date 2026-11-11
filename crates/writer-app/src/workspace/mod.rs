@@ -988,11 +988,9 @@ impl Workspace {
         // `press_and_hold`): say so when it was made too late for this one.
         if !noted && crate::press_and_hold::state(cx).restart_note_due() {
             let message = if on {
-                "Vim mode is on. Held keys also repeat while you type after The Writer is \
-                 restarted."
+                "Held keys repeat while typing after The Writer is restarted."
             } else {
-                "Vim mode is off. The accent menu on held keys is back after The Writer is \
-                 restarted."
+                "The accent menu on held keys returns after a restart."
             };
             self.show_toast(Toast::new(message).duration(Duration::from_secs(6)), cx);
         }
@@ -1175,7 +1173,8 @@ impl Workspace {
         let title = self.display_title();
         vim.update(cx, |vim, cx| {
             if saved {
-                vim.show_message(format!("\u{201c}{title}\u{201d} saved"), cx);
+                // As Vim says it; "Saved" is already beside it in the bar.
+                vim.show_message(format!("\u{201c}{title}\u{201d} written"), cx);
             } else {
                 vim.show_error("E212: Could not save; the save is retried", cx);
             }

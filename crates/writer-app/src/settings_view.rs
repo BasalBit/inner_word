@@ -541,8 +541,9 @@ impl SettingsView {
             .map(|field| field.read(cx).text().to_string())
     }
 
-    /// What the row says under its name.
-    pub fn description(&self, row: SettingRow, cx: &App) -> SharedString {
+    /// What the row says under its name. A row that is typed into explains
+    /// its units while the keyboard is in it (`focused`).
+    pub fn description(&self, row: SettingRow, focused: bool, cx: &App) -> SharedString {
         match row {
             SettingRow::VimMode => {
                 // The accent menu on held keys follows this setting, but the
@@ -561,23 +562,16 @@ impl SettingsView {
                         .into()
                 }
             }
-            SettingRow::DocumentMarginTop
-            | SettingRow::DocumentMarginBottom
-            | SettingRow::DocumentMarginLeft
-            | SettingRow::DocumentMarginRight
-            | SettingRow::DocumentPaperWidth
-            | SettingRow::DocumentPaperHeight => {
+            row if SettingRow::LENGTHS.contains(&row) && focused => {
                 let unit = self
                     .document_settings(cx)
                     .map(|settings| LengthUnit::for_paper(settings.page.paper))
                     .unwrap_or(LengthUnit::Millimetres);
-                let lead = row.description();
-                let units = format!("In {}; mm, cm, in and pt can be named.", unit.name());
-                if lead.is_empty() {
-                    units.into()
-                } else {
-                    format!("{lead} {units}").into()
-                }
+                format!(
+                    "In {}. Another unit can be named: 20mm, 2cm, 0.75in, 36pt.",
+                    unit.name()
+                )
+                .into()
             }
             _ => row.description().into(),
         }
@@ -1169,7 +1163,7 @@ impl SettingsView {
         let handle = self.handles[&row].clone();
         let focused = handle.contains_focused(window, cx);
         let ring = focus_ring(&colors);
-        let description = self.description(row, cx);
+        let description = self.description(row, focused, cx);
         let control_element = self.render_control(row, control, cx);
 
         div()

@@ -71,3 +71,48 @@ pub fn categories(commands: &[CommandDescriptor]) -> Vec<gpui::SharedString> {
     }
     categories
 }
+
+/// Words that keep their capital letter in a command title.
+const PROPER_NOUNS: [&str; 4] = ["Markdown", "Vim", "Word", "I"];
+
+/// A command title in the case the app uses for its interface text: a
+/// capital at the start, and after that only where the word has one of its
+/// own (`Code Block` becomes `Code block`, `Paste as Plain Text` becomes
+/// `Paste as plain text`). Words in capitals (`DOCX`) and the names in
+/// [`PROPER_NOUNS`] are left alone.
+///
+/// The crates publish their commands in whichever case they chose; the
+/// palette and the shortcuts overlay show them side by side, so the app
+/// brings them to one.
+pub fn sentence_case(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    for (ix, word) in title.split(' ').enumerate() {
+        if ix > 0 {
+            out.push(' ');
+        }
+        let mut chars = word.chars();
+        let keeps_capital = ix == 0
+            || PROPER_NOUNS.contains(&word)
+            || (word.chars().count() > 1
+                && word.chars().all(|ch| !ch.is_lowercase())
+                && word.chars().any(char::is_alphabetic));
+        match chars.next() {
+            Some(first) if !keeps_capital => {
+                out.extend(first.to_lowercase());
+                out.push_str(chars.as_str());
+            }
+            _ => out.push_str(word),
+        }
+    }
+    out
+}
+
+/// `commands` with their titles in [`sentence_case`].
+pub fn in_sentence_case(
+    commands: impl IntoIterator<Item = CommandDescriptor>,
+) -> impl Iterator<Item = CommandDescriptor> {
+    commands.into_iter().map(|mut command| {
+        command.title = sentence_case(&command.title).into();
+        command
+    })
+}

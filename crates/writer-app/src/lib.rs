@@ -124,8 +124,13 @@ pub fn init(cx: &mut App) {
 ///   overlay under "In the library".
 fn register_commands(cx: &mut App) {
     commands::register(actions::commands(), cx);
-    commands::register(writer_editor::commands(), cx);
-    commands::register(writer_editor_tools::commands(), cx);
+    // The editor and its tools title their commands Like This; the rest of
+    // the app says them like this.
+    commands::register(commands::in_sentence_case(writer_editor::commands()), cx);
+    commands::register(
+        commands::in_sentence_case(writer_editor_tools::commands()),
+        cx,
+    );
     commands::register(writer_comments::commands(), cx);
     commands::register(
         writer_vim_mode::commands()

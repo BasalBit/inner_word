@@ -167,7 +167,10 @@ mod tests {
             cx.bind_keys([KeyBinding::new("cmd-j", Ping, None)]);
             let bound = CommandDescriptor::new("Ping", "Test", Ping);
             let unbound = CommandDescriptor::from_boxed("Pong", "Test", Box::new(Pong));
-            assert_eq!(bound.key_hint(cx).map(|hint| hint.text()), Some("⌘J".into()));
+            assert_eq!(
+                bound.key_hint(cx).map(|hint| hint.text()),
+                Some("⌘J".into())
+            );
             assert!(unbound.key_hint(cx).is_none());
         });
     }

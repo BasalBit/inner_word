@@ -15,6 +15,9 @@ use writer_ui::{
     theme::{self, ThemeMode},
 };
 
+#[path = "widgets/context_menu.rs"]
+mod context_menu;
+
 fn init(cx: &mut TestAppContext) {
     cx.update(|cx| {
         theme::init(ThemeMode::Light, cx);

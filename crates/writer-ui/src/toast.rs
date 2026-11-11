@@ -27,6 +27,7 @@ use gpui::{
 };
 
 use crate::{
+    context_menu::ContextMenuLayer,
     icon::{Icon, IconName},
     theme::{ActiveTheme, RADIUS_LG, UI_TEXT_BASE},
 };
@@ -163,7 +164,9 @@ pub fn show_toast(toast: Toast, cx: &mut App) -> Option<ToastId> {
 impl Render for ToastLayer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.entries.is_empty() {
-            return div().into_any_element();
+            // The layer is mounted over the whole window content by every
+            // root view, which makes it the host of the context menu too.
+            return div().child(ContextMenuLayer).into_any_element();
         }
         let theme = cx.theme();
         let colors = theme.colors;
@@ -216,6 +219,7 @@ impl Render for ToastLayer {
                             .child(entry.toast.message.clone()),
                     )
             }))
+            .child(ContextMenuLayer)
             .into_any_element()
     }
 }

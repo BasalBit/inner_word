@@ -21,6 +21,7 @@
 //! | [`picker`] | [`Picker`]: query field + filtered virtual list, driven by a [`PickerDelegate`] |
 //! | [`fuzzy`] | Fuzzy subsequence matcher with match positions |
 //! | [`modal`] | [`ModalLayer`]: one modal at a time, backdrop, focus restore |
+//! | [`context_menu`] | [`ContextMenu`]: right-click and drop-down menus, drawn by the toast layer (nothing to mount) |
 //! | [`key_hint`] | [`KeyHint`]: key bindings as macOS glyphs, looked up from the keymap |
 //! | [`icon`] | [`Icon`] / [`IconName`]: embedded 16px line icons |
 //! | [`button`] | [`Button`]: primary / subtle / danger, focusable |
@@ -36,6 +37,7 @@ pub mod assets;
 pub mod button;
 pub mod command;
 pub mod confirm;
+pub mod context_menu;
 pub mod focus;
 pub mod fuzzy;
 pub mod icon;
@@ -52,6 +54,7 @@ pub mod toggle;
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use command::CommandDescriptor;
 pub use confirm::{ConfirmDialog, ConfirmDialogEvent};
+pub use context_menu::{ContextMenu, ContextMenuItem, ContextMenuLayer, MenuAnchor};
 pub use icon::{Icon, IconName};
 pub use key_hint::KeyHint;
 pub use label::{Divider, HighlightedLabel, SectionLabel};
@@ -68,6 +71,8 @@ pub use toggle::{Checkbox, Switch};
 /// bindings (bindings without a context tie with the deepest context and
 /// the later one wins).
 pub fn init(cx: &mut gpui::App) {
+    // First, so that an open menu sees a key before any other interceptor.
+    context_menu::init(cx);
     cx.bind_keys(text_field::key_bindings());
     cx.bind_keys(picker::key_bindings());
     cx.bind_keys(modal::key_bindings());

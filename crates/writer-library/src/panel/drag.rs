@@ -361,7 +361,8 @@ impl LibraryPanel {
                 self.remember_place(item, from, true);
                 self.reveal(item, cx);
                 let place = self.place_label(parent, cx);
-                show_toast(Toast::new(format!("Moved “{name}” to {place}.")), cx);
+                let toast = Toast::new(format!("Moved “{name}” to {place}."));
+                show_toast(self.with_undo_button(toast, cx), cx);
             }
             Err(err) => self.report_error(&err.to_string(), cx),
         }

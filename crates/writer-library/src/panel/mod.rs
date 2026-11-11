@@ -1,7 +1,8 @@
 //! [`LibraryPanel`]: the library sidebar, where the user organises their writing into
-//! folders. Everything in it works from the keyboard.
+//! folders. Everything in it works from the keyboard, and everything in it works with the
+//! mouse alone.
 //!
-//! The keys and the mounting recipe are in the docs of [`LibraryPanel`].
+//! The keys, the mouse and the mounting recipe are in the docs of [`LibraryPanel`].
 
 mod controls;
 mod drag;
@@ -28,7 +29,7 @@ use writer_store::{DocumentContent, DocumentId, FolderId, Result};
 use writer_ui::context_menu::OpenContextMenu;
 use writer_ui::toast::show_toast;
 use writer_ui::{
-    CommandDescriptor, ConfirmDialog, FieldAppearance, KeyHint, ModalLayer, Picker, TextField,
+    CommandDescriptor, ConfirmDialog, FieldAppearance, ModalLayer, Picker, TextField,
     TextFieldEvent, Toast,
 };
 
@@ -100,11 +101,11 @@ actions!(
         EmptyTrash,
         /// Switch the detail on document rows between edit time and word count.
         ToggleRowDetail,
-        /// Expand the selected folder and every folder inside it (on the "Library" row:
-        /// every folder).
+        /// Expand the selected folder and every folder inside it. With anything else
+        /// selected (a document, the "Library" row): every folder of the library.
         ExpandAll,
-        /// Collapse the selected folder and every folder inside it (on the "Library" row:
-        /// every folder).
+        /// Collapse the selected folder and every folder inside it. With anything else
+        /// selected (a document, the "Library" row): every folder of the library.
         CollapseAll,
     ]
 );
@@ -258,17 +259,19 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["document", "folder", "toggle"]),
         CommandDescriptor::new("Expand folder", CATEGORY, Expand).keywords(["open", "unfold"]),
         CommandDescriptor::new("Collapse folder", CATEGORY, Collapse).keywords(["close", "fold"]),
-        CommandDescriptor::new("Expand all inside", CATEGORY, ExpandAll).keywords([
+        CommandDescriptor::new("Expand all folders", CATEGORY, ExpandAll).keywords([
             "open",
             "unfold",
             "subfolders",
             "everything",
+            "inside",
         ]),
-        CommandDescriptor::new("Collapse all inside", CATEGORY, CollapseAll).keywords([
+        CommandDescriptor::new("Collapse all folders", CATEGORY, CollapseAll).keywords([
             "close",
             "fold",
             "subfolders",
             "everything",
+            "inside",
         ]),
         CommandDescriptor::new("Select next item", CATEGORY, SelectNext).keywords(["down"]),
         CommandDescriptor::new("Select previous item", CATEGORY, SelectPrevious).keywords(["up"]),
@@ -283,7 +286,14 @@ pub fn commands() -> Vec<CommandDescriptor> {
 ///
 /// When the panel itself has focus its own listeners run first, so nothing runs twice.
 /// Covered: new document, new folder, rename, duplicate, move to folder, move up / down,
-/// move to trash, undo, show trash, empty trash, filter, switch row detail.
+/// move to trash, undo, show trash, empty trash, filter, switch row detail, expand all,
+/// collapse all.
+///
+/// A command for one item (rename, duplicate, move to folder, move up / down, move to
+/// trash) that arrives while the keyboard is outside the panel acts on the document open
+/// in the editor ([`LibraryPanel::set_active_document`]), whose row is selected first:
+/// while writing, "Move to trash" means the text in front of the user, not a row the
+/// sidebar happens to be on. With the keyboard in the panel it acts on the selected row.
 ///
 /// Some of these put the keyboard in the panel (a rename field, the filter, the trash
 /// view). When the panel is not on screen at that moment, it asks its host to show it:
@@ -322,6 +332,8 @@ pub fn forward_actions<E: InteractiveElement>(element: E, panel: &Entity<Library
         EmptyTrash => on_empty_trash,
         FocusFilter => on_focus_filter,
         ToggleRowDetail => on_toggle_row_detail,
+        ExpandAll => on_expand_all,
+        CollapseAll => on_collapse_all,
     )
 }
 
@@ -380,7 +392,8 @@ enum View {
 }
 
 /// The library sidebar: the tree of folders and documents, the name filter and the trash.
-/// Everything in it works from the keyboard.
+/// Everything in it works from the keyboard, and everything in it works with the mouse
+/// alone.
 ///
 /// # What it shows
 ///
@@ -419,7 +432,40 @@ enum View {
 /// | `t` | show the trash | |
 /// | `cmd-shift-backspace` | empty the trash (asks first) | same |
 /// | `i` | switch the row detail between edit time and word count | |
+/// | `alt-right` / `alt-left` | expand / collapse the selected folder and every folder in it (on a document or the "Library" row: every folder) | |
+/// | `ctrl-enter` | the context menu of the selected row, at the row | of the selected item |
 /// | `escape` | clear the filter, else leave the panel ([`LibraryPanelEvent::Dismissed`]) | back to the tree |
+///
+/// # Mouse
+///
+/// - A click opens a document (the list keeps the keyboard) and opens or closes a folder;
+///   the triangle of a folder does the same without selecting it. A double click renames
+///   in place.
+/// - The "+" button of the header opens a menu with "New Document" and "New Folder". They
+///   go where `n` and `shift-n` put them: into the selected folder, or to the top level.
+/// - A right click selects what was clicked and opens its context menu; so does the "more"
+///   button at the right end of the selected row and of the row under the pointer, and
+///   `ctrl-enter`. The menus: on a document Open, Rename, Duplicate, Move To, Move to
+///   Trash; on a folder also New Document Here, New Folder Here and Expand All or
+///   Collapse All; on the "Library" row and on the empty area under the rows New
+///   Document, New Folder, Expand All or Collapse All, Show Trash; on the "Trash" row
+///   Show Trash and Empty Trash; in the trash view Restore and Delete Forever on an item,
+///   Back to Library and Empty Trash beside the items. Every item is one of the panel's
+///   actions, shows its key and does what the key does. The app adds its own items with
+///   [`set_menu_extension`](Self::set_menu_extension).
+/// - Drag and drop: a row dragged onto a folder moves into it (a closed folder opens
+///   when the drag rests on it), dragged between two rows it takes that place among its
+///   siblings, onto the "Library" row or the empty area it moves to the top level, and
+///   onto the "Trash" row to the trash. A line or a frame shows where it would land.
+///   A folder cannot go into itself or into a folder inside it. The moves are the ones
+///   the keys make (`m`, `alt-up` / `alt-down`, `cmd-backspace`) and `cmd-z` takes them
+///   back. Under a filter only moves into folders are offered. Close to the top or
+///   bottom edge of the list a drag scrolls it.
+/// - The trash view has its actions as buttons under the list, and "Back" above it; the
+///   empty library offers "New document" and "New folder" as buttons.
+///
+/// Context menus are drawn by `writer_ui::ContextMenuLayer`, which the toast layer of the
+/// window brings along.
 ///
 /// # Mounting
 ///
@@ -1269,10 +1315,21 @@ impl LibraryPanel {
         match self.move_item(item, folder, cx) {
             Ok(()) => {
                 let place = self.place_label(folder, cx);
-                show_toast(Toast::new(format!("Moved “{name}” to {place}.")), cx);
+                let toast = Toast::new(format!("Moved “{name}” to {place}."));
+                show_toast(self.with_undo_button(toast, cx), cx);
             }
             Err(err) => self.report_error(&err.to_string(), cx),
         }
+    }
+
+    /// Gives a toast about a change of the panel a button that takes the change back (what
+    /// `cmd-z` in the list does), so that a wrong drop or a wrong choice in the folder
+    /// picker can be undone with the mouse.
+    pub(super) fn with_undo_button(&self, toast: Toast, cx: &mut Context<Self>) -> Toast {
+        let panel = cx.weak_entity();
+        toast.on_action("Undo", move |_, cx| {
+            panel.update(cx, |panel, cx| panel.undo(cx)).ok();
+        })
     }
 
     /// Moves the selected item `delta` places among its siblings (negative is up). Folders
@@ -1336,7 +1393,8 @@ impl LibraryPanel {
 
     // ----- trash ----------------------------------------------------------------------
 
-    /// Moves the selected item to the trash and shows a toast that names it and the key
+    /// Moves the selected item to the trash and shows a toast that names it and has an
+    /// "Undo" button (with the key of the list's undo when the keyboard is in the panel).
     /// that undoes it. Returns whether something was trashed.
     pub fn trash_selected(&mut self, cx: &mut Context<Self>) -> bool {
         match self.selected {
@@ -1349,8 +1407,7 @@ impl LibraryPanel {
     /// [`trash_selected`](Self::trash_selected).
     pub fn trash_item(&mut self, item: LibraryItem, cx: &mut Context<Self>) -> bool {
         let mut name = self.name_of(item, cx);
-        // A folder takes its contents along: say how much went with it, in few words (the
-        // sentence must fit a toast, with the key that undoes at its end).
+        // A folder takes its contents along: say how much went with it, in few words.
         let contents = match item {
             LibraryItem::Folder(id) => self.folder_contents_brief(id, cx),
             LibraryItem::Document(_) => None,
@@ -1360,13 +1417,7 @@ impl LibraryPanel {
         if !contents.is_empty() {
             name = short(&name, NAME_IN_MESSAGE - 8);
         }
-        // The key that undoes belongs to the library list. With the keyboard elsewhere
-        // (the command came from the palette while writing) the same key would undo
-        // typing, so the sentence says where it works; it is longer, the name shorter.
         let in_panel = self.keyboard_inside;
-        if !in_panel {
-            name = short(&name, if contents.is_empty() { 22 } else { 11 });
-        }
         let trashed = self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.trash_folder(id, cx),
             LibraryItem::Document(id) => library.trash_document(id, cx),
@@ -1375,20 +1426,23 @@ impl LibraryPanel {
             Ok(()) => {
                 // Repair the selection now; the library's events arrive after this update.
                 self.tree_changed(cx);
-                let undo = KeyHint::for_action(&UndoTrash, cx)
-                    .map(|hint| {
-                        if in_panel {
-                            format!(" Press {} to undo.", hint.text())
-                        } else {
-                            format!(" Undo in the library: {}.", hint.text())
-                        }
+                let toast = Toast::new(format!("Moved “{name}”{contents} to the trash."))
+                    .duration(Duration::from_secs(6));
+                // The toast has a button that takes it back. With the keyboard in the
+                // panel it is the list's own undo and shows its key. With the keyboard
+                // elsewhere (the command came from the palette while writing) that key
+                // would undo typing: the button shows no key and restores this item.
+                let toast = if in_panel {
+                    toast.action("Undo", UndoTrash)
+                } else {
+                    let panel = cx.weak_entity();
+                    toast.on_action("Undo", move |_, cx| {
+                        panel
+                            .update(cx, |panel, cx| panel.restore_item(item, cx))
+                            .ok();
                     })
-                    .unwrap_or_default();
-                show_toast(
-                    Toast::new(format!("Moved “{name}”{contents} to the trash.{undo}"))
-                        .duration(Duration::from_secs(6)),
-                    cx,
-                );
+                };
+                show_toast(toast, cx);
                 true
             }
             Err(err) => {

@@ -874,10 +874,7 @@ fn trash_with_undo(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-backspace");
     assert_eq!(f.documents(Some(f.folder), cx), vec![]);
     assert_eq!(f.selected(cx), Some(Document(f.at_root)));
-    assert_eq!(
-        f.toasts(cx),
-        vec!["Moved “Chapter” to the trash. Press ⌘Z to undo."]
-    );
+    assert_eq!(f.toasts(cx), vec!["Moved “Chapter” to the trash."]);
     assert_eq!(
         f.panel.read_with(cx, |p, _| p.trash_items()),
         vec![Document(f.in_folder)]
@@ -890,7 +887,7 @@ fn trash_with_undo(cx: &mut TestAppContext) {
     assert_eq!(f.visible(cx), vec![Document(f.at_root)]);
     assert_eq!(
         f.toasts(cx),
-        vec!["Moved “Book” and 1 document to the trash. Press ⌘Z to undo."]
+        vec!["Moved “Book” and 1 document to the trash."]
     );
 
     // cmd-z brings back the last one, revealed and selected; again for the one before.
@@ -1674,12 +1671,38 @@ fn commands_from_the_text_act_on_the_open_document(cx: &mut TestAppContext) {
     // sidebar happened to be on. The toast does not offer a key that would undo typing.
     cx.dispatch_action(writer_library::MoveToTrash);
     assert_eq!(titles(cx), ["Alpha copy", "Elsewhere"]);
+    // The toast's Undo button works from the text (the key of the list's undo would undo
+    // typing there): it brings this document back, whatever else happened since.
+    let trashed = toasts.read_with(cx, |layer, _| layer.ids());
+    assert_eq!(trashed.len(), 1);
     assert_eq!(
-        messages(cx),
-        vec!["Moved “Alpha” to the trash. Undo in the library: ⌘Z."]
+        toasts.read_with(cx, |layer, _| layer
+            .toasts()
+            .map(|toast| (toast.message.to_string(), toast.action_label().cloned()))
+            .collect::<Vec<_>>()),
+        vec![(
+            "Moved “Alpha” to the trash.".to_string(),
+            Some("Undo".into())
+        )]
     );
-    cx.dispatch_action(writer_library::UndoTrash);
+    let other_trashed = library.update(cx, |l, cx| {
+        let id = l
+            .create_document(None, &content("Scrap", "x"), cx)
+            .unwrap()
+            .id;
+        l.trash_document(id, cx).unwrap();
+        id
+    });
+    cx.run_until_parked();
+    let layer = toasts.clone();
+    cx.update(|window, cx| {
+        layer.update(cx, |layer, cx| {
+            assert!(layer.run_action(trashed[0], window, cx))
+        })
+    });
+    cx.run_until_parked();
     assert_eq!(titles(cx), ["Alpha", "Alpha copy", "Elsewhere"]);
+    assert!(!library.read_with(cx, |l, _| l.document_exists(other_trashed).unwrap()));
     messages(cx);
     // (The app opens another document when the open one is trashed; here it is A again.)
     panel.update(cx, |p, cx| p.set_active_document(Some(open), cx));
@@ -1712,24 +1735,26 @@ fn commands_from_the_text_act_on_the_open_document(cx: &mut TestAppContext) {
     cx.dispatch_action(writer_library::MoveToTrash);
     assert!(!titles(cx).contains(&"Elsewhere".to_string()));
     assert_eq!(
-        messages(cx),
-        vec!["Moved “Elsewhere” to the trash. Press ⌘Z to undo."]
+        toasts.read_with(cx, |layer, _| layer
+            .toasts()
+            .map(|toast| toast.message.to_string())
+            .collect::<Vec<_>>()),
+        vec!["Moved “Elsewhere” to the trash."]
     );
 
-    // A folder trashed from the text: the longer ending still fits a one-line toast.
-    cx.update(|window, _| window.focus(&editor));
-    panel.update(cx, |p, cx| {
-        p.set_active_document(None, cx);
-        p.select(Some(Folder(folder)), cx)
+    // Its button is the list's own undo there, with the key.
+    let (label, key) = toasts.read_with(cx, |layer, cx| {
+        let toast = layer.toasts().last().unwrap().clone();
+        (
+            toast.action_label().cloned(),
+            writer_ui::KeyHint::for_action(&writer_library::UndoTrash, cx).map(|hint| hint.text()),
+        )
     });
-    library.update(cx, |l, cx| {
-        l.rename_folder(folder, "The Long Winter of Discontent", cx)
-            .unwrap()
-    });
-    cx.dispatch_action(writer_library::MoveToTrash);
-    let message = messages(cx).pop().unwrap();
-    assert!(message.ends_with("to the trash. Undo in the library: ⌘Z."));
-    assert!(message.chars().count() <= 78, "{message}");
+    assert_eq!(
+        label.map(|label| label.to_string()).as_deref(),
+        Some("Undo")
+    );
+    assert_eq!(key.as_deref(), Some("⌘Z"));
 }
 
 /// A window root that owns the modal layer, as the app does.
@@ -2573,7 +2598,7 @@ fn trashing_the_folder_of_the_open_document(cx: &mut TestAppContext) {
     assert!(f.panel_focused(cx));
     assert_eq!(
         f.toasts(cx),
-        vec!["Moved “Book” and 2 documents to the trash. Press ⌘Z to undo."]
+        vec!["Moved “Book” and 2 documents to the trash."]
     );
 
     // The editor's last autosave of the trashed document arrives late: the text is kept,
@@ -2858,10 +2883,7 @@ fn long_names_and_deep_nesting(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-backspace");
     cx.run_until_parked();
     let toast = f.toasts(cx).pop().unwrap();
-    assert_eq!(
-        toast,
-        "Moved “A very long working title…” to the trash. Press ⌘Z to undo."
-    );
+    assert_eq!(toast, "Moved “A very long working title…” to the trash.");
     // A folder's toast also says what went with it, and still ends with the key.
     f.panel
         .update(cx, |p, cx| p.trash_item(Folder(chain[10]), cx));
@@ -2869,7 +2891,7 @@ fn long_names_and_deep_nesting(cx: &mut TestAppContext) {
     let toast = f.toasts(cx).pop().unwrap();
     assert_eq!(
         toast,
-        "Moved “A very long worki…” and 1 document to the trash. Press ⌘Z to undo."
+        "Moved “A very long worki…” and 1 document to the trash."
     );
     cx.simulate_keystrokes("cmd-z");
     cx.run_until_parked();

@@ -303,6 +303,10 @@ impl LibraryPanel {
         let Some(item) = self.rows.get(ix).map(|row| row.item) else {
             return;
         };
+        // The row whose name is being typed: the click belongs to its text field.
+        if self.renaming == Some(item) {
+            return;
+        }
         if self.renaming.is_some() {
             self.finish_rename(true, cx);
         }

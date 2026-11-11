@@ -109,6 +109,18 @@ fn release(at: Point<Pixels>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// What a click on the button of the newest toast does.
+fn press_toast_button(f: &Fixture, cx: &mut VisualTestContext) {
+    let layer = f.toasts.clone();
+    cx.update(|window, cx| {
+        layer.update(cx, |layer, cx| {
+            let id = *layer.ids().last().expect("a toast is showing");
+            assert!(layer.run_action(id, window, cx), "the toast has no button");
+        })
+    });
+    cx.run_until_parked();
+}
+
 fn indicator(f: &Fixture, cx: &mut VisualTestContext) -> Option<String> {
     f.panel.read_with(cx, |p, _| p.drop_indicator())
 }
@@ -215,7 +227,7 @@ fn the_plus_button_creates_documents_and_folders(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(plus, None, none());
     cx.executor().advance_clock(Duration::from_millis(900));
     cx.run_until_parked();
-    assert!(cx.debug_bounds("library-tip").is_some());
+    assert!(cx.debug_bounds("tooltip").is_some());
 }
 
 #[gpui::test]
@@ -336,10 +348,7 @@ fn a_right_click_on_a_document_opens_its_menu(cx: &mut TestAppContext) {
     f.toasts(cx);
     choose("Move to Trash", cx);
     assert_eq!(f.documents(Some(f.folder), cx), vec![in_book[1]]);
-    assert_eq!(
-        f.toasts(cx),
-        vec!["Moved “Opening” to the trash. Press ⌘Z to undo."]
-    );
+    assert_eq!(f.toasts(cx), vec!["Moved “Opening” to the trash."]);
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(f.documents(Some(f.folder), cx), in_book);
 
@@ -888,8 +897,17 @@ fn dragging_onto_a_folder_moves_into_it(cx: &mut TestAppContext) {
     release(in_row(1, 0.5), cx);
     assert_eq!(f.documents(Some(f.inner), cx), vec![f.in_inner, one]);
     assert_eq!(f.selected(cx), Some(Document(one)));
-    assert_eq!(f.toasts(cx), vec!["Moved “One” to Book / Notes."]);
-    cx.simulate_keystrokes("cmd-z");
+    // The toast says where it went and has a button that takes the drop back.
+    let (message, button) = f.toasts.read_with(cx, |layer, _| {
+        let toast = layer.toasts().last().unwrap();
+        (
+            toast.message.to_string(),
+            toast.action_label().map(|label| label.to_string()),
+        )
+    });
+    assert_eq!(message, "Moved “One” to Book / Notes.");
+    assert_eq!(button.as_deref(), Some("Undo"));
+    press_toast_button(&f, cx);
     assert_eq!(f.folder_of(one, cx), None);
     assert_eq!(f.toasts(cx), vec!["Moved “One” back to the library root."]);
 
@@ -1011,7 +1029,7 @@ fn dragging_folders(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn dragging_to_the_top_level_and_to_the_trash(cx: &mut TestAppContext) {
-    let (f, [one, _two, _three], cx) = drag_fixture(cx);
+    let (f, [one, two, three], cx) = drag_fixture(cx);
 
     // Onto the empty area under the rows: to the top level.
     drag(in_row(3, 0.5), in_row(12, 0.5), cx);
@@ -1050,13 +1068,13 @@ fn dragging_to_the_top_level_and_to_the_trash(cx: &mut TestAppContext) {
         f.panel.read_with(cx, |p, _| p.trash_items()),
         vec![Document(one)]
     );
-    assert_eq!(
-        f.toasts(cx),
-        vec!["Moved “One” to the trash. Press ⌘Z to undo."]
-    );
+    assert_eq!(f.toasts(cx), vec!["Moved “One” to the trash."]);
     assert!(f.panel_focused(cx));
     cx.simulate_keystrokes("cmd-z");
     assert!(f.panel.read_with(cx, |p, _| p.trash_items()).is_empty());
+    // Back where it was among its siblings (found by a tester on an earlier build: a
+    // restore used to append).
+    assert_eq!(f.documents(None, cx), vec![f.at_root, one, two, three]);
 
     // The row being renamed is not dragged (the mouse selects text in its field).
     f.panel

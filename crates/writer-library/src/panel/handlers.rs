@@ -560,16 +560,16 @@ impl LibraryPanel {
         self.set_expanded_below_selection(false, cx);
     }
 
-    /// Expands or collapses the selected folder and every folder inside it; with the
-    /// "Library" row selected, every folder of the library.
+    /// Expands or collapses the selected folder and every folder inside it; with
+    /// anything else selected, every folder of the library.
     fn set_expanded_below_selection(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        // Under a filter every folder is drawn open.
         if self.view != View::Tree || self.filter.is_some() {
             return;
         }
         match self.selected {
             Some(LibraryItem::Folder(folder)) => self.set_expanded_all(Some(folder), expanded, cx),
-            None if self.on_root_row => self.set_expanded_all(None, expanded, cx),
-            _ => {}
+            _ => self.set_expanded_all(None, expanded, cx),
         }
     }
 

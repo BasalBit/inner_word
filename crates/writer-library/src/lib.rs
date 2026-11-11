@@ -54,8 +54,10 @@
 //! # LibraryPanel
 //!
 //! [`LibraryPanel`] is the sidebar view over an `Entity<Library>`: the tree of folders and
-//! documents, a name filter and the trash, all driven from the keyboard (the keys are listed
-//! in its docs). It emits [`LibraryPanelEvent`]s (open this document, dismissed) and exposes
+//! documents, a name filter and the trash. All of it works from the keyboard and all of it
+//! works with the mouse alone: a "+" button, context menus on every row and on the empty
+//! area, drag and drop (the keys and the mouse are listed in its docs). The app adds its
+//! own items to those menus with [`LibraryPanel::set_menu_extension`]. It emits [`LibraryPanelEvent`]s (open this document, dismissed) and exposes
 //! the selection so the app knows where `cmd-n` should create
 //! ([`LibraryPanel::selected_folder`]).
 //!
@@ -66,7 +68,7 @@
 //!     panel.set_modal_layer(modal_layer.clone(), cx);        // the window's own modal layer
 //!     panel.set_new_document_content(empty_document_json);   // what `n` puts in a new document
 //! });
-//! // Toasts ("Moved “Chapter 3” to the trash. Press ⌘Z to undo.") go through
+//! // Toasts ("Moved “Chapter 3” to the trash." with an Undo button) go through
 //! // writer_ui::toast::show_toast, so install a global ToastLayer.
 //! // In the window root's render, so the panel's commands also work from the editor:
 //! writer_library::forward_actions(div().size_full(), &panel)

@@ -129,7 +129,9 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
     // The status bar counts against the limit.
     type_text(&workspace, "Hello", vcx);
     let status = workspace.update(vcx, |w, cx| w.status_line(cx));
-    assert_eq!(status.limit.as_deref(), Some("X 5 / 280"));
+    assert_eq!(status.limit.as_deref(), Some("5 / 280 on X"));
+    // The indicator is the character count while it is on.
+    assert_eq!(status.characters, "");
     assert!(!status.over_limit);
     type_text(&workspace, &"word ".repeat(60), vcx);
     let status = workspace.update(vcx, |w, cx| w.status_line(cx));

@@ -2,10 +2,12 @@
 //! between runs) and the message window shown when the library cannot be
 //! opened.
 
+use std::rc::Rc;
+
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Pixels, Render, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
-    div, point, prelude::*, px, size,
+    Pixels, Render, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle,
+    WindowOptions, div, point, prelude::*, px, size,
 };
 use serde::{Deserialize, Serialize};
 use writer_library::Library;
@@ -14,7 +16,12 @@ use writer_ui::{
     theme::{self, ActiveTheme},
 };
 
-use crate::{actions::Quit, settings::keys, workspace::Workspace};
+use crate::{
+    actions::{AcceptMessage, Quit},
+    settings::keys,
+    single_instance::RunningCopy,
+    workspace::Workspace,
+};
 
 /// Default content size of a new main window.
 pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1200., 800.);
@@ -159,14 +166,43 @@ pub fn open_main_window(
     })
 }
 
-/// The key context of the message window. `enter` and `escape` quit there.
+/// The key context of the message window. `escape` quits there; `enter`
+/// takes the suggested way out (which is to quit, unless the window offers
+/// something better).
 pub const ERROR_WINDOW_KEY_CONTEXT: &str = "ErrorWindow";
+
+type WayOutHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// What a message window offers besides quitting.
+#[derive(Clone)]
+pub struct WayOut {
+    label: SharedString,
+    run: WayOutHandler,
+}
+
+impl WayOut {
+    /// A way out named `label` (the text of its button).
+    pub fn new(
+        label: impl Into<SharedString>,
+        run: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            run: Rc::new(run),
+        }
+    }
+}
 
 /// The view of the message window: what went wrong, and a way out.
 pub struct ErrorView {
     title: String,
     message: String,
     detail: String,
+    /// The suggested thing to do, when there is one besides quitting.
+    way_out: Option<WayOut>,
+    /// Nothing is broken: the window only explains (drawn without the
+    /// colour of an error).
+    notice: bool,
     focus_handle: FocusHandle,
 }
 
@@ -182,7 +218,48 @@ impl ErrorView {
             title: title.into(),
             message: message.into(),
             detail: detail.into(),
+            way_out: None,
+            notice: false,
             focus_handle: cx.focus_handle(),
+        }
+    }
+
+    /// Offers `way_out` as the main button (and on `enter`), beside "Quit".
+    pub fn with_way_out(mut self, way_out: WayOut) -> Self {
+        self.way_out = Some(way_out);
+        self
+    }
+
+    /// Marks the window as an explanation rather than an error.
+    pub fn as_notice(mut self) -> Self {
+        self.notice = true;
+        self
+    }
+
+    /// The title of the message.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The small print under the message.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// The label of the suggested way out, when the window offers one.
+    pub fn way_out_label(&self) -> Option<SharedString> {
+        self.way_out.as_ref().map(|way_out| way_out.label.clone())
+    }
+
+    fn accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.way_out.clone() {
+            Some(way_out) => (way_out.run)(window, cx),
+            None => cx.quit(),
         }
     }
 }
@@ -197,11 +274,18 @@ impl Render for ErrorView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = theme.colors;
+        let way_out = self.way_out.clone();
+        let icon_color = if self.notice {
+            colors.accent
+        } else {
+            colors.danger
+        };
         div()
             .id("error-window")
             .key_context(ERROR_WINDOW_KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(|_: &crate::actions::CloseWindow, _, cx| cx.quit())
+            .on_action(cx.listener(|this, _: &AcceptMessage, window, cx| this.accept(window, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -225,7 +309,7 @@ impl Render for ErrorView {
                             .flex()
                             .items_center()
                             .gap(theme::SPACE_2)
-                            .child(Icon::new(IconName::Alert).color(colors.danger))
+                            .child(Icon::new(IconName::Alert).color(icon_color))
                             .child(
                                 div()
                                     .font_family(theme.fonts.document.clone())
@@ -251,16 +335,77 @@ impl Render for ErrorView {
                             .text_color(colors.muted)
                             .child(self.detail.clone()),
                     )
-                    .child(
-                        div().flex().justify_end().child(
-                            Button::new("quit", "Quit The Writer")
-                                .primary()
-                                .key_hint(KeyHint::for_action(&Quit, cx))
-                                .on_click(|_, _, cx| cx.quit()),
-                        ),
-                    ),
+                    .child(div().flex().justify_end().gap(theme::SPACE_2).map(|row| {
+                        match way_out {
+                            None => row.child(
+                                Button::new("quit", "Quit The Writer")
+                                    .primary()
+                                    .key_hint(KeyHint::for_action(&Quit, cx))
+                                    .on_click(|_, _, cx| cx.quit()),
+                            ),
+                            Some(way_out) => row
+                                .child(
+                                    Button::new("quit", "Quit This Copy")
+                                        .key_hint(KeyHint::parse("escape"))
+                                        .on_click(|_, _, cx| cx.quit()),
+                                )
+                                .child(
+                                    Button::new("way-out", way_out.label.clone())
+                                        .primary()
+                                        .key_hint(KeyHint::parse("enter"))
+                                        .on_click(move |_, window, cx| (way_out.run)(window, cx)),
+                                ),
+                        }
+                    })),
             )
     }
+}
+
+/// What the message window says when another running copy of The Writer
+/// has this library open (see [`crate::single_instance`]).
+pub fn already_running_text(running: &RunningCopy) -> (String, String, String) {
+    let copy = match running.pid {
+        Some(pid) => format!("The copy that is open: process {pid}\n"),
+        None => String::new(),
+    };
+    (
+        "The Writer is already open".to_string(),
+        "Another copy of The Writer has this library open. Two copies would each save their own \
+         version of a document and overwrite the other's text, so this copy has not opened the \
+         library and has changed nothing. Go on writing in the copy that is already open, or \
+         quit that one first and start this one again."
+            .to_string(),
+        format!("{copy}Library folder: {}", running.data_dir.display()),
+    )
+}
+
+/// Opens the window a second copy shows instead of the library: what is
+/// going on, a button that brings the copy that has the library to the
+/// front (and ends this one), and a button to quit.
+///
+/// With `may_activate` off (a scripted run, which must never bring a
+/// window to the front) the first button only ends this copy.
+pub fn open_already_running_window(
+    running: &RunningCopy,
+    may_activate: bool,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<ErrorView>> {
+    let (title, message, detail) = already_running_text(running);
+    let pid = running.pid;
+    let way_out = WayOut::new("Show the Open Copy", move |_, cx| {
+        if may_activate && let Some(pid) = pid {
+            crate::single_instance::bring_to_front(pid);
+        }
+        cx.quit();
+    });
+    open_message_window(
+        move |cx| {
+            ErrorView::new(title, message, detail, cx)
+                .with_way_out(way_out)
+                .as_notice()
+        },
+        cx,
+    )
 }
 
 /// What the message window says when the library cannot be opened.
@@ -287,6 +432,13 @@ pub fn open_error_window(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<ErrorView>> {
     let (title, message, detail) = (title.into(), message.into(), detail.into());
+    open_message_window(move |cx| ErrorView::new(title, message, detail, cx), cx)
+}
+
+fn open_message_window(
+    build: impl FnOnce(&mut Context<ErrorView>) -> ErrorView + 'static,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<ErrorView>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
@@ -307,7 +459,7 @@ pub fn open_error_window(
     cx.open_window(options, |window, cx| {
         theme::observe_system_appearance(window, cx).detach();
         cx.new(|cx| {
-            let view = ErrorView::new(title, message, detail, cx);
+            let view = build(cx);
             window.focus(&view.focus_handle);
             view
         })

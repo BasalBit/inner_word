@@ -37,6 +37,8 @@ actions!(
         Zoom,
         /// Enter or leave full screen.
         ToggleFullScreen,
+        /// In a message window: take the way out it suggests.
+        AcceptMessage,
     ]
 );
 
@@ -118,7 +120,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // The message window shown when the library cannot be opened. First
         // in the list: key hints and menus show the binding added last, and
         // that must stay cmd-q.
-        KeyBinding::new("enter", Quit, Some(crate::window::ERROR_WINDOW_KEY_CONTEXT)),
+        KeyBinding::new(
+            "enter",
+            AcceptMessage,
+            Some(crate::window::ERROR_WINDOW_KEY_CONTEXT),
+        ),
         KeyBinding::new(
             "escape",
             Quit,
@@ -223,10 +229,10 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "everywhere",
             "all documents",
         ]),
-        CommandDescriptor::new("Focus library", CATEGORY_GO, FocusLibrary)
-            .keywords(["sidebar", "folders", "tree"]),
-        CommandDescriptor::new("Focus editor", CATEGORY_GO, FocusEditor)
-            .keywords(["text", "document", "write"]),
+        CommandDescriptor::new("Go to library", CATEGORY_GO, FocusLibrary)
+            .keywords(["focus", "sidebar", "folders", "tree"]),
+        CommandDescriptor::new("Go to text", CATEGORY_GO, FocusEditor)
+            .keywords(["focus", "editor", "document", "write"]),
         CommandDescriptor::new("Command palette", CATEGORY_GO, ToggleCommandPalette)
             .keywords(["commands", "actions", "run"]),
         CommandDescriptor::new("Show or hide library", CATEGORY_VIEW, ToggleSidebar)
@@ -235,13 +241,10 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["sidebar", "resize", "bigger"]),
         CommandDescriptor::new("Narrow library", CATEGORY_VIEW, NarrowSidebar)
             .keywords(["sidebar", "resize", "smaller"]),
-        CommandDescriptor::new("Toggle page view", CATEGORY_VIEW, TogglePageView).keywords([
-            "paper",
-            "pages",
-            "print layout",
-            "flow",
-        ]),
-        CommandDescriptor::new("Toggle Vim mode", CATEGORY_VIEW, ToggleVimMode).keywords([
+        CommandDescriptor::new("Turn page view on or off", CATEGORY_VIEW, TogglePageView)
+            .keywords(["toggle", "paper", "pages", "print layout", "flow"]),
+        CommandDescriptor::new("Turn Vim mode on or off", CATEGORY_VIEW, ToggleVimMode).keywords([
+            "toggle",
             "vi",
             "modal",
             "normal mode",

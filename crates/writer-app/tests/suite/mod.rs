@@ -4,6 +4,7 @@
 mod assembly;
 mod commands;
 mod export;
+mod findings;
 mod keymap;
 mod saving;
 mod session;

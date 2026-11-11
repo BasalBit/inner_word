@@ -220,7 +220,7 @@ impl SettingRow {
             SettingRow::Author => "Name on comments",
             SettingRow::Font => "Font",
             SettingRow::TextSize => "Text size",
-            SettingRow::LineHeight => "Line height",
+            SettingRow::LineHeight => "Line spacing",
             SettingRow::PageView => "Start in page view",
             SettingRow::Paper => "Paper size",
             SettingRow::CharacterLimit => "Character limit",
@@ -235,7 +235,7 @@ impl SettingRow {
             SettingRow::DocumentMarginRight => "Right margin",
             SettingRow::DocumentFont => "Font",
             SettingRow::DocumentTextSize => "Text size",
-            SettingRow::DocumentLineHeight => "Line height",
+            SettingRow::DocumentLineHeight => "Line spacing",
             SettingRow::DocumentParagraphSpacing => "Paragraph spacing",
         }
     }
@@ -309,6 +309,8 @@ pub struct SettingsView {
     editing: Option<SettingRow>,
     /// The row the keyboard starts on.
     start: SettingRow,
+    /// A row that is still to be scrolled to the top of the list.
+    reveal_at_top: Option<SettingRow>,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -361,9 +363,12 @@ impl SettingsView {
     /// when the row is not listed).
     pub fn starting_at(mut self, row: SettingRow, cx: &mut Context<Self>) -> Self {
         let rows = self.rows(cx);
-        if let Some(ix) = rows.iter().position(|listed| *listed == row) {
+        if rows.contains(&row) {
             self.start = row;
-            self.scroll.scroll_to_item(self.child_index(&rows, ix));
+            // The section the modal was opened for starts at the top of
+            // the list: scrolled there once the list has been laid out
+            // (see `render`).
+            self.reveal_at_top = Some(row);
         }
         self
     }
@@ -494,6 +499,7 @@ impl SettingsView {
             length_fields,
             editing: None,
             start: SettingRow::Theme,
+            reveal_at_top: None,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
@@ -961,28 +967,16 @@ impl SettingsView {
             .unwrap_or(-1);
         let target = (current + delta).clamp(0, count - 1) as usize;
         window.focus(&self.handles[&rows[target]]);
-        self.scroll.scroll_to_item(self.child_index(&rows, target));
+        // One scrolled child per row (see `render`): the row comes into
+        // view whole, with its section heading when it is the first of
+        // its section.
+        self.scroll.scroll_to_item(target);
         cx.notify();
     }
 
-    /// The index of row `row_ix` of `rows` among the scrolled children
-    /// (section headings are children too).
-    fn child_index(&self, rows: &[SettingRow], row_ix: usize) -> usize {
-        let mut child = 0;
-        let mut section = "";
-        for (ix, row) in rows.iter().enumerate() {
-            if row.section() != section {
-                section = row.section();
-                child += 1;
-            }
-            if ix == row_ix {
-                // Reveal the section heading together with its first row.
-                let first_of_section = ix == 0 || rows[ix - 1].section() != section;
-                return if first_of_section { child - 1 } else { child };
-            }
-            child += 1;
-        }
-        child
+    /// The scroll position of the list (tests read it).
+    pub fn scroll_handle(&self) -> &ScrollHandle {
+        &self.scroll
     }
 
     fn on_focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -1171,8 +1165,8 @@ impl SettingsView {
             .flex()
             .items_center()
             .gap(SPACE_4)
-            .min_h(px(46.))
-            .py(px(6.))
+            .min_h(px(42.))
+            .py(px(4.))
             .px(SPACE_3)
             .rounded(RADIUS_MD)
             .when(focused && !is_field, |el| el.bg(colors.hover).shadow(ring))
@@ -1252,25 +1246,58 @@ impl Render for SettingsView {
         // Leave room for the modal's top offset and a margin below.
         let list_height = (f32::from(window.viewport_size().height) * 0.80 - 150.).max(160.);
 
+        // A scroll position asked for before the list was ever drawn is
+        // worked out against a list at the top left of the window (GPUI
+        // learns where the list is while drawing it) and lands too far
+        // down. So the row to start at is scrolled to after the first
+        // frame.
+        if let Some(row) = self.reveal_at_top {
+            if self.scroll.bounds().size.height > px(0.) {
+                self.reveal_at_top = None;
+                if let Some(ix) = self.rows(cx).iter().position(|listed| *listed == row) {
+                    self.scroll.scroll_to_top_of_item(ix);
+                }
+            } else {
+                cx.defer_in(window, |_, _, cx| cx.notify());
+            }
+        }
+
+        // One child of the scrolled list per row. The first row of a
+        // section carries the section heading in the same child, so that
+        // bringing the row into view brings the heading with it (and never
+        // the heading alone). The child is a little taller than the row:
+        // the focus ring is drawn outside the row and would otherwise be
+        // cut at the edge of the list.
         let mut children: Vec<gpui::AnyElement> = Vec::new();
         let mut section = "";
         for (ix, row) in self.rows(cx).into_iter().enumerate() {
-            if row.section() != section {
+            let heading = (row.section() != section).then(|| {
                 section = row.section();
-                children.push(
-                    div()
-                        .px(SPACE_3)
-                        .pt(if ix == 0 { px(4.) } else { px(14.) })
-                        .pb(px(4.))
-                        .text_size(UI_TEXT_XS)
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(colors.muted)
-                        .child(section)
-                        .into_any_element(),
-                );
-            }
-            children.push(self.render_row(ix, row, window, cx));
+                div()
+                    .px(SPACE_3)
+                    .pt(if ix == 0 { px(1.) } else { px(11.) })
+                    .pb(px(4.))
+                    .text_size(UI_TEXT_XS)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.muted)
+                    .child(section)
+            });
+            children.push(
+                div()
+                    .debug_selector(move || format!("setting-{ix}"))
+                    .flex_none()
+                    .py(px(3.))
+                    .flex()
+                    .flex_col()
+                    .children(heading)
+                    .child(self.render_row(ix, row, window, cx))
+                    .into_any_element(),
+            );
         }
+        let close = crate::controls::close_control(
+            cx.listener(|_, _: &gpui::ClickEvent, _, cx| cx.emit(DismissEvent)),
+            cx,
+        );
 
         let hint = |keys: &'static str, what: &'static str| {
             div()
@@ -1289,7 +1316,7 @@ impl Render for SettingsView {
             // Clicks on the panel's own chrome must not close the modal or
             // steal focus from the focused row.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .w(px(580.))
+            .w(px(crate::workspace::MODAL_WIDTH))
             .max_w_full()
             .flex()
             .flex_col()
@@ -1313,11 +1340,13 @@ impl Render for SettingsView {
                     .border_b_1()
                     .border_color(colors.hairline)
                     .child(Icon::new(IconName::Settings).color(colors.muted))
-                    .child(div().text_size(UI_TEXT_LG).child("Settings")),
+                    .child(div().flex_1().text_size(UI_TEXT_LG).child("Settings"))
+                    .child(close),
             )
             .child(
                 div()
                     .id("settings-list")
+                    .debug_selector(|| "settings-list".into())
                     .max_h(px(list_height))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)

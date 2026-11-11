@@ -33,7 +33,7 @@ fn thread_bodies(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> V
 }
 
 /// `simple_document` with a comment on the first word of the paragraph.
-fn commented_document(title: &str, body: &str, comment: &str) -> Document {
+pub(super) fn commented_document(title: &str, body: &str, comment: &str) -> Document {
     let mut state = EditorState::new(simple_document(title, body));
     let first_word = body.find(' ').unwrap_or(body.len());
     state.set_selection(Selection::new(
@@ -288,7 +288,13 @@ fn view_toggles_are_stored_and_come_back(cx: &mut TestAppContext) {
         // resolved" in the panel, a font in the picker.
         vcx.simulate_keystrokes("cmd-alt-v cmd-alt-p");
         assert_eq!(vim_mode(&workspace, vcx), Some(Mode::Normal));
-        vcx.simulate_keystrokes("cmd-2 x s");
+        // Resolving the only thread empties the list and hands the
+        // keyboard back to the text; "show resolved" is then asked for
+        // from there.
+        vcx.simulate_keystrokes("cmd-2 x");
+        assert!(editor_focused(&workspace, vcx));
+        vcx.dispatch_action(writer_comments::ToggleShowResolved);
+        vcx.run_until_parked();
         assert!(workspace.read_with(vcx, |w, cx| w.comments().read(cx).show_resolved()));
         vcx.simulate_keystrokes("escape cmd-alt-c");
         vcx.run_until_parked();

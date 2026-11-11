@@ -13,6 +13,7 @@ use writer_ui::{
     },
 };
 
+use writer_comments as comments;
 use writer_editor::actions as editor;
 
 use super::{EditCommand, KEY_CONTEXT, SaveState, Workspace};
@@ -134,6 +135,18 @@ pub fn counted(n: usize, singular: &str, plural: &str) -> String {
     )
 }
 
+/// How the status bar shows a count against a network's limit: the number
+/// in the same form as the other counts, then the limit and the network by
+/// name ("1,722 / 280 on X").
+pub fn limit_label(count: writer_export::SocialCount) -> String {
+    format!(
+        "{} / {} on {}",
+        group_digits(count.length),
+        group_digits(count.limit),
+        count.network.name()
+    )
+}
+
 /// The texts of the status bar, computed from the workspace state. Split
 /// from the rendering so tests can read them.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -146,11 +159,14 @@ pub struct StatusLine {
     pub page: Option<String>,
     /// "1,234 words", or "12 of 1,234 words" with a selection.
     pub words: String,
-    /// "6,789 characters", or the selection's.
+    /// "6,789 characters", or the selection's. Empty while the
+    /// character-limit indicator is on and nothing is selected: the
+    /// indicator is the character count then, counted the way the network
+    /// counts, and two different numbers side by side would only confuse.
     pub characters: String,
     /// "5 min read". Empty for an empty document or with a selection.
     pub reading: String,
-    /// "212 / 280" when the character-limit indicator is on.
+    /// "1,722 / 280 on X" when the character-limit indicator is on.
     pub limit: Option<String>,
     /// Whether the text is over the limit.
     pub over_limit: bool,
@@ -226,22 +242,40 @@ impl Workspace {
             save_failed,
             page,
             words,
-            characters,
+            characters: if count.is_some() && selection.is_none() {
+                String::new()
+            } else {
+                characters
+            },
             reading,
-            limit: count.map(|count| format!("{} {}", count.network.name(), count.label())),
+            limit: count.map(limit_label),
             over_limit: count.is_some_and(|count| !count.fits()),
         }
     }
 
     fn render_titlebar(&mut self, sidebar_visible: bool, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
+        // Text that has scrolled under the title band is cut at its lower
+        // edge: draw that edge then, so the title never seems to touch the
+        // text. Page view has the desk's own edge.
+        let scrolled = self.session.is_some() && {
+            let editor = self.editor.read(cx);
+            !editor.page_view() && editor.scroll_offset() > px(0.5)
+        };
         div()
             .id("titlebar")
+            .debug_selector(|| "titlebar".into())
             .h(TITLEBAR_HEIGHT)
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
+            .border_b_1()
+            .border_color(if scrolled {
+                colors.hairline
+            } else {
+                gpui::transparent_black()
+            })
             // Keep the title centred and clear of the traffic lights.
             .px(if sidebar_visible {
                 SPACE_4
@@ -320,6 +354,10 @@ impl Workspace {
             .left(px(width - RESIZE_HANDLE_WIDTH / 2.))
             .w(px(RESIZE_HANDLE_WIDTH))
             .cursor(CursorStyle::ResizeLeftRight)
+            // The handle lies half over the text: a press on it must not
+            // also reach the editor underneath (which would move the caret
+            // and take the keyboard).
+            .occlude()
             .flex()
             .justify_center()
             .child(
@@ -333,6 +371,7 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     window.prevent_default();
+                    cx.stop_propagation();
                     if event.click_count == 2 {
                         this.set_sidebar_width(DEFAULT_SIDEBAR_WIDTH, cx);
                     } else {
@@ -340,6 +379,17 @@ impl Workspace {
                         cx.notify();
                     }
                 }),
+            )
+            // While the pointer is on the handle the workspace underneath
+            // hears nothing of it (the handle takes the pointer): the drag
+            // goes on here, and on the workspace root once the pointer is
+            // ahead of the handle.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.drag_sidebar(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_sidebar_drag(cx)),
             )
             .into_any_element()
     }
@@ -375,13 +425,13 @@ impl Workspace {
             )
             .child(div().h(SPACE_2))
             .child(hint("New document", KeyHint::for_action(&NewDocument, cx)))
-            .child(hint("Open a document", KeyHint::for_action(&QuickOpen, cx)))
+            .child(hint("Open document", KeyHint::for_action(&QuickOpen, cx)))
             .child(hint(
-                "Go to the library",
+                "Go to library",
                 KeyHint::for_action(&FocusLibrary, cx),
             ))
             .child(hint(
-                "Every command",
+                "Command palette",
                 KeyHint::for_action(&ToggleCommandPalette, cx),
             ))
             .into_any_element()
@@ -420,15 +470,27 @@ impl Workspace {
             .gap(SPACE_4)
             .flex_none()
             .children(status.limit.clone().map(|limit| {
-                text(limit).when(status.over_limit, |el| {
-                    el.text_color(colors.danger)
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                })
+                // Only the number says "too long"; the rest stays quiet.
+                let (number, rest) = match limit.split_once(' ') {
+                    Some((number, rest)) => (number.to_string(), format!(" {rest}")),
+                    None => (limit.clone(), String::new()),
+                };
+                div()
+                    .flex()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .child(div().child(number).when(status.over_limit, |el| {
+                        el.text_color(colors.danger)
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                    }))
+                    .child(rest)
             }))
             .children(status.page.clone().map(text))
             .when(!status.words.is_empty(), |el| {
                 el.child(text(status.words.clone()))
-                    .child(text(status.characters.clone()))
+            })
+            .when(!status.characters.is_empty(), |el| {
+                el.child(text(status.characters.clone()))
             })
             .when(!status.reading.is_empty(), |el| {
                 el.child(text(status.reading.clone()))
@@ -460,6 +522,18 @@ impl Workspace {
         match &self.editor_host {
             Some(host) => host.clone().into_any_element(),
             None => self.editor.clone().into_any_element(),
+        }
+    }
+
+    /// The pointer moved while the sidebar edge may be held: the edge
+    /// follows it, or the drag ends when the button is no longer down.
+    fn drag_sidebar(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.sidebar_dragging {
+            if event.dragging() {
+                self.set_sidebar_width_live(f32::from(event.position.x), cx);
+            } else {
+                self.end_sidebar_drag(cx);
+            }
         }
     }
 
@@ -521,8 +595,22 @@ impl Render for Workspace {
         // The library panel's commands (rename, move to trash, ...) work from
         // anywhere in the window, e.g. after the palette handed focus back
         // to the editor.
-        writer_library::forward_actions(div().id("workspace"), &self.panel)
-            .key_context(KEY_CONTEXT)
+        let mut root = writer_library::forward_actions(div().id("workspace"), &self.panel);
+        // And the commands for the text work while the keyboard is in the
+        // library, the comment list or a modal (the palette and the menu
+        // bar offer them everywhere). Only with a document open, so that
+        // the menu bar greys them out without one.
+        if self.session.is_some() {
+            for action in &self.text_commands {
+                root = root.on_boxed_action(
+                    action.as_ref(),
+                    cx.listener(|this, action: &dyn gpui::Action, window, cx| {
+                        this.forward_to_text(action, window, cx)
+                    }),
+                );
+            }
+        }
+        root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))
             .on_action(cx.listener(Self::on_quick_open))
@@ -581,14 +669,33 @@ impl Render for Workspace {
             .capture_action(cx.listener(|this, _: &editor::SelectAll, window, cx| {
                 this.edit_where_the_keyboard_is(EditCommand::SelectAll, window, cx)
             }))
+            // The comment keys work anywhere in the window (the comments
+            // crate handles them globally). Behind an open modal they
+            // would move the keyboard or the caret out of sight: the
+            // modal closes first.
+            .capture_action(cx.listener(|this, _: &comments::AddComment, window, cx| {
+                this.close_modal_first(window, cx);
+            }))
+            .capture_action(
+                cx.listener(|this, _: &comments::FocusComments, window, cx| {
+                    this.close_modal_first(window, cx);
+                }),
+            )
+            .capture_action(cx.listener(|this, _: &comments::NextComment, window, cx| {
+                this.close_modal_first(window, cx);
+            }))
+            .capture_action(
+                cx.listener(|this, _: &comments::PreviousComment, window, cx| {
+                    this.close_modal_first(window, cx);
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &comments::ToggleComments, window, cx| {
+                    this.close_modal_first(window, cx);
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if this.sidebar_dragging {
-                    if event.dragging() {
-                        this.set_sidebar_width_live(f32::from(event.position.x), cx);
-                    } else {
-                        this.end_sidebar_drag(cx);
-                    }
-                }
+                this.drag_sidebar(event, cx);
             }))
             .on_mouse_up(
                 MouseButton::Left,

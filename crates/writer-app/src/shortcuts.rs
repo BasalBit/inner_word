@@ -421,6 +421,6 @@ impl PickerDelegate for ShortcutsDelegate {
     }
 
     fn empty_text(&self, _query: &str) -> SharedString {
-        "No shortcut matches".into()
+        "No shortcuts match".into()
     }
 }

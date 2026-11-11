@@ -266,7 +266,7 @@ impl PickerDelegate for ExportDelegate {
     }
 
     fn empty_text(&self, _query: &str) -> SharedString {
-        "No export format matches".into()
+        "No export formats match".into()
     }
 }
 

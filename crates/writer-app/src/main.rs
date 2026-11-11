@@ -1,7 +1,11 @@
 //! The Writer: entry point.
 
 use gpui::{AnyWindowHandle, App, AppContext, Application};
-use writer_app::{automation, welcome, window};
+use writer_app::{
+    automation,
+    single_instance::{self, Acquired},
+    welcome, window,
+};
 use writer_library::Library;
 
 fn main() {
@@ -25,6 +29,9 @@ fn main() {
         .with_assets(writer_ui::assets::Assets)
         .run(move |cx: &mut App| {
             writer_app::init(cx);
+            // kill, a closed terminal and ctrl-c quit like cmd-q: the open
+            // document is saved first.
+            writer_app::signals::quit_on_termination_signals(cx);
             // Held keys repeat while Vim mode is on: the real app stores
             // that in its user defaults. A scripted run leaves the user's
             // preferences alone unless it is told otherwise.
@@ -33,7 +40,10 @@ fn main() {
             if script.is_none() || scripted_opt_in {
                 writer_app::press_and_hold::manage_user_default(cx);
             }
-            let Some(main_window) = open_window(cx) else {
+            // A scripted run stays in the background, also when it finds
+            // another copy running.
+            let may_activate = script.is_none() || automation::foreground_requested();
+            let Some(main_window) = open_window(may_activate, cx) else {
                 cx.quit();
                 return;
             };
@@ -53,9 +63,33 @@ fn main() {
         });
 }
 
-/// Opens the main window, or the message window when the library cannot be
-/// opened. `None` when no window could be opened at all.
-fn open_window(cx: &mut App) -> Option<AnyWindowHandle> {
+/// Opens the main window, or a message window when another copy of The
+/// Writer has the library open or when the library cannot be opened.
+/// `None` when no window could be opened at all.
+fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
+    // One running copy per library: two would overwrite each other's text
+    // (see `single_instance`). The lock is held until the process ends.
+    if let Ok(data_dir) = writer_library::data_dir() {
+        match single_instance::acquire(&data_dir) {
+            Ok(Acquired::Lock(lock)) => cx.set_global(lock),
+            Ok(Acquired::Taken(running)) => {
+                let (title, message, detail) = window::already_running_text(&running);
+                eprintln!("The Writer: {title}. {message}\n{detail}");
+                return match window::open_already_running_window(&running, may_activate, cx) {
+                    Ok(handle) => Some(handle.into()),
+                    Err(err) => {
+                        eprintln!("The Writer: cannot open a window: {err:#}");
+                        None
+                    }
+                };
+            }
+            // The folder cannot be made or written: the library will say so.
+            Err(error) => eprintln!(
+                "The Writer: could not check for another running copy in {}: {error}",
+                data_dir.display()
+            ),
+        }
+    }
     let library = match Library::open_default() {
         Ok(library) => library,
         Err(error) => {

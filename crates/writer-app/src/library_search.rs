@@ -148,9 +148,9 @@ impl PickerDelegate for LibrarySearchDelegate {
         if let Some(error) = &self.error {
             format!("The search failed: {error}").into()
         } else if query.trim().is_empty() {
-            "Type to search. The last word matches as a prefix; quotes make a phrase.".into()
+            "Type to search every document. Put a phrase in quotes.".into()
         } else {
-            format!("No document contains “{}”", query.trim()).into()
+            format!("No documents contain “{}”", query.trim()).into()
         }
     }
 }

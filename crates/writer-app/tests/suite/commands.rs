@@ -84,7 +84,7 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
 
     // One "New document" and one "New folder": the app's, which work from
     // anywhere. The library panel's own are its keys in the sidebar.
-    for once in ["New document", "New folder", "Toggle Vim mode"] {
+    for once in ["New document", "New folder", "Turn Vim mode on or off"] {
         assert_eq!(
             titles.iter().filter(|title| *title == once).count(),
             1,
@@ -555,22 +555,13 @@ fn quick_open_keeps_the_folder_in_view_beside_a_long_title(cx: &mut TestAppConte
             .unwrap()
             .id
     });
-    // No heading: the title is derived from the first line, eighty
-    // characters of it.
+    // A long heading: the title is the heading, up to eighty characters
+    // of it.
     let opening = "The ferry came in late, as it always did in October, and Mara was the only \
                    passenger who stayed on deck to watch the harbour lights.";
-    let long = add_document(
-        &library,
-        Some(folder),
-        &Document::from_blocks(vec![Block::paragraph(opening)]),
-        cx,
-    );
-    let loose = add_document(
-        &library,
-        None,
-        &Document::from_blocks(vec![Block::paragraph(opening)]),
-        cx,
-    );
+    let titled = Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), opening)]);
+    let long = add_document(&library, Some(folder), &titled, cx);
+    let loose = add_document(&library, None, &titled, cx);
     let (workspace, vcx) = open_workspace(&library, cx);
     let stored_title =
         library.read_with(vcx, |library, _| library.document_meta(long).unwrap().title);

@@ -89,7 +89,7 @@ use crate::{
 
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
-    counted, group_digits, panel_layout,
+    counted, group_digits, limit_label, panel_layout,
 };
 pub use session::{
     AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost, SaveState,
@@ -102,6 +102,13 @@ pub const KEY_CONTEXT: &str = "Workspace";
 
 /// The category under which the library panel publishes its commands.
 const LIBRARY_CATEGORY: &str = "Library";
+
+/// The width of the app's modals (palette, quick open, shortcuts, export,
+/// settings). One width, so the panel does not jump when one follows
+/// another.
+pub const MODAL_WIDTH: f32 = 600.;
+/// The width of the wide modals: the library search with its snippets.
+pub const WIDE_MODAL_WIDTH: f32 = 720.;
 
 /// Default width of the right panel slot.
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 320.;
@@ -169,6 +176,10 @@ pub struct Workspace {
     /// The focused element that was not part of the last frame (see
     /// [`Workspace::keep_focus_on_screen`]).
     off_screen_focus: Option<FocusHandle>,
+    /// The commands that act on the text (formatting, blocks, insertion,
+    /// the tools). Chosen while the keyboard is elsewhere in the window
+    /// they are passed on to the text: see [`Workspace::forward_to_text`].
+    pub(crate) text_commands: Vec<Box<dyn gpui::Action>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -336,6 +347,7 @@ impl Workspace {
             window_title: String::new(),
             bounds_task: None,
             off_screen_focus: None,
+            text_commands: text_commands(),
             _subscriptions: subscriptions,
         };
         this.restore_session(window, cx);
@@ -559,6 +571,7 @@ impl Workspace {
                 .is_some_and(|focused| this.focus_handle.contains(focused, window));
             if on_screen {
                 this.off_screen_focus = None;
+                this.close_modal_without_keyboard(window, cx);
                 return;
             }
             match focused {
@@ -573,6 +586,83 @@ impl Workspace {
                 }
             }
         });
+    }
+
+    /// A modal that is on screen has the keyboard. When the keyboard has
+    /// gone somewhere else in the window (a window-wide key of another
+    /// crate put it in the comments, a menu bar command opened a tool in
+    /// the text), the modal closes: left open it would cover the window
+    /// while `escape` and every other key went to what is behind it.
+    ///
+    /// Runs after a frame, with the focused element known to be in that
+    /// frame. The keyboard stays where it went.
+    fn close_modal_without_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.modal_layer.read(cx).has_modal() {
+            return;
+        }
+        let in_modal = window
+            .context_stack()
+            .iter()
+            .any(|context| context.contains(writer_ui::modal::KEY_CONTEXT));
+        if in_modal {
+            return;
+        }
+        let focused = window.focused(cx);
+        self.dismiss_modal(window, cx);
+        if let Some(focused) = focused {
+            window.focus(&focused);
+        }
+    }
+
+    /// A key or a menu command that acts on the window behind an open modal
+    /// closes the modal first (as `cmd-0`, `cmd-1` and `cmd-n` do), so
+    /// nothing changes out of sight. Returns whether a modal was closed.
+    pub(crate) fn close_modal_first(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let open = self.modal_layer.read(cx).has_modal();
+        if open {
+            self.dismiss_modal(window, cx);
+        }
+        open
+    }
+
+    /// Whether the keyboard is in the text of the document or in one of
+    /// its tools (also: in any other editor, such as the field a comment
+    /// is written in). Read from the last frame.
+    pub(crate) fn keyboard_in_text(&self, window: &Window) -> bool {
+        window.context_stack().iter().any(|context| {
+            context.contains(writer_editor::actions::KEY_CONTEXT)
+                || context.contains(writer_editor_tools::actions::KEY_CONTEXT)
+        })
+    }
+
+    /// A command for the text arrived at the workspace because nothing on
+    /// the way from the keyboard took it: the keyboard is in the library,
+    /// in the comment list or in a modal. The palette and the menu bar
+    /// offer these commands wherever the keyboard is, so they are passed on
+    /// to the text, which takes the keyboard (an open modal closes).
+    ///
+    /// When the keyboard is in the text already and the command still came
+    /// this far, the text had no use for it right now; it is left alone.
+    pub(crate) fn forward_to_text(
+        &mut self,
+        action: &dyn gpui::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.is_none()
+            || self.editor.read(cx).is_read_only()
+            || self.keyboard_in_text(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.dismiss_modal(window, cx);
+        window.focus(&self.editor.focus_handle(cx));
+        window.dispatch_action(action.boxed_clone(), cx);
     }
 
     /// Where the keyboard goes when it would otherwise be nowhere: the
@@ -769,7 +859,7 @@ impl Workspace {
                 let delegate = PaletteDelegate::new(workspace, recent, cx);
                 let rows = picker_rows(window, 14);
                 Picker::modal(delegate, window, cx)
-                    .width(px(600.))
+                    .width(px(MODAL_WIDTH))
                     .max_visible_rows(rows)
             });
         });
@@ -784,7 +874,7 @@ impl Workspace {
                 let delegate = QuickOpenDelegate::new(workspace, &library, cx);
                 let rows = picker_rows(window, 14);
                 Picker::modal(delegate, window, cx)
-                    .width(px(600.))
+                    .width(px(MODAL_WIDTH))
                     .max_visible_rows(rows)
             });
         });
@@ -799,7 +889,7 @@ impl Workspace {
                 let delegate = LibrarySearchDelegate::new(workspace, library);
                 let rows = picker_rows(window, 14);
                 Picker::modal(delegate, window, cx)
-                    .width(px(720.))
+                    .width(px(WIDE_MODAL_WIDTH))
                     .max_visible_rows(rows)
             });
         });
@@ -813,7 +903,7 @@ impl Workspace {
                 let delegate = ShortcutsDelegate::new(workspace, cx);
                 let rows = picker_rows(window, 20);
                 Picker::modal(delegate, window, cx)
-                    .width(px(600.))
+                    .width(px(MODAL_WIDTH))
                     .max_visible_rows(rows)
             });
         });
@@ -831,7 +921,9 @@ impl Workspace {
             layer.toggle(window, cx, |window, cx| {
                 let delegate = ExportDelegate::new(workspace, folder);
                 let rows = picker_rows(window, 12);
-                Picker::modal(delegate, window, cx).max_visible_rows(rows)
+                Picker::modal(delegate, window, cx)
+                    .width(px(MODAL_WIDTH))
+                    .max_visible_rows(rows)
             });
         });
     }
@@ -1340,6 +1432,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_modal_first(window, cx);
         let visible = !self.settings.sidebar_visible;
         self.set_sidebar_visible(visible, window, cx);
     }
@@ -1365,18 +1458,20 @@ impl Workspace {
     pub(crate) fn on_toggle_page_view(
         &mut self,
         _: &TogglePageView,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_modal_first(window, cx);
         self.toggle_page_view(cx);
     }
 
     pub(crate) fn on_toggle_vim(
         &mut self,
         _: &ToggleVimMode,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_modal_first(window, cx);
         self.toggle_vim_mode(cx);
     }
 
@@ -1609,6 +1704,22 @@ pub fn command_named(name: &str, cx: &App) -> Option<CommandDescriptor> {
             || squeeze(action) == wanted
             || squeeze(&command.label()) == wanted
     })
+}
+
+/// The commands of the editor and its tools that act on the text and that
+/// the workspace passes on to it (see [`Workspace::forward_to_text`]).
+///
+/// Left out: the Edit menu's standard items and the context menu. They
+/// belong to whatever has the keyboard (undo in the library brings back a
+/// trashed document, paste in a field pastes there), and are never sent
+/// to the text from somewhere else.
+pub fn text_commands() -> Vec<Box<dyn gpui::Action>> {
+    writer_editor::commands()
+        .into_iter()
+        .filter(|command| command.category.as_ref() != writer_editor::CATEGORY_EDIT)
+        .chain(writer_editor_tools::commands())
+        .map(|command| command.action())
+        .collect()
 }
 
 fn set_keyed(slots: &mut Vec<(SharedString, AnyView)>, key: SharedString, view: Option<AnyView>) {

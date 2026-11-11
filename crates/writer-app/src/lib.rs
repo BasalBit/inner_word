@@ -30,9 +30,12 @@
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`character_limit`] | the character-limit indicator, counted block by block |
+//! | [`controls`] | tooltips and the close control of a modal: the small things for the pointer |
 //! | [`welcome`] | the welcome document, the demo library for QA |
 //! | [`window`] | main window options, stored bounds, the error window |
 //! | [`menus`] | the native menu bar |
+//! | [`single_instance`] | one running copy per library: the lock of the data directory |
+//! | [`signals`] | `SIGTERM`, `SIGHUP` and `SIGINT` quit the way `cmd-q` does, saving first |
 //! | [`press_and_hold`] | held keys repeat while Vim mode is on (the `ApplePressAndHoldEnabled` user default) |
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
@@ -40,6 +43,7 @@ pub mod actions;
 pub mod automation;
 pub mod character_limit;
 pub mod commands;
+pub mod controls;
 pub mod document_io;
 pub mod export;
 pub mod library_search;
@@ -51,6 +55,8 @@ pub mod screenshot;
 pub mod settings;
 pub mod settings_view;
 pub mod shortcuts;
+pub mod signals;
+pub mod single_instance;
 pub mod version_history;
 pub mod welcome;
 pub mod window;
@@ -112,11 +118,11 @@ pub fn init(cx: &mut App) {
 /// and the shortcuts overlay list the categories.
 ///
 /// Three published commands are left out, because the app has the same
-/// thing under the same name and the palette should not list it twice:
+/// thing and the palette should not list it twice:
 ///
-/// - the Vim crate's "Toggle Vim mode": the app's
-///   [`actions::ToggleVimMode`] is the one bound to `cmd-alt-v` and the one
-///   that stores the setting;
+/// - the Vim crate's "Toggle Vim mode": the app's own toggle
+///   ([`actions::ToggleVimMode`], "Turn Vim mode on or off") is the one
+///   bound to `cmd-alt-v` and the one that stores the setting;
 /// - the library panel's "New document" and "New folder": the app's
 ///   [`actions::NewDocument`] (`cmd-n`) and [`actions::NewFolder`]
 ///   (`cmd-shift-n`) work from anywhere. The panel's own keys (`n`,

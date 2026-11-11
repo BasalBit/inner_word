@@ -29,7 +29,11 @@ fn init(cx: &mut TestAppContext) {
 fn field_window<'a>(
     cx: &'a mut TestAppContext,
     text: &str,
-) -> (Entity<TextField>, &'a mut VisualTestContext, Rc<RefCell<Vec<TextFieldEvent>>>) {
+) -> (
+    Entity<TextField>,
+    &'a mut VisualTestContext,
+    Rc<RefCell<Vec<TextFieldEvent>>>,
+) {
     init(cx);
     let text = text.to_string();
     let (field, cx) = cx.add_window_view(move |window, cx| {
@@ -140,7 +144,9 @@ fn text_field_select_all_and_clipboard(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-a cmd-c");
     assert_eq!(selection(&field, cx), 0..11);
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
         Some("draft title")
     );
     cx.simulate_input("New");
@@ -150,7 +156,9 @@ fn text_field_select_all_and_clipboard(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("alt-shift-left cmd-x");
     assert_eq!(text(&field, cx), "Newdraft ");
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
         Some("title")
     );
     // Multi-line clipboard text becomes one line.
@@ -160,7 +168,9 @@ fn text_field_select_all_and_clipboard(cx: &mut TestAppContext) {
     // Copy with an empty selection keeps the clipboard.
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
         Some("a\nb\r\nc")
     );
 }
@@ -237,7 +247,9 @@ fn text_field_ime_marked_text(cx: &mut TestAppContext) {
         // UTF-16 queries from the platform
         let mut adjusted = None;
         assert_eq!(
-            field.text_for_range(5..6, &mut adjusted, window, cx).as_deref(),
+            field
+                .text_for_range(5..6, &mut adjusted, window, cx)
+                .as_deref(),
             Some("家")
         );
         assert_eq!(
@@ -331,7 +343,10 @@ fn text_field_scrolls_horizontally(cx: &mut TestAppContext) {
     // 100 chars × 7.8px = 780px of text: scrolled so the caret is visible.
     assert!(scroll > px(500.), "scroll {scroll:?}");
     cx.simulate_keystrokes("cmd-left");
-    assert_eq!(field.read_with(cx, |field, _| field.scroll_offset()), px(0.));
+    assert_eq!(
+        field.read_with(cx, |field, _| field.scroll_offset()),
+        px(0.)
+    );
 }
 
 struct Narrow {
@@ -360,7 +375,10 @@ struct Names {
 impl Names {
     fn new(names: &[&str]) -> Self {
         Self {
-            names: names.iter().map(|n| SharedString::from(n.to_string())).collect(),
+            names: names
+                .iter()
+                .map(|n| SharedString::from(n.to_string()))
+                .collect(),
             with_headers: false,
             matches: Vec::new(),
             confirmed: Rc::default(),
@@ -439,7 +457,11 @@ impl PickerDelegate for Names {
 fn picker_window(
     cx: &mut TestAppContext,
     delegate: Names,
-) -> (Entity<Picker<Names>>, &mut VisualTestContext, Rc<Cell<usize>>) {
+) -> (
+    Entity<Picker<Names>>,
+    &mut VisualTestContext,
+    Rc<Cell<usize>>,
+) {
     init(cx);
     let (picker, cx) = cx.add_window_view(move |window, cx| Picker::modal(delegate, window, cx));
     let dismiss_events = Rc::new(Cell::new(0));
@@ -468,10 +490,12 @@ const DOCS: &[&str] = &[
 fn selected_label(picker: &Entity<Picker<Names>>, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| {
         let picker = picker.read(cx);
-        picker.selected_index().map(|ix| match picker.delegate.entry(ix, cx) {
-            PickerEntry::Item(item) => item.label.to_string(),
-            PickerEntry::Header(h) => format!("header {h}"),
-        })
+        picker
+            .selected_index()
+            .map(|ix| match picker.delegate.entry(ix, cx) {
+                PickerEntry::Item(item) => item.label.to_string(),
+                PickerEntry::Header(h) => format!("header {h}"),
+            })
     })
 }
 
@@ -481,11 +505,17 @@ fn picker_filters_and_navigates(cx: &mut TestAppContext) {
     assert_eq!(selected_label(&picker, cx).as_deref(), Some("Chapter one"));
 
     cx.simulate_keystrokes("down down");
-    assert_eq!(selected_label(&picker, cx).as_deref(), Some("Notes on style"));
+    assert_eq!(
+        selected_label(&picker, cx).as_deref(),
+        Some("Notes on style")
+    );
     cx.simulate_keystrokes("ctrl-p");
     assert_eq!(selected_label(&picker, cx).as_deref(), Some("Chapter two"));
     cx.simulate_keystrokes("ctrl-n ctrl-n");
-    assert_eq!(selected_label(&picker, cx).as_deref(), Some("Draft: opening"));
+    assert_eq!(
+        selected_label(&picker, cx).as_deref(),
+        Some("Draft: opening")
+    );
     cx.simulate_keystrokes("end");
     assert_eq!(selected_label(&picker, cx).as_deref(), Some("Outline"));
     cx.simulate_keystrokes("down"); // no wrap
@@ -503,7 +533,10 @@ fn picker_filters_and_navigates(cx: &mut TestAppContext) {
         assert_eq!(picker.query(cx), "ed");
         assert_eq!(picker.delegate.entry_count(), 1);
     });
-    assert_eq!(selected_label(&picker, cx).as_deref(), Some("Letter to the editor"));
+    assert_eq!(
+        selected_label(&picker, cx).as_deref(),
+        Some("Letter to the editor")
+    );
 
     // The query field still edits normally (left/right are not list keys).
     cx.simulate_keystrokes("left backspace");
@@ -571,11 +604,16 @@ fn picker_empty_state(cx: &mut TestAppContext) {
     picker.read_with(cx, |picker, cx| {
         assert_eq!(picker.delegate.entry_count(), 0);
         assert_eq!(picker.selected_index(), None);
-        assert_eq!(picker.delegate.empty_text(&picker.query(cx)), "No documents match “zzz”");
+        assert_eq!(
+            picker.delegate.empty_text(&picker.query(cx)),
+            "No documents match “zzz”"
+        );
     });
     // enter with nothing selected is a no-op
     cx.simulate_keystrokes("enter");
-    picker.read_with(cx, |picker, _| assert!(picker.delegate.confirmed.borrow().is_empty()));
+    picker.read_with(cx, |picker, _| {
+        assert!(picker.delegate.confirmed.borrow().is_empty())
+    });
 }
 
 #[gpui::test]
@@ -586,13 +624,20 @@ fn picker_large_list_is_virtualized(cx: &mut TestAppContext) {
     let calls = picker.read_with(cx, |picker, _| picker.delegate.entry_calls.clone());
     calls.set(0);
     cx.simulate_keystrokes("end");
-    picker.read_with(cx, |picker, _| assert_eq!(picker.selected_index(), Some(4999)));
+    picker.read_with(cx, |picker, _| {
+        assert_eq!(picker.selected_index(), Some(4999))
+    });
     // Only the visible rows (12) plus navigation lookups were built.
     assert!(calls.get() < 100, "entry() called {} times", calls.get());
     cx.simulate_keystrokes("pageup");
-    picker.read_with(cx, |picker, _| assert_eq!(picker.selected_index(), Some(4988)));
+    picker.read_with(cx, |picker, _| {
+        assert_eq!(picker.selected_index(), Some(4988))
+    });
     cx.simulate_input("4321");
-    assert_eq!(selected_label(&picker, cx).as_deref(), Some("Document 4321"));
+    assert_eq!(
+        selected_label(&picker, cx).as_deref(),
+        Some("Document 4321")
+    );
 }
 
 #[gpui::test]
@@ -607,7 +652,10 @@ fn picker_mouse_hover_and_click(cx: &mut TestAppContext) {
     let row_top = field_bounds.center().y + px(24. + 1. + 4.);
     let third_row = point(field_bounds.left() + px(40.), row_top + px(32. * 2. + 16.));
     cx.simulate_mouse_move(third_row, None, Modifiers::default());
-    assert_eq!(selected_label(&picker, cx).as_deref(), Some("Notes on style"));
+    assert_eq!(
+        selected_label(&picker, cx).as_deref(),
+        Some("Notes on style")
+    );
     cx.simulate_click(third_row, Modifiers::default());
     picker.read_with(cx, |picker, _| {
         assert_eq!(
@@ -623,9 +671,8 @@ fn picker_mouse_hover_and_click(cx: &mut TestAppContext) {
 #[gpui::test]
 fn picker_external_query(cx: &mut TestAppContext) {
     init(cx);
-    let (picker, cx) = cx.add_window_view(|window, cx| {
-        Picker::popup(Names::new(DOCS), window, cx).external_query()
-    });
+    let (picker, cx) = cx
+        .add_window_view(|window, cx| Picker::popup(Names::new(DOCS), window, cx).external_query());
     cx.run_until_parked();
     picker.update_in(cx, |picker, window, cx| {
         assert!(picker.query_field().is_none());
@@ -717,7 +764,9 @@ fn modal_layer_moves_and_restores_focus(cx: &mut TestAppContext) {
     // Confirming closes it too.
     cx.update(|window, cx| {
         layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| Picker::modal(Names::new(DOCS), window, cx));
+            layer.toggle(window, cx, |window, cx| {
+                Picker::modal(Names::new(DOCS), window, cx)
+            });
         })
     });
     cx.run_until_parked();
@@ -729,13 +778,17 @@ fn modal_layer_moves_and_restores_focus(cx: &mut TestAppContext) {
     // Programmatic dismiss and toggle.
     cx.update(|window, cx| {
         layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| Picker::modal(Names::new(DOCS), window, cx));
+            layer.toggle(window, cx, |window, cx| {
+                Picker::modal(Names::new(DOCS), window, cx)
+            });
         })
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
         layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| Picker::modal(Names::new(DOCS), window, cx));
+            layer.toggle(window, cx, |window, cx| {
+                Picker::modal(Names::new(DOCS), window, cx)
+            });
         })
     });
     cx.run_until_parked();
@@ -857,8 +910,9 @@ fn toasts_stack_and_expire(cx: &mut TestAppContext) {
 
     cx.executor().advance_clock(Duration::from_millis(600));
     cx.run_until_parked();
-    let left: Vec<String> =
-        toasts.read_with(cx, |layer, _| layer.toasts().map(|t| t.message.to_string()).collect());
+    let left: Vec<String> = toasts.read_with(cx, |layer, _| {
+        layer.toasts().map(|t| t.message.to_string()).collect()
+    });
     assert_eq!(left, vec!["Exported to ~/Essay.md", "Export failed"]);
 
     cx.executor().advance_clock(Duration::from_secs(5));
@@ -873,8 +927,9 @@ fn toasts_stack_and_expire(cx: &mut TestAppContext) {
             }
         })
     });
-    let shown: Vec<String> =
-        toasts.read_with(cx, |layer, _| layer.toasts().map(|t| t.message.to_string()).collect());
+    let shown: Vec<String> = toasts.read_with(cx, |layer, _| {
+        layer.toasts().map(|t| t.message.to_string()).collect()
+    });
     assert_eq!(shown, vec!["toast 6", "toast 7", "toast 8", "toast 9"]);
 }
 

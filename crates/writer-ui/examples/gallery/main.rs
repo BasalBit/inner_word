@@ -100,8 +100,16 @@ impl PickerDelegate for Commands {
             .into()
     }
 
-    fn confirm(&mut self, ix: usize, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) -> bool {
-        let action = self.commands[self.matches[ix].candidate_index].1.boxed_clone();
+    fn confirm(
+        &mut self,
+        ix: usize,
+        _: bool,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> bool {
+        let action = self.commands[self.matches[ix].candidate_index]
+            .1
+            .boxed_clone();
         // Deferred: runs after the palette closed and focus went back.
         window.dispatch_action(action, cx);
         true
@@ -125,7 +133,11 @@ struct Listing {
 
 impl Listing {
     fn header_count(&self) -> usize {
-        if self.query_empty && self.recent > 0 { 2 } else { 0 }
+        if self.query_empty && self.recent > 0 {
+            2
+        } else {
+            0
+        }
     }
 
     /// Entry index → match index (None for headers).
@@ -178,17 +190,31 @@ impl PickerDelegate for Listing {
         self.match_ix(ix).is_some()
     }
 
-    fn confirm(&mut self, ix: usize, secondary: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) -> bool {
-        let Some(m) = self.match_ix(ix) else { return false };
+    fn confirm(
+        &mut self,
+        ix: usize,
+        secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> bool {
+        let Some(m) = self.match_ix(ix) else {
+            return false;
+        };
         let label = self.items[self.matches[m].candidate_index].0.clone();
         let note = format!(
             "{} {label}{}",
             self.verb,
-            if secondary { " (secondary, cmd-enter)" } else { "" }
+            if secondary {
+                " (secondary, cmd-enter)"
+            } else {
+                ""
+            }
         );
         let gallery = self.gallery.clone();
         window.defer(cx, move |_, cx| {
-            gallery.update(cx, |gallery, cx| gallery.note(note, cx)).ok();
+            gallery
+                .update(cx, |gallery, cx| gallery.note(note, cx))
+                .ok();
         });
         true
     }
@@ -236,7 +262,13 @@ impl InsertMenu {
         if !self.sections {
             return ix;
         }
-        ix - if ix > 9 { 3 } else if ix > 5 { 2 } else { 1 }
+        ix - if ix > 9 {
+            3
+        } else if ix > 5 {
+            2
+        } else {
+            1
+        }
     }
 }
 
@@ -263,14 +295,23 @@ impl PickerDelegate for InsertMenu {
             "Page break" => KeyHint::parse("cmd-enter"),
             _ => None,
         };
-        PickerItem::new(name).positions(m.positions.clone()).key_hint(hint).into()
+        PickerItem::new(name)
+            .positions(m.positions.clone())
+            .key_hint(hint)
+            .into()
     }
 
     fn is_selectable(&self, ix: usize, _: &App) -> bool {
         self.header(ix).is_none()
     }
 
-    fn confirm(&mut self, ix: usize, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) -> bool {
+    fn confirm(
+        &mut self,
+        ix: usize,
+        _: bool,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> bool {
         let name = self.blocks[self.matches[self.match_ix(ix)].candidate_index].0;
         let gallery = self.gallery.clone();
         window.defer(cx, move |window, cx| {
@@ -314,9 +355,11 @@ struct Gallery {
 
 impl Gallery {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let title_field = cx.new(|cx| TextField::new(window, cx).with_placeholder("Document title"));
+        let title_field =
+            cx.new(|cx| TextField::new(window, cx).with_placeholder("Document title"));
         let filled_field = cx.new(|cx| {
-            TextField::new(window, cx).with_text("https://example.com/a-rather-long-link-that-scrolls-horizontally")
+            TextField::new(window, cx)
+                .with_text("https://example.com/a-rather-long-link-that-scrolls-horizontally")
         });
         let rename_field = cx.new(|cx| {
             TextField::new(window, cx)
@@ -349,17 +392,21 @@ impl Gallery {
             .max_visible_rows(7)
         });
         let subscriptions = vec![
-            cx.subscribe_in(&insert_field, window, |this, field, event, window, cx| match event {
-                TextFieldEvent::Changed => {
-                    let query = field.read(cx).text().to_string();
-                    this.insert_menu
-                        .update(cx, |menu, cx| menu.set_query(query, window, cx));
-                }
-                TextFieldEvent::Submitted => {
-                    this.insert_menu.update(cx, |menu, cx| menu.confirm(false, window, cx))
-                }
-                _ => {}
-            }),
+            cx.subscribe_in(
+                &insert_field,
+                window,
+                |this, field, event, window, cx| match event {
+                    TextFieldEvent::Changed => {
+                        let query = field.read(cx).text().to_string();
+                        this.insert_menu
+                            .update(cx, |menu, cx| menu.set_query(query, window, cx));
+                    }
+                    TextFieldEvent::Submitted => this
+                        .insert_menu
+                        .update(cx, |menu, cx| menu.confirm(false, window, cx)),
+                    _ => {}
+                },
+            ),
             cx.subscribe_in(&rename_field, window, |this, field, event, _, cx| {
                 if matches!(event, TextFieldEvent::Submitted | TextFieldEvent::Blurred) {
                     let name = field.read(cx).text().to_string();
@@ -401,8 +448,10 @@ impl Gallery {
     }
 
     fn reset_insert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.insert_field.update(cx, |field, cx| field.set_text("", cx));
-        self.insert_menu.update(cx, |menu, cx| menu.set_query("", window, cx));
+        self.insert_field
+            .update(cx, |field, cx| field.set_text("", cx));
+        self.insert_menu
+            .update(cx, |menu, cx| menu.set_query("", window, cx));
     }
 
     fn toggle_theme(&mut self, _: &ToggleTheme, _: &mut Window, cx: &mut Context<Self>) {
@@ -417,12 +466,20 @@ impl Gallery {
 
     fn open_palette(&mut self, _: &OpenPalette, window: &mut Window, cx: &mut Context<Self>) {
         self.modal_layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| Picker::modal(Commands::new(), window, cx))
+            layer.toggle(window, cx, |window, cx| {
+                Picker::modal(Commands::new(), window, cx)
+            })
         });
     }
 
     fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
-        let folders = ["Drafts", "Essays", "Book/Part one", "Book/Part two", "Notes"];
+        let folders = [
+            "Drafts",
+            "Essays",
+            "Book/Part one",
+            "Book/Part two",
+            "Notes",
+        ];
         let items = (0..3000)
             .map(|i| {
                 (
@@ -488,7 +545,9 @@ impl Gallery {
                     .ok();
             })
             .on_cancel(move |_, cx| {
-                cancelled.update(cx, |g, cx| g.note("Delete cancelled", cx)).ok();
+                cancelled
+                    .update(cx, |g, cx| g.note("Delete cancelled", cx))
+                    .ok();
             })
         });
         ConfirmDialog::show(dialog, &self.modal_layer, window, cx);
@@ -496,7 +555,7 @@ impl Gallery {
 
     fn show_toast(&mut self, _: &ShowToast, _: &mut Window, cx: &mut Context<Self>) {
         self.exports += 1;
-        let toast = if self.exports % 3 == 0 {
+        let toast = if self.exports.is_multiple_of(3) {
             Toast::new("Export failed: the folder is read-only").error()
         } else {
             Toast::new(format!("Exported to ~/Documents/Essay {}.md", self.exports)).success()
@@ -570,8 +629,15 @@ impl Render for Gallery {
                     .border_color(colors.hairline)
                     .child(Icon::new(IconName::Search))
                     .child(div().flex_1().child(self.find_field.clone()))
-                    .child(div().text_size(UI_TEXT_SM).text_color(colors.muted).child("3 of 12"))
-                    .child(Button::icon_only("find-close", IconName::Close).size(ButtonSize::Compact)),
+                    .child(
+                        div()
+                            .text_size(UI_TEXT_SM)
+                            .text_color(colors.muted)
+                            .child("3 of 12"),
+                    )
+                    .child(
+                        Button::icon_only("find-close", IconName::Close).size(ButtonSize::Compact),
+                    ),
             );
 
         let buttons = Self::card("Buttons", cx)
@@ -628,7 +694,11 @@ impl Render for Gallery {
                             })),
                     )
                     .child(Button::new("disabled", "Disabled").disabled(true))
-                    .child(Button::new("selected", "Active filter").selected(true).size(ButtonSize::Compact))
+                    .child(
+                        Button::new("selected", "Active filter")
+                            .selected(true)
+                            .size(ButtonSize::Compact),
+                    )
                     .child(Button::icon_only("add", IconName::Plus))
                     .child(Button::icon_only("more", IconName::More))
                     .child(Button::new("ghost", "Ghost").variant(ButtonVariant::Ghost)),
@@ -687,50 +757,62 @@ impl Render for Gallery {
                 .children(hint)
         };
         let hints = Self::card("Key hints (from the keymap)", cx)
-            .child(hint_row("Command palette", KeyHint::for_action(&OpenPalette, cx)))
-            .child(hint_row("Toggle theme", KeyHint::for_action(&ToggleTheme, cx)))
-            .child(hint_row("Undo in a field", KeyHint::for_action(&writer_ui::text_field::Undo, cx)))
+            .child(hint_row(
+                "Command palette",
+                KeyHint::for_action(&OpenPalette, cx),
+            ))
+            .child(hint_row(
+                "Toggle theme",
+                KeyHint::for_action(&ToggleTheme, cx),
+            ))
+            .child(hint_row(
+                "Undo in a field",
+                KeyHint::for_action(&writer_ui::text_field::Undo, cx),
+            ))
             .child(hint_row(
                 "Delete word",
                 KeyHint::for_action(&writer_ui::text_field::DeleteWordLeft, cx)
                     .map(|h| h.style(KeyHintStyle::Boxed)),
             ))
-            .child(hint_row("Chord (parsed)", KeyHint::parse("ctrl-x ctrl-s").map(KeyHint::boxed)))
+            .child(hint_row(
+                "Chord (parsed)",
+                KeyHint::parse("ctrl-x ctrl-s").map(KeyHint::boxed),
+            ))
             .child(hint_row(
                 "Every glyph",
-                KeyHint::parse("ctrl-alt-shift-cmd-enter backspace delete escape tab up down left right"),
+                KeyHint::parse(
+                    "ctrl-alt-shift-cmd-enter backspace delete escape tab up down left right",
+                ),
             ));
 
-        let icons = Self::card("Icons", cx).child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(4.))
-                .children(IconName::ALL.iter().map(|icon| {
-                    div()
-                        .w(px(92.))
-                        .h(px(52.))
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(6.))
-                        .rounded(px(6.))
-                        .hover(|s| s.bg(colors.hover))
-                        .child(Icon::new(*icon).color(colors.ink))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(colors.muted)
-                                .child(icon.name()),
-                        )
-                })),
-        );
+        let icons = Self::card("Icons", cx).child(div().flex().flex_wrap().gap(px(4.)).children(
+            IconName::ALL.iter().map(|icon| {
+                div()
+                    .w(px(92.))
+                    .h(px(52.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .rounded(px(6.))
+                    .hover(|s| s.bg(colors.hover))
+                    .child(Icon::new(*icon).color(colors.ink))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child(icon.name()),
+                    )
+            }),
+        ));
 
         let insert_field = self.insert_field.clone();
         let menu = self.insert_menu.clone();
         let insert = Self::card("Insert menu (popup picker, external query)", cx)
-            .child(caption("Type here; up/down/ctrl-n/ctrl-p move, enter inserts, escape clears"))
+            .child(caption(
+                "Type here; up/down/ctrl-n/ctrl-p move, enter inserts, escape clears",
+            ))
             .child(
                 div()
                     .key_context(picker::KEY_CONTEXT)
@@ -767,16 +849,44 @@ impl Render for Gallery {
             .child(self.insert_menu.clone());
 
         let overlays = Self::card("Overlays", cx)
-            .child(caption("Each opens in the modal layer; escape returns focus here"))
+            .child(caption(
+                "Each opens in the modal layer; escape returns focus here",
+            ))
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap(px(8.))
-                    .child(Button::new("o-palette", "Command palette").key_hint(KeyHint::for_action(&OpenPalette, cx)).on_click(cx.listener(|this, _, w, cx| this.open_palette(&OpenPalette, w, cx))))
-                    .child(Button::new("o-open", "Quick open").key_hint(KeyHint::for_action(&QuickOpen, cx)).on_click(cx.listener(|this, _, w, cx| this.quick_open(&QuickOpen, w, cx))))
-                    .child(Button::new("o-confirm", "Confirm dialog").key_hint(KeyHint::for_action(&ConfirmDelete, cx)).on_click(cx.listener(|this, _, w, cx| this.confirm_delete(&ConfirmDelete, w, cx))))
-                    .child(Button::new("o-toast", "Toast").key_hint(KeyHint::for_action(&ShowToast, cx)).on_click(cx.listener(|this, _, w, cx| this.show_toast(&ShowToast, w, cx)))),
+                    .child(
+                        Button::new("o-palette", "Command palette")
+                            .key_hint(KeyHint::for_action(&OpenPalette, cx))
+                            .on_click(
+                                cx.listener(|this, _, w, cx| {
+                                    this.open_palette(&OpenPalette, w, cx)
+                                }),
+                            ),
+                    )
+                    .child(
+                        Button::new("o-open", "Quick open")
+                            .key_hint(KeyHint::for_action(&QuickOpen, cx))
+                            .on_click(
+                                cx.listener(|this, _, w, cx| this.quick_open(&QuickOpen, w, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("o-confirm", "Confirm dialog")
+                            .key_hint(KeyHint::for_action(&ConfirmDelete, cx))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.confirm_delete(&ConfirmDelete, w, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("o-toast", "Toast")
+                            .key_hint(KeyHint::for_action(&ShowToast, cx))
+                            .on_click(
+                                cx.listener(|this, _, w, cx| this.show_toast(&ShowToast, w, cx)),
+                            ),
+                    ),
             )
             .child(Divider::horizontal())
             .child(

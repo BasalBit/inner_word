@@ -111,7 +111,9 @@ impl RenderOnce for SegmentedControl {
             .bg(colors.hover)
             .border_1()
             .border_color(colors.hairline)
-            .when(focused, |el| el.border_color(colors.accent).shadow(ring.clone()))
+            .when(focused, |el| {
+                el.border_color(colors.accent).shadow(ring.clone())
+            })
             .focus({
                 let accent = colors.accent;
                 move |style| style.border_color(accent).shadow(ring)
@@ -146,10 +148,16 @@ impl RenderOnce for SegmentedControl {
                     .cursor_pointer()
                     .map(|el| {
                         if is_selected {
-                            el.bg(colors.elevated)
-                                .text_color(colors.ink)
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .shadow(cx.theme().shadow_popover())
+                            // On Night the elevated surface is too close to
+                            // the track; use the stronger border tone.
+                            el.bg(if colors.appearance.is_dark() {
+                                colors.border_strong
+                            } else {
+                                colors.page
+                            })
+                            .text_color(colors.ink)
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .shadow(cx.theme().shadow_popover())
                         } else {
                             el.text_color(colors.muted)
                                 .hover(|style| style.text_color(colors.ink))

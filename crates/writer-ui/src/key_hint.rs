@@ -164,7 +164,11 @@ impl KeyHint {
     /// The highest-precedence binding for `action` that would fire if
     /// `focus` were focused (respects key contexts). Uses the last rendered
     /// frame, so `focus` must have been rendered.
-    pub fn for_action_in(action: &dyn Action, focus: &FocusHandle, window: &Window) -> Option<Self> {
+    pub fn for_action_in(
+        action: &dyn Action,
+        focus: &FocusHandle,
+        window: &Window,
+    ) -> Option<Self> {
         window
             .highest_precedence_binding_for_action_in(action, focus)
             .map(|binding| Self::from_binding(&binding))

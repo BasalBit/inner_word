@@ -279,7 +279,10 @@ mod tests {
         assert!(fuzzy_match("abc", "a b c").is_some());
         assert!(fuzzy_match("acb", "abc").is_none());
         assert!(fuzzy_match("x", "").is_none());
-        assert_eq!(fuzzy_match("", "anything").unwrap().positions, Vec::<usize>::new());
+        assert_eq!(
+            fuzzy_match("", "anything").unwrap().positions,
+            Vec::<usize>::new()
+        );
     }
 
     #[test]
@@ -311,7 +314,10 @@ mod tests {
 
     #[test]
     fn whitespace_in_query_is_ignored() {
-        assert_eq!(positions("new doc", "New document"), Some(vec![0, 1, 2, 4, 5, 6]));
+        assert_eq!(
+            positions("new doc", "New document"),
+            Some(vec![0, 1, 2, 4, 5, 6])
+        );
     }
 
     #[test]
@@ -355,6 +361,10 @@ mod tests {
         let ranked = match_strings("dcf", candidates.iter().map(String::as_str), usize::MAX);
         assert_eq!(ranked.len(), 5000);
         // Generous bound for debug builds on a busy machine.
-        assert!(started.elapsed().as_millis() < 2000, "{:?}", started.elapsed());
+        assert!(
+            started.elapsed().as_millis() < 2000,
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

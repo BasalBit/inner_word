@@ -89,7 +89,12 @@ impl ModalLayer {
     }
 
     /// Shows `view` near the top of the window and focuses it.
-    pub fn show<V: ManagedView>(&mut self, view: Entity<V>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn show<V: ManagedView>(
+        &mut self,
+        view: Entity<V>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_with_placement(view, ModalPlacement::Top, window, cx);
     }
 
@@ -107,9 +112,10 @@ impl ModalLayer {
             Some(active) => active.previous_focus,
             None => window.focused(cx).map(|handle| handle.downgrade()),
         };
-        let subscription = cx.subscribe_in(&view, window, |this, _, _: &DismissEvent, window, cx| {
-            this.dismiss(window, cx);
-        });
+        let subscription =
+            cx.subscribe_in(&view, window, |this, _, _: &DismissEvent, window, cx| {
+                this.dismiss(window, cx);
+            });
         let focus = view.focus_handle(cx);
         self.active = Some(ActiveModal {
             view: view.into(),
@@ -198,12 +204,7 @@ impl Render for ModalLayer {
                 ModalPlacement::Center => el.justify_center(),
             })
             .px(px(16.))
-            .child(
-                div()
-                    .occlude()
-                    .max_w_full()
-                    .child(active.view.clone()),
-            )
+            .child(div().occlude().max_w_full().child(active.view.clone()))
             .into_any_element()
     }
 }

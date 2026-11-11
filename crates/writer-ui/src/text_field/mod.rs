@@ -69,9 +69,7 @@ use gpui::{
     Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::*, px,
 };
 
-use crate::theme::{
-    ActiveTheme, RADIUS_MD, RADIUS_SM, UI_LINE_HEIGHT, UI_TEXT_BASE, focus_ring,
-};
+use crate::theme::{ActiveTheme, RADIUS_MD, RADIUS_SM, UI_LINE_HEIGHT, UI_TEXT_BASE, focus_ring};
 use boundaries::*;
 use element::TextFieldElement;
 use history::{EditKind, History, Snapshot};
@@ -155,33 +153,35 @@ actions!(
 pub fn key_bindings() -> Vec<KeyBinding> {
     let c = Some(KEY_CONTEXT);
     vec![
-        KeyBinding::new("backspace", Backspace, c),
-        KeyBinding::new("shift-backspace", Backspace, c),
+        // Alternatives first, the canonical key last: the last binding is
+        // the one KeyHint::for_action shows.
         KeyBinding::new("ctrl-h", Backspace, c),
-        KeyBinding::new("delete", Delete, c),
+        KeyBinding::new("shift-backspace", Backspace, c),
+        KeyBinding::new("backspace", Backspace, c),
         KeyBinding::new("ctrl-d", Delete, c),
-        KeyBinding::new("alt-backspace", DeleteWordLeft, c),
+        KeyBinding::new("delete", Delete, c),
         KeyBinding::new("ctrl-w", DeleteWordLeft, c),
+        KeyBinding::new("alt-backspace", DeleteWordLeft, c),
         KeyBinding::new("alt-delete", DeleteWordRight, c),
         KeyBinding::new("cmd-backspace", DeleteToLineStart, c),
-        KeyBinding::new("cmd-delete", DeleteToLineEnd, c),
         KeyBinding::new("ctrl-k", DeleteToLineEnd, c),
-        KeyBinding::new("left", Left, c),
+        KeyBinding::new("cmd-delete", DeleteToLineEnd, c),
         KeyBinding::new("ctrl-b", Left, c),
-        KeyBinding::new("right", Right, c),
+        KeyBinding::new("left", Left, c),
         KeyBinding::new("ctrl-f", Right, c),
+        KeyBinding::new("right", Right, c),
         KeyBinding::new("alt-left", WordLeft, c),
         KeyBinding::new("alt-right", WordRight, c),
-        KeyBinding::new("cmd-left", LineStart, c),
         KeyBinding::new("ctrl-a", LineStart, c),
         KeyBinding::new("cmd-up", LineStart, c),
-        KeyBinding::new("cmd-right", LineEnd, c),
+        KeyBinding::new("cmd-left", LineStart, c),
         KeyBinding::new("ctrl-e", LineEnd, c),
         KeyBinding::new("cmd-down", LineEnd, c),
-        KeyBinding::new("up", Up, c),
+        KeyBinding::new("cmd-right", LineEnd, c),
         KeyBinding::new("ctrl-p", Up, c),
-        KeyBinding::new("down", Down, c),
+        KeyBinding::new("up", Up, c),
         KeyBinding::new("ctrl-n", Down, c),
+        KeyBinding::new("down", Down, c),
         KeyBinding::new("pageup", PageUp, c),
         KeyBinding::new("pagedown", PageDown, c),
         KeyBinding::new("home", Home, c),
@@ -190,19 +190,19 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-right", SelectRight, c),
         KeyBinding::new("alt-shift-left", SelectWordLeft, c),
         KeyBinding::new("alt-shift-right", SelectWordRight, c),
-        KeyBinding::new("cmd-shift-left", SelectToLineStart, c),
         KeyBinding::new("shift-up", SelectToLineStart, c),
         KeyBinding::new("shift-home", SelectToLineStart, c),
         KeyBinding::new("cmd-shift-up", SelectToLineStart, c),
-        KeyBinding::new("cmd-shift-right", SelectToLineEnd, c),
+        KeyBinding::new("cmd-shift-left", SelectToLineStart, c),
         KeyBinding::new("shift-down", SelectToLineEnd, c),
         KeyBinding::new("shift-end", SelectToLineEnd, c),
         KeyBinding::new("cmd-shift-down", SelectToLineEnd, c),
+        KeyBinding::new("cmd-shift-right", SelectToLineEnd, c),
         KeyBinding::new("cmd-a", SelectAll, c),
         KeyBinding::new("cmd-c", Copy, c),
         KeyBinding::new("cmd-x", Cut, c),
-        KeyBinding::new("cmd-v", Paste, c),
         KeyBinding::new("cmd-shift-v", Paste, c),
+        KeyBinding::new("cmd-v", Paste, c),
         KeyBinding::new("cmd-z", Undo, c),
         KeyBinding::new("cmd-shift-z", Redo, c),
         KeyBinding::new("enter", Submit, c),
@@ -408,7 +408,11 @@ impl TextField {
         self.replace(range, text, EditKind::Other, cx);
     }
 
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.placeholder = placeholder.into();
         cx.notify();
     }
@@ -867,7 +871,12 @@ impl TextField {
         clamp_to_grapheme(&self.text, line.closest_index_for_x(x))
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle);
         // Clicking while composing commits the composition as typed.
         self.marked = None;
@@ -1132,7 +1141,11 @@ impl Render for TextField {
             .font_family(theme.fonts.ui.clone())
             .text_size(self.text_size)
             .line_height(line_height)
-            .text_color(if self.disabled { colors.faint } else { colors.ink });
+            .text_color(if self.disabled {
+                colors.faint
+            } else {
+                colors.ink
+            });
 
         let styled = match appearance {
             FieldAppearance::Bordered => base

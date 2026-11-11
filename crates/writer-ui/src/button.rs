@@ -175,7 +175,10 @@ impl Button {
         self
     }
 
-    pub fn on_click(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_click = Some(Rc::new(handler));
         self
     }
@@ -194,10 +197,30 @@ impl RenderOnce for Button {
         };
         let icon_only = self.label.is_none();
         let (bg, fg, border, hover_bg) = match self.variant {
-            ButtonVariant::Primary => (colors.accent, colors.on_accent, colors.accent, colors.accent_hover),
-            ButtonVariant::Danger => (colors.danger, colors.on_accent, colors.danger, colors.danger.opacity(0.88)),
-            ButtonVariant::Subtle => (colors.elevated, colors.ink, colors.border_strong, colors.hover),
-            ButtonVariant::Ghost => (gpui::transparent_black(), colors.ink, gpui::transparent_black(), colors.hover),
+            ButtonVariant::Primary => (
+                colors.accent,
+                colors.on_accent,
+                colors.accent,
+                colors.accent_hover,
+            ),
+            ButtonVariant::Danger => (
+                colors.danger,
+                colors.on_accent,
+                colors.danger,
+                colors.danger.opacity(0.88),
+            ),
+            ButtonVariant::Subtle => (
+                colors.elevated,
+                colors.ink,
+                colors.border_strong,
+                colors.hover,
+            ),
+            ButtonVariant::Ghost => (
+                gpui::transparent_black(),
+                colors.ink,
+                gpui::transparent_black(),
+                colors.hover,
+            ),
         };
         let (bg, border) = if self.selected {
             (colors.accent_subtle, colors.accent)
@@ -205,8 +228,18 @@ impl RenderOnce for Button {
             (bg, border)
         };
         let filled = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Danger);
-        let hint_color = if filled { fg.opacity(0.8) } else { colors.muted };
-        let icon_color = if filled { fg } else if icon_only { colors.muted } else { colors.ink };
+        let hint_color = if filled {
+            fg.opacity(0.8)
+        } else {
+            colors.muted
+        };
+        let icon_color = if filled {
+            fg
+        } else if icon_only {
+            colors.muted
+        } else {
+            colors.ink
+        };
         let disabled = self.disabled;
         let on_click = self.on_click.clone();
         let on_press = self.on_click;
@@ -216,6 +249,8 @@ impl RenderOnce for Button {
             .key_context(KEY_CONTEXT)
             .map(|el| match &self.focus_handle {
                 Some(handle) => el.track_focus(handle),
+                // Disabled buttons are skipped by tab navigation.
+                None if disabled => el,
                 None => el.tab_index(self.tab_index),
             })
             .flex()

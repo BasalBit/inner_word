@@ -144,13 +144,20 @@ impl Element for TextFieldElement {
         }
         let max_scroll = (line.width + CARET_WIDTH - width).max(px(0.));
         scroll_x = scroll_x.clamp(px(0.), max_scroll);
+        // Like AppKit, an unfocused field shows the start of its text.
+        if !focused {
+            scroll_x = px(0.);
+        }
 
         let left = bounds.left() - scroll_x;
         let selection = (!field.selection.is_empty()).then(|| {
             fill(
                 Bounds::from_corners(
                     point(left + line.x_for_index(field.selection.start), bounds.top()),
-                    point(left + line.x_for_index(field.selection.end), bounds.bottom()),
+                    point(
+                        left + line.x_for_index(field.selection.end),
+                        bounds.bottom(),
+                    ),
                 ),
                 if focused {
                     colors.selection
@@ -213,7 +220,9 @@ impl Element for TextFieldElement {
                 window.paint_quad(selection);
             }
             if let Some(placeholder) = prepaint.placeholder.as_ref() {
-                placeholder.paint(bounds.origin, line_height, window, cx).ok();
+                placeholder
+                    .paint(bounds.origin, line_height, window, cx)
+                    .ok();
             } else {
                 prepaint.line.paint(origin, line_height, window, cx).ok();
             }

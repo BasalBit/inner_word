@@ -38,7 +38,7 @@
 //! Section headers are entries too ([`PickerEntry::Header`]); navigation
 //! skips them. Lists of thousands of entries are fine: only visible rows are
 //! built (`uniform_list`), so `entry` is called for about a screenful of
-//! rows per frame. Keep `update_matches` synchronous; [`fuzzy::match_strings`]
+//! rows per frame. Keep `update_matches` synchronous; [`crate::fuzzy::match_strings`]
 //! filters several thousand candidates in a few milliseconds.
 //!
 //! # Presentations
@@ -116,16 +116,16 @@ actions!(
 pub fn key_bindings() -> Vec<KeyBinding> {
     let c = Some(KEY_CONTEXT);
     vec![
-        KeyBinding::new("up", SelectPrev, c),
         KeyBinding::new("ctrl-p", SelectPrev, c),
-        KeyBinding::new("down", SelectNext, c),
+        KeyBinding::new("up", SelectPrev, c),
         KeyBinding::new("ctrl-n", SelectNext, c),
+        KeyBinding::new("down", SelectNext, c),
         KeyBinding::new("pageup", SelectPageUp, c),
         KeyBinding::new("pagedown", SelectPageDown, c),
-        KeyBinding::new("home", SelectFirst, c),
         KeyBinding::new("cmd-up", SelectFirst, c),
-        KeyBinding::new("end", SelectLast, c),
+        KeyBinding::new("home", SelectFirst, c),
         KeyBinding::new("cmd-down", SelectLast, c),
+        KeyBinding::new("end", SelectLast, c),
         KeyBinding::new("enter", Confirm, c),
         KeyBinding::new("cmd-enter", SecondaryConfirm, c),
         KeyBinding::new("escape", Dismiss, c),
@@ -315,16 +315,19 @@ impl<D: PickerDelegate> Picker<D> {
             field.set_list_navigation(true);
             field
         });
-        let subscription = cx.subscribe_in(&field, window, |this, field, event, window, cx| {
-            match event {
-                TextFieldEvent::Changed => {
-                    let query = field.read(cx).text().to_string();
-                    this.run_query(&query, window, cx);
-                }
-                TextFieldEvent::Submitted => this.confirm(false, window, cx),
-                _ => {}
-            }
-        });
+        let subscription =
+            cx.subscribe_in(
+                &field,
+                window,
+                |this, field, event, window, cx| match event {
+                    TextFieldEvent::Changed => {
+                        let query = field.read(cx).text().to_string();
+                        this.run_query(&query, window, cx);
+                    }
+                    TextFieldEvent::Submitted => this.confirm(false, window, cx),
+                    _ => {}
+                },
+            );
         let mut picker = Self {
             delegate,
             presentation,
@@ -384,7 +387,12 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     /// Replaces the query and refilters (works with and without a field).
-    pub fn set_query(&mut self, query: impl Into<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_query(
+        &mut self,
+        query: impl Into<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let query = query.into();
         match &self.query_field {
             Some(field) => field.update(cx, |field, cx| field.set_text(query.clone(), cx)),
@@ -504,8 +512,7 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     pub fn select_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let last = self
-            .prev_selectable(self.delegate.entry_count().saturating_sub(1), cx);
+        let last = self.prev_selectable(self.delegate.entry_count().saturating_sub(1), cx);
         self.select(last, ScrollStrategy::Bottom, window, cx);
     }
 
@@ -514,7 +521,8 @@ impl<D: PickerDelegate> Picker<D> {
         if count == 0 {
             return;
         }
-        let target = (self.selected.unwrap_or(0) + self.max_rows.saturating_sub(1).max(1)).min(count - 1);
+        let target =
+            (self.selected.unwrap_or(0) + self.max_rows.saturating_sub(1).max(1)).min(count - 1);
         let ix = self
             .next_selectable(target, cx)
             .or_else(|| self.prev_selectable(target, cx));
@@ -637,14 +645,12 @@ impl<D: PickerDelegate> Picker<D> {
                                             .items_center()
                                             .gap(px(8.))
                                             .overflow_hidden()
-                                            .child(
-                                                div().flex_none().max_w(relative_full()).child(
-                                                    HighlightedLabel::new(
-                                                        item.label,
-                                                        item.label_positions,
-                                                    ),
+                                            .child(div().flex_none().max_w(relative_full()).child(
+                                                HighlightedLabel::new(
+                                                    item.label,
+                                                    item.label_positions,
                                                 ),
-                                            )
+                                            ))
                                             .when_some(item.detail, |el, detail| {
                                                 el.child(
                                                     div().flex_1().min_w_0().child(
@@ -758,7 +764,9 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .text_size(UI_TEXT_BASE)
             .line_height(px(18.))
             .text_color(colors.ink)
-            .when_some(query_row, |el, row| el.child(row).child(Divider::horizontal()))
+            .when_some(query_row, |el, row| {
+                el.child(row).child(Divider::horizontal())
+            })
             .map(|el| {
                 if count == 0 {
                     el.child(

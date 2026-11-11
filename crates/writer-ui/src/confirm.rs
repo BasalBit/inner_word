@@ -140,7 +140,12 @@ impl ConfirmDialog {
     }
 
     /// Shows `dialog` centred in `layer`.
-    pub fn show(dialog: Entity<Self>, layer: &Entity<ModalLayer>, window: &mut Window, cx: &mut App) {
+    pub fn show(
+        dialog: Entity<Self>,
+        layer: &Entity<ModalLayer>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         layer.update(cx, |layer, cx| {
             layer.show_with_placement(dialog, ModalPlacement::Center, window, cx)
         });

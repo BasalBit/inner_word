@@ -25,8 +25,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, FocusHandle, KeyBinding, MouseButton, SharedString, Window, div, prelude::*,
-    px,
+    App, ElementId, FocusHandle, KeyBinding, MouseButton, SharedString, Window, div, prelude::*, px,
 };
 
 use crate::{
@@ -84,7 +83,11 @@ impl ToggleRow {
 
         let control = match self.kind {
             Kind::Switch => {
-                let track = if checked { colors.accent } else { colors.border_strong };
+                let track = if checked {
+                    colors.accent
+                } else {
+                    colors.border_strong
+                };
                 div()
                     .flex_none()
                     .w(px(30.))
@@ -98,7 +101,11 @@ impl ToggleRow {
                         div()
                             .size(px(14.))
                             .rounded_full()
-                            .bg(if checked { colors.on_accent } else { colors.page })
+                            .bg(if colors.appearance.is_dark() {
+                                colors.ink
+                            } else {
+                                colors.page
+                            })
                             .shadow(cx.theme().shadow_popover()),
                     )
                     .into_any_element()
@@ -108,13 +115,21 @@ impl ToggleRow {
                 .size(px(16.))
                 .rounded(RADIUS_SM)
                 .border_1()
-                .border_color(if checked { colors.accent } else { colors.border_strong })
+                .border_color(if checked {
+                    colors.accent
+                } else {
+                    colors.border_strong
+                })
                 .bg(if checked { colors.accent } else { colors.page })
                 .flex()
                 .items_center()
                 .justify_center()
                 .when(checked, |el| {
-                    el.child(Icon::new(IconName::Check).size(px(12.)).color(colors.on_accent))
+                    el.child(
+                        Icon::new(IconName::Check)
+                            .size(px(12.))
+                            .color(colors.on_accent),
+                    )
                 })
                 .into_any_element(),
         };

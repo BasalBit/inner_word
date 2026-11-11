@@ -39,9 +39,9 @@ fn parse(source: &str) -> Result<Vec<Step>> {
                     .collect::<Result<_>>()?,
             ),
             "type" => Step::Type(arg.replace("\\s", " ")),
-            "theme" => Step::Theme(
-                ThemeMode::parse(arg).ok_or_else(|| anyhow!("unknown theme {arg:?}"))?,
-            ),
+            "theme" => {
+                Step::Theme(ThemeMode::parse(arg).ok_or_else(|| anyhow!("unknown theme {arg:?}"))?)
+            }
             "screenshot" => Step::Screenshot(PathBuf::from(arg.trim())),
             "log" => Step::Log(arg.to_string()),
             "quit" => Step::Quit,
@@ -93,7 +93,9 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             let handled = window
                                 .update(cx, |_, window, cx| window.dispatch_keystroke(key, cx))?;
                             eprintln!("[automation] keys {text}: handled={handled}");
-                            cx.background_executor().timer(Duration::from_millis(60)).await;
+                            cx.background_executor()
+                                .timer(Duration::from_millis(60))
+                                .await;
                         }
                     }
                     Step::Type(text) => {
@@ -102,15 +104,21 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                                 window.dispatch_keystroke(keystroke_for_char(ch), cx);
                             })?;
                         }
-                        cx.background_executor().timer(Duration::from_millis(60)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(60))
+                            .await;
                     }
                     Step::Theme(mode) => {
                         cx.update(|cx| theme::set_theme_mode(mode, cx))?;
-                        cx.background_executor().timer(Duration::from_millis(60)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(60))
+                            .await;
                     }
                     Step::Screenshot(path) => {
                         window.update(cx, |_, window, _| window.refresh())?;
-                        cx.background_executor().timer(Duration::from_millis(300)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(300))
+                            .await;
                         let number = window.update(cx, |_, window, _| window_number(window))??;
                         cx.background_executor()
                             .spawn(async move { capture(number, &path) })

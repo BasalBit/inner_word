@@ -24,10 +24,15 @@ pub enum EditorEvent {
     },
     /// The selection differs from the one before the mutation.
     SelectionChanged,
-    /// The editor's focus handle became focused (window active).
+    /// The keyboard came to the editor from outside (in an active
+    /// window): to its text, or straight into its popup. Not emitted when
+    /// focus returns from the popup to the text.
     Focused,
-    /// The editor's focus handle lost focus. Also emitted when focus moves
-    /// into the editor's own popup (see [`crate::Editor::show_popup`]).
+    /// The keyboard left the editor: neither its text nor anything in its
+    /// popup (see [`crate::Editor::show_popup`]) is focused any more, or
+    /// the window was deactivated. Not emitted when focus only moves from
+    /// the text into the popup; [`crate::Editor::popup_focused`] and
+    /// [`crate::Editor::is_focused`] tell the two places apart.
     Blurred,
     /// The document settings changed (page setup, typography, page view).
     /// Settings are saved with the document, so autosave listens to this

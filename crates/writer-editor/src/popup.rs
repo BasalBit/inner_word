@@ -18,6 +18,11 @@
 //! view that takes focus (a link field) gets its keys without the editor's
 //! bindings interfering; a view that leaves focus in the editor (a menu) is
 //! driven through [`crate::Editor::intercept_keys`].
+//!
+//! Focus inside the popup still counts as focus in the editor for
+//! [`crate::EditorEvent::Focused`] and [`crate::EditorEvent::Blurred`]:
+//! moving the keyboard from the text into the popup or back emits neither
+//! ([`Editor::popup_focused`] tells where it is).
 
 use gpui::{
     AnyView, App, AvailableSpace, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
@@ -107,6 +112,15 @@ impl Editor {
     /// Whether a popup is showing.
     pub fn has_popup(&self) -> bool {
         self.popup.is_some()
+    }
+
+    /// Whether the keyboard is inside the showing popup (something in its
+    /// view is focused). The editor's own focus handle is then not
+    /// focused ([`Editor::is_focused`] is false), but the editor does not
+    /// count as blurred: [`crate::EditorEvent::Blurred`] is only emitted
+    /// when the keyboard leaves both the text and the popup.
+    pub fn popup_focused(&self, window: &Window, cx: &App) -> bool {
+        self.popup.is_some() && self.popup_scope.contains_focused(window, cx)
     }
 
     /// The view shown as the popup, if any (compare its `entity_id()` to
@@ -236,6 +250,11 @@ impl Element for PopupElement {
             return;
         };
         let placement = popup.placement;
+        // The popup is drawn later, as a child of this element in the
+        // focus tree. Giving this element a focus handle of its own lets
+        // the editor ask "is the keyboard in my popup?" whatever the view
+        // is made of.
+        window.set_focus_handle(&editor.popup_scope, cx);
         let mut element = popup.view.clone().into_any_element();
         let size = element.layout_as_root(AvailableSpace::min_size(), window, cx);
         let origin = place_popup(anchor, size, viewport, placement);

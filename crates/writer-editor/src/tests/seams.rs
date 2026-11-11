@@ -642,3 +642,147 @@ fn hidden_comments_and_read_only_checks(cx: &mut TestAppContext) {
         assert!(!editor.layout_pending() || editor.viewport_bounds().is_some());
     });
 }
+
+/// A popup that takes the keyboard: a field inside a panel.
+struct Field {
+    focus: gpui::FocusHandle,
+}
+
+impl Render for Field {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(160.))
+            .p_2()
+            .child(div().track_focus(&self.focus).w_full().h(px(24.)))
+    }
+}
+
+#[gpui::test]
+fn focus_in_the_popup_is_focus_in_the_editor(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paragraphs(5), EditorConfig::full(), cx);
+    let field = cx.update(|_, cx| {
+        cx.new(|cx| Field {
+            focus: cx.focus_handle(),
+        })
+    });
+    let field_focus = field.read_with(cx, |field, _| field.focus.clone());
+    // Something outside the editor that can have the keyboard.
+    let elsewhere = cx.update(|_, cx| cx.focus_handle());
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    cx.update(|_, cx| {
+        let events = events.clone();
+        cx.subscribe(&editor, move |_, event: &EditorEvent, _| {
+            if matches!(event, EditorEvent::Focused | EditorEvent::Blurred) {
+                events.borrow_mut().push(event.clone());
+            }
+        })
+        .detach();
+    });
+    let take = |events: &Rc<RefCell<Vec<EditorEvent>>>| std::mem::take(&mut *events.borrow_mut());
+    assert_eq!(take(&events), []);
+
+    // The keyboard goes into the popup: the text is not focused any more,
+    // but the editor was not left.
+    editor.update(cx, |editor, cx| {
+        editor.show_popup(
+            field.clone().into(),
+            PopupAnchor::Caret,
+            PopupPlacement::Below,
+            cx,
+        );
+    });
+    cx.update(|window, _| window.focus(&field_focus));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let editor = editor.read(cx);
+        assert!(!editor.is_focused(window));
+        assert!(editor.popup_focused(window, cx));
+    });
+    assert_eq!(take(&events), []);
+    // Keys typed there do not reach the document.
+    cx.simulate_input("x");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].text(), "Paragraph number 0");
+    });
+
+    // And back: no event either.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let editor = editor.read(cx);
+        assert!(editor.is_focused(window));
+        assert!(!editor.popup_focused(window, cx));
+    });
+    assert_eq!(take(&events), []);
+
+    // From the popup to somewhere outside the editor: that is leaving.
+    cx.update(|window, _| window.focus(&field_focus));
+    cx.run_until_parked();
+    assert_eq!(take(&events), []);
+    cx.update(|window, _| window.focus(&elsewhere));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Blurred]);
+    // Straight back into the popup: the editor has the keyboard again.
+    cx.update(|window, _| window.focus(&field_focus));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Focused]);
+    // On to the text: still the same editor.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    assert_eq!(take(&events), []);
+
+    // From the text to outside and back, as before.
+    cx.update(|window, _| window.focus(&elsewhere));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Blurred]);
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Focused]);
+
+    // The window is deactivated while the keyboard is in the popup, and
+    // activated again.
+    cx.update(|window, _| window.focus(&field_focus));
+    cx.run_until_parked();
+    assert_eq!(take(&events), []);
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Blurred]);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Focused]);
+
+    // The popup is closed and the text gets the keyboard back in one go
+    // (what a tool does on escape): nothing to report.
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.hide_popup(cx));
+        editor.read(cx).focus(window);
+    });
+    cx.run_until_parked();
+    assert_eq!(take(&events), []);
+    cx.update(|window, cx| {
+        let editor = editor.read(cx);
+        assert!(editor.is_focused(window) && !editor.popup_focused(window, cx));
+    });
+
+    // A popup that is closed while it has the keyboard, with nobody
+    // moving the focus: the editor has lost it.
+    editor.update(cx, |editor, cx| {
+        editor.show_popup(
+            field.clone().into(),
+            PopupAnchor::Caret,
+            PopupPlacement::Below,
+            cx,
+        );
+    });
+    cx.update(|window, _| window.focus(&field_focus));
+    cx.run_until_parked();
+    assert_eq!(take(&events), []);
+    editor.update(cx, |editor, cx| editor.hide_popup(cx));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Blurred]);
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    assert_eq!(take(&events), [EditorEvent::Focused]);
+}

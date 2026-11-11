@@ -117,6 +117,12 @@ pub struct Editor {
     /// Threads whose anchors are not tinted.
     pub(crate) hidden_comments: BTreeSet<CommentId>,
     pub(crate) popup: Option<Popup>,
+    /// Stands for the popup in the focus tree: whatever is focused inside
+    /// the popup's view is inside this handle. Never focused itself.
+    pub(crate) popup_scope: FocusHandle,
+    /// The keyboard is in the popup and the editor counts as focused: no
+    /// `Blurred` was emitted when it went there.
+    focus_in_popup: bool,
     pub(crate) selection_stats: Cell<Option<(u64, Selection, Stats)>>,
     /// A mouse drag selection is in progress.
     pub(crate) drag: Option<Drag>,
@@ -195,14 +201,23 @@ impl Editor {
         state.set_options(options_of(&config));
         let layout = DocumentLayout::new(state.document(), state.revision());
 
+        let popup_scope = cx.focus_handle();
+        // `Focused` and `Blurred` are about the editor as a whole: its
+        // text and its popup. The keyboard moving between those two is
+        // neither. The four listeners below can run in any order for one
+        // focus change; `focused` and `focus_in_popup` make each of them
+        // give the same answer whichever comes first.
         let subscriptions = vec![
             cx.on_focus(&focus_handle, window, |this, _, cx| {
                 this.focused = true;
                 this.restart_blink(cx);
-                cx.emit(EditorEvent::Focused);
+                // Back from the popup: the editor never lost the keyboard.
+                if !std::mem::take(&mut this.focus_in_popup) {
+                    cx.emit(EditorEvent::Focused);
+                }
                 cx.notify();
             }),
-            cx.on_blur(&focus_handle, window, |this, _, cx| {
+            cx.on_blur(&focus_handle, window, |this, window, cx| {
                 this.focused = false;
                 this.blink_task = None;
                 this.blink_on = true;
@@ -212,8 +227,32 @@ impl Editor {
                 this.drag_scrolling = false;
                 this.link_hover = false;
                 this.state.break_undo_group();
-                cx.emit(EditorEvent::Blurred);
+                if this.popup_scope.contains_focused(window, cx) {
+                    // Into the editor's own popup (a link field, the
+                    // format menu's filter): that is not leaving.
+                    this.focus_in_popup = true;
+                } else {
+                    cx.emit(EditorEvent::Blurred);
+                }
                 cx.notify();
+            }),
+            // The keyboard left the popup for somewhere that is not the
+            // text (or the window was deactivated with it there).
+            cx.on_focus_out(&popup_scope, window, |this, _, window, cx| {
+                if this.focus_in_popup && !this.focus_handle.is_focused(window) {
+                    this.focus_in_popup = false;
+                    cx.emit(EditorEvent::Blurred);
+                }
+            }),
+            // The keyboard came into the popup: from the text (nothing to
+            // report), or from outside the editor.
+            cx.on_focus_in(&popup_scope, window, |this, _, cx| {
+                if !this.focus_in_popup {
+                    this.focus_in_popup = true;
+                    if !this.focused {
+                        cx.emit(EditorEvent::Focused);
+                    }
+                }
             }),
             // The caret and the selection colour follow the window's
             // active state.
@@ -267,6 +306,8 @@ impl Editor {
             active_comment: None,
             hidden_comments: BTreeSet::new(),
             popup: None,
+            popup_scope,
+            focus_in_popup: false,
             selection_stats: Cell::new(None),
             drag: None,
             drag_scroll: None,

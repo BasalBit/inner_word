@@ -13,6 +13,9 @@ use gpui::{KeyBinding, actions};
 pub const KEY_CONTEXT: &str = "EditorTools";
 /// The key context of the find bar.
 pub const FIND_BAR_CONTEXT: &str = "FindBar";
+/// Key context predicate of a text field inside the find bar (see
+/// [`key_bindings`]).
+pub const FIND_FIELD_CONTEXT: &str = "FindBar > TextField";
 /// The key context of the link popover.
 pub const LINK_CONTEXT: &str = "LinkPopover";
 
@@ -80,6 +83,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", ReplaceAll, find),
         KeyBinding::new("cmd-alt-c", ToggleCaseSensitive, find),
         KeyBinding::new("cmd-alt-w", ToggleWholeWord, find),
+        // The same two once more for the fields of the bar, which is where
+        // the keyboard is while the bar is in use. GPUI ranks a binding
+        // without a context like one in the deepest context, so a host's
+        // window-wide binding on these keys ("show comments" on cmd-alt-c)
+        // would win over the `FindBar` context, which is one level up from
+        // the focused field. At the field's own level the later binding
+        // wins, and the host adds its bindings before ours.
+        KeyBinding::new("cmd-alt-c", ToggleCaseSensitive, Some(FIND_FIELD_CONTEXT)),
+        KeyBinding::new("cmd-alt-w", ToggleWholeWord, Some(FIND_FIELD_CONTEXT)),
         // Link popover.
         KeyBinding::new("cmd-enter", OpenLinkInBrowser, link),
         // Anywhere inside the tools view.

@@ -16,7 +16,14 @@ path = "src/main.rs"
 [dependencies]
 gpui.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+writer-core.workspace = true
 writer-ui.workspace = true
+writer-editor.workspace = true
+writer-export.workspace = true
+# Not in [workspace.dependencies] (the root manifest belongs to the orchestrator).
+writer-library = { path = "../writer-library" }
 # Window capture for visual QA: the NSWindow number behind a GPUI window.
 raw-window-handle = "0.6"
 
@@ -25,3 +32,10 @@ objc = "0.2"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+
+# One integration-test binary (tests/main.rs with submodules): each GPUI test
+# binary costs about 150 MB of disk.
+[[test]]
+name = "main"
+path = "tests/main.rs"

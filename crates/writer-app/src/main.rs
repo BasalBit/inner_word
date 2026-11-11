@@ -18,7 +18,10 @@ fn main() {
     let script = match automation::Script::from_env() {
         Ok(script) => script,
         Err(err) => {
-            eprintln!("The Writer: invalid {}: {err:#}", automation::AUTOMATION_ENV);
+            eprintln!(
+                "The Writer: invalid {}: {err:#}",
+                automation::AUTOMATION_ENV
+            );
             std::process::exit(2);
         }
     };

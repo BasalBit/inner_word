@@ -11,15 +11,14 @@ use std::{borrow::Cow, cell::Cell, path::PathBuf, rc::Rc, time::Duration};
 use gpui::{
     Action, Animation, AnimationExt, AnyElement, App, AssetSource, Bounds, BoxShadow,
     ClipboardItem, ContentMask, Context, Corner, CursorStyle, DispatchPhase, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, Font, FontFeatures, FontWeight, Global,
-    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyBinding,
-    LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseDownEvent,
-    MouseMoveEvent, OsAction, PathPromptOptions, Pixels, PromptLevel, Render, RenderOnce,
-    ScrollHandle, ScrollStrategy, ScrollWheelEvent, SharedString, Style, StrikethroughStyle,
-    Subscription, Task, TestAppContext, TextRun, TitlebarOptions, UnderlineStyle,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, anchored, bounce,
-    deferred, div, ease_in_out, fill, font, hsla, list, point, prelude::*, px, quad, relative, rgb,
-    size, svg, uniform_list,
+    Entity, EventEmitter, FocusHandle, Font, FontFeatures, FontWeight, Global, GlobalElementId,
+    Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId,
+    ListAlignment, ListState, Menu, MenuItem, MouseDownEvent, MouseMoveEvent, OsAction,
+    PathPromptOptions, Pixels, PromptLevel, Render, RenderOnce, ScrollHandle, ScrollStrategy,
+    ScrollWheelEvent, SharedString, StrikethroughStyle, Style, Subscription, Task, TestAppContext,
+    TextRun, TitlebarOptions, UnderlineStyle, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, actions, anchored, bounce, deferred, div, ease_in_out, fill, font, hsla, list,
+    point, prelude::*, px, quad, relative, rgb, size, svg, uniform_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -105,7 +104,8 @@ fn bootstrap_window_and_entities(cx: &mut TestAppContext) {
     cx.update(|cx| {
         assert_eq!(cx.windows().len(), 1);
         // WeakEntity::update returns gpui::Result (entity may be gone).
-        weak.update(cx, |shell, _| shell.saved_bounds.take()).unwrap();
+        weak.update(cx, |shell, _| shell.saved_bounds.take())
+            .unwrap();
     });
 }
 
@@ -219,7 +219,8 @@ impl Lists {
     }
 
     fn reveal(&mut self, ix: usize) {
-        self.uniform_scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        self.uniform_scroll
+            .scroll_to_item(ix, ScrollStrategy::Center);
         self.list_state.scroll_to_reveal_item(ix);
         self.scroll.scroll_to_item(ix); // child index of the tracked div
     }
@@ -283,16 +284,13 @@ impl Render for Lists {
                 )
             })
             .child(
-                div()
-                    .size(px(8.))
-                    .bg(gpui::red())
-                    .with_animation(
-                        "caret-pulse",
-                        Animation::new(Duration::from_millis(1000))
-                            .repeat()
-                            .with_easing(bounce(ease_in_out)),
-                        |el, delta| el.opacity(delta),
-                    ),
+                div().size(px(8.)).bg(gpui::red()).with_animation(
+                    "caret-pulse",
+                    Animation::new(Duration::from_millis(1000))
+                        .repeat()
+                        .with_easing(bounce(ease_in_out)),
+                    |el, delta| el.opacity(delta),
+                ),
             )
     }
 }
@@ -358,16 +356,13 @@ impl Element for Blocks {
         let rows = self.rows;
         let mut measured = Style::default();
         measured.size.width = relative(1.).into();
-        let id = window.request_measured_layout(
-            measured,
-            move |known, available, _window, _cx| {
-                let width = known.width.unwrap_or(match available.width {
-                    gpui::AvailableSpace::Definite(w) => w,
-                    _ => px(700.),
-                });
-                size(width, line_height * rows as f32)
-            },
-        );
+        let id = window.request_measured_layout(measured, move |known, available, _window, _cx| {
+            let width = known.width.unwrap_or(match available.width {
+                gpui::AvailableSpace::Definite(w) => w,
+                _ => px(700.),
+            });
+            size(width, line_height * rows as f32)
+        });
         (id, ())
     }
 
@@ -436,16 +431,18 @@ struct CustomHost {
 
 impl Render for CustomHost {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(
-            div()
-                .debug_selector(|| "blocks".into())
-                .w(px(300.))
-                .child(Blocks {
-                    rows: 3,
-                    line_height: px(20.),
-                    clicked: self.clicked.clone(),
-                }),
-        )
+        div()
+            .size_full()
+            .child(
+                div()
+                    .debug_selector(|| "blocks".into())
+                    .w(px(300.))
+                    .child(Blocks {
+                        rows: 3,
+                        line_height: px(20.),
+                        clicked: self.clicked.clone(),
+                    }),
+            )
     }
 }
 
@@ -528,8 +525,15 @@ fn text_paint_in_element(cx: &mut TestAppContext) {
                 let mut origin = bounds.origin;
                 for line in &lines {
                     // Backgrounds are not painted by paint(): call paint_background first.
-                    line.paint_background(origin, line_height, gpui::TextAlign::Left, None, window, cx)
-                        .unwrap();
+                    line.paint_background(
+                        origin,
+                        line_height,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    )
+                    .unwrap();
                     line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
                         .unwrap();
                     origin.y += line.size(line_height).height;
@@ -565,7 +569,9 @@ impl Render for Dispatcher {
         div()
             .key_context("Editor")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, action: &SetHeading, _, _| this.last = Some(action.level)))
+            .on_action(
+                cx.listener(|this, action: &SetHeading, _, _| this.last = Some(action.level)),
+            )
             .on_action(cx.listener(|this, _: &Save, _, _| this.saves += 1))
     }
 }
@@ -604,7 +610,9 @@ fn actions_with_data_and_dispatch(cx: &mut TestAppContext) {
     // it is already being updated". `window.defer` runs with no view borrowed.
     view.update_in(cx, |v, window, cx| {
         let focus = v.focus.clone();
-        window.defer(cx, move |window, cx| focus.dispatch_action(&Save, window, cx));
+        window.defer(cx, move |window, cx| {
+            focus.dispatch_action(&Save, window, cx)
+        });
     });
     cx.run_until_parked();
     view.read_with(cx, |v, _| assert_eq!(v.saves, 1));
@@ -615,7 +623,13 @@ fn actions_with_data_and_dispatch(cx: &mut TestAppContext) {
         let keymap = keymap.borrow();
         let keys: Vec<String> = keymap
             .bindings_for_action(&SetHeading { level: 2 })
-            .map(|b| b.keystrokes().iter().map(|k| k.unparse()).collect::<Vec<_>>().join(" "))
+            .map(|b| {
+                b.keystrokes()
+                    .iter()
+                    .map(|k| k.unparse())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
             .collect();
         assert_eq!(keys, vec!["alt-cmd-2"]);
         assert!(cx.all_action_names().contains(&"snippets::Save"));
@@ -660,9 +674,12 @@ fn observe_subscribe_global(cx: &mut TestAppContext) {
         seen_edits: 0,
         seen_notifies: 0,
         _subs: vec![
-            cx.subscribe(&doc, |this: &mut WordCount, _doc, event: &DocumentEvent, _cx| match event {
-                DocumentEvent::Edited => this.seen_edits += 1,
-            }),
+            cx.subscribe(
+                &doc,
+                |this: &mut WordCount, _doc, event: &DocumentEvent, _cx| match event {
+                    DocumentEvent::Edited => this.seen_edits += 1,
+                },
+            ),
             cx.observe(&doc, |this, _doc, _cx| this.seen_notifies += 1),
             cx.observe_global::<Settings>(|_, cx| {
                 let _vim = cx.global::<Settings>().vim_mode;
@@ -739,9 +756,8 @@ fn prompts_and_panels(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     assert_eq!(cx.executor().block(answer).unwrap(), 0);
 
-    let path = cx.update(|_, cx| {
-        cx.prompt_for_new_path(&PathBuf::from("/tmp"), Some("Chapter 3.md"))
-    });
+    let path =
+        cx.update(|_, cx| cx.prompt_for_new_path(&PathBuf::from("/tmp"), Some("Chapter 3.md")));
     cx.simulate_new_path_selection(|_dir| Some(PathBuf::from("/tmp/out.md")));
     assert_eq!(
         cx.executor().block(path).unwrap().unwrap(),
@@ -775,7 +791,10 @@ fn open_panel(cx: &mut App) -> Task<Option<Vec<PathBuf>>> {
     cx.spawn(async move |_cx| paths.await.ok()?.ok()?)
 }
 
-actions!(menu_snippets, [Undo, Redo, Cut, Copy, Paste, SelectAll, Quit]);
+actions!(
+    menu_snippets,
+    [Undo, Redo, Cut, Copy, Paste, SelectAll, Quit]
+);
 
 fn app_menus() -> Vec<Menu> {
     vec![
@@ -823,7 +842,10 @@ impl AssetSource for Assets {
 
 fn icon() -> impl IntoElement {
     // svg() is tinted with text_color; size it explicitly.
-    svg().path("icons/check.svg").size_4().text_color(rgb(0xB0503A))
+    svg()
+        .path("icons/check.svg")
+        .size_4()
+        .text_color(rgb(0xB0503A))
 }
 
 fn register_fonts(cx: &mut App, bytes: &'static [u8]) -> gpui::Result<()> {

@@ -112,11 +112,7 @@ impl Render for Root {
                             .text_size(px(28.))
                             .child("The Writer"),
                     )
-                    .child(
-                        div()
-                            .text_color(colors.muted)
-                            .child("No document open"),
-                    ),
+                    .child(div().text_color(colors.muted).child("No document open")),
             )
     }
 }

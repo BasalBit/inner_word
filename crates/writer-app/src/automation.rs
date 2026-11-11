@@ -44,9 +44,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use gpui::{
-    AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, px, size,
-};
+use gpui::{AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, px, size};
 use writer_ui::theme::{self, ActiveTheme, ThemeMode};
 
 use crate::screenshot;
@@ -289,7 +287,9 @@ async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Resu
             frame_pause(cx).await;
         }
         Step::Resize(width, height) => {
-            window.update(cx, |_, window, _| window.resize(size(px(width), px(height))))?;
+            window.update(cx, |_, window, _| {
+                window.resize(size(px(width), px(height)))
+            })?;
             cx.background_executor()
                 .timer(Duration::from_millis(150))
                 .await;

@@ -220,14 +220,10 @@ impl Element for LineElement {
             underline: None,
             strikethrough: None,
         };
-        let shaped = window
-            .text_system()
-            .shape_line(text, px(24.), &[run], None);
+        let shaped = window.text_system().shape_line(text, px(24.), &[run], None);
         let focus = line.focus.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.0.clone()), cx);
-        shaped
-            .paint(bounds.origin, px(40.), window, cx)
-            .unwrap();
+        shaped.paint(bounds.origin, px(40.), window, cx).unwrap();
         let caret_x = bounds.left() + shaped.width;
         window.paint_quad(fill(
             Bounds::new(point(caret_x, bounds.top() + px(6.)), size(px(2.), px(28.))),

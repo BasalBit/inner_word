@@ -300,7 +300,8 @@ impl Element for TextBoxElement {
         let line = line.take().unwrap();
         line.paint(bounds.origin, window.line_height(), window, cx)
             .unwrap();
-        self.view.update(cx, |view, _| view.last_layout = Some(line));
+        self.view
+            .update(cx, |view, _| view.last_layout = Some(line));
     }
 }
 
@@ -329,9 +330,7 @@ impl Render for TextBox {
                             this.mouse_downs.push(event.click_count);
                         }),
                     )
-                    .child(TextBoxElement {
-                        view: cx.entity(),
-                    }),
+                    .child(TextBoxElement { view: cx.entity() }),
             )
     }
 }
@@ -387,7 +386,12 @@ fn typing_and_keystrokes_reach_focused_view(cx: &mut TestAppContext) {
             .filter(|k| !k.is_empty())
             .collect();
         assert_eq!(&printable[..3], &["shift-h", "e", "l"]);
-        assert!(!view.unhandled_keys.iter().any(|k| k == "cmd-b" || k == "backspace"));
+        assert!(
+            !view
+                .unhandled_keys
+                .iter()
+                .any(|k| k == "cmd-b" || k == "backspace")
+        );
     });
     view.update(cx, |view, _| view.unhandled_keys.clear());
     cx.simulate_keystrokes("escape cmd-b left");
@@ -397,7 +401,9 @@ fn typing_and_keystrokes_reach_focused_view(cx: &mut TestAppContext) {
     });
 
     // Mouse: debug_selector bounds + simulate_click.
-    let bounds = cx.debug_bounds("text-box-line").expect("element was painted");
+    let bounds = cx
+        .debug_bounds("text-box-line")
+        .expect("element was painted");
     cx.simulate_click(bounds.center(), Default::default());
     view.read_with(cx, |view, _| assert_eq!(view.mouse_downs, vec![1]));
 }
@@ -525,11 +531,7 @@ fn dispatch_precedence_and_chords(cx: &mut TestAppContext) {
         let all: Vec<String> = keymap
             .bindings()
             .map(|binding| {
-                let keys: Vec<String> = binding
-                    .keystrokes()
-                    .iter()
-                    .map(|k| k.unparse())
-                    .collect();
+                let keys: Vec<String> = binding.keystrokes().iter().map(|k| k.unparse()).collect();
                 format!(
                     "{} => {} in {}",
                     keys.join(" "),
@@ -854,9 +856,8 @@ fn theme_global_and_mode_switch(cx: &mut TestAppContext) {
     });
     let changes = Rc::new(RefCell::new(0));
     let counter = changes.clone();
-    let _sub = cx.update(|cx| {
-        cx.observe_global::<GlobalTheme>(move |_| *counter.borrow_mut() += 1)
-    });
+    let _sub =
+        cx.update(|cx| cx.observe_global::<GlobalTheme>(move |_| *counter.borrow_mut() += 1));
     cx.update(|cx| theme::set_theme_mode(ThemeMode::Dark, cx));
     cx.update(|cx| {
         assert!(cx.theme().is_dark());

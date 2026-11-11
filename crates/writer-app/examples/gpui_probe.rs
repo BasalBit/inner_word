@@ -50,10 +50,21 @@ fn probe(window: &mut Window, cx: &mut App) {
         "Baskerville",
         "Avenir Next",
     ] {
-        println!("  {family:<16} installed: {}", names.iter().any(|n| n == family));
+        println!(
+            "  {family:<16} installed: {}",
+            names.iter().any(|n| n == family)
+        );
     }
-    println!("appearance: app {:?}, window {:?}", cx.window_appearance(), window.appearance());
-    println!("scale factor: {}, rem size: {:?}", window.scale_factor(), window.rem_size());
+    println!(
+        "appearance: app {:?}, window {:?}",
+        cx.window_appearance(),
+        window.appearance()
+    );
+    println!(
+        "scale factor: {}, rem size: {:?}",
+        window.scale_factor(),
+        window.rem_size()
+    );
 
     let ts = window.text_system().clone();
     let charter = font("Charter");
@@ -73,7 +84,12 @@ fn probe(window: &mut Window, cx: &mut App) {
     );
 
     let text: SharedString = "Hello world, naïve café".into();
-    let line = ts.shape_line(text.clone(), px(17.), &[run(charter.clone(), text.len())], None);
+    let line = ts.shape_line(
+        text.clone(),
+        px(17.),
+        &[run(charter.clone(), text.len())],
+        None,
+    );
     println!(
         "shape_line {:?}: width {:?}, ascent {:?}, descent {:?}, glyphs {}",
         text.as_ref(),
@@ -116,11 +132,17 @@ fn probe(window: &mut Window, cx: &mut App) {
         line.runs.iter().map(|r| r.font_id).collect::<Vec<_>>()
     );
 
-    let lines = ts.shape_text(mixed.into(), px(17.), &runs, None, None).unwrap();
+    let lines = ts
+        .shape_text(mixed.into(), px(17.), &runs, None, None)
+        .unwrap();
     println!(
         "mixed runs via shape_text: {} shaped runs, font ids {:?}",
         lines[0].runs().len(),
-        lines[0].runs().iter().map(|r| r.font_id).collect::<Vec<_>>()
+        lines[0]
+            .runs()
+            .iter()
+            .map(|r| r.font_id)
+            .collect::<Vec<_>>()
     );
     let similar: Vec<&String> = names
         .iter()
@@ -130,7 +152,12 @@ fn probe(window: &mut Window, cx: &mut App) {
 
     // Ligatures and emoji: glyph count vs characters, glyph indices.
     for sample in ["office fit", "a😀b", "e\u{301}"] {
-        let line = ts.shape_line(sample.into(), px(17.), &[run(charter.clone(), sample.len())], None);
+        let line = ts.shape_line(
+            sample.into(),
+            px(17.),
+            &[run(charter.clone(), sample.len())],
+            None,
+        );
         let glyphs: Vec<(usize, bool)> = line
             .runs
             .iter()
@@ -146,12 +173,21 @@ fn probe(window: &mut Window, cx: &mut App) {
 
     // Glyph fallback: characters Charter lacks come from other fonts.
     let sample = "a😀b日本";
-    let line = ts.shape_line(sample.into(), px(17.), &[run(charter.clone(), sample.len())], None);
+    let line = ts.shape_line(
+        sample.into(),
+        px(17.),
+        &[run(charter.clone(), sample.len())],
+        None,
+    );
     println!(
         "fallback for {sample:?}: runs {:?}",
         line.runs
             .iter()
-            .map(|r| (r.font_id, ts.get_font_for_id(r.font_id).map(|f| f.family), r.glyphs.len()))
+            .map(|r| (
+                r.font_id,
+                ts.get_font_for_id(r.font_id).map(|f| f.family),
+                r.glyphs.len()
+            ))
             .collect::<Vec<_>>()
     );
 
@@ -159,7 +195,13 @@ fn probe(window: &mut Window, cx: &mut App) {
     let para = "It was a bright cold day in April, and the clocks were striking thirteen. \
                 Winston Smith, his chin nuzzled into his breast in an effort to escape the vile wind.";
     let lines = ts
-        .shape_text(para.into(), px(17.), &[run(charter.clone(), para.len())], Some(px(300.)), None)
+        .shape_text(
+            para.into(),
+            px(17.),
+            &[run(charter.clone(), para.len())],
+            Some(px(300.)),
+            None,
+        )
         .unwrap();
     let wrapped = &lines[0];
     let mut starts = vec![0];
@@ -172,7 +214,12 @@ fn probe(window: &mut Window, cx: &mut App) {
     starts.push(para.len());
     println!("wrap at 300px: {} rows", starts.len() - 1);
     for pair in starts.windows(2) {
-        println!("  {:>3}..{:<3} {:?}", pair[0], pair[1], &para[pair[0]..pair[1]]);
+        println!(
+            "  {:>3}..{:<3} {:?}",
+            pair[0],
+            pair[1],
+            &para[pair[0]..pair[1]]
+        );
     }
     println!(
         "  size at line height 27.2px: {:?}",
@@ -194,8 +241,18 @@ fn probe(window: &mut Window, cx: &mut App) {
         ts.shape_line(s.into(), px(17.), &[run(charter.clone(), len)], None);
     }
     println!("same 1000 lines again (cache hit) in {:?}", t.elapsed());
-    let a = ts.shape_line(text.clone(), px(17.), &[run(charter.clone(), text.len())], None);
-    let b = ts.shape_line(text.clone(), px(17.), &[run(charter.clone(), text.len())], None);
+    let a = ts.shape_line(
+        text.clone(),
+        px(17.),
+        &[run(charter.clone(), text.len())],
+        None,
+    );
+    let b = ts.shape_line(
+        text.clone(),
+        px(17.),
+        &[run(charter.clone(), text.len())],
+        None,
+    );
     println!(
         "same text shaped twice shares the layout Arc: {}",
         std::sync::Arc::ptr_eq(&*a, &*b)

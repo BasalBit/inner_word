@@ -358,7 +358,11 @@ impl Theme {
 
     /// Floating overlays: palette, pickers, format menu, modals.
     pub fn shadow_overlay(&self) -> Vec<BoxShadow> {
-        let (near, far) = if self.is_dark() { (0.40, 0.45) } else { (0.08, 0.14) };
+        let (near, far) = if self.is_dark() {
+            (0.40, 0.45)
+        } else {
+            (0.08, 0.14)
+        };
         vec![
             shadow(self.colors.shadow, near, 0., 1., 3., 0.),
             shadow(self.colors.shadow, far, 0., 8., 24., -4.),
@@ -367,7 +371,11 @@ impl Theme {
 
     /// Small popovers that sit close to their origin: tooltips, inline menus.
     pub fn shadow_popover(&self) -> Vec<BoxShadow> {
-        let (near, far) = if self.is_dark() { (0.35, 0.35) } else { (0.08, 0.10) };
+        let (near, far) = if self.is_dark() {
+            (0.35, 0.35)
+        } else {
+            (0.08, 0.10)
+        };
         vec![
             shadow(self.colors.shadow, near, 0., 1., 2., 0.),
             shadow(self.colors.shadow, far, 0., 4., 12., -2.),
@@ -376,7 +384,11 @@ impl Theme {
 
     /// Page sheets on the desk in page view.
     pub fn shadow_page(&self) -> Vec<BoxShadow> {
-        let (near, far) = if self.is_dark() { (0.45, 0.35) } else { (0.06, 0.08) };
+        let (near, far) = if self.is_dark() {
+            (0.45, 0.35)
+        } else {
+            (0.06, 0.08)
+        };
         vec![
             shadow(self.colors.shadow, near, 0., 1., 2., 0.),
             shadow(self.colors.shadow, far, 0., 6., 20., 0.),
@@ -532,9 +544,19 @@ mod tests {
             ("elevated", theme.elevated),
         ] {
             at_least(&format!("ink on {surface_name}"), theme.ink, surface, 12.0);
-            at_least(&format!("muted on {surface_name}"), theme.muted, surface, 4.5);
+            at_least(
+                &format!("muted on {surface_name}"),
+                theme.muted,
+                surface,
+                4.5,
+            );
         }
-        at_least("muted on accent_subtle", theme.muted, theme.accent_subtle, 4.5);
+        at_least(
+            "muted on accent_subtle",
+            theme.muted,
+            theme.accent_subtle,
+            4.5,
+        );
         at_least("ink on accent_subtle", theme.ink, theme.accent_subtle, 10.0);
         at_least("ink on hover", theme.ink, theme.hover, 10.0);
         at_least("faint on canvas", theme.faint, theme.canvas, 2.3);
@@ -544,7 +566,12 @@ mod tests {
         at_least("danger on canvas", theme.danger, theme.canvas, 4.5);
         at_least("success on canvas", theme.success, theme.canvas, 4.5);
         at_least("ink on comment", theme.ink, theme.comment, 10.0);
-        at_least("ink on comment_active", theme.ink, theme.comment_active, 7.0);
+        at_least(
+            "ink on comment_active",
+            theme.ink,
+            theme.comment_active,
+            7.0,
+        );
         for color in HighlightColor::ALL {
             at_least(
                 &format!("ink on {} highlight", color.as_str()),

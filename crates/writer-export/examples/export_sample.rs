@@ -8,7 +8,7 @@
 //! Files written: `sample.md`, `sample-footnotes.md`, `sample.txt`,
 //! `sample-social.txt`, `sample.docx`, `lists.docx` (one page of lists that
 //! restart in every way, small enough for a Quick Look thumbnail),
-//! `book.docx`, `chapter2.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
+//! `book.docx`, `chapter2.docx`, `book-mixed.docx`, `sample-restyled.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
 //! numbered items say their own number ("item 2"), which passes every
 //! limit the DOCX numbering has (a definition per list, shared
 //! definitions, numbers as text).
@@ -348,6 +348,32 @@ fn main() -> std::io::Result<()> {
         ],
     );
     std::fs::write(dir.join("book.docx"), to_docx(&book, &docx))?;
+    // Every kind of block in a document that does not have the look of
+    // the book's first one.
+    let restyled = doc.clone().with_settings(DocumentSettings {
+        typography: Typography {
+            body_font: "Palatino".into(),
+            base_size: 13.0,
+            line_height: 1.4,
+            paragraph_spacing: 8.0,
+        },
+        ..doc.settings().clone()
+    });
+    let mixed = ExportSource::collection(
+        "A Mixed Book",
+        [
+            ("Chapter 1", &one),
+            ("The Writer: export sample", &restyled),
+        ],
+    );
+    std::fs::write(dir.join("book-mixed.docx"), to_docx(&mixed, &docx))?;
+    std::fs::write(
+        dir.join("sample-restyled.docx"),
+        to_docx(
+            &ExportSource::single("The Writer: export sample", &restyled),
+            &docx,
+        ),
+    )?;
     // The second chapter by itself, to compare with its pages in the book.
     std::fs::write(
         dir.join("chapter2.docx"),

@@ -286,6 +286,9 @@ impl Workspace {
             } else {
                 TRAFFIC_LIGHT_RESERVED_WIDTH
             })
+            // A press on the band is not a press on the text: the keyboard
+            // stays where it is.
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .on_click(|event: &ClickEvent, window, _| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
@@ -677,6 +680,64 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// The close control of an open picker modal (palette, quick open,
+    /// library search, shortcuts, export): a small cross at the right of
+    /// its query row, for whoever would rather click than press `escape`.
+    ///
+    /// The picker draws its own panel and has no place for one, so the
+    /// control is laid over it from here, where [`writer_ui::ModalLayer`]
+    /// puts a modal: centred, its top at 12% of the window height, with
+    /// 16px to the window edges. It lies over the end of the query field
+    /// and steps aside when the query is long enough to reach it.
+    fn render_picker_close(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        /// The height of a modal picker's query row, and the size of the
+        /// control in it.
+        const QUERY_ROW: f32 = 48.;
+        const CONTROL: f32 = 24.;
+        let layer = self.modal_layer.read(cx);
+        // The width of the open picker and how long its query is.
+        fn query<D: writer_ui::PickerDelegate>(
+            layer: &writer_ui::ModalLayer,
+            cx: &App,
+        ) -> Option<usize> {
+            let picker = layer.active::<writer_ui::Picker<D>>()?;
+            Some(picker.read(cx).query(cx).chars().count())
+        }
+        let wide = query::<crate::library_search::LibrarySearchDelegate>(layer, cx)
+            .map(|typed| (super::WIDE_MODAL_WIDTH, typed));
+        let standard = || {
+            query::<crate::palette::PaletteDelegate>(layer, cx)
+                .or_else(|| query::<crate::quick_open::QuickOpenDelegate>(layer, cx))
+                .or_else(|| query::<crate::shortcuts::ShortcutsDelegate>(layer, cx))
+                .or_else(|| query::<crate::export::ExportDelegate>(layer, cx))
+                .map(|typed| (super::MODAL_WIDTH, typed))
+        };
+        let (width, typed) = wide.or_else(standard)?;
+        let viewport = window.viewport_size();
+        let window_width = f32::from(viewport.width);
+        let panel_width = width.min(window_width - 32.);
+        // The control lies over the end of the query field. A query long
+        // enough to reach it (about nine pixels a character) has the
+        // field to itself: the control steps aside.
+        if typed as f32 * 9. > panel_width - 110. {
+            return None;
+        }
+        let panel_right = (window_width + panel_width) / 2.;
+        let panel_top = f32::from(viewport.height) * 0.12;
+        let close = crate::controls::close_control(
+            cx.listener(|this, _: &ClickEvent, window, cx| this.dismiss_modal(window, cx)),
+            cx,
+        );
+        Some(
+            div()
+                .absolute()
+                .top(px(panel_top + (QUERY_ROW - CONTROL) / 2.))
+                .left(px(panel_right - 12. - CONTROL))
+                .child(close)
+                .into_any_element(),
+        )
+    }
+
     fn render_editor_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.session.is_none() {
             return self.render_empty_state(cx);
@@ -738,6 +799,7 @@ impl Render for Workspace {
         let titlebar = self.render_titlebar(layout.sidebar.is_some(), cx);
         let editor_area = self.render_editor_area(cx);
         let status_bar = self.render_status_bar(cx);
+        let picker_close = self.render_picker_close(window, cx);
         let sidebar = layout.sidebar.map(|width| self.render_sidebar(width, cx));
         let resize_handle = layout
             .sidebar
@@ -936,6 +998,7 @@ impl Render for Workspace {
             )
             .children(resize_handle)
             .child(self.modal_layer.clone())
+            .children(picker_close)
             .child(self.toast_layer.clone())
     }
 }

@@ -353,6 +353,18 @@ fn the_title_has_a_menu_and_a_chevron(cx: &mut TestAppContext) {
     );
     let (workspace, vcx) = open_workspace(&library, cx);
 
+    // A press on the title band or on the status bar is not a press on
+    // the text: the keyboard stays where it is.
+    let band = bounds_of("titlebar", vcx);
+    vcx.simulate_click(
+        point(band.left() + px(40.), band.center().y),
+        Modifiers::default(),
+    );
+    let bar = bounds_of("status-bar", vcx);
+    vcx.simulate_click(bar.center(), Modifiers::default());
+    vcx.run_until_parked();
+    assert!(editor_focused(&workspace, vcx));
+
     // A right-click on the title.
     right_click(MenuKind::Title.selector(), vcx);
     assert_eq!(
@@ -606,6 +618,27 @@ fn modals_close_and_work_on_a_click(cx: &mut TestAppContext) {
     vcx.simulate_click(point(px(40.), px(500.)), Modifiers::default());
     vcx.run_until_parked();
     assert!(!has_modal(&workspace, vcx));
+
+    // The pickers have the same control, at the right of their query row.
+    for open in [
+        "cmd-shift-p",
+        "cmd-p",
+        "cmd-shift-f",
+        "cmd-/",
+        "cmd-shift-s",
+    ] {
+        vcx.simulate_keystrokes(open);
+        assert!(has_modal(&workspace, vcx), "{open} opens a picker");
+        let control = bounds_of(writer_app::controls::CLOSE_CONTROL, vcx);
+        let window_size = vcx.update(|window, _| window.viewport_size());
+        assert!(control.top() >= window_size.height * 0.12);
+        assert!(control.bottom() <= window_size.height * 0.12 + px(48.));
+        assert!(control.left() > window_size.width / 2.);
+        vcx.simulate_input("a");
+        click(writer_app::controls::CLOSE_CONTROL, vcx);
+        assert!(!has_modal(&workspace, vcx), "the control closes {open}");
+        assert!(editor_focused(&workspace, vcx));
+    }
 
     // Version history: rows are clicked, a button restores.
     let save = |text: &str, cx: &mut VisualTestContext| {

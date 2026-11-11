@@ -1,7 +1,8 @@
 The Writer
 ==========
 
-A keyboard-first writing app for macOS.
+A writing app for macOS. Everything in it can be done from the keyboard, and
+everything can be done with the mouse.
 
 
 Install
@@ -55,6 +56,21 @@ Requirements
 macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on a Mac with Apple
 silicon. The name of the disk image says which kind of Mac it is for:
 "arm64" is Apple silicon, "x86_64" is Intel, "universal" runs on both.
+
+
+Finding your way
+----------------
+
+Right-click anything to see what you can do with it: the text, a document or
+a folder in the library on the left, the title above the text, the counts at
+the bottom of the window. The menu bar at the top of the screen has every
+command with its key beside it. Help > Keyboard Shortcuts lists all the keys,
+and Help > Welcome Document opens a short introduction.
+
+If The Writer says that it is already open, another copy of it is running
+with your library (for example an older copy that was not quit). Switch to
+that copy, or quit it and open The Writer again. Two copies never work on one
+library at the same time, so that neither overwrites what the other wrote.
 
 
 Your documents

@@ -405,9 +405,10 @@ impl Workspace {
         self.modal_layer.update(cx, |layer, cx| {
             let picker = cx.new(|cx| {
                 let delegate = ExportDelegate::for_target(workspace, target, document, folder);
+                let rows = crate::workspace::picker_rows(window, 12);
                 Picker::modal(delegate, window, cx)
                     .width(gpui::px(crate::workspace::MODAL_WIDTH))
-                    .max_visible_rows(12)
+                    .max_visible_rows(rows)
             });
             layer.show(picker, window, cx);
         });

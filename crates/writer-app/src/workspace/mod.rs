@@ -32,6 +32,15 @@
 //! | Settings | [`Workspace::settings`], [`crate::WorkspaceEvent::SettingsChanged`], [`crate::settings::keys`] |
 //! | Modals and toasts | [`Workspace::modal_layer`], [`Workspace::toast_layer`], [`Workspace::show_toast`] |
 //!
+//! # The mouse
+//!
+//! Everything is also on a menu: the native menu bar ([`crate::menus`]),
+//! the menus of the title and the status bar items ([`MenuKind`],
+//! [`Workspace::open_menu`]), and the items the app adds to the context
+//! menus of the text, the library rows and the Vim chip (`menus.rs`).
+//! Commands for the text that are chosen while the keyboard is elsewhere
+//! are passed on to the text ([`Workspace::forward_to_text`]).
+//!
 //! # Saving
 //!
 //! The session (`session.rs`) marks the document dirty on every edit and
@@ -1691,7 +1700,7 @@ impl Workspace {
 /// How many rows a picker modal may show in this window: as many as
 /// `wanted`, fewer when the window is short (the modal starts 12% down and
 /// has a 48px query row).
-fn picker_rows(window: &Window, wanted: usize) -> usize {
+pub(crate) fn picker_rows(window: &Window, wanted: usize) -> usize {
     let height = f32::from(window.viewport_size().height);
     let available = height * 0.88 - 48. - 8. - 24.;
     ((available / 32.).floor().max(0.) as usize).clamp(4, wanted.max(4))

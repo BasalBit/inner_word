@@ -462,9 +462,11 @@ pub fn set_theme_mode(mode: ThemeMode, cx: &mut App) {
 }
 
 /// Re-resolves `System` mode against a new system appearance. Does nothing
-/// in `Light` or `Dark` mode.
+/// in `Light` or `Dark` mode, or before [`init`].
 pub fn sync_system_appearance(system: WindowAppearance, cx: &mut App) {
-    let mode = theme_mode(cx);
+    let Some(mode) = cx.try_global::<GlobalTheme>().map(|global| global.mode) else {
+        return;
+    };
     if mode == ThemeMode::System {
         apply(mode, system.into(), cx);
     }

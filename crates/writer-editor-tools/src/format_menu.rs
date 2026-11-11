@@ -93,6 +93,9 @@ struct FormatItem {
     section: Section,
     label: SharedString,
     keywords: &'static str,
+    /// The current value, where a mark cannot say it (the font's name,
+    /// the text size).
+    detail: Option<SharedString>,
     mark: Mark,
     swatch: Option<Hsla>,
     key_hint: Option<KeyHint>,
@@ -114,6 +117,7 @@ impl FormatMenu {
                 id,
                 label: item.label.clone(),
                 positions,
+                detail: item.detail.clone(),
                 mark: item.mark,
                 swatch: item.swatch,
                 key_hint: item.key_hint.clone(),
@@ -341,6 +345,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
             section,
             label: SharedString::from(label.to_string()),
             keywords,
+            detail: None,
             mark,
             swatch: None,
             key_hint: KeyHint::for_action(action.as_ref(), cx),
@@ -497,13 +502,21 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         Mark::None,
         Rc::new(editor::DecreaseTextSize),
     );
-    action(
-        size,
-        "Reset text size",
-        "default normal size",
-        Mark::None,
-        Rc::new(editor::ResetTextSize),
-    );
+    let reset: Rc<dyn Action> = Rc::new(editor::ResetTextSize);
+    items.push(FormatItem {
+        section: Section::Size,
+        label: "Reset text size".into(),
+        keywords: "default normal size",
+        detail: match &format.text_size {
+            Choice::Same(Some(points)) => Some(format!("Now {points} pt").into()),
+            Choice::Same(None) => None,
+            Choice::Mixed => Some("Mixed".into()),
+        },
+        mark: Mark::None,
+        swatch: None,
+        key_hint: KeyHint::for_action(reset.as_ref(), cx),
+        effect: Effect::Editor(reset),
+    });
 
     // Highlight colours.
     for highlight in Highlight::ALL {
@@ -513,6 +526,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
             section: Section::Highlight,
             label: label.into(),
             keywords: "marker background",
+            detail: None,
             mark: choice_mark(&format.highlight, &present.highlights, |value| {
                 *value == Some(highlight)
             }),
@@ -529,6 +543,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         section: Section::Color,
         label: "Default text colour".into(),
         keywords: "color automatic ink black reset",
+        detail: None,
         mark: choice_mark(&format.color, &present.colors, |value| value.is_none()),
         swatch: Some(colors.ink),
         key_hint: None,
@@ -539,6 +554,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
             section: Section::Color,
             label: format!("{name} text").into(),
             keywords: "color colour",
+            detail: None,
             mark: choice_mark(&format.color, &present.colors, |value| *value == Some(rgb)),
             swatch: Some(rgb_color(rgb)),
             key_hint: None,
@@ -556,6 +572,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         section: Section::Text,
         label: "Link".into(),
         keywords: "url hyperlink web address",
+        detail: None,
         mark: link_mark,
         swatch: None,
         key_hint: KeyHint::for_action(&OpenLink, cx),
@@ -565,6 +582,11 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         section: Section::Text,
         label: "Font".into(),
         keywords: "typeface family",
+        detail: match &format.font {
+            Choice::Same(Some(family)) => Some(family.clone().into()),
+            Choice::Same(None) => None,
+            Choice::Mixed => Some("Mixed".into()),
+        },
         mark: Mark::None,
         swatch: None,
         key_hint: KeyHint::for_action(&OpenFontPicker, cx),
@@ -575,6 +597,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         section: Section::Text,
         label: "Clear formatting".into(),
         keywords: "remove plain reset styles",
+        detail: None,
         mark: Mark::None,
         swatch: None,
         key_hint: KeyHint::for_action(clear.as_ref(), cx),

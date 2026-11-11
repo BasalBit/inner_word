@@ -463,6 +463,7 @@ impl Render for Menu {
 
         div()
             .key_context(picker::KEY_CONTEXT)
+            .debug_selector(|| "tools-menu".into())
             .track_focus(&self.focus_handle)
             // The panel is over the document: clicks must not reach the
             // text under it, and must not take focus from the query field

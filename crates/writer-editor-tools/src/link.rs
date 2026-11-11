@@ -130,6 +130,7 @@ impl Render for LinkPopover {
         );
         div()
             .key_context(LINK_CONTEXT)
+            .debug_selector(|| "link-popover".into())
             .occlude()
             // Clicks on the panel keep focus in the field.
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())

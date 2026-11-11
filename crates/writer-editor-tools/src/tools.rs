@@ -58,6 +58,8 @@ pub enum FindBarPlacement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuRow {
     pub label: String,
+    /// Secondary text after the label (a current value, a sample).
+    pub detail: Option<String>,
     /// A section header (not selectable).
     pub header: bool,
     pub mark: Mark,
@@ -238,6 +240,7 @@ impl EditorTools {
             .map(|(index, entry)| match entry {
                 MenuEntry::Header(title) => MenuRow {
                     label: title.to_string(),
+                    detail: None,
                     header: true,
                     mark: Mark::None,
                     key_hint: None,
@@ -245,6 +248,7 @@ impl EditorTools {
                 },
                 MenuEntry::Item(item) => MenuRow {
                     label: item.label.to_string(),
+                    detail: item.detail.as_ref().map(|detail| detail.to_string()),
                     header: false,
                     mark: item.mark,
                     key_hint: item.key_hint.as_ref().map(|hint| hint.text()),

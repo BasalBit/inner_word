@@ -46,6 +46,8 @@ pub(crate) struct FindState {
     pub(crate) current: Option<usize>,
     /// A message shown in place of the count ("Replaced 12").
     notice: Option<SharedString>,
+    /// The document revision the notice was made for.
+    notice_revision: u64,
 }
 
 /// The open find bar.
@@ -294,6 +296,12 @@ impl EditorTools {
     /// selected; otherwise (the document changed) the selection is left
     /// alone and the current match is whichever one it is on.
     pub(crate) fn refresh_find(&mut self, reveal: bool, cx: &mut Context<Self>) {
+        // "Replaced 12" stands until the document changes again.
+        if self.find.notice.is_some()
+            && self.find.notice_revision != self.editor.read(cx).state().revision()
+        {
+            self.find.notice = None;
+        }
         self.find.matches = self.search(cx);
         if reveal {
             let from = self.editor.read(cx).selection().start();
@@ -500,6 +508,7 @@ impl EditorTools {
             0 => "No matches".into(),
             _ => format!("Replaced {count}").into(),
         });
+        self.find.notice_revision = self.editor.read(cx).state().revision();
         cx.notify();
     }
 
@@ -651,6 +660,7 @@ impl EditorTools {
         Some(
             div()
                 .key_context(FIND_BAR_CONTEXT)
+                .debug_selector(|| "find-bar".into())
                 .flex_none()
                 .w_full()
                 .flex()

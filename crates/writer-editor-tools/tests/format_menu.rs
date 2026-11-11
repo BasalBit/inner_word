@@ -309,3 +309,43 @@ fn shortcut_toggles_and_read_only_blocks(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-.");
     assert_eq!(active(&tools, cx), None);
 }
+
+#[gpui::test]
+fn rows_show_current_values(cx: &mut TestAppContext) {
+    setup(cx);
+    let serif = InlineAttrs {
+        font: Some("Georgia".into()),
+        ..InlineAttrs::default()
+    };
+    let document = Document::from_blocks(vec![
+        Block::new(BlockKind::Paragraph)
+            .with_span("serif", serif)
+            .with_span(" plain", InlineAttrs::default()),
+    ]);
+    let (tools, editor, cx) = open(document, cx);
+
+    select(&editor, TextRange::in_block(0, 0, 5), cx);
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(row(&tools, "Font", cx).detail.as_deref(), Some("Georgia"));
+    assert_eq!(row(&tools, "Reset text size", cx).detail, None);
+    cx.simulate_keystrokes("escape");
+
+    select(&editor, TextRange::in_block(0, 0, 11), cx);
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(row(&tools, "Font", cx).detail.as_deref(), Some("Mixed"));
+    // Larger text, through the menu.
+    cx.simulate_input("larger");
+    cx.simulate_keystrokes("enter");
+    let size = editor.read_with(cx, |editor, _| editor.document().blocks()[0].text_size());
+    let size = size.expect("the block has its own text size now");
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(
+        row(&tools, "Reset text size", cx).detail,
+        Some(format!("Now {size} pt"))
+    );
+    cx.simulate_input("reset");
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[0].text_size(), None);
+    });
+}

@@ -50,6 +50,7 @@ fn lists_filters_and_applies_to_the_selection(cx: &mut TestAppContext) {
     assert!(!editor_focused(&editor, cx));
     let all = rows(&tools, cx);
     assert_eq!(all[0].label, "Document default");
+    assert_eq!(all[0].detail.as_deref(), Some("Charter"));
     assert_eq!(
         all[0].mark,
         Mark::Check,

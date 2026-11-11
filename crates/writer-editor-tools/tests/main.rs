@@ -6,6 +6,7 @@ mod font_picker;
 mod format_menu;
 mod insert_menu;
 mod integration;
+mod layout;
 mod link;
 mod mouse;
 mod support;

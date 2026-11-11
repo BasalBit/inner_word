@@ -3,10 +3,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientation};
+use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientation, Typography};
 
 use super::numbering::{Allocator, Instance, Slot};
-use super::styles::{BULLET_NUM_ID, CODE_FILL, FIRST_DECIMAL_NUM_ID, RULE_COLOR};
+use super::styles::{
+    BULLET_NUM_ID, CHECKED_COLOR, CODE_FILL, FAINT_COLOR, FIRST_DECIMAL_NUM_ID, MUTED_COLOR,
+    RULE_COLOR,
+};
 use super::xml::{DECLARATION, attr, text, uri};
 use super::{Comment, DocxOptions, FIRST_LINK_REL, FOOTER_REL, Metrics, R_NS, W_NS, page_twips};
 use crate::common::{first_comment_ranges, ordinals, part_needs_title, thread_entries};
@@ -34,7 +37,14 @@ struct Para {
     numbering: Option<(u32, u8)>,
     /// A bottom border: the divider.
     rule: bool,
+    /// Tab stops: `(alignment, position in twips)`.
+    tabs: Vec<(&'static str, i32)>,
     bidi: bool,
+    /// Space after the paragraph in twips, where it differs from the
+    /// style's.
+    space_after: Option<i32>,
+    /// An exact line height in twips.
+    line_exact: Option<i32>,
     /// Left indent and hanging indent in twips.
     indent: Option<(i32, i32)>,
     align: Option<&'static str>,
@@ -50,7 +60,8 @@ struct Para {
 
 impl Para {
     fn xml(&self) -> String {
-        // Children in schema order: pStyle, numPr, pBdr, bidi, ind, jc, rPr, sectPr.
+        // Children in schema order: pStyle, numPr, pBdr, tabs, bidi,
+        // spacing, ind, jc, rPr, sectPr.
         let mut p = String::new();
         if let Some(style) = self.style {
             p.push_str(&format!("<w:pStyle w:val=\"{style}\"/>"));
@@ -62,11 +73,28 @@ impl Para {
         }
         if self.rule {
             p.push_str(&format!(
-                "<w:pBdr><w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"1\" w:color=\"{RULE_COLOR}\"/></w:pBdr>"
+                "<w:pBdr><w:bottom w:val=\"single\" w:sz=\"8\" w:space=\"0\" w:color=\"{RULE_COLOR}\"/></w:pBdr>"
             ));
+        }
+        if !self.tabs.is_empty() {
+            p.push_str("<w:tabs>");
+            for (align, pos) in &self.tabs {
+                p.push_str(&format!("<w:tab w:val=\"{align}\" w:pos=\"{pos}\"/>"));
+            }
+            p.push_str("</w:tabs>");
         }
         if self.bidi {
             p.push_str("<w:bidi/>");
+        }
+        if self.space_after.is_some() || self.line_exact.is_some() {
+            p.push_str("<w:spacing");
+            if let Some(after) = self.space_after {
+                p.push_str(&format!(" w:after=\"{after}\""));
+            }
+            if let Some(line) = self.line_exact {
+                p.push_str(&format!(" w:line=\"{line}\" w:lineRule=\"exact\""));
+            }
+            p.push_str("/>");
         }
         if let Some((left, hanging)) = self.indent {
             if hanging > 0 {
@@ -256,6 +284,8 @@ struct Marker {
 struct Builder<'a> {
     options: &'a DocxOptions,
     metrics: &'a Metrics,
+    /// The typography the styles are written from: the first document's.
+    typography: Typography,
     links: Vec<String>,
     link_ids: HashMap<String, usize>,
     numbering: Allocator,
@@ -334,8 +364,8 @@ impl Builder<'_> {
 
     /// The formatting of a run with `attrs` in a block whose text size
     /// override is `size`.
-    fn run_props(&self, attrs: &InlineAttrs, size: Option<u32>, code_block: bool) -> RunProps {
-        if code_block {
+    fn run_props(&self, attrs: &InlineAttrs, size: Option<u32>, block: &Block) -> RunProps {
+        if block.kind().is_code() {
             // The Code style carries the formatting.
             return RunProps {
                 size,
@@ -371,6 +401,12 @@ impl Builder<'_> {
             if p.shade.is_none() {
                 p.shade = Some(CODE_FILL.to_string());
             }
+        }
+        if matches!(block.kind(), BlockKind::TodoItem { checked: true }) {
+            // A finished to-do is struck through and faint, as in the
+            // editor, whatever colour its text has.
+            p.strike = true;
+            p.color = Some(FAINT_COLOR.to_string());
         }
         p
     }
@@ -426,7 +462,7 @@ impl Builder<'_> {
                         next_marker += 1;
                     }
                 }
-                let mut props = self.run_props(attrs, size, code_block);
+                let mut props = self.run_props(attrs, size, block);
                 if link.is_some() {
                     props.style = Some("Hyperlink");
                 }
@@ -470,6 +506,11 @@ impl Builder<'_> {
         };
         let typography = &doc.settings().typography;
         let ordinals = ordinals(doc);
+        let paragraph_gap = self.metrics.paragraph_gap(&self.typography);
+        let quote_gap = self.metrics.quote_gap(&self.typography);
+        let divider_half = self
+            .metrics
+            .twips((self.metrics.base_line(&self.typography) * 0.3).round());
         let markers = self.comment_markers(doc);
         let none: Vec<Marker> = Vec::new();
         let mut paras: Vec<Para> = Vec::new();
@@ -520,9 +561,19 @@ impl Builder<'_> {
                 ..Para::default()
             };
             let indented = (level > 0).then(|| (self.metrics.indent(level), 0));
+            // What follows on the same page: blocks of one group (list
+            // items, quotes) sit closer together than paragraphs.
+            let next = blocks
+                .get(index + 1)
+                .filter(|_| index + 1 < keep_until)
+                .map(Block::kind);
+            let next_in_list = next.is_some_and(BlockKind::is_list_item);
+            let gutter = self.metrics.marker_gutter();
+            let item_left = self.metrics.indent(level) + gutter;
             // A list marker written as text: a to-do's box, or the number
             // of a list item that has no numbering instance.
-            let mut literal_marker: Option<String> = None;
+            // `(text, colour, set flush right before the text)`.
+            let mut literal_marker: Option<(String, &str, bool)> = None;
             match block.kind() {
                 BlockKind::Paragraph => para.indent = indented,
                 BlockKind::Heading { level: n } => {
@@ -538,16 +589,25 @@ impl Builder<'_> {
                     // The style already keeps the text clear of the bar.
                     para.indent = (level > 0)
                         .then(|| (self.metrics.indent(level) + self.metrics.quote_gutter(), 0));
+                    if matches!(next, Some(BlockKind::Quote)) {
+                        para.space_after = Some(quote_gap);
+                    }
                 }
                 BlockKind::CodeBlock { .. } => {
                     para.style = Some("Code");
-                    para.indent = indented;
+                    // The style keeps the panel inside the column.
+                    let (pad, _) = self.metrics.code_padding();
+                    para.indent =
+                        (level > 0).then(|| (self.metrics.indent(level) + pad * 20 + 10, 0));
                     para.bidi = false;
                     para.align = None;
                 }
                 BlockKind::Divider => {
+                    // A short row with the rule in its middle.
                     para.rule = true;
                     para.indent = indented;
+                    para.line_exact = Some(divider_half.max(20));
+                    para.space_after = Some(divider_half + paragraph_gap);
                 }
                 BlockKind::BulletItem => {
                     para.style = Some("ListParagraph");
@@ -564,30 +624,45 @@ impl Builder<'_> {
                         Slot::Literal => {
                             // No numbering instance left (see `numbering`):
                             // the number is text in the marker gutter.
-                            let gutter = self.metrics.marker_gutter();
-                            para.indent = Some((self.metrics.indent(level) + gutter, gutter));
-                            literal_marker = Some(format!("{ordinal}."));
+                            // It ends where a real number ends: a right
+                            // tab stop there, then the text's left edge.
+                            para.indent = Some((item_left, gutter));
+                            para.tabs = vec![
+                                ("right", item_left - self.metrics.number_gap()),
+                                ("left", item_left),
+                            ];
+                            literal_marker = Some((format!("{ordinal}."), MUTED_COLOR, true));
                         }
                     }
                 }
                 BlockKind::TodoItem { .. } => {
                     para.style = Some("ListParagraph");
-                    let gutter = self.metrics.marker_gutter();
-                    para.indent = Some((self.metrics.indent(level) + gutter, gutter));
+                    para.indent = Some((item_left, gutter));
                 }
                 BlockKind::PageBreak => {}
             }
-            if let BlockKind::TodoItem { checked } = block.kind() {
-                literal_marker = Some(if *checked { "\u{2611}" } else { "\u{2610}" }.to_string());
+            if block.kind().is_list_item() && !next_in_list {
+                // The last item of a list is followed by a paragraph's
+                // space.
+                para.space_after = Some(paragraph_gap);
             }
-            if let Some(marker) = literal_marker {
+            if let BlockKind::TodoItem { checked } = block.kind() {
+                literal_marker = Some(if *checked {
+                    ("\u{2611}".to_string(), CHECKED_COLOR, false)
+                } else {
+                    ("\u{2610}".to_string(), MUTED_COLOR, false)
+                });
+            }
+            if let Some((marker, color, flush_right)) = literal_marker {
                 let props = RunProps {
                     size,
+                    color: Some(color.to_string()),
                     ..RunProps::default()
                 };
                 para.content.push_str(&format!(
-                    "<w:r>{}<w:t>{marker}</w:t><w:tab/></w:r>",
-                    props.xml()
+                    "<w:r>{}{}<w:t>{marker}</w:t><w:tab/></w:r>",
+                    props.xml(),
+                    if flush_right { "<w:tab/>" } else { "" },
                 ));
             }
             para.content
@@ -607,6 +682,9 @@ impl Builder<'_> {
 
 /// The longest page side Word accepts, in points (22 inches).
 const MAX_PAGE: f32 = 1584.0;
+
+/// The smallest bottom margin that still shows a page number, in points.
+const MIN_FOOTER_MARGIN: f32 = 23.0;
 
 /// Section properties: page size, orientation, margins and the footer.
 fn section_xml(doc: &Document, page_numbers: bool) -> String {
@@ -630,7 +708,9 @@ fn section_xml(doc: &Document, page_numbers: bool) -> String {
         Orientation::Landscape => " w:orient=\"landscape\"",
         Orientation::Portrait => "",
     };
-    let footer = if page_numbers {
+    // As in the page view, a bottom margin with no room for the number
+    // has none.
+    let footer = if page_numbers && m.bottom >= MIN_FOOTER_MARGIN {
         format!("<w:footerReference w:type=\"default\" r:id=\"{FOOTER_REL}\"/>")
     } else {
         String::new()
@@ -656,6 +736,11 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
     let mut builder = Builder {
         options,
         metrics,
+        typography: source
+            .parts()
+            .first()
+            .map(|p| p.document.settings().typography.clone().sanitized())
+            .unwrap_or_default(),
         links: Vec::new(),
         link_ids: HashMap::new(),
         numbering: Allocator::new(),

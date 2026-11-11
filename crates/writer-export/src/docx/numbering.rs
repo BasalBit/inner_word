@@ -159,8 +159,8 @@ impl Allocator {
         let ordinal = ordinal.max(1);
         // An item that continues a list written as text stays text, and
         // so does a list nested in one.
-        let continues_literal = (self.literal_at[level] && ordinal > 1)
-            || self.literal_at[..level].iter().any(|l| *l);
+        let continues_literal =
+            (self.literal_at[level] && ordinal > 1) || self.literal_at[..level].iter().any(|l| *l);
         for deeper in level + 1..LEVELS {
             self.literal_at[deeper] = false;
         }

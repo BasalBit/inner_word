@@ -167,8 +167,15 @@ pub(crate) struct Metrics {
 /// These are the editor's own measures, so the export looks like the page
 /// view.
 const INDENT_STEP: f32 = 24.0;
-const MARKER_GUTTER: f32 = 28.0;
+const MARKER_GUTTER: f32 = 26.0;
 const QUOTE_GUTTER: f32 = 20.0;
+/// Room between the end of a list number and the item's text.
+const NUMBER_GAP: f32 = 7.0;
+/// Inner padding of a code block: left and right, top and bottom.
+const CODE_PADDING: f32 = 14.0;
+const CODE_PADDING_V: f32 = 10.0;
+/// Headings are set tighter than body text.
+const HEADING_LINE_HEIGHT: f32 = 1.3;
 
 impl Metrics {
     fn new(options: &DocxOptions) -> Metrics {
@@ -198,6 +205,49 @@ impl Metrics {
         self.twips(MARKER_GUTTER)
     }
 
+    /// Where a list number ends, measured back from the item's text, in
+    /// twips.
+    pub fn number_gap(&self) -> i32 {
+        self.twips(NUMBER_GAP)
+    }
+
+    /// Where the middle of a bullet sits, measured back from the item's
+    /// text, in twips.
+    pub fn bullet_offset(&self) -> i32 {
+        self.twips(MARKER_GUTTER / 2.0)
+    }
+
+    /// The inner padding of a code block in points: `(sides, top and
+    /// bottom)`. Paragraph borders carry it, and their distance from the
+    /// text is limited to 31 pt.
+    pub fn code_padding(&self) -> (i32, i32) {
+        let pt = |v: f32| ((v * self.scale).round() as i32).clamp(1, 31);
+        (pt(CODE_PADDING), pt(CODE_PADDING_V))
+    }
+
+    /// The height of a body line in points: the unit the editor measures
+    /// heading and divider spacing in.
+    pub fn base_line(&self, typography: &writer_core::Typography) -> f32 {
+        (typography.base_size * typography.line_height)
+            .round()
+            .max(1.0)
+    }
+
+    /// The space after a paragraph in twips.
+    pub fn paragraph_gap(&self, typography: &writer_core::Typography) -> i32 {
+        self.twips(typography.paragraph_spacing.round())
+    }
+
+    /// The space between two neighbouring list items in twips.
+    pub fn list_gap(&self, typography: &writer_core::Typography) -> i32 {
+        self.twips((typography.paragraph_spacing.round() * 0.33).round())
+    }
+
+    /// The space between two neighbouring quote paragraphs in twips.
+    pub fn quote_gap(&self, typography: &writer_core::Typography) -> i32 {
+        self.twips((typography.paragraph_spacing.round() * 0.5).round())
+    }
+
     /// The indent of a quote's text from its bar, in twips.
     pub fn quote_gutter(&self) -> i32 {
         self.twips(QUOTE_GUTTER)
@@ -218,11 +268,79 @@ impl Metrics {
         (points * self.scale * 20.0).round() as i32
     }
 
-    /// A line height (multiple of the font size) as `w:line` for
-    /// `lineRule="auto"`, where 240 is the font's own line height.
-    pub fn line(&self, multiple: f32) -> i32 {
-        (multiple / 1.2 * 240.0).round().clamp(120.0, 1200.0) as i32
+    /// The line height of text of `size` points in `font`, set at
+    /// `ratio` times its size, as `w:line` for `lineRule="auto"`.
+    ///
+    /// The editor makes a line `size * ratio` high, rounded to whole
+    /// points, whatever the font. Word's unit (240) is the font's own
+    /// line height instead, which differs from font to font
+    /// ([`natural_line_height`]).
+    pub fn line(&self, font: &str, size: f32, ratio: f32) -> i32 {
+        let size = if size.is_finite() && size > 0.0 {
+            size
+        } else {
+            12.0
+        };
+        let pitch = (size * ratio).round().max(1.0);
+        let multiple = pitch / (size * natural_line_height(font));
+        if multiple.is_finite() {
+            (multiple * 240.0).round().clamp(120.0, 1200.0) as i32
+        } else {
+            240
+        }
     }
+
+    /// `w:line` of a heading of `size` points: headings are set tighter
+    /// than body text.
+    pub fn heading_line(&self, typography: &writer_core::Typography, size: f32) -> i32 {
+        self.line(
+            &typography.body_font,
+            size,
+            typography.line_height.min(HEADING_LINE_HEIGHT),
+        )
+    }
+}
+
+/// A font's own line height as a multiple of its size: ascent plus descent
+/// plus line gap of its `hhea` table, which is what Word and LibreOffice
+/// call "single" spacing. Measured from the fonts macOS ships (the ones
+/// the app offers, and the common ones besides); 1.2 for any other font.
+pub(crate) fn natural_line_height(font: &str) -> f32 {
+    const KNOWN: &[(&str, f32)] = &[
+        ("charter", 1.2202),
+        ("iowan old style", 1.3652),
+        ("georgia", 1.1362),
+        ("palatino", 1.1001),
+        ("baskerville", 1.144),
+        ("hoefler text", 1.0),
+        ("times new roman", 1.1499),
+        ("times", 1.0),
+        ("new york", 1.1934),
+        ("helvetica neue", 1.193),
+        ("helvetica", 1.0),
+        ("arial", 1.1499),
+        ("avenir next", 1.366),
+        ("avenir", 1.366),
+        ("menlo", 1.1641),
+        ("monaco", 1.3335),
+        ("courier new", 1.1328),
+        ("verdana", 1.2153),
+        ("optima", 1.212),
+        ("gill sans", 1.1484),
+        ("didot", 1.264),
+        ("cochin", 1.147),
+        ("athelas", 1.12),
+        ("seravek", 1.227),
+        ("pt serif", 1.294),
+        ("pt sans", 1.295),
+        ("american typewriter", 1.154),
+        ("futura", 1.3281),
+    ];
+    let name = font.trim().to_lowercase();
+    KNOWN
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map_or(1.2, |(_, height)| *height)
 }
 
 /// A page length in points as twips. Page geometry is never scaled.
@@ -504,8 +622,20 @@ mod tests {
         let m = Metrics::new(&DocxOptions::default());
         assert_eq!(m.half_points(17.0), 34);
         assert_eq!(m.twips(12.0), 240);
-        assert_eq!(m.line(1.6), 320);
-        assert_eq!(m.line(1.2), 240);
+        // 17 pt Charter at 1.6 is a 27 pt line; Charter's own line is
+        // 1.2202 times its size.
+        assert_eq!(m.line("Charter", 17.0, 1.6), 312);
+        assert_eq!(m.line(" charter ", 17.0, 1.6), 312);
+        // An unknown font is taken as 1.2: 27 / (17 * 1.2) * 240.
+        assert_eq!(m.line("No Such Font", 17.0, 1.6), 318);
+        assert_eq!(m.line("No Such Font", 10.0, 1.2), 240);
+        assert_eq!(m.line("Avenir Next", 17.0, 1.6), 279);
+        // A size that is not a number counts as 12 pt.
+        assert_eq!(m.line("Charter", f32::NAN, 1.6), 311);
+        assert_eq!(m.line("Charter", 17.0, 100.0), 1200);
+        // Headings never go above 1.3: 34 pt gives a 44 pt line.
+        let t = writer_core::Typography::default();
+        assert_eq!(m.heading_line(&t, 34.0), 255);
         assert_eq!(
             (
                 m.indent(0),
@@ -513,7 +643,15 @@ mod tests {
                 m.marker_gutter(),
                 m.quote_gutter()
             ),
-            (0, 960, 560, 400)
+            (0, 960, 520, 400)
+        );
+        assert_eq!((m.number_gap(), m.bullet_offset()), (140, 260));
+        assert_eq!(m.code_padding(), (14, 10));
+        let t = writer_core::Typography::default();
+        assert_eq!(m.base_line(&t), (t.base_size * t.line_height).round());
+        assert_eq!(
+            m.list_gap(&t),
+            m.twips((t.paragraph_spacing.round() * 0.33).round())
         );
         assert_eq!(page_twips(595.276), 11906);
         assert_eq!(page_twips(841.89), 16838);

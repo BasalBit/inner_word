@@ -324,7 +324,10 @@ impl Package {
                     .children()
                     .filter(|l| l.has_tag_name((W, "lvl")))
                     .all(|l| val(l, "numFmt") == Some("bullet"));
-                assert!(out.bullet.insert(id, bullet).is_none(), "duplicate definition");
+                assert!(
+                    out.bullet.insert(id, bullet).is_none(),
+                    "duplicate definition"
+                );
             } else if n.has_tag_name((W, "num")) {
                 let id: u32 = n.attribute((W, "numId")).unwrap().parse().unwrap();
                 let definition: u32 = val(n, "abstractNumId").unwrap().parse().unwrap();
@@ -334,7 +337,10 @@ impl Package {
                     let start: u32 = val(o, "startOverride").unwrap().parse().unwrap();
                     assert!(starts.insert(level, start).is_none());
                 }
-                assert!(out.nums.insert(id, (definition, starts)).is_none(), "duplicate instance");
+                assert!(
+                    out.nums.insert(id, (definition, starts)).is_none(),
+                    "duplicate instance"
+                );
             }
         }
         out
@@ -355,6 +361,7 @@ impl Package {
                     let first = p.runs.first().map(|r| r.text.as_str()).unwrap_or("");
                     return first
                         .strip_suffix(".\t")
+                        .and_then(|n| n.strip_prefix('\t'))
                         .filter(|_| p.hanging.is_some())
                         .and_then(|n| n.parse().ok());
                 };
@@ -483,6 +490,12 @@ struct P {
     bidi: bool,
     rule: bool,
     section: bool,
+    /// `w:spacing w:after` of the paragraph itself.
+    after: Option<i32>,
+    /// `w:spacing w:line` when the rule is "exact".
+    line_exact: Option<i32>,
+    /// Tab stops: `(alignment, position)`.
+    tabs: Vec<(String, i32)>,
     runs: Vec<Run>,
 }
 
@@ -505,6 +518,24 @@ impl P {
             out.bidi = child(ppr, "bidi").is_some();
             out.rule = child(ppr, "pBdr").is_some_and(|b| child(b, "bottom").is_some());
             out.section = child(ppr, "sectPr").is_some();
+            if let Some(spacing) = child(ppr, "spacing") {
+                out.after = spacing.attribute((W, "after")).map(|v| v.parse().unwrap());
+                if spacing.attribute((W, "lineRule")) == Some("exact") {
+                    out.line_exact = spacing.attribute((W, "line")).map(|v| v.parse().unwrap());
+                }
+            }
+            if let Some(tabs) = child(ppr, "tabs") {
+                out.tabs = tabs
+                    .children()
+                    .filter(Node::is_element)
+                    .map(|t| {
+                        (
+                            t.attribute((W, "val")).unwrap().to_string(),
+                            t.attribute((W, "pos")).unwrap().parse().unwrap(),
+                        )
+                    })
+                    .collect();
+            }
         }
         let read_run = |r: Node, link: Option<String>| {
             let mut run = Run {
@@ -989,11 +1020,22 @@ fn list_definitions_and_instances_stay_inside_words_limits() {
             // A list past the limit: the number is text in the gutter of
             // a hanging indent, at the indent of a real list item.
             let p = &ps[ps.len() - 3..];
-            assert_eq!(p[0].text(), "1.\tfirst");
-            assert_eq!((p[0].left, p[0].hanging), (Some(560), Some(560)));
-            assert_eq!(p[1].text(), "1.\tnested");
-            assert_eq!((p[1].left, p[1].hanging), (Some(1040), Some(560)));
-            assert_eq!(p[2].text(), "2.\tsecond");
+            // The number ends at a right tab stop 7 pt before the text,
+            // as a real list number does.
+            assert_eq!(p[0].text(), "\t1.\tfirst");
+            assert_eq!((p[0].left, p[0].hanging), (Some(520), Some(520)));
+            assert_eq!(
+                p[0].tabs,
+                vec![("right".to_string(), 380), ("left".to_string(), 520)]
+            );
+            assert_eq!(p[0].runs[0].color.as_deref(), Some("6B645B"));
+            assert_eq!(p[1].text(), "\t1.\tnested");
+            assert_eq!((p[1].left, p[1].hanging), (Some(1000), Some(520)));
+            assert_eq!(
+                p[1].tabs,
+                vec![("right".to_string(), 860), ("left".to_string(), 1000)]
+            );
+            assert_eq!(p[2].text(), "\t2.\tsecond");
         }
     }
 }
@@ -1041,7 +1083,10 @@ fn random_lists_show_the_documents_numbers_in_every_reader() {
         }
         // Never more instances than numbered items start at 1.
         let restarts = expected.iter().filter(|n| **n == Some(1)).count();
-        assert!(package.numbering().nums.len() <= restarts + 1, "seed {seed}");
+        assert!(
+            package.numbering().nums.len() <= restarts + 1,
+            "seed {seed}"
+        );
     }
 }
 
@@ -1078,9 +1123,183 @@ fn todos_have_ballot_boxes() {
     assert_eq!(ps[2].text(), "\u{2610}\t");
     assert_eq!(ps[0].style, "ListParagraph");
     assert_eq!(ps[0].num, None);
-    // Like list items: 28 pt for the marker, 24 pt more per level.
-    assert_eq!((ps[0].left, ps[0].hanging), (Some(560), Some(560)));
-    assert_eq!((ps[1].left, ps[1].hanging), (Some(1040), Some(560)));
+    // Like list items: 26 pt for the marker, 24 pt more per level.
+    assert_eq!((ps[0].left, ps[0].hanging), (Some(520), Some(520)));
+    assert_eq!((ps[1].left, ps[1].hanging), (Some(1000), Some(520)));
+    // As in the editor: an open box is muted; a finished to-do has an
+    // accent box and faint, struck text.
+    assert_eq!(ps[0].runs[0].color.as_deref(), Some("6B645B"));
+    assert!(!ps[0].runs[1].strike && ps[0].runs[1].color.is_none());
+    assert_eq!(ps[1].runs[0].color.as_deref(), Some("B0503A"));
+    assert!(!ps[1].runs[0].strike);
+    assert!(ps[1].runs[1].strike);
+    assert_eq!(ps[1].runs[1].color.as_deref(), Some("A0988D"));
+}
+
+/// The spacing, indents and colours of the app's page view (see
+/// `crates/writer-editor/src/layout/style.rs`), for the default
+/// typography: 17 pt Charter, line height 1.6 (a 27 pt line), 12 pt
+/// between paragraphs.
+#[test]
+fn spacing_and_colours_follow_the_page_view() {
+    let doc = Document::from_blocks(vec![
+        Block::with_text(BlockKind::BulletItem, "a"),
+        Block::with_text(BlockKind::NumberedItem, "b").with_indent(1),
+        Block::with_text(BlockKind::TodoItem { checked: false }, "c"),
+        Block::paragraph("after the list"),
+        Block::with_text(BlockKind::Quote, "q1"),
+        Block::with_text(BlockKind::Quote, "q2"),
+        Block::new(BlockKind::Divider),
+        Block::with_text(BlockKind::code(), "code").with_indent(1),
+        Block::with_text(BlockKind::BulletItem, "last block"),
+    ]);
+    let package = Package::of(&doc);
+    package.check();
+    let ps = package.paragraphs();
+    // Neighbouring list items of any kind keep the style's small gap; the
+    // last one is followed by a paragraph's space.
+    assert_eq!(ps[0].after, None);
+    assert_eq!(ps[1].after, None);
+    assert_eq!(ps[2].after, Some(240));
+    assert_eq!(ps[8].after, Some(240));
+    // Two quotes in a row are half a paragraph's space apart.
+    assert_eq!(ps[4].after, Some(120));
+    assert_eq!(ps[5].after, None);
+    // The divider is a row of 0.6 lines (16 pt) with the rule in its
+    // middle: 8 pt above the rule, 8 pt and a paragraph's space below.
+    assert!(ps[6].rule);
+    assert_eq!(ps[6].line_exact, Some(160));
+    assert_eq!(ps[6].after, Some(160 + 240));
+    // An indented code block: one level, plus the room its panel needs
+    // to stay inside the column (14 pt padding and the border).
+    assert_eq!(ps[7].left, Some(480 + 290));
+
+    let styles = roxmltree::Document::parse(package.part(parts::STYLES)).unwrap();
+    let style = |id: &str| {
+        styles
+            .descendants()
+            .find(|n| n.has_tag_name((W, "style")) && n.attribute((W, "styleId")) == Some(id))
+            .unwrap()
+    };
+    let spacing = |id: &str, name: &str| -> Option<i32> {
+        child(child(style(id), "pPr")?, "spacing")?
+            .attribute((W, name))
+            .map(|v| v.parse().unwrap())
+    };
+    // Body: a 27 pt line of 17 pt Charter, whose own line is 1.2202 times
+    // its size: 27 / (17 * 1.2202) * 240.
+    assert_eq!(spacing("Normal", "line"), Some(312));
+    assert_eq!(spacing("Normal", "after"), Some(240));
+    // Headings: space above and below in body lines (0.9 and 0.5 of 27 pt
+    // for level 1, 0.6 and 0.3 from level 4), and a line of at most 1.3.
+    assert_eq!(spacing("Heading1", "before"), Some(480));
+    assert_eq!(spacing("Heading1", "after"), Some(280));
+    assert_eq!(spacing("Heading1", "line"), Some(255));
+    assert_eq!(spacing("Heading2", "before"), Some(480));
+    assert_eq!(spacing("Heading2", "after"), Some(180));
+    assert_eq!(spacing("Heading3", "before"), Some(400));
+    assert_eq!(spacing("Heading3", "after"), Some(160));
+    assert_eq!(spacing("Heading6", "before"), Some(320));
+    assert_eq!(spacing("Heading6", "after"), Some(160));
+    // List items: a third of the paragraph spacing.
+    assert_eq!(spacing("ListParagraph", "after"), Some(80));
+    // Quote: muted text; a 3 pt bar that starts 1 pt in, text at 20 pt.
+    let quote = style("Quote");
+    assert_eq!(val(child(quote, "rPr").unwrap(), "color"), Some("6B645B"));
+    let quote_ppr = child(quote, "pPr").unwrap();
+    let bar = child(child(quote_ppr, "pBdr").unwrap(), "left").unwrap();
+    assert_eq!(bar.attribute((W, "sz")), Some("24"));
+    assert_eq!(bar.attribute((W, "space")), Some("16"));
+    assert_eq!(bar.attribute((W, "color")), Some("CDC5B8"));
+    assert_eq!(
+        child(quote_ppr, "ind").unwrap().attribute((W, "left")),
+        Some("400")
+    );
+    // Code: a panel in the hover colour with 14 pt padding at the sides
+    // and 10 pt above and below, 4 pt clear of its neighbours, kept
+    // inside the column; 15 pt Menlo on a 24 pt line.
+    let code_ppr = child(style("Code"), "pPr").unwrap();
+    let borders = child(code_ppr, "pBdr").unwrap();
+    for (side, space) in [
+        ("top", "10"),
+        ("left", "14"),
+        ("bottom", "10"),
+        ("right", "14"),
+    ] {
+        let b = child(borders, side).unwrap();
+        assert_eq!(b.attribute((W, "space")), Some(space), "{side}");
+        assert_eq!(b.attribute((W, "color")), Some("EEEAE3"), "{side}");
+    }
+    assert_eq!(
+        child(code_ppr, "shd").unwrap().attribute((W, "fill")),
+        Some("EEEAE3")
+    );
+    let ind = child(code_ppr, "ind").unwrap();
+    assert_eq!(ind.attribute((W, "left")), Some("290"));
+    assert_eq!(ind.attribute((W, "right")), Some("290"));
+    assert_eq!(spacing("Code", "before"), Some(80));
+    assert_eq!(spacing("Code", "after"), Some(320));
+    assert_eq!(spacing("Code", "line"), Some(330));
+    // Links are in the accent colour, the page number is small and faint.
+    assert_eq!(
+        val(child(style("Hyperlink"), "rPr").unwrap(), "color"),
+        Some("B0503A")
+    );
+    let footer = child(style("Footer"), "rPr").unwrap();
+    assert_eq!(val(footer, "color"), Some("A0988D"));
+    assert_eq!(val(footer, "sz"), Some("22"));
+
+    // List markers: bullets centred in the 26 pt gutter, numbers flush
+    // right 7 pt before the text, both muted.
+    let numbering = roxmltree::Document::parse(package.part(parts::NUMBERING)).unwrap();
+    let levels: Vec<Node> = numbering
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "lvl")))
+        .collect();
+    assert_eq!(levels.len(), 18);
+    for (i, l) in levels.iter().enumerate() {
+        let bullet = i < 9;
+        let level = (i % 9) as i32;
+        assert_eq!(
+            val(*l, "lvlJc"),
+            Some(if bullet { "center" } else { "right" })
+        );
+        let ind = child(child(*l, "pPr").unwrap(), "ind").unwrap();
+        assert_eq!(
+            ind.attribute((W, "left")),
+            Some((520 + 480 * level).to_string().as_str())
+        );
+        assert_eq!(
+            ind.attribute((W, "hanging")),
+            Some(if bullet { "260" } else { "140" })
+        );
+        assert_eq!(val(child(*l, "rPr").unwrap(), "color"), Some("6B645B"));
+    }
+}
+
+#[test]
+fn a_bottom_margin_too_small_for_the_page_number_has_none() {
+    let with_bottom = |bottom: f32| {
+        let settings = DocumentSettings {
+            page: PageSetup {
+                margins: Margins {
+                    top: 72.0,
+                    right: 72.0,
+                    bottom,
+                    left: 72.0,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let doc = Document::from_blocks(vec![Block::paragraph("x")]).with_settings(settings);
+        let package = Package::of(&doc);
+        package.check();
+        package.sections()[0].7
+    };
+    assert!(with_bottom(72.0));
+    assert!(with_bottom(23.0));
+    assert!(!with_bottom(22.0));
 }
 
 #[test]
@@ -1192,7 +1411,7 @@ fn run_formatting() {
     assert!(r[3].underline);
     assert!(r[4].strike);
     assert_eq!(r[5].font.as_deref(), Some("Menlo"));
-    assert_eq!(r[5].shade.as_deref(), Some("F1EEE8"));
+    assert_eq!(r[5].shade.as_deref(), Some("EEEAE3"));
     assert_eq!(r[6].shade.as_deref(), Some("FFF176"));
     assert_eq!(r[7].color.as_deref(), Some("CC3300"));
     assert_eq!(r[8].font.as_deref(), Some("Georgia"));

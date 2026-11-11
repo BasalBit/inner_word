@@ -173,8 +173,11 @@ fn sample() -> Document {
 
 /// One page of numbered lists; every item says the number it must show.
 fn lists() -> Document {
-    let n = |text: &str, indent: u8| Block::with_text(BlockKind::NumberedItem, text).with_indent(indent);
-    let b = |text: &str, indent: u8| Block::with_text(BlockKind::BulletItem, text).with_indent(indent);
+    let n = |text: &str, indent: u8| {
+        Block::with_text(BlockKind::NumberedItem, text).with_indent(indent)
+    };
+    let b =
+        |text: &str, indent: u8| Block::with_text(BlockKind::BulletItem, text).with_indent(indent);
     Document::from_blocks(vec![
         n("one", 0),
         n("two", 0),

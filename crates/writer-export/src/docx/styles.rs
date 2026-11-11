@@ -6,12 +6,24 @@ use super::numbering::Instance;
 use super::xml::{DECLARATION, attr};
 use super::{Metrics, W_NS};
 
+// The colours of the app's light theme ("Paper"), so that the export looks
+// like the page view. They are repeated here because this crate cannot
+// depend on the interface crates.
+
 /// Fill colour of code blocks and inline code.
-pub(crate) const CODE_FILL: &str = "F1EEE8";
-/// Colour of hyperlinks.
-pub(crate) const LINK_COLOR: &str = "0563C1";
+pub(crate) const CODE_FILL: &str = "EEEAE3";
+/// Colour of hyperlinks: the accent.
+pub(crate) const LINK_COLOR: &str = "B0503A";
 /// Colour of the quote bar and of dividers.
-pub(crate) const RULE_COLOR: &str = "B5AFA5";
+pub(crate) const RULE_COLOR: &str = "CDC5B8";
+/// Colour of quote text, list markers and open to-do boxes.
+pub(crate) const MUTED_COLOR: &str = "6B645B";
+/// Colour of finished to-dos and of the page number.
+pub(crate) const FAINT_COLOR: &str = "A0988D";
+/// Colour of the box of a finished to-do: the accent.
+pub(crate) const CHECKED_COLOR: &str = LINK_COLOR;
+/// Size of the page number in points (the interface's smallest text).
+const PAGE_NUMBER_SIZE: f32 = 11.0;
 
 /// The bullet numbering instance. Numbered lists use the ids from
 /// [`FIRST_DECIMAL_NUM_ID`].
@@ -35,8 +47,12 @@ fn size(half_points: u32) -> String {
 pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
     let body_font = fonts(&typography.body_font);
     let body_size = size(m.half_points(typography.base_size));
-    let after = m.twips(typography.paragraph_spacing);
-    let line = m.line(typography.line_height);
+    let after = m.paragraph_gap(typography);
+    let line = m.line(
+        &typography.body_font,
+        typography.base_size,
+        typography.line_height,
+    );
     let mut s = String::with_capacity(8192);
     s.push_str(DECLARATION);
     s.push_str(&format!("<w:styles xmlns:w=\"{W_NS}\">"));
@@ -59,36 +75,69 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
          <w:style w:type=\"numbering\" w:default=\"1\" w:styleId=\"NoList\"><w:name w:val=\"No List\"/>\
          <w:uiPriority w:val=\"99\"/><w:semiHidden/><w:unhideWhenUsed/></w:style>",
     );
-    // Headings: sizes from the typography and, as in the editor, extra
-    // room above of 0.35 lines.
+    // Headings as in the editor: sizes from the typography, a tighter
+    // line, and more room above than below, measured in body lines.
+    let base_line = m.base_line(typography);
     for level in 1..=6u8 {
         let pt = typography.size_for(&BlockKind::heading(level));
-        let before = m.twips(pt * typography.line_height * 0.35);
+        let (before, after) = match level {
+            1 => (0.9, 0.5),
+            2 => (0.9, 0.35),
+            3 => (0.75, 0.3),
+            _ => (0.6, 0.3),
+        };
+        let before = m.twips((base_line * before).round());
+        let after = m.twips((base_line * after).round());
+        let heading_line = m.heading_line(typography, pt);
         s.push_str(&format!(
             "<w:style w:type=\"paragraph\" w:styleId=\"Heading{level}\"><w:name w:val=\"heading {level}\"/>\
              <w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:uiPriority w:val=\"9\"/><w:qFormat/>\
-             <w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before=\"{before}\"/>\
+             <w:pPr><w:keepNext/><w:keepLines/>\
+             <w:spacing w:before=\"{before}\" w:after=\"{after}\" w:line=\"{heading_line}\" w:lineRule=\"auto\"/>\
              <w:outlineLvl w:val=\"{}\"/></w:pPr><w:rPr><w:b/><w:bCs/>{}</w:rPr></w:style>",
             level - 1,
             size(m.half_points(pt)),
         ));
     }
+    // The quote bar is 3 pt wide and starts 1 pt into the block; the text
+    // starts at the quote gutter. Quote text is muted.
     let step = m.quote_gutter();
+    let bar_space = ((step as f32 / 20.0) - 4.0).round().clamp(0.0, 31.0) as i32;
     s.push_str(&format!(
         "<w:style w:type=\"paragraph\" w:styleId=\"Quote\"><w:name w:val=\"Quote\"/><w:basedOn w:val=\"Normal\"/>\
-         <w:uiPriority w:val=\"29\"/><w:qFormat/><w:pPr><w:pBdr><w:left w:val=\"single\" w:sz=\"18\" w:space=\"12\" w:color=\"{RULE_COLOR}\"/></w:pBdr>\
-         <w:ind w:left=\"{step}\"/></w:pPr></w:style>"
+         <w:uiPriority w:val=\"29\"/><w:qFormat/><w:pPr><w:pBdr><w:left w:val=\"single\" w:sz=\"24\" w:space=\"{bar_space}\" w:color=\"{RULE_COLOR}\"/></w:pBdr>\
+         <w:ind w:left=\"{step}\"/></w:pPr><w:rPr><w:color w:val=\"{MUTED_COLOR}\"/></w:rPr></w:style>"
     ));
+    // A code block is a panel: the fill reaches the borders, which have
+    // the fill's colour and stand off the text by the panel's padding.
+    // The indents keep the panel inside the text column.
     let code_font = fonts(&m.code_font);
-    let code_size = size(m.half_points(typography.size_for(&BlockKind::code())));
+    let code_points = typography.size_for(&BlockKind::code());
+    let code_size = size(m.half_points(code_points));
+    let code_line = m.line(&m.code_font, code_points, typography.line_height);
+    let (pad, pad_v) = m.code_padding();
+    let code_indent = pad * 20 + 10;
+    let code_before = m.twips(4.0);
+    let code_after = after + m.twips(4.0);
+    let side = |name: &str, space: i32| {
+        format!(
+            "<w:{name} w:val=\"single\" w:sz=\"4\" w:space=\"{space}\" w:color=\"{CODE_FILL}\"/>"
+        )
+    };
     s.push_str(&format!(
         "<w:style w:type=\"paragraph\" w:styleId=\"Code\"><w:name w:val=\"Code\"/><w:basedOn w:val=\"Normal\"/><w:qFormat/>\
-         <w:pPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{CODE_FILL}\"/><w:suppressAutoHyphens/>\
-         <w:jc w:val=\"left\"/></w:pPr>\
-         <w:rPr>{code_font}<w:noProof/>{code_size}</w:rPr></w:style>"
+         <w:pPr><w:pBdr>{}{}{}{}</w:pBdr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{CODE_FILL}\"/><w:suppressAutoHyphens/>\
+         <w:spacing w:before=\"{code_before}\" w:after=\"{code_after}\" w:line=\"{code_line}\" w:lineRule=\"auto\"/>\
+         <w:ind w:left=\"{code_indent}\" w:right=\"{code_indent}\"/><w:jc w:val=\"left\"/></w:pPr>\
+         <w:rPr>{code_font}<w:noProof/>{code_size}</w:rPr></w:style>",
+        side("top", pad_v),
+        side("left", pad),
+        side("bottom", pad_v),
+        side("right", pad),
     ));
-    // List items sit closer together than paragraphs, as in the editor.
-    let list_after = m.twips(typography.paragraph_spacing * 0.35);
+    // List items sit closer together than paragraphs, as in the editor;
+    // the last item of a list gets the full paragraph spacing in the body.
+    let list_after = m.list_gap(typography);
     s.push_str(&format!(
         "<w:style w:type=\"paragraph\" w:styleId=\"ListParagraph\"><w:name w:val=\"List Paragraph\"/><w:basedOn w:val=\"Normal\"/>\
          <w:uiPriority w:val=\"34\"/><w:qFormat/><w:pPr><w:spacing w:after=\"{list_after}\"/></w:pPr></w:style>"
@@ -97,11 +146,11 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
         "<w:style w:type=\"character\" w:styleId=\"Hyperlink\"><w:name w:val=\"Hyperlink\"/><w:basedOn w:val=\"DefaultParagraphFont\"/>\
          <w:uiPriority w:val=\"99\"/><w:unhideWhenUsed/><w:rPr><w:color w:val=\"{LINK_COLOR}\"/><w:u w:val=\"single\"/></w:rPr></w:style>"
     ));
-    let small = size(m.half_points(typography.base_size * 0.8));
+    let small = size(m.half_points(PAGE_NUMBER_SIZE));
     s.push_str(&format!(
         "<w:style w:type=\"paragraph\" w:styleId=\"Footer\"><w:name w:val=\"footer\"/><w:basedOn w:val=\"Normal\"/>\
          <w:uiPriority w:val=\"99\"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/><w:jc w:val=\"center\"/></w:pPr>\
-         <w:rPr>{small}</w:rPr></w:style>\
+         <w:rPr><w:color w:val=\"{FAINT_COLOR}\"/>{small}</w:rPr></w:style>\
          <w:style w:type=\"character\" w:styleId=\"CommentReference\"><w:name w:val=\"annotation reference\"/>\
          <w:basedOn w:val=\"DefaultParagraphFont\"/><w:uiPriority w:val=\"99\"/><w:semiHidden/><w:unhideWhenUsed/>\
          <w:rPr><w:sz w:val=\"16\"/><w:szCs w:val=\"16\"/></w:rPr></w:style>\
@@ -123,7 +172,12 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
 /// share an instance and which instances share a definition; see
 /// [`super::numbering`] for the limits behind that.
 pub(crate) fn numbering_xml(m: &Metrics, numbered: &[Instance]) -> String {
+    // As in the editor: the text of an item starts one marker gutter in.
+    // A bullet is centred in the gutter; a number is set flush right and
+    // ends a little before the text, so the dots line up.
     let gutter = m.marker_gutter();
+    let bullet = m.bullet_offset();
+    let number = m.number_gap();
     let mut s = String::with_capacity(4096);
     s.push_str(DECLARATION);
     s.push_str(&format!("<w:numbering xmlns:w=\"{W_NS}\">"));
@@ -136,9 +190,9 @@ pub(crate) fn numbering_xml(m: &Metrics, numbered: &[Instance]) -> String {
     for level in 0..9u32 {
         let glyph = ["\u{2022}", "\u{25e6}", "\u{25aa}"][level as usize % 3];
         s.push_str(&format!(
-            "<w:lvl w:ilvl=\"{level}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\"{glyph}\"/><w:lvlJc w:val=\"left\"/>\
-             <w:pPr><w:ind w:left=\"{}\" w:hanging=\"{gutter}\"/></w:pPr>\
-             <w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:cs=\"Arial\" w:hint=\"default\"/></w:rPr></w:lvl>",
+            "<w:lvl w:ilvl=\"{level}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\"{glyph}\"/><w:lvlJc w:val=\"center\"/>\
+             <w:pPr><w:ind w:left=\"{}\" w:hanging=\"{bullet}\"/></w:pPr>\
+             <w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:cs=\"Arial\" w:hint=\"default\"/><w:color w:val=\"{MUTED_COLOR}\"/></w:rPr></w:lvl>",
             m.indent(level as u8) + gutter,
         ));
     }
@@ -146,8 +200,9 @@ pub(crate) fn numbering_xml(m: &Metrics, numbered: &[Instance]) -> String {
     let mut decimal_levels = String::new();
     for level in 0..9u32 {
         decimal_levels.push_str(&format!(
-            "<w:lvl w:ilvl=\"{level}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%{}.\"/><w:lvlJc w:val=\"left\"/>\
-             <w:pPr><w:ind w:left=\"{}\" w:hanging=\"{gutter}\"/></w:pPr></w:lvl>",
+            "<w:lvl w:ilvl=\"{level}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%{}.\"/><w:lvlJc w:val=\"right\"/>\
+             <w:pPr><w:ind w:left=\"{}\" w:hanging=\"{number}\"/></w:pPr>\
+             <w:rPr><w:color w:val=\"{MUTED_COLOR}\"/></w:rPr></w:lvl>",
             level + 1,
             m.indent(level as u8) + gutter,
         ));

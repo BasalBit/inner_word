@@ -160,7 +160,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-c", CopyComment, threads),
         KeyBinding::new("s", ToggleShowResolved, threads),
         KeyBinding::new("escape", FocusEditor, threads),
-        // The menu of the active thread (the shared context-menu key).
+        // The menu of the active thread (the shared context-menu keys;
+        // `ctrl-enter` last, so key hints show it).
+        KeyBinding::new("shift-f10", OpenContextMenu, threads),
         KeyBinding::new("ctrl-enter", OpenContextMenu, threads),
         // Back into a composer that was left open.
         KeyBinding::new("shift-tab", CycleFocus, threads),

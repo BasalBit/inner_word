@@ -174,3 +174,38 @@ fn the_window_text_input_reaches_vim_only_when_wanted(cx: &mut TestAppContext) {
     assert_eq!(rig.status(cx).composing, None);
     assert_eq!(line(&rig, cx), "/a");
 }
+
+#[gpui::test]
+fn a_dead_key_that_arrives_as_a_key_types_nothing(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["cafe"]), cx);
+    // Without marked text (a window that is not active): option-e reaches
+    // the key path with no character. It is not an "e", and the key after
+    // it goes to the text input, where the system makes one character of
+    // the two (a test has no system: the plain letter arrives).
+    cx.simulate_keystrokes(": s / c a f alt-e");
+    assert_eq!(line(&rig, cx), ":s/caf");
+    cx.simulate_keystrokes("e");
+    assert_eq!(line(&rig, cx), ":s/cafe");
+    // The key after that is an ordinary command-line key again.
+    cx.simulate_keystrokes("/ x enter");
+    assert_eq!(rig.text(cx), "x");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+
+    // r is not cancelled by the dead key.
+    cx.simulate_keystrokes("r alt-e");
+    assert_eq!(rig.status(cx).pending_keys, "r");
+    cx.simulate_keystrokes("y");
+    assert_eq!(rig.text(cx), "y");
+    assert_eq!(rig.status(cx).pending_keys, "");
+
+    // A dead key followed by a key that types nothing: forgotten.
+    cx.simulate_keystrokes("/ a alt-u escape");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    cx.simulate_keystrokes("x");
+    assert_eq!(rig.text(cx), "");
+
+    // In plain Normal mode an option chord is left to the editor as
+    // before (alt-down moves the block).
+    assert!(!rig.vim.read_with(cx, |vim, _| vim.wants_text_input()));
+}

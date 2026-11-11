@@ -90,8 +90,38 @@
 //!
 //! Changes that do not come from the engine (a mouse click, a `cmd`
 //! shortcut, find and replace, the comments panel) arrive as editor events;
-//! the engine is synced on each: a click in Normal mode puts the caret on a
-//! character, a drag or `shift`-arrows start Visual mode.
+//! the engine is synced on each.
+//!
+//! # The mouse
+//!
+//! As in a graphical Vim:
+//!
+//! - A click in Normal mode puts the caret on a character (a click past
+//!   the end of a line: on its last one) and drops a half-typed command
+//!   or an open command line. In Insert mode a click only moves the caret.
+//! - A drag, a double or triple click, `shift`-click and `shift`-arrows
+//!   leave a selection: that is Visual mode with that selection, the Vim
+//!   cursor on its last character at the pointer's end. A click that
+//!   collapses it returns to Normal mode. In Insert mode a selection is
+//!   just a selection (typing replaces it).
+//! - A right-click selects the word under the pointer (the editor does
+//!   that, see `writer_editor::ContextMenuRequest`), which is a Visual
+//!   selection by the time the menu opens; inside a selection it keeps it.
+//!   `ctrl-enter` asks for the same menu at the caret and is passed to the
+//!   editor in every mode but the command line. A half-typed command is
+//!   dropped when the menu is asked for. What the chosen item does is an
+//!   edit from outside like any other: one that removes the selection
+//!   (cut) ends in Normal mode on a character, one that keeps it (bold)
+//!   stays in Visual mode, and so does closing the menu without a choice;
+//!   `escape` then leaves Visual mode.
+//! - An edit from outside that leaves a selection behind while Vim was in
+//!   Normal mode (the editor's undo brings back the selection a step was
+//!   made on) does not start Visual mode: the caret goes to the start of
+//!   that selection.
+//! - [`VimCommandLine`]: a click on the line gives the keyboard back to
+//!   the text (where its keys are typed), and the control at its right
+//!   end closes it, as `escape` does. [`VimStatusItem`]: a click on the
+//!   mode opens a menu with what the mode offers.
 //!
 //! # What the editor shows
 //!
@@ -147,11 +177,27 @@
 //! on a Russian layout too. Where a character is wanted (Insert mode, the
 //! command line, the argument of `f`, `t`, `r`) the typed character counts.
 //!
+//! # Dead keys and input methods outside Insert mode
+//!
+//! `option-e` then `e` types `é` through the platform's text input: the
+//! accent is marked text until the letter follows. In Insert mode that is
+//! the editor's business. While the command line is open, or `f`, `t` or
+//! `r` waits for its character ([`VimMode::wants_text_input`]), the text
+//! has to reach the engine instead of the document, so [`VimMode`] is the
+//! window's text input itself for that time (`EntityInputHandler`;
+//! [`VimCommandLine`] registers it in its paint, which is why that view
+//! must be mounted, also while it shows nothing). The marked text is
+//! [`VimStatus::composing`]; the command line draws it underlined at its
+//! cursor. What the composition delivers goes into the command line, or
+//! its first character is the argument. A key the input method does not
+//! take ends the composition and does nothing else.
+//!
 //! # Not covered
 //!
-//! - The command line takes keys only: no IME composition and no dictation
-//!   into `:` or `/` (the engine's `command_line_input` is used for
-//!   `cmd-v`).
+//! - A composition for the command line or for the character of `f`, `t`
+//!   and `r` is taken as a whole (see "Dead keys" below); a replacement of
+//!   text typed earlier in the command line (the accent menu of a held
+//!   key) is not, and never starts there: a held key repeats.
 //! - A replacement the platform makes in text that is already there (a
 //!   system text replacement such as "omw", the accent menu of a held
 //!   key) is taken as typed where the replaced text is the end of what was

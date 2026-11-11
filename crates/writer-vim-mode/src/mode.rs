@@ -143,6 +143,8 @@ pub struct VimMode {
     /// `input` module). It is in neither the document nor the command
     /// line yet.
     pub(crate) composition: Option<String>,
+    /// The last key was a dead key that arrived as a key (see `on_key`).
+    dead_key: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -175,6 +177,7 @@ impl VimMode {
             seen: None,
             layout_fallbacks: 0,
             composition: None,
+            dead_key: false,
             _subscriptions: subscriptions,
         }
     }
@@ -375,6 +378,7 @@ impl VimMode {
             return KeyDisposition::Pass;
         }
         let modifiers = keystroke.modifiers;
+        let after_dead_key = std::mem::take(&mut self.dead_key);
         if self.composition.is_some() {
             // So do the keys of a composition for the command line or for
             // a character argument. The platform asks the input method
@@ -408,6 +412,21 @@ impl VimMode {
         }
         if modifiers.function {
             return KeyDisposition::Pass;
+        }
+        if self.wants_text_input() && !modifiers.control {
+            // A dead key (`option-e`: the option key, no character) that
+            // was not taken as the start of a composition. That happens
+            // where the system composes it without marked text (seen in a
+            // window that is not the active one). It types nothing, and
+            // the key after it has to reach the text input, which is where
+            // the two become one character.
+            if after_dead_key && keystroke.key_char.is_some() {
+                return KeyDisposition::Pass;
+            }
+            if modifiers.alt && keystroke.key_char.is_none() && keystroke.key.chars().count() == 1 {
+                self.dead_key = true;
+                return KeyDisposition::Consumed;
+            }
         }
         // The key of the context menu (the editor's `ctrl-enter`, as in
         // macOS) is no Vim command in any mode; to the engine it would be

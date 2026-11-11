@@ -414,7 +414,7 @@ impl VimMode {
         }
         // The editor handles the key as without Vim. If it types text, the
         // engine learns it once the editor reports the insertion.
-        if self.vim.mode().is_insert() {
+        if self.vim.mode().is_insert() && !self.editor.read(cx).is_read_only() {
             self.typed = typed_text(keystroke, &key);
         }
         KeyDisposition::Pass
@@ -833,8 +833,6 @@ fn typed_text(keystroke: &Keystroke, key: &Key) -> Option<String> {
         .cloned()
 }
 
-/// Keeps `RegisterContent` in the public surface reachable from here for
-/// hosts that want to fill a register (for example from a command).
 impl VimMode {
     /// Sets register `name` (`'a'`..`'z'`, `'"'`, `'+'` for the system
     /// clipboard, …).

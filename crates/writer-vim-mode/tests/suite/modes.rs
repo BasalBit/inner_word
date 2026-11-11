@@ -1,7 +1,10 @@
 //! Normal, Visual and operator-pending mode through the real key path;
 //! attaching and detaching.
 
-use gpui::{EntityInputHandler, TestAppContext};
+use gpui::{
+    EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
+    TestAppContext, VisualTestContext, point, px,
+};
 use writer_core::Selection;
 use writer_editor::{CaretStyle, InterceptPriority, KeyDisposition};
 use writer_vim_mode::{CURSOR_LAYER, CaretShape, Mode, VimEvent};
@@ -472,4 +475,88 @@ fn a_read_only_editor_refuses_changes(cx: &mut TestAppContext) {
         .update(cx, |editor, cx| editor.set_read_only(false, cx));
     cx.simulate_keystrokes("x");
     assert_eq!(rig.text(cx), "hello orld");
+}
+
+fn click(cx: &mut VisualTestContext, at: Point<Pixels>, count: usize) {
+    cx.simulate_event(MouseDownEvent {
+        position: at,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: count,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: at,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: count,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_mouse_works_in_normal_mode(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["hello world", "second line"]), cx);
+    let point_of = |cx: &mut VisualTestContext, block, offset| {
+        rig.editor.read_with(cx, |editor, _| {
+            editor.position_bounds(at(block, offset)).unwrap().center()
+        })
+    };
+
+    // A click inside a word: the caret is on that character.
+    let target = point_of(cx, 1, 3);
+    click(cx, target, 1);
+    assert_eq!(rig.head(cx), at(1, 3));
+    assert_eq!(rig.mode(cx), Mode::Normal);
+
+    // A click past the end of a line: on its last character, not after it.
+    let target = point_of(cx, 0, 11) + point(px(40.), px(0.));
+    click(cx, target, 1);
+    assert_eq!(rig.head(cx), at(0, 10));
+    cx.simulate_keystrokes("x");
+    assert_eq!(rig.text(cx), "hello worl\nsecond line");
+
+    // A double click selects a word: Visual mode, ready for an operator.
+    let target = point_of(cx, 1, 2);
+    click(cx, target, 2);
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    assert_eq!(rig.selected_text(cx), "second");
+    cx.simulate_keystrokes("c");
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    cx.simulate_input("first");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.text(cx), "hello worl\nfirst line");
+
+    // In Insert mode a click just moves the caret, also past the line end.
+    cx.simulate_keystrokes("i");
+    let target = point_of(cx, 0, 10) + point(px(40.), px(0.));
+    click(cx, target, 1);
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    assert_eq!(rig.head(cx), at(0, 10));
+    cx.simulate_input("d");
+    assert_eq!(rig.text(cx), "hello world\nfirst line");
+}
+
+#[gpui::test]
+fn a_key_that_types_nothing_is_not_reported_as_typed(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["abc"]), cx);
+    cx.simulate_keystrokes("i");
+    cx.simulate_input("x");
+    // Something swallows the next key after Vim let it through (a binding,
+    // a lower interceptor): no text arrives for it.
+    let swallow = rig.editor.read_with(cx, |editor, _| {
+        editor.intercept_keys(InterceptPriority::DEFAULT, |_, _, _| {
+            KeyDisposition::Consumed
+        })
+    });
+    cx.simulate_input("y");
+    drop(swallow);
+    cx.simulate_input("z");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.text(cx), "xzabc");
+    rig.vim.read_with(cx, |vim, _| {
+        assert_eq!(vim.engine().last_inserted_text(), "xz");
+    });
 }

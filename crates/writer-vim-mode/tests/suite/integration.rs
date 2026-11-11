@@ -2,8 +2,9 @@
 
 use gpui::{AppContext, ClipboardItem, TestAppContext, px, size};
 use writer_core::{Block, BlockKind, Document, Fragment};
+use writer_ui::theme::{self, ThemeMode};
 use writer_vim_mode::{
-    ClearSearchHighlight, Mode, SEARCH_LAYER, ToggleVimMode, VimEvent, VimOptions,
+    CURSOR_LAYER, ClearSearchHighlight, Mode, SEARCH_LAYER, ToggleVimMode, VimEvent, VimOptions,
 };
 
 use super::{at, doc, open, open_detached, setup};
@@ -198,4 +199,20 @@ fn dropping_vim_mode_gives_the_editor_back(cx: &mut TestAppContext) {
     });
     cx.simulate_input("x");
     editor.read_with(cx, |editor, _| assert_eq!(editor.plain_text(), "xello"));
+}
+
+#[gpui::test]
+fn highlight_colours_follow_the_theme(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["alpha beta", "beta"]), cx);
+    cx.simulate_keystrokes("/ b e t a enter v l");
+    assert_eq!(rig.layer(SEARCH_LAYER, cx).len(), 2);
+    assert_eq!(rig.layer(CURSOR_LAYER, cx).len(), 1);
+    // Switching the theme sets the layers again (they keep the colours
+    // they were set with) and loses neither.
+    cx.update(|_, cx| theme::set_theme_mode(ThemeMode::Dark, cx));
+    cx.run_until_parked();
+    assert_eq!(rig.layer(SEARCH_LAYER, cx).len(), 2);
+    assert_eq!(rig.layer(CURSOR_LAYER, cx).len(), 1);
+    assert_eq!(rig.mode(cx), Mode::Visual);
 }

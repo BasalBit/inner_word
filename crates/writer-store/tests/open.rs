@@ -297,3 +297,84 @@ fn store_moves_to_another_thread() {
     let handle = std::thread::spawn(move || store.search("threaded", 5).unwrap().len());
     assert_eq!(handle.join().unwrap(), 1);
 }
+
+#[test]
+fn a_version_1_library_file_is_upgraded_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let clock = Clock::manual(START);
+    let (folder, big, small) = {
+        let mut store = Store::open_with(&path, opts(&clock)).unwrap();
+        let folder = store.create_folder(None, "Book").unwrap();
+        let big = doc(&mut store, Some(folder.id), "Big", &"word ".repeat(20_000));
+        let small = doc(&mut store, None, "Small", "a few words");
+        store.close().unwrap();
+        (folder.id, big, small)
+    };
+    // Put the file back to what version 1 of the app wrote: no listing index, version 1.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP INDEX documents_meta; PRAGMA user_version = 1;")
+            .unwrap();
+    }
+    // A day later the app with schema 2 opens it: a backup of the old file first, then
+    // the upgrade, and everything is where it was.
+    clock.advance_ms(DAY);
+    let mut store = Store::open_with(&path, opts(&clock)).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert!(SCHEMA_VERSION >= 2);
+    assert!(matches!(store.backup_on_open(), Some(Ok(_))));
+    let backups = list_backups(&backups_dir(&path)).unwrap();
+    assert_eq!(backups.len(), 1);
+    {
+        let old = rusqlite::Connection::open(&backups[0].1).unwrap();
+        let version: i64 = old
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 1, "the backup is the file from before the upgrade");
+    }
+    let tree = store.library_tree().unwrap();
+    assert_eq!(tree.find_document(big.id), Some(&big));
+    assert_eq!(tree.find_document(small.id), Some(&small));
+    assert_eq!(tree.find_folder(folder).unwrap().documents.len(), 1);
+    assert_eq!(store.documents().unwrap().len(), 2);
+    assert_eq!(store.search("few", 5).unwrap().len(), 1);
+    assert_eq!(
+        store.document(big.id).unwrap().content.len(),
+        big_content_len()
+    );
+    // It keeps working as a library: the index follows saves, trash and restore.
+    clock.advance_ms(MINUTE);
+    let saved = store
+        .save_document(small.id, &content("Small, later", "more words now", "{}"))
+        .unwrap();
+    assert_eq!(
+        store.library_tree().unwrap().find_document(small.id),
+        Some(&saved)
+    );
+    store.trash_document(big.id).unwrap();
+    assert!(
+        store
+            .library_tree()
+            .unwrap()
+            .find_document(big.id)
+            .is_none()
+    );
+    store.restore_document(big.id).unwrap();
+    assert!(
+        store
+            .library_tree()
+            .unwrap()
+            .find_document(big.id)
+            .is_some()
+    );
+    store.close().unwrap();
+    // And opens again without another upgrade.
+    let store = Store::open_with(&path, opts(&clock)).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+}
+
+/// The length of the content JSON that `doc` stores for the big document above.
+fn big_content_len() -> usize {
+    format!("{{\"text\":{:?}}}", "word ".repeat(20_000)).len()
+}

@@ -16,7 +16,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext as _, Application, Entity};
-use writer_library::store::Store;
+use writer_library::store::{OpenOptions, Store};
 use writer_library::{
     DocumentContent, DocumentId, EXPANDED_FOLDERS_SETTING, FolderId, Library, LibraryPanel,
 };
@@ -176,7 +176,7 @@ fn summary(label: &str, mut times: Vec<Duration>) {
     let ms = |d: Duration| d.as_secs_f64() * 1000.;
     let pick = |q: f64| times[((times.len() - 1) as f64 * q).round() as usize];
     println!(
-        "{label:<46} median {:>8.3} ms   p90 {:>8.3} ms   max {:>8.3} ms",
+        "{label:<50} median {:>8.3} ms   p90 {:>8.3} ms   max {:>8.3} ms",
         ms(pick(0.5)),
         ms(pick(0.9)),
         ms(times[times.len() - 1]),
@@ -287,10 +287,50 @@ fn bench(documents: usize, cx: &mut App) {
         &library,
         small,
         "A short note",
-        small_text,
+        small_text.clone(),
         &mut prose,
         cx,
     );
+
+    // The app's background autosave writes through a second connection and then tells the
+    // library. What telling it costs on the main thread, both ways.
+    let mut background = Store::open_with(
+        dir.path().join("library.db"),
+        OpenOptions {
+            daily_backup: false,
+            ..OpenOptions::default()
+        },
+    )
+    .expect("second connection");
+    let mut text = small_text;
+    let (mut refreshes, mut notes) = (Vec::new(), Vec::new());
+    for round in 0..ROUNDS * 2 {
+        text.push(' ');
+        text.push_str(prose.word());
+        // The clock has millisecond steps and these saves are faster than that.
+        std::thread::sleep(Duration::from_millis(2));
+        let saved = Saved::new(text.clone());
+        let meta = background
+            .save_document(small, &saved.content("A short note"))
+            .expect("background save");
+        let start = Instant::now();
+        if round % 2 == 0 {
+            library
+                .update(cx, |library, cx| library.refresh(cx))
+                .expect("refresh");
+            refreshes.push(start.elapsed());
+        } else {
+            library
+                .update(cx, |library, cx| {
+                    library.document_saved_elsewhere(&meta, cx)
+                })
+                .expect("note");
+            notes.push(start.elapsed());
+        }
+    }
+    summary("after an outside save: refresh()", refreshes);
+    summary("after an outside save: document_saved_elsewhere()", notes);
+
     measure(
         "1 MB document",
         &library,

@@ -171,7 +171,9 @@ impl Library {
     }
 
     /// Reloads the cached tree from the store and emits [`LibraryEvent::TreeChanged`].
-    /// Normal use never needs this; every write refreshes the cache itself.
+    /// Normal use never needs this; every write refreshes the cache itself. After a
+    /// document save that went through another connection, use
+    /// [`document_saved_elsewhere`](Self::document_saved_elsewhere), which is far cheaper.
     pub fn refresh(&mut self, cx: &mut Context<Self>) -> Result<()> {
         self.reload_tree()?;
         cx.emit(LibraryEvent::TreeChanged);
@@ -369,6 +371,58 @@ impl Library {
         cx.notify();
         refreshed?;
         Ok(meta)
+    }
+
+    /// Takes note of a document that was saved **through another connection** to the same
+    /// library file (the app's background autosave writes that way, so the commit does not
+    /// hold up the main thread). `meta` is what that save returned.
+    ///
+    /// Does for the cache and the subscribers what [`save_document`](Self::save_document)
+    /// does, without touching the database when the document is where the cache has it:
+    /// the cached entry is replaced in place, `DocumentSaved` is emitted, and `TreeChanged`
+    /// when the title is not the one the cache had. Use it instead of
+    /// [`refresh`](Self::refresh) after such a save: `refresh` reloads the whole tree and
+    /// tells every view that the tree changed.
+    ///
+    /// For a trashed document (it is not in the tree) only `DocumentSaved` is emitted, with
+    /// `title_changed: false`: the cache has no earlier title to compare with.
+    pub fn document_saved_elsewhere(
+        &mut self,
+        meta: &DocumentMeta,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        let live = meta.trashed_at.is_none();
+        let before = self.tree.find_document(meta.id).map(|cached| {
+            // `meta` comes from another thread and may be older than what the cache has
+            // (the document was renamed here while that save was on its way).
+            let newer = meta.updated_at > cached.updated_at
+                || (meta.updated_at == cached.updated_at && meta.title == cached.title);
+            (cached.title.clone(), newer)
+        });
+        let in_place = matches!(before, Some((_, true)))
+            && Arc::make_mut(&mut self.tree).update_document(meta);
+        let refreshed = if !live || in_place {
+            Ok(())
+        } else {
+            // Not where the cache has it (moved or restored meanwhile), or not newer than
+            // it: read it all again.
+            self.reload_tree()
+        };
+        // Against what the cache holds now, which is what the views will show.
+        let title_changed = live
+            && self
+                .tree
+                .find_document(meta.id)
+                .is_some_and(|now| before.is_none_or(|(title, _)| title != now.title));
+        cx.emit(LibraryEvent::DocumentSaved {
+            id: meta.id,
+            title_changed,
+        });
+        if title_changed {
+            cx.emit(LibraryEvent::TreeChanged);
+        }
+        cx.notify();
+        refreshed
     }
 
     /// Renames a live document. If the app derives titles from content, its next save

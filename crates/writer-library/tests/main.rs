@@ -845,3 +845,150 @@ fn a_match_at_the_end_of_a_long_name_is_brought_into_view() {
     // A row with no room at all does not panic.
     assert!(label_around_match(label, &positions, 0).is_some());
 }
+
+#[gpui::test]
+fn a_save_through_another_connection_is_taken_in_place(cx: &mut TestAppContext) {
+    use writer_library::store::{OpenOptions, Store};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let clock = Clock::manual(1_700_000_000_000);
+    let options = || OpenOptions {
+        clock: clock.clone(),
+        daily_backup: false,
+        ..OpenOptions::default()
+    };
+    let store = Store::open_with(&path, options()).unwrap();
+    let (library, events) = library_from(Library::from_store(store).unwrap(), cx);
+    let (folder, doc, other) = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Book", cx).unwrap().id;
+        let doc = l
+            .create_document(Some(folder), &content("Chapter", "one two"), cx)
+            .unwrap()
+            .id;
+        let other = l
+            .create_document(None, &content("Notes", "x"), cx)
+            .unwrap()
+            .id;
+        (folder, doc, other)
+    });
+    take(&events, cx);
+    // The app's background autosave: a second connection to the same file.
+    let mut background = Store::open_with(&path, options()).unwrap();
+    let address = |cx: &mut TestAppContext| {
+        library.read_with(cx, |l, _| std::sync::Arc::as_ptr(&l.tree()) as usize)
+    };
+    let cached = address(cx);
+
+    // Same title: the entry is replaced in place and only DocumentSaved is emitted.
+    clock.advance_ms(2_000);
+    let saved = background
+        .save_document(doc, &content("Chapter", "one two three four"))
+        .unwrap();
+    library.update(cx, |l, cx| l.document_saved_elsewhere(&saved, cx).unwrap());
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: doc,
+            title_changed: false
+        }]
+    );
+    assert_eq!(address(cx), cached, "the tree was reloaded");
+    library.read_with(cx, |l, _| {
+        assert_eq!(l.tree().find_document(doc), Some(&saved));
+        assert_eq!(*l.tree(), l.store().library_tree().unwrap());
+    });
+    // A new title: the tree's views are told.
+    clock.advance_ms(2_000);
+    let saved = background
+        .save_document(doc, &content("Chapter one", "one two three four"))
+        .unwrap();
+    library.update(cx, |l, cx| l.document_saved_elsewhere(&saved, cx).unwrap());
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::DocumentSaved {
+                id: doc,
+                title_changed: true
+            },
+            LibraryEvent::TreeChanged
+        ]
+    );
+    assert_eq!(address(cx), cached, "the tree was reloaded");
+    // The library's own next save compares with what it now knows.
+    library.update(cx, |l, cx| {
+        l.save_document(doc, &content("Chapter one", "five words in this text"), cx)
+            .unwrap()
+    });
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: doc,
+            title_changed: false
+        }]
+    );
+
+    // The document was renamed here while a save with the old title was on its way: the
+    // late note must not put the old title back into the cache.
+    clock.advance_ms(2_000);
+    let late = background
+        .save_document(doc, &content("Chapter one", "six words in this text now"))
+        .unwrap();
+    clock.advance_ms(2_000);
+    library.update(cx, |l, cx| {
+        l.rename_document(doc, "Renamed here", cx).unwrap()
+    });
+    take(&events, cx);
+    library.update(cx, |l, cx| l.document_saved_elsewhere(&late, cx).unwrap());
+    library.read_with(cx, |l, _| {
+        let tree = l.tree();
+        assert_eq!(*tree, l.store().library_tree().unwrap());
+        let now = tree.find_document(doc).unwrap();
+        assert_eq!((now.title.as_str(), now.word_count), ("Renamed here", 6));
+    });
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: doc,
+            title_changed: false
+        }]
+    );
+
+    // The document was moved while the save was on its way: the note still leaves the
+    // cache equal to the database (by reading it again).
+    clock.advance_ms(2_000);
+    let saved = background
+        .save_document(other, &content("Notes", "a b c"))
+        .unwrap();
+    library.update(cx, |l, cx| {
+        l.move_document(other, Some(folder), Some(0), cx).unwrap();
+        l.document_saved_elsewhere(&saved, cx).unwrap();
+    });
+    library.read_with(cx, |l, _| {
+        let tree = l.tree();
+        assert_eq!(*tree, l.store().library_tree().unwrap());
+        let moved = tree.find_document(other).unwrap();
+        assert_eq!((moved.folder_id, moved.word_count), (Some(folder), 3));
+    });
+    take(&events, cx);
+
+    // A trashed document: saved (no text lost), not in the tree, nothing else changes.
+    library.update(cx, |l, cx| l.trash_document(other, cx).unwrap());
+    take(&events, cx);
+    let before = library.read_with(cx, |l, _| l.tree());
+    let saved = background
+        .save_document(other, &content("Last words", "kept"))
+        .unwrap();
+    assert!(saved.trashed_at.is_some());
+    library.update(cx, |l, cx| l.document_saved_elsewhere(&saved, cx).unwrap());
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: other,
+            title_changed: false
+        }]
+    );
+    library.read_with(cx, |l, _| {
+        assert_eq!(*l.tree(), *before);
+        assert_eq!(l.document(other).unwrap().meta.title, "Last words");
+    });
+}

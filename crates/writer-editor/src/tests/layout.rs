@@ -82,6 +82,24 @@ fn only_what_is_on_screen_is_shaped(cx: &mut TestAppContext) {
         assert!(step.position.block > 5_000);
     });
 
+    // Selecting everything and asking where the selection is (a format
+    // menu does) does not shape the book either.
+    cx.simulate_keystrokes("cmd-a");
+    editor.read_with(cx, |editor, _| {
+        let before = shaped(editor);
+        let viewport = editor.viewport_bounds().unwrap();
+        let all = editor.selection_bounds().unwrap();
+        assert!(all.top() < viewport.top() && all.bottom() >= viewport.bottom() - px(400.));
+        let rows = editor.range_bounds(editor.selection().range()).unwrap();
+        assert!(!rows.is_empty() && rows.len() < 2_000);
+        assert!(
+            shaped(editor) < before + 200,
+            "{} blocks shaped",
+            shaped(editor)
+        );
+    });
+    cx.simulate_keystrokes("cmd-up");
+
     // The cache of shaped blocks is bounded however far the caret travels.
     for target in (0..10_000).step_by(37) {
         editor.update(cx, |editor, cx| {

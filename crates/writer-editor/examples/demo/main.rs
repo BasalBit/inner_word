@@ -20,6 +20,7 @@
 //! | `cmd-alt-h` | highlight layer on every "the" / clear it |
 //! | `cmd-alt-u` | popup at the caret / hide it |
 //! | `cmd-alt-i` | intercept keys: `x` is swallowed while on |
+//! | `cmd-alt-n` | squeeze the editor into a narrow strip (page view scales down) |
 //! | `cmd-alt-l` | page setup: A4, A4 landscape, US Letter with narrow margins |
 //! | `cmd-alt-x` | print the frame timings collected since the last print |
 //! | `cmd-1` / `cmd-2` | focus the editor / the compact composer |
@@ -83,6 +84,7 @@ actions!(
         ToggleHighlights,
         TogglePopup,
         ToggleIntercept,
+        ToggleNarrow,
         CyclePageSetup,
         LogPerf,
         FocusEditor,
@@ -293,6 +295,8 @@ struct Demo {
     composer: Entity<Editor>,
     popup: Entity<PopupCard>,
     interceptor: Option<Subscription>,
+    /// The editor is squeezed into a narrow strip.
+    narrow: bool,
     last_event: SharedString,
     submitted: Vec<String>,
     /// When the demo started, for the timings it prints.
@@ -358,6 +362,7 @@ impl Demo {
             composer,
             popup: cx.new(|_| PopupCard),
             interceptor: None,
+            narrow: false,
             last_event: "none".into(),
             submitted: Vec::new(),
             opened,
@@ -468,6 +473,11 @@ impl Demo {
                 },
             ));
         }
+        cx.notify();
+    }
+
+    fn toggle_narrow(&mut self, _: &ToggleNarrow, _: &mut Window, cx: &mut Context<Self>) {
+        self.narrow = !self.narrow;
         cx.notify();
     }
 
@@ -606,6 +616,7 @@ impl Render for Demo {
             .on_action(cx.listener(Self::toggle_highlights))
             .on_action(cx.listener(Self::toggle_popup))
             .on_action(cx.listener(Self::toggle_intercept))
+            .on_action(cx.listener(Self::toggle_narrow))
             .on_action(cx.listener(Self::cycle_page_setup))
             .on_action(cx.listener(Self::log_perf))
             .on_action(cx.listener(Self::focus_editor))
@@ -627,7 +638,21 @@ impl Render for Demo {
                     .border_color(colors.hairline),
             )
             // The document editor fills the rest.
-            .child(div().flex_1().min_h_0().child(self.editor.clone()))
+            .child(
+                div().flex_1().min_h_0().flex().justify_center().child(
+                    div()
+                        .h_full()
+                        .when(self.narrow, |strip| {
+                            strip
+                                .w(px(440.))
+                                .border_l_1()
+                                .border_r_1()
+                                .border_color(colors.hairline)
+                        })
+                        .when(!self.narrow, |strip| strip.w_full())
+                        .child(self.editor.clone()),
+                ),
+            )
             // Status line.
             .child(
                 div()
@@ -681,6 +706,7 @@ fn main() {
                 KeyBinding::new("cmd-alt-h", ToggleHighlights, None),
                 KeyBinding::new("cmd-alt-u", TogglePopup, None),
                 KeyBinding::new("cmd-alt-i", ToggleIntercept, None),
+                KeyBinding::new("cmd-alt-n", ToggleNarrow, None),
                 KeyBinding::new("cmd-alt-l", CyclePageSetup, None),
                 KeyBinding::new("cmd-alt-x", LogPerf, None),
                 KeyBinding::new("cmd-1", FocusEditor, None),

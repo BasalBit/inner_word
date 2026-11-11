@@ -39,6 +39,27 @@ scripts/bundle.sh                    # release .app + .dmg in dist/
 The real library lives in `~/Library/Application Support/The Writer/`. Tests and manual
 QA must set `THE_WRITER_DATA_DIR` to a temp directory and never touch the real one.
 
+Scripted runs of the real app (visual QA; grammar in `crates/writer-app/src/automation.rs`,
+recipe in `docs/gpui-notes.md`):
+
+```bash
+# THE_WRITER_SEED_DEMO=1: a few folders and documents in an empty library (optional)
+# THE_WRITER_EXPORT_DIR:  file exports are written there, without the save panel (optional)
+THE_WRITER_DATA_DIR=/some/tmp \
+THE_WRITER_SEED_DEMO=1 \
+THE_WRITER_EXPORT_DIR=/some/tmp/out \
+THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/some/tmp/a.png; quit" \
+./target/debug/the-writer
+```
+
+A scripted run stays in the background and draws its own frames, so it works while the
+window is covered. Do not script anything that writes the system clipboard (copy, cut,
+"Copy as Markdown"): it is the user's clipboard.
+
+The story test (`crates/writer-app/tests/suite/story.rs`) walks through the whole product
+headlessly; `tests/suite/keymap.rs` checks every key of the tables below against the
+assembled keymap.
+
 ## Working rules
 
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
@@ -92,6 +113,11 @@ to text through span attributes so they move with edits.
 
 ## Default keymap
 
+`opt` below is the option key; in GPUI keystroke strings it is spelled `alt`
+(`KeyBinding::new("cmd-alt-s", ..)`; `opt` does not parse). The shortcuts overlay (`cmd-/`)
+is generated from the keymap and lists everything, including the keys of the library, the
+comment list and the find bar that are not repeated here.
+
 Global (work anywhere in the window):
 
 | Keys | Action |
@@ -99,8 +125,9 @@ Global (work anywhere in the window):
 | `cmd-shift-p` | Command palette |
 | `cmd-p` | Quick open document |
 | `cmd-n` / `cmd-shift-n` | New document / new folder |
-| `cmd-0` / `cmd-1` | Focus library / focus editor |
+| `cmd-0` / `cmd-1` / `cmd-2` | Focus library / focus editor / focus comments |
 | `cmd-opt-s` | Show or hide the library sidebar |
+| `cmd-opt-right` / `cmd-opt-left` | Widen / narrow the library sidebar |
 | `cmd-shift-f` | Search the whole library |
 | `cmd-shift-s` | Export (Markdown, DOCX) |
 | `cmd-,` | Settings |
@@ -108,8 +135,12 @@ Global (work anywhere in the window):
 | `cmd-opt-p` | Toggle page view |
 | `cmd-opt-v` | Toggle Vim mode |
 | `cmd-opt-c` | Show or hide comments |
-| `cmd-opt-m` | Add comment on selection |
+| `cmd-opt-m` | Add comment on selection (or on the word at the caret) |
 | `cmd-opt-]` / `cmd-opt-[` | Next / previous comment |
+| `cmd-w` / `cmd-q` | Close the window / quit |
+
+`cmd-opt-c` has a second meaning in one place: inside the find bar it switches "case
+sensitive" (the bar shows the hint), and `cmd-opt-w` "whole word".
 
 Editor:
 
@@ -117,7 +148,7 @@ Editor:
 |---|---|
 | `cmd-b` `cmd-i` `cmd-u` | Bold, italic, underline |
 | `cmd-shift-x` / `cmd-e` / `cmd-shift-h` | Strikethrough / inline code / highlight |
-| `cmd-k` | Add or edit link |
+| `cmd-k` / `cmd-shift-k` | Add or edit link / remove link |
 | `cmd-\` | Clear formatting |
 | `cmd-opt-0`, `cmd-opt-1` … `cmd-opt-6` | Paragraph, heading 1–6 |
 | `cmd-shift-7` / `cmd-shift-8` / `cmd-shift-9` | Numbered list / bullet list / todo list |
@@ -130,13 +161,29 @@ Editor:
 | `cmd-shift-.` / `cmd-shift-,` | Larger / smaller text |
 | `cmd-t` | Font picker |
 | `cmd-.` | Contextual format menu |
-| `/` at the start of an empty block | Insert menu |
+| `/` at the start of a block or after a space | Insert menu |
 | `cmd-f` `cmd-opt-f` `cmd-g` `cmd-shift-g` | Find, replace, next, previous |
 | `cmd-z` / `cmd-shift-z` | Undo / redo |
 | `cmd-a` `cmd-c` `cmd-x` `cmd-v` `cmd-shift-v` | Select all, copy, cut, paste, paste as plain text |
 
 Plus the standard macOS text-navigation keys (arrows, `alt`/`cmd` + arrows, `shift` to
 extend, `alt-backspace`, `cmd-backspace`, and the `ctrl-a/e/f/b/n/p/k/d/h` Emacs set).
+
+Keymap facts that bite (details in `docs/gpui-notes.md`):
+
+- **Shift plus a digit or punctuation** reaches GPUI as the shifted character without the
+  shift flag (`cmd-shift-7` is `cmd-&` on a US keyboard). Bind both spellings, the readable
+  one last so key hints show it (see `crates/writer-editor/src/actions.rs`).
+- **A binding without a context ranks like the deepest context**, not like the shallowest:
+  it beats every binding of an outer context on the same key, and among bindings at the
+  focused element's own level the one added later wins. `writer_app::init` therefore adds
+  the app's bindings first, and a crate that needs a window-wide key inside one of its
+  views binds it at the level of the focused element (the find bar does, for `cmd-opt-c`).
+- **Who takes a key in the text**: an open insert menu, then Vim mode (it lets every `cmd`
+  chord through), then the bindings from the editor outwards, then text input. Popups with
+  a field (format menu, link, font, find bar) and modals have the keyboard themselves.
+- **Vim mode**: `:w` saves at once, `:q` closes the document (the window stays), any other
+  ex name is looked up among the palette's commands (`:togglepageview`, `:export`).
 
 ## Design language
 

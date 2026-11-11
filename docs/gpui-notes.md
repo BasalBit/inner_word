@@ -6,8 +6,8 @@ examples in `$G/examples/`. Do not write GPUI code from memory: other versions d
 (older `cx.spawn(|this, mut cx| ..)`, `ViewContext`, `WindowContext` do **not** exist here).
 
 Markers: **(tested)** = asserted in `crates/writer-ui/tests/gpui_harness.rs` or
-`gpui_snippets.rs`; **(probe)** = observed with the real macOS text system in
-`cargo run -p writer-app --example gpui_probe`; **(app)** = seen in the running app;
+`gpui_snippets.rs`; **(probe)** = observed with the real macOS text system in a probe
+example that has since been removed (the numbers stand); **(app)** = seen in the running app;
 **(source)** = read in the gpui source, not exercised; **UNVERIFIED** = not checked.
 
 Contents: [Setup](#setup) · [Bootstrap](#bootstrap) · [Rendering](#rendering) ·
@@ -443,6 +443,22 @@ Dispatch rules (tested in `dispatch_precedence_and_chords`):
   wins** at equal depth. GPUI dispatches the best binding's action from the focused node:
   capture listeners root→focus, then bubble focus→root. The first listener that handles it
   stops dispatch.
+- **A binding without a context has the depth of the whole context stack** (`Keymap::binding_enabled`
+  returns `contexts.len()`): it ranks like a binding in the focused element's own context,
+  not like an outermost one. So it beats every binding of an *outer* context on the same key,
+  whatever the order they were added in. Example that went wrong: the comments crate binds
+  `cmd-alt-c` without a context; the find bar bound the same key in `"FindBar"`, but the
+  keyboard is in a `TextField` inside the bar, one level deeper, so the window-wide binding
+  won. Fix: bind at the focused element's level (`"FindBar > TextField"`, same depth as a
+  context-free binding) and add it later. To see what a key will run where the keyboard is:
+  `cx.key_bindings().borrow().bindings_for_input(&[keystroke], &window.context_stack())`,
+  first entry (used by `crates/writer-app/tests/suite/keymap.rs`).
+- **Real keyboards report shift plus a non-letter as the shifted character without the shift
+  flag** (`parse_keystroke` in `$G/src/platform/mac/events.rs`): `cmd-shift-7` arrives as
+  `cmd-&`, `cmd-shift-.` as `cmd->`, `cmd-shift-'` as `cmd-"` on a US layout. A binding
+  spelled `cmd-shift-7` only matches scripted and test keystrokes. Bind both, the spelled-out
+  one last so `KeyHint` shows it. Letters, enter, tab, arrows and backspace keep the shift
+  flag; option plus a key keeps the plain key name with the alt flag (`cmd-alt-]`).
 - Action listeners stop propagation by default. `cx.propagate()` inside a handler means "not
   handled": GPUI then tries **the next matching binding** (tested: cmd-k bound to Inner (Editor)
   and Outer (Workspace) → Inner handler propagates → Outer runs). `cx.stop_propagation()` exists for events.
@@ -518,6 +534,17 @@ cx.on_focus_lost(window, ..)        // window lost all focus
 ```
 - Focus events fire when a frame is drawn **and the window is active** (tested; test windows
   start inactive: call `window.activate_window()` in tests).
+- **Focus can sit on an element that is not drawn.** `window.focus(&handle)` only stores the
+  id; nothing checks that the handle is rendered, and GPUI does not move the focus when the
+  focused element disappears. While the `FocusHandle` is alive, `window.focused(cx)` is
+  `Some`, keys are dispatched at the root node and reach no element (`window.context_stack()`
+  is empty); once it is dropped, `focused` is `None`, and no redraw is triggered either way.
+  Typical cause: a modal remembers the focused handle, the thing behind it closes on blur (a
+  popup, a rename field), and the modal "restores" focus to it. Check with
+  `root_handle.contains(&focused, window)` (the last **rendered** frame: a just-focused
+  element may be missing from it for a frame or two, e.g. a row of a `uniform_list`).
+  `Workspace::keep_focus_on_screen` does this after every frame, from a `cx.defer_in` queued
+  in `render` (a deferred effect of a draw runs right after that draw).
 - Restore after an overlay (tested): on open `let previous = window.focused(cx);` focus the
   overlay; on close `window.focus(&previous)` (fall back to the editor handle).
 - Tab stops: `cx.focus_handle().tab_index(1).tab_stop(true)`, `div().tab_index(i)`, `.tab_group()`;
@@ -683,8 +710,7 @@ Works on this machine (verified): the app runs a script from `THE_WRITER_AUTOMAT
 (`crates/writer-app/src/automation.rs`) and captures **only its own window** with
 `screencapture -x -o -l <CGWindowID>` (the window number comes from the NSView behind the
 GPUI window). The terminal already has the Screen Recording permission, so captures contain
-the real window content (checked: Paper and Night screenshots, typed text in the
-`input_demo` example). GPUI 0.2.2 cannot render a window to an image itself.
+the real window content. GPUI 0.2.2 cannot render a window to an image itself.
 
 Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATION=@file` reads a file):
 
@@ -692,16 +718,25 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 |---|---|
 | `wait:<ms>` | sleep |
 | `keys:<keystrokes>` | GPUI keystrokes, space separated (`keys:cmd-shift-p escape`); logs handled / not handled |
-| `type:<text>` | one keystroke per character (bindings first, then the focused input handler). Escapes `\;` `\n` `\t` `\s` `\\` |
+| `type:<text>` | one keystroke per character (bindings first, then the focused input handler). Escapes `\;` `\n` `\t` `\s` `\\`. **The argument is trimmed: write a leading or trailing space as `\s`** |
 | `action:<name>` | dispatch a registered action by name (`action:app::Quit`) |
 | `resize:<w>x<h>` | resize window content (overridden by the tiling window manager here) |
 | `theme:<light\|dark\|system>` | switch theme mode |
-| `screenshot:<path>` | refresh, wait 250ms, capture this window to PNG (Retina 2×) |
+| `screenshot:<path>` | draw a fresh frame, wait 250ms, capture this window to PNG (Retina 2×) |
 | `info` | print window bounds, viewport, scale, appearance, active, focused, theme |
+| `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), Vim mode and command line, open tool and find count, comment threads, status bar |
+| `dump` | the first 400 characters of the text in the editor |
 | `log:<text>` | print |
 | `quit` | quit through `cx.quit()` (runs on_app_quit hooks) |
 
 No mouse steps: `Window::dispatch_event` cannot be called from outside gpui (see Actions).
+
+Environment: `THE_WRITER_DATA_DIR` (always a temp dir), `THE_WRITER_SEED_DEMO=1` (demo
+folders and documents in an empty library; without it a fresh library gets the welcome
+document), `THE_WRITER_EXPORT_DIR=<dir>` (file exports are written there under the suggested
+name; the native save panel cannot be driven), `THE_WRITER_AUTOMATION_FOREGROUND=1`
+(activate the app; **do not use it while someone is at the machine**, their typing lands in
+the window).
 
 Ready-to-run (from the repo root; `timeout` is not installed, so wait in a loop):
 
@@ -709,7 +744,7 @@ Ready-to-run (from the repo root; `timeout` is not installed, so wait in a loop)
 cargo build -p writer-app
 QA=$(mktemp -d)
 THE_WRITER_DATA_DIR=$QA/data \
-THE_WRITER_AUTOMATION="wait:800; info; theme:light; screenshot:$QA/paper.png; theme:dark; screenshot:$QA/night.png; quit" \
+THE_WRITER_AUTOMATION="wait:1200; info; theme:light; screenshot:$QA/paper.png; theme:dark; screenshot:$QA/night.png; quit" \
 ./target/debug/the-writer & PID=$!
 for i in $(seq 1 30); do sleep 1; kill -0 $PID 2>/dev/null || break; done; kill $PID 2>/dev/null
 sips -Z 1400 $QA/paper.png --out $QA/paper_small.png     # downscale before opening with Read
@@ -718,20 +753,33 @@ sips --cropOffset 100 200 -c 400 1600 $QA/paper.png --out $QA/crop.png  # crop: 
 echo $QA                                                   # open the PNGs with the Read tool
 ```
 
-Typing into a real input handler (fixture with one text line, real fonts):
-```bash
-THE_WRITER_DATA_DIR=$(mktemp -d) \
-THE_WRITER_AUTOMATION="wait:800; type:Hello wörld; keys:backspace; type:d; keys:cmd-b; screenshot:/tmp/tw-demo.png; quit" \
-cargo run -p writer-app --example input_demo
-```
+Useful lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a tool
+`keys:cmd-.` / `cmd-k` / `cmd-t` / `cmd-f`, then `type:` filters it; a comment
+`keys:shift-alt-right cmd-alt-m; type:Why?; keys:enter`; Vim `keys:cmd-alt-v; type:ggdw`,
+a command line `type:\:w; keys:enter`; the library `keys:cmd-0 n; type:Name; keys:enter`.
 
 Notes:
 - stderr lines start with `[automation]`; a failing step is reported and the script continues.
+- `cargo test -p writer-app` rebuilds `target/debug/the-writer` with gpui's test features.
+  Run `cargo build -p writer-app` before a scripted run, or copy the binary first.
+- A scripted run stays in the background (no `cx.activate`). **A window that is completely
+  covered by other windows gets no frames**: macOS reports it occluded and GPUI stops its
+  display link (`window_did_change_occlusion_state` in `$G/src/platform/mac/window.rs`). The
+  app keeps handling keys, but nothing is drawn: captures are stale, and everything a frame
+  settles lags (the registered input handler, focus events, layout). The automation
+  therefore draws a frame itself after every key and before every capture by sending the
+  view `displayLayer:` (`writer_app::screenshot::force_frame`; it is the path AppKit uses for
+  a synchronous frame, and it must be called outside any GPUI update). With that, a covered
+  window behaves and captures like a visible one (app).
+- A background window is **inactive**: focus events do not fire (see Focus), so behaviour
+  that hangs on blur (a popup tool closing when a modal opens over it) does not happen in a
+  scripted run. Check those paths headlessly, where the test window is activated.
+- Scripts must not write the system clipboard (copy, cut, "Copy as Markdown", Vim's `"+`
+  register): it is the user's clipboard.
 - The window is placed by the tiling window manager at ~1489×1672 points (2978×3344 px PNG).
 - If a capture ever comes back black/wallpaper-only or `screencapture` fails with a permission
   error, the Screen Recording permission was revoked for the launching terminal. Do not try to
   change system settings; fall back to headless tests and ask the user.
-- Real text metrics / fonts: `cargo run -p writer-app --example gpui_probe` (prints and quits).
 
 ## Theme API (writer-ui)
 

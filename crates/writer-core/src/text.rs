@@ -260,11 +260,6 @@ pub(crate) fn char_class(c: char) -> CharClass {
     }
 }
 
-/// Whether `c` counts as part of a word for whole-word search.
-pub(crate) fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
 /// The char ending at `offset`, if any.
 pub(crate) fn char_before(text: &str, offset: usize) -> Option<char> {
     let o = floor_char_boundary(text, offset);

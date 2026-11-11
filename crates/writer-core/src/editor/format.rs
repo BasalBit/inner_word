@@ -165,11 +165,14 @@ impl EditorState {
         })
     }
 
-    /// Changes the pending attributes (collapsed caret).
+    /// Changes the pending attributes (collapsed caret). Also ends the
+    /// current typing undo group, so text typed before and after the toggle
+    /// undoes separately.
     fn change_pending(&mut self, f: impl FnOnce(&mut InlineAttrs)) {
         let mut a = self.current_attrs();
         f(&mut a);
         self.pending = Some(a);
+        self.history.close();
     }
 
     /// Toggles a style over the selection: if all selected text already has

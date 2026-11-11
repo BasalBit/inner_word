@@ -4,6 +4,8 @@ use std::ops::Range;
 
 use crate::document::Document;
 use crate::position::TextRange;
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::text;
 
 /// Options for [`Document::find_all`]. Matches always start and end on
@@ -11,10 +13,15 @@ use crate::text;
 /// `e` + combining accent).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SearchOptions {
-    /// Match case exactly. When false, matching uses Unicode lower-casing.
+    /// Match case exactly. When false, matching uses Unicode lower-casing
+    /// (plus final sigma as sigma, `İ` as `i`); there is no Unicode
+    /// normalisation, so
+    /// precomposed and decomposed accents are different text.
     pub case_sensitive: bool,
-    /// Only match whole words: the characters around a match must not be
-    /// letters, digits or `_`.
+    /// Only match whole words: both ends of a match must be word boundaries
+    /// of Unicode word segmentation (UAX #29). So `don` does not match
+    /// inside `don't`, `case` not inside `snake_case`, and each CJK
+    /// ideograph counts as a word of its own.
     pub whole_word: bool,
 }
 
@@ -29,13 +36,23 @@ struct Folded {
     starts: Vec<bool>,
 }
 
+/// Simple case folding: Unicode lower-casing, plus final sigma folded to
+/// sigma (so `ΣΟΦΟΣ` matches `σοφος`) and the Turkish dotted capital I to
+/// a plain `i` (so `istanbul` matches `İstanbul`).
+fn fold_char(c: char) -> impl Iterator<Item = char> {
+    let dotted_i = c == '\u{130}';
+    c.to_lowercase()
+        .filter(move |&l| !(dotted_i && l == '\u{307}'))
+        .map(|l| if l == '\u{3C2}' { '\u{3C3}' } else { l })
+}
+
 fn fold(src: &str) -> Folded {
     let mut text = String::with_capacity(src.len());
     let mut map = Vec::with_capacity(src.len() + 1);
     let mut starts = Vec::with_capacity(src.len() + 1);
     for (i, c) in src.char_indices() {
         let before = text.len();
-        text.extend(c.to_lowercase());
+        text.extend(fold_char(c));
         for k in before..text.len() {
             map.push(i);
             starts.push(k == before);
@@ -47,20 +64,23 @@ fn fold(src: &str) -> Folded {
 }
 
 fn fold_query(q: &str) -> String {
-    q.chars().flat_map(char::to_lowercase).collect()
+    q.chars().flat_map(fold_char).collect()
+}
+
+/// Word boundaries of `text` (UAX #29), sorted, including 0 and the end.
+fn word_bounds(text: &str) -> Vec<usize> {
+    let mut b: Vec<usize> = text.split_word_bound_indices().map(|(i, _)| i).collect();
+    b.push(text.len());
+    b
 }
 
 /// Matches must start and end on grapheme boundaries (so they can be
-/// selected and replaced), and satisfy the whole-word option.
-fn acceptable(text: &str, r: &Range<usize>, opts: SearchOptions) -> bool {
+/// selected and replaced) and, with `bounds` (whole words), on word
+/// boundaries.
+fn acceptable(text: &str, r: &Range<usize>, bounds: Option<&[usize]>) -> bool {
     text::is_grapheme_boundary(text, r.start)
         && text::is_grapheme_boundary(text, r.end)
-        && (!opts.whole_word || whole_word_ok(text, r))
-}
-
-fn whole_word_ok(text: &str, r: &Range<usize>) -> bool {
-    !text::char_before(text, r.start).is_some_and(text::is_word_char)
-        && !text::char_after(text, r.end).is_some_and(text::is_word_char)
+        && bounds.is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok())
 }
 
 /// All non-overlapping matches of `query` in `text`, left to right.
@@ -69,11 +89,13 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
     if query.is_empty() || text.is_empty() {
         return out;
     }
+    let bounds = opts.whole_word.then(|| word_bounds(text));
+    let bounds = bounds.as_deref();
     if opts.case_sensitive {
         let mut from = 0;
         while let Some(i) = text[from..].find(query) {
             let r = from + i..from + i + query.len();
-            if acceptable(text, &r, opts) {
+            if acceptable(text, &r, bounds) {
                 from = r.end;
                 out.push(r);
             } else {
@@ -89,6 +111,24 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
     if q.is_empty() {
         return out;
     }
+    if text.is_ascii() && q.is_ascii() {
+        // Fast path: ASCII folding keeps every byte offset.
+        let lower = text.to_ascii_lowercase();
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(&q) {
+            let r = from + i..from + i + q.len();
+            if bounds.is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok()) {
+                from = r.end;
+                out.push(r);
+            } else {
+                from = r.start + 1;
+            }
+            if from >= text.len() {
+                break;
+            }
+        }
+        return out;
+    }
     let f = fold(text);
     let mut from = 0;
     while from < f.text.len() {
@@ -100,7 +140,7 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
         // Both ends must fall on whole original characters.
         let aligned = f.starts[fs] && f.starts[fe];
         let r = f.map[fs]..f.map[fe];
-        if aligned && r.start < r.end && acceptable(text, &r, opts) {
+        if aligned && r.start < r.end && acceptable(text, &r, bounds) {
             out.push(r);
             from = fe;
         } else {
@@ -171,7 +211,7 @@ mod tests {
         // 'İ' lower-cases to two chars; offsets must map to the original.
         let text = "xİstanbul ÄÖ straße";
         let m = find_in_text(text, "istanbul", SearchOptions::default());
-        assert!(m.is_empty() || &text[m[0].clone()] == "İstanbul");
+        assert_eq!(&text[m[0].clone()], "İstanbul");
         let m = find_in_text(text, "äö", SearchOptions::default());
         assert_eq!(&text[m[0].clone()], "ÄÖ");
         let m = find_in_text(text, "STRASSE", SearchOptions::default());

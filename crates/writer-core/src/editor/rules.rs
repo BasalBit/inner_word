@@ -33,6 +33,40 @@ use crate::text::{self, char_after, char_before};
 
 use super::{EditorState, inherited_attrs};
 
+/// The opening delimiter `d` (made of `ch`) matching a closing one at
+/// `close`, searched backwards on the line starting at `ls`.
+///
+/// A candidate is an opener when the content after it does not start with
+/// whitespace or another `ch`, and it does not follow a letter, digit or
+/// `ch`. Candidates that are not openers are skipped when they cannot close
+/// either (they follow whitespace, as the middle `*` of `*a * b*`); the
+/// search stops at one that could close an earlier span (it follows other
+/// text, as the second `*` of `*a* b*`), so a span never jumps over it.
+fn find_opener(t: &str, ls: usize, close: usize, d: &str, ch: char) -> Option<usize> {
+    let mut end = close;
+    while let Some(rel) = t[ls..end].rfind(d) {
+        let open = ls + rel;
+        let open_end = open + d.len();
+        end = open;
+        if open_end >= close {
+            continue;
+        }
+        let content = &t[open_end..close];
+        let before = char_before(t, open);
+        let valid = !content.starts_with(char::is_whitespace)
+            && !content.starts_with(ch)
+            && !before.is_some_and(|c| c == ch || c.is_alphanumeric());
+        if valid {
+            return Some(open);
+        }
+        let could_close = before.is_some_and(|c| c != ch && !c.is_whitespace());
+        if could_close {
+            return None;
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy)]
 enum Effect {
     Style(InlineStyle),
@@ -167,21 +201,10 @@ impl EditorState {
             if (ch == '*' || ch == '_') && char_after(t, o).is_some_and(char::is_alphanumeric) {
                 continue;
             }
-            let Some(rel) = t[ls..close].rfind(d) else {
+            let Some(open) = find_opener(t, ls, close, d, ch) else {
                 continue;
             };
-            let open = ls + rel;
             let open_end = open + d.len();
-            if open_end >= close {
-                continue;
-            }
-            if t[open_end..close].starts_with(char::is_whitespace) {
-                continue;
-            }
-            let before_open = char_before(t, open);
-            if before_open.is_some_and(|c| c == ch || c.is_alphanumeric()) {
-                continue;
-            }
             if runs::spans_in(&b.runs, open..o).any(|(_, a)| a.code) {
                 continue;
             }

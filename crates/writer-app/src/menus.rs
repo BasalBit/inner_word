@@ -6,6 +6,7 @@
 
 use gpui::{App, Menu, MenuItem, OsAction, SystemMenuType};
 use writer_editor::actions as editor;
+use writer_editor_tools::actions as tools;
 
 use crate::actions::*;
 
@@ -54,6 +55,13 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Paste as Plain Text", editor::PasteAsPlainText),
                 MenuItem::separator(),
                 MenuItem::os_action("Select All", editor::SelectAll, OsAction::SelectAll),
+                MenuItem::separator(),
+                MenuItem::action("Find…", tools::Find),
+                MenuItem::action("Find and Replace…", tools::FindAndReplace),
+                MenuItem::action("Find Next", tools::FindNext),
+                MenuItem::action("Find Previous", tools::FindPrevious),
+                MenuItem::separator(),
+                MenuItem::action("Add Comment", writer_comments::AddComment),
             ],
         },
         Menu {

@@ -2,8 +2,9 @@
 //!
 //! Generated, not written: the rows are the registered command descriptors
 //! that have a binding in GPUI's keymap, grouped by category, followed by
-//! the editing keys that have no descriptor (caret movement, selection,
-//! deletion), named after their actions. The key shown is whatever the
+//! the keys that have no descriptor (caret movement, selection and deletion
+//! in the text; moving around the find bar, the comment list, the library,
+//! the pickers and the settings), named after their actions. The key shown is whatever the
 //! keymap says right now. The list is searchable, and enter runs the
 //! selected command.
 
@@ -19,7 +20,14 @@ pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
 
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the heading they are listed under.
-const KEY_GROUPS: [(&str, &str); 1] = [("editor", "Editing keys")];
+const KEY_GROUPS: [(&str, &str); 6] = [
+    ("editor", "Editing keys"),
+    ("editor_tools", "Find bar keys"),
+    ("comments", "Comment list keys"),
+    ("library_panel", "Library keys"),
+    ("picker", "List keys"),
+    ("settings", "Settings keys"),
+];
 
 /// One shortcut.
 pub struct Shortcut {

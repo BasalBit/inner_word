@@ -96,12 +96,13 @@ pub fn welcome_document() -> Document {
             "{k:⌘0} moves to the library on the left and {k:⌘1} comes back to the text. \
              {k:⌘N} starts a new document, {k:⇧⌘N} a new folder.",
         ),
+        bullet("{k:⌘F} finds in this document and {k:⌥⌘F} replaces."),
         bullet("{k:⌘/} lists every keyboard shortcut."),
         heading(2, "Format without a toolbar"),
         paragraph(
             "Select some text and press {k:⌘.} for the format menu, or use the usual keys: \
              {b:bold} with {k:⌘B}, {i:italic} with {k:⌘I}, {u:underline} with {k:⌘U}, \
-             {h:highlight} with {k:⇧⌘H} and a link with {k:⌘K}.",
+             {h:highlight} with {k:⇧⌘H} and a link with {k:⌘K}. {k:⌘T} picks a font.",
         ),
         paragraph(
             "Type {k:/} at the start of an empty line for the insert menu: headings, lists, \
@@ -126,8 +127,15 @@ pub fn welcome_document() -> Document {
             "{k:⌥⌘P} switches between the flowing column and page view. Paper size and the \
              defaults for new documents are in Settings, {k:⌘,}.",
         ),
-        bullet("{k:⌥⌘M} adds a comment to the selected text. {k:⌥⌘C} shows or hides comments."),
-        bullet("{k:⌥⌘V} turns Vim mode on or off."),
+        bullet(
+            "{k:⌥⌘M} adds a comment to the selected text, {k:⌥⌘]} and {k:⌥⌘[} step through \
+             the comments, {k:⌘2} moves to the list beside the text. {k:⌥⌘C} shows or hides \
+             them.",
+        ),
+        bullet(
+            "{k:⌥⌘V} turns Vim mode on or off. In it, {c::w} saves at once and {c::q} closes \
+             the document.",
+        ),
         heading(2, "Take your words elsewhere"),
         paragraph(
             "{k:⇧⌘S} exports this document, or its whole folder as one file: Markdown, a Word \

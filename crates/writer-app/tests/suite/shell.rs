@@ -304,7 +304,12 @@ fn menu_bar_follows_the_macos_layout(cx: &mut TestAppContext) {
             "Copy",
             "Paste",
             "Paste as Plain Text",
-            "Select All"
+            "Select All",
+            "Find…",
+            "Find and Replace…",
+            "Find Next",
+            "Find Previous",
+            "Add Comment"
         ]
     );
     assert!(items(&menus[3]).contains(&"Page View".to_string()));

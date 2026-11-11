@@ -52,6 +52,16 @@
 //! continues to the parent, so a surrounding modal or picker closes too. Use
 //! [`TextField::consume_escape`] to stop it.
 //!
+//! # Mouse
+//!
+//! Click, shift-click, drag, double-click (word, and drag by words),
+//! triple-click (all). A right-click, and `ctrl-enter` from the keyboard,
+//! opens the field's [`crate::ContextMenu`]: Cut, Copy, Paste and Select All
+//! with their keys, greyed when they cannot apply (nothing selected, nothing
+//! to paste, a disabled field). A right-click outside the selection first
+//! selects the word under the pointer, as macOS text fields do. The owner of
+//! a field can add items of its own with [`TextField::with_menu_items`].
+//!
 //! `up` / `down` / `ctrl-p` / `ctrl-n` / `pageup` / `pagedown` / `home` / `end`
 //! move the caret to the start or end of the line, unless
 //! [`TextField::set_list_navigation`] is on: then they are passed to the
@@ -61,7 +71,7 @@ pub mod boundaries;
 mod element;
 mod history;
 
-use std::{ops::Range, time::Duration};
+use std::{ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, EntityInputHandler, EventEmitter,
@@ -69,7 +79,10 @@ use gpui::{
     Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::*, px,
 };
 
-use crate::theme::{ActiveTheme, RADIUS_MD, RADIUS_SM, UI_LINE_HEIGHT, UI_TEXT_BASE, focus_ring};
+use crate::{
+    context_menu::{ContextMenu, ContextMenuItem, MenuAnchor, OpenContextMenu},
+    theme::{ActiveTheme, RADIUS_MD, RADIUS_SM, UI_LINE_HEIGHT, UI_TEXT_BASE, focus_ring},
+};
 use boundaries::*;
 use element::TextFieldElement;
 use history::{EditKind, History, Snapshot};
@@ -208,6 +221,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("escape", Cancel, c),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, c),
+        KeyBinding::new("ctrl-enter", OpenContextMenu, c),
     ]
 }
 
@@ -250,6 +264,8 @@ enum DragMode {
     Words(Range<usize>),
 }
 
+type MenuItems = Rc<dyn Fn(&mut Window, &mut App) -> Vec<ContextMenuItem>>;
+
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 /// A single-line text input entity. See the [module docs](self).
@@ -268,6 +284,7 @@ pub struct TextField {
     list_navigation: bool,
     consume_escape: bool,
     disabled: bool,
+    menu_items: Option<MenuItems>,
 
     // Layout from the last paint, for hit testing and IME bounds.
     pub(crate) scroll_x: Pixels,
@@ -330,6 +347,7 @@ impl TextField {
             list_navigation: false,
             consume_escape: false,
             disabled: false,
+            menu_items: None,
             scroll_x: px(0.),
             last_layout: None,
             last_bounds: None,
@@ -373,6 +391,17 @@ impl TextField {
     /// Stop `escape` from reaching the parent after `Cancelled` is emitted.
     pub fn consume_escape(mut self) -> Self {
         self.consume_escape = true;
+        self
+    }
+
+    /// Items of the field's owner for the field's context menu, asked for
+    /// each time the menu opens. They follow Cut, Copy, Paste and Select All
+    /// after a separator ("Rename", "Clear", "Open link").
+    pub fn with_menu_items(
+        mut self,
+        items: impl Fn(&mut Window, &mut App) -> Vec<ContextMenuItem> + 'static,
+    ) -> Self {
+        self.menu_items = Some(Rc::new(items));
         self
     }
 
@@ -805,6 +834,9 @@ impl TextField {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let range = self.selection.clone();
             self.replace(range, &text, EditKind::Other, cx);
@@ -903,6 +935,92 @@ impl TextField {
                 }
             }
         }
+    }
+
+    /// Right button: the menu of the field, on the selection when the
+    /// pointer is on it, else on the word under the pointer.
+    fn on_secondary_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle);
+        self.marked = None;
+        self.selecting = false;
+        self.drag = None;
+        let ix = self.index_for_position(event.position);
+        let on_selection =
+            !self.selection.is_empty() && self.selection.start <= ix && ix <= self.selection.end;
+        if !on_selection {
+            let word = word_range_at(&self.text, ix);
+            if word.is_empty() {
+                self.move_to(ix, cx);
+            } else {
+                self.selection = word;
+                self.reversed = false;
+                self.after_move(cx);
+            }
+        }
+        self.open_context_menu(event.position, window, cx);
+    }
+
+    fn open_context_menu_action(
+        &mut self,
+        _: &OpenContextMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = match (self.last_bounds, self.last_layout.as_ref()) {
+            (Some(bounds), Some(line)) => {
+                let x = bounds.left() - self.scroll_x + line.x_for_index(self.cursor());
+                let x = x.max(bounds.left()).min(bounds.right());
+                MenuAnchor::Below(Bounds::from_corners(
+                    point(x, bounds.top()),
+                    point(x, bounds.bottom()),
+                ))
+            }
+            (Some(bounds), None) => MenuAnchor::Below(bounds),
+            _ => MenuAnchor::Point(window.mouse_position()),
+        };
+        let menu = self.open_context_menu(anchor, window, cx);
+        menu.update(cx, |menu, cx| menu.select_first(cx));
+    }
+
+    /// What the field's context menu holds right now: Cut, Copy, Paste and
+    /// Select All (disabled when they cannot apply), then the owner's items
+    /// ([`TextField::with_menu_items`]).
+    pub fn context_menu_items(&self, window: &mut Window, cx: &mut App) -> Vec<ContextMenuItem> {
+        let has_selection = !self.selection.is_empty();
+        let can_paste = !self.disabled
+            && cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| !text.is_empty());
+        let mut items = vec![
+            ContextMenuItem::action("Cut", Cut).disabled(!has_selection || self.disabled),
+            ContextMenuItem::action("Copy", Copy).disabled(!has_selection),
+            ContextMenuItem::action("Paste", Paste).disabled(!can_paste),
+            ContextMenuItem::separator(),
+            ContextMenuItem::action("Select All", SelectAll).disabled(self.text.is_empty()),
+        ];
+        if let Some(extra) = self.menu_items.clone() {
+            items.push(ContextMenuItem::separator());
+            items.extend(extra(window, cx));
+        }
+        items
+    }
+
+    /// Opens the field's context menu at `anchor`. Its actions go to this
+    /// field wherever the keyboard is.
+    pub fn open_context_menu(
+        &mut self,
+        anchor: impl Into<MenuAnchor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<ContextMenu> {
+        let items = self.context_menu_items(window, cx);
+        ContextMenu::open_for(&self.focus_handle, anchor, items, window, cx)
     }
 
     /// Called by the element for window-wide mouse moves while selecting.
@@ -1132,7 +1250,12 @@ impl Render for TextField {
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::show_character_palette))
+            .on_action(cx.listener(Self::open_context_menu_action))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(Self::on_secondary_mouse_down),
+            )
             .flex()
             .items_center()
             .w_full()

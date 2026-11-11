@@ -30,6 +30,7 @@
 //! | [`label`] | [`SectionLabel`], [`Divider`], [`HighlightedLabel`] |
 //! | [`confirm`] | [`ConfirmDialog`] |
 //! | [`toast`] | [`ToastLayer`] / [`Toast`] |
+//! | [`tooltip`] | [`Tooltip`]: the name of a control and its key, on hover |
 //! | [`focus`] | tab navigation helper |
 //! | [`command`] | [`CommandDescriptor`]: how crates publish commands to the palette and shortcuts overlay |
 
@@ -50,6 +51,7 @@ pub mod text_field;
 pub mod theme;
 pub mod toast;
 pub mod toggle;
+pub mod tooltip;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use command::CommandDescriptor;
@@ -65,6 +67,7 @@ pub use text_field::{FieldAppearance, TextField, TextFieldEvent};
 pub use theme::{ActiveTheme, Theme, ThemeColors, ThemeMode};
 pub use toast::{Toast, ToastKind, ToastLayer};
 pub use toggle::{Checkbox, Switch};
+pub use tooltip::Tooltip;
 
 /// Installs the key bindings of every widget in this crate. Call once at
 /// startup, after [`theme::init`] and after the app's own context-free

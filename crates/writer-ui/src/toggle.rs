@@ -24,9 +24,7 @@
 
 use std::rc::Rc;
 
-use gpui::{
-    App, ElementId, FocusHandle, KeyBinding, MouseButton, SharedString, Window, div, prelude::*, px,
-};
+use gpui::{App, ElementId, FocusHandle, KeyBinding, SharedString, Window, div, prelude::*, px};
 
 use crate::{
     button::Press,
@@ -157,7 +155,14 @@ impl ToggleRow {
                     el.opacity(0.45)
                 } else {
                     el.cursor_pointer()
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| toggle(window, cx))
+                        .hover(move |style| style.bg(focus_bg))
+                        // press and release on the row; `enter` / `space` go
+                        // through `Press` (see `Button`)
+                        .on_click(move |event, window, cx| {
+                            if matches!(event, gpui::ClickEvent::Mouse(_)) {
+                                toggle(window, cx)
+                            }
+                        })
                         .on_action(move |_: &Press, window, cx| press(window, cx))
                 }
             })

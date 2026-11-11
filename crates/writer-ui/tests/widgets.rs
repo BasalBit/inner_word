@@ -17,6 +17,8 @@ use writer_ui::{
 
 #[path = "widgets/context_menu.rs"]
 mod context_menu;
+#[path = "widgets/mouse.rs"]
+mod mouse;
 
 fn init(cx: &mut TestAppContext) {
     cx.update(|cx| {

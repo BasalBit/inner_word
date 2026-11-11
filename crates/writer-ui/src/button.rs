@@ -17,18 +17,31 @@
 //!
 //! The click handler receives a [`ClickEvent`]: `ClickEvent::Mouse` for
 //! clicks, `ClickEvent::Keyboard` for `enter` / `space`.
+//!
+//! The mouse: the button lights up under the pointer, darkens while pressed
+//! and shows a pointing hand. A click needs the press and the release on the
+//! button. An icon-only button has no words, so give it a
+//! [`Button::tooltip`]: resting the pointer on it shows the name and the
+//! button's key hint (which an icon-only button does not draw inline).
+//!
+//! ```ignore
+//! Button::icon_only("close", IconName::Close)
+//!     .tooltip("Close")
+//!     .key_hint(KeyHint::for_action(&Close, cx))
+//! ```
 
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, ElementId, FocusHandle, KeyBinding, KeyboardClickEvent, MouseButton,
-    SharedString, Window, actions, div, prelude::*, px,
+    App, ClickEvent, ElementId, FocusHandle, KeyBinding, KeyboardClickEvent, SharedString, Window,
+    actions, div, prelude::*, px,
 };
 
 use crate::{
     icon::{Icon, IconName},
     key_hint::KeyHint,
     theme::{ActiveTheme, RADIUS_MD, UI_TEXT_BASE, UI_TEXT_SM, focus_ring},
+    tooltip::Tooltip,
 };
 
 pub const KEY_CONTEXT: &str = "Button";
@@ -87,6 +100,7 @@ pub struct Button {
     tab_index: isize,
     on_click: Option<ClickHandler>,
     full_width: bool,
+    tooltip: Option<SharedString>,
 }
 
 impl Button {
@@ -104,6 +118,7 @@ impl Button {
             tab_index: 0,
             on_click: None,
             full_width: false,
+            tooltip: None,
         }
     }
 
@@ -143,6 +158,13 @@ impl Button {
     /// `KeyHint::for_action(..)` can be passed directly.
     pub fn key_hint(mut self, hint: impl Into<Option<KeyHint>>) -> Self {
         self.key_hint = hint.into();
+        self
+    }
+
+    /// What the button does, shown with its key hint when the pointer rests
+    /// on it. Every icon-only button should have one.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 
@@ -287,23 +309,22 @@ impl RenderOnce for Button {
                 if disabled {
                     el.opacity(0.45).cursor_default()
                 } else {
-                    el.cursor_pointer().hover(move |style| style.bg(hover_bg))
+                    el.cursor_pointer()
+                        .hover(move |style| style.bg(hover_bg))
+                        .active(move |style| style.bg(hover_bg).opacity(0.8))
                 }
             })
+            .when_some(self.tooltip, |el, text| {
+                el.tooltip(Tooltip::new(text).key_hint(self.key_hint.clone()).build())
+            })
             .when(!disabled, |el| {
-                el.on_mouse_up(MouseButton::Left, move |event, window, cx| {
-                    if let Some(handler) = on_click.as_ref() {
-                        let click = ClickEvent::Mouse(gpui::MouseClickEvent {
-                            down: gpui::MouseDownEvent {
-                                button: MouseButton::Left,
-                                position: event.position,
-                                modifiers: event.modifiers,
-                                click_count: event.click_count,
-                                first_mouse: false,
-                            },
-                            up: event.clone(),
-                        });
-                        handler(&click, window, cx);
+                // A click is a press and a release on the button: letting go
+                // of a drag over it does nothing. GPUI also reports `enter`
+                // and `space` released on a focused element as a click; the
+                // keyboard presses on key down through `Press` instead.
+                el.on_click(move |event, window, cx| {
+                    if let (ClickEvent::Mouse(_), Some(handler)) = (event, on_click.as_ref()) {
+                        handler(event, window, cx);
                     }
                 })
                 .on_action(move |_: &Press, window, cx| {
@@ -320,7 +341,8 @@ impl RenderOnce for Button {
                 el.child(Icon::new(icon).color(icon_color))
             })
             .when_some(self.label, |el, label| el.child(label))
-            .when_some(self.key_hint, |el, hint| {
+            // an icon-only button is a square: its key is in the tooltip
+            .when_some(self.key_hint.filter(|_| !icon_only), |el, hint| {
                 el.child(hint.color(hint_color).size(UI_TEXT_SM))
             })
     }

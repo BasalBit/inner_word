@@ -17,8 +17,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, FocusHandle, KeyBinding, MouseButton, SharedString, Window, actions, div,
-    prelude::*, px,
+    App, ElementId, FocusHandle, KeyBinding, SharedString, Window, actions, div, prelude::*, px,
 };
 
 use crate::theme::{ActiveTheme, RADIUS_MD, RADIUS_SM, UI_TEXT_SM, focus_ring};
@@ -159,12 +158,17 @@ impl RenderOnce for SegmentedControl {
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .shadow(cx.theme().shadow_popover())
                         } else {
-                            el.text_color(colors.muted)
-                                .hover(|style| style.text_color(colors.ink))
+                            el.text_color(colors.muted).hover(|style| {
+                                style
+                                    .text_color(colors.ink)
+                                    .bg(colors.border_strong.opacity(0.35))
+                            })
                         }
                     })
-                    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                        if let Some(handler) = handler.as_ref() {
+                    .on_click(move |event, window, cx| {
+                        if let (gpui::ClickEvent::Mouse(_), Some(handler)) =
+                            (event, handler.as_ref())
+                        {
                             handler(&ix, window, cx);
                         }
                     })

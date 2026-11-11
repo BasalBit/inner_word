@@ -147,6 +147,9 @@ pub struct Editor {
     refining: bool,
     refine_slices: usize,
     pub(crate) perf: Cell<FramePerf>,
+    /// The selection rectangles of the last frame, in window coordinates.
+    #[cfg(test)]
+    pub(crate) painted_selection: Vec<gpui::Bounds<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -282,6 +285,8 @@ impl Editor {
             refining: false,
             refine_slices: 0,
             perf: Cell::new(FramePerf::default()),
+            #[cfg(test)]
+            painted_selection: Vec::new(),
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.

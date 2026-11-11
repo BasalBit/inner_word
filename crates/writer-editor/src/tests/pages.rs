@@ -344,3 +344,154 @@ fn switching_views_keeps_the_caret_on_screen(cx: &mut TestAppContext) {
         assert_eq!(geometry.gap, px(PAGE_GAP));
     });
 }
+
+/// A document with every kind of gap between blocks: heading space, list
+/// items, quotes, a code block with inner padding, a divider, an empty
+/// paragraph, a paragraph that wraps.
+fn mixed_blocks() -> Vec<Block> {
+    let long = "The quick brown fox jumps over the lazy dog and keeps running. ".repeat(3);
+    vec![
+        Block::with_text(BlockKind::heading(1), "A heading"),
+        Block::paragraph(long.trim_end()),
+        Block::with_text(BlockKind::heading(2), "Another heading"),
+        Block::with_text(BlockKind::BulletItem, "one"),
+        Block::with_text(BlockKind::BulletItem, "two"),
+        Block::paragraph(""),
+        Block::with_text(BlockKind::Quote, "a quote"),
+        Block::with_text(BlockKind::Quote, "more of it"),
+        Block::with_text(BlockKind::code(), "fn main() {\n    body();\n}"),
+        Block::new(BlockKind::Divider),
+        Block::paragraph("the end"),
+    ]
+}
+
+/// The selection rectangles of the last frame, top to bottom.
+fn painted_selection(editor: &Editor) -> Vec<gpui::Bounds<gpui::Pixels>> {
+    let mut rects = editor.painted_selection.clone();
+    rects.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
+    rects
+}
+
+#[gpui::test]
+fn the_selection_is_one_shape_across_blocks(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(
+        Document::from_blocks(mixed_blocks()),
+        EditorConfig::full(),
+        cx,
+    );
+    cx.simulate_keystrokes("cmd-a");
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let rects = painted_selection(editor);
+        // 3 rows of the long paragraph, 3 of the code block, 9 single rows.
+        assert_eq!(rects.len(), 15);
+        // Every rectangle starts exactly where the one above it ends: no
+        // stripes between rows, between blocks or around the code panel.
+        for pair in rects.windows(2) {
+            assert_eq!(
+                pair[0].bottom(),
+                pair[1].top(),
+                "a gap or an overlap between {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+            assert!(pair[0].size.height > px(0.));
+        }
+        // From the first row's top to the last row's bottom.
+        let first = editor.position_bounds(Position::ZERO).unwrap();
+        let last = editor.position_bounds(editor.document().end()).unwrap();
+        assert_eq!(rects[0].top(), first.top());
+        assert_eq!(rects.last().unwrap().bottom(), last.bottom());
+        // The last row is not stretched, and rows keep the width of their
+        // text: the empty paragraph is a stub.
+        assert_eq!(rects.last().unwrap().size.height, last.size.height);
+        let stub = &rects[7];
+        assert!(stub.size.width > px(0.) && stub.size.width < px(12.));
+        assert!(
+            stub.size.height > last.size.height,
+            "the stub of an empty paragraph also covers the space below it"
+        );
+        // The geometry API still reports plain rows.
+        let rows = editor.range_bounds(editor.selection().range()).unwrap();
+        assert_eq!(rows.len(), 15);
+        let height = |rects: &[gpui::Bounds<gpui::Pixels>]| {
+            rects
+                .iter()
+                .fold(px(0.), |sum, rect| sum + rect.size.height)
+        };
+        assert!(height(&rows) < height(&rects), "rows, without the gaps");
+    });
+
+    // A selection that ends at the very start of a block paints nothing in
+    // that block and does not reach down to it.
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_selection(writer_core::Selection::new(
+                    Position::new(3, 1),
+                    Position::new(4, 0),
+                ))
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let rects = painted_selection(editor);
+        let row = editor.position_bounds(Position::new(3, 1)).unwrap();
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].size.height, row.size.height);
+    });
+    // One that takes the first character of the next block does.
+    cx.simulate_keystrokes("shift-right");
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let rects = painted_selection(editor);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].bottom(), rects[1].top());
+    });
+}
+
+#[gpui::test]
+fn the_selection_does_not_cross_the_desk_between_sheets(cx: &mut TestAppContext) {
+    setup(cx);
+    // 18 one-row paragraphs fill a sheet; the 19th starts the next one.
+    let (editor, cx) = open(paged(one_row_paragraphs(30)), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    cx.simulate_keystrokes("cmd-a");
+    cx.run_until_parked();
+    // Bring the break between the sheets into view.
+    editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(18, 0), crate::Autoscroll::Center, cx)
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let rects = painted_selection(editor);
+        let end_of_sheet = editor.position_bounds(Position::new(17, 0)).unwrap();
+        let start_of_next = editor.position_bounds(Position::new(18, 0)).unwrap();
+        assert!(start_of_next.top() - end_of_sheet.bottom() > px(PAGE_GAP));
+        let viewport = editor.viewport_bounds().unwrap();
+        assert!(end_of_sheet.top() > viewport.top() && start_of_next.bottom() < viewport.bottom());
+        let mut on_first = 0;
+        let mut on_second = 0;
+        // Painted rectangles sit on whole device pixels.
+        let close = |a: gpui::Pixels, b: gpui::Pixels| (a - b).abs() <= px(0.5);
+        for pair in rects.windows(2) {
+            if close(pair[0].top(), end_of_sheet.top()) {
+                // The last row of the sheet keeps its height; the next
+                // rectangle is the first row of the next sheet.
+                assert!(close(pair[0].size.height, end_of_sheet.size.height));
+                assert!(close(pair[1].top(), start_of_next.top()));
+            } else {
+                assert_eq!(pair[0].bottom(), pair[1].top());
+                if pair[0].top() < end_of_sheet.top() {
+                    on_first += 1;
+                } else {
+                    on_second += 1;
+                }
+            }
+        }
+        assert!(on_first > 0 && on_second > 0, "both sheets are on screen");
+    });
+}

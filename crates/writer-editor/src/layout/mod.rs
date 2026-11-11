@@ -705,6 +705,18 @@ impl DocumentLayout {
         px(self.placement(index).map_or(0., |place| place.top))
     }
 
+    /// Content-space y of the top of the first row of block `index`
+    /// (clamped): its box top plus its inner padding. Needs no shaping.
+    pub(crate) fn first_row_top(&mut self, index: usize) -> Pixels {
+        let Some(last) = self.slots.len().checked_sub(1) else {
+            return px(0.);
+        };
+        let index = index.min(last);
+        self.place_through(index);
+        let slot = &self.slots[index];
+        px(slot.place.top + slot.measure.pad_top)
+    }
+
     /// The block whose box top is the last one at or above content-space
     /// `y`, clamped to the first block.
     pub(crate) fn block_at_y(&mut self, y: Pixels) -> usize {
@@ -958,10 +970,22 @@ impl Placed {
     /// One rectangle per row for the bytes in `range`, one row high. Only
     /// the rows in `rows` are looked at.
     pub(crate) fn rects(&self, range: Range<usize>, rows: Range<usize>) -> Vec<Bounds<Pixels>> {
+        self.row_rects(range, rows)
+            .into_iter()
+            .map(|(_, bounds)| bounds)
+            .collect()
+    }
+
+    /// [`Self::rects`] with the row each rectangle is on.
+    pub(crate) fn row_rects(
+        &self,
+        range: Range<usize>,
+        rows: Range<usize>,
+    ) -> Vec<(usize, Bounds<Pixels>)> {
         self.layout
             .rects_for_range(range, rows)
             .into_iter()
-            .map(|(row, bounds)| self.lift(row, bounds))
+            .map(|(row, bounds)| (row, self.lift(row, bounds)))
             .collect()
     }
 

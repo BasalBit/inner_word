@@ -130,8 +130,9 @@ impl Editor {
     }
 
     /// One rectangle per visual row covered by `range` (empty for an empty
-    /// range). These are the rectangles a selection over the range would
-    /// paint.
+    /// range), each one row high. A painted selection covers the same
+    /// rows and, in addition, the space between two blocks it runs
+    /// through.
     ///
     /// A range over more than a few hundred blocks is resolved only around
     /// the viewport (the rows a frame could show), so that asking about a

@@ -115,7 +115,8 @@ fn inline(mut block: Block, text: &str) -> Block {
     let mut attrs = InlineAttrs::default();
     let mut pending = String::new();
     let mut rest = text.as_str();
-    let marks: [(&str, fn(&mut InlineAttrs)); 5] = [
+    type Toggle = fn(&mut InlineAttrs);
+    let marks: [(&str, Toggle); 5] = [
         ("**", |attrs| attrs.bold = !attrs.bold),
         ("==", |attrs| {
             attrs.highlight = match attrs.highlight {

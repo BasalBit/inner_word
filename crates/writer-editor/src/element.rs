@@ -393,9 +393,41 @@ impl Editor {
                         local.end
                     };
                     if block.is_void() || local.start < end {
-                        for rect in placed.rects(local.start..end, rows.clone()) {
-                            plan.selection
-                                .push(fill(shifted(rect, origin), selection_color));
+                        let mut rects = placed.row_rects(local.start..end, rows.clone());
+                        // The selection is one shape: where it goes on in
+                        // the next block, the space between the two blocks
+                        // belongs to it (as tall as the gap, as wide as
+                        // this block's last row), unless the next block
+                        // starts on another sheet.
+                        let continues = index + 1 < range.end.block
+                            || (index + 1 == range.end.block
+                                && (range.end.offset > 0
+                                    || document
+                                        .block(index + 1)
+                                        .is_some_and(|next| next.is_void())));
+                        if continues
+                            && let Some((row, last)) = rects.last_mut()
+                            && *row + 1 == block_layout.rows.len()
+                        {
+                            let next_top = lay.layout.first_row_top(index + 1);
+                            if next_top > last.bottom()
+                                && lay.page_at(last.top()) == lay.page_at(next_top)
+                            {
+                                last.size.height = next_top - last.top();
+                            }
+                        }
+                        for (_, rect) in rects {
+                            // Whole device pixels vertically: rows meet
+                            // without a seam or an overlap.
+                            let rect = shifted(rect, origin);
+                            let (top, bottom) = (snap(rect.top()), snap(rect.bottom()));
+                            plan.selection.push(fill(
+                                Bounds::new(
+                                    point(rect.left(), top),
+                                    size(rect.size.width, bottom - top),
+                                ),
+                                selection_color,
+                            ));
                         }
                     }
                 }
@@ -559,6 +591,10 @@ impl Editor {
                 .push(window.insert_hitbox(checkbox.bounds, HitboxBehavior::Normal));
         }
         plan.link_cursor = self.link_hover;
+        #[cfg(test)]
+        {
+            self.painted_selection = plan.selection.iter().map(|quad| quad.bounds).collect();
+        }
         self.checkbox_hits = checkboxes;
         self.scrollbar.geometry = scrollbar;
         self.caret_painted = caret_painted;

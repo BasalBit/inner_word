@@ -25,27 +25,33 @@
 //! | [`actions`] | app actions, their key bindings and command descriptors |
 //! | [`commands`] | the command registry every crate registers into |
 //! | [`palette`], [`quick_open`], [`library_search`], [`shortcuts`] | the picker modals |
-//! | [`settings`], [`settings_view`] | setting keys and the typed snapshot; the settings modal |
+//! | [`settings`], [`settings_view`] | setting keys and the typed snapshot; the settings modal, with the section for the open document |
+//! | [`version_history`] | the snapshots of the open document, a preview, restore |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
+//! | [`character_limit`] | the character-limit indicator, counted block by block |
 //! | [`welcome`] | the welcome document, the demo library for QA |
 //! | [`window`] | main window options, stored bounds, the error window |
 //! | [`menus`] | the native menu bar |
+//! | [`press_and_hold`] | held keys repeat while Vim mode is on (the `ApplePressAndHoldEnabled` user default) |
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
 pub mod actions;
 pub mod automation;
+pub mod character_limit;
 pub mod commands;
 pub mod document_io;
 pub mod export;
 pub mod library_search;
 pub mod menus;
 pub mod palette;
+pub mod press_and_hold;
 pub mod quick_open;
 pub mod screenshot;
 pub mod settings;
 pub mod settings_view;
 pub mod shortcuts;
+pub mod version_history;
 pub mod welcome;
 pub mod window;
 pub mod workspace;
@@ -61,13 +67,14 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 /// 1. theme ([`writer_ui::theme::init`], System until the stored setting is
 ///    read by the workspace);
 /// 2. the app's context-free key bindings ([`actions::key_bindings`]);
-/// 3. the widget, editor, library-panel and settings-modal bindings (later
-///    bindings win ties, so a focused widget keeps its own keys);
+/// 3. the widget, editor, library-panel, settings-modal and
+///    version-history bindings (later bindings win ties, so a focused
+///    widget keeps its own keys);
 /// 4. the comments, Vim and editor-tools bindings and global handlers. The
 ///    tools come last: inside the find bar `cmd-alt-c` is "case sensitive",
 ///    and it must win over the window-wide "show or hide comments";
 /// 5. the command registry: every crate's commands (see
-///    [`register_commands`] for the two that are left out);
+///    [`register_commands`] for the three that are left out);
 /// 6. the app-global actions (quit, hide) and the menu bar;
 /// 7. quit when the last window closes.
 pub fn init(cx: &mut App) {
@@ -78,6 +85,7 @@ pub fn init(cx: &mut App) {
     writer_editor::init(cx);
     writer_library::init(cx);
     cx.bind_keys(settings_view::key_bindings());
+    cx.bind_keys(version_history::key_bindings());
     writer_comments::init(cx);
     writer_vim_mode::init(cx);
     writer_editor_tools::init(cx);
@@ -103,10 +111,17 @@ pub fn init(cx: &mut App) {
 /// Fills the command registry from every crate, in the order the palette
 /// and the shortcuts overlay list the categories.
 ///
-/// One published command is left out: the Vim crate's own "Toggle Vim
-/// mode". The app's [`actions::ToggleVimMode`] is the one bound to
-/// `cmd-alt-v` and the one that stores the setting, and the palette should
-/// not list the same thing twice.
+/// Three published commands are left out, because the app has the same
+/// thing under the same name and the palette should not list it twice:
+///
+/// - the Vim crate's "Toggle Vim mode": the app's
+///   [`actions::ToggleVimMode`] is the one bound to `cmd-alt-v` and the one
+///   that stores the setting;
+/// - the library panel's "New document" and "New folder": the app's
+///   [`actions::NewDocument`] (`cmd-n`) and [`actions::NewFolder`]
+///   (`cmd-shift-n`) work from anywhere. The panel's own keys (`n`,
+///   `shift-n` in the sidebar) still work and are listed in the shortcuts
+///   overlay under "In the library".
 fn register_commands(cx: &mut App) {
     commands::register(actions::commands(), cx);
     commands::register(writer_editor::commands(), cx);
@@ -118,5 +133,11 @@ fn register_commands(cx: &mut App) {
             .filter(|command| command.action_name() != writer_vim_mode::ToggleVimMode.name()),
         cx,
     );
-    commands::register(writer_library::commands(), cx);
+    commands::register(
+        writer_library::commands().into_iter().filter(|command| {
+            let name = command.action_name();
+            name != writer_library::NewDocument.name() && name != writer_library::NewFolder.name()
+        }),
+        cx,
+    );
 }

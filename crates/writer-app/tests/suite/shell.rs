@@ -448,3 +448,128 @@ fn library_commands_work_from_the_editor_and_renaming_pins_the_title(cx: &mut Te
     assert_eq!(title(created.id, vcx), "Named at birth");
     assert_eq!(title(id, vcx), "Chosen in the sidebar");
 }
+
+#[gpui::test]
+fn edit_menu_items_act_where_the_keyboard_is(cx: &mut TestAppContext) {
+    use writer_editor::actions as editor;
+
+    init(cx);
+    let library = library(cx);
+    let id = add_document(&library, None, &simple_document("Menu", "Body text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    // The menu bar dispatches an item's action from whatever has the
+    // keyboard, and enables the item when something there takes it.
+    let available = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            [
+                window.is_action_available(&editor::Undo, cx),
+                window.is_action_available(&editor::Redo, cx),
+                window.is_action_available(&editor::Cut, cx),
+                window.is_action_available(&editor::Copy, cx),
+                window.is_action_available(&editor::Paste, cx),
+                window.is_action_available(&editor::SelectAll, cx),
+            ]
+        })
+    };
+    let clipboard = |cx: &mut VisualTestContext| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+    vcx.write_to_clipboard(gpui::ClipboardItem::new_string("pasted".to_string()));
+
+    // ----- the query field of the palette ---------------------------------------
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let palette = workspace
+        .read_with(vcx, |w, cx| {
+            w.modal_layer()
+                .read(cx)
+                .active::<writer_app::palette::CommandPalette>()
+        })
+        .expect("the palette is open");
+    let query = |cx: &mut VisualTestContext| palette.read_with(cx, |palette, cx| palette.query(cx));
+    assert_eq!(available(vcx), [true; 6]);
+    vcx.dispatch_action(editor::Paste);
+    assert_eq!(query(vcx), "pasted");
+    vcx.dispatch_action(editor::Undo);
+    assert_eq!(query(vcx), "");
+    vcx.dispatch_action(editor::Redo);
+    assert_eq!(query(vcx), "pasted");
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.simulate_input("x");
+    assert_eq!(query(vcx), "x", "everything was selected and replaced");
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.dispatch_action(editor::Cut);
+    assert_eq!(query(vcx), "");
+    assert_eq!(clipboard(vcx), "x");
+    vcx.dispatch_action(editor::PasteAsPlainText);
+    assert_eq!(query(vcx), "x");
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.write_to_clipboard(gpui::ClipboardItem::new_string("elsewhere".to_string()));
+    vcx.dispatch_action(editor::Copy);
+    assert_eq!(clipboard(vcx), "x");
+    // The document behind the palette was not touched.
+    assert_eq!(editor_text(&workspace, vcx), "Menu\nBody text.");
+    vcx.simulate_keystrokes("escape");
+
+    // ----- the find bar ----------------------------------------------------------
+    vcx.write_to_clipboard(gpui::ClipboardItem::new_string("Body".to_string()));
+    vcx.simulate_keystrokes("cmd-f");
+    vcx.dispatch_action(editor::Paste);
+    let find_query = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| w.tools().read(cx).find_query().to_string())
+    };
+    assert_eq!(find_query(vcx), "Body");
+    assert_eq!(editor_text(&workspace, vcx), "Menu\nBody text.");
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.dispatch_action(editor::Cut);
+    assert_eq!(find_query(vcx), "");
+    assert_eq!(editor_text(&workspace, vcx), "Menu\nBody text.");
+    vcx.simulate_keystrokes("escape");
+    assert!(editor_focused(&workspace, vcx));
+
+    // ----- a rename field in the library ---------------------------------------
+    vcx.write_to_clipboard(gpui::ClipboardItem::new_string("Renamed".to_string()));
+    vcx.simulate_keystrokes("cmd-0 r");
+    vcx.run_until_parked();
+    assert!(
+        workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()),
+        "the title is being renamed"
+    );
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.dispatch_action(editor::Paste);
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let title = library.read_with(vcx, |library, _| library.document_meta(id).unwrap().title);
+    assert_eq!(title, "Renamed");
+    assert_eq!(editor_text(&workspace, vcx), "Menu\nBody text.");
+
+    // ----- the library list: Undo brings back what went to the trash -----------
+    vcx.simulate_keystrokes("cmd-backspace");
+    vcx.run_until_parked();
+    assert!(!library.read_with(vcx, |library, _| library.document_exists(id).unwrap()));
+    vcx.dispatch_action(editor::Undo);
+    assert!(library.read_with(vcx, |library, _| library.document_exists(id).unwrap()));
+
+    // ----- the text itself -------------------------------------------------------
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.open_document(id, true, window, cx);
+    });
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(available(vcx), [true; 6]);
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| state.set_caret(writer_core::Position::new(0, 0)),
+            cx,
+        );
+    });
+    vcx.write_to_clipboard(gpui::ClipboardItem::new_string("Typed. ".to_string()));
+    vcx.dispatch_action(editor::Paste);
+    assert_eq!(editor_text(&workspace, vcx), "Typed. Menu\nBody text.");
+    vcx.dispatch_action(editor::Undo);
+    assert_eq!(editor_text(&workspace, vcx), "Menu\nBody text.");
+    vcx.dispatch_action(editor::SelectAll);
+    vcx.dispatch_action(editor::Copy);
+    assert_eq!(clipboard(vcx), "Menu\nBody text.");
+}

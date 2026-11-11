@@ -112,13 +112,14 @@ const EDITOR: &[(&str, &str)] = &[
     ("backspace", "editor::Backspace"),
     ("alt-backspace", "editor::DeleteWordBackward"),
     ("cmd-backspace", "editor::DeleteToLineStart"),
-    ("ctrl-a", "editor::MoveToLineStart"),
-    ("ctrl-e", "editor::MoveToLineEnd"),
+    // The Emacs keys work on the paragraph, as in every macOS text view.
+    ("ctrl-a", "editor::MoveToParagraphStart"),
+    ("ctrl-e", "editor::MoveToParagraphEnd"),
     ("ctrl-f", "editor::MoveRight"),
     ("ctrl-b", "editor::MoveLeft"),
     ("ctrl-n", "editor::MoveDown"),
     ("ctrl-p", "editor::MoveUp"),
-    ("ctrl-k", "editor::DeleteToLineEnd"),
+    ("ctrl-k", "editor::DeleteToParagraphEnd"),
     ("ctrl-d", "editor::Delete"),
     ("ctrl-h", "editor::Backspace"),
 ];

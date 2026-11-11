@@ -344,8 +344,8 @@ fn view_toggles_are_stored_and_come_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn paper_and_typography_of_a_document_change_from_the_palette(cx: &mut TestAppContext) {
-    use writer_core::{Orientation, PaperSize};
+fn document_setup_shortcuts_stay_in_the_palette(cx: &mut TestAppContext) {
+    use writer_core::Orientation;
 
     init(cx);
     let library = library(cx);
@@ -368,25 +368,22 @@ fn paper_and_typography_of_a_document_change_from_the_palette(cx: &mut TestAppCo
         cx.run_until_parked();
     };
     let before = settings(&workspace, vcx);
-    assert_eq!(before.page.paper, PaperSize::A4);
     assert_eq!(before.page.orientation, Orientation::Portrait);
 
-    run("us letter", vcx);
+    // The one-step commands that are quicker than the settings.
     run("landscape", vcx);
     run("larger body text", vcx);
     run("more line spacing", vcx);
     run("more line spacing", vcx);
     let after = settings(&workspace, vcx);
-    assert_eq!(after.page.paper, PaperSize::UsLetter);
     assert_eq!(after.page.orientation, Orientation::Landscape);
     assert_eq!(after.typography.base_size, before.typography.base_size + 1.);
     assert!((after.typography.line_height - (before.typography.line_height + 0.2)).abs() < 0.001);
     assert!(editor_focused(&workspace, vcx));
-    // The sheet in page view is the new paper, turned.
+    // The sheet in page view is turned.
     vcx.simulate_keystrokes("cmd-alt-p");
     let (width, height) = after.page.page_size();
     assert!(width > height);
-    assert_eq!((width, height), (792., 612.));
 
     // It is the document's own setting: stored with it, and back with it.
     workspace.update(vcx, |w, cx| w.flush(cx));
@@ -394,7 +391,6 @@ fn paper_and_typography_of_a_document_change_from_the_palette(cx: &mut TestAppCo
     let reread = Document::from_json(&stored).unwrap();
     assert_eq!(reread.settings(), &settings(&workspace, vcx));
     // And each step can be taken back.
-    run("a4 paper", vcx);
     run("portrait", vcx);
     run("smaller body text", vcx);
     run("less line spacing", vcx);
@@ -402,4 +398,16 @@ fn paper_and_typography_of_a_document_change_from_the_palette(cx: &mut TestAppCo
     let mut restored = settings(&workspace, vcx);
     restored.page_view = before.page_view;
     assert_eq!(restored, before);
+
+    // The paper itself is chosen in the settings of the document: the
+    // palette leads there instead of listing one command per size.
+    let titles: Vec<String> = vcx.update(|_, cx| {
+        writer_app::commands::all(cx)
+            .iter()
+            .map(|command| command.title.to_string())
+            .collect()
+    });
+    assert!(titles.iter().any(|title| title == "Document settings"));
+    assert!(!titles.iter().any(|title| title.contains("A4")));
+    assert!(!titles.iter().any(|title| title.contains("US Letter")));
 }

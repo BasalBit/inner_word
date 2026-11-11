@@ -3,16 +3,32 @@
 //! One list of rows, each a focus stop. `up` / `down` (or `tab` /
 //! `shift-tab`) move between rows, `left` / `right` change a choice,
 //! `space` or `enter` flips a switch or steps a choice forward, and
-//! `escape` closes. The mouse works on every control too.
+//! `escape` closes. A row with a text field is typed into. The mouse works
+//! on every control too.
 //!
-//! Every change is written to the library's settings at once; the workspace
-//! applies it live (see [`crate::settings`]).
+//! The app's settings are written to the library at once; the workspace
+//! applies them live (see [`crate::settings`]).
+//!
+//! # This document
+//!
+//! With a document open the list ends with a section for that document
+//! alone: page view, paper (A4, US Letter or a custom size), orientation,
+//! the four margins, the body font, text size, line height and paragraph
+//! spacing. These are part of the document ([`writer_core::DocumentSettings`]):
+//! they are changed through the editor, saved with the text and exported
+//! with it. Lengths are typed in millimetres, or in inches on US Letter;
+//! another unit can be named (`20mm`, `0.75in`, `2cm`, `36pt`). The palette
+//! command "Document settings" opens the modal at this section.
+
+use std::collections::HashMap;
 
 use gpui::{
     App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
     MouseButton, ScrollHandle, SharedString, Subscription, Window, actions, div, prelude::*, px,
 };
 use serde::Serialize;
+use writer_core::{DocumentSettings, Orientation, PaperSize};
+use writer_editor::{Autoscroll, Editor, EditorEvent};
 use writer_export::SocialNetwork;
 use writer_library::{Library, LibraryEvent};
 use writer_ui::{
@@ -24,7 +40,8 @@ use writer_ui::{
 };
 
 use crate::settings::{
-    self, LINE_HEIGHTS, Paper, Settings, TEXT_SIZES, character_limit_name, keys,
+    self, LINE_HEIGHTS, LengthUnit, Paper, Settings, TEXT_SIZES, character_limit_name,
+    format_length, keys, parse_length,
 };
 
 actions!(
@@ -66,6 +83,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
+/// The smallest and largest body text size of a document, in points, that
+/// the settings step through.
+pub const DOCUMENT_TEXT_SIZES: (f32, f32) = (9., 36.);
+/// The smallest and largest line height of a document.
+pub const DOCUMENT_LINE_HEIGHTS: (f32, f32) = (1.0, 3.0);
+/// The largest paragraph spacing of a document, in points.
+pub const DOCUMENT_PARAGRAPH_SPACING_MAX: f32 = 48.;
+
 /// The settings, in the order they are listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingRow {
@@ -91,11 +116,37 @@ pub enum SettingRow {
     Paper,
     /// The character-limit indicator.
     CharacterLimit,
+    /// This document: page view or the flowing column.
+    DocumentPageView,
+    /// This document: A4, US Letter or a custom size.
+    DocumentPaper,
+    /// This document: the width of a custom sheet.
+    DocumentPaperWidth,
+    /// This document: the height of a custom sheet.
+    DocumentPaperHeight,
+    /// This document: portrait or landscape.
+    DocumentOrientation,
+    /// This document: the top margin.
+    DocumentMarginTop,
+    /// This document: the bottom margin.
+    DocumentMarginBottom,
+    /// This document: the left margin.
+    DocumentMarginLeft,
+    /// This document: the right margin.
+    DocumentMarginRight,
+    /// This document: the body font.
+    DocumentFont,
+    /// This document: the body text size.
+    DocumentTextSize,
+    /// This document: the line height.
+    DocumentLineHeight,
+    /// This document: the space after a paragraph.
+    DocumentParagraphSpacing,
 }
 
 impl SettingRow {
-    /// Every row, in order.
-    pub const ALL: [SettingRow; 11] = [
+    /// The rows about the app, in order. They are always listed.
+    pub const APP: [SettingRow; 11] = [
         SettingRow::Theme,
         SettingRow::VimMode,
         SettingRow::MarkdownShortcuts,
@@ -108,6 +159,40 @@ impl SettingRow {
         SettingRow::Paper,
         SettingRow::CharacterLimit,
     ];
+
+    /// The rows about the open document, in order. Listed while a document
+    /// is open; the two sizes of a custom sheet only while the paper is
+    /// custom.
+    pub const DOCUMENT: [SettingRow; 13] = [
+        SettingRow::DocumentPageView,
+        SettingRow::DocumentPaper,
+        SettingRow::DocumentPaperWidth,
+        SettingRow::DocumentPaperHeight,
+        SettingRow::DocumentOrientation,
+        SettingRow::DocumentMarginTop,
+        SettingRow::DocumentMarginBottom,
+        SettingRow::DocumentMarginLeft,
+        SettingRow::DocumentMarginRight,
+        SettingRow::DocumentFont,
+        SettingRow::DocumentTextSize,
+        SettingRow::DocumentLineHeight,
+        SettingRow::DocumentParagraphSpacing,
+    ];
+
+    /// The rows that are typed into as a length.
+    const LENGTHS: [SettingRow; 6] = [
+        SettingRow::DocumentPaperWidth,
+        SettingRow::DocumentPaperHeight,
+        SettingRow::DocumentMarginTop,
+        SettingRow::DocumentMarginBottom,
+        SettingRow::DocumentMarginLeft,
+        SettingRow::DocumentMarginRight,
+    ];
+
+    /// Whether the row belongs to the open document rather than the app.
+    pub fn is_document(self) -> bool {
+        Self::DOCUMENT.contains(&self)
+    }
 
     fn section(self) -> &'static str {
         match self {
@@ -122,6 +207,7 @@ impl SettingRow {
             | SettingRow::PageView
             | SettingRow::Paper => "New documents",
             SettingRow::CharacterLimit => "Status bar",
+            _ => "This document",
         }
     }
 
@@ -138,6 +224,19 @@ impl SettingRow {
             SettingRow::PageView => "Start in page view",
             SettingRow::Paper => "Paper size",
             SettingRow::CharacterLimit => "Character limit",
+            SettingRow::DocumentPageView => "Page view",
+            SettingRow::DocumentPaper => "Paper size",
+            SettingRow::DocumentPaperWidth => "Paper width",
+            SettingRow::DocumentPaperHeight => "Paper height",
+            SettingRow::DocumentOrientation => "Orientation",
+            SettingRow::DocumentMarginTop => "Top margin",
+            SettingRow::DocumentMarginBottom => "Bottom margin",
+            SettingRow::DocumentMarginLeft => "Left margin",
+            SettingRow::DocumentMarginRight => "Right margin",
+            SettingRow::DocumentFont => "Font",
+            SettingRow::DocumentTextSize => "Text size",
+            SettingRow::DocumentLineHeight => "Line height",
+            SettingRow::DocumentParagraphSpacing => "Paragraph spacing",
         }
     }
 
@@ -154,6 +253,20 @@ impl SettingRow {
             SettingRow::PageView => "Show sheets of paper instead of one column.",
             SettingRow::Paper => "Used by page view and Word export.",
             SettingRow::CharacterLimit => "Count the text against a social network's post limit.",
+            SettingRow::DocumentPageView => "Show sheets of paper instead of one column.",
+            SettingRow::DocumentPaper => "Used by page view and Word export.",
+            SettingRow::DocumentPaperWidth | SettingRow::DocumentPaperHeight => {
+                "Of the upright sheet."
+            }
+            SettingRow::DocumentOrientation => "Upright or turned on its side.",
+            SettingRow::DocumentMarginTop
+            | SettingRow::DocumentMarginBottom
+            | SettingRow::DocumentMarginLeft
+            | SettingRow::DocumentMarginRight => "",
+            SettingRow::DocumentFont => "Body text of this document.",
+            SettingRow::DocumentTextSize => "Body text, in points. Headings scale with it.",
+            SettingRow::DocumentLineHeight => "As a multiple of the text size.",
+            SettingRow::DocumentParagraphSpacing => "Space after each paragraph, in points.",
         }
     }
 }
@@ -173,16 +286,29 @@ enum Control {
         index: usize,
         count: usize,
     },
-    Text,
+    /// A text field: the author's name, or a length with its unit.
+    Field {
+        unit: Option<&'static str>,
+    },
 }
 
 /// The settings modal. See the [module docs](self).
 pub struct SettingsView {
     library: Entity<Library>,
     settings: Settings,
+    /// The editor whose document the "This document" rows change. `None`
+    /// while no document is open.
+    document: Option<Entity<Editor>>,
     fonts: Vec<String>,
-    handles: Vec<FocusHandle>,
+    document_fonts: Vec<String>,
+    handles: HashMap<SettingRow, FocusHandle>,
     author_field: Entity<TextField>,
+    length_fields: HashMap<SettingRow, Entity<TextField>>,
+    /// The length row whose field is being typed into: its text is left
+    /// alone until the keyboard moves on.
+    editing: Option<SettingRow>,
+    /// The row the keyboard starts on.
+    start: SettingRow,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -191,7 +317,7 @@ impl EventEmitter<DismissEvent> for SettingsView {}
 
 impl Focusable for SettingsView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.handles[0].clone()
+        self.handles[&self.start].clone()
     }
 }
 
@@ -209,11 +335,55 @@ fn trim_number(value: f32) -> String {
     text.strip_suffix(".0").map(str::to_string).unwrap_or(text)
 }
 
+/// The position of `value` on a scale from `low` in steps of `step`.
+fn step_index(value: f32, low: f32, step: f32) -> usize {
+    ((value - low) / step).round().max(0.) as usize
+}
+
 impl SettingsView {
-    /// Builds the modal over `library`.
+    /// Builds the modal over `library`, with the app's settings only.
     pub fn new(library: Entity<Library>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(library, None, window, cx)
+    }
+
+    /// Builds the modal with the "This document" section for the document
+    /// open in `editor`.
+    pub fn for_document(
+        library: Entity<Library>,
+        editor: Entity<Editor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(library, Some(editor), window, cx)
+    }
+
+    /// Starts with the keyboard on `row` instead of the first one (ignored
+    /// when the row is not listed).
+    pub fn starting_at(mut self, row: SettingRow, cx: &mut Context<Self>) -> Self {
+        let rows = self.rows(cx);
+        if let Some(ix) = rows.iter().position(|listed| *listed == row) {
+            self.start = row;
+            self.scroll.scroll_to_item(self.child_index(&rows, ix));
+        }
+        self
+    }
+
+    fn build(
+        library: Entity<Library>,
+        document: Option<Entity<Editor>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let settings = Settings::load(library.read(cx));
         let fonts = settings::available_fonts(&settings.new_document_font, cx);
+        let document_settings = document
+            .as_ref()
+            .map(|editor| editor.read(cx).document().settings().clone());
+        let document_fonts = document_settings
+            .as_ref()
+            .map(|settings| settings::available_fonts(&settings.typography.body_font, cx))
+            .unwrap_or_default();
+
         let author_field = cx.new(|cx| {
             let mut field = TextField::new(window, cx)
                 .with_placeholder("Your name")
@@ -223,15 +393,34 @@ impl SettingsView {
             field.set_list_navigation(true);
             field
         });
-        let author_handle = author_field.focus_handle(cx);
-        let handles = SettingRow::ALL
-            .iter()
-            .map(|row| match row {
-                SettingRow::Author => author_handle.clone(),
-                _ => cx.focus_handle(),
-            })
-            .collect();
-        let subscriptions = vec![
+        let mut length_fields = HashMap::new();
+        if let Some(document_settings) = &document_settings {
+            for row in SettingRow::LENGTHS {
+                let text = length_text(row, document_settings);
+                let field = cx.new(|cx| {
+                    let mut field = TextField::new(window, cx)
+                        .with_text(text)
+                        .with_appearance(FieldAppearance::Bordered);
+                    field.set_list_navigation(true);
+                    field
+                });
+                length_fields.insert(row, field);
+            }
+        }
+
+        let mut handles = HashMap::new();
+        for row in SettingRow::APP.into_iter().chain(SettingRow::DOCUMENT) {
+            let handle = match row {
+                SettingRow::Author => author_field.focus_handle(cx),
+                _ => match length_fields.get(&row) {
+                    Some(field) => field.focus_handle(cx),
+                    None => cx.focus_handle(),
+                },
+            };
+            handles.insert(row, handle);
+        }
+
+        let mut subscriptions = vec![
             cx.subscribe(
                 &library,
                 |this: &mut Self, library, event: &LibraryEvent, cx| {
@@ -254,12 +443,57 @@ impl SettingsView {
                 },
             ),
         ];
+        for (row, field) in &length_fields {
+            let row = *row;
+            subscriptions.push(cx.subscribe_in(
+                field,
+                window,
+                move |this: &mut Self, field, event: &TextFieldEvent, window, cx| match event {
+                    TextFieldEvent::Focused => this.editing = Some(row),
+                    TextFieldEvent::Changed => {
+                        this.editing = Some(row);
+                        let text = field.read(cx).text().to_string();
+                        this.length_typed(row, &text, cx);
+                    }
+                    TextFieldEvent::Blurred => {
+                        if this.editing == Some(row) {
+                            this.editing = None;
+                        }
+                        this.refresh_length_fields(cx);
+                    }
+                    TextFieldEvent::Submitted => this.move_focus(1, window, cx),
+                    _ => {}
+                },
+            ));
+        }
+        if let Some(editor) = &document {
+            // The document can change behind the modal (a shortcut such as
+            // cmd-alt-p reaches the workspace): show what it is now.
+            subscriptions.push(cx.subscribe(
+                editor,
+                |this: &mut Self, _, event: &EditorEvent, cx| {
+                    if matches!(
+                        event,
+                        EditorEvent::SettingsChanged | EditorEvent::DocumentReplaced
+                    ) {
+                        this.refresh_length_fields(cx);
+                        cx.notify();
+                    }
+                },
+            ));
+        }
+
         Self {
             library,
             settings,
+            document,
             fonts,
+            document_fonts,
             handles,
             author_field,
+            length_fields,
+            editing: None,
+            start: SettingRow::Theme,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
@@ -270,12 +504,83 @@ impl SettingsView {
         &self.settings
     }
 
+    /// The settings of the open document, when the modal has its section.
+    pub fn document_settings(&self, cx: &App) -> Option<DocumentSettings> {
+        self.document
+            .as_ref()
+            .map(|editor| editor.read(cx).document().settings().clone())
+    }
+
+    /// The rows that are listed right now, in order.
+    pub fn rows(&self, cx: &App) -> Vec<SettingRow> {
+        let mut rows = SettingRow::APP.to_vec();
+        if let Some(document) = self.document_settings(cx) {
+            let custom = matches!(document.page.paper, PaperSize::Custom { .. });
+            rows.extend(SettingRow::DOCUMENT.into_iter().filter(|row| {
+                custom
+                    || !matches!(
+                        row,
+                        SettingRow::DocumentPaperWidth | SettingRow::DocumentPaperHeight
+                    )
+            }));
+        }
+        rows
+    }
+
     /// The row that has focus.
     pub fn focused_row(&self, window: &Window, cx: &App) -> Option<SettingRow> {
-        self.handles
-            .iter()
-            .position(|handle| handle.contains_focused(window, cx))
-            .map(|ix| SettingRow::ALL[ix])
+        self.rows(cx)
+            .into_iter()
+            .find(|row| self.handles[row].contains_focused(window, cx))
+    }
+
+    /// The text in the field of a length row (a paper size or a margin).
+    pub fn length_field_text(&self, row: SettingRow, cx: &App) -> Option<String> {
+        self.length_fields
+            .get(&row)
+            .map(|field| field.read(cx).text().to_string())
+    }
+
+    /// What the row says under its name.
+    pub fn description(&self, row: SettingRow, cx: &App) -> SharedString {
+        match row {
+            SettingRow::VimMode => {
+                // The accent menu on held keys follows this setting, but the
+                // system only looks at launch (see `press_and_hold`).
+                let state = crate::press_and_hold::state(cx);
+                if !state.restart_note_due() {
+                    "Modal editing with Vim keys. Held keys repeat instead of offering accents."
+                        .into()
+                } else if state.repeats_next() == Some(true) {
+                    "Modal editing with Vim keys. Restart The Writer to make held keys repeat \
+                     while you type, too."
+                        .into()
+                } else {
+                    "Modal editing with Vim keys. Restart The Writer to get the accent menu on \
+                     held keys back."
+                        .into()
+                }
+            }
+            SettingRow::DocumentMarginTop
+            | SettingRow::DocumentMarginBottom
+            | SettingRow::DocumentMarginLeft
+            | SettingRow::DocumentMarginRight
+            | SettingRow::DocumentPaperWidth
+            | SettingRow::DocumentPaperHeight => {
+                let unit = self
+                    .document_settings(cx)
+                    .map(|settings| LengthUnit::for_paper(settings.page.paper))
+                    .unwrap_or(LengthUnit::Millimetres);
+                let lead = row.description();
+                let units = format!("In {}; mm, cm, in and pt can be named.", unit.name());
+                if lead.is_empty() {
+                    units.into()
+                } else {
+                    format!("{lead} {units}").into()
+                }
+            }
+            _ => row.description().into(),
+        }
     }
 
     fn write<T: Serialize + ?Sized>(&mut self, key: &str, value: &T, cx: &mut Context<Self>) {
@@ -296,14 +601,90 @@ impl SettingsView {
         }
     }
 
+    /// Changes the settings of the open document through the editor, which
+    /// reports the change so that it is saved with the text.
+    fn change_document(
+        &mut self,
+        change: impl FnOnce(&mut DocumentSettings),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.document.clone() else {
+            return;
+        };
+        if editor.read(cx).is_read_only() {
+            return;
+        }
+        let before = editor.read(cx).document().settings().clone();
+        let mut settings = before.clone();
+        change(&mut settings);
+        let settings = settings.sanitized();
+        if settings == before {
+            return;
+        }
+        editor.update(cx, |editor, cx| {
+            editor.edit_with(Autoscroll::None, |state| state.set_settings(settings), cx);
+        });
+        self.refresh_length_fields(cx);
+        cx.notify();
+    }
+
+    /// A length was typed into the field of `row`: apply it when it reads
+    /// as one.
+    fn length_typed(&mut self, row: SettingRow, text: &str, cx: &mut Context<Self>) {
+        let Some(document) = self.document_settings(cx) else {
+            return;
+        };
+        let unit = LengthUnit::for_paper(document.page.paper);
+        let Some(points) = parse_length(text, unit) else {
+            return;
+        };
+        self.change_document(
+            |settings| match row {
+                SettingRow::DocumentPaperWidth | SettingRow::DocumentPaperHeight => {
+                    if let PaperSize::Custom { width, height } = &mut settings.page.paper {
+                        if row == SettingRow::DocumentPaperWidth {
+                            *width = points;
+                        } else {
+                            *height = points;
+                        }
+                    }
+                }
+                SettingRow::DocumentMarginTop => settings.page.margins.top = points,
+                SettingRow::DocumentMarginBottom => settings.page.margins.bottom = points,
+                SettingRow::DocumentMarginLeft => settings.page.margins.left = points,
+                SettingRow::DocumentMarginRight => settings.page.margins.right = points,
+                _ => {}
+            },
+            cx,
+        );
+    }
+
+    /// Shows the document's values in the length fields again, except in
+    /// the one that is being typed into.
+    fn refresh_length_fields(&mut self, cx: &mut Context<Self>) {
+        let Some(document) = self.document_settings(cx) else {
+            return;
+        };
+        for (row, field) in &self.length_fields {
+            if self.editing == Some(*row) {
+                continue;
+            }
+            let text = length_text(*row, &document);
+            if field.read(cx).text() != text {
+                field.update(cx, |field, cx| field.set_text(text, cx));
+            }
+        }
+    }
+
     fn limit_options() -> Vec<Option<SocialNetwork>> {
         std::iter::once(None)
             .chain(SocialNetwork::ALL.into_iter().map(Some))
             .collect()
     }
 
-    fn control(&self, row: SettingRow) -> Control {
+    fn control(&self, row: SettingRow, cx: &App) -> Control {
         let settings = &self.settings;
+        let document = self.document_settings(cx).unwrap_or_default();
         match row {
             SettingRow::Theme => Control::Segments {
                 options: vec!["System".into(), "Paper".into(), "Night".into()],
@@ -316,7 +697,7 @@ impl SettingsView {
             SettingRow::VimMode => Control::Switch(settings.vim_mode),
             SettingRow::MarkdownShortcuts => Control::Switch(settings.input_rules),
             SettingRow::SmartPunctuation => Control::Switch(settings.smart_punctuation),
-            SettingRow::Author => Control::Text,
+            SettingRow::Author => Control::Field { unit: None },
             SettingRow::Font => {
                 let index = self
                     .fonts
@@ -365,6 +746,68 @@ impl SettingsView {
                     count: options.len(),
                 }
             }
+            SettingRow::DocumentPageView => Control::Switch(document.page_view),
+            SettingRow::DocumentPaper => Control::Segments {
+                options: vec!["A4".into(), "US Letter".into(), "Custom".into()],
+                selected: match document.page.paper {
+                    PaperSize::A4 => 0,
+                    PaperSize::UsLetter => 1,
+                    PaperSize::Custom { .. } => 2,
+                },
+            },
+            SettingRow::DocumentOrientation => Control::Segments {
+                options: vec!["Portrait".into(), "Landscape".into()],
+                selected: match document.page.orientation {
+                    Orientation::Portrait => 0,
+                    Orientation::Landscape => 1,
+                },
+            },
+            SettingRow::DocumentPaperWidth
+            | SettingRow::DocumentPaperHeight
+            | SettingRow::DocumentMarginTop
+            | SettingRow::DocumentMarginBottom
+            | SettingRow::DocumentMarginLeft
+            | SettingRow::DocumentMarginRight => Control::Field {
+                unit: Some(LengthUnit::for_paper(document.page.paper).abbreviation()),
+            },
+            SettingRow::DocumentFont => {
+                let font = &document.typography.body_font;
+                Control::Stepper {
+                    value: font.clone().into(),
+                    index: self
+                        .document_fonts
+                        .iter()
+                        .position(|candidate| candidate == font)
+                        .unwrap_or(0),
+                    count: self.document_fonts.len().max(1),
+                }
+            }
+            SettingRow::DocumentTextSize => {
+                let (low, high) = DOCUMENT_TEXT_SIZES;
+                let size = document.typography.base_size;
+                Control::Stepper {
+                    value: format!("{} pt", trim_number(size)).into(),
+                    index: step_index(size.clamp(low, high), low, 1.),
+                    count: step_index(high, low, 1.) + 1,
+                }
+            }
+            SettingRow::DocumentLineHeight => {
+                let (low, high) = DOCUMENT_LINE_HEIGHTS;
+                let height = document.typography.line_height;
+                Control::Stepper {
+                    value: format!("{height:.1}").into(),
+                    index: step_index(height.clamp(low, high), low, 0.1),
+                    count: step_index(high, low, 0.1) + 1,
+                }
+            }
+            SettingRow::DocumentParagraphSpacing => {
+                let spacing = document.typography.paragraph_spacing;
+                Control::Stepper {
+                    value: format!("{} pt", trim_number(spacing)).into(),
+                    index: step_index(spacing.clamp(0., DOCUMENT_PARAGRAPH_SPACING_MAX), 0., 1.),
+                    count: step_index(DOCUMENT_PARAGRAPH_SPACING_MAX, 0., 1.) + 1,
+                }
+            }
         }
     }
 
@@ -409,13 +852,79 @@ impl SettingsView {
                     self.write(keys::CHARACTER_LIMIT, character_limit_name(*option), cx);
                 }
             }
+            SettingRow::DocumentPageView => {
+                self.change_document(|settings| settings.page_view = index != 0, cx)
+            }
+            SettingRow::DocumentPaper => self.change_document(
+                |settings| {
+                    settings.page.paper = match index {
+                        0 => PaperSize::A4,
+                        1 => PaperSize::UsLetter,
+                        2 => match settings.page.paper {
+                            custom @ PaperSize::Custom { .. } => custom,
+                            // A custom size starts from the sheet it replaces.
+                            standard => {
+                                let (width, height) = standard.portrait_size();
+                                PaperSize::Custom { width, height }
+                            }
+                        },
+                        _ => settings.page.paper,
+                    }
+                },
+                cx,
+            ),
+            SettingRow::DocumentOrientation => self.change_document(
+                |settings| {
+                    settings.page.orientation = match index {
+                        0 => Orientation::Portrait,
+                        1 => Orientation::Landscape,
+                        _ => settings.page.orientation,
+                    }
+                },
+                cx,
+            ),
+            SettingRow::DocumentFont => {
+                if let Some(font) = self.document_fonts.get(index).cloned() {
+                    self.change_document(|settings| settings.typography.body_font = font, cx);
+                }
+            }
+            SettingRow::DocumentTextSize => {
+                let (low, high) = DOCUMENT_TEXT_SIZES;
+                let size = low + index as f32;
+                if size <= high {
+                    self.change_document(|settings| settings.typography.base_size = size, cx);
+                }
+            }
+            SettingRow::DocumentLineHeight => {
+                let (low, high) = DOCUMENT_LINE_HEIGHTS;
+                let height = ((low + index as f32 * 0.1) * 10.).round() / 10.;
+                if height <= high {
+                    self.change_document(|settings| settings.typography.line_height = height, cx);
+                }
+            }
+            SettingRow::DocumentParagraphSpacing => {
+                let spacing = index as f32;
+                if spacing <= DOCUMENT_PARAGRAPH_SPACING_MAX {
+                    self.change_document(
+                        |settings| settings.typography.paragraph_spacing = spacing,
+                        cx,
+                    );
+                }
+            }
+            // Typed, not chosen.
+            SettingRow::DocumentPaperWidth
+            | SettingRow::DocumentPaperHeight
+            | SettingRow::DocumentMarginTop
+            | SettingRow::DocumentMarginBottom
+            | SettingRow::DocumentMarginLeft
+            | SettingRow::DocumentMarginRight => {}
         }
     }
 
     /// Moves the value of `row` by `delta` options. Switches turn on with a
     /// positive delta and off with a negative one; choices stop at the ends.
     pub fn step(&mut self, row: SettingRow, delta: isize, cx: &mut Context<Self>) {
-        match self.control(row) {
+        match self.control(row, cx) {
             Control::Switch(_) => self.choose(row, usize::from(delta > 0), cx),
             Control::Segments { options, selected } => {
                 let target = selected as isize + delta;
@@ -429,14 +938,14 @@ impl SettingsView {
                     self.choose(row, target as usize, cx);
                 }
             }
-            Control::Text => {}
+            Control::Field { .. } => {}
         }
     }
 
     /// `space` / `enter`: flips a switch, steps a choice forward and wraps
     /// around at the end.
     pub fn activate(&mut self, row: SettingRow, cx: &mut Context<Self>) {
-        match self.control(row) {
+        match self.control(row, cx) {
             Control::Switch(on) => self.choose(row, usize::from(!on), cx),
             Control::Segments { options, selected } => {
                 self.choose(row, (selected + 1) % options.len().max(1), cx)
@@ -444,37 +953,37 @@ impl SettingsView {
             Control::Stepper { index, count, .. } => {
                 self.choose(row, (index + 1) % count.max(1), cx)
             }
-            Control::Text => {}
+            Control::Field { .. } => {}
         }
     }
 
     fn move_focus(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.handles.len() as isize;
-        let current = self
-            .handles
+        let rows = self.rows(cx);
+        let count = rows.len() as isize;
+        let current = rows
             .iter()
-            .position(|handle| handle.contains_focused(window, cx))
+            .position(|row| self.handles[row].contains_focused(window, cx))
             .map(|ix| ix as isize)
             .unwrap_or(-1);
         let target = (current + delta).clamp(0, count - 1) as usize;
-        window.focus(&self.handles[target]);
-        self.scroll.scroll_to_item(self.child_index(target));
+        window.focus(&self.handles[&rows[target]]);
+        self.scroll.scroll_to_item(self.child_index(&rows, target));
         cx.notify();
     }
 
-    /// The index of row `row_ix` among the scrolled children (section
-    /// headings are children too).
-    fn child_index(&self, row_ix: usize) -> usize {
+    /// The index of row `row_ix` of `rows` among the scrolled children
+    /// (section headings are children too).
+    fn child_index(&self, rows: &[SettingRow], row_ix: usize) -> usize {
         let mut child = 0;
         let mut section = "";
-        for (ix, row) in SettingRow::ALL.iter().enumerate() {
+        for (ix, row) in rows.iter().enumerate() {
             if row.section() != section {
                 section = row.section();
                 child += 1;
             }
             if ix == row_ix {
                 // Reveal the section heading together with its first row.
-                let first_of_section = ix == 0 || SettingRow::ALL[ix - 1].section() != section;
+                let first_of_section = ix == 0 || rows[ix - 1].section() != section;
                 return if first_of_section { child - 1 } else { child };
             }
             child += 1;
@@ -621,10 +1130,28 @@ impl SettingsView {
                     .child(arrow("next", "›", index + 1 < count, 1))
                     .into_any_element()
             }
-            Control::Text => div()
+            Control::Field { unit: None } => div()
                 .w(px(220.))
                 .flex_none()
                 .child(self.author_field.clone())
+                .into_any_element(),
+            Control::Field { unit: Some(unit) } => div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(SPACE_2)
+                .child(
+                    div()
+                        .w(px(96.))
+                        .children(self.length_fields.get(&row).cloned()),
+                )
+                .child(
+                    div()
+                        .w(px(24.))
+                        .text_size(UI_TEXT_SM)
+                        .text_color(colors.muted)
+                        .child(unit),
+                )
                 .into_any_element(),
         }
     }
@@ -637,11 +1164,12 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let colors = cx.theme().colors;
-        let control = self.control(row);
-        let is_text = control == Control::Text;
-        let handle = self.handles[ix].clone();
+        let control = self.control(row, cx);
+        let is_field = matches!(control, Control::Field { .. });
+        let handle = self.handles[&row].clone();
         let focused = handle.contains_focused(window, cx);
         let ring = focus_ring(&colors);
+        let description = self.description(row, cx);
         let control_element = self.render_control(row, control, cx);
 
         div()
@@ -653,10 +1181,10 @@ impl SettingsView {
             .py(px(6.))
             .px(SPACE_3)
             .rounded(RADIUS_MD)
-            .when(focused && !is_text, |el| el.bg(colors.hover).shadow(ring))
-            .when(focused && is_text, |el| el.bg(colors.hover))
+            .when(focused && !is_field, |el| el.bg(colors.hover).shadow(ring))
+            .when(focused && is_field, |el| el.bg(colors.hover))
             .map(|el| {
-                if is_text {
+                if is_field {
                     // The text field is the focus stop of this row.
                     el
                 } else {
@@ -689,17 +1217,36 @@ impl SettingsView {
                             .text_color(colors.ink)
                             .child(row.label()),
                     )
-                    .child(
-                        div()
-                            .text_size(UI_TEXT_SM)
-                            .line_height(px(16.))
-                            .text_color(colors.muted)
-                            .child(row.description()),
-                    ),
+                    .when(!description.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .text_size(UI_TEXT_SM)
+                                .line_height(px(16.))
+                                .text_color(colors.muted)
+                                .child(description),
+                        )
+                    }),
             )
             .child(control_element)
             .into_any_element()
     }
+}
+
+/// What the field of the length row `row` shows for `document`.
+fn length_text(row: SettingRow, document: &DocumentSettings) -> String {
+    let unit = LengthUnit::for_paper(document.page.paper);
+    let (width, height) = document.page.paper.portrait_size();
+    let margins = document.page.margins;
+    let points = match row {
+        SettingRow::DocumentPaperWidth => width,
+        SettingRow::DocumentPaperHeight => height,
+        SettingRow::DocumentMarginTop => margins.top,
+        SettingRow::DocumentMarginBottom => margins.bottom,
+        SettingRow::DocumentMarginLeft => margins.left,
+        SettingRow::DocumentMarginRight => margins.right,
+        _ => return String::new(),
+    };
+    format_length(points, unit)
 }
 
 impl Render for SettingsView {
@@ -713,7 +1260,7 @@ impl Render for SettingsView {
 
         let mut children: Vec<gpui::AnyElement> = Vec::new();
         let mut section = "";
-        for (ix, row) in SettingRow::ALL.into_iter().enumerate() {
+        for (ix, row) in self.rows(cx).into_iter().enumerate() {
             if row.section() != section {
                 section = row.section();
                 children.push(

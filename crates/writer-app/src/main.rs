@@ -25,6 +25,14 @@ fn main() {
         .with_assets(writer_ui::assets::Assets)
         .run(move |cx: &mut App| {
             writer_app::init(cx);
+            // Held keys repeat while Vim mode is on: the real app stores
+            // that in its user defaults. A scripted run leaves the user's
+            // preferences alone unless it is told otherwise.
+            let scripted_opt_in = std::env::var_os(writer_app::press_and_hold::MANAGE_ENV)
+                .is_some_and(|value| !value.is_empty());
+            if script.is_none() || scripted_opt_in {
+                writer_app::press_and_hold::manage_user_default(cx);
+            }
             let Some(main_window) = open_window(cx) else {
                 cx.quit();
                 return;

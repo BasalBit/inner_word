@@ -7,9 +7,15 @@
 //! - Every edit marks the session dirty and (re)starts a short timer
 //!   ([`AUTOSAVE_DELAY`]); when it fires the document is saved. Typing
 //!   without such a pause still saves every [`MAX_AUTOSAVE_WAIT`].
-//! - [`Workspace::flush`] saves synchronously. It runs before another
-//!   document is opened, when the window closes, when the app quits and when
-//!   the window loses focus.
+//! - The autosave works on a background thread (see [`super::saver`]): the
+//!   main thread only copies the document, so typing in a book does not
+//!   stutter when it is saved. One background save runs at a time; edits
+//!   made while it runs keep the session dirty and are saved next.
+//! - [`Workspace::flush`] saves synchronously and completely. It runs
+//!   before another document is opened, when the window closes, when the
+//!   app quits and when the window loses focus. It first waits for a
+//!   background save that is writing and cancels one that has not started,
+//!   so an older copy of the text can never be written after a newer one.
 //! - A failed save keeps the session dirty, shows a toast once and retries
 //!   every [`RETRY_DELAY`] until it succeeds. Nothing is dropped.
 //! - The title is derived from the text until the user renames the document
@@ -18,15 +24,24 @@
 //! - After a successful save the library takes a version snapshot when the
 //!   newest one is older than [`SNAPSHOT_INTERVAL`] and the text differs.
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
-use gpui::{Context, Task, Window};
+use gpui::{AppContext as _, Context, Task, Window};
 use writer_core::{Block, BlockKind, Document, Position, SearchOptions, TextRange};
 use writer_editor::{Autoscroll, ViewState};
 use writer_library::{DocumentId, LibraryItem};
 use writer_ui::Toast;
 
-use super::{Workspace, WorkspaceEvent};
+use super::{
+    Workspace, WorkspaceEvent,
+    saver::{SaveJob, SaveOutcome},
+};
 use crate::{
     document_io::{StoredForm, UNTITLED, load_document},
     settings::keys,
@@ -54,13 +69,40 @@ pub enum SaveState {
     Failed(String),
 }
 
+/// What one save cost. Kept for the last save, for measuring (the `state`
+/// step of the automation script prints it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SaveCost {
+    /// Time spent on the main thread, where it delays typing and frames.
+    pub main_thread: Duration,
+    /// Time the background thread worked; `None` for a synchronous save.
+    pub background: Option<Duration>,
+    /// Size of the stored content in bytes.
+    pub bytes: usize,
+}
+
+/// A background save that has been started and not yet answered.
+pub(crate) struct InFlight {
+    /// Its position among the saves of this window.
+    pub seq: u64,
+    /// The document revision that was copied for it.
+    pub revision: u64,
+    /// Main-thread time spent starting it.
+    pub started_in: Duration,
+    /// Waits for the background thread and reports back. Dropping it
+    /// abandons the answer (the save itself is settled by
+    /// [`super::saver::Saver::settle`]).
+    pub _task: Task<()>,
+}
+
 /// The open document.
 pub(crate) struct Session {
     pub id: DocumentId,
     /// The title as stored in the library.
     pub title: String,
     /// The user named the document; do not derive the title from the text.
-    pub custom_title: bool,
+    /// Shared with a background save, which reads it right before writing.
+    pub custom_title: Arc<AtomicBool>,
     /// The text changed since the last successful save.
     pub dirty: bool,
     /// When the oldest unsaved edit was made.
@@ -69,8 +111,10 @@ pub(crate) struct Session {
     pub stored_view_state: Option<String>,
     /// The message of the last failed save, while it has not succeeded since.
     pub failure: Option<String>,
-    /// The pending autosave or retry.
+    /// The pending autosave or retry timer.
     pub save_task: Option<Task<()>>,
+    /// The background save that is running, if any.
+    pub in_flight: Option<InFlight>,
 }
 
 impl Session {
@@ -220,14 +264,16 @@ impl Workspace {
         self.session = Some(Session {
             id,
             title: stored.meta.title.clone(),
-            custom_title,
+            custom_title: Arc::new(AtomicBool::new(custom_title)),
             dirty: false,
             dirty_since: None,
             stored_view_state: stored.view_state.clone(),
             failure: None,
             save_task: None,
+            in_flight: None,
         });
         self.character_count = None;
+        self.limit_counter = None;
 
         self.panel.update(cx, |panel, cx| {
             panel.set_active_document(Some(id), cx);
@@ -257,6 +303,7 @@ impl Workspace {
         self.flush(cx);
         self.session = None;
         self.character_count = None;
+        self.limit_counter = None;
         self.editor.update(cx, |editor, cx| {
             editor.set_document(Document::new(), cx);
             editor.set_read_only(true, cx);
@@ -395,19 +442,30 @@ impl Workspace {
         };
         session.dirty = true;
         let now = cx.background_executor().now();
-        let since = *session.dirty_since.get_or_insert(now);
-        let delay = if session.failure.is_some() {
-            // While a save is failing, keep the retry rhythm instead of
-            // hammering the store on every keystroke.
-            RETRY_DELAY
-        } else {
-            // Debounce, but never let steady typing postpone the save
-            // beyond MAX_AUTOSAVE_WAIT.
-            let waited = now.saturating_duration_since(since);
-            AUTOSAVE_DELAY.min(MAX_AUTOSAVE_WAIT.saturating_sub(waited))
-        };
+        session.dirty_since.get_or_insert(now);
+        let delay = self.autosave_delay(cx);
         self.schedule_save(delay, cx);
         cx.notify();
+    }
+
+    /// How long from now the open document should be saved.
+    fn autosave_delay(&self, cx: &Context<Self>) -> Duration {
+        let Some(session) = self.session.as_ref() else {
+            return AUTOSAVE_DELAY;
+        };
+        if session.failure.is_some() {
+            // While a save is failing, keep the retry rhythm instead of
+            // hammering the store on every keystroke.
+            return RETRY_DELAY;
+        }
+        // Debounce, but never let steady typing postpone the save beyond
+        // MAX_AUTOSAVE_WAIT.
+        let now = cx.background_executor().now();
+        let waited = session
+            .dirty_since
+            .map(|since| now.saturating_duration_since(since))
+            .unwrap_or_default();
+        AUTOSAVE_DELAY.min(MAX_AUTOSAVE_WAIT.saturating_sub(waited))
     }
 
     fn schedule_save(&mut self, delay: Duration, cx: &mut Context<Self>) {
@@ -419,21 +477,185 @@ impl Workspace {
             cx.background_executor().timer(delay).await;
             this.update(cx, |this, cx| {
                 if this.open_document_id() == Some(id) {
-                    this.save_now(cx);
+                    this.autosave(cx);
                 }
             })
             .ok();
         }));
     }
 
+    /// The autosave timer fired: save the open document without holding up
+    /// the main thread, when that is possible.
+    pub fn autosave(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        // The timer that called this has done its work.
+        session.save_task = None;
+        if session.in_flight.is_some() {
+            // One background save at a time. When it reports back and the
+            // text has changed meanwhile, the next one is scheduled.
+            return;
+        }
+        if !session.dirty || !self.saver.is_background() {
+            self.save_now(cx);
+            return;
+        }
+        self.save_in_background(cx);
+    }
+
+    /// Starts a background save of the open document as it is now.
+    fn save_in_background(&mut self, cx: &mut Context<Self>) {
+        let started = Instant::now();
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let id = session.id;
+        let (document, stats, revision, view_state) = {
+            let editor = self.editor.read(cx);
+            (
+                // The only heavy thing the main thread does for an
+                // autosave: well under a millisecond for a book.
+                editor.document().clone(),
+                // Counts that are still being brought up to date (a book
+                // that was just opened) are counted on the background
+                // thread instead of storing stale ones.
+                (!editor.stats_pending()).then(|| editor.stats()),
+                editor.state().revision(),
+                serde_json::to_string(&editor.view_state()).ok(),
+            )
+        };
+        let seq = self.saver.next_seq();
+        let job = SaveJob {
+            seq,
+            id,
+            document,
+            stats,
+            custom_title: session.custom_title.clone(),
+            view_state: view_state
+                .filter(|json| session.stored_view_state.as_deref() != Some(json.as_str())),
+            snapshot_interval: SNAPSHOT_INTERVAL,
+        };
+        let Some(work) = self.saver.work(job) else {
+            self.save_now(cx);
+            return;
+        };
+        // Edits from here on are newer than what is being saved.
+        session.dirty_since = None;
+        let background = cx.background_spawn(async move { work() });
+        let task = cx.spawn(async move |this, cx| {
+            let outcome = background.await;
+            this.update(cx, |this, cx| {
+                this.background_save_finished(id, seq, outcome, cx)
+            })
+            .ok();
+        });
+        session.in_flight = Some(InFlight {
+            seq,
+            revision,
+            started_in: started.elapsed(),
+            _task: task,
+        });
+    }
+
+    /// A background save reported back.
+    fn background_save_finished(
+        &mut self,
+        id: DocumentId,
+        seq: u64,
+        outcome: SaveOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let started = Instant::now();
+        let Some(session) = self.session.as_mut().filter(|session| session.id == id) else {
+            return;
+        };
+        if session.in_flight.as_ref().map(|save| save.seq) != Some(seq) {
+            return;
+        }
+        let Some(in_flight) = session.in_flight.take() else {
+            return;
+        };
+        match outcome {
+            // A synchronous save took over; it has dealt with the session.
+            SaveOutcome::Superseded => {}
+            SaveOutcome::Failed(message) => self.save_failed(message, cx),
+            SaveOutcome::Saved(saved) => {
+                // Clean only if nothing was edited while the save ran.
+                let unchanged = self.editor.read(cx).state().revision() == in_flight.revision;
+                session.title = saved.meta.title;
+                if let Some(view_state) = saved.view_state {
+                    session.stored_view_state = Some(view_state);
+                }
+                if unchanged {
+                    session.dirty = false;
+                    session.dirty_since = None;
+                    session.save_task = None;
+                }
+                let recovered = session.failure.take().is_some();
+                // The write went past the library's own connection: its
+                // cached tree (title, counts, edit time) has to catch up.
+                if let Err(error) = self.library.update(cx, |library, cx| library.refresh(cx)) {
+                    eprintln!("The Writer: could not re-read the library: {error}");
+                }
+                if recovered {
+                    self.show_toast(Toast::new("Saved").success(), cx);
+                }
+                if !unchanged {
+                    self.ensure_save_scheduled(cx);
+                }
+                self.last_save = Some(SaveCost {
+                    main_thread: in_flight.started_in + started.elapsed(),
+                    background: Some(saved.duration),
+                    bytes: saved.bytes,
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    /// Makes sure a dirty session has a save coming.
+    fn ensure_save_scheduled(&mut self, cx: &mut Context<Self>) {
+        let waiting = self.session.as_ref().is_some_and(|session| {
+            session.dirty && session.save_task.is_none() && session.in_flight.is_none()
+        });
+        if waiting {
+            let delay = self.autosave_delay(cx);
+            self.schedule_save(delay, cx);
+        }
+    }
+
     /// Saves the open document and its view state now, if there is anything
-    /// to save. Returns `false` when the save failed (it is then retried).
+    /// to save, and returns when it is in the library. Returns `false` when
+    /// the save failed (it is then retried).
     pub fn flush(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_now(cx)
     }
 
+    /// What the last save of this window cost.
+    pub fn last_save_cost(&self) -> Option<SaveCost> {
+        self.last_save
+    }
+
+    /// Whether a background save of the open document is running.
+    pub fn is_saving_in_background(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|session| session.in_flight.is_some())
+    }
+
     /// The save itself. Synchronous.
     pub(crate) fn save_now(&mut self, cx: &mut Context<Self>) -> bool {
+        let started = Instant::now();
+        // Nothing older may be written after this: wait for the background
+        // save that is writing, cancel one that has not started. Its answer
+        // is not needed any more; the session is still dirty, so the text
+        // as it is now is written below.
+        if let Some(session) = self.session.as_mut() {
+            session.in_flight = None;
+        }
+        self.saver.settle();
+
         let Some(session) = self.session.as_ref() else {
             return true;
         };
@@ -445,7 +667,7 @@ impl Workspace {
 
         // A title the user chose is read back from the library, so a rename
         // made a moment ago is never overwritten by an older copy.
-        let kept_title = if session.custom_title {
+        let kept_title = if session.custom_title.load(Ordering::SeqCst) {
             self.library
                 .read(cx)
                 .document_meta(id)
@@ -456,8 +678,14 @@ impl Workspace {
         };
         let form = {
             let editor = self.editor.read(cx);
-            // The editor keeps the statistics current; no need to recount.
-            StoredForm::with_stats(editor.document(), kept_title.as_deref(), editor.stats())
+            // The editor keeps the statistics current; no need to recount,
+            // unless it is still counting a document it has just opened.
+            let stats = if editor.stats_pending() {
+                editor.document().stats()
+            } else {
+                editor.stats()
+            };
+            StoredForm::with_stats(editor.document(), kept_title.as_deref(), stats)
         };
         let result = self.library.update(cx, |library, cx| {
             library.save_document(id, &form.content(), cx)
@@ -482,28 +710,39 @@ impl Workspace {
                     eprintln!("The Writer: could not take a version snapshot: {error}");
                 }
                 self.save_view_state(cx);
+                self.last_save = Some(SaveCost {
+                    main_thread: started.elapsed(),
+                    background: None,
+                    bytes: form.json.len(),
+                });
                 cx.notify();
                 true
             }
             Err(error) => {
-                let message = error.to_string();
-                let session = self.session.as_mut().expect("session checked above");
-                let first_failure = session.failure.is_none();
-                session.failure = Some(message.clone());
-                if first_failure {
-                    self.toast_error(
-                        format!(
-                            "Could not save: {message}. Your text is kept here and the save \
-                             is retried."
-                        ),
-                        cx,
-                    );
-                }
-                self.schedule_save(RETRY_DELAY, cx);
-                cx.notify();
+                self.save_failed(error.to_string(), cx);
                 false
             }
         }
+    }
+
+    /// A save failed: keep the session dirty, say so once, and try again
+    /// after [`RETRY_DELAY`].
+    fn save_failed(&mut self, message: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let first_failure = session.failure.is_none();
+        session.failure = Some(message.clone());
+        if first_failure {
+            self.toast_error(
+                format!(
+                    "Could not save: {message}. Your text is kept here and the save is retried."
+                ),
+                cx,
+            );
+        }
+        self.schedule_save(RETRY_DELAY, cx);
+        cx.notify();
     }
 
     /// Writes the caret and scroll position when they differ from what the
@@ -530,6 +769,79 @@ impl Workspace {
         }
     }
 
+    // ----- versions --------------------------------------------------------------
+
+    /// Puts the text of version `snapshot` back as the text of the open
+    /// document. The text as it is now is saved and kept as a version
+    /// first, so the step can be taken back from the version history.
+    /// Returns whether the version was restored.
+    pub fn restore_version(
+        &mut self,
+        snapshot: writer_library::SnapshotId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(id) = self.open_document_id() else {
+            return false;
+        };
+        let stored = match self.library.read(cx).snapshot(snapshot) {
+            Ok(stored) if stored.meta.document_id == id => stored,
+            Ok(_) => return false,
+            Err(error) => {
+                self.toast_error(format!("Could not read that version: {error}"), cx);
+                return false;
+            }
+        };
+        // What is on screen goes to the library, and becomes a version
+        // itself (unless the newest version already is this text).
+        let kept = self.flush(cx)
+            && self
+                .library
+                .update(cx, |library, cx| {
+                    library.snapshot_if_stale(id, Duration::ZERO, cx)
+                })
+                .is_ok();
+        if !kept {
+            self.toast_error(
+                "The text as it is now could not be kept as a version, so nothing was restored.",
+                cx,
+            );
+            return false;
+        }
+
+        let loaded = load_document(&stored.content);
+        self.editor.update(cx, |editor, cx| {
+            editor.set_document(loaded.document, cx);
+        });
+        self.character_count = None;
+        self.limit_counter = None;
+        if let Some(session) = self.session.as_mut() {
+            session.dirty = true;
+        }
+        let saved = self.save_now(cx);
+        self.focus_editor(window, cx);
+        self.update_window_title(window);
+        if saved {
+            let when = crate::version_history::version_time_label(
+                crate::version_history::LocalTime::from_unix_ms(stored.meta.created_at),
+                crate::version_history::LocalTime::from_unix_ms(
+                    self.library.read(cx).clock().now_ms(),
+                ),
+            );
+            self.show_toast(
+                Toast::new(format!(
+                    "Restored the version of {when}. The text from before is in the version \
+                     history."
+                ))
+                .success()
+                .duration(Duration::from_secs(6)),
+                cx,
+            );
+        }
+        cx.notify();
+        saved
+    }
+
     // ----- title -----------------------------------------------------------------
 
     /// The library reported a rename. The app never renames documents
@@ -547,7 +859,7 @@ impl Workspace {
             .ok()
             .map(|meta| meta.title);
         if let Some(session) = self.session.as_mut().filter(|session| session.id == id) {
-            session.custom_title = true;
+            session.custom_title.store(true, Ordering::SeqCst);
             if let Some(title) = title {
                 session.title = title;
             }
@@ -579,7 +891,7 @@ impl Workspace {
             return;
         };
         let id = session.id;
-        session.custom_title = false;
+        session.custom_title.store(false, Ordering::SeqCst);
         session.dirty = true;
         let key = keys::custom_title(id);
         self.library

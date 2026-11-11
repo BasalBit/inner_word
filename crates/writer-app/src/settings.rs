@@ -367,3 +367,88 @@ pub fn available_fonts(current: &str, cx: &App) -> Vec<String> {
     }
     fonts
 }
+
+/// The unit a length (paper size, margin) is shown and typed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LengthUnit {
+    /// Millimetres: everything but US Letter.
+    Millimetres,
+    /// Inches: US Letter.
+    Inches,
+}
+
+/// Points in a millimetre.
+pub const POINTS_PER_MILLIMETRE: f32 = writer_core::POINTS_PER_INCH / 25.4;
+
+impl LengthUnit {
+    /// The unit that goes with `paper`: inches for US Letter, millimetres
+    /// for A4 and custom sizes.
+    pub fn for_paper(paper: PaperSize) -> LengthUnit {
+        match paper {
+            PaperSize::UsLetter => LengthUnit::Inches,
+            _ => LengthUnit::Millimetres,
+        }
+    }
+
+    /// The abbreviation shown beside a value.
+    pub fn abbreviation(self) -> &'static str {
+        match self {
+            LengthUnit::Millimetres => "mm",
+            LengthUnit::Inches => "in",
+        }
+    }
+
+    /// The name used in a sentence.
+    pub fn name(self) -> &'static str {
+        match self {
+            LengthUnit::Millimetres => "millimetres",
+            LengthUnit::Inches => "inches",
+        }
+    }
+
+    fn points(self) -> f32 {
+        match self {
+            LengthUnit::Millimetres => POINTS_PER_MILLIMETRE,
+            LengthUnit::Inches => writer_core::POINTS_PER_INCH,
+        }
+    }
+}
+
+/// `points` in `unit`, as short as it can be said: `"25.4"`, `"210"`,
+/// `"8.5"`, `"1"`. No unit suffix.
+pub fn format_length(points: f32, unit: LengthUnit) -> String {
+    let value = points / unit.points();
+    let decimals = match unit {
+        LengthUnit::Millimetres => 1,
+        LengthUnit::Inches => 2,
+    };
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
+    }
+}
+
+/// Reads a typed length and returns it in points. A bare number is in
+/// `unit`; a suffix names another one: `mm`, `cm`, `in` (or `"`), `pt`.
+/// A decimal comma works like a point. `None` for anything else, and for
+/// negative or non-finite values.
+pub fn parse_length(text: &str, unit: LengthUnit) -> Option<f32> {
+    let text = text.trim();
+    let split = text
+        .find(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '.' | ',')))
+        .unwrap_or(text.len());
+    let (number, suffix) = text.split_at(split);
+    let value: f32 = number.replace(',', ".").parse().ok()?;
+    let factor = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" => unit.points(),
+        "mm" => POINTS_PER_MILLIMETRE,
+        "cm" => POINTS_PER_MILLIMETRE * 10.,
+        "in" | "\"" | "inch" | "inches" => writer_core::POINTS_PER_INCH,
+        "pt" => 1.,
+        _ => return None,
+    };
+    let points = value * factor;
+    (points.is_finite() && points >= 0.).then_some(points)
+}

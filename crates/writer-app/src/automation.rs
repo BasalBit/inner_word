@@ -26,6 +26,8 @@
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
 //! | `state`               | prints the workspace state: document, save state, modal, focus, status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
+//! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
+//! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
 //! | `quit`                | quits the app (runs the quit hooks)                          |
 //!
 //! `THE_WRITER_AUTOMATION=@/path/to/script.txt` reads the script from a file.
@@ -113,6 +115,8 @@ pub enum Step {
     Info,
     State,
     Dump,
+    Book(usize),
+    SaveCost(usize),
     Quit,
 }
 
@@ -249,6 +253,12 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         "info" => Step::Info,
         "state" => Step::State,
         "dump" => Step::Dump,
+        "book" => Step::Book(arg.parse().context("expected a number of blocks")?),
+        "savecost" => Step::SaveCost(if arg.is_empty() {
+            5
+        } else {
+            arg.parse().context("expected a number of rounds")?
+        }),
         "quit" | "exit" => Step::Quit,
         other => bail!("unknown step {other:?}"),
     })
@@ -416,6 +426,21 @@ async fn execute(
             })?;
             eprintln!("[automation] text: {text:?}");
         }
+        Step::Book(blocks) => {
+            let title = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                workspace.open_generated_book(blocks, window, cx)
+            })??;
+            eprintln!("[automation] book: opened {title:?} with {blocks} blocks");
+            frame_pause(window, view, cx).await;
+        }
+        Step::SaveCost(rounds) => {
+            let report = workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                workspace.measure_save_cost(rounds, cx)
+            })?;
+            for line in report {
+                eprintln!("[automation] savecost: {line}");
+            }
+        }
         Step::Quit => return Ok(StepOutcome::Quit),
     }
     Ok(StepOutcome::Continue)
@@ -508,13 +533,27 @@ pub fn describe_state(
         comments.active_thread().map(|id| id.0),
         comments.is_composing(),
     );
+    let last_save = match workspace.last_save_cost() {
+        Some(cost) => {
+            let millis = |duration: Duration| format!("{:.2} ms", duration.as_secs_f64() * 1000.);
+            format!(
+                "main {}, background {}, {} bytes",
+                millis(cost.main_thread),
+                cost.background.map(millis).unwrap_or_else(|| "none".into()),
+                cost.bytes
+            )
+        }
+        None => "none".to_string(),
+    };
     format!(
-        "document={:?} title={:?} save={:?} focus={focus} modal={} sidebar={} page_view={} \
+        "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
+         modal={} sidebar={} page_view={} \
          vim=[{vim}] tool=[{tool}] comments=[{comments}] words={:?} characters={:?} page={:?} \
          limit={:?}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),
         workspace.save_state(),
+        workspace.is_saving_in_background(),
         workspace.modal_layer().read(cx).has_modal(),
         settings.sidebar_visible,
         workspace.editor().read(cx).page_view(),

@@ -13,9 +13,12 @@ use writer_ui::{
     },
 };
 
-use super::{KEY_CONTEXT, SaveState, Workspace};
+use writer_editor::actions as editor;
+
+use super::{EditCommand, KEY_CONTEXT, SaveState, Workspace};
 use crate::{
     actions::{FocusLibrary, NewDocument, QuickOpen, ToggleCommandPalette},
+    character_limit::LimitCounter,
     settings::{DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, keys},
 };
 
@@ -117,11 +120,21 @@ impl Workspace {
         };
 
         // The limit is counted over the whole text, the way a network would
-        // count the post; cached per document revision.
+        // count the post; the result is kept per document revision.
         let revision = editor.state().revision();
         let count = limit_network.map(|network| match self.character_count {
             Some((cached, count)) if cached == revision && count.network == network => count,
-            _ => network.count(&editor.document().plain_text()),
+            _ => {
+                // Block by block: after an edit only the changed blocks are
+                // counted again (see `character_limit`).
+                let counter = self
+                    .limit_counter
+                    .get_or_insert_with(|| LimitCounter::new(network));
+                if counter.network() != network {
+                    *counter = LimitCounter::new(network);
+                }
+                counter.count(editor.document())
+            }
         });
         if let Some(count) = count {
             self.character_count = Some((revision, count));
@@ -422,8 +435,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_page_view))
             .on_action(cx.listener(Self::on_toggle_vim))
             .on_action(cx.listener(Self::on_title_from_text))
-            .on_action(cx.listener(Self::on_a4_paper))
-            .on_action(cx.listener(Self::on_letter_paper))
+            .on_action(cx.listener(Self::on_document_settings))
+            .on_action(cx.listener(Self::on_version_history))
             .on_action(cx.listener(Self::on_toggle_orientation))
             .on_action(cx.listener(Self::on_larger_body_text))
             .on_action(cx.listener(Self::on_smaller_body_text))
@@ -438,6 +451,31 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_minimize))
             .on_action(cx.listener(Self::on_zoom))
             .on_action(cx.listener(Self::on_toggle_full_screen))
+            // The Edit menu's standard items reach a focused text field as
+            // the field's own actions (see `edit_where_the_keyboard_is`).
+            .capture_action(cx.listener(|this, _: &editor::Undo, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::Undo, window, cx)
+            }))
+            .capture_action(cx.listener(|this, _: &editor::Redo, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::Redo, window, cx)
+            }))
+            .capture_action(cx.listener(|this, _: &editor::Cut, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::Cut, window, cx)
+            }))
+            .capture_action(cx.listener(|this, _: &editor::Copy, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::Copy, window, cx)
+            }))
+            .capture_action(cx.listener(|this, _: &editor::Paste, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::Paste, window, cx)
+            }))
+            .capture_action(
+                cx.listener(|this, _: &editor::PasteAsPlainText, window, cx| {
+                    this.edit_where_the_keyboard_is(EditCommand::Paste, window, cx)
+                }),
+            )
+            .capture_action(cx.listener(|this, _: &editor::SelectAll, window, cx| {
+                this.edit_where_the_keyboard_is(EditCommand::SelectAll, window, cx)
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if this.sidebar_dragging {
                     if event.dragging() {

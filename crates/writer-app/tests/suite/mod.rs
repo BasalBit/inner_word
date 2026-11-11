@@ -5,11 +5,13 @@ mod assembly;
 mod commands;
 mod export;
 mod keymap;
+mod saving;
 mod session;
 mod settings;
 mod shell;
 mod story;
 mod units;
+mod versions;
 
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use writer_app::{Workspace, document_io::StoredForm};

@@ -1,11 +1,17 @@
 //! The keyboard shortcuts overlay (`cmd-/`).
 //!
 //! Generated, not written: the rows are the registered command descriptors
-//! that have a binding in GPUI's keymap, grouped by category, followed by
-//! the keys that have no descriptor (caret movement, selection and deletion
-//! in the text; moving around the find bar, the comment list, the library,
-//! the pickers and the settings), named after their actions. The key shown is whatever the
-//! keymap says right now. The list is searchable, and enter runs the
+//! that have a binding in GPUI's keymap, followed by the keys that have no
+//! descriptor (caret movement, selection and deletion in the text; moving
+//! around the find bar, the comment list, the library, the pickers and the
+//! settings), named after their actions. The key shown is whatever the
+//! keymap says right now.
+//!
+//! A key only works where its binding applies, so the list is grouped by
+//! where the keyboard has to be ([`Place`], read from the key context of
+//! the binding): "Anywhere" first, then "In the text", then the panels and
+//! overlays. Within a place the commands keep their categories; a heading
+//! reads "In the text · Format". The list is searchable, and enter runs the
 //! selected command.
 
 use std::collections::HashSet;
@@ -19,26 +25,169 @@ use crate::{commands, workspace::Workspace};
 pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
 
 /// Action namespaces whose bindings are listed even without a command
-/// descriptor, with the heading they are listed under.
-const KEY_GROUPS: [(&str, &str); 6] = [
-    ("editor", "Editing keys"),
-    ("editor_tools", "Find bar keys"),
-    ("comments", "Comment list keys"),
-    ("library_panel", "Library keys"),
-    ("picker", "List keys"),
-    ("settings", "Settings keys"),
+/// descriptor, with the category they are listed under (empty: the place
+/// says it all).
+const KEY_GROUPS: [(&str, &str); 7] = [
+    ("editor", "Moving and selecting"),
+    ("editor_tools", ""),
+    ("comments", ""),
+    ("library_panel", ""),
+    ("picker", ""),
+    ("settings", ""),
+    ("version_history", ""),
 ];
+
+/// Where the keyboard has to be for a shortcut to work. In the order the
+/// overlay lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Place {
+    /// Wherever the keyboard is in the window.
+    Anywhere,
+    /// In the text of the document.
+    Text,
+    /// In the find bar.
+    FindBar,
+    /// In the link field.
+    LinkField,
+    /// In the list of comment threads.
+    CommentList,
+    /// In the field a comment or a reply is written in.
+    CommentField,
+    /// In the library sidebar.
+    Library,
+    /// In the trash view of the library.
+    Trash,
+    /// In a list with a search field: the palette, a picker, a menu.
+    List,
+    /// In the settings.
+    Settings,
+    /// In the version history.
+    VersionHistory,
+    /// In a dialog.
+    Dialog,
+    /// In a text field.
+    TextField,
+    /// Somewhere this list does not know by name.
+    Elsewhere,
+}
+
+impl Place {
+    /// How the overlay names the place.
+    pub fn label(self) -> &'static str {
+        match self {
+            Place::Anywhere => "Anywhere",
+            Place::Text => "In the text",
+            Place::FindBar => "In the find bar",
+            Place::LinkField => "In the link field",
+            Place::CommentList => "In the comment list",
+            Place::CommentField => "Writing a comment",
+            Place::Library => "In the library",
+            Place::Trash => "In the trash",
+            Place::List => "In a list or menu",
+            Place::Settings => "In settings",
+            Place::VersionHistory => "In the version history",
+            Place::Dialog => "In a dialog",
+            Place::TextField => "In a text field",
+            Place::Elsewhere => "Elsewhere",
+        }
+    }
+
+    /// The place a binding with the key context predicate `predicate`
+    /// works in (`None`: the binding has no context).
+    pub fn of_predicate(predicate: Option<&str>) -> Place {
+        let Some(predicate) = predicate else {
+            return Place::Anywhere;
+        };
+        let has = |name: &str| predicate.contains(name);
+        if has("FindBar") {
+            Place::FindBar
+        } else if has("LinkPopover") {
+            Place::LinkField
+        } else if has("CommentComposer") {
+            Place::CommentField
+        } else if has("CommentThreads") || has("CommentsPanel") {
+            Place::CommentList
+        } else if has("LibraryPanel") {
+            if has("mode == trash") {
+                Place::Trash
+            } else {
+                Place::Library
+            }
+        } else if has("SettingsView") || has("SettingsRow") {
+            Place::Settings
+        } else if has("VersionHistory") {
+            Place::VersionHistory
+        } else if has("Picker") {
+            Place::List
+        } else if [
+            "ConfirmDialog",
+            "Button",
+            "Toggle",
+            "SegmentedControl",
+            "TabNavigation",
+        ]
+        .into_iter()
+        .any(has)
+        {
+            Place::Dialog
+        } else if has("EditorTools") || has("Editor") || has("vim_mode") {
+            Place::Text
+        } else if has("TextField") {
+            Place::TextField
+        } else if has("Workspace") {
+            Place::Anywhere
+        } else {
+            Place::Elsewhere
+        }
+    }
+
+    /// The command category that needs no mention beside this place.
+    fn own_category(self) -> Option<&'static str> {
+        match self {
+            Place::Library => Some("Library"),
+            Place::CommentList => Some("Comments"),
+            _ => None,
+        }
+    }
+
+    /// The heading of the commands of `category` in this place.
+    pub fn heading(self, category: &str) -> String {
+        if category.is_empty() || self.own_category() == Some(category) {
+            self.label().to_string()
+        } else {
+            format!("{} \u{b7} {category}", self.label())
+        }
+    }
+}
 
 /// One shortcut.
 pub struct Shortcut {
     /// What it does.
     pub title: SharedString,
-    /// The group it is listed under.
+    /// The category of its command.
     pub category: SharedString,
+    /// Where the keyboard has to be.
+    pub place: Place,
+    /// The heading it is listed under: place and category.
+    pub heading: SharedString,
     /// The keys, as shown.
     pub keys: String,
     action: Box<dyn Action>,
     hint: KeyHint,
+}
+
+/// The binding the keymap prefers for `action` (the one added last), as a
+/// key hint and the place it works in.
+fn preferred_binding(action: &dyn Action, cx: &App) -> Option<(KeyHint, Place)> {
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let binding = keymap.bindings_for_action(action).last()?;
+    Some((KeyHint::from_binding(binding), binding_place(binding)))
+}
+
+fn binding_place(binding: &gpui::KeyBinding) -> Place {
+    let predicate = binding.predicate().map(|predicate| predicate.to_string());
+    Place::of_predicate(predicate.as_deref())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,8 +226,9 @@ pub fn humanize_action_name(name: &str) -> String {
     out
 }
 
-/// Every shortcut: bound commands by category, then the undescribed keys of
-/// the [`KEY_GROUPS`] namespaces.
+/// Every shortcut, in the order the overlay lists them: by place, within a
+/// place by heading (the commands' categories in registration order, then
+/// the undescribed keys of the [`KEY_GROUPS`] namespaces).
 pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     let mut shortcuts = Vec::new();
     let mut described: HashSet<&'static str> = HashSet::new();
@@ -86,10 +236,12 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     for category in commands::categories(&all) {
         for command in all.iter().filter(|command| command.category == category) {
             described.insert(command.action_name());
-            if let Some(hint) = command.key_hint(cx) {
+            if let Some((hint, place)) = preferred_binding(command.action_ref(), cx) {
                 shortcuts.push(Shortcut {
                     title: command.title.clone(),
                     category: category.clone(),
+                    place,
+                    heading: place.heading(&category).into(),
                     keys: hint.text(),
                     action: command.action(),
                     hint,
@@ -102,7 +254,7 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     // take precedence, so walk backwards and keep the first of each action.
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
-    for (namespace, heading) in KEY_GROUPS {
+    for (namespace, category) in KEY_GROUPS {
         let prefix = format!("{namespace}::");
         let mut seen: HashSet<&'static str> = HashSet::new();
         let mut group = Vec::new();
@@ -112,9 +264,12 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
                 continue;
             }
             let hint = KeyHint::from_binding(binding);
+            let place = binding_place(binding);
             group.push(Shortcut {
                 title: humanize_action_name(name).into(),
-                category: heading.into(),
+                category: category.into(),
+                place,
+                heading: place.heading(category).into(),
                 keys: hint.text(),
                 action: binding.action().boxed_clone(),
                 hint,
@@ -124,6 +279,24 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
         group.reverse();
         shortcuts.extend(group);
     }
+    drop(keymap);
+
+    // By place, then by heading in the order the headings first appeared;
+    // rows keep their order within a heading.
+    let mut headings: Vec<SharedString> = Vec::new();
+    for shortcut in &shortcuts {
+        if !headings.contains(&shortcut.heading) {
+            headings.push(shortcut.heading.clone());
+        }
+    }
+    let rank = |shortcut: &Shortcut| {
+        let heading = headings
+            .iter()
+            .position(|heading| *heading == shortcut.heading)
+            .unwrap_or(usize::MAX);
+        (shortcut.place, heading)
+    };
+    shortcuts.sort_by_key(rank);
     shortcuts
 }
 
@@ -153,11 +326,11 @@ impl PickerDelegate for ShortcutsDelegate {
     fn update_matches(&mut self, query: &str, _: &mut Window, _: &mut Context<Picker<Self>>) {
         self.rows.clear();
         if query.trim().is_empty() {
-            let mut category: Option<&SharedString> = None;
+            let mut heading: Option<&SharedString> = None;
             for (index, shortcut) in self.shortcuts.iter().enumerate() {
-                if category != Some(&shortcut.category) {
-                    category = Some(&shortcut.category);
-                    self.rows.push(Row::Header(shortcut.category.clone()));
+                if heading != Some(&shortcut.heading) {
+                    heading = Some(&shortcut.heading);
+                    self.rows.push(Row::Header(shortcut.heading.clone()));
                 }
                 self.rows.push(Row::Shortcut {
                     index,
@@ -174,7 +347,10 @@ impl PickerDelegate for ShortcutsDelegate {
                 if let Some(found) = fuzzy_match(query, &shortcut.title) {
                     return Some((found.score + 10_000, index, found.positions));
                 }
-                let haystack = format!("{} {}", shortcut.category, shortcut.title);
+                let haystack = format!(
+                    "{} {} {}",
+                    shortcut.heading, shortcut.category, shortcut.title
+                );
                 crate::palette::words_match(query, &haystack).then(|| (0, index, Vec::new()))
             })
             .collect();
@@ -197,11 +373,11 @@ impl PickerDelegate for ShortcutsDelegate {
                 let item = PickerItem::new(shortcut.title.clone())
                     .positions(positions.clone())
                     .key_hint(shortcut.hint.clone());
-                // Headers already name the group while browsing.
+                // Headers already say where and what while browsing.
                 if matches!(self.rows.first(), Some(Row::Header(_))) {
                     item.into()
                 } else {
-                    item.detail(shortcut.category.clone()).into()
+                    item.detail(shortcut.heading.clone()).into()
                 }
             }
         }

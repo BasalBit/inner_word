@@ -380,3 +380,351 @@ mod window {
         assert!(StoredBounds { x: -300., ..good }.is_usable(&display()));
     }
 }
+
+mod character_limit {
+    use writer_app::character_limit::LimitCounter;
+    use writer_core::{Block, BlockKind, Document, EditorState, Position};
+    use writer_export::SocialNetwork;
+
+    fn document(lines: &[&str]) -> Document {
+        Document::from_blocks(lines.iter().map(|line| Block::paragraph(line)).collect())
+    }
+
+    /// The counter and a count of the whole text must agree.
+    fn check(counter: &mut LimitCounter, document: &Document) -> usize {
+        let whole = counter.network().count(&document.plain_text());
+        let counted = counter.count(document);
+        assert_eq!(
+            counted,
+            whole,
+            "{:?} on {:?}",
+            counter.network(),
+            document.plain_text()
+        );
+        counted.length
+    }
+
+    #[test]
+    fn the_sum_over_blocks_is_the_count_of_the_whole_text() {
+        let texts: [&[&str]; 10] = [
+            &[""],
+            &["", "  ", ""],
+            &["Hello"],
+            &["  Hello  "],
+            &[
+                "",
+                "  First line. ",
+                "",
+                "\tSecond 👍🏽 line  ",
+                "   ",
+                "Third",
+                "",
+                " ",
+            ],
+            &[
+                "Launch day! https://example.com/a/very/long/path",
+                "see https://x.y.",
+            ],
+            &[
+                "https://example.com",
+                "nothttp://x.y",
+                "HTTP://X.Y and http://z.w  ",
+            ],
+            &["日本語 👨‍👩‍👧‍👦 🇦🇱🇺🇸", "café “quoted” — dash", "1️⃣ e\u{301}"],
+            &["soft\nbreak inside", " \n ", "end\n"],
+            &["\u{3000}ideographic space\u{3000}", "tail\u{a0}"],
+        ];
+        for network in SocialNetwork::ALL {
+            for lines in texts {
+                let mut counter = LimitCounter::new(network);
+                check(&mut counter, &document(lines));
+            }
+        }
+    }
+
+    #[test]
+    fn odd_text_falls_back_to_the_whole_count() {
+        // A combining mark right after leading white space joins the space
+        // in the whole text; a carriage return would join the line break.
+        let texts: [&[&str]; 3] = [
+            &["first", " \u{301}accent after a space", "last"],
+            &["first", "ends with a return\r", "last"],
+            &["\u{600} ", "prepend before a space \u{600} ", "x"],
+        ];
+        for network in SocialNetwork::ALL {
+            for lines in texts {
+                let mut counter = LimitCounter::new(network);
+                check(&mut counter, &document(lines));
+            }
+        }
+    }
+
+    #[test]
+    fn an_edit_recounts_only_the_blocks_it_changed() {
+        let mut blocks = vec![Block::with_text(BlockKind::heading(1), "A long post")];
+        blocks.extend((0..500).map(|ix| Block::paragraph(&format!("Paragraph {ix} of the text."))));
+        let mut state = EditorState::new(Document::from_blocks(blocks));
+        for network in [
+            SocialNetwork::X,
+            SocialNetwork::Mastodon,
+            SocialNetwork::LinkedIn,
+        ] {
+            let mut counter = LimitCounter::new(network);
+            let before = check(&mut counter, state.document());
+            assert_eq!(counter.recounted(), 501);
+            // The same document again: nothing to count.
+            check(&mut counter, state.document());
+            assert_eq!(counter.recounted(), 0);
+
+            // Typing in the middle.
+            state.set_caret(Position::new(250, 3));
+            state.insert_text("xyz");
+            assert_eq!(check(&mut counter, state.document()), before + 3);
+            assert_eq!(counter.recounted(), 1);
+            // A new paragraph: the split block and the new one.
+            state.insert_paragraph_break();
+            assert_eq!(check(&mut counter, state.document()), before + 4);
+            assert!(counter.recounted() <= 2, "{}", counter.recounted());
+            // Joining them again, then undoing everything.
+            state.backspace();
+            assert_eq!(check(&mut counter, state.document()), before + 3);
+            assert!(counter.recounted() <= 2, "{}", counter.recounted());
+            while state.undo() {}
+            assert_eq!(check(&mut counter, state.document()), before);
+            assert!(counter.recounted() <= 2, "{}", counter.recounted());
+            // At the very ends, where trimming applies.
+            state.set_caret(Position::new(0, 0));
+            state.insert_text("   ");
+            assert_eq!(check(&mut counter, state.document()), before);
+            let end = state.document().end();
+            state.set_caret(end);
+            state.insert_text(" \u{1f44d}  ");
+            check(&mut counter, state.document());
+            assert_eq!(counter.recounted(), 1);
+            while state.undo() {}
+        }
+    }
+
+    #[test]
+    fn deleting_and_inserting_many_blocks_keeps_the_count_right() {
+        let lines: Vec<String> = (0..60)
+            .map(|ix| format!(" line {ix} https://a.b/{ix} "))
+            .collect();
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut state = EditorState::new(document(&lines));
+        let mut counter = LimitCounter::new(SocialNetwork::X);
+        check(&mut counter, state.document());
+        // Delete a stretch across blocks.
+        state.set_selection(writer_core::Selection::new(
+            Position::new(10, 2),
+            Position::new(40, 4),
+        ));
+        state.delete_selection();
+        check(&mut counter, state.document());
+        // Paste several paragraphs.
+        state.insert_text("one\ntwo");
+        check(&mut counter, state.document());
+        state.select_all();
+        state.delete_selection();
+        assert_eq!(check(&mut counter, state.document()), 0);
+        state.undo();
+        check(&mut counter, state.document());
+    }
+}
+
+mod lengths {
+    use writer_app::settings::{LengthUnit, format_length, parse_length};
+    use writer_core::PaperSize;
+
+    #[test]
+    fn lengths_are_shown_briefly_and_read_with_units() {
+        let mm = LengthUnit::Millimetres;
+        let inches = LengthUnit::Inches;
+        assert_eq!(LengthUnit::for_paper(PaperSize::A4), mm);
+        assert_eq!(LengthUnit::for_paper(PaperSize::UsLetter), inches);
+        assert_eq!(
+            LengthUnit::for_paper(PaperSize::Custom {
+                width: 300.,
+                height: 400.
+            }),
+            mm
+        );
+
+        assert_eq!(format_length(72., mm), "25.4");
+        assert_eq!(format_length(72., inches), "1");
+        assert_eq!(format_length(612., inches), "8.5");
+        assert_eq!(format_length(595.276, mm), "210");
+        assert_eq!(format_length(841.89, mm), "297");
+        assert_eq!(format_length(0., mm), "0");
+        assert_eq!(format_length(54., inches), "0.75");
+
+        let close = |text: &str, unit, points: f32| {
+            let read = parse_length(text, unit).unwrap_or_else(|| panic!("{text:?} is a length"));
+            assert!((read - points).abs() < 0.01, "{text:?}: {read} != {points}");
+        };
+        close("25.4", mm, 72.);
+        close(" 25,4 ", mm, 72.);
+        close("1", inches, 72.);
+        close("20mm", inches, 56.693);
+        close("2 cm", mm, 56.693);
+        close("0.75in", mm, 54.);
+        close("0.75\"", mm, 54.);
+        close("36pt", mm, 36.);
+        close("36 PT", inches, 36.);
+        close("0", mm, 0.);
+        for bad in ["", "abc", "12 parsecs", "-3", "1.2.3", "mm"] {
+            assert_eq!(parse_length(bad, mm), None, "{bad:?}");
+        }
+        // What is shown reads back as the same length.
+        for points in [72., 36., 595.276, 841.89, 612., 792., 100.] {
+            for unit in [mm, inches] {
+                let shown = format_length(points, unit);
+                let read = parse_length(&shown, unit).unwrap();
+                // To a tenth of a millimetre, a hundredth of an inch.
+                assert!((read - points).abs() < 0.4, "{shown}: {read} != {points}");
+            }
+        }
+    }
+}
+
+mod version_times {
+    use writer_app::version_history::{LocalTime, version_time_label};
+
+    fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> LocalTime {
+        LocalTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+        }
+    }
+
+    #[test]
+    fn versions_are_dated_the_way_people_say_it() {
+        let now = at(2026, 11, 11, 15, 30);
+        assert_eq!(
+            version_time_label(at(2026, 11, 11, 14, 5), now),
+            "Today 14:05"
+        );
+        assert_eq!(
+            version_time_label(at(2026, 11, 11, 0, 0), now),
+            "Today 00:00"
+        );
+        assert_eq!(
+            version_time_label(at(2026, 11, 10, 23, 59), now),
+            "Yesterday 23:59"
+        );
+        assert_eq!(
+            version_time_label(at(2026, 11, 9, 8, 15), now),
+            "9 Nov, 08:15"
+        );
+        assert_eq!(
+            version_time_label(at(2026, 3, 3, 17, 40), now),
+            "3 Mar, 17:40"
+        );
+        assert_eq!(
+            version_time_label(at(2025, 12, 31, 9, 0), now),
+            "31 Dec 2025, 09:00"
+        );
+        // Across the turn of a month and of a year.
+        assert_eq!(
+            version_time_label(at(2026, 2, 28, 10, 0), at(2026, 3, 1, 9, 0)),
+            "Yesterday 10:00"
+        );
+        assert_eq!(
+            version_time_label(at(2024, 2, 29, 10, 0), at(2024, 3, 1, 9, 0)),
+            "Yesterday 10:00"
+        );
+        assert_eq!(
+            version_time_label(at(2025, 12, 31, 22, 0), at(2026, 1, 1, 1, 0)),
+            "Yesterday 22:00"
+        );
+    }
+
+    #[test]
+    fn local_time_is_read_from_the_clock() {
+        // Whatever the time zone of the machine, a minute later is a minute
+        // later, and the fields are in range.
+        let a = LocalTime::from_unix_ms(1_800_000_000_000);
+        let b = LocalTime::from_unix_ms(1_800_000_060_000);
+        assert!((2026..=2027).contains(&a.year));
+        assert!((1..=12).contains(&a.month) && (1..=31).contains(&a.day));
+        assert!(a.hour < 24 && a.minute < 60);
+        assert_eq!((b.minute + 60 - a.minute) % 60, 1);
+    }
+}
+
+mod quick_open_titles {
+    use writer_app::quick_open::clip_title;
+
+    #[test]
+    fn long_titles_are_cut_and_keep_their_matches() {
+        let short = "Chapter 2: The Harbour";
+        assert_eq!(
+            clip_title(short, &[0, 8], 48),
+            (short.to_string(), vec![0, 8])
+        );
+
+        let long = "The ferry came in late, as it always did in October, and Mara was the only";
+        let (clipped, positions) = clip_title(long, &[4, 9, 70], 48);
+        assert_eq!(clipped.chars().count(), 48);
+        assert!(clipped.ends_with('\u{2026}'));
+        assert!(long.starts_with(clipped.trim_end_matches('\u{2026}')));
+        // Matches that are still in view stay, the one that was cut goes.
+        assert_eq!(positions, vec![4, 9]);
+
+        // Cut between characters, never inside one.
+        let accents = "é".repeat(60);
+        let (clipped, _) = clip_title(&accents, &[], 10);
+        assert_eq!(clipped, format!("{}\u{2026}", "é".repeat(9)));
+        let families = "👨‍👩‍👧‍👦".repeat(12);
+        let (clipped, _) = clip_title(&families, &[], 5);
+        assert_eq!(clipped, format!("{}\u{2026}", "👨‍👩‍👧‍👦".repeat(4)));
+        // No space is left hanging before the ellipsis.
+        let (clipped, _) = clip_title("word word word word", &[], 11);
+        assert_eq!(clipped, "word word\u{2026}");
+    }
+}
+
+mod shortcut_places {
+    use writer_app::shortcuts::Place;
+
+    #[test]
+    fn a_key_context_says_where_the_keyboard_must_be() {
+        let place = |predicate: &str| Place::of_predicate(Some(predicate));
+        assert_eq!(Place::of_predicate(None), Place::Anywhere);
+        assert_eq!(place("Editor"), Place::Text);
+        assert_eq!(place("EditorTools"), Place::Text);
+        assert_eq!(place("FindBar"), Place::FindBar);
+        assert_eq!(place("FindBar > TextField"), Place::FindBar);
+        assert_eq!(place("LibraryPanel"), Place::Library);
+        assert_eq!(
+            place("LibraryPanel && mode == tree && !TextField"),
+            Place::Library
+        );
+        assert_eq!(
+            place("LibraryPanel && mode == trash && !TextField"),
+            Place::Trash
+        );
+        assert_eq!(place("CommentThreads"), Place::CommentList);
+        assert_eq!(place("CommentComposer"), Place::CommentField);
+        assert_eq!(place("Picker"), Place::List);
+        assert_eq!(place("SettingsRow"), Place::Settings);
+        assert_eq!(place("VersionHistory"), Place::VersionHistory);
+        assert_eq!(place("TextField"), Place::TextField);
+        assert_eq!(place("SomethingNew"), Place::Elsewhere);
+
+        assert_eq!(Place::Anywhere.heading("File"), "Anywhere \u{b7} File");
+        assert_eq!(Place::Text.heading("Format"), "In the text \u{b7} Format");
+        // A place that is its own category is not said twice.
+        assert_eq!(Place::Library.heading("Library"), "In the library");
+        assert_eq!(
+            Place::CommentList.heading("Comments"),
+            "In the comment list"
+        );
+        assert_eq!(Place::FindBar.heading(""), "In the find bar");
+        // The overlay lists the places in this order.
+        assert!(Place::Anywhere < Place::Text && Place::Text < Place::Library);
+    }
+}

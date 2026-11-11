@@ -6865,11 +6865,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "libc",
  "objc",
  "raw-window-handle",
  "serde",
  "serde_json",
  "tempfile",
+ "unicode-segmentation",
  "writer-comments",
  "writer-core",
  "writer-editor",

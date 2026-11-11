@@ -75,10 +75,10 @@ actions!(
         ToggleVimMode,
         /// Derive the document's title from its text again.
         UseTitleFromText,
-        /// Lay the current document out on A4 paper.
-        UseA4Paper,
-        /// Lay the current document out on US Letter paper.
-        UseLetterPaper,
+        /// List the earlier versions of the current document.
+        ShowVersionHistory,
+        /// Open the settings of the current document: paper, margins, type.
+        OpenDocumentSettings,
         /// Turn the pages of the current document: portrait or landscape.
         TogglePageOrientation,
         /// Make the body text of the current document one point larger.
@@ -167,16 +167,36 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "save as",
             "copy",
         ]),
+        CommandDescriptor::new("Version history", CATEGORY_FILE, ShowVersionHistory).keywords([
+            "versions",
+            "snapshots",
+            "restore",
+            "revert",
+            "earlier",
+            "previous",
+            "go back",
+            "recover",
+        ]),
         CommandDescriptor::new("Take title from text", CATEGORY_FILE, UseTitleFromText)
             .keywords(["rename", "name", "derive", "reset"]),
         CommandDescriptor::new("Close window", CATEGORY_FILE, CloseWindow),
-        CommandDescriptor::new("Use A4 paper", CATEGORY_DOCUMENT, UseA4Paper).keywords([
-            "page size",
-            "page setup",
-            "sheet",
-        ]),
-        CommandDescriptor::new("Use US Letter paper", CATEGORY_DOCUMENT, UseLetterPaper)
-            .keywords(["page size", "page setup", "sheet"]),
+        CommandDescriptor::new("Document settings", CATEGORY_DOCUMENT, OpenDocumentSettings)
+            .keywords([
+                "page setup",
+                "paper",
+                "page size",
+                "a4",
+                "us letter",
+                "custom",
+                "margins",
+                "orientation",
+                "font",
+                "text size",
+                "line height",
+                "paragraph spacing",
+                "typography",
+                "this document",
+            ]),
         CommandDescriptor::new(
             "Switch portrait and landscape",
             CATEGORY_DOCUMENT,

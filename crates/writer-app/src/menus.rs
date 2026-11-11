@@ -3,6 +3,12 @@
 //!
 //! The product's "few menus" rule is about chrome inside the window; the
 //! system menu bar is where macOS users look for About, Settings and Quit.
+//!
+//! The standard items of the Edit menu (undo, redo, cut, copy, paste,
+//! select all) are the editor's actions, so the menu shows the editor's
+//! shortcuts. They act on whatever has the keyboard: the workspace turns
+//! them into the text field's own actions when a text field has it (see
+//! `Workspace::edit_where_the_keyboard_is`).
 
 use gpui::{App, Menu, MenuItem, OsAction, SystemMenuType};
 use writer_editor::actions as editor;
@@ -39,6 +45,9 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Search Library…", SearchLibrary),
                 MenuItem::separator(),
                 MenuItem::action("Export…", Export),
+                MenuItem::separator(),
+                MenuItem::action("Document Settings…", OpenDocumentSettings),
+                MenuItem::action("Version History…", ShowVersionHistory),
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
             ],

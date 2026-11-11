@@ -41,7 +41,9 @@
 //! takes focus (format menu, link popover, font picker, find bar) and the
 //! modals get their keys directly.
 
+mod measure;
 mod render;
+mod saver;
 mod session;
 
 use std::time::Duration;
@@ -73,12 +75,14 @@ use crate::{
     settings::{self, Settings, keys},
     settings_view::SettingsView,
     shortcuts::ShortcutsDelegate,
+    version_history::VersionHistory,
     window::StoredBounds,
 };
 
 pub use render::{STATUS_BAR_HEIGHT, StatusLine, counted, group_digits};
 pub use session::{
-    AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveState, first_occurrence,
+    AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost, SaveState,
+    first_occurrence,
 };
 pub(crate) use session::{Session, display_title as session_title};
 
@@ -130,6 +134,10 @@ pub struct Workspace {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) settings: Settings,
     pub(crate) session: Option<Session>,
+    /// The background half of the autosave.
+    pub(crate) saver: saver::Saver,
+    /// What the last save cost.
+    pub(crate) last_save: Option<SaveCost>,
     pub(crate) sidebar_dragging: bool,
     pub(crate) editor_host: Option<AnyView>,
     pub(crate) right_panel: Option<AnyView>,
@@ -137,6 +145,8 @@ pub struct Workspace {
     pub(crate) strips: Vec<(SharedString, AnyView)>,
     pub(crate) status_items: Vec<(SharedString, AnyView)>,
     pub(crate) character_count: Option<(u64, writer_export::SocialCount)>,
+    /// The per-block counts behind `character_count`, for the open document.
+    pub(crate) limit_counter: Option<crate::character_limit::LimitCounter>,
     pub(crate) window_bounds: Option<WindowBounds>,
     pub(crate) window_title: String,
     bounds_task: Option<Task<()>>,
@@ -265,6 +275,7 @@ impl Workspace {
             true
         });
 
+        let saver = saver::Saver::new(library.read(cx));
         let mut this = Self {
             library,
             editor,
@@ -278,12 +289,15 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             settings,
             session: None,
+            saver,
+            last_save: None,
             sidebar_dragging: false,
             right_panel: None,
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             status_items: vec![(VIM_STATUS_KEY.into(), vim_status.into())],
             character_count: None,
+            limit_counter: None,
             window_bounds: None,
             window_title: String::new(),
             bounds_task: None,
@@ -639,6 +653,7 @@ impl Workspace {
         }
         if old.character_limit != new.character_limit {
             self.character_count = None;
+            self.limit_counter = None;
         }
         if old.new_document_settings() != new.new_document_settings() {
             self.panel.update(cx, |panel, _| {
@@ -779,12 +794,63 @@ impl Workspace {
         });
     }
 
-    /// Opens the settings, or closes them when they are open.
+    /// Opens the settings, or closes them when they are open. With a
+    /// document open they include the "This document" section.
     pub fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_settings(None, window, cx);
+    }
+
+    /// Opens the settings at the section for the open document (its paper,
+    /// margins and typography), or closes them when they are open.
+    pub fn toggle_document_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_none() {
+            self.show_toast(Toast::new("Open a document to change its settings"), cx);
+            return;
+        }
+        self.show_settings(
+            Some(crate::settings_view::SettingRow::DocumentPageView),
+            window,
+            cx,
+        );
+    }
+
+    /// Opens the version history of the open document, or closes it when
+    /// it is open. What is on screen is saved first, so the list is up to
+    /// date.
+    pub fn toggle_version_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.open_document_id() else {
+            self.show_toast(Toast::new("Open a document to see its versions"), cx);
+            return;
+        };
+        self.flush(cx);
+        let workspace = cx.weak_entity();
         let library = self.library.clone();
+        let title = self.display_title();
+        self.modal_layer.update(cx, |layer, cx| {
+            layer.toggle(window, cx, |_, cx| {
+                VersionHistory::new(workspace, library, id, title, cx)
+            });
+        });
+    }
+
+    fn show_settings(
+        &mut self,
+        start: Option<crate::settings_view::SettingRow>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let library = self.library.clone();
+        let document = self.session.is_some().then(|| self.editor.clone());
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
-                SettingsView::new(library, window, cx)
+                let view = match document {
+                    Some(editor) => SettingsView::for_document(library, editor, window, cx),
+                    None => SettingsView::new(library, window, cx),
+                };
+                match start {
+                    Some(row) => view.starting_at(row, cx),
+                    None => view,
+                }
             });
         });
     }
@@ -829,23 +895,6 @@ impl Workspace {
         });
         self.mark_dirty(cx);
         self.show_toast(Toast::new(message).duration(Duration::from_secs(2)), cx);
-    }
-
-    fn set_paper(&mut self, paper: writer_core::PaperSize, cx: &mut Context<Self>) {
-        self.change_document_settings(
-            |settings| settings.page.paper = paper,
-            |settings| {
-                let (width, height) = settings.page.page_size();
-                let name = match settings.page.paper {
-                    writer_core::PaperSize::A4 => "A4",
-                    writer_core::PaperSize::UsLetter => "US Letter",
-                    writer_core::PaperSize::Custom { .. } => "Custom",
-                };
-                let turned = if width > height { ", landscape" } else { "" };
-                format!("Paper: {name}{turned}")
-            },
-            cx,
-        );
     }
 
     fn toggle_orientation(&mut self, cx: &mut Context<Self>) {
@@ -894,10 +943,25 @@ impl Workspace {
         self.write_setting(keys::VIM_MODE, &on, cx);
     }
 
-    /// Attaches or detaches Vim mode as the setting says.
+    /// Attaches or detaches Vim mode as the setting says, and has held
+    /// keys repeat (instead of offering accents) while it is on.
     fn apply_vim_setting(&mut self, cx: &mut Context<Self>) {
         let on = self.settings.vim_mode;
         self.vim.update(cx, |vim, cx| vim.set_attached(on, cx));
+        let noted = crate::press_and_hold::state(cx).restart_note_due();
+        crate::press_and_hold::sync(on, cx);
+        // The system reads that choice once per launch (see
+        // `press_and_hold`): say so when it was made too late for this one.
+        if !noted && crate::press_and_hold::state(cx).restart_note_due() {
+            let message = if on {
+                "Vim mode is on. Held keys also repeat while you type after The Writer is \
+                 restarted."
+            } else {
+                "Vim mode is off. The accent menu on held keys is back after The Writer is \
+                 restarted."
+            };
+            self.show_toast(Toast::new(message).duration(Duration::from_secs(6)), cx);
+        }
     }
 
     /// Shows or hides comments: the tints in the text and the panel (a
@@ -1275,17 +1339,22 @@ impl Workspace {
         self.toggle_vim_mode(cx);
     }
 
-    pub(crate) fn on_a4_paper(&mut self, _: &UseA4Paper, _: &mut Window, cx: &mut Context<Self>) {
-        self.set_paper(writer_core::PaperSize::A4, cx);
-    }
-
-    pub(crate) fn on_letter_paper(
+    pub(crate) fn on_version_history(
         &mut self,
-        _: &UseLetterPaper,
-        _: &mut Window,
+        _: &ShowVersionHistory,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_paper(writer_core::PaperSize::UsLetter, cx);
+        self.toggle_version_history(window, cx);
+    }
+
+    pub(crate) fn on_document_settings(
+        &mut self,
+        _: &OpenDocumentSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_document_settings(window, cx);
     }
 
     pub(crate) fn on_toggle_orientation(
@@ -1409,6 +1478,62 @@ impl Workspace {
         _: &mut Context<Self>,
     ) {
         window.toggle_fullscreen();
+    }
+}
+
+/// The standard items of the Edit menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    /// Undo.
+    Undo,
+    /// Redo.
+    Redo,
+    /// Cut.
+    Cut,
+    /// Copy.
+    Copy,
+    /// Paste (also "paste as plain text": a field holds plain text only).
+    Paste,
+    /// Select all.
+    SelectAll,
+}
+
+impl Workspace {
+    /// The Edit menu acts on whatever has the keyboard.
+    ///
+    /// The menu items are the editor's actions (so they show the editor's
+    /// shortcuts). The text and the comment fields handle them themselves.
+    /// A plain text field (the palette's query, a rename field, the find
+    /// bar, the settings) has its own actions for the same things, bound
+    /// to the same keys, but does not know the editor's: so when one of
+    /// the editor's edit actions is on its way to a text field, it is
+    /// replaced here by the field's own. In the library, Undo brings back
+    /// what was last moved to the trash, as `cmd-z` does there.
+    ///
+    /// Registered for the capture phase on the workspace root, which runs
+    /// before anything between the root and the focused element.
+    pub(crate) fn edit_where_the_keyboard_is(
+        &mut self,
+        command: EditCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use writer_ui::text_field as field;
+        let for_field: Box<dyn gpui::Action> = match command {
+            EditCommand::Undo => Box::new(field::Undo),
+            EditCommand::Redo => Box::new(field::Redo),
+            EditCommand::Cut => Box::new(field::Cut),
+            EditCommand::Copy => Box::new(field::Copy),
+            EditCommand::Paste => Box::new(field::Paste),
+            EditCommand::SelectAll => Box::new(field::SelectAll),
+        };
+        if window.is_action_available(for_field.as_ref(), cx) {
+            cx.stop_propagation();
+            window.dispatch_action(for_field, cx);
+        } else if command == EditCommand::Undo && self.panel_has_focus(window, cx) {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(writer_library::UndoTrash), cx);
+        }
     }
 }
 

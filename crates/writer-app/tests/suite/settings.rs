@@ -100,8 +100,11 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
         workspace.read_with(vcx, |w, _| w.settings().character_limit),
         Some(SocialNetwork::X)
     );
-    // The list ends here; up goes back.
-    vcx.simulate_keystrokes("down down up");
+    // With a document open the list goes on with that document's own
+    // settings; up goes back.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentPageView));
+    vcx.simulate_keystrokes("up up");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::Paper));
 
     // Escape closes and focus returns to the editor.
@@ -246,4 +249,296 @@ fn view_toggles_flip_settings_and_the_document(cx: &mut TestAppContext) {
         .filter(|event| **event == writer_app::WorkspaceEvent::SettingsChanged)
         .count();
     assert_eq!(changes, 4, "{events:?}");
+}
+
+#[gpui::test]
+fn this_document_section_changes_the_open_document(cx: &mut TestAppContext) {
+    use writer_core::{Orientation, PaperSize};
+
+    init(cx);
+    let library = library(cx);
+    let id = add_document(
+        &library,
+        None,
+        &simple_document("Pages", "A paragraph on a page."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let document = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            w.editor().read(cx).document().settings().clone()
+        })
+    };
+    let before = document(vcx);
+    assert_eq!(before.page.paper, PaperSize::A4);
+
+    // "Document settings" in the palette opens the settings at the section
+    // for this document.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.simulate_input("document settings");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let view = settings_view(&workspace, vcx).expect("the settings are open");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentPageView));
+    let rows = view.read_with(vcx, |view, cx| view.rows(cx));
+    assert!(rows.starts_with(&SettingRow::APP));
+    assert!(!rows.contains(&SettingRow::DocumentPaperWidth));
+
+    // Page view on; paper to US Letter, then to a custom size, which starts
+    // from the sheet it replaces and brings two more rows.
+    vcx.simulate_keystrokes("space down right");
+    assert!(document(vcx).page_view);
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentPaper));
+    assert_eq!(document(vcx).page.paper, PaperSize::UsLetter);
+    let field = |row: SettingRow, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, cx| view.length_field_text(row, cx).unwrap())
+    };
+    // Lengths of a Letter document are in inches.
+    assert_eq!(field(SettingRow::DocumentMarginTop, vcx), "1");
+    vcx.simulate_keystrokes("right");
+    assert_eq!(
+        document(vcx).page.paper,
+        PaperSize::Custom {
+            width: 612.,
+            height: 792.
+        }
+    );
+    assert!(
+        view.read_with(vcx, |view, cx| view.rows(cx))
+            .contains(&SettingRow::DocumentPaperWidth)
+    );
+    // ...and of any other in millimetres.
+    assert_eq!(field(SettingRow::DocumentPaperWidth, vcx), "215.9");
+    assert_eq!(field(SettingRow::DocumentPaperHeight, vcx), "279.4");
+    assert_eq!(field(SettingRow::DocumentMarginTop, vcx), "25.4");
+
+    // The size is typed: A5.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentPaperWidth)
+    );
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("148");
+    vcx.simulate_keystrokes("enter");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentPaperHeight)
+    );
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("210");
+    let (width, height) = document(vcx).page.paper.portrait_size();
+    assert!((width - 419.53).abs() < 0.01 && (height - 595.28).abs() < 0.01);
+
+    // Orientation, with the arrow keys.
+    vcx.simulate_keystrokes("down right");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentOrientation)
+    );
+    assert_eq!(document(vcx).page.orientation, Orientation::Landscape);
+    let (sheet_width, sheet_height) = document(vcx).page.page_size();
+    assert!(sheet_width > sheet_height);
+
+    // Margins: millimetres by default, another unit when it is named.
+    vcx.simulate_keystrokes("down cmd-a");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentMarginTop));
+    vcx.simulate_input("20");
+    vcx.simulate_keystrokes("down cmd-a");
+    vcx.simulate_input("0.5in");
+    vcx.simulate_keystrokes("down cmd-a");
+    vcx.simulate_input("3cm");
+    vcx.simulate_keystrokes("down cmd-a");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentMarginRight)
+    );
+    vcx.simulate_input("24pt");
+    let margins = document(vcx).page.margins;
+    assert!((margins.top - 56.69).abs() < 0.01, "{margins:?}");
+    assert_eq!(margins.bottom, 36.);
+    assert!((margins.left - 85.04).abs() < 0.01, "{margins:?}");
+    assert_eq!(margins.right, 24.);
+    // A field that was left shows the value in the document's unit again;
+    // text that is no length changes nothing.
+    assert_eq!(field(SettingRow::DocumentMarginBottom, vcx), "12.7");
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("wide");
+    assert_eq!(document(vcx).page.margins.right, 24.);
+
+    // Typography: font, size, line height, paragraph spacing.
+    let font_before = document(vcx).typography.body_font.clone();
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentFont));
+    assert_eq!(field(SettingRow::DocumentMarginRight, vcx), "8.5");
+    vcx.simulate_keystrokes("right");
+    let fonts = vcx.update(|_, cx| writer_app::settings::available_fonts(&font_before, cx));
+    if fonts.len() > 1 {
+        assert_ne!(document(vcx).typography.body_font, font_before);
+    }
+    vcx.simulate_keystrokes("down right right");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentTextSize));
+    assert_eq!(
+        document(vcx).typography.base_size,
+        before.typography.base_size + 2.
+    );
+    vcx.simulate_keystrokes("down left");
+    assert!((document(vcx).typography.line_height - 1.5).abs() < 0.001);
+    vcx.simulate_keystrokes("down right");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentParagraphSpacing)
+    );
+    assert_eq!(document(vcx).typography.paragraph_spacing, 13.);
+    // The list ends here.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentParagraphSpacing)
+    );
+
+    // The defaults for new documents were not touched.
+    let settings = workspace.read_with(vcx, |w, _| w.settings().clone());
+    assert_eq!(
+        settings,
+        Settings {
+            comment_author: settings.comment_author.clone(),
+            ..Settings::default()
+        }
+    );
+
+    // Escape closes; the changes are the document's own: saved with it.
+    vcx.simulate_keystrokes("escape");
+    assert!(settings_view(&workspace, vcx).is_none());
+    assert!(editor_focused(&workspace, vcx));
+    assert!(workspace.read_with(vcx, |w, cx| w.editor().read(cx).page_view()));
+    vcx.executor()
+        .advance_clock(writer_app::workspace::AUTOSAVE_DELAY * 2);
+    vcx.run_until_parked();
+    let stored = library.read_with(vcx, |library, _| library.document(id).unwrap().content);
+    let reread = Document::from_json(&stored).unwrap();
+    assert_eq!(reread.settings(), &document(vcx));
+
+    // Back to a standard sheet: the custom rows go away.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.simulate_input("document settings");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let view = settings_view(&workspace, vcx).expect("the settings are open");
+    vcx.simulate_keystrokes("down left left");
+    assert_eq!(document(vcx).page.paper, PaperSize::A4);
+    assert!(
+        !view
+            .read_with(vcx, |view, cx| view.rows(cx))
+            .contains(&SettingRow::DocumentPaperWidth)
+    );
+    vcx.simulate_keystrokes("down");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentOrientation)
+    );
+    vcx.simulate_keystrokes("escape");
+
+    // Without a document there is no such section, and the command says so.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.close_document(window, cx)
+    });
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.toggle_document_settings(window, cx)
+    });
+    assert!(settings_view(&workspace, vcx).is_none());
+    vcx.simulate_keystrokes("cmd-,");
+    let view = settings_view(&workspace, vcx).expect("the settings are open");
+    assert_eq!(
+        view.read_with(vcx, |view, cx| view.rows(cx)),
+        SettingRow::APP.to_vec()
+    );
+}
+
+#[gpui::test]
+fn held_keys_follow_vim_mode_from_the_next_launch(cx: &mut TestAppContext) {
+    use writer_app::press_and_hold;
+
+    init(cx);
+    // As in the real app (without writing the user's preferences).
+    cx.update(press_and_hold::manage_without_writing);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Doc", "Text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let state = |cx: &mut VisualTestContext| cx.update(|_, cx| press_and_hold::state(cx));
+    let toasts = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            w.toast_layer()
+                .read(cx)
+                .toasts()
+                .map(|toast| toast.message.to_string())
+                .collect::<Vec<_>>()
+        })
+    };
+    let vim_text = |cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes("cmd-,");
+        let view = settings_view(&workspace, cx).expect("settings are open");
+        let text = view.read_with(cx, |view, cx| {
+            view.description(SettingRow::VimMode, cx).to_string()
+        });
+        cx.simulate_keystrokes("escape");
+        text
+    };
+
+    // Launched with Vim mode off: the accent menu is the system's, and
+    // nothing has to be said.
+    assert_eq!(state(vcx).repeats_now(), Some(false));
+    assert!(!state(vcx).relaunch_needed());
+    assert!(toasts(vcx).is_empty());
+    assert!(!vim_text(vcx).contains("Restart"));
+
+    // Vim mode on: stored for the next launch, and the app says that the
+    // rest follows then, once in a toast and in the settings.
+    vcx.simulate_keystrokes("cmd-alt-v");
+    assert!(workspace.read_with(vcx, |w, _| w.settings().vim_mode));
+    assert_eq!(state(vcx).repeats_next(), Some(true));
+    assert_eq!(state(vcx).repeats_now(), Some(false));
+    assert!(state(vcx).restart_note_due());
+    assert_eq!(toasts(vcx).len(), 1);
+    assert!(toasts(vcx)[0].contains("restarted"), "{:?}", toasts(vcx));
+    assert!(vim_text(vcx).contains("Restart The Writer to make held keys repeat"));
+
+    // Off again before any relaunch: back to what this launch does anyway.
+    vcx.simulate_keystrokes("cmd-alt-v");
+    assert!(!state(vcx).relaunch_needed());
+    assert!(!vim_text(vcx).contains("Restart"));
+    assert_eq!(toasts(vcx).len(), 1, "nothing new to say");
+
+    // The next launch, with Vim mode stored as on: in effect from the
+    // start, nothing to say; turning it off then needs a relaunch too.
+    vcx.simulate_keystrokes("cmd-alt-v");
+    cx.update(press_and_hold::reset);
+    let (second, vcx) = open_workspace(&library, cx);
+    let state = |cx: &mut VisualTestContext| cx.update(|_, cx| press_and_hold::state(cx));
+    assert!(second.read_with(vcx, |w, _| w.settings().vim_mode));
+    assert_eq!(state(vcx).repeats_now(), Some(true));
+    assert!(!state(vcx).relaunch_needed());
+    second.update(vcx, |workspace, cx| workspace.toggle_vim_mode(cx));
+    assert_eq!(state(vcx).repeats_next(), Some(false));
+    assert!(state(vcx).restart_note_due());
+}
+
+#[gpui::test]
+fn tests_and_scripted_runs_leave_the_user_default_alone(cx: &mut TestAppContext) {
+    use writer_app::press_and_hold;
+
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Doc", "Text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.simulate_keystrokes("cmd-alt-v");
+    let state = vcx.update(|_, cx| press_and_hold::state(cx));
+    // The bookkeeping is the same...
+    assert_eq!(state.repeats_next(), Some(true));
+    assert!(state.relaunch_needed());
+    // ...but nothing is stored, so nothing is promised for a relaunch.
+    assert!(!state.is_managed());
+    assert!(!state.restart_note_due());
+    let toasts = workspace.read_with(vcx, |w, cx| w.toast_layer().read(cx).toasts().count());
+    assert_eq!(toasts, 0);
 }

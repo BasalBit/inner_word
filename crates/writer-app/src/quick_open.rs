@@ -3,6 +3,11 @@
 //! Lists every document, most recently edited first, with its folder path
 //! as the detail. The query matches titles fuzzily. When nothing matches,
 //! the only row offers to create a document with the typed name.
+//!
+//! A title derived from the text can be eighty characters long. In a row
+//! that also names a folder it is cut short ([`clip_title`]) so the folder
+//! stays in view: two documents with the same opening words are told apart
+//! by where they are.
 
 use gpui::{App, Context, Entity, SharedString, WeakEntity, Window};
 use writer_library::{DocumentEntry, DocumentId, Library};
@@ -12,6 +17,33 @@ use crate::{document_io::UNTITLED, workspace::Workspace};
 
 /// Quick open as a modal view.
 pub type QuickOpen = Picker<QuickOpenDelegate>;
+
+/// The longest title, in characters, shown in a row that also names the
+/// document's folder.
+pub const MAX_TITLE_BESIDE_FOLDER: usize = 48;
+
+/// `title` cut to at most `max` characters (grapheme clusters), ending in an
+/// ellipsis when something was cut, with the match `positions` (byte
+/// offsets) that are still in view.
+pub fn clip_title(title: &str, positions: &[usize], max: usize) -> (String, Vec<usize>) {
+    use unicode_segmentation::UnicodeSegmentation;
+    let max = max.max(2);
+    let Some((cut, _)) = title.grapheme_indices(true).nth(max) else {
+        return (title.to_string(), positions.to_vec());
+    };
+    // Room for the ellipsis, and no space before it.
+    let keep = title
+        .grapheme_indices(true)
+        .nth(max - 1)
+        .map_or(cut, |(at, _)| at);
+    let kept = title[..keep].trim_end();
+    let positions = positions
+        .iter()
+        .copied()
+        .filter(|position| *position < kept.len())
+        .collect();
+    (format!("{kept}\u{2026}"), positions)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
@@ -120,13 +152,19 @@ impl PickerDelegate for QuickOpenDelegate {
             Row::Header(title) => PickerEntry::Header((*title).into()),
             Row::Document { index, positions } => {
                 let folder = self.documents[*index].folder_label();
-                let item = PickerItem::new(self.titles[*index].clone())
-                    .positions(positions.clone())
-                    .icon(IconName::Document);
+                let title = &self.titles[*index];
                 if folder.is_empty() {
-                    item.into()
+                    PickerItem::new(title.clone())
+                        .positions(positions.clone())
+                        .icon(IconName::Document)
+                        .into()
                 } else {
-                    item.detail(folder).into()
+                    let (title, positions) = clip_title(title, positions, MAX_TITLE_BESIDE_FOLDER);
+                    PickerItem::new(title)
+                        .positions(positions)
+                        .icon(IconName::Document)
+                        .detail(folder)
+                        .into()
                 }
             }
             Row::Create(name) => PickerItem::new(format!("Create “{name}”"))

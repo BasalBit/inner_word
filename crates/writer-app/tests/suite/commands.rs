@@ -68,6 +68,16 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
         );
     }
 
+    // One "New document" and one "New folder": the app's, which work from
+    // anywhere. The library panel's own are its keys in the sidebar.
+    for once in ["New document", "New folder", "Toggle Vim mode"] {
+        assert_eq!(
+            titles.iter().filter(|title| *title == once).count(),
+            1,
+            "{once} is listed once"
+        );
+    }
+
     // Under a category heading the row does not repeat the category.
     let details = |palette: &Entity<CommandPalette>, cx: &mut VisualTestContext| {
         palette.read_with(cx, |palette, cx| {
@@ -352,7 +362,11 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     // Keys without a command descriptor come from the keymap itself.
     assert_eq!(
         find("Move word left"),
-        ("Editing keys".into(), "Move word left".into(), "⌥←".into())
+        (
+            "Moving and selecting".into(),
+            "Move word left".into(),
+            "⌥←".into()
+        )
     );
     // Commands without a binding are not shortcuts.
     assert!(
@@ -360,14 +374,131 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
             .iter()
             .any(|(_, title, _)| title == "Use Night theme")
     );
-    // Nothing is listed twice.
-    let mut titles: Vec<_> = listed.iter().map(|(c, t, _)| (c, t)).collect();
+
+    // Every key is listed under where the keyboard has to be for it.
+    let placed = overlay.read_with(vcx, |overlay, _| {
+        overlay
+            .delegate
+            .listed()
+            .iter()
+            .map(|shortcut| {
+                (
+                    shortcut.title.to_string(),
+                    shortcut.place,
+                    shortcut.heading.to_string(),
+                    shortcut.keys.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    let place = |title: &str, keys: &str| {
+        placed
+            .iter()
+            .find(|(listed, _, _, listed_keys)| listed == title && listed_keys == keys)
+            .map(|(_, place, heading, _)| (*place, heading.clone()))
+            .unwrap_or_else(|| panic!("{title} ({keys}) is not listed"))
+    };
+    use writer_app::shortcuts::Place;
+    assert_eq!(
+        place("Command palette", "⇧⌘P"),
+        (Place::Anywhere, "Anywhere \u{b7} Go".into())
+    );
+    assert_eq!(
+        place("Bold", "⌘B"),
+        (Place::Text, "In the text \u{b7} Format".into())
+    );
+    assert_eq!(
+        place("Move word left", "⌥←"),
+        (
+            Place::Text,
+            "In the text \u{b7} Moving and selecting".into()
+        )
+    );
+    // The keys of the panels say that they are the panels' keys.
+    assert_eq!(
+        place("Rename", "R"),
+        (Place::Library, "In the library".into())
+    );
+    assert_eq!(
+        place("Move to trash", "⌘⌫"),
+        (Place::Library, "In the library".into())
+    );
+    // Creating a document has a key that works anywhere and the library's
+    // own; both are listed, each in its place.
+    assert_eq!(
+        place("New document", "⌘N"),
+        (Place::Anywhere, "Anywhere \u{b7} File".into())
+    );
+    assert_eq!(
+        place("New document", "N"),
+        (Place::Library, "In the library".into())
+    );
+    assert_eq!(place("Add comment", "⌥⌘M").0, Place::Anywhere);
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, heading, _)| *place == Place::CommentList
+                && heading == "In the comment list"),
+        "the comment list has keys of its own"
+    );
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, _, _)| *place == Place::FindBar)
+    );
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, heading, _)| *place == Place::VersionHistory
+                && heading == "In the version history")
+    );
+    // Nothing is listed twice in one place.
+    let mut titles: Vec<_> = placed.iter().map(|(t, _, h, _)| (h, t)).collect();
     let total = titles.len();
     titles.sort();
+    let all = titles.clone();
     titles.dedup();
-    assert_eq!(titles.len(), total);
+    assert_eq!(titles.len(), total, "{:?}", {
+        let mut twice = all.clone();
+        twice.retain(|entry| all.iter().filter(|other| *other == entry).count() > 1);
+        twice
+    });
+    // The places come in a fixed order, "Anywhere" first, and each heading
+    // appears once.
+    let places: Vec<Place> = placed.iter().map(|(_, place, _, _)| *place).collect();
+    assert!(places.is_sorted(), "{places:?}");
+    assert_eq!(places.first(), Some(&Place::Anywhere));
+    let headers = overlay.read_with(vcx, |overlay, cx| {
+        use writer_ui::{PickerDelegate, PickerEntry};
+        (0..overlay.delegate.entry_count())
+            .filter_map(|ix| match overlay.delegate.entry(ix, cx) {
+                PickerEntry::Header(title) => Some(title.to_string()),
+                PickerEntry::Item(_) => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut unique = headers.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), headers.len(), "{headers:?}");
+    assert_eq!(
+        headers.first().map(String::as_str),
+        Some("Anywhere \u{b7} File")
+    );
+    // Nothing is left without a place.
+    assert!(!places.contains(&Place::Elsewhere), "{placed:?}");
 
-    // Searchable, and enter runs the shortcut's command.
+    // Searchable (also by place), and enter runs the shortcut's command.
+    vcx.simulate_input("library rename");
+    let first = overlay.read_with(vcx, |overlay, _| {
+        overlay
+            .delegate
+            .listed()
+            .first()
+            .map(|s| (s.title.to_string(), s.place))
+    });
+    assert_eq!(first, Some(("Rename".to_string(), Place::Library)));
+    vcx.simulate_keystrokes("cmd-a");
     vcx.simulate_input("document end");
     let first = overlay.read_with(vcx, |overlay, _| {
         overlay
@@ -387,4 +518,73 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     });
     assert_eq!(head, end);
     let _ = (Movement::DocEnd, LibraryItem::Document);
+}
+
+#[gpui::test]
+fn quick_open_keeps_the_folder_in_view_beside_a_long_title(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        let novel = library.create_folder(None, "The Salt Road", cx).unwrap().id;
+        library
+            .create_folder(Some(novel), "Part one", cx)
+            .unwrap()
+            .id
+    });
+    // No heading: the title is derived from the first line, eighty
+    // characters of it.
+    let opening = "The ferry came in late, as it always did in October, and Mara was the only \
+                   passenger who stayed on deck to watch the harbour lights.";
+    let long = add_document(
+        &library,
+        Some(folder),
+        &Document::from_blocks(vec![Block::paragraph(opening)]),
+        cx,
+    );
+    let loose = add_document(
+        &library,
+        None,
+        &Document::from_blocks(vec![Block::paragraph(opening)]),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let stored_title =
+        library.read_with(vcx, |library, _| library.document_meta(long).unwrap().title);
+    assert!(stored_title.chars().count() > 60, "{stored_title}");
+
+    vcx.simulate_keystrokes("cmd-p");
+    let picker = modal!(workspace, vcx, QuickOpen).expect("quick open is open");
+    vcx.simulate_input("ferry mara");
+    let rows = picker.read_with(vcx, |picker, cx| {
+        use writer_ui::{PickerDelegate, PickerEntry};
+        let choices = picker.delegate.choices();
+        (0..picker.delegate.entry_count())
+            .filter_map(|ix| match picker.delegate.entry(ix, cx) {
+                PickerEntry::Item(item) => Some((
+                    item.label.to_string(),
+                    item.label_positions.clone(),
+                    item.detail.map(|detail| detail.to_string()),
+                )),
+                PickerEntry::Header(_) => None,
+            })
+            .zip(choices)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(rows.len(), 2);
+    for ((label, positions, detail), choice) in rows {
+        if choice == QuickOpenChoice::Open(long) {
+            // In a folder: the title is cut short, the folder path is there,
+            // and the marked matches are within what is shown.
+            assert_eq!(detail.as_deref(), Some("The Salt Road / Part one"));
+            assert!(label.chars().count() <= 48, "{label}");
+            assert!(label.ends_with('\u{2026}'));
+            assert!(!positions.is_empty());
+            assert!(positions.iter().all(|position| *position < label.len()));
+        } else {
+            // At the top level there is nothing to make room for.
+            assert_eq!(choice, QuickOpenChoice::Open(loose));
+            assert_eq!(detail, None);
+            assert_eq!(label, stored_title);
+        }
+    }
 }

@@ -308,3 +308,114 @@ pub fn seed_demo_library(library: &mut Library, cx: &mut gpui::Context<Library>)
     )?;
     Ok(())
 }
+
+/// A book-length document for measuring: `blocks` blocks, a chapter heading
+/// every forty, paragraphs of thirty to ninety words with a little inline
+/// formatting. The text is generated, the same for the same `blocks`.
+pub fn book_document(blocks: usize) -> Document {
+    const WORDS: [&str; 48] = [
+        "the",
+        "harbour",
+        "salt",
+        "letter",
+        "and",
+        "morning",
+        "she",
+        "walked",
+        "along",
+        "quay",
+        "where",
+        "nets",
+        "were",
+        "drying",
+        "in",
+        "a",
+        "wind",
+        "that",
+        "smelled",
+        "of",
+        "rain",
+        "nobody",
+        "remembered",
+        "her",
+        "name",
+        "but",
+        "house",
+        "on",
+        "hill",
+        "still",
+        "kept",
+        "its",
+        "door",
+        "ferry",
+        "came",
+        "late",
+        "as",
+        "it",
+        "always",
+        "did",
+        "October",
+        "with",
+        "one",
+        "lamp",
+        "burning",
+        "over",
+        "water",
+        "again",
+    ];
+    // A small linear congruential generator: no dependency, stable output.
+    let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut next = move |bound: usize| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((seed >> 33) as usize) % bound.max(1)
+    };
+    let sentence = |words: usize, next: &mut dyn FnMut(usize) -> usize| {
+        let mut text = String::new();
+        for ix in 0..words {
+            let word = WORDS[next(WORDS.len())];
+            if ix == 0 {
+                let mut chars = word.chars();
+                if let Some(first) = chars.next() {
+                    text.extend(first.to_uppercase());
+                    text.push_str(chars.as_str());
+                }
+            } else {
+                text.push(' ');
+                text.push_str(word);
+            }
+        }
+        text.push('.');
+        text
+    };
+    let mut out = Vec::with_capacity(blocks.max(1));
+    for ix in 0..blocks.max(1) {
+        if ix % 40 == 0 {
+            out.push(heading(
+                if ix == 0 { 1 } else { 2 },
+                &format!("Chapter {}", ix / 40 + 1),
+            ));
+            continue;
+        }
+        let mut block = Block::new(BlockKind::Paragraph);
+        let sentences = 3 + next(5);
+        for s in 0..sentences {
+            let words = 8 + next(12);
+            let text = sentence(words, &mut next);
+            let attrs = match next(12) {
+                0 => InlineAttrs::default().with(InlineStyle::Italic),
+                1 => InlineAttrs::default().with(InlineStyle::Bold),
+                _ => InlineAttrs::default(),
+            };
+            let text = if s + 1 < sentences {
+                format!("{text} ")
+            } else {
+                text
+            };
+            block = block.with_span(&text, attrs);
+        }
+        out.push(block);
+    }
+    Document::from_blocks(out)
+}

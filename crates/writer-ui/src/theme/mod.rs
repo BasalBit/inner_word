@@ -396,6 +396,20 @@ impl Theme {
     }
 }
 
+/// Focus ring for keyboard-focused controls (fields, buttons, switches): a
+/// 3px translucent accent halo drawn outside the control's bounds. Use it on
+/// controls with an opaque background; the halo is a filled shadow and would
+/// tint a transparent control's interior.
+pub fn focus_ring(colors: &ThemeColors) -> Vec<BoxShadow> {
+    let alpha = if colors.appearance.is_dark() { 0.45 } else { 0.30 };
+    vec![BoxShadow {
+        color: colors.accent.alpha(alpha),
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(3.),
+    }]
+}
+
 fn with_fallbacks(mut font: Font, stack: &[&str]) -> Font {
     let fallbacks: Vec<String> = stack
         .iter()

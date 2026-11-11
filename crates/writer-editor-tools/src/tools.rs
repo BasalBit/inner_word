@@ -11,6 +11,7 @@ use crate::{
     actions::*,
     find::{FindBar, FindState},
     font_picker::FontMenu,
+    format_bar::FormatBar,
     format_menu::FormatMenu,
     insert_menu::InsertMenu,
     link::LinkTool,
@@ -129,6 +130,8 @@ pub struct EditorTools {
     pub(crate) text_menu: Option<OpenTextMenu>,
     /// The host's items for the text context menu.
     pub(crate) text_menu_extension: Option<TextMenuExtension>,
+    /// The floating format bar.
+    pub(crate) format_bar: FormatBar,
     /// This view, for the handlers of menu items.
     pub(crate) this: WeakEntity<Self>,
     _subscriptions: Vec<Subscription>,
@@ -156,7 +159,15 @@ impl EditorTools {
             cx.observe_global::<GlobalTheme>(|this, cx| {
                 this.apply_find_highlights(cx);
                 this.retheme_format_menu(cx);
+                this.format_bar.forget_snapshot();
                 cx.notify();
+            }),
+            // The format bar belongs to the moment after a mouse
+            // selection: it does not wait behind another app.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.dismiss_format_bar(cx);
+                }
             }),
         ];
         Self {
@@ -168,6 +179,7 @@ impl EditorTools {
             slash_typed: false,
             text_menu: None,
             text_menu_extension: None,
+            format_bar: FormatBar::default(),
             this: cx.weak_entity(),
             _subscriptions: subscriptions,
         }
@@ -217,6 +229,7 @@ impl EditorTools {
 
     /// Closes whatever is open and returns focus to the editor.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_format_bar(cx);
         self.close_text_menu(window, cx);
         self.close_popup(false, window, cx);
         self.close_find_bar(cx);
@@ -290,6 +303,8 @@ impl EditorTools {
         cx: &mut Context<Self>,
     ) {
         let kind = tool.kind();
+        // A popup tool takes the format bar's place.
+        self.dismiss_format_bar(cx);
         self.editor.update(cx, |editor, cx| {
             editor.show_popup(view, anchor, PopupPlacement::Below, cx)
         });
@@ -420,6 +435,8 @@ impl EditorTools {
             EditorEvent::TextInput { text, .. } => {
                 // Announces the `Edited` of the same insertion.
                 self.slash_typed = text == "/";
+                // Typing is the keyboard's: the format bar goes.
+                self.dismiss_format_bar(cx);
             }
             EditorEvent::Edited { change } => {
                 // Only typing opens the insert menu: an edit that was not
@@ -438,6 +455,7 @@ impl EditorTools {
                 }
             }
             EditorEvent::SelectionChanged => {
+                self.format_bar_selection_changed(cx);
                 if matches!(self.popup, Some(PopupTool::Insert(_))) {
                     self.sync_insert_menu(window, cx);
                 }
@@ -446,6 +464,8 @@ impl EditorTools {
                 }
             }
             EditorEvent::Blurred => {
+                // The format bar is for the text that has the keyboard.
+                self.dismiss_format_bar(cx);
                 // The insert menu lives on the editor's keyboard focus. A
                 // deactivated window is not a reason to close it.
                 if matches!(self.popup, Some(PopupTool::Insert(_))) && window.is_window_active() {
@@ -456,6 +476,7 @@ impl EditorTools {
                 self.open_text_menu(request.clone(), window, cx);
             }
             EditorEvent::DocumentReplaced => {
+                self.format_bar_document_replaced(cx);
                 // The menu was composed for the old document.
                 self.close_text_menu(window, cx);
                 // The editor dropped its popup and its highlight layers. If
@@ -479,11 +500,13 @@ impl EditorTools {
 
     /// `escape` with the keyboard in the document (the fields of the tools
     /// take their own `escape`): closes what is open, one thing at a time,
-    /// the popup tool before the find bar. With nothing open the key goes
-    /// on.
+    /// the popup tool or the format bar before the find bar. With nothing
+    /// open the key goes on.
     fn on_close_tool(&mut self, _: &CloseTool, window: &mut Window, cx: &mut Context<Self>) {
         if self.popup.is_some() {
             self.close_popup(true, window, cx);
+        } else if self.format_bar_pending_or_visible() {
+            self.dismiss_format_bar(cx);
         } else if self.find_bar.is_some() {
             self.close_find(window, cx);
         } else if !self.end_find_flash(cx) {
@@ -583,6 +606,7 @@ impl Render for EditorTools {
                     .min_h_0()
                     .relative()
                     .child(self.editor.clone())
+                    .children(self.render_format_bar_layer(cx))
                     .children(self.render_find_flash(cx)),
             )
             .children(bottom)

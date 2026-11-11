@@ -34,7 +34,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Action, App, ClipboardItem, Context, DismissEvent, Entity, SharedString, Subscription,
+    Action, App, ClipboardItem, Context, DismissEvent, Entity, Hsla, SharedString, Subscription,
     WeakEntity, Window,
 };
 use writer_core::{BlockKind, Choice, TextRange};
@@ -84,6 +84,8 @@ struct Row {
     key_hint: Option<KeyHint>,
     /// `Some` for a row with a state: its check mark column.
     checked: Option<bool>,
+    /// The colour a row stands for (a highlight, a text colour).
+    swatch: Option<Hsla>,
     enabled: bool,
     what: What,
 }
@@ -94,6 +96,7 @@ impl Row {
             label: label.into(),
             key_hint: None,
             checked: None,
+            swatch: None,
             enabled: true,
             what,
         }
@@ -118,6 +121,7 @@ impl Row {
             effect => What::Run(Run::Format(effect.clone())),
         };
         let mut row = Self::new(item.short, what).key(item.key_hint.clone());
+        row.swatch = item.swatch;
         if state {
             row.checked = Some(item.mark == Mark::Check);
         }
@@ -164,6 +168,10 @@ impl Row {
             ),
         };
         let item = item.key_hint(self.key_hint).disabled(!self.enabled);
+        let item = match self.swatch {
+            Some(color) => item.swatch(color),
+            None => item,
+        };
         match self.checked {
             Some(checked) => item.checked(checked),
             None => item,
@@ -243,6 +251,8 @@ impl EditorTools {
         cx: &mut Context<Self>,
     ) {
         self.close_popup(false, window, cx);
+        // The menu is what the pointer asked for now.
+        self.dismiss_format_bar(cx);
         let mut items = self.text_menu_items(&request, cx);
         let extension = self.text_menu_extension.clone();
         let caret = self.editor.read(cx).caret_bounds();

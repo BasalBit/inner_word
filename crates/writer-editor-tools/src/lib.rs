@@ -137,6 +137,7 @@ pub mod actions;
 mod commands;
 mod find;
 mod font_picker;
+mod format_bar;
 mod format_menu;
 mod insert_menu;
 mod link;
@@ -152,6 +153,7 @@ pub use font_picker::{
     FontLibrary, RECENT_FONT_LIMIT, WRITING_FONTS, font_families, recent_fonts, set_font_families,
     set_recent_fonts,
 };
+pub use format_bar::{FORMAT_BAR_BUTTONS, FORMAT_BAR_DELAY, FormatBarButton, FormatBarItem};
 pub use format_menu::TEXT_COLORS;
 pub use menu::Mark;
 #[doc(hidden)]

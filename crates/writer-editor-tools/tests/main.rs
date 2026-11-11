@@ -3,6 +3,7 @@
 
 mod find;
 mod font_picker;
+mod format_bar;
 mod format_menu;
 mod insert_menu;
 mod integration;

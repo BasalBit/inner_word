@@ -143,6 +143,16 @@ impl Render for Root {
     }
 }
 
+/// Confirms the open "this cannot be undone" dialog with its key. The shared dialog is
+/// changing while this is written: a destructive one starts on Cancel and confirms with
+/// `cmd-enter`; before that change `enter` confirmed it. Either is accepted here.
+fn confirm_for_good(panel: &Entity<LibraryPanel>, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("cmd-enter");
+    if panel.read_with(cx, |p, cx| p.modal_layer().read(cx).has_modal()) {
+        cx.simulate_keystrokes("enter");
+    }
+}
+
 fn fixture(cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
     cx.update(|cx| {
         writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
@@ -1032,8 +1042,9 @@ fn trash_view_restore_delete_and_empty(cx: &mut TestAppContext) {
     // The panel's keys do not act behind the dialog.
     cx.simulate_keystrokes("cmd-backspace r j escape");
     assert_eq!(trash(cx), vec![Document(f.at_root)]);
-    // enter confirms.
-    cx.simulate_keystrokes("cmd-backspace enter");
+    // What cannot be undone has a key of its own.
+    cx.simulate_keystrokes("cmd-backspace");
+    confirm_for_good(&f.panel, cx);
     assert!(!has_modal(cx));
     assert!(trash(cx).is_empty());
     assert!(
@@ -1068,7 +1079,8 @@ fn trash_view_restore_delete_and_empty(cx: &mut TestAppContext) {
     assert!(has_modal(cx));
     cx.simulate_keystrokes("escape");
     assert_eq!(trash(cx).len(), 2);
-    cx.simulate_keystrokes("cmd-shift-backspace enter");
+    cx.simulate_keystrokes("cmd-shift-backspace");
+    confirm_for_good(&f.panel, cx);
     assert!(trash(cx).is_empty());
     assert_eq!(f.toasts(cx), vec!["Deleted 2 documents and 1 folder."]);
     // Nothing is left to undo.
@@ -1822,7 +1834,7 @@ fn the_panel_can_use_the_window_modal_layer(cx: &mut TestAppContext) {
     // So do the confirmations.
     cx.simulate_keystrokes("cmd-backspace t cmd-backspace");
     assert!(modal_layer.read_with(cx, |layer, _| layer.is_open::<ConfirmDialog>()));
-    cx.simulate_keystrokes("enter");
+    confirm_for_good(&panel, cx);
     assert!(!modal_layer.read_with(cx, |layer, _| layer.has_modal()));
     assert!(library.read_with(cx, |l, _| l.trash().unwrap().is_empty()));
     assert!(library.read_with(cx, |l, _| l.document_meta(document).is_err()));

@@ -28,14 +28,21 @@ pub(super) struct DraggedItem {
     pub label: SharedString,
 }
 
-/// What follows the pointer during a drag: the icon and name of the dragged item.
+/// What follows the pointer during a drag: the icon and name of the dragged item, a little
+/// below and to the right of the pointer, so the row under the pointer stays readable.
 pub(super) struct DragPreview {
     dragged: DraggedItem,
+    /// Where in its row the pointer was when the drag began. GPUI draws this view that
+    /// far up and left of the pointer.
+    grabbed_at: gpui::Point<Pixels>,
 }
 
 impl DragPreview {
-    pub fn new(dragged: DraggedItem) -> Self {
-        Self { dragged }
+    pub fn new(dragged: DraggedItem, grabbed_at: gpui::Point<Pixels>) -> Self {
+        Self {
+            dragged,
+            grabbed_at,
+        }
     }
 }
 
@@ -43,7 +50,7 @@ impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = theme.colors;
-        div()
+        let label = div()
             .flex()
             .items_center()
             .gap(SPACE_2)
@@ -65,7 +72,11 @@ impl Render for DragPreview {
                 })
                 .color(colors.muted),
             )
-            .child(div().min_w_0().truncate().child(self.dragged.label.clone()))
+            .child(div().min_w_0().truncate().child(self.dragged.label.clone()));
+        div()
+            .pl(self.grabbed_at.x + px(14.))
+            .pt(self.grabbed_at.y + px(12.))
+            .child(label)
     }
 }
 

@@ -6,11 +6,11 @@
 //! count as a click on the row around the button.
 
 use gpui::{
-    ElementId, Hsla, InteractiveElement, ParentElement, Pixels, Stateful,
+    AppContext, ElementId, Hsla, InteractiveElement, ParentElement, Pixels, Stateful,
     StatefulInteractiveElement, Styled, div, px,
 };
 use writer_ui::theme::{RADIUS_SM, SPACE_1, ThemeColors};
-use writer_ui::{Icon, IconName, KeyHint, Tooltip};
+use writer_ui::{ContextMenu, Icon, IconName, KeyHint, Tooltip};
 
 /// Side of an icon button.
 pub(super) const ICON_BUTTON: Pixels = px(20.);
@@ -37,6 +37,7 @@ pub(super) fn icon_button(
     colors: &ThemeColors,
 ) -> Stateful<gpui::Div> {
     let (hover, pressed) = (hover_fill(colors), rest_fill(colors));
+    let tooltip = Tooltip::new(label).key_hint(hint).build();
     div()
         .id(id)
         .flex()
@@ -47,7 +48,14 @@ pub(super) fn icon_button(
         .rounded(RADIUS_SM)
         .hover(move |style| style.bg(hover))
         .active(move |style| style.bg(pressed))
-        .tooltip(Tooltip::new(label).key_hint(hint).build())
+        .tooltip(move |window, cx| {
+            // Not over the menu that the button has just opened.
+            if ContextMenu::is_open(window, cx) {
+                cx.new(|_| gpui::EmptyView).into()
+            } else {
+                tooltip(window, cx)
+            }
+        })
         .child(Icon::new(icon).size(px(14.)).color(colors.muted))
 }
 

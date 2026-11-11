@@ -767,7 +767,9 @@ impl LibraryPanel {
                                 item: row.item,
                                 label: row.label.clone(),
                             },
-                            |dragged, _, _, cx| cx.new(|_| DragPreview::new(dragged.clone())),
+                            |dragged, grabbed_at, _, cx| {
+                                cx.new(|_| DragPreview::new(dragged.clone(), grabbed_at))
+                            },
                         )
                     })
                     .on_drag_move::<DraggedItem>(cx.listener(

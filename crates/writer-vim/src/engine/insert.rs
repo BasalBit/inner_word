@@ -305,7 +305,10 @@ impl Vim {
         if p.offset <= ls {
             return;
         }
-        let prev = Position::new(p.block, buf::prev_boundary(buf::text_of(doc, p.block), p.offset));
+        let prev = Position::new(
+            p.block,
+            buf::prev_boundary(buf::text_of(doc, p.block), p.offset),
+        );
         match s.overwritten.pop() {
             Some(original) => {
                 if let Some(InsertAction::Text(t)) = s.actions.last_mut() {
@@ -360,7 +363,8 @@ impl Vim {
                 o = q;
             }
         }
-        cx.ed.delete_range(TextRange::in_block(p.block, o, p.offset));
+        cx.ed
+            .delete_range(TextRange::in_block(p.block, o, p.offset));
     }
 
     /// `ctrl-u`: deletes back to the start of the line.
@@ -370,7 +374,8 @@ impl Vim {
         if p.offset <= ls {
             cx.ed.backspace();
         } else {
-            cx.ed.delete_range(TextRange::in_block(p.block, ls, p.offset));
+            cx.ed
+                .delete_range(TextRange::in_block(p.block, ls, p.offset));
         }
     }
 
@@ -387,7 +392,12 @@ impl Vim {
     }
 
     /// Does `actions` again at the caret.
-    pub(crate) fn apply_insert_actions(&mut self, cx: &mut Cx, actions: &[InsertAction], replace: bool) {
+    pub(crate) fn apply_insert_actions(
+        &mut self,
+        cx: &mut Cx,
+        actions: &[InsertAction],
+        replace: bool,
+    ) {
         for a in actions {
             match a {
                 InsertAction::Text(s) => {
@@ -459,11 +469,13 @@ impl Vim {
                 .collect();
             if below {
                 let ins = format!("\n{indent}");
-                cx.ed.replace_range(TextRange::in_block(p.block, le, le), &ins);
+                cx.ed
+                    .replace_range(TextRange::in_block(p.block, le, le), &ins);
                 cx.ed.set_caret(Position::new(p.block, le + ins.len()));
             } else {
                 let ins = format!("{indent}\n");
-                cx.ed.replace_range(TextRange::in_block(p.block, ls, ls), &ins);
+                cx.ed
+                    .replace_range(TextRange::in_block(p.block, ls, ls), &ins);
                 cx.ed.set_caret(Position::new(p.block, ls + indent.len()));
             }
             return;
@@ -502,7 +514,10 @@ impl Vim {
         let doc = cx.ed.document();
         let ls = buf::line_start(doc, head);
         let back = if head.offset > ls {
-            Position::new(head.block, buf::prev_boundary(buf::text_of(doc, head.block), head.offset))
+            Position::new(
+                head.block,
+                buf::prev_boundary(buf::text_of(doc, head.block), head.offset),
+            )
         } else {
             head
         };

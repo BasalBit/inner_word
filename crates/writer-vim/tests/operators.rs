@@ -304,7 +304,11 @@ fn counts_on_both_sides() {
         c("|a\nb\nc\nd\ne", "2d2d", "|e"),
         c("|abcdefgh", "2y3l", "|abcdefgh").regs(&[('"', "abcdef")]),
         c("|a b c d e f g", "2c3wX<Esc>", "|X g"),
-        c("|a\nb\nc\nd\ne\nf", "2>2j", "{1}|a\n{1}b\n{1}c\n{1}d\n{1}e\nf"),
+        c(
+            "|a\nb\nc\nd\ne\nf",
+            "2>2j",
+            "{1}|a\n{1}b\n{1}c\n{1}d\n{1}e\nf",
+        ),
         // A zero after a digit is part of the count.
         c("|abcdefghijklm", "10x", "|klm"),
         c("|abcdefghijklm", "d10l", "|klm"),
@@ -331,7 +335,9 @@ fn more_motions_after_operators() {
     run(&[
         c("a\n|b\nc\nd", "dL", "a\n|d").height(3),
         c("a\n|b\nc\nd", "dH", "|c\nd").height(3),
-        c("a\n|b\nc\nd", "yM", "a\n|b\nc\nd").height(3).regs(&[('"', "b\n")]),
+        c("a\n|b\nc\nd", "yM", "a\n|b\nc\nd")
+            .height(3)
+            .regs(&[('"', "b\n")]),
         c("a |bc  ", "dg_", "a |  "),
         c("abcde|fghij", "dg0", "abcde|fghij").width(5),
         c("abcdef|ghij", "dg0", "abcde|ghij").width(5),
@@ -367,10 +373,11 @@ fn every_operator_with_every_motion() {
     let buffer = "One two. Three (four) five\nsec|ond \"line\" here. More\n\n  last one";
     let operators = ["d", "c", "y", ">", "<", "gu", "gU", "g~"];
     let motions = [
-        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0", "g$", "gg",
-        "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", ";", ",", "%", "H", "M", "L", "*", "#", "n",
-        "N", "+", "-", "_", "<Space>", "<BS>", "gj", "gk", "|", "3|", "2w", "3l", "'a", "`a", "/one<CR>",
-        "?One<CR>", "iw", "aw", "iW", "aW", "is", "as", "ip", "ap", "i\"", "a\"", "i(", "a(", "ib",
+        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0",
+        "g$", "gg", "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", ";", ",", "%", "H", "M",
+        "L", "*", "#", "n", "N", "+", "-", "_", "<Space>", "<BS>", "gj", "gk", "|", "3|", "2w",
+        "3l", "'a", "`a", "/one<CR>", "?One<CR>", "iw", "aw", "iW", "aW", "is", "as", "ip", "ap",
+        "i\"", "a\"", "i(", "a(", "ib",
     ];
     let mut failures = Vec::new();
     for op in operators {
@@ -429,9 +436,10 @@ fn every_motion_in_visual_mode() {
     use writer_vim::Mode;
     let buffer = "One two. Three (four) five\nsec|ond \"line\" here. More\n\n  last one";
     let motions = [
-        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0", "g$", "gg",
-        "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", "%", "H", "M", "L", "*", "#", "+", "-", "_",
-        "<Space>", "<BS>", "iw", "aw", "is", "as", "ip", "ap", "i\"", "a\"", "i(", "a(", "o", "/one<CR>",
+        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0",
+        "g$", "gg", "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", "%", "H", "M", "L", "*",
+        "#", "+", "-", "_", "<Space>", "<BS>", "iw", "aw", "is", "as", "ip", "ap", "i\"", "a\"",
+        "i(", "a(", "o", "/one<CR>",
     ];
     let mut failures = Vec::new();
     for start in ["v", "V"] {

@@ -40,10 +40,15 @@ fn which_keys_are_consumed() {
     // Insert mode: only what Vim owns.
     let mut s = Session::new("|abc");
     s.keys("i");
-    for k in ["a", "Z", " ", "<CR>", "<BS>", "<Del>", "<Tab>", "<Left>", "<Up>", "<C-a>", "<C-e>", "<C-d>", "<C-k>", "<C-n>", "<A-BS>", "<S-CR>"] {
+    for k in [
+        "a", "Z", " ", "<CR>", "<BS>", "<Del>", "<Tab>", "<Left>", "<Up>", "<C-a>", "<C-e>",
+        "<C-d>", "<C-k>", "<C-n>", "<A-BS>", "<S-CR>",
+    ] {
         assert!(!consumed(&mut s, k), "{k} must be left to the host");
     }
-    for k in ["<C-w>", "<C-u>", "<C-h>", "<C-r>", "a", "<C-o>", "l", "<Esc>"] {
+    for k in [
+        "<C-w>", "<C-u>", "<C-h>", "<C-r>", "a", "<C-o>", "l", "<Esc>",
+    ] {
         assert!(consumed(&mut s, k), "{k} must be consumed");
     }
     assert_eq!(s.mode(), Mode::Normal);
@@ -249,7 +254,10 @@ fn registers_through_the_api() {
     // The clipboard registers go to the host.
     s.vim
         .set_register('+', RegisterContent::from_plain_text("clip"), &mut s.host);
-    assert_eq!(s.host.clipboard.as_ref().map(|c| c.text()).as_deref(), Some("clip"));
+    assert_eq!(
+        s.host.clipboard.as_ref().map(|c| c.text()).as_deref(),
+        Some("clip")
+    );
     s.keys("iabc def<Esc>");
     assert_eq!(s.vim.last_inserted_text(), "abc def");
 }
@@ -275,7 +283,11 @@ fn options() {
     s.clear_effects();
     s.keys("/bar<CR>");
     assert!(s.vim.search_highlight().is_none());
-    assert!(!s.effects.iter().any(|e| matches!(e, Effect::SearchHighlight(Some(_)))));
+    assert!(
+        !s.effects
+            .iter()
+            .any(|e| matches!(e, Effect::SearchHighlight(Some(_))))
+    );
     assert!(s.vim.search_pattern().is_some());
     // Options can change later.
     let mut o = s.vim.options().clone();

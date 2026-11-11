@@ -7,7 +7,13 @@ use writer_vim::{Mode, Scroll, ScrollAlign, VimOptions};
 /// Twenty one-row blocks `l0` … `l19`, five rows visible, caret on `line`.
 fn tall(line: usize) -> Session {
     let buffer: Vec<String> = (0..20)
-        .map(|i| if i == line { format!("|l{i}") } else { format!("l{i}") })
+        .map(|i| {
+            if i == line {
+                format!("|l{i}")
+            } else {
+                format!("l{i}")
+            }
+        })
         .collect();
     let mut s = Session::with(&buffer.join("\n"), 1000, 5, VimOptions::default());
     s.clear_effects();
@@ -148,7 +154,12 @@ fn scrolling_in_visual_mode_extends_the_selection() {
 #[test]
 fn wrapped_rows_count_as_rows() {
     // One block of 30 characters in rows of 5, then short lines.
-    let mut s = Session::with("|abcdefghijklmnopqrstuvwxyz1234\nx\ny", 5, 4, VimOptions::default());
+    let mut s = Session::with(
+        "|abcdefghijklmnopqrstuvwxyz1234\nx\ny",
+        5,
+        4,
+        VimOptions::default(),
+    );
     s.keys("<C-d>");
     assert_eq!(s.host.scrolls, vec![Scroll::Rows(2)]);
     assert_eq!(s.buffer(), "abcdefghij|klmnopqrstuvwxyz1234\nx\ny");

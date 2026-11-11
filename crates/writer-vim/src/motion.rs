@@ -4,8 +4,8 @@
 use writer_core::{Document, Position};
 
 use crate::buf::{
-    self, BlockClass, Class, ClassOpts, block_class, class_at, is_empty_line, is_newline, next_cell,
-    prev_cell, text_of,
+    self, BlockClass, Class, ClassOpts, block_class, class_at, is_empty_line, is_newline,
+    next_cell, prev_cell, text_of,
 };
 
 /// `w` / `W`: forward to the start of the `count`th next word.
@@ -114,7 +114,12 @@ pub(crate) fn word_end(
 }
 
 /// `b` / `B`: backward to the start of the `count`th previous word.
-pub(crate) fn word_backward(doc: &Document, start: Position, count: usize, opts: ClassOpts) -> Position {
+pub(crate) fn word_backward(
+    doc: &Document,
+    start: Position,
+    count: usize,
+    opts: ClassOpts,
+) -> Position {
     let cls = |p: Position| class_at(doc, p, opts);
     let mut p = start;
     'counts: for _ in 0..count {
@@ -202,7 +207,11 @@ pub(crate) fn find_char(
     let matches = |o: usize| t[o..].starts_with(ch);
     let mut found = 0;
     if forward {
-        let mut o = if from.offset < le { buf::next_boundary(t, from.offset) } else { le };
+        let mut o = if from.offset < le {
+            buf::next_boundary(t, from.offset)
+        } else {
+            le
+        };
         if till && skip_adjacent && o < le {
             o = buf::next_boundary(t, o);
         }
@@ -290,7 +299,10 @@ fn is_cjk_sentence_end(c: char) -> bool {
 }
 
 fn is_closer(c: char) -> bool {
-    matches!(c, ')' | ']' | '"' | '\'' | '\u{201D}' | '\u{2019}' | '\u{00BB}')
+    matches!(
+        c,
+        ')' | ']' | '"' | '\'' | '\u{201D}' | '\u{2019}' | '\u{00BB}'
+    )
 }
 
 /// One sentence of a block: `start..end` covers the sentence and the white
@@ -428,7 +440,13 @@ const PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
 
 /// The partner of the bracket `open`/`close` at `at`, scanning the whole
 /// document with nesting.
-pub(crate) fn match_bracket(doc: &Document, at: Position, open: char, close: char, forward: bool) -> Option<Position> {
+pub(crate) fn match_bracket(
+    doc: &Document,
+    at: Position,
+    open: char,
+    close: char,
+    forward: bool,
+) -> Option<Position> {
     let mut depth = 0usize;
     if forward {
         let mut b = at.block;
@@ -489,7 +507,13 @@ pub(crate) fn match_pair(doc: &Document, from: Position) -> Option<Position> {
                 return match_bracket(doc, Position::new(from.block, start + i), open, close, true);
             }
             if c == close {
-                return match_bracket(doc, Position::new(from.block, start + i), open, close, false);
+                return match_bracket(
+                    doc,
+                    Position::new(from.block, start + i),
+                    open,
+                    close,
+                    false,
+                );
             }
         }
     }
@@ -505,7 +529,10 @@ mod tests {
         let t = "One. Two two!  Three (three)? \"Four.\" Five";
         let s = sentences(t);
         let texts: Vec<&str> = s.iter().map(|s| &t[s.start..s.text_end]).collect();
-        assert_eq!(texts, ["One.", "Two two!", "Three (three)?", "\"Four.\"", "Five"]);
+        assert_eq!(
+            texts,
+            ["One.", "Two two!", "Three (three)?", "\"Four.\"", "Five"]
+        );
         assert_eq!(&t[s[1].start..s[1].end], "Two two!  ");
         assert_eq!(s[4].end, t.len());
         let t = "  lead. e.g. not split";

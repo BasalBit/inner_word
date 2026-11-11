@@ -387,8 +387,7 @@ impl Vim {
             Base::Replace => CaretShape::Underline,
             Base::Visual { .. } => CaretShape::Block,
             Base::Normal => {
-                if self.pending.operator.is_some()
-                    || self.pending.awaiting == Some(Await::Replace)
+                if self.pending.operator.is_some() || self.pending.awaiting == Some(Await::Replace)
                 {
                     CaretShape::Underline
                 } else {
@@ -469,7 +468,12 @@ impl Vim {
     /// `ctrl-o`, `ctrl-r`, and backspace in Replace mode); the host handles
     /// every other key as it would without Vim and reports typed text
     /// through [`Vim::text_inserted`].
-    pub fn handle_key(&mut self, key: Key, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+    pub fn handle_key(
+        &mut self,
+        key: Key,
+        ed: &mut EditorState,
+        host: &mut dyn VimHost,
+    ) -> Outcome {
         let mut cx = Cx { ed, host };
         let one_shot = self.resume.is_some();
         let consumed = self.dispatch(key, &mut cx);
@@ -515,14 +519,21 @@ impl Vim {
         }
     }
 
-    /// Tells the engine that the host inserted `text` at the caret through
+    /// Tells the engine that the host inserts `text` at the caret through
     /// its normal typing path (a typed character or committed IME text).
-    /// Call it after the document changed, with the text as typed.
+    /// Call it once per insertion, with the text as typed, right after the
+    /// document changed (right before works too, as long as the insertion
+    /// then happens at the same caret).
     ///
     /// In Insert mode this feeds dot-repeat, counts (`3ihello`) and the `.`
     /// register. In Replace mode the engine also removes the characters the
     /// new text overwrites. In other modes it does nothing.
-    pub fn text_inserted(&mut self, text: &str, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+    pub fn text_inserted(
+        &mut self,
+        text: &str,
+        ed: &mut EditorState,
+        host: &mut dyn VimHost,
+    ) -> Outcome {
         let mut cx = Cx { ed, host };
         self.note_inserted(text, &mut cx);
         self.finish(true)
@@ -531,7 +542,12 @@ impl Vim {
     /// Types `text` into the command line (for text that does not arrive as
     /// keys, such as committed IME input while `:` or `/` is open). Does
     /// nothing when the command line is closed.
-    pub fn command_line_input(&mut self, text: &str, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+    pub fn command_line_input(
+        &mut self,
+        text: &str,
+        ed: &mut EditorState,
+        host: &mut dyn VimHost,
+    ) -> Outcome {
         let mut cx = Cx { ed, host };
         let used = self.cmdline.is_some();
         if used {
@@ -542,7 +558,12 @@ impl Vim {
 
     /// Runs an ex command line (without the leading `:`), as if it had been
     /// typed and confirmed. For command palette entries and tests.
-    pub fn execute(&mut self, command: &str, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+    pub fn execute(
+        &mut self,
+        command: &str,
+        ed: &mut EditorState,
+        host: &mut dyn VimHost,
+    ) -> Outcome {
         let mut cx = Cx { ed, host };
         if matches!(self.base, Base::Insert | Base::Replace) {
             self.leave_insert(&mut cx);
@@ -585,6 +606,13 @@ impl Vim {
     /// state.
     pub fn attach(&mut self, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
         let mut cx = Cx { ed, host };
+        if let Some(s) = self.insert.take()
+            && s.group_open
+        {
+            // Attached again without a detach: do not leave the undo group
+            // of the old session open.
+            cx.ed.end_undo_group();
+        }
         self.reset_transient();
         self.marks.clear();
         self.jumps = JumpList::default();
@@ -655,9 +683,15 @@ impl Vim {
                     let doc = cx.ed.document();
                     let line = matches!(self.base, Base::Visual { line: true });
                     let (anchor, cursor) = if sel.head >= sel.anchor {
-                        (sel.anchor, buf::prev_cell(doc, sel.head).unwrap_or(sel.head))
+                        (
+                            sel.anchor,
+                            buf::prev_cell(doc, sel.head).unwrap_or(sel.head),
+                        )
                     } else {
-                        (buf::prev_cell(doc, sel.anchor).unwrap_or(sel.anchor), sel.head)
+                        (
+                            buf::prev_cell(doc, sel.anchor).unwrap_or(sel.anchor),
+                            sel.head,
+                        )
                     };
                     self.visual = VisualState { anchor, cursor };
                     self.base = Base::Visual { line };

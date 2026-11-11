@@ -27,10 +27,18 @@ pub(crate) enum Motion {
     LineUp,
     /// `_`: `count - 1` line units down, to the first non-blank.
     LineHere,
-    WordForward { big: bool },
-    WordBackward { big: bool },
-    WordEnd { big: bool },
-    WordEndBackward { big: bool },
+    WordForward {
+        big: bool,
+    },
+    WordBackward {
+        big: bool,
+    },
+    WordEnd {
+        big: bool,
+    },
+    WordEndBackward {
+        big: bool,
+    },
     LineStart,
     FirstNonBlank,
     LineEnd,
@@ -50,13 +58,17 @@ pub(crate) enum Motion {
     SentenceForward,
     SentenceBackward,
     Find(FindSpec),
-    RepeatFind { reverse: bool },
+    RepeatFind {
+        reverse: bool,
+    },
     MatchPair,
     ViewTop,
     ViewMiddle,
     ViewBottom,
     /// `n`, `N`, and the motion of `/`, `?`, `*`, `#`.
-    Search { reverse: bool },
+    Search {
+        reverse: bool,
+    },
     MarkLine(char),
     MarkExact(char),
 }
@@ -117,7 +129,12 @@ fn jump(pos: Position, kind: MotionKind) -> MotionOut {
 impl Vim {
     /// Moves `rows` visual rows from `from`, keeping the goal column.
     /// `None` when the caret cannot move (first or last row).
-    pub(crate) fn move_rows(&mut self, cx: &mut Cx, from: Position, rows: isize) -> Option<Position> {
+    pub(crate) fn move_rows(
+        &mut self,
+        cx: &mut Cx,
+        from: Position,
+        rows: isize,
+    ) -> Option<Position> {
         let doc = cx.ed.document();
         let goal = match self.goal {
             Some(g) => g,
@@ -312,7 +329,10 @@ impl Vim {
                 }
                 let e = buf::line_end(doc, p);
                 let s = buf::line_start(doc, p);
-                out(Position::new(p.block, buf::last_non_blank(doc, p.block, s, e)), Inclusive)
+                out(
+                    Position::new(p.block, buf::last_non_blank(doc, p.block, s, e)),
+                    Inclusive,
+                )
             }
             Motion::RowStart | Motion::RowFirstNonBlank | Motion::RowEnd => {
                 let row = cx.host.visual_row(cx.ed, origin);
@@ -320,9 +340,15 @@ impl Vim {
                 let re = row.end.clamp(rs, t.len());
                 match m {
                     Motion::RowStart => out(at(rs), Exclusive),
-                    Motion::RowFirstNonBlank => out(at(buf::first_non_blank(doc, b, rs).min(re)), Exclusive),
+                    Motion::RowFirstNonBlank => {
+                        out(at(buf::first_non_blank(doc, b, rs).min(re)), Exclusive)
+                    }
                     _ => {
-                        let last = if re > rs { buf::prev_boundary(t, re) } else { rs };
+                        let last = if re > rs {
+                            buf::prev_boundary(t, re)
+                        } else {
+                            rs
+                        };
                         MotionOut {
                             goal: GoalUpdate::End,
                             ..out(at(last), Inclusive)
@@ -401,11 +427,19 @@ impl Vim {
                     Motion::ViewTop => {
                         let p = cx.host.move_by_rows(cx.ed, vp.top, n as isize - 1, x);
                         // Never below the last visible row.
-                        if doc.clamp_position(p) > vp.bottom { vp.bottom } else { p }
+                        if doc.clamp_position(p) > vp.bottom {
+                            vp.bottom
+                        } else {
+                            p
+                        }
                     }
                     Motion::ViewBottom => {
                         let p = cx.host.move_by_rows(cx.ed, vp.bottom, -(n as isize - 1), x);
-                        if doc.clamp_position(p) < vp.top { vp.top } else { p }
+                        if doc.clamp_position(p) < vp.top {
+                            vp.top
+                        } else {
+                            p
+                        }
                     }
                     _ => cx
                         .host
@@ -451,7 +485,10 @@ impl Vim {
                     return None;
                 };
                 let doc = cx.ed.document();
-                jump(buf::unit_first_non_blank(doc, buf::unit_at(doc, p)), Linewise)
+                jump(
+                    buf::unit_first_non_blank(doc, buf::unit_at(doc, p)),
+                    Linewise,
+                )
             }
             Motion::MarkExact(c) => {
                 let Some(p) = self.mark_position(cx, c) else {
@@ -468,7 +505,11 @@ impl Vim {
     /// a line.
     pub(crate) fn motion_target(&self, cx: &Cx, origin: Position, m: &MotionOut) -> Target {
         let doc = cx.ed.document();
-        let (s, e) = if origin <= m.pos { (origin, m.pos) } else { (m.pos, origin) };
+        let (s, e) = if origin <= m.pos {
+            (origin, m.pos)
+        } else {
+            (m.pos, origin)
+        };
         match m.kind {
             MotionKind::Linewise => Target::Lines(buf::lines_between(doc, s, e)),
             MotionKind::Inclusive => Target::Chars(TextRange::new(s, buf::cell_end(doc, e))),
@@ -528,6 +569,10 @@ impl Vim {
         let doc = cx.ed.document();
         let u = buf::unit_at(doc, origin);
         let last = buf::unit_offset(doc, u, count.max(1) as isize - 1);
-        buf::lines_between(doc, Position::new(u.block, u.start), Position::new(last.block, last.start))
+        buf::lines_between(
+            doc,
+            Position::new(u.block, u.start),
+            Position::new(last.block, last.start),
+        )
     }
 }

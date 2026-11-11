@@ -46,7 +46,11 @@ pub(crate) fn word(
     let runs = class_runs(doc, at, opts);
     if runs.is_empty() {
         // An empty line: nothing to select.
-        return if around { None } else { Some(TextRange::empty(at)) };
+        return if around {
+            None
+        } else {
+            Some(TextRange::empty(at))
+        };
     }
     let le = runs.last().map(|(r, _)| r.end).unwrap_or(at.offset);
     let o = if at.offset >= le {
@@ -101,7 +105,12 @@ pub(crate) fn word(
 }
 
 /// `is` / `as` in the block of `at`.
-pub(crate) fn sentence(doc: &Document, at: Position, around: bool, count: usize) -> Option<TextRange> {
+pub(crate) fn sentence(
+    doc: &Document,
+    at: Position,
+    around: bool,
+    count: usize,
+) -> Option<TextRange> {
     let t = text_of(doc, at.block);
     let ss = sentences(t);
     if ss.is_empty() {
@@ -126,7 +135,11 @@ pub(crate) fn sentence(doc: &Document, at: Position, around: bool, count: usize)
                 end = ss[j].end;
             } else {
                 // No white space after: take the white space before.
-                start = if i > 0 { ss[i - 1].text_end } else { ss[i].start };
+                start = if i > 0 {
+                    ss[i - 1].text_end
+                } else {
+                    ss[i].start
+                };
                 end = ss[j].text_end;
             }
         }
@@ -265,7 +278,14 @@ fn is_word_apostrophe(t: &str, i: usize, c: char) -> bool {
     before.is_some_and(char::is_alphanumeric) && after.is_some_and(char::is_alphanumeric)
 }
 
-fn curly_quotes(t: &str, ls: usize, le: usize, o: usize, open: char, close: char) -> Option<Quoted> {
+fn curly_quotes(
+    t: &str,
+    ls: usize,
+    le: usize,
+    o: usize,
+    open: char,
+    close: char,
+) -> Option<Quoted> {
     // (offset, is_open) of every quote mark on the line; an apostrophe
     // inside a word is not a closing quote.
     let marks: Vec<(usize, bool)> = t[ls..le]
@@ -351,10 +371,18 @@ pub(crate) fn quote(doc: &Document, at: Position, q: char, around: bool) -> Opti
             (true, false) => a,
             (false, true) => b,
             (true, true) => {
-                if a.close - a.open <= b.close - b.open { a } else { b }
+                if a.close - a.open <= b.close - b.open {
+                    a
+                } else {
+                    b
+                }
             }
             (false, false) => {
-                if a.open <= b.open { a } else { b }
+                if a.open <= b.open {
+                    a
+                } else {
+                    b
+                }
             }
         },
         (Some(a), None) => a,
@@ -521,13 +549,25 @@ mod tests {
         assert_eq!(r(&d, quote(&d, at(6), '"', true)), "\"hi there\" ");
         assert_eq!(r(&d, quote(&d, at(0), '"', false)), "hi there");
         assert_eq!(r(&d, quote(&d, at(25), '"', false)), "curly one");
-        assert_eq!(r(&d, quote(&d, at(25), '"', true)), "\u{201C}curly one\u{201D} ");
+        assert_eq!(
+            r(&d, quote(&d, at(25), '"', true)),
+            "\u{201C}curly one\u{201D} "
+        );
         let d = doc("f(a, (b + c), d) [x]");
         assert_eq!(r(&d, bracket(&d, at(7), '(', ')', false, 1)), "b + c");
         assert_eq!(r(&d, bracket(&d, at(7), '(', ')', true, 1)), "(b + c)");
-        assert_eq!(r(&d, bracket(&d, at(7), '(', ')', false, 2)), "a, (b + c), d");
-        assert_eq!(r(&d, bracket(&d, at(1), '(', ')', false, 1)), "a, (b + c), d");
-        assert_eq!(r(&d, bracket(&d, at(15), '(', ')', false, 1)), "a, (b + c), d");
+        assert_eq!(
+            r(&d, bracket(&d, at(7), '(', ')', false, 2)),
+            "a, (b + c), d"
+        );
+        assert_eq!(
+            r(&d, bracket(&d, at(1), '(', ')', false, 1)),
+            "a, (b + c), d"
+        );
+        assert_eq!(
+            r(&d, bracket(&d, at(15), '(', ')', false, 1)),
+            "a, (b + c), d"
+        );
         assert_eq!(r(&d, bracket(&d, at(18), '[', ']', false, 1)), "x");
         assert_eq!(r(&d, bracket(&d, at(0), '(', ')', false, 1)), "<none>");
         let d = doc("it\u{2019}s \u{2018}a don\u{2019}t b\u{2019} x");

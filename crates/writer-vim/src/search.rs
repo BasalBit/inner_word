@@ -98,7 +98,12 @@ pub(crate) struct Found {
 
 /// The next match that starts after `from` (forward) or before it
 /// (backward), wrapping around the document.
-pub(crate) fn find(doc: &Document, pat: &SearchPattern, from: Position, forward: bool) -> Option<Found> {
+pub(crate) fn find(
+    doc: &Document,
+    pat: &SearchPattern,
+    from: Position,
+    forward: bool,
+) -> Option<Found> {
     let n = doc.block_count();
     let hit = |b: usize, r: std::ops::Range<usize>, wrapped: bool| Found {
         range: TextRange::in_block(b, r.start, r.end),
@@ -127,7 +132,9 @@ pub(crate) fn find(doc: &Document, pat: &SearchPattern, from: Position, forward:
                 return Some(hit(b, r, b > from.block));
             }
         }
-        here.into_iter().next_back().map(|r| hit(from.block, r, true))
+        here.into_iter()
+            .next_back()
+            .map(|r| hit(from.block, r, true))
     }
 }
 

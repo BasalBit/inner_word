@@ -13,8 +13,12 @@ fn undo_and_redo() {
         c("|abcd", "xxx2u", "|bcd"),
         c("|abcd", "xxx3u2<C-r>", "|cd"),
         c("|abcd", "xxx9u", "|abcd"),
-        c("|a", "u", "|a").message("Already at oldest change").bell(true),
-        c("|a", "<C-r>", "|a").message("Already at newest change").bell(true),
+        c("|a", "u", "|a")
+            .message("Already at oldest change")
+            .bell(true),
+        c("|a", "<C-r>", "|a")
+            .message("Already at newest change")
+            .bell(true),
         // A new change ends redo.
         c("|abc", "xuix<Esc><C-r>", "|xabc").message("Already at newest change"),
         // Yanking and moving are not changes.

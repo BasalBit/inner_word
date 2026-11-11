@@ -366,7 +366,12 @@ impl Vim {
     }
 
     /// The blocks a range names; `default` when no range was given.
-    fn resolve_range(&mut self, cx: &Cx, r: RangeSpec, default: Range<usize>) -> Option<Range<usize>> {
+    fn resolve_range(
+        &mut self,
+        cx: &Cx,
+        r: RangeSpec,
+        default: Range<usize>,
+    ) -> Option<Range<usize>> {
         let n = cx.ed.document().block_count();
         Some(match r {
             RangeSpec::None => default,
@@ -413,7 +418,8 @@ impl Vim {
                     return;
                 };
                 let doc = cx.ed.document();
-                let target = buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(r.end - 1, 0)));
+                let target =
+                    buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(r.end - 1, 0)));
                 self.push_jump(cx, origin);
                 self.leave_visual_quietly(cx);
                 self.set_normal_caret(cx, target);
@@ -431,10 +437,12 @@ impl Vim {
                 }
             }
             ExCommand::Quit { force } => {
-                self.effects.push(Effect::Request(HostRequest::Close { force }));
+                self.effects
+                    .push(Effect::Request(HostRequest::Close { force }));
             }
             ExCommand::WriteQuit => {
-                self.effects.push(Effect::Request(HostRequest::SaveAndClose));
+                self.effects
+                    .push(Effect::Request(HostRequest::SaveAndClose));
             }
             ExCommand::Delete { register } | ExCommand::Yank { register } => {
                 let Some(r) = self.resolve_range(cx, parsed.range, here) else {
@@ -591,7 +599,11 @@ impl Vim {
             return;
         };
         let plural = |n: usize, word: &str| {
-            if n == 1 { format!("{n} {word}") } else { format!("{n} {word}s") }
+            if n == 1 {
+                format!("{n} {word}")
+            } else {
+                format!("{n} {word}s")
+            }
         };
         if args.count_only {
             self.set_normal_caret(cx, origin);

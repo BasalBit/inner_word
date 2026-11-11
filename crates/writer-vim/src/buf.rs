@@ -91,7 +91,10 @@ pub(crate) fn next_cell(doc: &Document, p: Position) -> Option<Position> {
 /// start of the document.
 pub(crate) fn prev_cell(doc: &Document, p: Position) -> Option<Position> {
     if p.offset > 0 {
-        Some(Position::new(p.block, prev_boundary(text_of(doc, p.block), p.offset)))
+        Some(Position::new(
+            p.block,
+            prev_boundary(text_of(doc, p.block), p.offset),
+        ))
     } else if p.block > 0 {
         Some(Position::new(p.block - 1, len_of(doc, p.block - 1)))
     } else {
@@ -117,7 +120,6 @@ pub(crate) fn grapheme_at(doc: &Document, p: Position) -> &str {
     let t = text_of(doc, p.block);
     &t[p.offset..next_boundary(t, p.offset)]
 }
-
 
 /// The offset of the last character cell of the hard line `ls..le` (`ls`
 /// when the line is empty).
@@ -331,7 +333,11 @@ pub(crate) fn unit_prev(doc: &Document, u: Unit) -> Option<Unit> {
 pub(crate) fn unit_offset(doc: &Document, u: Unit, n: isize) -> Unit {
     let mut cur = u;
     for _ in 0..n.unsigned_abs() {
-        let next = if n > 0 { unit_next(doc, cur) } else { unit_prev(doc, cur) };
+        let next = if n > 0 {
+            unit_next(doc, cur)
+        } else {
+            unit_prev(doc, cur)
+        };
         match next {
             Some(x) => cur = x,
             None => break,

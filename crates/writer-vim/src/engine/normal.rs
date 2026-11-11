@@ -3,8 +3,8 @@
 use writer_core::{Position, Selection, TextRange};
 
 use crate::buf::{self, Class, Lines};
-use crate::host::{GoalColumn, Scroll, ScrollAlign};
 use crate::effect::{Effect, HostRequest};
+use crate::host::{GoalColumn, Scroll, ScrollAlign};
 use crate::key::{Key, KeyCode};
 use crate::motion;
 use crate::register;
@@ -15,7 +15,10 @@ use super::cmdline::CmdKind;
 use super::marks::Mark;
 use super::motions::{GoalUpdate, Motion, MotionKind, MotionOut};
 use super::operators::OpInfo;
-use super::{Await, Base, ChangeRecord, Cx, FindSpec, Operator, Pending, SavedVisual, Vim, VisualRepeat, VisualState};
+use super::{
+    Await, Base, ChangeRecord, Cx, FindSpec, Operator, Pending, SavedVisual, Vim, VisualRepeat,
+    VisualState,
+};
 
 /// A key reduced to what the command tables look at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +64,9 @@ impl Vim {
                     Position::new(r.start, 0),
                     Position::new(r.end - 1, buf::len_of(doc, r.end - 1)),
                 ),
-                Lines::Code { block, start, end } => (Position::new(block, start), Position::new(block, end)),
+                Lines::Code { block, start, end } => {
+                    (Position::new(block, start), Position::new(block, end))
+                }
             }
         } else {
             (s, visual_end(doc, e))
@@ -93,7 +98,10 @@ impl Vim {
 
     fn enter_visual(&mut self, cx: &mut Cx, line: bool) {
         let c = self.cursor(cx);
-        self.visual = VisualState { anchor: c, cursor: c };
+        self.visual = VisualState {
+            anchor: c,
+            cursor: c,
+        };
         self.base = Base::Visual { line };
         self.sync_visual_selection(cx);
     }
@@ -267,7 +275,12 @@ impl Vim {
             && (c != '0' || self.pending.count.is_some())
         {
             let d = c as usize - '0' as usize;
-            let n = self.pending.count.unwrap_or(0).saturating_mul(10).saturating_add(d);
+            let n = self
+                .pending
+                .count
+                .unwrap_or(0)
+                .saturating_mul(10)
+                .saturating_add(d);
             self.pending.count = Some(n.min(999_999));
             self.pending.display.push(c);
             return true;
@@ -298,7 +311,9 @@ impl Vim {
             Tok::Ch('l') | Tok::Named(KeyCode::Right) => Motion::Right,
             Tok::Named(KeyCode::Backspace) | Tok::Ctrl('h') => Motion::WrapLeft,
             Tok::Ch(' ') => Motion::WrapRight,
-            Tok::Ch('j') | Tok::Named(KeyCode::Down) | Tok::Ctrl('n') | Tok::Ctrl('j') => Motion::Down,
+            Tok::Ch('j') | Tok::Named(KeyCode::Down) | Tok::Ctrl('n') | Tok::Ctrl('j') => {
+                Motion::Down
+            }
             Tok::Ch('k') | Tok::Named(KeyCode::Up) | Tok::Ctrl('p') => Motion::Up,
             Tok::Ch('+') | Tok::Named(KeyCode::Enter) | Tok::Ctrl('m') => Motion::LineDown,
             Tok::Ch('-') => Motion::LineUp,
@@ -595,7 +610,23 @@ impl Vim {
             GoalUpdate::Clear => self.goal = None,
             GoalUpdate::End => self.goal = Some(GoalColumn::EndOfRow),
         }
-        if self.cursor(cx) == before && !matches!(m, Motion::LineStart | Motion::FirstNonBlank | Motion::LineEnd | Motion::LineHere | Motion::Column | Motion::RowStart | Motion::RowFirstNonBlank | Motion::RowEnd | Motion::LastNonBlank | Motion::FirstLine | Motion::LastLine | Motion::Percent) {
+        if self.cursor(cx) == before
+            && !matches!(
+                m,
+                Motion::LineStart
+                    | Motion::FirstNonBlank
+                    | Motion::LineEnd
+                    | Motion::LineHere
+                    | Motion::Column
+                    | Motion::RowStart
+                    | Motion::RowFirstNonBlank
+                    | Motion::RowEnd
+                    | Motion::LastNonBlank
+                    | Motion::FirstLine
+                    | Motion::LastLine
+                    | Motion::Percent
+            )
+        {
             self.bell();
         }
         self.finish_command(cx, false);
@@ -604,7 +635,12 @@ impl Vim {
     /// The word a `*` at `at` searches for: the keyword under or after the
     /// caret on its line, else the run of other non-blank characters.
     /// Returns the text, whether it is a keyword, and where it starts.
-    pub(crate) fn word_under(&self, cx: &Cx, at: Position, big: bool) -> Option<(String, bool, Position)> {
+    pub(crate) fn word_under(
+        &self,
+        cx: &Cx,
+        at: Position,
+        big: bool,
+    ) -> Option<(String, bool, Position)> {
         let doc = cx.ed.document();
         let opts = self.class_opts(big);
         let t = buf::text_of(doc, at.block);
@@ -714,7 +750,14 @@ impl Vim {
                     self.fail();
                     return;
                 };
-                self.run_motion(cx, if exact { Motion::MarkExact(c) } else { Motion::MarkLine(c) });
+                self.run_motion(
+                    cx,
+                    if exact {
+                        Motion::MarkExact(c)
+                    } else {
+                        Motion::MarkLine(c)
+                    },
+                );
             }
             Await::SetMark => {
                 let Tok::Ch(c) = t else {
@@ -773,11 +816,13 @@ impl Vim {
             }
             Await::BigZ => match t {
                 Tok::Ch('Z') => {
-                    self.effects.push(Effect::Request(HostRequest::SaveAndClose));
+                    self.effects
+                        .push(Effect::Request(HostRequest::SaveAndClose));
                     self.finish_command(cx, false);
                 }
                 Tok::Ch('Q') => {
-                    self.effects.push(Effect::Request(HostRequest::Close { force: true }));
+                    self.effects
+                        .push(Effect::Request(HostRequest::Close { force: true }));
                     self.finish_command(cx, false);
                 }
                 _ => self.fail(),
@@ -859,9 +904,8 @@ impl Vim {
         let doc = cx.ed.document();
         // With something already selected, a word, sentence or paragraph
         // object adds the next one.
-        let extending = visual
-            && self.visual.anchor < self.visual.cursor
-            && matches!(c, 'w' | 'W' | 's' | 'p');
+        let extending =
+            visual && self.visual.anchor < self.visual.cursor && matches!(c, 'w' | 'W' | 's' | 'p');
         if extending {
             let next = if c == 'p' {
                 (at.block + 1 < doc.block_count()).then(|| Position::new(at.block + 1, 0))
@@ -936,7 +980,9 @@ impl Vim {
             Target::Lines(l) => {
                 let (s, e) = match l {
                     Lines::Blocks(r) => (Position::new(r.start, 0), Position::new(r.end - 1, 0)),
-                    Lines::Code { block, start, end } => (Position::new(block, start), Position::new(block, end)),
+                    Lines::Code { block, start, end } => {
+                        (Position::new(block, start), Position::new(block, end))
+                    }
                 };
                 if !extending {
                     self.visual.anchor = s;
@@ -964,7 +1010,10 @@ impl Vim {
         if self.is_visual() {
             self.save_visual(cx);
         }
-        self.visual = VisualState { anchor: a, cursor: c };
+        self.visual = VisualState {
+            anchor: a,
+            cursor: c,
+        };
         self.base = Base::Visual { line: saved.line };
         self.sync_visual_selection(cx);
     }
@@ -1011,7 +1060,10 @@ impl Vim {
             let o = buf::advance_graphemes(t, 0, v.cols.saturating_sub(1), le);
             buf::clamp_normal(doc, Position::new(last_block, o))
         };
-        self.visual = VisualState { anchor: start, cursor };
+        self.visual = VisualState {
+            anchor: start,
+            cursor,
+        };
         self.base = Base::Visual { line: v.line };
         self.sync_visual_selection(cx);
     }
@@ -1020,10 +1072,14 @@ impl Vim {
 
     fn visual_key(&mut self, t: Tok, cx: &mut Cx) -> bool {
         match t {
-            Tok::Ch('x') | Tok::Named(KeyCode::Delete) => self.visual_operator(cx, Operator::Delete, false),
+            Tok::Ch('x') | Tok::Named(KeyCode::Delete) => {
+                self.visual_operator(cx, Operator::Delete, false)
+            }
             Tok::Ch('X') | Tok::Ch('D') => self.visual_operator(cx, Operator::Delete, true),
             Tok::Ch('s') => self.visual_operator(cx, Operator::Change, false),
-            Tok::Ch('C') | Tok::Ch('S') | Tok::Ch('R') => self.visual_operator(cx, Operator::Change, true),
+            Tok::Ch('C') | Tok::Ch('S') | Tok::Ch('R') => {
+                self.visual_operator(cx, Operator::Change, true)
+            }
             Tok::Ch('Y') => self.visual_operator(cx, Operator::Yank, true),
             Tok::Ch('u') => self.visual_operator(cx, Operator::Lower, false),
             Tok::Ch('U') => self.visual_operator(cx, Operator::Upper, false),
@@ -1066,7 +1122,9 @@ impl Vim {
                 self.finish_command(cx, false);
             }
             Tok::Ch(':') => {
-                self.save_visual(cx);
+                // The selection becomes the range; Visual mode ends, as in
+                // Vim (escape then returns to Normal mode).
+                self.exit_visual(cx);
                 self.open_cmdline(cx, CmdKind::Ex, "'<,'>");
             }
             Tok::Ch('m') => self.pending.awaiting = Some(Await::SetMark),
@@ -1106,18 +1164,39 @@ impl Vim {
                     self.fail();
                     return true;
                 }
-                self.run_operator(cx, Operator::Delete, Target::Chars(range), range.start, false, false);
+                self.run_operator(
+                    cx,
+                    Operator::Delete,
+                    Target::Chars(range),
+                    range.start,
+                    false,
+                    false,
+                );
             }
             Tok::Ch('s') => {
                 let doc = cx.ed.document();
                 let le = buf::line_end(doc, cur);
                 let o = buf::advance_graphemes(buf::text_of(doc, cur.block), cur.offset, n, le);
                 let range = TextRange::in_block(cur.block, cur.offset, o);
-                self.run_operator(cx, Operator::Change, Target::Chars(range), cur, false, false);
+                self.run_operator(
+                    cx,
+                    Operator::Change,
+                    Target::Chars(range),
+                    cur,
+                    false,
+                    false,
+                );
             }
             Tok::Ch('S') => {
                 let lines = self.lines_from_cursor(cx, cur, n);
-                self.run_operator(cx, Operator::Change, Target::Lines(lines), cur, false, false);
+                self.run_operator(
+                    cx,
+                    Operator::Change,
+                    Target::Lines(lines),
+                    cur,
+                    false,
+                    false,
+                );
             }
             Tok::Ch('D') | Tok::Ch('C') => {
                 // To the end of the line, and `count - 1` more lines.
@@ -1126,7 +1205,11 @@ impl Vim {
                     return true;
                 };
                 let target = Target::Chars(TextRange::new(cur, m.pos));
-                let op = if t == Tok::Ch('D') { Operator::Delete } else { Operator::Change };
+                let op = if t == Tok::Ch('D') {
+                    Operator::Delete
+                } else {
+                    Operator::Change
+                };
                 self.run_operator(cx, op, target, cur, false, false);
             }
             Tok::Ch('Y') => {
@@ -1164,7 +1247,9 @@ impl Vim {
                 let at = match t {
                     Tok::Ch('i') => cur,
                     Tok::Ch('a') => buf::cell_end(doc, cur),
-                    Tok::Ch('I') => Position::new(cur.block, buf::first_non_blank(doc, cur.block, ls).min(le)),
+                    Tok::Ch('I') => {
+                        Position::new(cur.block, buf::first_non_blank(doc, cur.block, ls).min(le))
+                    }
                     _ => Position::new(cur.block, le),
                 };
                 cx.ed.set_caret(at);
@@ -1189,7 +1274,12 @@ impl Vim {
                     } else {
                         let doc = cx.ed.document();
                         let le = buf::line_end(doc, cur);
-                        let o = buf::advance_graphemes(buf::text_of(doc, cur.block), cur.offset, n - 1, le);
+                        let o = buf::advance_graphemes(
+                            buf::text_of(doc, cur.block),
+                            cur.offset,
+                            n - 1,
+                            le,
+                        );
                         self.visual.cursor = buf::clamp_normal(doc, Position::new(cur.block, o));
                     }
                     self.sync_visual_selection(cx);
@@ -1203,7 +1293,11 @@ impl Vim {
             Tok::Ch(':') => {
                 let initial = if self.pending.count.is_some() {
                     // `3:` starts with a range of three lines.
-                    if n > 1 { format!(".,.+{}", n - 1) } else { ".".to_string() }
+                    if n > 1 {
+                        format!(".,.+{}", n - 1)
+                    } else {
+                        ".".to_string()
+                    }
                 } else {
                     String::new()
                 };
@@ -1425,10 +1519,14 @@ impl Vim {
             Tok::Ctrl('y') => (-(counted.unwrap_or(1) as isize), false),
             Tok::Ctrl('d') => (counted.unwrap_or((page / 2).max(1)) as isize, true),
             Tok::Ctrl('u') => (-(counted.unwrap_or((page / 2).max(1)) as isize), true),
-            Tok::Ctrl('f') | Tok::Named(KeyCode::PageDown) => {
-                ((page.saturating_sub(2).max(1) * counted.unwrap_or(1)) as isize, true)
-            }
-            _ => (-((page.saturating_sub(2).max(1) * counted.unwrap_or(1)) as isize), true),
+            Tok::Ctrl('f') | Tok::Named(KeyCode::PageDown) => (
+                (page.saturating_sub(2).max(1) * counted.unwrap_or(1)) as isize,
+                true,
+            ),
+            _ => (
+                -((page.saturating_sub(2).max(1) * counted.unwrap_or(1)) as isize),
+                true,
+            ),
         };
         cx.host.scroll(cx.ed, Scroll::Rows(rows));
         if with_caret {
@@ -1455,7 +1553,8 @@ impl Vim {
             ));
             let top_row = cx.host.visual_row(cx.ed, top);
             let bottom_row = cx.host.visual_row(cx.ed, bottom);
-            let above = cur.block < top.block || (cur.block == top.block && cur.offset < top_row.start);
+            let above =
+                cur.block < top.block || (cur.block == top.block && cur.offset < top_row.start);
             let below = cur.block > bottom.block
                 || (cur.block == bottom.block
                     && if bottom_row.is_empty() {

@@ -23,12 +23,12 @@
 use std::ops::Range;
 
 use writer_core::{
-    Block, BlockKind, Document, EditorOptions, EditorState, Fragment, InlineAttrs, Movement, Position,
-    Selection, text,
+    Block, BlockKind, Document, EditorOptions, EditorState, Fragment, InlineAttrs, Movement,
+    Position, Selection, text,
 };
 use writer_vim::{
-    Effect, GoalColumn, HostRequest, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll, ScrollAlign,
-    Viewport, Vim, VimHost, VimOptions,
+    Effect, GoalColumn, HostRequest, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll,
+    ScrollAlign, Viewport, Vim, VimHost, VimOptions,
 };
 
 // ----- the mock host -------------------------------------------------------------------------
@@ -69,7 +69,9 @@ impl MockHost {
             let t = b.text();
             let mut line_start = 0;
             loop {
-                let line_end = t[line_start..].find('\n').map_or(t.len(), |i| line_start + i);
+                let line_end = t[line_start..]
+                    .find('\n')
+                    .map_or(t.len(), |i| line_start + i);
                 if line_start == line_end {
                     out.push(Row {
                         block: bi,
@@ -113,7 +115,8 @@ impl MockHost {
             }
             best = i;
             let at_line_end = r.end >= t.len() || t.as_bytes()[r.end] == b'\n';
-            if (r.start <= pos.offset && pos.offset < r.end) || (pos.offset == r.end && at_line_end) {
+            if (r.start <= pos.offset && pos.offset < r.end) || (pos.offset == r.end && at_line_end)
+            {
                 return i;
             }
         }
@@ -154,7 +157,13 @@ impl VimHost for MockHost {
         text::grapheme_count(&t[r.start..upto]) as f32
     }
 
-    fn move_by_rows(&mut self, state: &EditorState, from: Position, rows: isize, goal: GoalColumn) -> Position {
+    fn move_by_rows(
+        &mut self,
+        state: &EditorState,
+        from: Position,
+        rows: isize,
+        goal: GoalColumn,
+    ) -> Position {
         let doc = state.document();
         let all = self.rows(doc);
         let i = self.row_index(doc, from) as isize;
@@ -250,9 +259,16 @@ fn parse_buffer(src: &str) -> ParsedBuffer {
             indent = n;
             line = &rest[close + 1..];
         }
-        let bare: String = line.chars().filter(|c| *c != CARET && *c != ANCHOR).collect();
+        let bare: String = line
+            .chars()
+            .filter(|c| *c != CARET && *c != ANCHOR)
+            .collect();
         if bare == "---" || bare == "===" {
-            let kind = if bare == "---" { BlockKind::Divider } else { BlockKind::PageBreak };
+            let kind = if bare == "---" {
+                BlockKind::Divider
+            } else {
+                BlockKind::PageBreak
+            };
             if line.contains(CARET) {
                 caret = Some(Position::new(bi, 0));
             }
@@ -327,7 +343,11 @@ fn render_block(b: &Block, caret: Option<usize>, anchor: Option<usize>) -> Strin
     match b.kind() {
         BlockKind::Divider | BlockKind::PageBreak => {
             mark(&mut out, 0);
-            out.push_str(if *b.kind() == BlockKind::Divider { "---" } else { "===" });
+            out.push_str(if *b.kind() == BlockKind::Divider {
+                "---"
+            } else {
+                "==="
+            });
             return out;
         }
         BlockKind::Paragraph => {}
@@ -628,7 +648,10 @@ impl Session {
     }
 
     pub fn bells(&self) -> usize {
-        self.effects.iter().filter(|e| matches!(e, Effect::Bell)).count()
+        self.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Bell))
+            .count()
     }
 
     pub fn clear_effects(&mut self) {
@@ -788,10 +811,17 @@ impl Case {
         let mut problems = Vec::new();
         let got = s.buffer();
         if got != self.expect {
-            problems.push(format!("buffer: expected {:?}\n              got {:?}", self.expect, got));
+            problems.push(format!(
+                "buffer: expected {:?}\n              got {:?}",
+                self.expect, got
+            ));
         }
         if s.mode() != self.mode {
-            problems.push(format!("mode: expected {:?}, got {:?}", self.mode, s.mode()));
+            problems.push(format!(
+                "mode: expected {:?}, got {:?}",
+                self.mode,
+                s.mode()
+            ));
         }
         for (name, want) in self.regs {
             let got = s.reg(*name);
@@ -808,7 +838,10 @@ impl Case {
         if let Some(want) = self.message
             && !s.messages().iter().any(|m| m.contains(want))
         {
-            problems.push(format!("message: expected one containing {want:?}, got {:?}", s.messages()));
+            problems.push(format!(
+                "message: expected one containing {want:?}, got {:?}",
+                s.messages()
+            ));
         }
         if let Some(want) = self.bell
             && (s.bells() > 0) != want

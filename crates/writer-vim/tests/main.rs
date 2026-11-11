@@ -3,19 +3,19 @@
 
 mod harness;
 
+mod api;
+mod code;
+mod ex;
+mod fuzz;
+mod insert;
 mod motions;
 mod operators;
-mod textobjects;
-mod insert;
-mod visual;
 mod registers;
-mod search;
-mod ex;
-mod undo;
 mod repeat;
 mod rich;
-mod void;
-mod code;
 mod scroll;
-mod api;
-mod fuzz;
+mod search;
+mod textobjects;
+mod undo;
+mod visual;
+mod void;

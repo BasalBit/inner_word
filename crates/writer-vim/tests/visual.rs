@@ -202,3 +202,26 @@ fn selections_made_by_the_host() {
     s.keys("d");
     assert_eq!(s.buffer(), "a|d");
 }
+
+#[test]
+fn registers_counts_and_the_command_line() {
+    run(&[
+        c("|foo", "ve\"ay", "|foo").regs(&[('a', "foo"), ('0', "<unset>")]),
+        c("|foo bar", "ve\"ad\"aP", "fo|o bar"),
+        c("|foo", "ve\"_d", "|").regs(&[('"', "<unset>")]),
+        c("|foo", "ve\".y", "|foo").bell(true),
+        // The command line takes the selection as its range.
+        c("|a\nb\nc", "Vj:<Esc>", "a\n|b\nc"),
+        c("|a\nb\nc", "vj:d<CR>", "|c"),
+        c("|a\nb\nc", "Vj:><CR>", "{1}|a\n{1}b\nc"),
+        c("|a\nb\nc", "Vj:y<CR>", "a\n|b\nc").regs(&[('"', "a\nb\n")]),
+        c("|a\nb\nc", "Vj<Esc>:'<,'>d<CR>", "|c"),
+        // Marks and searches move the cursor end.
+        c("a|bc\ndef", "mxjv`xd", "a|f"),
+        c("|foo bar baz", "v/baz<CR>y", "|foo bar baz").regs(&[('"', "foo bar b")]),
+        c("|foo bar foo", "v*d", "|oo"),
+        c("|a b c", "v3ed", "|"),
+        c("|abc def", "vfdd", "|ef"),
+        c("|(abc) x", "v%d", "| x"),
+    ]);
+}

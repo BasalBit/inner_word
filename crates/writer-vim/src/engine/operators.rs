@@ -96,7 +96,9 @@ impl Vim {
         let doc = cx.ed.document();
         match target {
             Target::Chars(r) => RegisterContent::charwise(doc.fragment(*r)),
-            Target::Lines(Lines::Blocks(r)) => RegisterContent::linewise(doc.block_fragment(r.clone())),
+            Target::Lines(Lines::Blocks(r)) => {
+                RegisterContent::linewise(doc.block_fragment(r.clone()))
+            }
             Target::Lines(Lines::Code { block, start, end }) => {
                 RegisterContent::linewise(code_fragment(cx, *block, *start..*end))
             }
@@ -110,7 +112,13 @@ impl Vim {
     }
 
     /// Applies `op` to `target`. Returns false when nothing could be done.
-    pub(crate) fn apply_operator(&mut self, cx: &mut Cx, op: Operator, target: Target, info: OpInfo) -> bool {
+    pub(crate) fn apply_operator(
+        &mut self,
+        cx: &mut Cx,
+        op: Operator,
+        target: Target,
+        info: OpInfo,
+    ) -> bool {
         match op {
             Operator::Yank => {
                 let content = self.target_content(cx, &target);
@@ -132,7 +140,11 @@ impl Vim {
                 true
             }
             Operator::Delete => {
-                let target = if info.widen { self.widen_delete(cx, target) } else { target };
+                let target = if info.widen {
+                    self.widen_delete(cx, target)
+                } else {
+                    target
+                };
                 let before = cx.ed.document().block_count();
                 let caret = self.delete_target(cx, &target, info);
                 let linewise = matches!(target, Target::Lines(_));
@@ -169,7 +181,12 @@ impl Vim {
                         }
                     }),
                 };
-                self.shift_lines(cx, &lines, op == Operator::ShiftRight, info.shift_times.max(1));
+                self.shift_lines(
+                    cx,
+                    &lines,
+                    op == Operator::ShiftRight,
+                    info.shift_times.max(1),
+                );
                 true
             }
             Operator::Lower | Operator::Upper | Operator::ToggleCase => {
@@ -207,19 +224,23 @@ impl Vim {
                 }
                 let doc = cx.ed.document();
                 let small = r.start.block == r.end.block
-                    && !buf::text_of(doc, r.start.block)[r.start.offset..r.end.offset].contains('\n');
-                self.registers.delete(info.register, content, small, info.big, cx.host);
+                    && !buf::text_of(doc, r.start.block)[r.start.offset..r.end.offset]
+                        .contains('\n');
+                self.registers
+                    .delete(info.register, content, small, info.big, cx.host);
                 cx.ed.set_caret(r.start);
                 cx.ed.delete_range(*r);
                 cx.ed.selection().head
             }
             Target::Lines(Lines::Blocks(range)) => {
-                self.registers.delete(info.register, content, false, false, cx.host);
+                self.registers
+                    .delete(info.register, content, false, false, cx.host);
                 delete_blocks(cx, range);
                 cx.ed.selection().head
             }
             Target::Lines(Lines::Code { block, start, end }) => {
-                self.registers.delete(info.register, content, false, false, cx.host);
+                self.registers
+                    .delete(info.register, content, false, false, cx.host);
                 let len = buf::len_of(cx.ed.document(), *block);
                 if *start == 0 && *end >= len {
                     // Every line: the code block itself goes.
@@ -252,7 +273,8 @@ impl Vim {
             }
             Target::Lines(Lines::Blocks(range)) => {
                 let content = self.target_content(cx, target);
-                self.registers.delete(info.register, content, false, false, cx.host);
+                self.registers
+                    .delete(info.register, content, false, false, cx.host);
                 let first = range.start;
                 let first_void = cx.ed.document().blocks()[first].is_void();
                 if first_void {
@@ -277,15 +299,18 @@ impl Vim {
             }
             Target::Lines(Lines::Code { block, start, end }) => {
                 let content = self.target_content(cx, target);
-                self.registers.delete(info.register, content, false, false, cx.host);
+                self.registers
+                    .delete(info.register, content, false, false, cx.host);
                 // Keep the indent of the first line, as autoindent would.
                 let indent: String = buf::text_of(cx.ed.document(), *block)[*start..*end]
                     .chars()
                     .take_while(|c| *c == ' ' || *c == '\t')
                     .collect();
                 cx.ed.set_caret(Position::new(*block, *start));
-                cx.ed.replace_range(TextRange::in_block(*block, *start, *end), &indent);
-                cx.ed.set_caret(Position::new(*block, *start + indent.len()));
+                cx.ed
+                    .replace_range(TextRange::in_block(*block, *start, *end), &indent);
+                cx.ed
+                    .set_caret(Position::new(*block, *start + indent.len()));
             }
         }
         let c = cx.ed.selection().head;
@@ -311,7 +336,10 @@ impl Vim {
                     }
                 }
                 let doc = cx.ed.document();
-                caret = buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(range.start, 0)));
+                caret = buf::unit_first_non_blank(
+                    doc,
+                    buf::unit_at(doc, Position::new(range.start, 0)),
+                );
                 let n = range.len();
                 if n > 2 {
                     self.message(format!(
@@ -337,7 +365,8 @@ impl Vim {
                     if right {
                         if le > ls {
                             let pad = " ".repeat(width);
-                            cx.ed.replace_range(TextRange::in_block(*block, ls, ls), &pad);
+                            cx.ed
+                                .replace_range(TextRange::in_block(*block, ls, ls), &pad);
                         }
                     } else {
                         let mut remove = 0;
@@ -354,13 +383,17 @@ impl Vim {
                             remove += c.len_utf8();
                         }
                         if remove > 0 {
-                            cx.ed.delete_range(TextRange::in_block(*block, ls, ls + remove));
+                            cx.ed
+                                .delete_range(TextRange::in_block(*block, ls, ls + remove));
                         }
                     }
                 }
                 let doc = cx.ed.document();
                 let o = buf::first_non_blank(doc, *block, *start);
-                caret = Position::new(*block, o.min(buf::line_end(doc, Position::new(*block, *start))));
+                caret = Position::new(
+                    *block,
+                    o.min(buf::line_end(doc, Position::new(*block, *start))),
+                );
             }
         }
         self.set_normal_caret(cx, caret);
@@ -376,8 +409,16 @@ impl Vim {
         match target {
             Target::Chars(r) => {
                 for b in r.start.block..=r.end.block {
-                    let from = if b == r.start.block { r.start.offset } else { 0 };
-                    let to = if b == r.end.block { r.end.offset } else { buf::len_of(doc, b) };
+                    let from = if b == r.start.block {
+                        r.start.offset
+                    } else {
+                        0
+                    };
+                    let to = if b == r.end.block {
+                        r.end.offset
+                    } else {
+                        buf::len_of(doc, b)
+                    };
                     if from < to {
                         parts.push((b, from..to));
                     }
@@ -412,7 +453,8 @@ impl Vim {
         if old.chars().count() == new.chars().count() {
             // Same length in characters: every character keeps its own
             // formatting.
-            cx.ed.replace_range(TextRange::in_block(block, range.start, range.end), &new);
+            cx.ed
+                .replace_range(TextRange::in_block(block, range.start, range.end), &new);
             return;
         }
         // The length changes (ß to SS): go run by run so that each piece
@@ -426,7 +468,8 @@ impl Vim {
             let old = cx.ed.document().blocks()[block].text()[r.clone()].to_string();
             let new = map_case(&old, mode);
             if new != old {
-                cx.ed.replace_range(TextRange::in_block(block, r.start, r.end), &new);
+                cx.ed
+                    .replace_range(TextRange::in_block(block, r.start, r.end), &new);
             }
         }
     }
@@ -446,7 +489,8 @@ impl Vim {
         // counting characters from the start.
         let doc = cx.ed.document();
         let le = buf::line_end(doc, origin);
-        let after = buf::advance_graphemes(buf::text_of(doc, origin.block), origin.offset, count, le);
+        let after =
+            buf::advance_graphemes(buf::text_of(doc, origin.block), origin.offset, count, le);
         self.set_normal_caret(cx, Position::new(origin.block, after));
         self.set_change_marks(cx, origin, origin);
         true
@@ -491,8 +535,16 @@ impl Vim {
         match target {
             Target::Chars(r) => {
                 for b in r.start.block..=r.end.block {
-                    let from = if b == r.start.block { r.start.offset } else { 0 };
-                    let to = if b == r.end.block { r.end.offset } else { buf::len_of(doc, b) };
+                    let from = if b == r.start.block {
+                        r.start.offset
+                    } else {
+                        0
+                    };
+                    let to = if b == r.end.block {
+                        r.end.offset
+                    } else {
+                        buf::len_of(doc, b)
+                    };
                     if from < to {
                         parts.push((b, from..to));
                     }
@@ -520,7 +572,8 @@ impl Vim {
                 o = next;
             }
             if new != old {
-                cx.ed.replace_range(TextRange::in_block(b, range.start, range.end), &new);
+                cx.ed
+                    .replace_range(TextRange::in_block(b, range.start, range.end), &new);
             }
         }
     }
@@ -530,7 +583,13 @@ impl Vim {
     /// space, or when either side is empty); the leading white space of
     /// the joined block goes. A void block joins like an empty line: it
     /// disappears. Inside a code block the hard lines are joined instead.
-    pub(crate) fn join_lines(&mut self, cx: &mut Cx, origin: Position, count: usize, spaces: bool) -> bool {
+    pub(crate) fn join_lines(
+        &mut self,
+        cx: &mut Cx,
+        origin: Position,
+        count: usize,
+        spaces: bool,
+    ) -> bool {
         /// What one join does.
         enum Step {
             /// Remove a void block; the caret goes to this position.
@@ -565,7 +624,9 @@ impl Vim {
                     Step::DropBlock(b, Position::new(b, 0))
                 } else {
                     let nt = next.text();
-                    let next_le = nt[next_start..].find('\n').map_or(nt.len(), |i| next_start + i);
+                    let next_le = nt[next_start..]
+                        .find('\n')
+                        .map_or(nt.len(), |i| next_start + i);
                     let ws: usize = nt[next_start..next_le]
                         .chars()
                         .take_while(|c| c.is_whitespace())
@@ -574,7 +635,10 @@ impl Vim {
                     let rest_empty = next_start + ws >= next_le;
                     let ls = buf::line_start(doc, brk);
                     let head_empty = brk.offset == ls;
-                    let ends_white = t[ls..brk.offset].chars().next_back().is_some_and(char::is_whitespace);
+                    let ends_white = t[ls..brk.offset]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace);
                     let before_paren = nt[next_start + ws..].starts_with(')');
                     let sep = if !spaces || head_empty || rest_empty || ends_white || before_paren {
                         ""
@@ -615,11 +679,21 @@ impl Vim {
     // ----- put ---------------------------------------------------------------------------
 
     /// Reads register `name` for a put; reports an empty register.
-    pub(crate) fn read_register(&mut self, cx: &mut Cx, name: Option<char>) -> Option<RegisterContent> {
+    pub(crate) fn read_register(
+        &mut self,
+        cx: &mut Cx,
+        name: Option<char>,
+    ) -> Option<RegisterContent> {
         let content = match name {
-            Some('.') => Some(RegisterContent::charwise(Fragment::from_plain_text(&self.last_inserted))),
-            Some(':') => Some(RegisterContent::charwise(Fragment::from_plain_text(&self.last_ex))),
-            Some('/') => Some(RegisterContent::charwise(Fragment::from_plain_text(&self.search.raw))),
+            Some('.') => Some(RegisterContent::charwise(Fragment::from_plain_text(
+                &self.last_inserted,
+            ))),
+            Some(':') => Some(RegisterContent::charwise(Fragment::from_plain_text(
+                &self.last_ex,
+            ))),
+            Some('/') => Some(RegisterContent::charwise(Fragment::from_plain_text(
+                &self.search.raw,
+            ))),
             Some('_') => None,
             other => self.registers.get(other, cx.host),
         };
@@ -644,7 +718,14 @@ impl Vim {
     }
 
     /// `p`, `P`, `gp`, `gP` in Normal mode.
-    pub(crate) fn put(&mut self, cx: &mut Cx, content: &RegisterContent, before: bool, count: usize, caret_after: bool) {
+    pub(crate) fn put(
+        &mut self,
+        cx: &mut Cx,
+        content: &RegisterContent,
+        before: bool,
+        count: usize,
+        caret_after: bool,
+    ) {
         let origin = cx.ed.selection().head;
         let count = count.clamp(1, MAX_REPEAT);
         cx.ed.set_caret(origin);
@@ -662,21 +743,29 @@ impl Vim {
                     (le, ins, le + 1)
                 };
                 let len = ins.len();
-                cx.ed.replace_range(TextRange::in_block(origin.block, at, at), &ins);
+                cx.ed
+                    .replace_range(TextRange::in_block(origin.block, at, at), &ins);
                 let doc = cx.ed.document();
                 let caret = if caret_after {
                     let after = (first_line + len).min(buf::len_of(doc, origin.block));
                     Position::new(origin.block, after)
                 } else {
                     let le = buf::line_end(doc, Position::new(origin.block, first_line));
-                    Position::new(origin.block, buf::first_non_blank(doc, origin.block, first_line).min(le))
+                    Position::new(
+                        origin.block,
+                        buf::first_non_blank(doc, origin.block, first_line).min(le),
+                    )
                 };
                 self.set_mark(cx, '[', Position::new(origin.block, first_line));
                 self.set_mark(cx, ']', Position::new(origin.block, first_line + len - 1));
                 self.set_normal_caret(cx, caret);
                 return;
             }
-            let index = if before { origin.block } else { origin.block + 1 };
+            let index = if before {
+                origin.block
+            } else {
+                origin.block + 1
+            };
             let n = content.fragment.blocks().len();
             for _ in 0..count {
                 cx.ed.insert_blocks_at(index, &content.fragment);
@@ -702,7 +791,11 @@ impl Vim {
             return;
         }
         let doc = cx.ed.document();
-        let at = if before { origin } else { buf::cell_end(doc, origin) };
+        let at = if before {
+            origin
+        } else {
+            buf::cell_end(doc, origin)
+        };
         cx.ed.set_caret(at);
         for _ in 0..count {
             cx.ed.paste(&content.fragment);
@@ -716,7 +809,9 @@ impl Vim {
             // Vim leaves the caret at the start of a multi-line put.
             doc.clamp_position(at)
         } else {
-            buf::prev_cell(doc, end).filter(|p| p.block == end.block).unwrap_or(end)
+            buf::prev_cell(doc, end)
+                .filter(|p| p.block == end.block)
+                .unwrap_or(end)
         };
         self.set_mark(cx, '[', at);
         self.set_mark(cx, ']', end);
@@ -726,7 +821,14 @@ impl Vim {
     /// `p` / `P` over a Visual selection: the selection is replaced by the
     /// register. With `keep` (`P`) the registers stay as they are;
     /// otherwise the replaced text goes to the unnamed register.
-    pub(crate) fn put_over(&mut self, cx: &mut Cx, target: Target, content: &RegisterContent, count: usize, keep: bool) {
+    pub(crate) fn put_over(
+        &mut self,
+        cx: &mut Cx,
+        target: Target,
+        content: &RegisterContent,
+        count: usize,
+        keep: bool,
+    ) {
         let count = count.clamp(1, MAX_REPEAT);
         let replaced = self.target_content(cx, &target);
         match &target {
@@ -740,7 +842,9 @@ impl Vim {
                     }
                     let end = cx.ed.selection().head;
                     let doc = cx.ed.document();
-                    let caret = buf::prev_cell(doc, end).filter(|q| q.block == end.block).unwrap_or(end);
+                    let caret = buf::prev_cell(doc, end)
+                        .filter(|q| q.block == end.block)
+                        .unwrap_or(end);
                     self.set_normal_caret(cx, caret);
                 } else {
                     // Lines go between the two halves of the block.
@@ -786,13 +890,17 @@ impl Vim {
                 cx.ed.insert_blocks_at(range.start, &Fragment::new(lines));
                 delete_blocks(cx, &(range.start + n..range.end + n));
                 let doc = cx.ed.document();
-                let c = buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(range.start, 0)));
+                let c = buf::unit_first_non_blank(
+                    doc,
+                    buf::unit_at(doc, Position::new(range.start, 0)),
+                );
                 self.set_normal_caret(cx, c);
             }
             Target::Lines(Lines::Code { block, start, end }) => {
                 let text = vec![content.text(); count].join("\n");
                 cx.ed.set_caret(Position::new(*block, *start));
-                cx.ed.replace_range(TextRange::in_block(*block, *start, *end), &text);
+                cx.ed
+                    .replace_range(TextRange::in_block(*block, *start, *end), &text);
                 let doc = cx.ed.document();
                 let o = buf::first_non_blank(doc, *block, *start);
                 let le = buf::line_end(doc, Position::new(*block, *start));

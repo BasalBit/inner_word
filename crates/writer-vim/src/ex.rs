@@ -327,12 +327,16 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
     let args = args_raw.trim();
     let command = if abbreviates(name, "substitute", 1) {
         parse_substitute(args_raw)?
-    } else if abbreviates(name, "write", 1) || abbreviates(name, "wall", 2) || abbreviates(name, "update", 2)
+    } else if abbreviates(name, "write", 1)
+        || abbreviates(name, "wall", 2)
+        || abbreviates(name, "update", 2)
     {
         ExCommand::Write {
             args: args.to_string(),
         }
-    } else if abbreviates(name, "quit", 1) || abbreviates(name, "qall", 2) || abbreviates(name, "close", 3)
+    } else if abbreviates(name, "quit", 1)
+        || abbreviates(name, "qall", 2)
+        || abbreviates(name, "close", 3)
     {
         ExCommand::Quit { force: bang }
     } else if name == "wq"
@@ -440,13 +444,28 @@ mod tests {
 
     #[test]
     fn commands() {
-        assert_eq!(cmd("w"), ExCommand::Write { args: String::new() });
-        assert_eq!(cmd("write"), ExCommand::Write { args: String::new() });
+        assert_eq!(
+            cmd("w"),
+            ExCommand::Write {
+                args: String::new()
+            }
+        );
+        assert_eq!(
+            cmd("write"),
+            ExCommand::Write {
+                args: String::new()
+            }
+        );
         assert_eq!(cmd("q"), ExCommand::Quit { force: false });
         assert_eq!(cmd("q!"), ExCommand::Quit { force: true });
         assert_eq!(cmd("wq"), ExCommand::WriteQuit);
         assert_eq!(cmd("x"), ExCommand::WriteQuit);
-        assert_eq!(cmd("d a"), ExCommand::Delete { register: Some('a') });
+        assert_eq!(
+            cmd("d a"),
+            ExCommand::Delete {
+                register: Some('a')
+            }
+        );
         assert_eq!(cmd("y"), ExCommand::Yank { register: None });
         assert_eq!(cmd("noh"), ExCommand::NoHighlight);
         assert_eq!(cmd("nohlsearch"), ExCommand::NoHighlight);

@@ -76,7 +76,11 @@ fn word_under_the_caret() {
         c("|foo x", "*", "|foo x").message("search hit BOTTOM"),
         c("|   ", "*", "|   ").message("E348"),
         c("fo|o bar\nfoo", "*", "foo bar\n|foo"),
-        c("|don\u{2019}t x don\u{2019}t", "*", "don\u{2019}t x |don\u{2019}t"),
+        c(
+            "|don\u{2019}t x don\u{2019}t",
+            "*",
+            "don\u{2019}t x |don\u{2019}t",
+        ),
         c("|Foo foo Foo", "*", "Foo foo |Foo"),
         c("|foo bar foo", "*N", "|foo bar foo"),
         c("fo|o bar foo", "#", "foo bar |foo").message("search hit TOP"),
@@ -119,7 +123,12 @@ fn command_line_editing() {
         // History.
         c("|a b c b", "/b<CR>/<Up><CR>", "a b c |b"),
         c("|a b c b a", "/b<CR>/a<CR>/<Up><Up><CR>", "a |b c b a").message("search hit BOTTOM"),
-        c("|a b c b a", "/b<CR>/c<CR>/<Up><Up><Down><CR>", "a b |c b a").message("search hit BOTTOM"),
+        c(
+            "|a b c b a",
+            "/b<CR>/c<CR>/<Up><Up><Down><CR>",
+            "a b |c b a",
+        )
+        .message("search hit BOTTOM"),
         c("|a b", "/zz<Up><Down><BS><BS>b<CR>", "a |b"),
         c("|foo bar foo", "/<C-r><C-w><CR>", "foo bar |foo"),
         c("|foo bar foo", "yiwwh/<C-r>\"<CR>", "foo bar |foo"),
@@ -179,7 +188,9 @@ fn highlight_effects() {
     s.clear_effects();
     s.keys("n");
     assert!(matches!(
-        s.effects.iter().find(|e| matches!(e, Effect::SearchHighlight(_))),
+        s.effects
+            .iter()
+            .find(|e| matches!(e, Effect::SearchHighlight(_))),
         Some(Effect::SearchHighlight(Some(_)))
     ));
     s.keys("<C-l>");

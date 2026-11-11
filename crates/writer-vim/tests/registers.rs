@@ -17,7 +17,9 @@ fn named_registers() {
         c("|foo bar", "\"adw\"bdw\"aP\"bp", "foo ba|r"),
         c("|foo", "\"Ayiw", "|foo").regs(&[('a', "foo")]),
         c("|foo", "\"!x", "|oo").bell(true),
-        c("|foo", "\".yy", "|foo").bell(true).regs(&[('"', "<unset>")]),
+        c("|foo", "\".yy", "|foo")
+            .bell(true)
+            .regs(&[('"', "<unset>")]),
         c("|ab", "\"a\"byl", "|ab").regs(&[('a', "<unset>"), ('b', "a")]),
     ]);
 }
@@ -27,7 +29,12 @@ fn yank_and_delete_registers() {
     run(&[
         c("|foo bar baz", "yiwwdiw", "foo | baz").regs(&[('0', "foo"), ('"', "bar"), ('-', "bar")]),
         c("|foo bar", "yiwwdiw\"0P", "foofo|o "),
-        c("|a\nb\nc\nd", "dddddd", "|d").regs(&[('1', "c\n"), ('2', "b\n"), ('3', "a\n"), ('"', "c\n")]),
+        c("|a\nb\nc\nd", "dddddd", "|d").regs(&[
+            ('1', "c\n"),
+            ('2', "b\n"),
+            ('3', "a\n"),
+            ('"', "c\n"),
+        ]),
         // A small delete does not shift the numbered registers.
         c("|foo\nbar", "ddx", "|ar").regs(&[('1', "foo\n"), ('-', "b"), ('"', "b")]),
         // Some motions always use register 1.
@@ -38,7 +45,12 @@ fn yank_and_delete_registers() {
         c("a|b\ncd", "vjd", "|a").regs(&[('1', "b\ncd"), ('-', "<unset>")]),
         c("|foo bar", "yiww\"_diwP", "foofo|o ").regs(&[('"', "foo"), ('-', "<unset>")]),
         c("|foo bar", "\"_dd", "|").regs(&[('"', "<unset>"), ('1', "<unset>")]),
-        c("|a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk", "dddddddddddddddddddd", "|k").regs(&[('1', "j\n"), ('9', "b\n")]),
+        c(
+            "|a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk",
+            "dddddddddddddddddddd",
+            "|k",
+        )
+        .regs(&[('1', "j\n"), ('9', "b\n")]),
         c("|foo bar", "cwx<Esc>", "|x bar").regs(&[('"', "foo"), ('-', "foo")]),
     ]);
 }
@@ -46,7 +58,9 @@ fn yank_and_delete_registers() {
 #[test]
 fn clipboard_registers() {
     run(&[
-        c("|foo bar", "\"+yiw", "|foo bar").expect_clip("foo").regs(&[('"', "foo"), ('0', "<unset>")]),
+        c("|foo bar", "\"+yiw", "|foo bar")
+            .expect_clip("foo")
+            .regs(&[('"', "foo"), ('0', "<unset>")]),
         c("|foo bar", "\"*yiw", "|foo bar").expect_clip("foo"),
         c("|x", "\"+p", "xcli|p").clip("clip"),
         c("|x", "\"*P", "cli|px").clip("clip"),
@@ -67,13 +81,24 @@ fn unnamed_register_can_mirror_the_clipboard() {
     };
     let mut s = Session::with("|foo bar", 1000, 10, options.clone());
     s.keys("yiw");
-    assert_eq!(s.host.clipboard.as_ref().map(|c| c.to_plain_text()).as_deref(), Some("foo"));
+    assert_eq!(
+        s.host
+            .clipboard
+            .as_ref()
+            .map(|c| c.to_plain_text())
+            .as_deref(),
+        Some("foo")
+    );
     s.host.clipboard = Some(RegisterContent::from_plain_text("ext"));
     s.keys("$p");
     assert_eq!(s.buffer(), "foo barex|t");
     s.keys("dd");
     assert_eq!(
-        s.host.clipboard.as_ref().map(|c| c.to_plain_text()).as_deref(),
+        s.host
+            .clipboard
+            .as_ref()
+            .map(|c| c.to_plain_text())
+            .as_deref(),
         Some("foo barext\n")
     );
     // A named register stays away from the clipboard.

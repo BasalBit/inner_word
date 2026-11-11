@@ -85,10 +85,22 @@ fn quotes() {
         c("|foo", "di\"", "|foo").bell(true),
         c("x \"a\\\"|b\" y", "di\"", "x \"|\" y"),
         // The typographic quotes that smart punctuation types.
-        c("say \u{201C}h|i there\u{201D} now", "di\"", "say \u{201C}|\u{201D} now"),
+        c(
+            "say \u{201C}h|i there\u{201D} now",
+            "di\"",
+            "say \u{201C}|\u{201D} now",
+        ),
         c("say \u{201C}h|i there\u{201D} now", "da\"", "say |now"),
-        c("it \u{2018}w|as\u{2019} so", "di'", "it \u{2018}|\u{2019} so"),
-        c("\u{2018}it\u{2019}s f|ine\u{2019} x", "di'", "\u{2018}|\u{2019} x"),
+        c(
+            "it \u{2018}w|as\u{2019} so",
+            "di'",
+            "it \u{2018}|\u{2019} so",
+        ),
+        c(
+            "\u{2018}it\u{2019}s f|ine\u{2019} x",
+            "di'",
+            "\u{2018}|\u{2019} x",
+        ),
         c("end \"la|st\"", "da\"", "en|d"),
         c("say \"h|i there\" now", "yi\"", "say \"|hi there\" now").regs(&[('"', "hi there")]),
     ]);

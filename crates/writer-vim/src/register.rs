@@ -133,7 +133,12 @@ pub(crate) struct Registers {
 impl Registers {
     /// Stores `content` in an explicitly named register. Returns false for
     /// the black hole (nothing stored anywhere).
-    fn store_named(&mut self, name: char, content: &RegisterContent, host: &mut dyn VimHost) -> bool {
+    fn store_named(
+        &mut self,
+        name: char,
+        content: &RegisterContent,
+        host: &mut dyn VimHost,
+    ) -> bool {
         match name {
             '_' => return false,
             '+' | '*' => host.clipboard_write(content),
@@ -156,7 +161,8 @@ impl Registers {
                     self.yank = Some(content.clone());
                 } else {
                     while self.numbered.len() < i {
-                        self.numbered.push_back(RegisterContent::charwise(Fragment::default()));
+                        self.numbered
+                            .push_back(RegisterContent::charwise(Fragment::default()));
                     }
                     self.numbered[i - 1] = content.clone();
                 }
@@ -167,7 +173,12 @@ impl Registers {
         true
     }
 
-    fn set_unnamed(&mut self, name: Option<char>, content: &RegisterContent, host: &mut dyn VimHost) {
+    fn set_unnamed(
+        &mut self,
+        name: Option<char>,
+        content: &RegisterContent,
+        host: &mut dyn VimHost,
+    ) {
         // The unnamed register shows the last written register (for an
         // upper-case append: the whole appended register).
         let shown = match name {

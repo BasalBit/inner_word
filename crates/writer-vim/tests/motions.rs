@@ -268,7 +268,11 @@ fn sentences() {
         c("One. |Two.\nThree.", ")", "One. Two.\n|Three."),
         c("One.\n|Two.", "(", "|One.\nTwo."),
         c("|Really? Yes! Fine.", "))", "Really? Yes! |Fine."),
-        c("|He said \u{201C}no.\u{201D} Then left.", ")", "He said \u{201C}no.\u{201D} |Then left."),
+        c(
+            "|He said \u{201C}no.\u{201D} Then left.",
+            ")",
+            "He said \u{201C}no.\u{201D} |Then left.",
+        ),
         c("|One.\n\nTwo.", ")", "One.\n|\nTwo."),
         c("One. Tw|o", ")", "One. Tw|o").bell(true),
         c("|One. Two.", "(", "|One. Two.").bell(true),

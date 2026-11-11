@@ -99,9 +99,17 @@ fn substitute() {
     run(&[
         c("|foo foo", ":s/foo/bar/<CR>", "|bar foo").message("1 substitution on 1 line"),
         c("|foo foo", ":s/foo/bar/g<CR>", "|bar bar"),
-        c("|foo\nx foo\nfoo foo", ":%s/foo/bar/g<CR>", "bar\nx bar\n|bar bar")
-            .message("4 substitutions on 3 lines"),
-        c("|foo\nx foo\nfoo foo", ":%s/foo/bar/<CR>", "bar\nx bar\n|bar foo"),
+        c(
+            "|foo\nx foo\nfoo foo",
+            ":%s/foo/bar/g<CR>",
+            "bar\nx bar\n|bar bar",
+        )
+        .message("4 substitutions on 3 lines"),
+        c(
+            "|foo\nx foo\nfoo foo",
+            ":%s/foo/bar/<CR>",
+            "bar\nx bar\n|bar foo",
+        ),
         // Lower case finds any case, like a search; i and I decide.
         c("|Foo foo", ":s/foo/x/g<CR>", "|x x"),
         c("|Foo foo", ":s/foo/x/gI<CR>", "|Foo x"),

@@ -184,7 +184,11 @@ impl Key {
                 _ => None,
             }
         };
-        let base = if key == "space" { Some(' ') } else { single(key) };
+        let base = if key == "space" {
+            Some(' ')
+        } else {
+            single(key)
+        };
         if ctrl {
             let c = base?;
             return Some(Key {
@@ -199,7 +203,11 @@ impl Key {
             Some(c) => c,
             None => {
                 let c = base?;
-                if shift { c.to_uppercase().next().unwrap_or(c) } else { c }
+                if shift {
+                    c.to_uppercase().next().unwrap_or(c)
+                } else {
+                    c
+                }
             }
         };
         Some(Key {
@@ -383,7 +391,10 @@ mod tests {
         assert_eq!(k("4", Some("$"), false, false, true), Some(Key::char('$')));
         assert_eq!(k("w", None, true, false, false), Some(Key::ctrl('w')));
         assert_eq!(k("[", None, true, false, false), Some(Key::ctrl('[')));
-        assert_eq!(k("space", Some(" "), false, false, false), Some(Key::char(' ')));
+        assert_eq!(
+            k("space", Some(" "), false, false, false),
+            Some(Key::char(' '))
+        );
         assert_eq!(k("escape", None, false, false, false), Some(Key::ESCAPE));
         assert_eq!(
             k("enter", None, false, false, true),

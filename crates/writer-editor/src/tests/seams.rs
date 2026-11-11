@@ -551,3 +551,94 @@ fn compact_mode_grows_and_submits(cx: &mut TestAppContext) {
         assert_eq!(editor.selection(), Selection::caret(Position::new(1, 3)));
     });
 }
+
+#[gpui::test]
+fn caret_blinks_and_follows_focus_and_the_window(cx: &mut TestAppContext) {
+    use std::time::Duration;
+
+    setup(cx);
+    let (editor, cx) = open(paragraphs(3), EditorConfig::full(), cx);
+    let painted = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| editor.caret_painted)
+    };
+    // Outside a scripted run the caret follows the window's state.
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(false, cx));
+    assert!(painted(cx), "focused, active window: the caret shows");
+
+    // Half a second on, half a second off.
+    cx.executor().advance_clock(Duration::from_millis(600));
+    assert!(!painted(cx));
+    cx.executor().advance_clock(Duration::from_millis(530));
+    assert!(painted(cx));
+    cx.executor().advance_clock(Duration::from_millis(530));
+    assert!(!painted(cx));
+    // Typing and moving show it at once and start the blink over.
+    cx.simulate_input("a");
+    assert!(painted(cx));
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.simulate_keystrokes("right");
+    cx.executor().advance_clock(Duration::from_millis(400));
+    assert!(painted(cx), "still in the first half after the move");
+
+    // A range has no bar caret; the block and underline carets stay (Vim
+    // shows its cursor in visual mode).
+    cx.simulate_keystrokes("shift-right");
+    assert!(!painted(cx));
+    editor.update(cx, |editor, cx| {
+        editor.set_caret_style(CaretStyle::Block, cx)
+    });
+    assert!(painted(cx));
+    editor.update(cx, |editor, cx| editor.set_caret_style(CaretStyle::Bar, cx));
+    cx.simulate_keystrokes("left");
+    assert!(painted(cx));
+
+    // No caret in a background window, unless asked for (scripted runs).
+    cx.deactivate_window();
+    assert!(!painted(cx));
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(true, cx));
+    assert!(painted(cx));
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(false, cx));
+    cx.update(|window, _| window.activate_window());
+    assert!(painted(cx));
+
+    // No caret without focus.
+    cx.update(|window, _| window.blur());
+    assert!(!painted(cx));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    assert!(!painted(cx));
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    assert!(painted(cx));
+}
+
+#[gpui::test]
+fn hidden_comments_and_read_only_checks(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paragraphs(3), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.select_range(TextRange::in_block(0, 0, 9)), cx);
+        let first = editor
+            .edit(|state| state.add_comment("One", "Me", 0), cx)
+            .unwrap();
+        editor.edit(|state| state.select_range(TextRange::in_block(1, 0, 9)), cx);
+        let second = editor
+            .edit(|state| state.add_comment("Two", "Me", 0), cx)
+            .unwrap();
+        // Hidden threads are remembered until replaced.
+        editor.set_hidden_comments([first], cx);
+        assert_eq!(editor.hidden_comments().collect::<Vec<_>>(), [first]);
+        editor.set_hidden_comments([second, first], cx);
+        assert_eq!(editor.hidden_comments().count(), 2);
+        editor.set_hidden_comments([], cx);
+        assert_eq!(editor.hidden_comments().count(), 0);
+        editor.set_hidden_comments([first], cx);
+    });
+    // A frame with a hidden and a visible thread paints.
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        // Replacing the document forgets them.
+        editor.set_document(paragraphs(2), cx);
+        assert_eq!(editor.hidden_comments().count(), 0);
+        assert!(!editor.layout_pending() || editor.viewport_bounds().is_some());
+    });
+}

@@ -231,7 +231,7 @@ fn book(blocks: usize) -> Document {
                 BlockKind::heading(2),
                 &format!("Chapter {}", index / 40 + 1),
             ),
-            7 | 8 | 9 => Block::with_text(BlockKind::BulletItem, sentence.trim_end()),
+            7..=9 => Block::with_text(BlockKind::BulletItem, sentence.trim_end()),
             _ => Block::paragraph(sentence.repeat(1 + index % 3 + (index % 7) / 3).trim_end()),
         });
     }

@@ -21,7 +21,7 @@ fn book(blocks: usize) -> Document {
                 BlockKind::heading(2),
                 &format!("Chapter {}", index / 40 + 1),
             ),
-            7 | 8 | 9 => Block::with_text(BlockKind::BulletItem, sentence.trim_end()),
+            7..=9 => Block::with_text(BlockKind::BulletItem, sentence.trim_end()),
             _ => Block::paragraph(sentence.repeat(1 + index % 3 + (index % 7) / 3).trim_end()),
         });
     }
@@ -329,4 +329,226 @@ fn ten_thousand_blocks_open_and_type(cx: &mut TestAppContext) {
         }
         cx.update(|window, _| window.remove_window());
     }
+}
+
+/// A small deterministic generator (the tests have no `rand`).
+struct Dice(u64);
+
+impl Dice {
+    fn roll(&mut self, sides: usize) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as usize) % sides.max(1)
+    }
+}
+
+/// Everything about where blocks and rows are, in content space: per block
+/// its top, its row count and the top of its last row; then the content
+/// height and the page count.
+fn fingerprint(editor: &Editor) -> (Vec<(f32, usize, f32)>, f32, usize) {
+    editor
+        .with_layout(|lay| {
+            let mut blocks = Vec::new();
+            for index in 0..lay.count() {
+                let placed = lay.placed(index).unwrap();
+                let rows = placed.layout.rows.len();
+                blocks.push((
+                    f32::from(placed.top),
+                    rows,
+                    f32::from(placed.row_top(rows - 1)),
+                ));
+            }
+            (
+                blocks,
+                f32::from(lay.layout.content_height()),
+                lay.layout.page_count(),
+            )
+        })
+        .expect("laid out")
+}
+
+/// The fingerprint of a brand-new editor on `document`, in a window of
+/// its own of the same size.
+fn fresh_fingerprint(
+    document: Document,
+    cx: &mut TestAppContext,
+) -> (Vec<(f32, usize, f32)>, f32, usize) {
+    let (fresh, cx) = open(document, EditorConfig::full(), cx);
+    let result = fresh.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        fingerprint(editor)
+    });
+    cx.update(|window, _| window.remove_window());
+    result
+}
+
+/// After any sequence of edits, the layout that was kept up to date
+/// change by change is the layout a fresh editor computes from scratch,
+/// and the counts are the document's. `WRITER_EDITOR_SEEDS=50` runs more
+/// sequences than the default three.
+#[gpui::test]
+fn incremental_layout_matches_a_fresh_one(cx: &mut TestAppContext) {
+    setup(cx);
+    let seeds = std::env::var("WRITER_EDITOR_SEEDS")
+        .ok()
+        .and_then(|seeds| seeds.parse::<u64>().ok())
+        .unwrap_or(3);
+    for seed in 0..seeds {
+        random_edits_keep_the_layout_exact(seed, cx);
+    }
+}
+
+fn random_edits_keep_the_layout_exact(seed: u64, cx: &mut TestAppContext) {
+    let (editor, cx) = open(book(120), EditorConfig::full(), cx);
+    let mut dice = Dice(20261111 + seed * 7919);
+    let words = [
+        "ink",
+        "paper",
+        "a",
+        "margin",
+        "the",
+        "quiet",
+        "sentence",
+        "of",
+        "typography",
+        "row",
+    ];
+    let kinds = [
+        BlockKind::Paragraph,
+        BlockKind::heading(1),
+        BlockKind::heading(3),
+        BlockKind::BulletItem,
+        BlockKind::NumberedItem,
+        BlockKind::todo(),
+        BlockKind::Quote,
+        BlockKind::code(),
+    ];
+    for step in 0..400 {
+        let roll = dice.roll(100);
+        editor.update(cx, |editor, cx| {
+            let document = editor.document();
+            let count = document.block_count();
+            let random_position = |dice: &mut Dice| {
+                let block = dice.roll(count);
+                let length = document.blocks()[block].len();
+                document.clamp_position(Position::new(block, dice.roll(length + 1)))
+            };
+            match roll {
+                0..=29 => {
+                    let mut text = String::new();
+                    for _ in 0..1 + dice.roll(12) {
+                        text.push_str(words[dice.roll(words.len())]);
+                        text.push(' ');
+                    }
+                    editor.edit(|state| state.insert_text(&text), cx);
+                }
+                30..=37 => {
+                    editor.edit(|state| state.insert_paragraph_break(), cx);
+                }
+                38..=45 => {
+                    for _ in 0..1 + dice.roll(30) {
+                        editor.edit(|state| state.backspace(), cx);
+                    }
+                }
+                46..=57 => {
+                    let position = random_position(&mut dice);
+                    editor.edit(|state| state.set_caret(position), cx);
+                }
+                58..=65 => {
+                    let (a, b) = (random_position(&mut dice), random_position(&mut dice));
+                    editor.edit(
+                        |state| state.set_selection(writer_core::Selection::new(a, b)),
+                        cx,
+                    );
+                }
+                66..=71 => {
+                    let kind = kinds[dice.roll(kinds.len())].clone();
+                    editor.edit(|state| state.set_block_kind(kind), cx);
+                }
+                72..=74 => {
+                    editor.edit(|state| state.toggle_bold(), cx);
+                }
+                75..=77 => {
+                    editor.edit(|state| state.delete_selection(), cx);
+                }
+                78..=80 => {
+                    editor.edit(|state| state.indent(), cx);
+                }
+                81..=82 => {
+                    editor.edit(|state| state.move_blocks_down(), cx);
+                }
+                83..=84 => {
+                    editor.edit(|state| state.move_blocks_up(), cx);
+                }
+                85..=86 => {
+                    editor.edit(|state| state.insert_page_break(), cx);
+                }
+                87 => {
+                    editor.edit(|state| state.insert_divider(), cx);
+                }
+                88..=89 => {
+                    editor.edit(
+                        |state| state.paste_plain_text("one line\nanother line\n\nand a last one"),
+                        cx,
+                    );
+                }
+                90..=92 => {
+                    editor.edit(|state| state.undo(), cx);
+                }
+                93 => {
+                    editor.edit(|state| state.redo(), cx);
+                }
+                94 => {
+                    editor.edit(|state| state.step_text_size(1), cx);
+                }
+                95 => {
+                    editor.edit(
+                        |state| state.set_alignment(writer_core::Alignment::Justify),
+                        cx,
+                    );
+                }
+                96 => editor.toggle_page_view(cx),
+                97 => editor.scroll_by_rows(dice.roll(60) as isize - 30, cx),
+                _ => editor.scroll_by_pages(dice.roll(5) as f32 - 2., cx),
+            }
+        });
+        cx.run_until_parked();
+
+        // The caret is where a click on it would put it, whatever is
+        // measured so far.
+        editor.read_with(cx, |editor, _| {
+            let head = editor.selection().head;
+            let bounds = editor.position_bounds(head).unwrap();
+            assert_eq!(
+                editor.position_at_point(bounds.center()),
+                Some(head),
+                "seed {seed}, step {step}"
+            );
+            assert_eq!(
+                editor.stats(),
+                editor.document().stats(),
+                "seed {seed}, step {step}"
+            );
+        });
+
+        if step % 25 == 24 {
+            let (kept, document) = editor.update(cx, |editor, cx| {
+                editor.finish_layout(cx);
+                (fingerprint(editor), editor.document().clone())
+            });
+            let fresh = fresh_fingerprint(document, cx);
+            assert_eq!(kept.0.len(), fresh.0.len(), "seed {seed}, step {step}");
+            for (index, (kept, fresh)) in kept.0.iter().zip(&fresh.0).enumerate() {
+                assert_eq!(kept, fresh, "seed {seed}, step {step}, block {index}");
+            }
+            assert_eq!(
+                (kept.1, kept.2),
+                (fresh.1, fresh.2),
+                "seed {seed}, step {step}"
+            );
+        }
+    }
+    cx.update(|window, _| window.remove_window());
 }

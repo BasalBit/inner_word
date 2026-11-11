@@ -41,7 +41,7 @@ impl Editor {
             layout.rebuild(document, self.state.revision());
         }
         let mut lay = Lay {
-            layout: &mut *layout,
+            layout: &mut layout,
             document,
         };
         Some(f(&mut lay))

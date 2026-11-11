@@ -203,6 +203,7 @@ impl Editor {
         let mut plan = FramePlan::new(hitbox);
         let mut checkboxes: Vec<CheckboxHit> = Vec::new();
         let mut scrollbar = None;
+        let mut caret_painted = false;
         let document = self.state.document();
         let selection = self.state.selection();
 
@@ -432,6 +433,7 @@ impl Editor {
                     && head.block == index
                     && (selection.is_collapsed() || style != CaretStyle::Bar)
                 {
+                    caret_painted = true;
                     let rect = caret_rect(&placed, block.text(), head.offset, style);
                     let color = match style {
                         // A block caret lets the character show through.
@@ -529,6 +531,7 @@ impl Editor {
         plan.link_cursor = self.link_hover;
         self.checkbox_hits = checkboxes;
         self.scrollbar.geometry = scrollbar;
+        self.caret_painted = caret_painted;
         plan
     }
 }

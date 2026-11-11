@@ -125,6 +125,8 @@ pub struct Editor {
     pub(crate) draw_as_active: bool,
     /// The caret is in the visible half of its blink.
     pub(crate) blink_on: bool,
+    /// The last frame painted a caret.
+    pub(crate) caret_painted: bool,
     blink_task: Option<Task<()>>,
     /// Ends the typing undo step after a pause.
     pub(crate) typing_pause: Option<Task<()>>,
@@ -259,6 +261,7 @@ impl Editor {
             // should still show the caret.
             draw_as_active: std::env::var_os("THE_WRITER_AUTOMATION").is_some(),
             blink_on: true,
+            caret_painted: false,
             blink_task: None,
             typing_pause: None,
             refine_task: None,
@@ -591,7 +594,7 @@ impl Editor {
         }
         // Estimates turning into measures move the scroll bar and the page
         // count; a few repaints while that happens are enough.
-        if !more || counted || self.refine_slices % 8 == 0 {
+        if !more || counted || self.refine_slices.is_multiple_of(8) {
             cx.notify();
         }
         more

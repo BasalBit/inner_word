@@ -30,7 +30,7 @@
 //! | Read the document and selection | [`Editor::state`], [`Editor::document`], [`Editor::selection`] |
 //! | Change anything | [`Editor::edit`], [`Editor::edit_with`] (the only mutation path) |
 //! | React to changes | `cx.subscribe(&editor, ..)` with [`EditorEvent`] |
-//! | Configure | [`EditorConfig`], [`Editor::set_config`], [`Editor::update_config`], [`Editor::set_caret_style`], [`Editor::set_document`], [`Editor::toggle_page_view`] |
+//! | Configure | [`EditorConfig`], [`Editor::set_config`], [`Editor::update_config`], [`Editor::set_caret_style`], [`Editor::set_document`], [`Editor::toggle_page_view`], [`Editor::set_draw_as_active`] |
 //! | See keys first | [`Editor::intercept_keys`] with an [`InterceptPriority`], returning a [`KeyDisposition`] |
 //! | Refuse typed text | [`Editor::set_text_input_enabled`] |
 //! | Join key dispatch with own bindings | [`Editor::set_key_context_value`], [`Editor::add_key_context_flag`], [`Editor::remove_key_context_entry`] |
@@ -39,8 +39,8 @@
 //! | Scroll | [`Editor::scroll_to_caret`], [`Editor::scroll_to_position`], [`Editor::scroll_by_rows`], [`Editor::scroll_by_pages`], [`Editor::scroll_by_pixels`] with [`Autoscroll`] |
 //! | Float a view at the caret | [`Editor::show_popup`], [`Editor::hide_popup`] with [`PopupAnchor`], [`PopupPlacement`] |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
-//! | Comments | [`EditorConfig::comments_visible`], [`Editor::set_active_comment`] |
-//! | Status bar numbers | [`Editor::stats`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`] |
+//! | Comments | [`EditorConfig::comments_visible`], [`Editor::set_active_comment`], [`Editor::set_hidden_comments`] |
+//! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
@@ -71,6 +71,17 @@
 //!   [`Editor::set_text_input_enabled`]`(false)` so nothing composed or
 //!   dictated reaches the document. In insert mode it consumes only
 //!   `escape` and control combinations and turns text input back on.
+//!
+//! ## Views
+//!
+//! Flow view is one centred column. Page view (the document's own
+//! `page_view` setting, [`Editor::set_page_view`]) shows sheets at the size,
+//! orientation and margins of the document's page setup: rows flow from
+//! sheet to sheet, a block continues on the next sheet at a row boundary,
+//! a page break starts a new sheet, headings stay with the text after
+//! them. A window narrower than the page shows the page scaled down. All
+//! geometry, the visual-row oracle and scrolling work the same in both
+//! views.
 //!
 //! ## Geometry and visual rows
 //!

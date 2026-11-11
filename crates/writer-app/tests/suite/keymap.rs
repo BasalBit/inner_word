@@ -23,6 +23,7 @@ const GLOBAL: &[(&str, &str)] = &[
     ("cmd-alt-left", "workspace::NarrowSidebar"),
     ("cmd-shift-f", "workspace::SearchLibrary"),
     ("cmd-shift-s", "workspace::Export"),
+    ("cmd-s", "workspace::SaveNow"),
     ("cmd-,", "workspace::OpenSettings"),
     ("cmd-/", "workspace::ShowShortcuts"),
     ("cmd-alt-p", "workspace::TogglePageView"),
@@ -87,6 +88,8 @@ const EDITOR: &[(&str, &str)] = &[
     ("cmd-x", "editor::Cut"),
     ("cmd-v", "editor::Paste"),
     ("cmd-shift-v", "editor::PasteAsPlainText"),
+    // The context menu of the text, from the keyboard.
+    ("ctrl-enter", "editor::OpenContextMenu"),
     // The same keys as a real US keyboard reports them: GPUI names shift
     // plus a digit or punctuation by the shifted character.
     ("cmd-&", "editor::ToggleNumberedList"),

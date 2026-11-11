@@ -398,21 +398,35 @@ impl Editor {
                     }
                 }
 
-                // Text of an IME composition: underlined.
+                // Text of an IME composition: underlined, and underlined
+                // twice as thick where the input method has a clause
+                // selected.
                 if let Some(marked) = &self.marked
                     && marked.block == index
                 {
-                    let thickness = px((f32::from(block_layout.font_size) / 16.).round().max(1.));
-                    for rect in placed.rects(marked.range.clone(), rows.clone()) {
-                        let rect = shifted(rect, origin);
-                        let y = rect.top() + block_layout.baseline + block_layout.descent * 0.6;
-                        plan.front.push(fill(
-                            Bounds::new(
-                                point(rect.left(), snap(y)),
-                                size(rect.size.width, thickness),
-                            ),
-                            colors.ink,
-                        ));
+                    let thin = px((f32::from(block_layout.font_size) / 16.).round().max(1.));
+                    let clause = selected
+                        .and_then(|range| document.range_in_block(range, index))
+                        .map(|local| {
+                            local.start.max(marked.range.start)..local.end.min(marked.range.end)
+                        })
+                        .filter(|clause| clause.start < clause.end);
+                    let mut underline = |range: std::ops::Range<usize>, thickness: Pixels| {
+                        for rect in placed.rects(range, rows.clone()) {
+                            let rect = shifted(rect, origin);
+                            let y = rect.top() + block_layout.baseline + block_layout.descent * 0.6;
+                            plan.front.push(fill(
+                                Bounds::new(
+                                    point(rect.left(), snap(y)),
+                                    size(rect.size.width, thickness),
+                                ),
+                                colors.ink,
+                            ));
+                        }
+                    };
+                    underline(marked.range.clone(), thin);
+                    if let Some(clause) = clause {
+                        underline(clause, thin * 2.);
                     }
                 }
 

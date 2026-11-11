@@ -97,6 +97,18 @@ impl Measure {
         self.pad_top + self.rows as f32 * self.line_height + self.pad_bottom
     }
 
+    /// What has to fit on a sheet for the block to start there: all of a
+    /// block that stays together or has no more than three rows, otherwise
+    /// its first two rows (no single row is left behind at the bottom of a
+    /// sheet).
+    pub(crate) fn lead(&self) -> f32 {
+        if self.keep_together || self.rows <= 3 {
+            self.height()
+        } else {
+            self.pad_top + 2. * self.line_height
+        }
+    }
+
     /// A guess at the measure of a block that was never shaped:
     /// `advance` is the average glyph advance per byte and font size.
     pub(crate) fn estimate(

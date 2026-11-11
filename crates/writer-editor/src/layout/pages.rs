@@ -14,8 +14,11 @@
 //! them; rows flow from sheet to sheet:
 //!
 //! - a row is never split and never crosses the bottom of the text area;
-//! - a block may continue on the next sheet at any row boundary, unless
-//!   its measure says [`Measure::keep_together`] and it fits on one sheet;
+//! - a block may continue on the next sheet at a row boundary, unless its
+//!   measure says [`Measure::keep_together`] and it fits on one sheet;
+//! - no single row is left alone: a block of up to three rows is not
+//!   split, a longer one leaves at least two rows at the bottom of a sheet
+//!   and takes at least two to the top of the next;
 //! - a heading moves to the next sheet together with the first row of the
 //!   block after it, and a run of headings moves together
 //!   ([`Measure::keep_with_next`], [`kept_height`]);
@@ -175,9 +178,9 @@ pub(crate) fn gap(previous: &Measure, next: &Measure) -> f32 {
 }
 
 /// The room a block that is kept with what follows needs on a sheet: its
-/// own box, every heading directly after it, and the first row of the
-/// first block that is not a heading. `None` for a block that is not kept
-/// with anything.
+/// own box, every heading directly after it, and the start
+/// ([`Measure::lead`]) of the first block that is not a heading. `None`
+/// for a block that is not kept with anything.
 pub(crate) fn kept_height<'a>(
     measure: &Measure,
     following: impl Iterator<Item = &'a Measure>,
@@ -190,7 +193,7 @@ pub(crate) fn kept_height<'a>(
     for next in following.take(KEEP_LOOKAHEAD) {
         total += gap(previous, next);
         if !next.keep_with_next {
-            return Some(total + next.pad_top + next.line_height);
+            return Some(total + next.lead());
         }
         total += next.height();
         previous = next;
@@ -239,9 +242,10 @@ pub(crate) fn place_paged(
     };
     if y > 0. {
         // What has to fit under `y` for the block to start on this sheet.
-        let mut needed = measure.pad_top + line_height;
-        if measure.keep_together && whole <= page_height + EPSILON {
-            needed = whole;
+        let mut needed = measure.lead();
+        if needed > page_height + EPSILON {
+            // Too tall to keep together even on an empty sheet.
+            needed = measure.pad_top + line_height;
         }
         if let Some(kept) = kept
             && kept <= page_height + EPSILON
@@ -266,13 +270,28 @@ pub(crate) fn place_paged(
             shifts: None,
         };
     }
-    // The block continues on the following sheets.
+    // The block continues on the following sheets: rows per sheet.
     let per_page = (((page_height + EPSILON) / line_height).floor() as i64).max(1) as u32;
-    let mut shifts = Vec::new();
-    let mut row = first_fit;
+    let mut chunks = vec![first_fit];
+    let mut left = rows - first_fit;
+    while left > 0 {
+        let take = left.min(per_page);
+        chunks.push(take);
+        left -= take;
+    }
+    // The last row does not go to a sheet alone: it takes the one before
+    // it along.
+    if let [.., before, last] = chunks.as_mut_slice()
+        && *last == 1
+        && *before >= 3
+    {
+        *before -= 1;
+        *last += 1;
+    }
+    let mut shifts = Vec::with_capacity(chunks.len() - 1);
+    let mut row = chunks[0];
     let mut sheet = page;
-    let mut rows_on_last = first_fit;
-    while row < rows {
+    for rows_here in &chunks[1..] {
         sheet += 1;
         // Without the shift the row would sit at `natural`.
         let natural = top + measure.pad_top + row as f32 * line_height;
@@ -280,9 +299,9 @@ pub(crate) fn place_paged(
             first_row: row,
             shift: content_top(sheet) - natural,
         });
-        rows_on_last = (rows - row).min(per_page);
-        row += rows_on_last;
+        row += rows_here;
     }
+    let rows_on_last = chunks[chunks.len() - 1];
     Placement {
         top,
         end: rows_on_last as f32 * line_height + measure.pad_bottom,
@@ -425,7 +444,7 @@ mod tests {
         assert_eq!(rows[2][0].0, 1);
         assert_eq!(rows[3][0].0, 1);
         // With room for all of it nothing moves.
-        let rows = rows_of(&geometry, &[paragraph(2), heading, heading, paragraph(3)]);
+        let rows = rows_of(&geometry, &[paragraph(1), heading, heading, paragraph(3)]);
         assert!(rows.iter().all(|block| block[0].0 == 0));
 
         // A block that fills a sheet exactly leaves the next one on the
@@ -433,6 +452,36 @@ mod tests {
         let rows = rows_of(&geometry, &[paragraph(10), paragraph(1)]);
         assert_eq!(rows[0].last().unwrap().2, 200.);
         assert_eq!((rows[1][0].0, rows[1][0].1), (1, 0.));
+    }
+
+    #[test]
+    fn no_row_is_left_alone() {
+        let geometry = geometry(200.);
+        let split = |before: u32, rows: u32| {
+            let all = rows_of(&geometry, &[paragraph(before), paragraph(rows)]);
+            let first_page = all[1][0].0;
+            let on_first = all[1].iter().filter(|row| row.0 == first_page).count();
+            (first_page, on_first, all[1].len() - on_first)
+        };
+        // Three rows fit under 130px, the block has five: 3 + 2.
+        assert_eq!(split(6, 5), (0, 3, 2));
+        // Four rows fit under 110px: the fifth would be alone on the next
+        // sheet, so it takes the fourth along.
+        assert_eq!(split(5, 5), (0, 3, 2));
+        // All five fit under 90px.
+        assert_eq!(split(4, 5), (0, 5, 0));
+        // One row fits: a long block starts on the next sheet instead.
+        assert_eq!(split(8, 6), (1, 6, 0));
+        // Two rows fit: enough to start a long block.
+        assert_eq!(split(7, 6), (0, 2, 4));
+        // A block of three rows is never split.
+        assert_eq!(split(7, 3), (1, 3, 0));
+        assert_eq!(split(6, 3), (0, 3, 0));
+        // A block longer than a sheet: full sheets, and the last row is
+        // not alone (10 + 10 + 1 becomes 10 + 9 + 2).
+        let all = rows_of(&geometry, &[paragraph(21)]);
+        let per_sheet = |sheet: usize| all[0].iter().filter(|row| row.0 == sheet).count();
+        assert_eq!((per_sheet(0), per_sheet(1), per_sheet(2)), (10, 9, 2));
     }
 
     #[test]

@@ -161,9 +161,14 @@ impl EditorTools {
     pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popup(false, window, cx);
         let opened = self.find_bar.is_none();
-        // With the bar open, a selection that is the current match is the
-        // result of the search, not a new thing to search for.
-        let seed = if opened || self.find.current.is_none() {
+        // With the bar open, the selection only becomes the query when the
+        // shortcut comes from the document and the selection is not the
+        // current match (which is a result of the search, not a new thing
+        // to search for).
+        let from_bar = self.find_bar.as_ref().is_some_and(|bar| {
+            bar.query.read(cx).is_focused(window) || bar.replace.read(cx).is_focused(window)
+        });
+        let seed = if opened || (!from_bar && self.find.current.is_none()) {
             self.find_seed(cx)
         } else {
             None

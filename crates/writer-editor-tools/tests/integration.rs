@@ -118,6 +118,10 @@ fn a_menu_closes_when_focus_goes_elsewhere(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(active(&tools, cx), None);
+    // The picker had the keyboard; it goes back to the editor.
+    assert!(editor_focused(&editor, cx));
+    cx.simulate_input("A ");
+    assert_eq!(text(&editor, cx), "A New");
 }
 
 #[gpui::test]

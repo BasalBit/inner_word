@@ -42,6 +42,30 @@
 //! bar alone, because it is part of typing). `escape` returns focus to the
 //! editor.
 //!
+//! # Notes for the host
+//!
+//! - **Focus.** `EditorTools` is `Focusable` with the editor's handle. A
+//!   popup tool with a field (format menu, link popover, font picker) takes
+//!   focus; it closes when focus moves elsewhere in the window and gives
+//!   focus back to the editor on `escape` or after applying. If the host
+//!   opens a modal while such a tool has focus, the tool closes and the
+//!   focus handle the modal remembered is gone: fall back to focusing the
+//!   tools view when restoring focus fails.
+//! - **Key contexts.** The bindings live in `"EditorTools"` (the whole
+//!   view), `"FindBar"` and `"LinkPopover"`. Inside the find bar
+//!   `cmd-alt-c` toggles case sensitivity; a context-free binding for the
+//!   same key (the app's "show comments") must be registered before
+//!   [`init`] so that the find bar's binding wins there.
+//! - **Fonts.** The family list and the recently used families are in the
+//!   [`FontLibrary`] global: restore them with [`set_recent_fonts`] at
+//!   startup and persist [`recent_fonts`] from
+//!   `cx.observe_global::<FontLibrary>(..)`.
+//! - **State for a status line or automation:**
+//!   [`EditorTools::active_tool`], [`EditorTools::menu_rows`],
+//!   [`EditorTools::find_status`], and [`ToolsEvent`] on open and close.
+//! - **Highlight layers.** Find uses the editor layers [`FIND_LAYER`] and
+//!   [`FIND_CURRENT_LAYER`]; other crates should pick other names.
+//!
 //! # Module map
 //!
 //! | Module | Contents |

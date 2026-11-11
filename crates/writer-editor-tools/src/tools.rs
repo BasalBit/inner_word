@@ -334,6 +334,17 @@ impl EditorTools {
         cx.notify();
     }
 
+    /// Whether keyboard focus is inside the open popup tool.
+    fn popup_has_focus(&self, window: &Window, cx: &App) -> bool {
+        match &self.popup {
+            Some(PopupTool::Link(tool)) => tool.popover.read(cx).field.read(cx).is_focused(window),
+            Some(PopupTool::Insert(_)) | None => false,
+            Some(tool) => tool
+                .menu()
+                .is_some_and(|menu| menu.read(cx).focus_handle(cx).is_focused(window)),
+        }
+    }
+
     /// Whether the popup tool showing `menu` is still the open one.
     fn is_current_menu(&self, menu: &Entity<Menu>) -> bool {
         self.popup
@@ -427,8 +438,10 @@ impl EditorTools {
                 }
             }
             EditorEvent::DocumentReplaced => {
-                // The editor dropped its popup and its highlight layers.
-                self.close_popup(false, window, cx);
+                // The editor dropped its popup and its highlight layers. If
+                // the popup had the keyboard, the editor gets it back.
+                let had_focus = self.popup_has_focus(window, cx);
+                self.close_popup(had_focus, window, cx);
                 if self.find_bar.is_some() {
                     self.refresh_find(false, cx);
                 }

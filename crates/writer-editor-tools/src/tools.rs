@@ -351,7 +351,18 @@ impl EditorTools {
             },
             MenuEvent::Dismissed => self.close_popup(true, window, cx),
             MenuEvent::Blurred => self.popup_lost_focus(window, cx),
+            MenuEvent::ClickedOutside => self.popup_clicked_outside(window, cx),
         }
+    }
+
+    /// A mouse button went down outside the open popup tool: the tool
+    /// closes. Where the press itself took the keyboard somewhere (into
+    /// the text, a field of the find bar, another panel) it stays there;
+    /// where it did not (a button, the window's chrome) the keyboard would
+    /// be left in a field that is gone, so it returns to the editor.
+    pub(crate) fn popup_clicked_outside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let keyboard_in_popup = self.popup_has_focus(window, cx);
+        self.close_popup(keyboard_in_popup, window, cx);
     }
 
     /// The field of the open popup tool lost focus.

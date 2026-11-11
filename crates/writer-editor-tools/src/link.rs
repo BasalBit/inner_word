@@ -32,6 +32,8 @@ pub(crate) enum LinkEvent {
     Remove,
     Cancel,
     Blurred,
+    /// A mouse button went down somewhere outside the popover.
+    ClickedOutside,
 }
 
 pub(crate) struct LinkPopover {
@@ -174,6 +176,7 @@ impl Render for LinkPopover {
             .occlude()
             // Clicks on the panel keep focus in the field.
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(LinkEvent::ClickedOutside)))
             .on_action(cx.listener(|_, _: &OpenLinkInBrowser, _, cx| cx.emit(LinkEvent::Open)))
             .w(px(380.))
             .flex()
@@ -374,6 +377,7 @@ impl EditorTools {
             LinkEvent::Remove => self.remove_link(window, cx),
             LinkEvent::Cancel => self.close_popup(true, window, cx),
             LinkEvent::Blurred => self.popup_lost_focus(window, cx),
+            LinkEvent::ClickedOutside => self.popup_clicked_outside(window, cx),
         }
     }
 

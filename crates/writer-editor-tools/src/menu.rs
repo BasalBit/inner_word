@@ -67,6 +67,8 @@ pub(crate) enum MenuEvent {
     Dismissed,
     /// The query field lost focus.
     Blurred,
+    /// A mouse button went down somewhere outside the menu.
+    ClickedOutside,
 }
 
 pub(crate) struct MenuOptions {
@@ -508,6 +510,10 @@ impl Render for Menu {
             // (or, without a field, from the editor).
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            // A press anywhere else closes the menu, also where the press
+            // does not move the keyboard (the find bar's buttons, the
+            // window's chrome).
+            .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(MenuEvent::ClickedOutside)))
             .on_action(cx.listener(|this, _: &picker::SelectPrev, _, cx| this.select_prev(cx)))
             .on_action(cx.listener(|this, _: &picker::SelectNext, _, cx| this.select_next(cx)))
             .on_action(cx.listener(|this, _: &picker::SelectFirst, _, cx| this.select_first(cx)))

@@ -158,3 +158,126 @@ fn link_popover_actions_can_be_clicked(cx: &mut TestAppContext) {
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
 }
+
+/// A press at the place of a document position (a little inside the
+/// character after it).
+fn click_text(
+    editor: &gpui::Entity<writer_editor::Editor>,
+    block: usize,
+    offset: usize,
+    cx: &mut VisualTestContext,
+) {
+    let at = editor.read_with(cx, |editor, _| {
+        editor
+            .position_bounds(writer_core::Position::new(block, offset))
+            .unwrap()
+    });
+    cx.simulate_click(
+        gpui::point(at.left() + gpui::px(1.), at.center().y),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_click_outside_closes_a_popup(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(
+        paragraphs(&[
+            "Hello brave world",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Last line here",
+        ]),
+        cx,
+    );
+    let query =
+        |cx: &mut VisualTestContext| tools.read_with(cx, |tools, _| tools.find_query().to_string());
+
+    // In the text: the menu closes and the click does what a click does.
+    select(&editor, TextRange::in_block(0, 6, 11), cx);
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Format));
+    click_text(&editor, 12, 4, cx);
+    assert_eq!(active(&tools, cx), None);
+    assert!(editor_focused(&editor, cx));
+    editor.read_with(cx, |editor, _| {
+        assert!(!editor.has_popup());
+        assert_eq!(
+            editor.selection(),
+            writer_core::Selection::caret(writer_core::Position::new(12, 4))
+        );
+    });
+
+    // On something that does not take the keyboard (a button of the find
+    // bar): the popup closes all the same, the button does its work, and
+    // the keyboard is in the text, not in a field that is gone.
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("l");
+    cx.simulate_keystrokes("cmd-t");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Font));
+    let before = tools.read_with(cx, |tools, _| tools.find_current_match());
+    click("find-next", cx);
+    assert_eq!(
+        active(&tools, cx),
+        Some(ToolKind::Find),
+        "only the bar is left"
+    );
+    editor.read_with(cx, |editor, _| assert!(!editor.has_popup()));
+    assert_ne!(
+        tools.read_with(cx, |tools, _| tools.find_current_match()),
+        before
+    );
+    assert!(editor_focused(&editor, cx));
+
+    // On a field: the popup closes and the keyboard is in that field.
+    cx.simulate_keystrokes("cmd-k");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Link));
+    click("find-query-frame", cx);
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    assert!(!editor_focused(&editor, cx));
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("brave");
+    assert_eq!(query(cx), "brave");
+    assert_eq!(text(&editor, cx).lines().next(), Some("Hello brave world"));
+    cx.simulate_keystrokes("escape");
+
+    // The insert menu has no field and leaves the keyboard in the text; a
+    // click on the window's chrome closes it and keeps what was typed.
+    caret(&editor, 1, 0, cx);
+    cx.simulate_keystrokes("cmd-f");
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    cx.simulate_input("/he");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Insert));
+    click("find-case", cx);
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    editor.read_with(cx, |editor, _| {
+        assert!(!editor.has_popup());
+        assert_eq!(editor.document().blocks()[1].text(), "/he");
+    });
+    assert!(editor_focused(&editor, cx));
+
+    // A click inside a popup is not a click outside.
+    cx.simulate_keystrokes("escape");
+    select(&editor, TextRange::in_block(0, 6, 11), cx);
+    cx.simulate_keystrokes("cmd-k");
+    click("link-popover", cx);
+    assert_eq!(active(&tools, cx), Some(ToolKind::Link));
+    cx.simulate_input("example.com");
+    assert_eq!(
+        tools
+            .read_with(cx, |tools, cx| tools.link_field_text(cx))
+            .as_deref(),
+        Some("example.com")
+    );
+}

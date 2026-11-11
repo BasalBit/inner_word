@@ -702,6 +702,14 @@ fn test_text_system_uses_fake_metrics(cx: &mut TestAppContext) {
             lines[0].closest_index_for_position(point(px(50.), px(25.)), px(20.)),
             Err(14)
         );
+        // LineWrapper (what the Text element uses): Boundary.ix is the byte
+        // index where the next row starts, same as the wrap boundaries above.
+        let mut wrapper = window.text_system().line_wrapper(font("Charter"), px(10.));
+        let rows: Vec<usize> = wrapper
+            .wrap_line(&[gpui::LineFragment::text("aaaa bbbb cccc")], px(60.))
+            .map(|boundary| boundary.ix)
+            .collect();
+        assert_eq!(rows, vec![10]);
         // The test text system reports no installed families.
         let names = window.text_system().all_font_names();
         assert!(!names.contains(&"Charter".to_string()));
@@ -863,6 +871,32 @@ fn theme_global_and_mode_switch(cx: &mut TestAppContext) {
     // Global observers are notified once per effect flush: the three changes
     // in the second `cx.update` coalesce into one notification.
     assert_eq!(*changes.borrow(), 2);
+}
+
+struct LineHeightProbe(Rc<RefCell<Option<Pixels>>>);
+
+impl Render for LineHeightProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let out = self.0.clone();
+        div()
+            .text_size(px(20.))
+            .line_height(relative(1.5))
+            .child(gpui::canvas(
+                move |_, window, _| *out.borrow_mut() = Some(window.line_height()),
+                |_, _, _, _| {},
+            ))
+    }
+}
+
+#[gpui::test]
+fn line_height_is_inherited_text_style(cx: &mut TestAppContext) {
+    let seen = Rc::new(RefCell::new(None));
+    let probe = seen.clone();
+    let (_view, cx) = cx.add_window_view(move |_, _| LineHeightProbe(probe));
+    cx.run_until_parked();
+    // window.line_height() = the inherited text style's line height resolved
+    // against its font size (relative(1.5) of 20px).
+    assert_eq!(*seen.borrow(), Some(px(30.)));
 }
 
 /// A window with an explicit size, for layout-dependent tests.

@@ -40,8 +40,9 @@ struct Para {
     /// Tab stops: `(alignment, position in twips)`.
     tabs: Vec<(&'static str, i32)>,
     bidi: bool,
-    /// Space after the paragraph in twips, where it differs from the
-    /// style's.
+    /// Space before and after the paragraph in twips, where they differ
+    /// from the style's.
+    space_before: Option<i32>,
     space_after: Option<i32>,
     /// An exact line height in twips.
     line_exact: Option<i32>,
@@ -60,11 +61,14 @@ struct Para {
 
 impl Para {
     fn xml(&self) -> String {
-        // Children in schema order: pStyle, numPr, pBdr, tabs, bidi,
-        // spacing, ind, jc, rPr, sectPr.
+        // Children in schema order: pStyle, pageBreakBefore, numPr, pBdr,
+        // tabs, bidi, spacing, ind, jc, rPr, sectPr.
         let mut p = String::new();
         if let Some(style) = self.style {
             p.push_str(&format!("<w:pStyle w:val=\"{style}\"/>"));
+        }
+        if self.page_break {
+            p.push_str("<w:pageBreakBefore/>");
         }
         if let Some((num, level)) = self.numbering {
             p.push_str(&format!(
@@ -86,8 +90,11 @@ impl Para {
         if self.bidi {
             p.push_str("<w:bidi/>");
         }
-        if self.space_after.is_some() || self.line_exact.is_some() {
+        if self.space_before.is_some() || self.space_after.is_some() || self.line_exact.is_some() {
             p.push_str("<w:spacing");
+            if let Some(before) = self.space_before {
+                p.push_str(&format!(" w:before=\"{before}\""));
+            }
             if let Some(after) = self.space_after {
                 p.push_str(&format!(" w:after=\"{after}\""));
             }
@@ -119,9 +126,6 @@ impl Para {
         let mut out = String::from("<w:p>");
         if !p.is_empty() {
             out.push_str(&format!("<w:pPr>{p}</w:pPr>"));
-        }
-        if self.page_break {
-            out.push_str("<w:r><w:br w:type=\"page\"/></w:r>");
         }
         out.push_str(&self.content);
         out.push_str("</w:p>");
@@ -757,6 +761,20 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
         let section = section_xml(part.document, options.page_numbers);
         if paras.is_empty() {
             paras.push(Para::default());
+        }
+        // As in the page view, nothing stands above the first line of a
+        // page: a heading or a code block that opens the document or
+        // follows a page break gets no space before. (Readers drop that
+        // space where a page ends by itself, but not at the start of a
+        // document or a section, or after a page break.)
+        for (i, para) in paras.iter_mut().enumerate() {
+            if (i == 0 || para.page_break)
+                && para
+                    .style
+                    .is_some_and(|s| s.starts_with("Heading") || s == "Code")
+            {
+                para.space_before = Some(0);
+            }
         }
         if i + 1 < parts.len() {
             // Every document but the last ends its section in its last

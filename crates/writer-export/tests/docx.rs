@@ -476,7 +476,6 @@ struct Run {
     shade: Option<String>,
     style: Option<String>,
     link: Option<String>,
-    page_break: bool,
 }
 
 /// A paragraph as the tests see it.
@@ -490,7 +489,10 @@ struct P {
     bidi: bool,
     rule: bool,
     section: bool,
-    /// `w:spacing w:after` of the paragraph itself.
+    /// Starts on a new page (`w:pageBreakBefore`).
+    page_break: bool,
+    /// `w:spacing w:before` and `w:after` of the paragraph itself.
+    before: Option<i32>,
     after: Option<i32>,
     /// `w:spacing w:line` when the rule is "exact".
     line_exact: Option<i32>,
@@ -518,7 +520,9 @@ impl P {
             out.bidi = child(ppr, "bidi").is_some();
             out.rule = child(ppr, "pBdr").is_some_and(|b| child(b, "bottom").is_some());
             out.section = child(ppr, "sectPr").is_some();
+            out.page_break = child(ppr, "pageBreakBefore").is_some();
             if let Some(spacing) = child(ppr, "spacing") {
+                out.before = spacing.attribute((W, "before")).map(|v| v.parse().unwrap());
                 out.after = spacing.attribute((W, "after")).map(|v| v.parse().unwrap());
                 if spacing.attribute((W, "lineRule")) == Some("exact") {
                     out.line_exact = spacing.attribute((W, "line")).map(|v| v.parse().unwrap());
@@ -575,7 +579,9 @@ impl P {
                         }
                         run.text.push_str(t);
                     }
-                    "br" if c.attribute((W, "type")) == Some("page") => run.page_break = true,
+                    "br" if c.attribute((W, "type")) == Some("page") => {
+                        panic!("a page break is a paragraph property, not a run")
+                    }
                     "br" => run.text.push('\n'),
                     "tab" => run.text.push('\t'),
                     "commentReference" => {}
@@ -1278,6 +1284,59 @@ fn spacing_and_colours_follow_the_page_view() {
 }
 
 #[test]
+fn space_before_and_after_add_up_and_nothing_stands_above_the_first_line() {
+    // The editor adds the space after a block and the space before the
+    // next one. Word and LibreOffice only do that with this setting.
+    let doc = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Title"),
+        Block::paragraph("text"),
+        Block::with_text(BlockKind::heading(2), "Section"),
+        Block::new(BlockKind::PageBreak),
+        Block::with_text(BlockKind::heading(2), "After a break"),
+    ]);
+    let package = Package::of(&doc);
+    package.check();
+    let settings = roxmltree::Document::parse(package.part(parts::SETTINGS)).unwrap();
+    let compat = settings
+        .descendants()
+        .find(|n| n.has_tag_name((W, "compat")))
+        .unwrap();
+    assert!(child(compat, "doNotUseHTMLParagraphAutoSpacing").is_some());
+    // The heading that opens the document has no space above it, nor has
+    // the one after the page break; other headings keep the style's.
+    let ps = package.paragraphs();
+    assert_eq!(ps[0].before, Some(0));
+    assert_eq!(ps[1].before, None);
+    assert_eq!(ps[2].before, None);
+    assert_eq!((ps[3].page_break, ps[3].before), (true, Some(0)));
+    // So does a code block, and the first heading of every part of a
+    // collection, including a title written for it.
+    let code = Document::from_blocks(vec![Block::with_text(BlockKind::code(), "x")]);
+    assert_eq!(Package::of(&code).paragraphs()[0].before, Some(0));
+    let plain = Document::from_blocks(vec![Block::paragraph("x")]);
+    assert_eq!(Package::of(&plain).paragraphs()[0].before, None);
+    let source = ExportSource::collection("Book", [("One", &doc), ("Two", &plain)]);
+    let options = DocxOptions {
+        part_titles: PartTitles::Always,
+        ..Default::default()
+    };
+    let ps = Package::new(&source, &options).paragraphs();
+    let firsts: Vec<(String, Option<i32>)> = ps
+        .iter()
+        .filter(|p| p.text() == "One" || p.text() == "Two" || p.text() == "Title")
+        .map(|p| (p.text(), p.before))
+        .collect();
+    assert_eq!(
+        firsts,
+        vec![
+            ("One".to_string(), Some(0)),
+            ("Title".to_string(), None),
+            ("Two".to_string(), Some(0))
+        ]
+    );
+}
+
+#[test]
 fn a_bottom_margin_too_small_for_the_page_number_has_none() {
     let with_bottom = |bottom: f32| {
         let settings = DocumentSettings {
@@ -1318,18 +1377,18 @@ fn dividers_and_page_breaks() {
     assert_eq!(ps.len(), 7);
     assert!(ps[0].rule && ps[0].runs.is_empty());
     assert!(!ps[1].rule);
-    // The page break is a run at the start of the next paragraph.
-    assert!(ps[2].runs[0].page_break && ps[2].text() == "two");
+    // The page break is a property of the next paragraph.
+    assert!(ps[2].page_break && ps[2].text() == "two");
     // Two in a row: an empty page.
-    assert!(ps[3].runs[0].page_break && ps[3].text().is_empty());
-    assert!(ps[4].runs[0].page_break && ps[4].style == "Heading1");
+    assert!(ps[3].page_break && ps[3].text().is_empty());
+    assert!(ps[4].page_break && ps[4].style == "Heading1");
     assert!(ps[5].rule);
     // A trailing page break stands alone.
-    assert!(ps[6].runs[0].page_break && ps[6].runs.len() == 1);
+    assert!(ps[6].page_break && ps[6].runs.is_empty());
     // Void blocks only.
     let ps = paragraphs(vec![Block::new(BlockKind::PageBreak)]);
     assert_eq!(ps.len(), 1);
-    assert!(ps[0].runs[0].page_break);
+    assert!(ps[0].page_break);
 }
 
 #[test]
@@ -1458,7 +1517,6 @@ fn every_attribute_at_once() {
             shade: Some("D9C5F0".into()),
             style: Some("Hyperlink".into()),
             link: Some("https://example.com/all".into()),
-            page_break: false,
         }]
     );
 }
@@ -2047,7 +2105,7 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
         for block in doc.blocks() {
             if matches!(block.kind(), BlockKind::PageBreak) {
                 if pending_break {
-                    assert!(ps.next().unwrap().runs[0].page_break, "seed {seed}");
+                    assert!(ps.next().unwrap().page_break, "seed {seed}");
                 }
                 pending_break = true;
                 continue;
@@ -2056,11 +2114,7 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
                 .next()
                 .unwrap_or_else(|| panic!("seed {seed}: a paragraph is missing"));
             let mut text = p.text();
-            assert_eq!(
-                p.runs.first().is_some_and(|r| r.page_break),
-                pending_break,
-                "seed {seed}"
-            );
+            assert_eq!(p.page_break, pending_break, "seed {seed}");
             pending_break = false;
             if let BlockKind::TodoItem { checked } = block.kind() {
                 let mark = if *checked { "\u{2611}\t" } else { "\u{2610}\t" };
@@ -2072,7 +2126,7 @@ fn random_documents_are_valid_packages_and_keep_their_text() {
             assert_eq!(text, block.text(), "seed {seed}");
         }
         if pending_break {
-            assert!(ps.next().unwrap().runs[0].page_break, "seed {seed}");
+            assert!(ps.next().unwrap().page_break, "seed {seed}");
         }
         assert!(ps.next().is_none(), "seed {seed}: extra paragraphs");
     }
@@ -2433,14 +2487,14 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                 for block in blocks {
                     if matches!(block.kind(), BlockKind::PageBreak) {
                         if pending_break {
-                            assert!(ps.next().unwrap().runs[0].page_break);
+                            assert!(ps.next().unwrap().page_break);
                         }
                         pending_break = true;
                         continue;
                     }
                     let p = ps.next().expect("a paragraph for every block");
                     let mut text = p.text();
-                    assert_eq!(p.runs.first().is_some_and(|r| r.page_break), pending_break);
+                    assert_eq!(p.page_break, pending_break);
                     pending_break = false;
                     if let BlockKind::TodoItem { checked } = block.kind() {
                         let mark = if *checked { "\u{2611}\t" } else { "\u{2610}\t" };
@@ -2451,7 +2505,7 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                     expected_text.push('\n');
                 }
                 if pending_break {
-                    assert!(ps.next().unwrap().runs[0].page_break);
+                    assert!(ps.next().unwrap().page_break);
                 }
                 if blocks.is_empty() && !titled {
                     // A part with nothing in it is one empty paragraph.
@@ -2507,13 +2561,7 @@ fn page_breaks_between_the_parts_of_a_collection_leave_no_empty_page() {
     let ps = Package::new(&source, &o).paragraphs();
     let seen: Vec<(String, bool, bool)> = ps
         .iter()
-        .map(|p| {
-            (
-                p.text(),
-                p.runs.first().is_some_and(|r| r.page_break),
-                p.section,
-            )
-        })
+        .map(|p| (p.text(), p.page_break, p.section))
         .collect();
     let row = |t: &str, page_break: bool, section: bool| (t.to_string(), page_break, section);
     assert_eq!(
@@ -2534,7 +2582,7 @@ fn page_breaks_between_the_parts_of_a_collection_leave_no_empty_page() {
     // A single document is exported as it is.
     let ps = Package::of(&a).paragraphs();
     assert_eq!(ps.len(), 4);
-    assert!(ps[0].runs[0].page_break && ps[2].runs[0].page_break && ps[3].runs[0].page_break);
+    assert!(ps[0].page_break && ps[2].page_break && ps[3].page_break);
 }
 
 #[test]

@@ -18,8 +18,8 @@
 //!   long the document is; numbered lists beyond that carry their numbers
 //!   as text. To-dos
 //!   are list paragraphs that start with a ballot box character (☐ / ☑). A
-//!   divider is an empty paragraph with a bottom border, a page break is a
-//!   page-break run at the start of the next paragraph. Code blocks keep
+//!   divider is an empty paragraph with a bottom border, a page break
+//!   makes the next paragraph start on a new page (`w:pageBreakBefore`). Code blocks keep
 //!   their whitespace and line breaks. Alignment and indent levels are
 //!   kept. Indents and spacing follow the editor's page view: 24 pt per
 //!   indent level, list items closer together than paragraphs.
@@ -513,10 +513,17 @@ fn app_properties() -> String {
     )
 }
 
+/// `word/settings.xml`.
+///
+/// `doNotUseHTMLParagraphAutoSpacing` makes the space after a paragraph
+/// and the space before the next one add up, as they do in the editor.
+/// Without it Word and LibreOffice use only the larger of the two, and a
+/// heading sits a paragraph's space closer to the text above it.
 fn settings_xml() -> String {
     format!(
         "{DECLARATION}<w:settings xmlns:w=\"{W_NS}\"><w:zoom w:percent=\"100\"/><w:defaultTabStop w:val=\"720\"/>\
          <w:characterSpacingControl w:val=\"doNotCompress\"/><w:compat>\
+         <w:doNotUseHTMLParagraphAutoSpacing/>\
          <w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/>\
          </w:compat></w:settings>"
     )

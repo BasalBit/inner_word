@@ -387,3 +387,38 @@ fn open_and_apply_wait_for_an_address(cx: &mut TestAppContext) {
     assert_eq!(link_at(&editor, 6, cx), None);
     assert_eq!(active(&tools, cx), None);
 }
+
+#[gpui::test]
+fn the_buttons_of_the_popover_say_what_they_do(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_tools, editor, cx) = open(linked_document(), cx);
+    caret(&editor, 0, 6, cx);
+    cx.simulate_keystrokes("cmd-k");
+
+    // Resting the pointer on a button shows its tooltip at the pointer.
+    for button in ["link-apply", "link-open", "link-remove", "link-cancel"] {
+        let pointer = cx
+            .debug_bounds(button)
+            .unwrap_or_else(|| panic!("{button} is not drawn"))
+            .center();
+        cx.simulate_mouse_move(pointer, None, gpui::Modifiers::default());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(600));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let tip = cx
+            .debug_bounds("tool-tip")
+            .unwrap_or_else(|| panic!("no tooltip over {button}"));
+        assert!(
+            (tip.origin.x - pointer.x).abs() <= px(12.) && tip.origin.y > pointer.y,
+            "the tooltip of {button} is at {tip:?}, the pointer at {pointer:?}"
+        );
+        cx.simulate_mouse_move(
+            gpui::point(px(40.), px(700.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+    }
+}

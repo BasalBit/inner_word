@@ -54,10 +54,14 @@
 //! While find results are showing, an edit updates the match list from the
 //! blocks it changed (`writer_core`'s change report and
 //! `Document::find_in_block`); the whole document is searched only when the
-//! query or an option changes. At 10,000 blocks and 40,000 matches a typed
-//! character costs about a quarter of what it did with a search per edit
-//! (debug build: 13 ms before, 3.3 ms after, 0.7 ms with the bar closed);
-//! what is left is handing the editor the highlight ranges.
+//! query or an option changes. Measured by `tests/perf.rs` at 10,000
+//! blocks with 40,000 matches, per character typed in the document: debug
+//! build 13.2 ms with a search per edit, 3.3 ms now, 0.7 ms with the bar
+//! closed; release build 0.33 ms now and 0.11 ms with the bar closed,
+//! against 2.2 ms for one search of the whole document. What is left is
+//! handing the editor the highlight ranges, and that is skipped when the
+//! edit touched no match (0.19 ms in release with a query that is not in
+//! the paragraph being typed).
 //!
 //! # Notes for the host
 //!

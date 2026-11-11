@@ -101,6 +101,23 @@ fn typing_with_the_find_bar_open_on_a_long_document(cx: &mut TestAppContext) {
         searches
     );
 
+    // The format menu over the whole book (select all, then cmd-.).
+    cx.simulate_keystrokes("escape cmd-a");
+    let started = Instant::now();
+    cx.simulate_keystrokes("cmd-.");
+    let format_menu = started.elapsed();
+    assert_eq!(
+        active(&tools, cx),
+        Some(writer_editor_tools::ToolKind::Format)
+    );
+    let started = Instant::now();
+    cx.simulate_keystrokes("cmd-t");
+    let font_picker = started.elapsed();
+    cx.simulate_keystrokes("escape");
+    println!(
+        "perf: with all 10,000 blocks selected, the format menu opens in {format_menu:?}, the font picker in {font_picker:?}"
+    );
+
     println!(
         "perf: 10,000 blocks, {count} matches; per typed character: bar closed {closed:?}, bar open {open:?}; per query character {query:?}; cmd-g with the bar closed: first {first_step:?}, then {step:?}"
     );

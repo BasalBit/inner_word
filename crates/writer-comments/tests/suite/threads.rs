@@ -3,7 +3,7 @@
 
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use writer_comments::{DeleteTarget, DraftKind};
-use writer_core::{ReplyId, TextRange};
+use writer_core::{Block, Document, Position, ReplyId, TextRange};
 
 use super::support::{AUTHOR, Fixture, Focus, NOW, open, sample};
 
@@ -529,4 +529,157 @@ fn the_list_stays_usable_beside_a_draft_that_was_left_open(cx: &mut TestAppConte
     cx.simulate_keystrokes("escape cmd-2 r");
     cx.simulate_click(composer.center(), Modifiers::none());
     assert_eq!(f.focus(cx), Focus::Composer);
+}
+
+/// A document long enough to scroll: `count` paragraphs.
+fn long_document(count: usize) -> Document {
+    Document::from_blocks(
+        (0..count)
+            .map(|ix| Block::paragraph(&format!("Paragraph number {ix} of a long text.")))
+            .collect(),
+    )
+}
+
+#[gpui::test]
+fn undo_from_the_list_shows_what_it_undid(cx: &mut TestAppContext) {
+    let (f, cx) = open(long_document(300), cx);
+    let scroll =
+        |cx: &mut VisualTestContext| f.editor.read_with(cx, |editor, _| editor.scroll_offset());
+    let first = f.comment(0, 0, 9, "At the top", cx);
+
+    // A text edit far down, then back to the top and into the list.
+    f.editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_caret(Position::new(280, 0));
+                state.insert_text("Typed far away. ")
+            },
+            cx,
+        );
+    });
+    f.caret(0, 2, cx);
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::List);
+    assert!(scroll(cx) < gpui::px(100.), "at the top: {:?}", scroll(cx));
+
+    // Undo takes the text edit back, and the text scrolls to it.
+    cx.simulate_keystrokes("cmd-z");
+    f.editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.document().block(280).unwrap().text(),
+            "Paragraph number 280 of a long text."
+        );
+    });
+    assert!(
+        scroll(cx) > gpui::px(1000.),
+        "the undone edit is brought into view: {:?}",
+        scroll(cx)
+    );
+    assert_eq!(f.focus(cx), Focus::List);
+    assert_eq!(f.comment_count(cx), 1);
+
+    // Redo shows it again from wherever the text is.
+    f.editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(0, 0), writer_editor::Autoscroll::Top, cx)
+    });
+    cx.run_until_parked();
+    assert!(scroll(cx) < gpui::px(100.));
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert!(scroll(cx) > gpui::px(1000.));
+    cx.simulate_keystrokes("cmd-z");
+
+    // The next undo step is the comment: its place in the text is shown.
+    cx.simulate_keystrokes("escape");
+    let far = f.comment(250, 0, 9, "Far down", cx);
+    f.editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(0, 0), writer_editor::Autoscroll::Top, cx)
+    });
+    f.caret(0, 2, cx);
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.active(cx), Some(first));
+    assert!(scroll(cx) < gpui::px(100.));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.all_ids(cx), vec![first]);
+    assert!(scroll(cx) > gpui::px(1000.), "where the comment was");
+    // Redo: the thread is back, active, and the text is at its anchor.
+    f.editor.update(cx, |editor, cx| {
+        editor.scroll_to_position(Position::new(0, 0), writer_editor::Autoscroll::Top, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(f.all_ids(cx), vec![first, far]);
+    assert_eq!(f.active(cx), Some(far));
+    assert!(scroll(cx) > gpui::px(1000.));
+
+    // A change of a thread only (a reply) makes that thread the active one.
+    cx.simulate_keystrokes("r");
+    cx.simulate_input("An answer");
+    cx.simulate_keystrokes("enter home");
+    assert_eq!(f.active(cx), Some(first));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.active(cx), Some(far), "the thread that lost its reply");
+    f.panel.read_with(cx, |panel, _| {
+        assert!(panel.thread(far).unwrap().thread.replies.is_empty());
+    });
+    // Nothing left to redo twice: no harm.
+    cx.simulate_keystrokes("cmd-shift-z cmd-shift-z cmd-shift-z");
+    assert_eq!(f.focus(cx), Focus::List);
+}
+
+#[gpui::test]
+fn commented_text_partly_deleted_fully_deleted_and_restored(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    // "quick brown fox"
+    let id = f.comment(0, 4, 19, "All three words", cx);
+    let delete = |start: usize, end: usize, cx: &mut VisualTestContext| {
+        f.editor.update(cx, |editor, cx| {
+            editor.edit(
+                |state| {
+                    state.select_range(TextRange::in_block(0, start, end));
+                    state.delete_selection()
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    };
+    let entry = |cx: &mut VisualTestContext| {
+        f.panel
+            .read_with(cx, |panel, _| panel.thread(id).unwrap().clone())
+    };
+
+    // The middle word goes: the thread stays on what is left.
+    delete(10, 16, cx);
+    assert_eq!(entry(cx).quote, "quick fox");
+    assert_eq!(entry(cx).ranges, vec![TextRange::in_block(0, 4, 13)]);
+    // The front of it and some text before it.
+    delete(0, 10, cx);
+    assert_eq!(entry(cx).quote, "fox");
+    // The rest: detached, listed under its own heading, still active.
+    delete(0, 3, cx);
+    assert!(entry(cx).is_detached());
+    assert_eq!(entry(cx).quote, "");
+    assert!(cx.debug_bounds("comments-detached").is_some());
+    assert_eq!(f.listed_ids(cx), vec![id]);
+    // Next and previous comment have nowhere to go, and say so quietly.
+    cx.simulate_keystrokes("cmd-alt-] cmd-alt-[");
+    assert_eq!(f.focus(cx), Focus::Editor);
+
+    // Undo from the text, step by step: anchored again, then whole again.
+    cx.simulate_keystrokes("cmd-z");
+    assert!(!entry(cx).is_detached());
+    assert_eq!(entry(cx).quote, "fox");
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    assert_eq!(entry(cx).quote, "quick brown fox");
+    assert_eq!(entry(cx).ranges, vec![TextRange::in_block(0, 4, 19)]);
+    // And redo detaches it again.
+    cx.simulate_keystrokes("cmd-shift-z cmd-shift-z cmd-shift-z");
+    assert!(entry(cx).is_detached());
+    // Undo from the list makes the re-anchored thread the active one.
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::List);
+    cx.simulate_keystrokes("cmd-z");
+    assert!(!entry(cx).is_detached());
+    assert_eq!(f.active(cx), Some(id));
+    assert_eq!(f.focus(cx), Focus::List);
 }

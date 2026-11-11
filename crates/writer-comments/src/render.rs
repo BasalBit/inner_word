@@ -12,10 +12,14 @@
 //! ```
 //!
 //! A reply or an edit puts the composer inside the thread card instead.
+//!
+//! The thread list is a `gpui::list`: only the cards near the visible part
+//! are built, laid out and painted, so a document with a thousand threads
+//! costs a frame no more than one with ten.
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
-    KeyContext, Render, SharedString, Stateful, WeakEntity, Window, div, prelude::*, px,
+    KeyContext, Render, SharedString, Stateful, WeakEntity, Window, div, list, prelude::*, px,
 };
 use writer_core::{CommentId, Reply, ReplyId};
 use writer_ui::{
@@ -28,13 +32,13 @@ use writer_ui::{
 
 use crate::{
     actions::{
-        AddComment, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, DeleteComment,
-        EditComment, FocusComments, FocusEditor, NextComment, PANEL_CONTEXT, PreviousComment,
-        ReplyToThread, SelectFirstThread, SelectLastThread, SelectNextReply, SelectNextThread,
-        SelectPreviousReply, SelectPreviousThread, SubmitComment, THREADS_CONTEXT, ToggleComments,
-        ToggleResolved, ToggleShowResolved,
+        AddComment, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, CycleFocus,
+        DeleteComment, EditComment, FocusComments, FocusEditor, NextComment, PANEL_CONTEXT,
+        PreviousComment, ReplyToThread, SelectFirstThread, SelectLastThread, SelectNextReply,
+        SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment,
+        THREADS_CONTEXT, ToggleComments, ToggleResolved, ToggleShowResolved,
     },
-    panel::{CommentsPanel, DeleteTarget, DraftKind, panel_for_actions},
+    panel::{CommentsPanel, DeleteTarget, DraftKind, Row, panel_for_actions},
     threads::ThreadEntry,
     time::relative_time,
 };
@@ -88,6 +92,7 @@ fn panel_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<CommentsP
         ConfirmDelete => confirm_delete,
         CancelDelete => cancel_delete,
         FocusEditor => focus_editor,
+        CycleFocus => cycle_focus,
         SubmitComment => submit,
         CancelComment => cancel,
         writer_editor::actions::Undo => undo,
@@ -149,42 +154,39 @@ impl Render for CommentsPanel {
                 .into_any_element();
         }
         let panel = cx.weak_entity();
-        let list_focused = self.focus_handle.is_focused(window);
         let composer_focused = self.composer.read(cx).is_focused(window);
-        let now = self.now();
-
-        let mut rows: Vec<AnyElement> = Vec::new();
-        let mut detached_heading = false;
-        let entries: Vec<ThreadEntry> = self.listed_threads().cloned().collect();
-        for entry in &entries {
-            if entry.is_detached() && !detached_heading {
-                detached_heading = true;
-                rows.push(self.render_detached_heading(&colors).into_any_element());
-            }
-            rows.push(
-                self.render_thread(entry, list_focused, composer_focused, now, &colors, cx)
-                    .into_any_element(),
-            );
+        if self.reveal_pending() {
+            // Once this frame has measured the cards: is the active one
+            // fully in view?
+            cx.defer_in(window, |this, _, cx| this.settle_reveal(cx));
         }
         let open_count = self
             .threads
             .iter()
             .filter(|entry| !entry.is_resolved())
             .count();
-        if rows.is_empty() && self.draft.is_none() {
+        let threads: AnyElement = if self.rows.is_empty() && self.draft.is_none() {
             // Every thread is resolved and hidden. The list still holds the
             // focus; the footer below leads back to the resolved threads.
-            rows.push(
-                div()
-                    .debug_selector(|| "comments-empty".into())
-                    .flex_none()
-                    .px(SPACE_1)
-                    .py(SPACE_1)
-                    .text_color(colors.muted)
-                    .child("No open comments.")
-                    .into_any_element(),
-            );
-        }
+            div()
+                .debug_selector(|| "comments-empty".into())
+                .px(SPACE_3)
+                .py(SPACE_3)
+                .text_color(colors.muted)
+                .child("No open comments.")
+                .into_any_element()
+        } else {
+            let panel = panel.clone();
+            list(self.list.clone(), move |ix, window, cx| {
+                panel
+                    .update(cx, |this, cx| this.render_row(ix, window, cx))
+                    .unwrap_or_else(|_| div().into_any_element())
+            })
+            .size_full()
+            .px(SPACE_1)
+            .py(SPACE_2)
+            .into_any_element()
+        };
 
         let root = div()
             .id("comments-panel")
@@ -231,13 +233,7 @@ impl Render for CommentsPanel {
                 .track_focus(&self.focus_handle)
                 .flex_1()
                 .min_h_0()
-                .flex()
-                .flex_col()
-                .gap(SPACE_1)
-                .p(SPACE_2)
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll)
-                .children(rows),
+                .child(threads),
         )
         .when_some(self.render_footer(&colors, cx), |root, footer| {
             root.child(footer)
@@ -247,6 +243,36 @@ impl Render for CommentsPanel {
 }
 
 impl CommentsPanel {
+    /// One row of the thread list, built when the list needs it.
+    fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.rows_built += 1;
+        let colors = cx.theme().colors;
+        match self.rows.get(ix).copied() {
+            Some(Row::DetachedHeading) => self.render_detached_heading(&colors).into_any_element(),
+            Some(Row::Thread(id)) => {
+                let Some(entry) = self.thread(id) else {
+                    return div().into_any_element();
+                };
+                let list_focused = self.focus_handle.is_focused(window);
+                let composer_focused = self.composer.read(cx).is_focused(window);
+                // The space between two cards belongs to the row, so that
+                // the list can measure it.
+                div()
+                    .pb(SPACE_1)
+                    .child(self.render_thread(
+                        entry,
+                        list_focused,
+                        composer_focused,
+                        self.now(),
+                        &colors,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
+            None => div().into_any_element(),
+        }
+    }
+
     /// The key context of the thread list: [`THREADS_CONTEXT`], plus
     /// `confirming` while a delete confirmation is showing, plus `composing`
     /// while focus is in a composer inside the list (a reply or an edit).
@@ -298,7 +324,7 @@ impl CommentsPanel {
             .gap(SPACE_0_5)
             .px(SPACE_2)
             .pt(SPACE_3)
-            .pb(SPACE_1)
+            .pb(SPACE_2)
             .child(SectionLabel::new("Detached"))
             .child(
                 div()
@@ -326,17 +352,36 @@ impl CommentsPanel {
             .child(self.composer.clone())
     }
 
+    /// The keys of the composer, read from the keymap: `enter` (the
+    /// compact editor's own submit-on-enter, bound as its `Newline`) and
+    /// `cmd-enter` both save, `shift-enter` breaks the line, `escape`
+    /// cancels.
     fn render_composer_hints(
         &self,
         submit_label: &'static str,
         colors: &ThemeColors,
         cx: &App,
     ) -> Div {
+        let key =
+            |hint: Option<KeyHint>| hint.map(|hint| hint.color(colors.muted).size(UI_TEXT_XS));
         hint_row(colors)
-            // `enter` submits through the compact editor's own binding.
+            .debug_selector(|| "comment-composer-hints".into())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_1)
+                    .child(submit_label)
+                    .children(key(KeyHint::for_action(
+                        &writer_editor::actions::Newline,
+                        cx,
+                    )))
+                    .child("or")
+                    .children(key(KeyHint::for_action(&SubmitComment, cx))),
+            )
             .child(hint(
-                submit_label,
-                KeyHint::for_action(&writer_editor::actions::Newline, cx),
+                "Line break",
+                KeyHint::for_action(&writer_editor::actions::InsertSoftBreak, cx),
                 colors,
             ))
             .child(hint(
@@ -367,7 +412,16 @@ impl CommentsPanel {
                 .p(SPACE_3)
                 .border_b_1()
                 .border_color(colors.hairline)
-                .child(quote_line(draft.quote.clone().into(), colors))
+                .child(if self.draft_target_lost() {
+                    // The text was deleted while the comment was written.
+                    div()
+                        .debug_selector(|| "comment-target-lost".into())
+                        .text_size(UI_TEXT_SM)
+                        .text_color(colors.danger)
+                        .child("The text this comment was for was deleted. Undo, or select other text and add the comment again.")
+                } else {
+                    quote_line(draft.quote.clone().into(), colors)
+                })
                 .child(self.render_composer_box(composer_focused, colors))
                 .child(self.render_composer_hints("Comment", colors, cx)),
         )
@@ -412,13 +466,18 @@ impl CommentsPanel {
             .gap(SPACE_1)
             .py(SPACE_2)
             .pr(SPACE_2)
-            .pl(SPACE_2)
-            .rounded(RADIUS_MD)
+            // With the 2px rule and the list's 4px, the text starts 12px
+            // from the panel's edge, in line with the header and the footer.
+            .pl(px(6.))
+            // The rule is straight: no rounding on its side.
+            .rounded_r(RADIUS_MD)
             .border_l_2()
-            .border_color(if is_active {
-                colors.accent
-            } else {
-                gpui::transparent_black()
+            // Accent only while the keyboard is in the list (as the
+            // library marks its selected row); a quiet rule otherwise.
+            .border_color(match (is_active, list_focused) {
+                (true, true) => colors.accent,
+                (true, false) => colors.border_strong,
+                (false, _) => gpui::transparent_black(),
             })
             .when(is_active, |card| {
                 card.bg(if list_focused {
@@ -447,7 +506,15 @@ impl CommentsPanel {
             card.child(self.render_composer_box(composer_focused, colors))
                 .child(self.render_composer_hints("Save", colors, cx))
         } else {
-            card.child(body_text(&entry.thread.body, colors))
+            // A resolved thread steps back: its words are done with.
+            card.child(body_text(
+                &entry.thread.body,
+                if entry.is_resolved() {
+                    colors.muted
+                } else {
+                    colors.ink
+                },
+            ))
         };
 
         if !entry.thread.replies.is_empty() {
@@ -693,10 +760,10 @@ fn meta_line(author: &str, time: String, resolved: bool, colors: &ThemeColors) -
         })
 }
 
-fn body_text(body: &str, colors: &ThemeColors) -> Div {
+fn body_text(body: &str, color: Hsla) -> Div {
     div()
         .min_w_0()
-        .text_color(colors.ink)
+        .text_color(color)
         .child(SharedString::from(body.to_string()))
 }
 
@@ -723,7 +790,7 @@ fn reply_block(
             false,
             colors,
         ))
-        .child(body_text(&reply.body, colors))
+        .child(body_text(&reply.body, colors.ink))
 }
 
 fn hint_row(colors: &ThemeColors) -> Div {

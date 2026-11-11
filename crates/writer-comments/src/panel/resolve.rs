@@ -1,8 +1,11 @@
 //! Resolving, reopening and deleting threads, and undo from the list.
 
 use gpui::{Context, Window};
+use writer_core::{Change, CommentId, Position};
+use writer_editor::Autoscroll;
 
 use super::{CommentsPanel, DeleteTarget, PendingDelete};
+use crate::threads::ThreadEntry;
 
 impl CommentsPanel {
     /// Resolves the active thread, or reopens it when it is resolved. A
@@ -65,13 +68,13 @@ impl CommentsPanel {
             Some(pending) => pending.return_to_editor,
             None => !self.has_focus(window, cx),
         };
-        self.discard_draft(cx);
+        self.keep_draft(true, cx);
         self.confirming = Some(PendingDelete {
             target,
             return_to_editor,
         });
         window.focus(&self.focus_handle);
-        self.scroll_list_to_active();
+        self.scroll_list_to_active(cx);
         cx.notify();
     }
 
@@ -99,6 +102,7 @@ impl CommentsPanel {
         } else {
             self.repair_focus(window, cx);
         }
+        self.restore_kept_draft(cx);
         cx.notify();
     }
 
@@ -110,20 +114,91 @@ impl CommentsPanel {
         if pending.return_to_editor {
             self.editor.read(cx).focus(window);
         }
+        self.restore_kept_draft(cx);
         cx.notify();
     }
 
     /// Undoes the last change of the document (comment changes are part of
     /// its history). Bound to `cmd-z` in the thread list, so a resolve or a
     /// delete can be taken back without leaving the panel.
+    ///
+    /// The step that is undone may be something else than a comment change,
+    /// and may be anywhere in the document. It is never undone out of
+    /// sight: a thread that changed, came back or was reopened becomes the
+    /// active one (the list and the text scroll to it), and for any other
+    /// change the text scrolls to the place that changed.
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mutate(cx, |state| state.undo());
+        self.step_history(false, window, cx);
+    }
+
+    /// Redoes the last undone change of the document, and shows where it
+    /// was like [`CommentsPanel::undo`].
+    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_history(true, window, cx);
+    }
+
+    fn step_history(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.threads.clone();
+        let change = self.mutate(cx, |state| {
+            let stepped = if redo { state.redo() } else { state.undo() };
+            stepped.then(|| state.last_change()).flatten()
+        });
+        if let Some(Some(change)) = change {
+            self.show_change(&before, change, cx);
+        }
         self.repair_focus(window, cx);
     }
 
-    /// Redoes the last undone change of the document.
-    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mutate(cx, |state| state.redo());
-        self.repair_focus(window, cx);
+    /// Brings what an undo or redo changed into view. `before` is the
+    /// thread list before the step.
+    fn show_change(&mut self, before: &[ThreadEntry], change: Change, cx: &mut Context<Self>) {
+        let was = |id: CommentId| before.iter().find(|entry| entry.id == id);
+        // A thread that is new, has other content, or lost or regained its
+        // text. (Anchors that merely moved with the text do not count.)
+        let touched = self
+            .threads
+            .iter()
+            .find(|entry| {
+                was(entry.id).is_none_or(|old| {
+                    old.thread != entry.thread || old.is_detached() != entry.is_detached()
+                })
+            })
+            .map(|entry| (entry.id, entry.anchor()));
+        if let Some((id, anchor)) = touched {
+            if self.is_listed(id) {
+                self.set_active(Some(id), true, cx);
+            } else if let Some(anchor) = anchor {
+                // Resolved and not listed: its place in the text.
+                self.scroll_text_to(anchor.start, cx);
+            }
+            return;
+        }
+        // A thread that is gone: where it was.
+        let removed = before
+            .iter()
+            .find(|old| self.thread(old.id).is_none())
+            .and_then(ThreadEntry::anchor);
+        if let Some(anchor) = removed {
+            self.scroll_text_to(anchor.start, cx);
+            return;
+        }
+        // Text: the caret is put where the change was; failing that, the
+        // first block that changed.
+        if let Some(splice) = change.blocks {
+            let head = self.editor.read(cx).selection().head;
+            let position = if splice.new_range().contains(&head.block) {
+                head
+            } else {
+                Position::new(splice.start, 0)
+            };
+            self.scroll_text_to(position, cx);
+        }
+    }
+
+    fn scroll_text_to(&mut self, position: Position, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            let position = editor.document().clamp_position(position);
+            editor.scroll_to_position(position, Autoscroll::Fit, cx);
+        });
     }
 }

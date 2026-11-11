@@ -79,6 +79,7 @@
 //! | anywhere | `cmd-2` | [`FocusComments`]: focus the thread list |
 //! | composer | `enter`, `cmd-enter` | [`SubmitComment`] (`shift-enter` is a line break) |
 //! | composer | `escape` | [`CancelComment`]: back to where the draft was started |
+//! | composer, thread list | `tab`, `shift-tab` | [`CycleFocus`]: between an open composer and the thread list |
 //! | thread list | `up` `down`, `k` `j`, `home` `end` | move between threads; the editor scrolls to the anchor |
 //! | thread list | `right` `left`, `l` `h` | step through the replies of the active thread |
 //! | thread list | `enter` or `r` | [`ReplyToThread`] |
@@ -111,9 +112,10 @@ mod panel;
 mod render;
 pub mod threads;
 pub mod time;
+pub mod track;
 
 pub use actions::{
-    AddComment, CATEGORY, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete,
+    AddComment, CATEGORY, COMPOSER_CONTEXT, CancelComment, CancelDelete, ConfirmDelete, CycleFocus,
     DeleteComment, EditComment, FocusComments, FocusEditor, NextComment, PANEL_CONTEXT,
     PreviousComment, ReplyToThread, SelectFirstThread, SelectLastThread, SelectNextReply,
     SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment, THREADS_CONTEXT,

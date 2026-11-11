@@ -7,7 +7,7 @@
 //! | none | anywhere in the window | add comment, next / previous comment, show or hide comments, focus comments |
 //! | [`THREADS_CONTEXT`] | the thread list has focus | thread and reply navigation, reply, edit, resolve, delete, show resolved, undo, back to the editor |
 //! | [`THREADS_CONTEXT`] with `confirming` | a delete confirmation is showing | confirm, cancel |
-//! | [`COMPOSER_CONTEXT`] | the composer has focus | submit, cancel |
+//! | [`COMPOSER_CONTEXT`] | the composer has focus | submit, cancel, on to the thread list |
 //!
 //! The list bindings are disabled while a composer is open inside the list
 //! (the `composing` flag), so letters typed into a reply are text, not
@@ -59,6 +59,8 @@ actions!(
         CancelDelete,
         /// Leave the comments panel and return focus to the editor.
         FocusEditor,
+        /// Move the keyboard between an open composer and the thread list.
+        CycleFocus,
         // --- The composer ---
         /// Save the comment, reply or edit being written.
         SubmitComment,
@@ -80,6 +82,12 @@ pub const COMPOSER_CONTEXT: &str = "CommentComposer";
 /// Category of every command in [`commands`].
 pub const CATEGORY: &str = "Comments";
 
+/// The composer's own level: the compact editor inside the composer box.
+/// The editor binds `tab` at this level too (in a compact editor it moves
+/// to the next tab stop of the window, which from a composer can be
+/// anywhere); of two bindings at the focused element's level the one added
+/// later wins, and [`crate::init`] runs after `writer_editor::init`.
+const COMPOSER_FIELD: &str = "CommentComposer > Editor";
 const THREADS_IDLE: &str = "CommentThreads && !confirming && !composing";
 const THREADS_CONFIRMING: &str = "CommentThreads && confirming";
 
@@ -120,6 +128,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-backspace", DeleteComment, threads),
         KeyBinding::new("s", ToggleShowResolved, threads),
         KeyBinding::new("escape", FocusEditor, threads),
+        // Back into a composer that was left open.
+        KeyBinding::new("shift-tab", CycleFocus, threads),
+        KeyBinding::new("tab", CycleFocus, threads),
         // The document's undo history holds the comment changes, so undo
         // must work without going back to the text first.
         KeyBinding::new("cmd-z", writer_editor::actions::Undo, threads),
@@ -132,6 +143,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // the composer, because the editor binds `cmd-enter` itself.
         KeyBinding::new("cmd-enter", SubmitComment, composer),
         KeyBinding::new("escape", CancelComment, composer),
+        // A comment is plain text, so `tab` is free: it leads to the thread
+        // list and leaves the draft open.
+        KeyBinding::new("shift-tab", CycleFocus, Some(COMPOSER_FIELD)),
+        KeyBinding::new("tab", CycleFocus, Some(COMPOSER_FIELD)),
     ]
 }
 

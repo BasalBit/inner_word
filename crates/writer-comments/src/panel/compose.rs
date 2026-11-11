@@ -6,8 +6,11 @@ use writer_core::{Selection, TextRange};
 use writer_editor::HighlightStyle;
 use writer_ui::theme::ActiveTheme;
 
-use super::{CommentsPanel, DRAFT_HIGHLIGHT_LAYER, Draft, DraftKind};
-use crate::threads::{quote, word_range_at};
+use super::{CommentsPanel, DRAFT_HIGHLIGHT_LAYER, Draft, DraftKind, fingerprint_of};
+use crate::{
+    threads::{quote, word_range_at},
+    track::RangeTracker,
+};
 
 impl CommentsPanel {
     /// Starts a comment: opens the composer for the selected text, or for
@@ -46,9 +49,14 @@ impl CommentsPanel {
             return;
         };
         if retargeting {
+            let tracker = RangeTracker::new(self.editor.read(cx).document(), range);
             if let Some(draft) = &mut self.draft {
-                draft.kind = DraftKind::New { range };
+                draft.kind = DraftKind::New {
+                    range: tracker.range(),
+                };
                 draft.quote = quote;
+                draft.fingerprint = tracker.text().to_string();
+                draft.tracker = Some(tracker);
             }
             self.refresh_draft_highlight(cx);
             window.focus(&self.composer.focus_handle(cx));
@@ -116,21 +124,40 @@ impl CommentsPanel {
             });
         let was_visible = self.visible;
         self.confirming = None;
+        // Another composer with text in it is set aside, not overwritten:
+        // it reopens when this one closes.
+        self.keep_draft(true, cx);
+        // Showing comments would bring a kept draft back into the composer
+        // this one is about to use; it waits its turn instead.
+        let kept = std::mem::take(&mut self.kept);
         self.set_visible(true, window, cx);
+        self.kept = kept;
         let placeholder = kind.placeholder();
         self.composer.update(cx, |composer, cx| {
             composer.set_plain_text(text, cx);
             composer.update_config(|config| config.placeholder = placeholder.into(), cx);
         });
+        let document = self.editor.read(cx).document();
+        let tracker = match kind {
+            DraftKind::New { range } => Some(RangeTracker::new(document, range)),
+            _ => None,
+        };
+        let fingerprint = match &tracker {
+            Some(tracker) => tracker.text().to_string(),
+            None => fingerprint_of(&kind, document).unwrap_or_default(),
+        };
         self.draft = Some(Draft {
             kind,
             quote,
+            tracker,
+            fingerprint,
+            original: text.to_string(),
             return_to_list,
             was_visible,
         });
         self.refresh_draft_highlight(cx);
         // A reply or an edit grows its card: keep the card in view.
-        self.scroll_list_to_active();
+        self.scroll_list_to_active(cx);
         window.focus(&self.composer.focus_handle(cx));
         cx.notify();
     }
@@ -142,6 +169,7 @@ impl CommentsPanel {
             Some(DraftKind::New { range }) => Some(*range),
             _ => None,
         };
+        let range = range.filter(|range| !range.is_empty() && self.visible);
         let color = cx.theme().colors.comment_active;
         self.editor.update(cx, |editor, cx| match range {
             Some(range) => {
@@ -163,11 +191,18 @@ impl CommentsPanel {
 
     /// Saves what the composer holds: creates the thread, adds the reply or
     /// changes the body, as one undo step of the document. An empty text
-    /// saves nothing and leaves the composer open. Afterwards focus returns
+    /// saves nothing and leaves the composer open; so does a new comment
+    /// whose text was deleted meanwhile
+    /// ([`CommentsPanel::draft_target_lost`]). Afterwards focus returns
     /// to where the draft was started (the editor for a new comment, the
     /// thread list for a reply or an edit made there), and a new thread is
     /// the active one.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft.is_none() || self.read_only(cx) {
+            return;
+        }
+        // The target as it is in the document now.
+        self.track_edit(None, cx);
         let Some(draft) = &self.draft else {
             return;
         };
@@ -181,6 +216,13 @@ impl CommentsPanel {
         let now = self.now();
         match kind {
             DraftKind::New { range } => {
+                if range.is_empty() {
+                    self.notice(
+                        "The text this comment was for is gone. Select text and add the comment again.",
+                        cx,
+                    );
+                    return;
+                }
                 let created = self.mutate(cx, |state| {
                     state.grouped(|state| {
                         // The thread is anchored to the selection; put the
@@ -192,9 +234,11 @@ impl CommentsPanel {
                         id
                     })
                 });
-                if let Some(Some(id)) = created {
-                    self.set_active(Some(id), false, cx);
-                }
+                let Some(Some(id)) = created else {
+                    // Nothing to anchor to after all: keep what was written.
+                    return;
+                };
+                self.set_active(Some(id), false, cx);
             }
             DraftKind::Reply { thread } => {
                 self.mutate(cx, |state| state.add_reply(thread, body, &author, now));
@@ -234,6 +278,8 @@ impl CommentsPanel {
         } else {
             self.editor.read(cx).focus(window);
         }
+        // A draft that was set aside for this one takes the composer back.
+        self.restore_kept_draft(cx);
         cx.notify();
     }
 

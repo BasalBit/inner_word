@@ -1,8 +1,9 @@
 //! Starting a comment from the editor: the composer, submit, cancel, undo.
 
 use gpui::TestAppContext;
-use writer_comments::{CommentsEvent, DRAFT_HIGHLIGHT_LAYER, DraftKind};
+use writer_comments::{CommentsEvent, DRAFT_HIGHLIGHT_LAYER, DraftKind, SubmitComment};
 use writer_core::{Position, Selection, TextRange};
+use writer_ui::KeyHint;
 
 use super::support::{AUTHOR, Focus, NOW, open, sample};
 
@@ -235,4 +236,106 @@ fn adding_while_comments_are_hidden_shows_them(cx: &mut TestAppContext) {
             CommentsEvent::VisibilityChanged(true),
         ]
     );
+}
+
+#[gpui::test]
+fn the_composer_names_both_keys_that_save(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    f.select(0, 4, 9, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    assert!(cx.debug_bounds("comment-composer-hints").is_some());
+    // The hints are read from the keymap: these are the keys they show...
+    cx.update(|_, cx| {
+        let hint = |hint: Option<KeyHint>| hint.map(|hint| hint.text());
+        assert_eq!(
+            hint(KeyHint::for_action(&writer_editor::actions::Newline, cx)).as_deref(),
+            Some("↩")
+        );
+        assert_eq!(
+            hint(KeyHint::for_action(&SubmitComment, cx)).as_deref(),
+            Some("⌘↩")
+        );
+        assert_eq!(
+            hint(KeyHint::for_action(
+                &writer_editor::actions::InsertSoftBreak,
+                cx
+            ))
+            .as_deref(),
+            Some("⇧↩")
+        );
+    });
+    // ...and each of them does what the hint says.
+    cx.simulate_input("one");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("two");
+    assert_eq!(f.composer_text(cx), "one\ntwo");
+    cx.simulate_keystrokes("cmd-enter");
+    assert_eq!(f.comment_count(cx), 1);
+    f.select(1, 2, 8, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    cx.simulate_input("three");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.comment_count(cx), 2);
+}
+
+#[gpui::test]
+fn tab_in_the_composer_moves_to_the_thread_list(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    let existing = f.comment(1, 2, 8, "Existing", cx);
+    f.select(0, 4, 9, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    cx.simulate_input("Draft");
+
+    // Tab is not text in a comment: it leads on to the thread list. The
+    // draft stays open.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(f.composer_text(cx), "Draft");
+    assert_eq!(f.focus(cx), Focus::List);
+    f.panel
+        .read_with(cx, |panel, _| assert!(panel.is_composing()));
+    // The list has an active thread to work on, and its keys work.
+    assert_eq!(f.active(cx), Some(existing));
+    cx.simulate_keystrokes("j k");
+    assert_eq!(f.composer_text(cx), "Draft");
+    // Tab (or shift-tab) leads back into the composer.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    cx.simulate_keystrokes("shift-tab");
+    assert_eq!(f.focus(cx), Focus::List);
+    cx.simulate_keystrokes("shift-tab");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    cx.simulate_input(" continued");
+    assert_eq!(f.composer_text(cx), "Draft continued");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.comment_count(cx), 2);
+
+    // The same from a reply composer inside a card.
+    cx.simulate_keystrokes("cmd-2 r");
+    cx.simulate_input("Reply");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(f.focus(cx), Focus::List);
+    assert_eq!(f.composer_text(cx), "Reply");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    cx.simulate_input("\tdone");
+    assert_eq!(
+        f.composer_text(cx),
+        "Reply\tdone",
+        "pasted or typed tabs are text"
+    );
+    // Without a composer, tab in the list does nothing.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(f.focus(cx), Focus::List);
+    cx.simulate_keystrokes("tab shift-tab");
+    assert_eq!(f.focus(cx), Focus::List);
+
+    // With no thread to list there is nowhere to go: the composer keeps
+    // the keyboard.
+    let (f, cx) = open(sample(), cx);
+    f.select(0, 4, 9, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    cx.simulate_input("Only");
+    cx.simulate_keystrokes("tab shift-tab");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    assert_eq!(f.composer_text(cx), "Only");
 }

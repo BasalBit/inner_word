@@ -78,7 +78,8 @@ fn hiding_from_inside_the_panel_returns_focus_to_the_editor(cx: &mut TestAppCont
     cx.simulate_keystrokes("cmd-alt-c");
     assert_eq!(f.focus(cx), Focus::Editor);
 
-    // From an open reply composer: the draft is dropped with the panel.
+    // From an open reply composer: the composer closes with the panel and
+    // nothing is saved, but what was written is kept.
     cx.simulate_keystrokes("cmd-2 r");
     assert_eq!(f.focus(cx), Focus::Composer);
     cx.simulate_input("half a thought");
@@ -88,10 +89,23 @@ fn hiding_from_inside_the_panel_returns_focus_to_the_editor(cx: &mut TestAppCont
         assert!(!panel.is_visible());
         assert!(!panel.is_composing());
         assert!(panel.threads()[0].thread.replies.is_empty());
+        assert_eq!(panel.kept_drafts(), 1);
     });
     assert_eq!(f.composer_text(cx), "");
 
-    // Focusing the panel, or going to a comment, shows comments again.
+    // Focusing the panel, or going to a comment, shows comments again,
+    // and the reply is back in its composer.
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    assert_eq!(f.composer_text(cx), "half a thought");
+    f.panel.read_with(cx, |panel, _| {
+        assert!(panel.is_visible());
+        assert_eq!(panel.kept_drafts(), 0);
+    });
+    // An empty composer is simply closed.
+    cx.simulate_keystrokes("escape r cmd-alt-c");
+    f.panel
+        .read_with(cx, |panel, _| assert_eq!(panel.kept_drafts(), 0));
     cx.simulate_keystrokes("cmd-2");
     assert_eq!(f.focus(cx), Focus::List);
     f.panel

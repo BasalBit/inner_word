@@ -122,9 +122,10 @@ fn the_list_scrolls_to_the_active_thread(cx: &mut TestAppContext) {
     assert_eq!(f.focus(cx), Focus::List);
     let list = bounds("comment-threads".into(), cx);
 
-    // 80 cards do not fit: the last one starts below the list.
+    // 80 cards do not fit; the far ones are not drawn at all. (The test
+    // platform keeps the bounds of the last frame that drew an element,
+    // so only cards that must be on screen are asked for.)
     let last = *ids.last().unwrap();
-    assert!(thread_bounds(last, cx).top() > list.bottom());
 
     cx.simulate_keystrokes("end");
     assert_eq!(f.active(cx), Some(last));
@@ -132,7 +133,6 @@ fn the_list_scrolls_to_the_active_thread(cx: &mut TestAppContext) {
         contains(list, thread_bounds(last, cx)),
         "the active thread is scrolled into view"
     );
-    assert!(thread_bounds(ids[0], cx).bottom() < list.top());
 
     cx.simulate_keystrokes("home");
     assert!(contains(list, thread_bounds(ids[0], cx)));
@@ -148,4 +148,76 @@ fn the_list_scrolls_to_the_active_thread(cx: &mut TestAppContext) {
     assert_eq!(f.active(cx), Some(ids[30]));
     cx.run_until_parked();
     assert!(contains(list, thread_bounds(ids[30], cx)));
+
+    // Step by step, down and up again, the active card is always whole:
+    // also the one that grows by its row of key hints when it gets active.
+    cx.simulate_keystrokes("cmd-2");
+    for (step, id) in ids.iter().enumerate().take(50).skip(31) {
+        cx.simulate_keystrokes("j");
+        assert_eq!(f.active(cx), Some(*id));
+        assert!(contains(list, thread_bounds(*id, cx)), "down to {step}");
+    }
+    for (step, id) in ids.iter().enumerate().take(49).skip(20).rev() {
+        cx.simulate_keystrokes("k");
+        assert!(contains(list, thread_bounds(*id, cx)), "up to {step}");
+    }
+    // A reply composer that opens in the last card stays in view.
+    cx.simulate_keystrokes("end r");
+    assert_eq!(f.focus(cx), Focus::Composer);
+    cx.run_until_parked();
+    assert!(contains(list, bounds("comment-composer".into(), cx)));
+}
+
+/// The list is virtualised: with a thousand threads only the cards near
+/// the visible part are built. (Before, every card was laid out for every
+/// frame: 40 steps through this list took 13 s in a debug build, now 0.2 s.)
+#[gpui::test]
+fn a_thousand_threads_cost_no_more_than_a_screenful(cx: &mut TestAppContext) {
+    let (f, cx) = open(many_comments(1000), cx);
+    let ids = ids(&f, cx);
+    assert_eq!(ids.len(), 1000);
+    cx.simulate_keystrokes("cmd-2");
+    let list = bounds("comment-threads".into(), cx);
+    let built = |cx: &mut VisualTestContext| f.panel.read_with(cx, |panel, _| panel.rows_built());
+    assert!(contains(list, thread_bounds(ids[0], cx)));
+    let so_far = built(cx);
+    assert!(
+        so_far < 400,
+        "{so_far} cards were built to show the first screenful of 1000"
+    );
+
+    let started = std::time::Instant::now();
+    for id in ids.iter().take(41).skip(1) {
+        cx.simulate_keystrokes("j");
+        assert!(contains(list, thread_bounds(*id, cx)));
+    }
+    let stepping = started.elapsed();
+    let per_step = (built(cx) - so_far) / 40;
+    assert!(
+        per_step < 150,
+        "{per_step} cards built per step through a list of 1000"
+    );
+    // The far end and back: no walk through the cards in between.
+    let so_far = built(cx);
+    cx.simulate_keystrokes("end");
+    assert_eq!(f.active(cx), Some(ids[999]));
+    assert!(contains(list, thread_bounds(ids[999], cx)));
+    cx.simulate_keystrokes("home");
+    assert!(contains(list, thread_bounds(ids[0], cx)));
+    assert!(
+        built(cx) - so_far < 600,
+        "{} cards built",
+        built(cx) - so_far
+    );
+
+    // Resolving in the middle of the list keeps the place.
+    cx.simulate_keystrokes("escape");
+    f.caret(500, 3, cx);
+    cx.simulate_keystrokes("cmd-2 x");
+    assert_eq!(f.listed_ids(cx).len(), 999);
+    assert_eq!(f.active(cx), Some(ids[501]));
+    assert!(contains(list, thread_bounds(ids[501], cx)));
+    eprintln!("1000 threads: 40 steps through the list took {stepping:?}");
+    // Generous: a debug build on a busy machine. It was 13 s.
+    assert!(stepping < std::time::Duration::from_secs(5));
 }

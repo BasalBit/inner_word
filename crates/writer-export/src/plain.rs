@@ -1,8 +1,10 @@
 //! Plain-text export, for places where Markdown is not rendered (social
 //! posts, plain e-mail).
 //!
-//! Paragraphs are separated by blank lines, list items sit on consecutive
-//! lines, bullets are a bullet character, numbered items carry their real
+//! Paragraphs are separated by blank lines, and an empty paragraph the
+//! author left between two pieces of text is one more blank line
+//! ([`PlainTextOptions::empty_paragraphs`]), so the spacing of a post is the
+//! spacing that was typed. List items sit on consecutive lines, bullets are a bullet character, numbered items carry their real
 //! numbers, to-dos a ballot box, quotes a `>` prefix, and links are written
 //! as `text (url)`. Formatting that plain text cannot carry is dropped;
 //! optionally bold and italic become the Unicode mathematical alphabets
@@ -27,7 +29,7 @@
 
 use writer_core::{Block, BlockKind, Document};
 
-use crate::common::{is_list_item, ordinals, part_needs_title, trimmed_lines};
+use crate::common::{is_blank_text, is_list_item, ordinals, part_needs_title, trimmed_lines};
 use crate::{ExportSource, PartTitles};
 
 /// How links are written in plain text.
@@ -73,6 +75,13 @@ pub struct PlainTextOptions {
     /// Whether the documents of a collection get their title as a line of
     /// their own.
     pub part_titles: PartTitles,
+    /// Keep the empty paragraphs between two pieces of text: each one is
+    /// one more blank line (default on). Two paragraphs are separated by
+    /// one blank line; with an empty paragraph between them, by two. Empty
+    /// paragraphs before the first text and after the last are always
+    /// dropped, as are spaces at the end of a line. When off, every gap is
+    /// exactly one blank line.
+    pub empty_paragraphs: bool,
 }
 
 impl Default for PlainTextOptions {
@@ -87,6 +96,7 @@ impl Default for PlainTextOptions {
             quote_prefix: "> ".to_string(),
             divider: "* * *".to_string(),
             part_titles: PartTitles::default(),
+            empty_paragraphs: true,
         }
     }
 }
@@ -112,6 +122,7 @@ pub fn to_plain_text(source: &ExportSource<'_>, options: &PlainTextOptions) -> S
             chunks.push(Chunk {
                 text: style_text(&part.title, options.unicode_styles, false),
                 list: false,
+                blank_before: 0,
             });
         }
         document_chunks(part.document, options, &mut chunks);
@@ -136,17 +147,22 @@ pub fn to_plain_text(source: &ExportSource<'_>, options: &PlainTextOptions) -> S
 struct Chunk {
     text: String,
     list: bool,
+    /// How many empty paragraphs stand between this chunk and the one
+    /// before it.
+    blank_before: usize,
 }
 
 fn join_chunks(chunks: &[Chunk]) -> String {
     let mut out = String::new();
     for (i, c) in chunks.iter().enumerate() {
         if i > 0 {
-            out.push_str(if c.list && chunks[i - 1].list {
+            // An empty paragraph between two list items ends the list.
+            out.push_str(if c.list && chunks[i - 1].list && c.blank_before == 0 {
                 "\n"
             } else {
                 "\n\n"
             });
+            out.extend(std::iter::repeat_n('\n', c.blank_before));
         }
         out.push_str(&c.text);
     }
@@ -155,7 +171,14 @@ fn join_chunks(chunks: &[Chunk]) -> String {
 
 fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<Chunk>) {
     let ordinals = ordinals(doc);
+    // Empty paragraphs seen since the last text of this document. Those
+    // above the first text (`None`) do not count.
+    let mut blank: Option<usize> = None;
     for (i, block) in doc.blocks().iter().enumerate() {
+        if options.empty_paragraphs && is_blank_text(block) && !is_list_item(block) {
+            blank = blank.map(|n| n + 1);
+            continue;
+        }
         let text = match block.kind() {
             BlockKind::Divider => options.divider.trim().to_string(),
             BlockKind::PageBreak => String::new(),
@@ -213,7 +236,9 @@ fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<
             chunks.push(Chunk {
                 text,
                 list: is_list_item(block),
+                blank_before: blank.unwrap_or(0),
             });
+            blank = Some(0);
         }
     }
 }
@@ -442,7 +467,73 @@ mod tests {
                 Block::paragraph(""),
                 Block::paragraph("  Two  \n  three "),
             ]),
-            "One\n\nTwo\nthree\n"
+            "One\n\n\n\nTwo\nthree\n"
+        );
+        // What a post looks like: the gaps are the author's, the edges and
+        // the spaces at the end of a line are not.
+        let post = vec![
+            Block::paragraph(""),
+            Block::paragraph("first line\nsecond line, two trailing spaces  "),
+            Block::paragraph("1. not a list"),
+            Block::paragraph("- not a bullet"),
+            Block::paragraph(""),
+            Block::paragraph("Last line \u{1f44d}\u{1f3fd} end"),
+            Block::paragraph(" "),
+        ];
+        assert_eq!(
+            plain(post.clone()),
+            "first line\nsecond line, two trailing spaces\n\n1. not a list\n\n- not a bullet\n\n\n\
+             Last line \u{1f44d}\u{1f3fd} end\n"
+        );
+        let doc = Document::from_blocks(post);
+        let tight = PlainTextOptions {
+            empty_paragraphs: false,
+            ..PlainTextOptions::default()
+        };
+        assert_eq!(
+            to_plain_text(&ExportSource::from(&doc), &tight),
+            "first line\nsecond line, two trailing spaces\n\n1. not a list\n\n- not a bullet\n\n\
+             Last line \u{1f44d}\u{1f3fd} end\n"
+        );
+    }
+
+    #[test]
+    fn empty_paragraphs_between_other_blocks() {
+        // An empty paragraph between two list items ends the list; an empty
+        // list item is still an item; page breaks are no gap; an empty
+        // heading or quote is a gap like an empty paragraph.
+        assert_eq!(
+            plain(vec![
+                Block::with_text(BlockKind::BulletItem, "a"),
+                Block::paragraph(""),
+                Block::with_text(BlockKind::BulletItem, "b"),
+                Block::with_text(BlockKind::BulletItem, ""),
+                Block::with_text(BlockKind::BulletItem, "c"),
+                Block::new(BlockKind::PageBreak),
+                Block::paragraph("d"),
+                Block::with_text(BlockKind::heading(2), ""),
+                Block::with_text(BlockKind::Quote, " "),
+                Block::new(BlockKind::Divider),
+                Block::paragraph(""),
+            ]),
+            "\u{2022} a\n\n\n\u{2022} b\n\u{2022}\n\u{2022} c\n\nd\n\n\n\n* * *\n"
+        );
+        // In a collection the gaps stay inside their document.
+        let a = Document::from_blocks(vec![
+            Block::paragraph(""),
+            Block::paragraph("One"),
+            Block::paragraph(""),
+        ]);
+        let b = Document::from_blocks(vec![
+            Block::paragraph(""),
+            Block::paragraph("Two"),
+            Block::paragraph(""),
+            Block::paragraph("more"),
+        ]);
+        let book = ExportSource::collection("Book", [("One", &a), ("Chapter", &b)]);
+        assert_eq!(
+            to_plain_text(&book, &PlainTextOptions::default()),
+            "One\n\n* * *\n\nChapter\n\nTwo\n\n\nmore\n"
         );
     }
 

@@ -358,7 +358,7 @@ impl EditorState {
             return false;
         }
         self.history.force_end_group();
-        let Some(entry) = self.history.undo.pop_back() else {
+        let Some(entry) = self.history.pop_undo() else {
             return false;
         };
         let (ops, splice, comments) = self.apply_ops(entry.ops);
@@ -431,7 +431,9 @@ impl EditorState {
         r
     }
 
-    /// Sets the maximum number of undo steps kept (at least 1).
+    /// Sets the maximum number of undo steps kept (at least 1). Independently
+    /// of it, the oldest steps are dropped once the history holds more than
+    /// about [`UNDO_BYTE_BUDGET`](crate::UNDO_BYTE_BUDGET) bytes.
     pub fn set_undo_limit(&mut self, limit: usize) {
         self.history.limit = limit.max(1);
         self.history.trim();
@@ -561,6 +563,7 @@ impl EditorState {
             first_class: tx.first_class,
             last_class: tx.last_class,
             open: false,
+            bytes: 0,
         });
         #[cfg(debug_assertions)]
         self.debug_check_local(tx.splice);

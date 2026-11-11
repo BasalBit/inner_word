@@ -135,7 +135,7 @@ pub use editor::{
     BlockSplice, Change, Choice, EditorOptions, EditorState, FormatState, LinkInfo, Toggle,
 };
 pub use fragment::Fragment;
-pub use history::DEFAULT_UNDO_LIMIT;
+pub use history::{DEFAULT_UNDO_LIMIT, UNDO_BYTE_BUDGET};
 pub use movement::Movement;
 pub use position::{Position, Selection, TextRange};
 pub use runs::Run;

@@ -1007,3 +1007,19 @@ fn word_movement_matches_macos() {
     assert_eq!(d.moved(p(0, t.len()), Movement::WordRight), p(3, 6));
     assert_eq!(d.moved(p(3, 2), Movement::WordLeft), p(0, t.len() - "clock".len() - 2));
 }
+
+#[test]
+fn undo_history_has_a_memory_budget() {
+    // About 2.4 MB per step: every select-all edit keeps a copy of everything.
+    let blocks: Vec<Block> = (0..2000).map(|i| para(&format!("{i:>1000}"))).collect();
+    let mut e = ed(blocks);
+    for _ in 0..70 {
+        e.select_all();
+        e.toggle_bold();
+    }
+    // 70 steps would hold about 170 MB; the budget keeps about 128 MB.
+    let depth = e.undo_depth();
+    assert!((20..60).contains(&depth), "{depth}");
+    assert_eq!(undo_count(&mut e), depth);
+    assert!(!e.can_undo());
+}

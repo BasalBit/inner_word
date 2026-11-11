@@ -312,3 +312,121 @@ fn library_tree_nests_in_display_order() {
     assert_eq!(tree.documents[0].title, "root doc");
     assert_eq!(tree.find_folder(a1x.id).unwrap().folder.name, "A1x");
 }
+
+/// Not a test of behaviour: prints what the parts of an autosave cost on a database file
+/// with 5,000 documents and a 1 MB document.
+///
+/// ```bash
+/// CARGO_TARGET_DIR=target-pure cargo test --release -p writer-store --test documents \
+///     -- --ignored --nocapture save_cost
+/// ```
+#[test]
+#[ignore = "a measurement; run it by hand in a release build"]
+fn save_cost() {
+    use std::time::{Duration, Instant};
+
+    const ROUNDS: usize = 30;
+    fn report(label: &str, mut times: Vec<Duration>) {
+        times.sort();
+        let ms = |d: Duration| d.as_secs_f64() * 1000.;
+        println!(
+            "{label:<52} median {:>8.3} ms   max {:>8.3} ms",
+            ms(times[times.len() / 2]),
+            ms(times[times.len() - 1]),
+        );
+    }
+    fn prose(bytes: usize, seed: &mut u64) -> String {
+        const WORDS: &[&str] = &[
+            "salt", "road", "harbour", "letter", "tide", "inland", "ash", "morning", "window",
+            "paper", "ink", "river", "stone", "quiet", "the", "a", "of", "and", "to", "in", "was",
+            "her", "his", "that", "with", "for", "had", "but", "not", "from", "said", "when",
+        ];
+        let mut text = String::with_capacity(bytes + 8);
+        while text.len() < bytes {
+            *seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(WORDS[(*seed >> 33) as usize % WORDS.len()]);
+        }
+        text
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = writer_store::Store::open(dir.path().join("library.db")).unwrap();
+    let mut seed = 7;
+    let folders: Vec<_> = (0..20)
+        .map(|ix| store.create_folder(None, &format!("Box {ix}")).unwrap().id)
+        .collect();
+    // SAVE_COST_DOC_BYTES: the size of the 5,000 ordinary documents (default 1,800).
+    let doc_bytes = std::env::var("SAVE_COST_DOC_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1800);
+    for ix in 0..5000 {
+        let text = prose(doc_bytes, &mut seed);
+        doc(
+            &mut store,
+            Some(folders[ix % folders.len()]),
+            &format!("Entry {ix}"),
+            &text,
+        );
+    }
+    let mut text = prose(950_000, &mut seed);
+    let big = doc(&mut store, None, "The whole book", &text).id;
+    let small_text = prose(2_000, &mut seed);
+    let small = doc(&mut store, None, "A short note", &small_text).id;
+
+    let mut times = Vec::new();
+    for _ in 0..ROUNDS {
+        let start = Instant::now();
+        let tree = store.library_tree().unwrap();
+        times.push(start.elapsed());
+        assert_eq!(tree.documents.len(), 2);
+    }
+    report("library_tree()", times);
+
+    let mut times = Vec::new();
+    for round in 0..ROUNDS {
+        let text = format!("{small_text} word{round}");
+        let json = format!("{{\"text\":{text:?}}}");
+        let start = Instant::now();
+        store
+            .save_document(small, &content("A short note", &text, &json))
+            .unwrap();
+        times.push(start.elapsed());
+    }
+    report("save_document, 2 KB, text changed", times);
+
+    let (mut changed, mut snapshots) = (Vec::new(), Vec::new());
+    for round in 0..ROUNDS {
+        text.push_str(&format!(" word{round}"));
+        let json = format!("{{\"text\":{text:?}}}");
+        let start = Instant::now();
+        store
+            .save_document(big, &content("The whole book", &text, &json))
+            .unwrap();
+        changed.push(start.elapsed());
+        let start = Instant::now();
+        store
+            .snapshot_if_stale(big, Duration::from_secs(600))
+            .unwrap();
+        snapshots.push(start.elapsed());
+    }
+    report("save_document, 1 MB, text changed", changed);
+    report("snapshot_if_stale, 1 MB, snapshot is recent", snapshots);
+
+    let mut times = Vec::new();
+    for round in 0..ROUNDS {
+        // A change of formatting only: the stored form differs, the plain text does not.
+        let json = format!("{{\"round\":{round},\"text\":{text:?}}}");
+        let start = Instant::now();
+        store
+            .save_document(big, &content("The whole book", &text, &json))
+            .unwrap();
+        times.push(start.elapsed());
+    }
+    report("save_document, 1 MB, same text (formatting only)", times);
+}

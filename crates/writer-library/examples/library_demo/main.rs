@@ -5,6 +5,7 @@
 //! cargo run -p writer-library --example library_demo
 //! LIBRARY_DEMO_DOCS=5000 cargo run -p writer-library --example library_demo   # a big library
 //! LIBRARY_DEMO_EMPTY=1 cargo run -p writer-library --example library_demo     # the empty state
+//! LIBRARY_DEMO_BENCH=5000 cargo run --release -p writer-library --example library_demo  # save cost, no window
 //! ```
 //!
 //! The library lives in memory and is seeded with nested folders, documents and a few
@@ -16,6 +17,7 @@
 //! `THE_WRITER_AUTOMATION="wait:800; theme:light; screenshot:/tmp/l.png; quit"`.
 
 mod automation;
+mod bench;
 
 use gpui::{
     App, Application, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, SharedString,
@@ -392,6 +394,9 @@ impl Render for Demo {
 }
 
 fn main() {
+    if bench::run_from_env() {
+        return;
+    }
     Application::new()
         .with_assets(writer_ui::assets::Assets)
         .run(|cx: &mut App| {

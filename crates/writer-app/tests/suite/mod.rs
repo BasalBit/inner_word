@@ -7,8 +7,8 @@ mod export;
 mod keymap;
 mod session;
 mod settings;
-mod story;
 mod shell;
+mod story;
 mod units;
 
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};

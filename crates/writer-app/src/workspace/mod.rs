@@ -204,9 +204,7 @@ impl Workspace {
 
         // Everything that extends the editor attaches to the one editor
         // entity here and follows `DocumentReplaced` by itself.
-        let recent_fonts: Vec<String> = library
-            .read(cx)
-            .setting_or(keys::RECENT_FONTS, Vec::new());
+        let recent_fonts: Vec<String> = library.read(cx).setting_or(keys::RECENT_FONTS, Vec::new());
         writer_editor_tools::set_recent_fonts(recent_fonts.into_iter().map(SharedString::from), cx);
         let tools = cx.new(|cx| EditorTools::new(editor.clone(), window, cx));
         let comments = cx.new(|cx| {
@@ -806,6 +804,89 @@ impl Workspace {
         self.mark_dirty(cx);
     }
 
+    /// Changes the open document's own settings (paper, typography) and
+    /// says what they are now. The change is part of the document: it is
+    /// saved with it and exported with it.
+    pub fn change_document_settings(
+        &mut self,
+        change: impl FnOnce(&mut writer_core::DocumentSettings),
+        describe: impl FnOnce(&writer_core::DocumentSettings) -> String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.is_none() || self.editor.read(cx).is_read_only() {
+            return;
+        }
+        let mut settings = self.editor.read(cx).document().settings().clone();
+        change(&mut settings);
+        let settings = settings.sanitized();
+        let message = describe(&settings);
+        self.editor.update(cx, |editor, cx| {
+            editor.edit_with(
+                writer_editor::Autoscroll::None,
+                |state| state.set_settings(settings),
+                cx,
+            );
+        });
+        self.mark_dirty(cx);
+        self.show_toast(Toast::new(message).duration(Duration::from_secs(2)), cx);
+    }
+
+    fn set_paper(&mut self, paper: writer_core::PaperSize, cx: &mut Context<Self>) {
+        self.change_document_settings(
+            |settings| settings.page.paper = paper,
+            |settings| {
+                let (width, height) = settings.page.page_size();
+                let name = match settings.page.paper {
+                    writer_core::PaperSize::A4 => "A4",
+                    writer_core::PaperSize::UsLetter => "US Letter",
+                    writer_core::PaperSize::Custom { .. } => "Custom",
+                };
+                let turned = if width > height { ", landscape" } else { "" };
+                format!("Paper: {name}{turned}")
+            },
+            cx,
+        );
+    }
+
+    fn toggle_orientation(&mut self, cx: &mut Context<Self>) {
+        use writer_core::Orientation;
+        self.change_document_settings(
+            |settings| {
+                settings.page.orientation = match settings.page.orientation {
+                    Orientation::Portrait => Orientation::Landscape,
+                    Orientation::Landscape => Orientation::Portrait,
+                }
+            },
+            |settings| match settings.page.orientation {
+                Orientation::Portrait => "Pages: portrait".to_string(),
+                Orientation::Landscape => "Pages: landscape".to_string(),
+            },
+            cx,
+        );
+    }
+
+    fn step_body_text_size(&mut self, points: f32, cx: &mut Context<Self>) {
+        self.change_document_settings(
+            |settings| {
+                let size = (settings.typography.base_size + points).round();
+                settings.typography.base_size = size.clamp(9., 36.);
+            },
+            |settings| format!("Body text: {} pt", settings.typography.base_size),
+            cx,
+        );
+    }
+
+    fn step_line_height(&mut self, step: f32, cx: &mut Context<Self>) {
+        self.change_document_settings(
+            |settings| {
+                let height = ((settings.typography.line_height + step) * 10.).round() / 10.;
+                settings.typography.line_height = height.clamp(1.0, 3.0);
+            },
+            |settings| format!("Line spacing: {:.1}", settings.typography.line_height),
+            cx,
+        );
+    }
+
     /// Turns Vim mode on or off (a setting). The mode indicator in the
     /// status bar shows the result.
     pub fn toggle_vim_mode(&mut self, cx: &mut Context<Self>) {
@@ -1192,6 +1273,64 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.toggle_vim_mode(cx);
+    }
+
+    pub(crate) fn on_a4_paper(&mut self, _: &UseA4Paper, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_paper(writer_core::PaperSize::A4, cx);
+    }
+
+    pub(crate) fn on_letter_paper(
+        &mut self,
+        _: &UseLetterPaper,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_paper(writer_core::PaperSize::UsLetter, cx);
+    }
+
+    pub(crate) fn on_toggle_orientation(
+        &mut self,
+        _: &TogglePageOrientation,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_orientation(cx);
+    }
+
+    pub(crate) fn on_larger_body_text(
+        &mut self,
+        _: &IncreaseBodyTextSize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_body_text_size(1., cx);
+    }
+
+    pub(crate) fn on_smaller_body_text(
+        &mut self,
+        _: &DecreaseBodyTextSize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_body_text_size(-1., cx);
+    }
+
+    pub(crate) fn on_more_line_height(
+        &mut self,
+        _: &IncreaseLineHeight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_line_height(0.1, cx);
+    }
+
+    pub(crate) fn on_less_line_height(
+        &mut self,
+        _: &DecreaseLineHeight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_line_height(-0.1, cx);
     }
 
     pub(crate) fn on_title_from_text(

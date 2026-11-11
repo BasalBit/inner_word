@@ -342,3 +342,64 @@ fn view_toggles_are_stored_and_come_back(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert_eq!(vim_mode(&workspace, vcx), None);
 }
+
+#[gpui::test]
+fn paper_and_typography_of_a_document_change_from_the_palette(cx: &mut TestAppContext) {
+    use writer_core::{Orientation, PaperSize};
+
+    init(cx);
+    let library = library(cx);
+    let id = add_document(
+        &library,
+        None,
+        &simple_document("Pages", "A paragraph on a page."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let settings = |workspace: &Entity<Workspace>, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            w.editor().read(cx).document().settings().clone()
+        })
+    };
+    let run = |query: &str, cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes("cmd-shift-p");
+        cx.simulate_input(query);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+    };
+    let before = settings(&workspace, vcx);
+    assert_eq!(before.page.paper, PaperSize::A4);
+    assert_eq!(before.page.orientation, Orientation::Portrait);
+
+    run("us letter", vcx);
+    run("landscape", vcx);
+    run("larger body text", vcx);
+    run("more line spacing", vcx);
+    run("more line spacing", vcx);
+    let after = settings(&workspace, vcx);
+    assert_eq!(after.page.paper, PaperSize::UsLetter);
+    assert_eq!(after.page.orientation, Orientation::Landscape);
+    assert_eq!(after.typography.base_size, before.typography.base_size + 1.);
+    assert!((after.typography.line_height - (before.typography.line_height + 0.2)).abs() < 0.001);
+    assert!(editor_focused(&workspace, vcx));
+    // The sheet in page view is the new paper, turned.
+    vcx.simulate_keystrokes("cmd-alt-p");
+    let (width, height) = after.page.page_size();
+    assert!(width > height);
+    assert_eq!((width, height), (792., 612.));
+
+    // It is the document's own setting: stored with it, and back with it.
+    workspace.update(vcx, |w, cx| w.flush(cx));
+    let stored = library.read_with(vcx, |library, _| library.document(id).unwrap().content);
+    let reread = Document::from_json(&stored).unwrap();
+    assert_eq!(reread.settings(), &settings(&workspace, vcx));
+    // And each step can be taken back.
+    run("a4 paper", vcx);
+    run("portrait", vcx);
+    run("smaller body text", vcx);
+    run("less line spacing", vcx);
+    run("less line spacing", vcx);
+    let mut restored = settings(&workspace, vcx);
+    restored.page_view = before.page_view;
+    assert_eq!(restored, before);
+}

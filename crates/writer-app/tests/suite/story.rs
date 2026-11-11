@@ -49,12 +49,7 @@ fn block_with<'a>(document: &'a Document, text: &str) -> &'a writer_core::Block 
 }
 
 /// Exports through the picker (`row` rows down from the first) into `path`.
-fn export_row(
-    workspace: &Entity<Workspace>,
-    row: usize,
-    path: &Path,
-    cx: &mut VisualTestContext,
-) {
+fn export_row(workspace: &Entity<Workspace>, row: usize, path: &Path, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes("cmd-shift-s");
     for _ in 0..row {
         cx.simulate_keystrokes("down");
@@ -236,8 +231,14 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
             Some("https://example.com/port")
         );
         assert!(attrs_of(&written, "bright").highlight.is_some());
-        assert_eq!(attrs_of(&written, "Georgia").font.as_deref(), Some("Georgia"));
-        assert_eq!(block_with(&written, "Centred").alignment(), Alignment::Center);
+        assert_eq!(
+            attrs_of(&written, "Georgia").font.as_deref(),
+            Some("Georgia")
+        );
+        assert_eq!(
+            block_with(&written, "Centred").alignment(),
+            Alignment::Center
+        );
         let larger = block_with(&written, "Larger");
         assert_eq!(larger.alignment(), Alignment::Left);
         assert!(larger.text_size().expect("a size of its own") > 17.);
@@ -381,7 +382,10 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
                 "A link to the port and bright words in Georgia",
                 "Larger gg",
             ] {
-                assert!(text.contains(expected), "{expected:?} is in the DOCX:\n{text}");
+                assert!(
+                    text.contains(expected),
+                    "{expected:?} is in the DOCX:\n{text}"
+                );
             }
         }
 
@@ -411,7 +415,10 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
     assert_eq!(reread.comment_count(), 1);
     let thread = reread.comments().next().unwrap();
     assert_eq!(thread.body, "Which ferry?");
-    assert_eq!(reread.text_in(reread.comment_ranges(thread.id)[0]), "The ferry");
+    assert_eq!(
+        reread.text_in(reread.comment_ranges(thread.id)[0]),
+        "The ferry"
+    );
     assert!(reread.settings().page_view);
     // Full-text search finds it.
     let hits = library.read_with(cx, |library, _| library.search("gulls", 10).unwrap());

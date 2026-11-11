@@ -160,9 +160,7 @@ fn assert_table(table: &[(&str, &str)], place: &str, cx: &mut VisualTestContext)
     );
 }
 
-fn workspace_with_comment<'a>(
-    cx: &'a mut TestAppContext,
-) -> (Entity<Workspace>, &'a mut VisualTestContext) {
+fn workspace_in_the_text(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
     init(cx);
     let library = library(cx);
     add_document(
@@ -178,14 +176,14 @@ fn workspace_with_comment<'a>(
 
 #[gpui::test]
 fn every_documented_key_runs_its_action_in_the_text(cx: &mut TestAppContext) {
-    let (_workspace, vcx) = workspace_with_comment(cx);
+    let (_workspace, vcx) = workspace_in_the_text(cx);
     assert_table(GLOBAL, "the text", vcx);
     assert_table(EDITOR, "the text", vcx);
 }
 
 #[gpui::test]
 fn global_keys_work_wherever_the_keyboard_is(cx: &mut TestAppContext) {
-    let (workspace, vcx) = workspace_with_comment(cx);
+    let (workspace, vcx) = workspace_in_the_text(cx);
 
     // The library sidebar.
     vcx.simulate_keystrokes("cmd-0");
@@ -253,7 +251,9 @@ fn global_keys_work_wherever_the_keyboard_is(cx: &mut TestAppContext) {
     );
     // And it really toggles.
     vcx.simulate_keystrokes("cmd-alt-c");
-    assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).find_options().case_sensitive));
+    assert!(workspace.read_with(vcx, |w, cx| {
+        w.tools().read(cx).find_options().case_sensitive
+    }));
     assert!(workspace.read_with(vcx, |w, cx| w.comments().read(cx).is_visible()));
 
     // A modal (the palette): the app keys still resolve.
@@ -267,7 +267,7 @@ fn global_keys_work_wherever_the_keyboard_is(cx: &mut TestAppContext) {
 /// to it last.
 #[gpui::test]
 fn no_window_wide_key_is_shadowed_in_the_text(cx: &mut TestAppContext) {
-    let (_workspace, vcx) = workspace_with_comment(cx);
+    let (_workspace, vcx) = workspace_in_the_text(cx);
     let window_wide: Vec<(String, String)> = vcx.update(|_, cx| {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();

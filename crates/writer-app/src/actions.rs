@@ -75,6 +75,20 @@ actions!(
         ToggleVimMode,
         /// Derive the document's title from its text again.
         UseTitleFromText,
+        /// Lay the current document out on A4 paper.
+        UseA4Paper,
+        /// Lay the current document out on US Letter paper.
+        UseLetterPaper,
+        /// Turn the pages of the current document: portrait or landscape.
+        TogglePageOrientation,
+        /// Make the body text of the current document one point larger.
+        IncreaseBodyTextSize,
+        /// Make the body text of the current document one point smaller.
+        DecreaseBodyTextSize,
+        /// Give the lines of the current document more room.
+        IncreaseLineHeight,
+        /// Give the lines of the current document less room.
+        DecreaseLineHeight,
         /// Use the Paper (light) theme.
         UseLightTheme,
         /// Use the Night (dark) theme.
@@ -88,6 +102,9 @@ actions!(
 
 /// Category of the commands about documents and folders.
 pub const CATEGORY_FILE: &str = "File";
+/// Category of the commands that change the open document as a whole:
+/// its paper and its typography.
+pub const CATEGORY_DOCUMENT: &str = "Document";
 /// Category of the commands that move around the app.
 pub const CATEGORY_GO: &str = "Go";
 /// Category of the view toggles.
@@ -153,6 +170,27 @@ pub fn commands() -> Vec<CommandDescriptor> {
         CommandDescriptor::new("Take title from text", CATEGORY_FILE, UseTitleFromText)
             .keywords(["rename", "name", "derive", "reset"]),
         CommandDescriptor::new("Close window", CATEGORY_FILE, CloseWindow),
+        CommandDescriptor::new("Use A4 paper", CATEGORY_DOCUMENT, UseA4Paper).keywords([
+            "page size",
+            "page setup",
+            "sheet",
+        ]),
+        CommandDescriptor::new("Use US Letter paper", CATEGORY_DOCUMENT, UseLetterPaper)
+            .keywords(["page size", "page setup", "sheet"]),
+        CommandDescriptor::new(
+            "Switch portrait and landscape",
+            CATEGORY_DOCUMENT,
+            TogglePageOrientation,
+        )
+        .keywords(["orientation", "page setup", "rotate", "sideways"]),
+        CommandDescriptor::new("Larger body text", CATEGORY_DOCUMENT, IncreaseBodyTextSize)
+            .keywords(["font size", "base size", "bigger", "zoom", "typography"]),
+        CommandDescriptor::new("Smaller body text", CATEGORY_DOCUMENT, DecreaseBodyTextSize)
+            .keywords(["font size", "base size", "typography"]),
+        CommandDescriptor::new("More line spacing", CATEGORY_DOCUMENT, IncreaseLineHeight)
+            .keywords(["line height", "leading", "looser", "typography"]),
+        CommandDescriptor::new("Less line spacing", CATEGORY_DOCUMENT, DecreaseLineHeight)
+            .keywords(["line height", "leading", "tighter", "typography"]),
         CommandDescriptor::new("Open document", CATEGORY_GO, QuickOpen).keywords([
             "quick open",
             "switch",

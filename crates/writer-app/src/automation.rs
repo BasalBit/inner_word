@@ -468,7 +468,10 @@ pub fn describe_state(
             text.push_str(&format!(" pending={:?}", status.pending_keys));
         }
         if let Some(line) = &status.command_line {
-            text.push_str(&format!(" line={:?}", format!("{}{}", line.prefix, line.text)));
+            text.push_str(&format!(
+                " line={:?}",
+                format!("{}{}", line.prefix, line.text)
+            ));
         }
         if let Some(message) = &status.message {
             text.push_str(&format!(" message={:?}", message.text));
@@ -495,7 +498,11 @@ pub fn describe_state(
     let comments = workspace.comments().read(cx);
     let comments = format!(
         "{} threads={} open={} active={:?} composing={}",
-        if comments.is_visible() { "shown" } else { "hidden" },
+        if comments.is_visible() {
+            "shown"
+        } else {
+            "hidden"
+        },
         comments.threads().len(),
         comments.is_open(),
         comments.active_thread().map(|id| id.0),

@@ -268,6 +268,16 @@ impl Library {
         self.changed(cx, [LibraryEvent::FolderMoved(id)], false, true)
     }
 
+    /// Copies a folder with everything live inside it (subfolders and documents, at any
+    /// depth) next to the original, named "`<name>` copy". One store transaction and one
+    /// tree reload, however much is in the folder. Emits `FolderCreated` (the copy),
+    /// `TreeChanged`; the copied documents are in the tree but get no events of their own.
+    pub fn duplicate_folder(&mut self, id: FolderId, cx: &mut Context<Self>) -> Result<Folder> {
+        let folder = self.store.duplicate_folder(id)?;
+        self.changed(cx, [LibraryEvent::FolderCreated(folder.id)], false, true)?;
+        Ok(folder)
+    }
+
     /// Moves a folder and its whole subtree to the trash.
     /// Emits `FolderTrashed` (with the documents that went with it), `TrashChanged`,
     /// `TreeChanged`.
@@ -278,10 +288,9 @@ impl Library {
                 collect(child, out);
             }
         }
-        // Fresh tree, so the list is right even if the cache were ever stale.
-        let before = self.store.library_tree()?;
+        // The cache is the tree as of the last write, and every write goes through here.
         let mut documents = Vec::new();
-        if let Some(node) = before.find_folder(id) {
+        if let Some(node) = self.tree.find_folder(id) {
             collect(node, &mut documents);
         }
         self.store.trash_folder(id)?;
@@ -327,22 +336,38 @@ impl Library {
     /// Saves a document's content together with its title, plain text and counts. Also
     /// works on a trashed document, so an autosave racing a delete never loses text.
     /// Emits `DocumentSaved`, and `TreeChanged` when the title changed on a live document.
+    ///
+    /// This is the call behind autosave, so it is kept cheap: the tree is not reloaded. The
+    /// document's entry in the cached tree (title, counts, `updated_at`) is replaced in
+    /// place.
     pub fn save_document(
         &mut self,
         id: DocumentId,
         content: &DocumentContent<'_>,
         cx: &mut Context<Self>,
     ) -> Result<DocumentMeta> {
-        let old_title = self.store.document_meta(id)?.title;
+        // The title before the save: from the cache for a live document, from the store
+        // for one that is in the trash (or missing, which is the error to return).
+        let same_title = match self.tree.find_document(id) {
+            Some(cached) => cached.title == content.title,
+            None => self.store.document_meta(id)?.title == content.title,
+        };
         let meta = self.store.save_document(id, content)?;
-        let title_changed = old_title != meta.title;
-        let tree_changed = title_changed && meta.trashed_at.is_none();
-        self.changed(
-            cx,
-            [LibraryEvent::DocumentSaved { id, title_changed }],
-            false,
-            tree_changed,
-        )?;
+        let title_changed = !same_title;
+        let live = meta.trashed_at.is_none();
+        // A trashed document is not in the tree. For a live one, a reload is only needed
+        // if the cache does not hold the document where the store says it is.
+        let refreshed = if !live || Arc::make_mut(&mut self.tree).update_document(&meta) {
+            Ok(())
+        } else {
+            self.reload_tree()
+        };
+        cx.emit(LibraryEvent::DocumentSaved { id, title_changed });
+        if title_changed && live {
+            cx.emit(LibraryEvent::TreeChanged);
+        }
+        cx.notify();
+        refreshed?;
         Ok(meta)
     }
 
@@ -634,7 +659,8 @@ impl Library {
         trash_changed: bool,
         tree_changed: bool,
     ) -> Result<()> {
-        // Always refresh: even a plain save changes counts and timestamps in the tree.
+        // Everything that comes through here can change the shape of the tree. (A content
+        // save does not, and updates its entry in place: see `save_document`.)
         let refreshed = self.reload_tree();
         for event in events {
             cx.emit(event);

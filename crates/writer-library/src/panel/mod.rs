@@ -8,8 +8,10 @@ mod move_picker;
 mod render;
 mod rows;
 mod trash;
+mod undo;
 
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
@@ -27,8 +29,12 @@ use writer_ui::{
 
 use crate::library::{Library, LibraryEvent};
 use move_picker::MoveDelegate;
-use rows::{Filter, Row, ancestors, build_rows, count_documents, count_folders, item_name, plural};
+use rows::{
+    Filter, Row, ancestors, build_rows, count_documents, count_folders, item_name, place_of,
+    plural, stored_name,
+};
 use trash::{ROOT_LABEL, TrashRow, build_trash_rows};
+use undo::UndoEntry;
 
 actions!(
     library_panel,
@@ -59,7 +65,7 @@ actions!(
         NewFolder,
         /// Rename the selected item in place.
         Rename,
-        /// Duplicate the selected document.
+        /// Duplicate the selected document, or the selected folder with everything in it.
         Duplicate,
         /// Move the selected item to another folder, chosen from a list.
         MoveToFolder,
@@ -69,7 +75,8 @@ actions!(
         MoveDown,
         /// Move the selected item to the trash.
         MoveToTrash,
-        /// Restore the item that was last moved to the trash.
+        /// Take back the last change made in the library: a move to the trash, a rename,
+        /// a move to another folder or a reorder.
         UndoTrash,
         /// Focus the filter field of the library.
         FocusFilter,
@@ -110,9 +117,14 @@ pub const ROW_HEIGHT: Pixels = px(26.);
 pub const HEADER_HEIGHT: Pixels = px(34.);
 /// The height of one row of the trash view (name over original location).
 pub const TRASH_ROW_HEIGHT: Pixels = px(44.);
+/// The height of the strip between the header and the tree that holds the "Library" row
+/// (the root of the tree, selectable like any row).
+pub const ROOT_ROW_HEIGHT: Pixels = px(30.);
 
 const SELECTION_PERSIST_DELAY: Duration = Duration::from_millis(400);
-const UNDO_LIMIT: usize = 64;
+/// How long the panel waits to be drawn after it was given the keyboard while off screen,
+/// before it gives the keyboard back. Checked twice.
+const OFF_SCREEN_GRACE: Duration = Duration::from_millis(250);
 const NEW_FOLDER_NAME: &str = "New folder";
 
 /// The panel's default key bindings, all scoped to [`KEY_CONTEXT`]. Installed by
@@ -185,18 +197,21 @@ pub fn commands() -> Vec<CommandDescriptor> {
         CommandDescriptor::new("New folder", CATEGORY, NewFolder)
             .keywords(["create", "add", "group"]),
         CommandDescriptor::new("Rename", CATEGORY, Rename).keywords(["name", "title"]),
-        CommandDescriptor::new("Duplicate document", CATEGORY, Duplicate)
-            .keywords(["copy", "clone"]),
+        CommandDescriptor::new("Duplicate", CATEGORY, Duplicate)
+            .keywords(["copy", "clone", "document", "folder"]),
         CommandDescriptor::new("Move to folder", CATEGORY, MoveToFolder)
             .keywords(["relocate", "organise", "organize"]),
         CommandDescriptor::new("Move up", CATEGORY, MoveUp).keywords(["reorder", "sort"]),
         CommandDescriptor::new("Move down", CATEGORY, MoveDown).keywords(["reorder", "sort"]),
         CommandDescriptor::new("Move to trash", CATEGORY, MoveToTrash)
             .keywords(["delete", "remove", "bin"]),
-        CommandDescriptor::new("Undo move to trash", CATEGORY, UndoTrash).keywords([
+        CommandDescriptor::new("Undo library change", CATEGORY, UndoTrash).keywords([
             "restore",
             "undelete",
             "bring back",
+            "trash",
+            "rename",
+            "move",
         ]),
         CommandDescriptor::new("Show trash", CATEGORY, ShowTrash)
             .keywords(["deleted", "bin", "restore"]),
@@ -233,8 +248,11 @@ pub fn commands() -> Vec<CommandDescriptor> {
 ///
 /// When the panel itself has focus its own listeners run first, so nothing runs twice.
 /// Covered: new document, new folder, rename, duplicate, move to folder, move up / down,
-/// move to trash, undo move to trash, show trash, empty trash, filter, switch row detail.
-/// The panel must be on screen for the commands that focus something in it.
+/// move to trash, undo, show trash, empty trash, filter, switch row detail.
+///
+/// Some of these put the keyboard in the panel (a rename field, the filter, the trash
+/// view). When the panel is not on screen at that moment, it asks its host to show it:
+/// see [`LibraryPanel::set_reveal_handler`].
 ///
 /// ```ignore
 /// writer_library::forward_actions(div().size_full(), &self.panel).child(..)
@@ -308,6 +326,9 @@ pub enum RowDetail {
     Words,
 }
 
+/// How the panel asks its host to put it on screen.
+type RevealHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View {
     Tree,
@@ -324,6 +345,9 @@ enum View {
 ///   expand and collapse. The document open in the editor is marked. Each document row has
 ///   a muted detail: how long ago it was edited, or its word count
 ///   ([`RowDetail`], switched with `i`).
+/// - A "Library" row above the tree: the root. `up` from the first row or `left` from a
+///   top-level row selects it; with it selected, new documents and folders are created at
+///   the top level.
 /// - A "Trash" row at the bottom. It opens the trash view: the trashed items with the place
 ///   they came from, where they can be restored or deleted for good.
 ///
@@ -337,17 +361,17 @@ enum View {
 /// | `up` / `down`, `k` / `j`, `ctrl-p` / `ctrl-n` | move the selection | same |
 /// | `home` / `end`, `cmd-up` / `cmd-down`, `g g` / `shift-g` | first / last row | same |
 /// | `pageup` / `pagedown` | move by a screenful | same |
-/// | `left` / `h` | collapse the folder, or go to the parent | back to the tree |
+/// | `left` / `h` | collapse the folder, or go to the parent (at the top level: the "Library" row) | back to the tree |
 /// | `right` / `l` | expand the folder, or go to its first child | |
 /// | `enter` | open the document (focus goes to the editor), or toggle the folder | restore |
-/// | `n` / `shift-n` | new document / new folder in the selected folder, then rename it | |
+/// | `n` / `shift-n` | new document / new folder in the selected folder (on the "Library" row: at the top level), then rename it | |
 /// | `r` / `f2` | rename in place (`enter` commits, `escape` cancels) | `r` restores |
-/// | `cmd-d` | duplicate the document | |
+/// | `cmd-d` | duplicate the document, or the folder with everything in it | |
 /// | `m` | move to another folder (a picker, with "Library root") | |
 /// | `alt-up` / `alt-down` | reorder among siblings | |
 /// | `cmd-backspace` | move to the trash (a toast offers undo) | delete forever (asks first) |
-/// | `cmd-z` | undo the last move to the trash | same |
-/// | `/` / `cmd-f` | focus the filter (`escape` clears it, `tab` keeps it and returns to the tree) | |
+/// | `cmd-z` | undo the last move to the trash, rename, move or reorder | same |
+/// | `/` / `cmd-f` | focus the filter (`escape` clears it, `tab` keeps it and returns to the tree, `enter` opens the selected match) | |
 /// | `t` | show the trash | |
 /// | `cmd-shift-backspace` | empty the trash (asks first) | same |
 /// | `i` | switch the row detail between edit time and word count | |
@@ -362,6 +386,9 @@ enum View {
 ///     panel.set_modal_layer(modal_layer.clone());         // share the window's modal layer
 ///     panel.set_new_document_content(empty_document_json); // what `n` creates
 /// });
+/// // If the sidebar can be hidden: how the panel asks to be shown (a palette command
+/// // that renames, filters or shows the trash while the sidebar is closed).
+/// panel.update(cx, |panel, _| panel.set_reveal_handler(move |window, cx| { /* show the sidebar */ }));
 /// // Toasts go through writer_ui::toast::show_toast: install a global ToastLayer.
 /// // In the window root, so palette commands reach the panel from anywhere:
 /// writer_library::forward_actions(div().size_full(), &panel)
@@ -395,6 +422,8 @@ pub struct LibraryPanel {
     selected: Option<LibraryItem>,
     /// The "Trash" row under the tree is selected (then `selected` is `None`).
     on_trash_row: bool,
+    /// The "Library" row above the tree is selected (then `selected` is `None`).
+    on_root_row: bool,
     active_document: Option<DocumentId>,
     rows: Vec<Row>,
     scroll: UniformListScrollHandle,
@@ -404,6 +433,8 @@ pub struct LibraryPanel {
     renaming: Option<LibraryItem>,
     /// The item being renamed was just created with `n`: open it once it has a name.
     rename_opens: bool,
+    /// The rename gives a new item its first name: nothing to undo.
+    rename_is_naming: bool,
     rename_field: Option<Entity<TextField>>,
 
     // Filter.
@@ -415,8 +446,8 @@ pub struct LibraryPanel {
     trash_rows: Vec<TrashRow>,
     trash_selected: Option<LibraryItem>,
     trash_scroll: UniformListScrollHandle,
-    /// Items trashed in this session, oldest first, for undo.
-    undo_stack: Vec<LibraryItem>,
+    /// The changes of this session that `cmd-z` can take back, oldest first.
+    undo_stack: Vec<UndoEntry>,
 
     new_document_content: Option<String>,
     modal_layer: Entity<ModalLayer>,
@@ -424,6 +455,13 @@ pub struct LibraryPanel {
     modal_layer_is_shared: bool,
     selection_dirty: bool,
     persist_selection: Option<Task<()>>,
+    /// Tracked on an empty element inside the panel, only to learn whether the panel was
+    /// drawn in the last frame.
+    probe: FocusHandle,
+    /// Asks the host to put the panel on screen.
+    reveal_handler: Option<RevealHandler>,
+    /// Waits for the panel to be drawn after it took the keyboard while off screen.
+    off_screen_watch: Option<Task<()>>,
     focus_subscription: Option<Subscription>,
     modal_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
@@ -471,12 +509,14 @@ impl LibraryPanel {
             expanded: expanded.into_iter().collect(),
             selected: None,
             on_trash_row: false,
+            on_root_row: false,
             active_document: None,
             rows: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             detail,
             renaming: None,
             rename_opens: false,
+            rename_is_naming: false,
             rename_field: None,
             filter_text: String::new(),
             filter: None,
@@ -490,6 +530,9 @@ impl LibraryPanel {
             modal_layer_is_shared: false,
             selection_dirty: false,
             persist_selection: None,
+            probe: cx.focus_handle(),
+            reveal_handler: None,
+            off_screen_watch: None,
             focus_subscription: None,
             modal_subscription,
             _subscriptions: subscriptions,
@@ -538,17 +581,95 @@ impl LibraryPanel {
         self.new_document_content = Some(content.into());
     }
 
+    /// Sets how the panel asks its host to put it on screen. A host that can hide the
+    /// panel (a sidebar that closes) should set this.
+    ///
+    /// The panel calls it when something puts the keyboard inside the panel while the
+    /// panel is not drawn: [`begin_rename`](Self::begin_rename) (so also
+    /// [`new_document`](Self::new_document) and [`new_folder`](Self::new_folder)),
+    /// [`focus_filter`](Self::focus_filter) and [`show_trash`](Self::show_trash), which is
+    /// what the palette's library commands do when the sidebar is closed. The handler runs
+    /// after the current update, so it may update the entity that called the panel.
+    ///
+    /// Without a handler, or when the panel still is not drawn a moment later, the panel
+    /// ends the rename (keeping the name) and gives the keyboard back with
+    /// [`LibraryPanelEvent::Dismissed`], so the keyboard is never left on something that is
+    /// not on screen.
+    pub fn set_reveal_handler(&mut self, handler: impl Fn(&mut Window, &mut App) + 'static) {
+        self.reveal_handler = Some(Rc::new(handler));
+    }
+
+    /// Whether the panel was drawn in the window's last frame.
+    pub fn is_on_screen(&self, window: &Window) -> bool {
+        self.focus_handle.contains(&self.probe, window)
+    }
+
+    /// Gives the keyboard to `handle`, which is something inside the panel. When the panel
+    /// is not on screen it asks the host to show it, and makes sure the keyboard does not
+    /// stay on an element that is never drawn.
+    fn focus_inside(&mut self, handle: &FocusHandle, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_on_screen(window) {
+            if let Some(handler) = self.reveal_handler.clone() {
+                // Deferred: the caller may be in the middle of updating the host.
+                window.defer(cx, move |window, cx| handler(window, cx));
+            }
+            self.watch_off_screen(2, window, cx);
+        }
+        window.focus(handle);
+    }
+
+    /// Looks again in a moment whether the panel is drawn; after `checks` looks without
+    /// it, gives the keyboard back.
+    fn watch_off_screen(&mut self, checks: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.off_screen_watch = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(OFF_SCREEN_GRACE).await;
+            this.update_in(cx, |this, window, cx| {
+                this.off_screen_watch = None;
+                if this.is_on_screen(window) {
+                    return;
+                }
+                if checks > 1 {
+                    window.refresh();
+                    this.watch_off_screen(checks - 1, window, cx);
+                } else {
+                    this.leave_off_screen(window, cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The panel has the keyboard but is not drawn: end what needs the keyboard and hand
+    /// it back to the host.
+    fn leave_off_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_rename(true, cx);
+        let focused = window.focused(cx);
+        let ours = [
+            Some(self.focus_handle.clone()),
+            self.rename_field
+                .as_ref()
+                .map(|field| field.focus_handle(cx)),
+            self.filter_field
+                .as_ref()
+                .map(|field| field.focus_handle(cx)),
+        ];
+        if focused.is_some() && ours.contains(&focused) {
+            window.blur();
+            cx.emit(LibraryPanelEvent::Dismissed);
+        }
+    }
+
     // ----- selection ------------------------------------------------------------------
 
-    /// The selected row of the tree, if any (`None` also while the "Trash" row is
-    /// selected).
+    /// The selected row of the tree, if any (`None` also while the "Library" row or the
+    /// "Trash" row is selected).
     pub fn selected(&self) -> Option<LibraryItem> {
         self.selected
     }
 
     /// The folder a new document or folder should be created in: the selected folder
-    /// itself, or the folder that holds the selected document. `None` is the root (also
-    /// when nothing is selected).
+    /// itself, or the folder that holds the selected document. `None` is the root (when
+    /// the "Library" row is selected, and when nothing is).
     pub fn selected_folder(&self) -> Option<FolderId> {
         match self.selected? {
             LibraryItem::Folder(id) => Some(id),
@@ -559,6 +680,22 @@ impl LibraryPanel {
     /// Whether the "Trash" row under the tree is selected.
     pub fn is_trash_row_selected(&self) -> bool {
         self.on_trash_row
+    }
+
+    /// Whether the "Library" row above the tree (the root) is selected. New documents and
+    /// folders then go to the top level: [`selected_folder`](Self::selected_folder) is
+    /// `None`.
+    pub fn is_root_row_selected(&self) -> bool {
+        self.on_root_row
+    }
+
+    /// Selects the "Library" row above the tree. This is how the keyboard says "the top
+    /// level" when every top-level item is a folder (`up` from the first row and `left`
+    /// from a top-level row do it).
+    pub fn select_root(&mut self, cx: &mut Context<Self>) {
+        self.set_selected(None, cx);
+        self.on_root_row = true;
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
     }
 
     /// Selects `item` (or clears the selection with `None`) without expanding anything.
@@ -730,6 +867,7 @@ impl LibraryPanel {
             Ok(meta) => {
                 self.begin_rename(LibraryItem::Document(meta.id), window, cx);
                 self.rename_opens = true;
+                self.rename_is_naming = true;
                 Some(meta.id)
             }
             Err(err) => {
@@ -749,6 +887,7 @@ impl LibraryPanel {
         match created {
             Ok(folder) => {
                 self.begin_rename(LibraryItem::Folder(folder.id), window, cx);
+                self.rename_is_naming = true;
                 Some(folder.id)
             }
             Err(err) => {
@@ -763,6 +902,10 @@ impl LibraryPanel {
     /// commits, `escape` cancels, and so does moving focus away (it commits). The app calls
     /// this right after creating a folder so the user can type its name. Returns false when
     /// the item is not in the live tree.
+    ///
+    /// While the name is being typed its row stays on screen: the list does not scroll it
+    /// away. When the panel itself is not on screen, see
+    /// [`set_reveal_handler`](Self::set_reveal_handler).
     pub fn begin_rename(
         &mut self,
         item: LibraryItem,
@@ -788,9 +931,10 @@ impl LibraryPanel {
             field.set_text(name, cx);
             field.select_all(cx);
         });
-        window.focus(&field.focus_handle(cx));
         self.renaming = Some(item);
         self.rename_opens = false;
+        self.rename_is_naming = false;
+        self.focus_inside(&field.focus_handle(cx), window, cx);
         cx.notify();
         true
     }
@@ -821,6 +965,7 @@ impl LibraryPanel {
             return;
         };
         let opens = std::mem::take(&mut self.rename_opens);
+        let naming = std::mem::take(&mut self.rename_is_naming);
         cx.notify();
         if !commit {
             return;
@@ -830,20 +975,22 @@ impl LibraryPanel {
             .as_ref()
             .map(|field| field.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        let current = self
-            .rows
-            .iter()
-            .find(|row| row.item == item)
-            .filter(|row| !row.untitled)
-            .map(|row| row.label.to_string())
-            .unwrap_or_default();
+        // From the tree, not from the rows: the row may be hidden by now.
+        let Some(current) = stored_name(&self.library.read(cx).tree(), item) else {
+            return;
+        };
         if !name.is_empty() && name != current {
             let renamed = self.library.update(cx, |library, cx| match item {
                 LibraryItem::Folder(id) => library.rename_folder(id, &name, cx),
                 LibraryItem::Document(id) => library.rename_document(id, &name, cx),
             });
             match renamed {
-                Ok(()) => self.rebuild_rows(cx),
+                Ok(()) => {
+                    if !naming {
+                        self.remember_rename(item, current);
+                    }
+                    self.rebuild_rows(cx);
+                }
                 Err(err) => self.report_error(&err.to_string(), cx),
             }
         }
@@ -894,27 +1041,48 @@ impl LibraryPanel {
 
     // ----- duplicate, move, reorder ---------------------------------------------------
 
-    /// Duplicates the selected document (the copy lands right after it, titled
-    /// "`<title>` copy") and selects the copy. Folders are not duplicated.
+    /// Duplicates the selected item (see [`duplicate_item`](Self::duplicate_item)).
+    /// Returns the copy when a document was duplicated, `None` otherwise (also when a
+    /// folder was duplicated).
     pub fn duplicate_selected(&mut self, cx: &mut Context<Self>) -> Option<DocumentId> {
-        match self.selected? {
-            LibraryItem::Document(id) => {
-                let copied = self
-                    .library
-                    .update(cx, |library, cx| library.duplicate_document(id, cx));
-                match copied {
-                    Ok(meta) => {
-                        self.reveal(LibraryItem::Document(meta.id), cx);
-                        Some(meta.id)
-                    }
-                    Err(err) => {
-                        self.report_error(&err.to_string(), cx);
-                        None
-                    }
+        match self.duplicate_item(self.selected?, cx)? {
+            LibraryItem::Document(id) => Some(id),
+            LibraryItem::Folder(_) => None,
+        }
+    }
+
+    /// Duplicates `item` and selects the copy, which lands right after the original and is
+    /// called "`<name>` copy". A folder is copied with everything in it, at any depth (a
+    /// toast says how much). Returns the copy, or `None` when the store refused (a toast
+    /// says why).
+    pub fn duplicate_item(
+        &mut self,
+        item: LibraryItem,
+        cx: &mut Context<Self>,
+    ) -> Option<LibraryItem> {
+        let copied = self.library.update(cx, |library, cx| match item {
+            LibraryItem::Document(id) => library
+                .duplicate_document(id, cx)
+                .map(|meta| LibraryItem::Document(meta.id)),
+            LibraryItem::Folder(id) => library
+                .duplicate_folder(id, cx)
+                .map(|folder| LibraryItem::Folder(folder.id)),
+        });
+        match copied {
+            Ok(copy) => {
+                self.reveal(copy, cx);
+                if let LibraryItem::Folder(id) = copy {
+                    let name = self.name_of(item, cx);
+                    let contents = self
+                        .folder_contents(id, cx)
+                        .map(|contents| format!(" with {contents}"))
+                        .unwrap_or_default();
+                    show_toast(Toast::new(format!("Duplicated “{name}”{contents}.")), cx);
                 }
+                Some(copy)
             }
-            LibraryItem::Folder(_) => {
-                show_toast(Toast::new("Only documents can be duplicated."), cx);
+            Err(err) => {
+                self.report_error(&err.to_string(), cx);
                 None
             }
         }
@@ -941,20 +1109,25 @@ impl LibraryPanel {
     }
 
     /// Moves `item` into `folder` (`None` is the library root), at the end, then reveals
-    /// it. Moving it to where it already is does nothing.
+    /// it. Moving it to where it already is does nothing. [`undo`](Self::undo) puts it back
+    /// where it was.
     pub fn move_item(
         &mut self,
         item: LibraryItem,
         folder: Option<FolderId>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        if self.parent_of(item, cx) == Some(folder) {
+        let from = place_of(&self.library.read(cx).tree(), item);
+        if from.map(|(parent, _)| parent) == Some(folder) {
             return Ok(());
         }
         self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.move_folder(id, folder, None, cx),
             LibraryItem::Document(id) => library.move_document(id, folder, None, cx),
         })?;
+        if let Some(from) = from {
+            self.remember_move(item, from);
+        }
         self.reveal(item, cx);
         Ok(())
     }
@@ -1022,6 +1195,7 @@ impl LibraryPanel {
         });
         match moved {
             Ok(()) => {
+                self.remember_reorder(item, (path.last().copied(), index));
                 self.rebuild_rows(cx);
                 self.scroll_to_selected(if delta < 0 {
                     ScrollStrategy::Top
@@ -1085,19 +1259,6 @@ impl LibraryPanel {
         }
     }
 
-    /// Restores the item that was last moved to the trash in this session (by the panel
-    /// or by anything else that went through the library) and reveals it. Repeating it
-    /// walks back through earlier ones. Returns whether something was restored.
-    pub fn undo_trash(&mut self, cx: &mut Context<Self>) -> bool {
-        while let Some(item) = self.undo_stack.pop() {
-            if self.restore_item(item, cx).is_some() {
-                return true;
-            }
-        }
-        show_toast(Toast::new("Nothing to undo."), cx);
-        false
-    }
-
     /// Whether the panel shows the trash instead of the tree.
     pub fn is_showing_trash(&self) -> bool {
         self.view == View::Trash
@@ -1116,7 +1277,8 @@ impl LibraryPanel {
                 .scroll_to_item_strict(0, ScrollStrategy::Top);
         }
         self.refresh_trash(cx);
-        window.focus(&self.focus_handle);
+        let handle = self.focus_handle.clone();
+        self.focus_inside(&handle, window, cx);
         cx.notify();
     }
 
@@ -1159,14 +1321,14 @@ impl LibraryPanel {
     }
 
     /// Restores a trashed item, reveals it in the tree and says where it went.
-    fn restore_item(&mut self, item: LibraryItem, cx: &mut Context<Self>) -> Option<()> {
+    pub(super) fn restore_item(&mut self, item: LibraryItem, cx: &mut Context<Self>) -> Option<()> {
         let restored = self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.restore_folder(id, cx).map(|_| ()),
             LibraryItem::Document(id) => library.restore_document(id, cx).map(|_| ()),
         });
         match restored {
             Ok(()) => {
-                self.undo_stack.retain(|entry| *entry != item);
+                self.forget_trashed(item);
                 self.reveal(item, cx);
                 self.refresh_trash(cx);
                 let name = self.name_of(item, cx);
@@ -1331,7 +1493,7 @@ impl LibraryPanel {
         self.view = View::Tree;
         let field = self.ensure_filter_field(window, cx);
         field.update(cx, |field, cx| field.select_all(cx));
-        window.focus(&field.focus_handle(cx));
+        self.focus_inside(&field.focus_handle(cx), window, cx);
         cx.notify();
     }
 
@@ -1344,6 +1506,10 @@ impl LibraryPanel {
     fn apply_filter(&mut self, text: String, cx: &mut Context<Self>) {
         if text == self.filter_text {
             return;
+        }
+        // The row being renamed may not survive the filter: keep the typed name first.
+        if self.renaming.is_some() {
+            self.finish_rename(true, cx);
         }
         if text.trim().is_empty() {
             self.filter_text = text;
@@ -1409,13 +1575,16 @@ impl LibraryPanel {
                     let text = field.read(cx).text().to_string();
                     this.apply_filter(text, cx);
                 }
-                // enter: open the selected document, or continue in the tree.
+                // enter: open the selected document, or continue in the tree on the selected
+                // folder. With no match there is nothing to continue with: the keyboard
+                // stays in the field.
                 TextFieldEvent::Submitted => match this.selected {
                     Some(LibraryItem::Document(id)) => cx.emit(LibraryPanelEvent::OpenDocument {
                         id,
                         focus_editor: true,
                     }),
-                    _ => window.focus(&this.focus_handle),
+                    Some(LibraryItem::Folder(_)) => window.focus(&this.focus_handle),
+                    None => {}
                 },
                 TextFieldEvent::Cancelled => {
                     this.clear_filter(cx);
@@ -1458,6 +1627,7 @@ impl LibraryPanel {
     /// Changes the tree's selection and schedules storing it.
     fn set_selected(&mut self, item: Option<LibraryItem>, cx: &mut Context<Self>) {
         self.on_trash_row = false;
+        self.on_root_row = false;
         if self.selected != item {
             self.selected = item;
             self.schedule_persist_selection(cx);
@@ -1502,13 +1672,13 @@ impl LibraryPanel {
         ancestors(&tree, item).map(|path| path.last().copied())
     }
 
-    fn name_of(&self, item: LibraryItem, cx: &App) -> String {
+    pub(super) fn name_of(&self, item: LibraryItem, cx: &App) -> String {
         let tree = self.library.read(cx).tree();
         item_name(&tree, item).unwrap_or_default()
     }
 
     /// A folder as a place in a sentence: "Novel / Part one", or "the library root".
-    fn place_label(&self, folder: Option<FolderId>, cx: &App) -> String {
+    pub(super) fn place_label(&self, folder: Option<FolderId>, cx: &App) -> String {
         let path = self.library.read(cx).folder_path(folder);
         if path.is_empty() {
             format!("the {}", ROOT_LABEL.to_lowercase())
@@ -1517,7 +1687,7 @@ impl LibraryPanel {
         }
     }
 
-    fn report_error(&self, message: &str, cx: &mut Context<Self>) {
+    pub(super) fn report_error(&self, message: &str, cx: &mut Context<Self>) {
         show_toast(Toast::new(message.to_string()).error(), cx);
     }
 
@@ -1565,7 +1735,7 @@ impl LibraryPanel {
         let old_index = self.selected_trash_index();
         self.trash_rows = build_trash_rows(self.library.read(cx));
         let in_trash: HashSet<LibraryItem> = self.trash_rows.iter().map(|row| row.item).collect();
-        self.undo_stack.retain(|item| in_trash.contains(item));
+        self.forget_trashed_except(|item| in_trash.contains(&item));
         if self.selected_trash_index().is_none() {
             let last = self.trash_rows.len().saturating_sub(1);
             self.trash_selected = self
@@ -1582,11 +1752,8 @@ impl LibraryPanel {
             // Word counts and edit times changed; names and structure did not.
             LibraryEvent::DocumentSaved {
                 title_changed: false,
-                ..
-            } => {
-                self.rebuild_rows(cx);
-                cx.notify();
-            }
+                id,
+            } => self.document_saved(*id, cx),
             LibraryEvent::DocumentTrashed(id) => self.remember_trashed(LibraryItem::Document(*id)),
             LibraryEvent::FolderTrashed { id, .. } => {
                 self.remember_trashed(LibraryItem::Folder(*id))
@@ -1596,12 +1763,29 @@ impl LibraryPanel {
         }
     }
 
-    fn remember_trashed(&mut self, item: LibraryItem) {
-        self.undo_stack.retain(|entry| *entry != item);
-        self.undo_stack.push(item);
-        if self.undo_stack.len() > UNDO_LIMIT {
-            self.undo_stack.remove(0);
+    /// A document was saved under the same title: its row shows a new edit time and word
+    /// count, and nothing else in the list changed. This runs after every autosave, so it
+    /// touches one row instead of rebuilding them all.
+    fn document_saved(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        let Some(ix) = self
+            .rows
+            .iter()
+            .position(|row| row.item == LibraryItem::Document(id))
+        else {
+            return;
+        };
+        let tree = self.library.read(cx).tree();
+        let saved = tree
+            .documents_in(self.rows[ix].parent)
+            .and_then(|documents| documents.iter().find(|document| document.id == id));
+        match saved {
+            Some(meta) => {
+                self.rows[ix].updated_at = meta.updated_at;
+                self.rows[ix].word_count = meta.word_count;
+            }
+            None => self.rebuild_rows(cx),
         }
+        cx.notify();
     }
 
     /// The library's tree changed: rebuild the rows and repair the selection.
@@ -1625,6 +1809,7 @@ impl LibraryPanel {
         {
             self.renaming = None;
             self.rename_opens = false;
+            self.rename_is_naming = false;
         }
         if self
             .active_document
@@ -1637,7 +1822,11 @@ impl LibraryPanel {
 
     /// The panel got the keyboard focus: make sure a row is selected, so focus is visible.
     fn focused(&mut self, cx: &mut Context<Self>) {
-        if self.view == View::Tree && self.selected.is_none() && !self.on_trash_row {
+        if self.view == View::Tree
+            && self.selected.is_none()
+            && !self.on_trash_row
+            && !self.on_root_row
+        {
             let item = self
                 .active_document
                 .map(LibraryItem::Document)

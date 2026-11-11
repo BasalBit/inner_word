@@ -8,8 +8,14 @@
 //! cached [`LibraryTree`] and emits [`LibraryEvent`]s, so every view that subscribes stays in
 //! sync no matter who made the change.
 //!
-//! All calls are **synchronous on the main thread**. SQLite is fast enough for this app
-//! (single-digit milliseconds for a save of a normal document); the app debounces autosave.
+//! All calls are **synchronous on the main thread**. SQLite is fast enough for this app; the
+//! app debounces autosave. A content save does not reload the tree (its entry is updated in
+//! place), so it costs what the database write costs: about 0.2 ms for a document of a few
+//! pages in a library of 5,000 documents, and about 22 ms for a single document of 1 MB,
+//! nearly all of it the search index (release build, measured with
+//! `LIBRARY_DEMO_BENCH=5000 cargo run --release -p writer-library --example library_demo`).
+//! Writes that change the shape of the tree reload it, which takes under a millisecond for
+//! 5,000 documents.
 //!
 //! Errors are returned as [`StoreError`] (`Result<T>`), never panics. A failed call changes
 //! nothing and emits nothing.
@@ -77,10 +83,10 @@ pub use panel::{
     Collapse, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash, Expand,
     FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem, LibraryPanel,
     LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash, MoveUp, NewDocument, NewFolder,
-    OpenSelected, ROW_DETAIL_SETTING, ROW_HEIGHT, Rename, RestoreSelected, RowDetail,
-    SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp,
-    SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, commands,
-    forward_actions, key_bindings,
+    OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING, ROW_HEIGHT, Rename, RestoreSelected,
+    RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPageDown,
+    SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash,
+    commands, forward_actions, key_bindings,
 };
 
 /// The whole storage crate, for anything not re-exported above.

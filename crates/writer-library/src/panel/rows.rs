@@ -312,23 +312,23 @@ pub(super) fn plural(count: u64, noun: &str) -> String {
     }
 }
 
-/// A live document's metadata, found by id anywhere in the tree.
-pub(super) fn find_document(
-    tree: &LibraryTree,
-    id: writer_store::DocumentId,
-) -> Option<&DocumentMeta> {
-    fn walk(nodes: &[FolderNode], id: writer_store::DocumentId) -> Option<&DocumentMeta> {
-        nodes.iter().find_map(|node| {
-            node.documents
-                .iter()
-                .find(|document| document.id == id)
-                .or_else(|| walk(&node.folders, id))
-        })
-    }
-    tree.documents
-        .iter()
-        .find(|document| document.id == id)
-        .or_else(|| walk(&tree.folders, id))
+/// Where a live item is: the folder that holds it (`None` is the root) and its index among
+/// its siblings of the same kind (folders among folders, documents among documents). `None`
+/// when the item is not in the tree.
+pub(super) fn place_of(tree: &LibraryTree, item: LibraryItem) -> Option<(Option<FolderId>, usize)> {
+    let parent = ancestors(tree, item)?.last().copied();
+    let (folders, documents) = match parent {
+        Some(id) => {
+            let node = tree.find_folder(id)?;
+            (&node.folders, &node.documents)
+        }
+        None => (&tree.folders, &tree.documents),
+    };
+    let index = match item {
+        LibraryItem::Folder(id) => folders.iter().position(|node| node.folder.id == id),
+        LibraryItem::Document(id) => documents.iter().position(|document| document.id == id),
+    }?;
+    Some((parent, index))
 }
 
 /// The display name of a live item: the folder's name, or the document's title
@@ -336,8 +336,19 @@ pub(super) fn find_document(
 pub(super) fn item_name(tree: &LibraryTree, item: LibraryItem) -> Option<String> {
     match item {
         LibraryItem::Folder(id) => tree.find_folder(id).map(|node| node.folder.name.clone()),
-        LibraryItem::Document(id) => {
-            find_document(tree, id).map(|document| document_label(document).0.to_string())
-        }
+        LibraryItem::Document(id) => tree
+            .find_document(id)
+            .map(|document| document_label(document).0.to_string()),
+    }
+}
+
+/// The stored name of a live item: the folder's name, or the document's title (empty when
+/// it has none). `None` when the item is not in the tree.
+pub(super) fn stored_name(tree: &LibraryTree, item: LibraryItem) -> Option<String> {
+    match item {
+        LibraryItem::Folder(id) => tree.find_folder(id).map(|node| node.folder.name.clone()),
+        LibraryItem::Document(id) => tree
+            .find_document(id)
+            .map(|document| document.title.trim().to_string()),
     }
 }

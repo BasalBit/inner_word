@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, Modifiers, MouseButton,
-    MouseDownEvent, MouseUpEvent, Render, TestAppContext, VisualTestContext, Window, div, point,
-    prelude::*, px,
+    MouseDownEvent, MouseUpEvent, Render, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    TouchPhase, VisualTestContext, Window, div, point, prelude::*, px,
 };
 use writer_library::{
     Clock, DocumentId, FolderId, Library, LibraryItem, LibraryPanel, LibraryPanelEvent, RowDetail,
@@ -117,6 +117,7 @@ impl Fixture {
         point(
             px(x),
             writer_library::HEADER_HEIGHT
+                + writer_library::ROOT_ROW_HEIGHT
                 + px(4.)
                 + writer_library::ROW_HEIGHT * ix as f32
                 + writer_library::ROW_HEIGHT / 2.,
@@ -296,8 +297,9 @@ fn every_command_has_a_key_in_the_panel_context(cx: &mut TestAppContext) {
             "New document",
             "New folder",
             "Rename",
-            "Duplicate document",
+            "Duplicate",
             "Move to folder",
+            "Undo library change",
             "Move to trash",
             "Show trash",
             "Empty trash",
@@ -717,12 +719,50 @@ fn duplicate_and_reorder(cx: &mut TestAppContext) {
     assert_eq!(&documents[..2], &[f.in_folder, b]);
     assert_eq!(f.title(copy, cx), "B copy");
     assert_eq!(f.selected(cx), Some(Document(copy)));
-    // Folders are not duplicated; the panel says so.
+    assert!(f.toasts(cx).is_empty());
+
+    // cmd-d on a folder copies it with everything in it, right after it, and selects the
+    // copy (collapsed, so a toast says what is inside).
     f.panel
-        .update(cx, |p, cx| p.select(Some(Folder(other)), cx));
+        .update(cx, |p, cx| p.select(Some(Folder(f.folder)), cx));
     cx.simulate_keystrokes("cmd-d");
-    assert_eq!(root_folders(cx), vec![f.folder, other]);
-    assert_eq!(f.toasts(cx), vec!["Only documents can be duplicated."]);
+    let folders = root_folders(cx);
+    assert_eq!(folders.len(), 3);
+    let copied = folders[1];
+    assert_eq!(folders, vec![f.folder, copied, other]);
+    assert_eq!(f.folder_name(copied, cx), "Book copy");
+    assert_eq!(f.selected(cx), Some(Folder(copied)));
+    assert_eq!(
+        f.toasts(cx),
+        vec!["Duplicated “Book” with 5 documents, 1 subfolder."]
+    );
+    let titles = |folder: FolderId, cx: &mut VisualTestContext| -> Vec<String> {
+        f.documents(Some(folder), cx)
+            .into_iter()
+            .map(|id| f.title(id, cx))
+            .collect()
+    };
+    assert_eq!(titles(copied, cx), titles(f.folder, cx));
+    assert_eq!(titles(copied, cx), vec!["Chapter", "B", "B copy", "C"]);
+    let inner_copy = f.library.read_with(cx, |l, _| {
+        l.tree().find_folder(copied).unwrap().folders[0].folder.id
+    });
+    assert_ne!(inner_copy, f.inner);
+    assert_eq!(titles(inner_copy, cx), vec!["Idea"]);
+    // The originals are where they were.
+    assert_eq!(f.folder_of(f.in_inner, cx), Some(f.inner));
+    // An empty folder is duplicated without a list of contents; the API reports the copy.
+    let copy = f
+        .panel
+        .update(cx, |p, cx| p.duplicate_item(Folder(other), cx));
+    let Some(Folder(copy)) = copy else {
+        panic!("no copy: {copy:?}");
+    };
+    assert_eq!(root_folders(cx), vec![f.folder, copied, other, copy]);
+    assert_eq!(f.toasts(cx), vec!["Duplicated “Other”."]);
+    // duplicate_selected still answers with a document only.
+    assert_eq!(f.panel.update(cx, |p, cx| p.duplicate_selected(cx)), None);
+    assert_eq!(root_folders(cx).len(), 5);
 }
 
 #[gpui::test]
@@ -1279,9 +1319,23 @@ fn mouse(cx: &mut TestAppContext) {
     assert_eq!(f.title(f.in_folder, cx), "Opening");
     f.events();
 
-    // A click below the last row clears the selection.
+    // A click below the last row selects the library itself: new items go to the top.
     cx.simulate_click(Fixture::row_point(8, 120.), none);
     assert_eq!(f.selected(cx), None);
+    assert!(f.panel.read_with(cx, |p, _| p.is_root_row_selected()));
+    assert_eq!(f.panel.read_with(cx, |p, _| p.selected_folder()), None);
+    // So does a click on the "Library" row.
+    cx.simulate_click(Fixture::row_point(1, 120.), none);
+    assert!(!f.panel.read_with(cx, |p, _| p.is_root_row_selected()));
+    cx.simulate_click(
+        point(
+            px(120.),
+            writer_library::HEADER_HEIGHT + writer_library::ROOT_ROW_HEIGHT / 2.,
+        ),
+        none,
+    );
+    assert!(f.panel.read_with(cx, |p, _| p.is_root_row_selected()));
+    assert!(f.panel_focused(cx));
 
     // The trash row at the bottom opens the trash view; "Back" returns.
     f.library
@@ -1587,4 +1641,1208 @@ fn the_panel_can_use_the_window_modal_layer(cx: &mut TestAppContext) {
     assert!(!modal_layer.read_with(cx, |layer, _| layer.has_modal()));
     assert!(library.read_with(cx, |l, _| l.trash().unwrap().is_empty()));
     assert!(library.read_with(cx, |l, _| l.document_meta(document).is_err()));
+}
+
+// ----- the "Library" row ------------------------------------------------------------------
+
+#[gpui::test]
+fn the_library_row_is_the_root(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let on_root =
+        |cx: &mut VisualTestContext| f.panel.read_with(cx, |p, _| p.is_root_row_selected());
+    let target = |cx: &mut VisualTestContext| f.panel.read_with(cx, |p, _| p.selected_folder());
+    // Every top-level item is a folder: without the row there would be no way to say
+    // "at the top" from the keyboard.
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(f.at_root), Some(f.folder), cx)
+            .unwrap();
+        p.set_expanded(f.folder, false, cx);
+        p.set_new_document_content("{}");
+    });
+    cx.run_until_parked();
+    f.toasts(cx);
+    assert_eq!(f.visible(cx), vec![Folder(f.folder)]);
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    assert_eq!(target(cx), Some(f.folder));
+
+    // up from the first row selects the library itself, and stays there.
+    cx.simulate_keystrokes("up");
+    assert!(on_root(cx));
+    assert_eq!(f.selected(cx), None);
+    assert_eq!(target(cx), None);
+    cx.simulate_keystrokes("up k home");
+    assert!(!on_root(cx), "home is the first row");
+    cx.simulate_keystrokes("up up");
+    assert!(on_root(cx));
+
+    // n and shift-n now create at the top level.
+    cx.simulate_keystrokes("n");
+    cx.simulate_input("Loose note");
+    cx.simulate_keystrokes("enter");
+    let loose = f.documents(None, cx);
+    assert_eq!(loose.len(), 1);
+    assert_eq!(f.title(loose[0], cx), "Loose note");
+    assert_eq!(f.selected(cx), Some(Document(loose[0])));
+    f.events();
+
+    // left from a top-level row goes to its parent: the library.
+    cx.simulate_keystrokes("left");
+    assert!(on_root(cx));
+    cx.simulate_keystrokes("shift-n");
+    cx.simulate_input("Blog");
+    cx.simulate_keystrokes("enter");
+    let Some(Folder(blog)) = f.selected(cx) else {
+        panic!("the new folder is not selected");
+    };
+    assert_eq!(
+        f.library
+            .read_with(cx, |l, _| l.folder(blog).unwrap().parent_id),
+        None
+    );
+    // An open folder is closed first; the next left leaves it.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(f.folder)), cx));
+    cx.simulate_keystrokes("right left");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("h");
+    assert!(on_root(cx));
+
+    // down and right lead back into the tree, at its first row.
+    cx.simulate_keystrokes("down");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("up l");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("up pagedown");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+
+    // The library itself cannot be renamed, moved, duplicated, opened or trashed.
+    let before = f.library.read_with(cx, |l, _| l.tree());
+    cx.simulate_keystrokes("up r f2 cmd-d m enter alt-up alt-down cmd-backspace");
+    assert!(on_root(cx));
+    assert_eq!(f.renaming(cx), None);
+    assert!(
+        !f.panel
+            .read_with(cx, |p, cx| p.modal_layer().read(cx).has_modal())
+    );
+    assert!(f.toasts(cx).is_empty());
+    assert!(f.events().is_empty());
+    assert_eq!(f.library.read_with(cx, |l, _| l.tree()), before);
+
+    // While typing a filter the arrows stay among the matches.
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("blog");
+    assert_eq!(f.selected(cx), Some(Folder(blog)));
+    cx.simulate_keystrokes("up up");
+    assert_eq!(f.selected(cx), Some(Folder(blog)));
+    assert!(!on_root(cx));
+    cx.simulate_keystrokes("escape");
+
+    // The root row is "nothing selected" for the stored selection, and it survives the
+    // panel losing and getting the keyboard.
+    cx.simulate_keystrokes("home up");
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    let stored: Option<LibraryItem> = f.library.read_with(cx, |l, _| {
+        l.setting_or(writer_library::SELECTED_ITEM_SETTING, Some(Folder(blog)))
+    });
+    assert_eq!(stored, None);
+    cx.update(|window, _| window.blur());
+    cx.run_until_parked();
+    let panel = f.panel.clone();
+    cx.update(|window, cx| window.focus(&panel.focus_handle(cx)));
+    cx.run_until_parked();
+    assert!(on_root(cx));
+
+    // The API says the same.
+    f.panel.update(cx, |p, cx| p.select(Some(Folder(blog)), cx));
+    assert!(!on_root(cx));
+    f.panel.update(cx, |p, cx| p.select_root(cx));
+    assert!(on_root(cx));
+    assert_eq!(f.selected(cx), None);
+}
+
+#[gpui::test]
+fn an_empty_library(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
+        writer_ui::init(cx);
+        writer_library::init(cx);
+    });
+    let (library, _) = library_from(Library::in_memory().unwrap(), cx);
+    let (panel, cx) = cx.add_window_view({
+        let library = library.clone();
+        move |window, cx| {
+            let mut panel = LibraryPanel::new(library, cx);
+            panel.set_new_document_content("{}");
+            window.focus(&panel.focus_handle(cx));
+            panel
+        }
+    });
+    cx.run_until_parked();
+    let state = |cx: &mut VisualTestContext| {
+        panel.read_with(cx, |p, _| {
+            (
+                p.selected(),
+                p.is_root_row_selected(),
+                p.is_trash_row_selected(),
+            )
+        })
+    };
+    assert_eq!(state(cx), (None, false, false));
+    // Nothing to select but the two fixed rows; no key does harm.
+    cx.simulate_keystrokes("down");
+    assert_eq!(state(cx), (None, false, true));
+    cx.simulate_keystrokes("up");
+    assert_eq!(state(cx), (None, true, false));
+    cx.simulate_keystrokes(
+        "up left right home end pageup pagedown enter r m cmd-d alt-up cmd-backspace",
+    );
+    assert_eq!(state(cx), (None, true, false));
+    cx.simulate_keystrokes("down");
+    assert_eq!(state(cx), (None, false, true));
+    cx.simulate_keystrokes("up cmd-z");
+    // The first document.
+    cx.simulate_keystrokes("n");
+    cx.simulate_input("First");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(panel.read_with(cx, |p, _| p.visible_items().len()), 1);
+    assert_eq!(
+        library.read_with(cx, |l, _| l.tree().documents[0].title.clone()),
+        "First"
+    );
+    // Trashing the only item leaves the list empty and the keyboard in the panel.
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(state(cx), (None, false, false));
+    assert!(cx.update(|window, cx| panel.focus_handle(cx).is_focused(window)));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(panel.read_with(cx, |p, _| p.visible_items().len()), 1);
+}
+
+// ----- undo -------------------------------------------------------------------------------
+
+#[gpui::test]
+fn undo_covers_renames_moves_and_reorders(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let b = f.create(Some(f.folder), "B", cx);
+    let c = f.create(Some(f.folder), "C", cx);
+    cx.run_until_parked();
+    f.panel.update(cx, |p, cx| {
+        p.set_new_document_content("{}");
+        p.reveal_document(f.in_folder, cx);
+    });
+    assert!(!f.panel.read_with(cx, |p, _| p.can_undo()));
+
+    // A rename, of a document and of a folder.
+    cx.simulate_keystrokes("r");
+    cx.simulate_input("Opening");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.title(f.in_folder, cx), "Opening");
+    assert!(f.panel.read_with(cx, |p, _| p.can_undo()));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.title(f.in_folder, cx), "Chapter");
+    assert_eq!(f.toasts(cx), vec!["Renamed “Opening” back to “Chapter”."]);
+    assert_eq!(f.selected(cx), Some(Document(f.in_folder)));
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(f.inner)), cx));
+    cx.simulate_keystrokes("f2");
+    cx.simulate_input("Scraps");
+    cx.simulate_keystrokes("enter cmd-z");
+    assert_eq!(f.folder_name(f.inner, cx), "Notes");
+    assert_eq!(f.toasts(cx), vec!["Renamed “Scraps” back to “Notes”."]);
+    // A document that had no title gets none back.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(f.at_root)), cx));
+    cx.simulate_keystrokes("r");
+    cx.simulate_input("Named");
+    cx.simulate_keystrokes("enter cmd-z");
+    assert_eq!(f.title(f.at_root, cx), "");
+    assert_eq!(f.toasts(cx), vec!["Renamed “Named” back to “Untitled”."]);
+    // An unchanged or cancelled name is not a change.
+    cx.simulate_keystrokes("r enter r escape cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Nothing to undo."]);
+
+    // A run of reorders is one change: back to where it started.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(f.in_folder)), cx));
+    cx.simulate_keystrokes("alt-down alt-down alt-up alt-down");
+    assert_eq!(f.documents(Some(f.folder), cx), vec![b, c, f.in_folder]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.documents(Some(f.folder), cx), vec![f.in_folder, b, c]);
+    assert_eq!(f.toasts(cx), vec!["Moved “Chapter” back to its place."]);
+    assert_eq!(f.selected(cx), Some(Document(f.in_folder)));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Nothing to undo."]);
+    // Folders too.
+    let other = f
+        .library
+        .update(cx, |l, cx| l.create_folder(None, "Other", cx).unwrap().id);
+    cx.run_until_parked();
+    let root_folders = |cx: &mut VisualTestContext| {
+        f.library.read_with(cx, |l, _| {
+            l.tree()
+                .folders
+                .iter()
+                .map(|n| n.folder.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(other)), cx));
+    cx.simulate_keystrokes("alt-up");
+    assert_eq!(root_folders(cx), vec![other, f.folder]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(root_folders(cx), vec![f.folder, other]);
+    f.toasts(cx);
+
+    // A move to another folder: back into the old folder, at the old place.
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(b), None, cx).unwrap();
+    });
+    assert_eq!(f.documents(None, cx), vec![f.at_root, b]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.documents(Some(f.folder), cx), vec![f.in_folder, b, c]);
+    assert_eq!(f.documents(None, cx), vec![f.at_root]);
+    assert_eq!(f.toasts(cx), vec!["Moved “B” back to Book."]);
+    assert_eq!(f.selected(cx), Some(Document(b)));
+    // With the picker, a folder, out to the root and back.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(f.inner)), cx));
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("library root");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(root_folders(cx), vec![f.folder, other, f.inner]);
+    assert_eq!(f.toasts(cx), vec!["Moved “Notes” to the library root."]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(root_folders(cx), vec![f.folder, other]);
+    assert_eq!(f.folder_of(f.in_inner, cx), Some(f.inner));
+    assert_eq!(f.toasts(cx), vec!["Moved “Notes” back to Book."]);
+
+    // Changes of different kinds come back in reverse order.
+    f.panel.update(cx, |p, cx| p.select(Some(Document(c)), cx));
+    cx.simulate_keystrokes("r");
+    cx.simulate_input("C2");
+    cx.simulate_keystrokes("enter");
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(c), Some(f.inner), cx).unwrap();
+    });
+    cx.simulate_keystrokes("cmd-backspace");
+    cx.run_until_parked();
+    f.toasts(cx);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Restored “C2” to Book / Notes."]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Moved “C2” back to Book."]);
+    assert_eq!(f.documents(Some(f.folder), cx), vec![f.in_folder, b, c]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Renamed “C2” back to “C”."]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Nothing to undo."]);
+
+    // Giving a new item its first name is not a rename to take back.
+    cx.simulate_keystrokes("n");
+    cx.simulate_input("Fresh");
+    cx.simulate_keystrokes("enter shift-n");
+    cx.simulate_input("Shelf");
+    cx.simulate_keystrokes("enter cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Nothing to undo."]);
+    f.events();
+
+    // What can no longer be taken back is skipped: the folder the document came from is
+    // deleted for good, and the document itself after a rename.
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(b), None, cx).unwrap();
+        p.select(Some(Document(f.at_root)), cx);
+    });
+    cx.simulate_keystrokes("r");
+    cx.simulate_input("Doomed");
+    cx.simulate_keystrokes("enter");
+    f.library.update(cx, |l, cx| {
+        l.trash_folder(f.folder, cx).unwrap();
+        l.purge_folder(f.folder, cx).unwrap();
+        l.trash_document(f.at_root, cx).unwrap();
+        l.purge_document(f.at_root, cx).unwrap();
+    });
+    cx.run_until_parked();
+    f.toasts(cx);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.toasts(cx), vec!["Nothing to undo."]);
+    assert_eq!(f.folder_of(b, cx), None);
+}
+
+// ----- a rename and the virtualised list ---------------------------------------------------
+
+#[gpui::test]
+fn the_row_being_renamed_stays_on_screen(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let ids: Vec<DocumentId> = f.library.update(cx, |l, cx| {
+        (0..400)
+            .map(|ix| {
+                l.create_document(None, &content(&format!("Note {ix:03}"), "x"), cx)
+                    .unwrap()
+                    .id
+            })
+            .collect()
+    });
+    cx.run_until_parked();
+    // The rename field is drawn (it is part of the last frame) and has the keyboard.
+    let field_is_live = |cx: &mut VisualTestContext| {
+        let panel = f.panel.clone();
+        cx.update(|window, cx| {
+            let panel = panel.read(cx);
+            panel.rename_field().is_some_and(|field| {
+                let field = field.focus_handle(cx);
+                field.is_focused(window) && panel.focus_handle(cx).contains(&field, window)
+            })
+        })
+    };
+    let wheel = |delta: f32, cx: &mut VisualTestContext| {
+        cx.simulate_event(ScrollWheelEvent {
+            position: Fixture::row_point(3, 120.),
+            delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+    };
+
+    // Without a rename the wheel scrolls rows out of the list as usual.
+    let target = ids[4];
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(target)), cx));
+    cx.run_until_parked();
+    f.panel.update_in(cx, |p, window, cx| {
+        p.begin_rename(Document(target), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(field_is_live(cx));
+
+    // Scrolling far down, and back up past the top, cannot take the row away.
+    for delta in [-800., -6000., -6000., 9000., -300.] {
+        wheel(delta, cx);
+        assert_eq!(f.renaming(cx), Some(Document(target)));
+        assert!(field_is_live(cx), "after scrolling by {delta}");
+    }
+    cx.simulate_input("Kept while scrolling");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.title(target, cx), "Kept while scrolling");
+    assert!(f.panel_focused(cx));
+    // After the rename the list scrolls freely again.
+    wheel(-6000., cx);
+    assert_eq!(f.renaming(cx), None);
+
+    // A row far down the list: the rename brings it into view, and the library changing
+    // above it (rows inserted, an autosave elsewhere) does not push it out.
+    let far = ids[350];
+    f.panel.update_in(cx, |p, window, cx| {
+        p.begin_rename(Document(far), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(field_is_live(cx));
+    f.library.update(cx, |l, cx| {
+        for ix in 0..60 {
+            l.create_folder(None, &format!("Shelf {ix:02}"), cx)
+                .unwrap();
+        }
+    });
+    cx.run_until_parked();
+    assert_eq!(f.renaming(cx), Some(Document(far)));
+    assert!(field_is_live(cx));
+    cx.simulate_input("Far and kept");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.title(far, cx), "Far and kept");
+
+    // When the row leaves the list altogether (its folder is closed under it), the rename
+    // ends, the typed name is kept and the keyboard goes to the list.
+    f.panel.update_in(cx, |p, window, cx| {
+        p.begin_rename(Document(f.in_inner), window, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_input("Closed over");
+    f.panel
+        .update(cx, |p, cx| p.set_expanded(f.folder, false, cx));
+    cx.run_until_parked();
+    assert_eq!(f.renaming(cx), None);
+    assert_eq!(f.title(f.in_inner, cx), "Closed over");
+    assert!(f.panel_focused(cx));
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    // So does a filter set from outside that hides the row.
+    f.panel.update_in(cx, |p, window, cx| {
+        p.begin_rename(Document(f.in_folder), window, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_input("Filtered away");
+    f.panel.update(cx, |p, cx| p.set_filter("note 00", cx));
+    cx.run_until_parked();
+    assert_eq!(f.renaming(cx), None);
+    assert_eq!(f.title(f.in_folder, cx), "Filtered away");
+    // A name that was not changed is not written again when its row is hidden.
+    f.panel.update(cx, |p, cx| p.clear_filter(cx));
+    let before = f
+        .library
+        .read_with(cx, |l, _| l.document_meta(f.in_inner).unwrap());
+    f.clock.advance_ms(60_000);
+    f.panel.update_in(cx, |p, window, cx| {
+        p.begin_rename(Document(f.in_inner), window, cx)
+    });
+    cx.run_until_parked();
+    f.panel
+        .update(cx, |p, cx| p.set_expanded(f.folder, false, cx));
+    cx.run_until_parked();
+    assert_eq!(f.renaming(cx), None);
+    assert_eq!(
+        f.library
+            .read_with(cx, |l, _| l.document_meta(f.in_inner).unwrap()),
+        before
+    );
+}
+
+// ----- the panel off screen ----------------------------------------------------------------
+
+/// A window root whose sidebar can be closed, as the app's can.
+struct HidingShell {
+    panel: Entity<LibraryPanel>,
+    editor: FocusHandle,
+    sidebar: bool,
+}
+
+impl Render for HidingShell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        writer_library::forward_actions(div().size_full().flex(), &self.panel)
+            .when(self.sidebar, |el| {
+                el.child(div().w(px(280.)).h_full().child(self.panel.clone()))
+            })
+            .child(div().flex_1().track_focus(&self.editor))
+    }
+}
+
+#[gpui::test]
+fn commands_while_the_panel_is_hidden(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
+        writer_ui::init(cx);
+        writer_library::init(cx);
+    });
+    let (library, _) = library_from(Library::in_memory().unwrap(), cx);
+    let folder = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Book", cx).unwrap().id;
+        l.create_document(Some(folder), &content("Chapter", "x"), cx)
+            .unwrap();
+        folder
+    });
+    let events: Rc<RefCell<Vec<LibraryPanelEvent>>> = Rc::default();
+    let (shell, cx) = cx.add_window_view({
+        let library = library.clone();
+        let events = events.clone();
+        move |window, cx| {
+            let panel = cx.new(|cx| LibraryPanel::new(library, cx));
+            let editor = cx.focus_handle();
+            // The host gives the keyboard to the editor when the panel lets go of it.
+            cx.subscribe_in(&panel, window, {
+                let editor = editor.clone();
+                move |_, _, event: &LibraryPanelEvent, window, _| {
+                    events.borrow_mut().push(event.clone());
+                    if *event == LibraryPanelEvent::Dismissed {
+                        window.focus(&editor);
+                    }
+                }
+            })
+            .detach();
+            window.focus(&editor);
+            HidingShell {
+                panel,
+                editor,
+                sidebar: false,
+            }
+        }
+    });
+    let panel = shell.read_with(cx, |shell, _| shell.panel.clone());
+    let editor = shell.read_with(cx, |shell, _| shell.editor.clone());
+    cx.run_until_parked();
+    let on_screen = |cx: &mut VisualTestContext| {
+        let panel = panel.clone();
+        cx.update(|window, cx| panel.read(cx).is_on_screen(window))
+    };
+    let editor_focused = |cx: &mut VisualTestContext| {
+        let editor = editor.clone();
+        cx.update(|window, _| editor.is_focused(window))
+    };
+    let wait = |cx: &mut VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(700));
+        cx.run_until_parked();
+    };
+    let take_events = || events.borrow_mut().drain(..).collect::<Vec<_>>();
+    assert!(!on_screen(cx));
+    panel.update(cx, |p, cx| p.select(Some(Folder(folder)), cx));
+
+    // A host that does not show the panel on request: the command still does what it can
+    // (the folder is created), the rename ends, and the keyboard comes back to the editor
+    // instead of staying on a field that is not drawn.
+    cx.dispatch_action(writer_library::NewFolder);
+    let Some(Folder(created)) = panel.read_with(cx, |p, _| p.renaming()) else {
+        panic!("not naming the new folder");
+    };
+    assert!(!editor_focused(cx));
+    wait(cx);
+    assert_eq!(panel.read_with(cx, |p, _| p.renaming()), None);
+    assert_eq!(take_events(), vec![LibraryPanelEvent::Dismissed]);
+    assert!(editor_focused(cx));
+    assert_eq!(
+        library.read_with(cx, |l, _| l.folder(created).unwrap().name),
+        "New folder"
+    );
+    // The same for the filter and the trash view.
+    cx.dispatch_action(writer_library::FocusFilter);
+    wait(cx);
+    assert_eq!(take_events(), vec![LibraryPanelEvent::Dismissed]);
+    assert!(editor_focused(cx));
+    cx.dispatch_action(writer_library::ShowTrash);
+    wait(cx);
+    assert_eq!(take_events(), vec![LibraryPanelEvent::Dismissed]);
+    assert!(editor_focused(cx));
+    panel.update(cx, |p, cx| p.show_tree(cx));
+    // Commands that do not need the keyboard in the panel are not disturbed.
+    panel.update(cx, |p, cx| p.select(Some(Folder(created)), cx));
+    cx.dispatch_action(writer_library::MoveToTrash);
+    wait(cx);
+    assert!(take_events().is_empty());
+    assert!(editor_focused(cx));
+    cx.dispatch_action(writer_library::UndoTrash);
+    cx.run_until_parked();
+
+    // A host that shows the panel when asked: the command works as if the sidebar had
+    // been open.
+    panel.update(cx, |p, _| {
+        let shell = shell.downgrade();
+        p.set_reveal_handler(move |_, cx| {
+            shell
+                .update(cx, |shell, cx| {
+                    shell.sidebar = true;
+                    cx.notify();
+                })
+                .ok();
+        });
+    });
+    panel.update(cx, |p, cx| p.select(Some(Folder(folder)), cx));
+    cx.dispatch_action(writer_library::Rename);
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, _| shell.sidebar));
+    assert!(on_screen(cx));
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.renaming()),
+        Some(Folder(folder))
+    );
+    wait(cx);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.renaming()),
+        Some(Folder(folder))
+    );
+    assert!(take_events().is_empty());
+    cx.simulate_input("Shown");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        library.read_with(cx, |l, _| l.folder(folder).unwrap().name),
+        "Shown"
+    );
+    assert!(cx.update(|window, cx| panel.focus_handle(cx).is_focused(window)));
+
+    // Closed again by the host, the filter command opens it again.
+    cx.update(|window, _| window.focus(&editor));
+    shell.update(cx, |shell, cx| {
+        shell.sidebar = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(!on_screen(cx));
+    cx.dispatch_action(writer_library::FocusFilter);
+    cx.run_until_parked();
+    assert!(on_screen(cx));
+    cx.simulate_input("chap");
+    assert_eq!(panel.read_with(cx, |p, _| p.filter().to_string()), "chap");
+    wait(cx);
+    assert!(take_events().is_empty());
+}
+
+// ----- at the edges -----------------------------------------------------------------------
+
+#[gpui::test]
+fn moves_and_reorders_at_the_edges(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let empty = f
+        .library
+        .update(cx, |l, cx| l.create_folder(None, "Empty", cx).unwrap().id);
+    let last = f.create(None, "Last", cx);
+    cx.run_until_parked();
+    let folders = |parent: Option<FolderId>, cx: &mut VisualTestContext| -> Vec<FolderId> {
+        f.library.read_with(cx, |l, _| {
+            let tree = l.tree();
+            match parent {
+                None => tree.folders.iter().map(|n| n.folder.id).collect(),
+                Some(id) => tree
+                    .find_folder(id)
+                    .unwrap()
+                    .folders
+                    .iter()
+                    .map(|n| n.folder.id)
+                    .collect(),
+            }
+        })
+    };
+
+    // Into an empty folder: it opens, the document is its only row, and stays selected.
+    f.panel
+        .update(cx, |p, cx| p.reveal_document(f.in_folder, cx));
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("empty");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.documents(Some(empty), cx), vec![f.in_folder]);
+    assert_eq!(f.documents(Some(f.folder), cx), vec![]);
+    assert_eq!(f.selected(cx), Some(Document(f.in_folder)));
+    assert!(f.panel.read_with(cx, |p, _| p.is_expanded(empty)));
+    assert_eq!(f.toasts(cx), vec!["Moved “Chapter” to Empty."]);
+    // The only child has nowhere to go among its siblings.
+    cx.simulate_keystrokes("alt-up alt-down");
+    assert_eq!(f.documents(Some(empty), cx), vec![f.in_folder]);
+    assert!(f.toasts(cx).is_empty());
+
+    // Out to the root: after the documents that are there.
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("library");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.documents(None, cx), vec![f.at_root, last, f.in_folder]);
+    assert_eq!(f.documents(Some(empty), cx), vec![]);
+    assert_eq!(f.selected(cx), Some(Document(f.in_folder)));
+    f.toasts(cx);
+    // The folder it left is empty again: right does not step into anything.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(empty)), cx));
+    cx.simulate_keystrokes("right right");
+    assert_eq!(f.selected(cx), Some(Folder(empty)));
+
+    // Last among the root documents: down is the edge, up walks to the first place and
+    // stops there, never crossing into the folders above.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(f.in_folder)), cx));
+    cx.simulate_keystrokes("alt-down");
+    assert_eq!(f.documents(None, cx), vec![f.at_root, last, f.in_folder]);
+    cx.simulate_keystrokes("alt-up alt-up alt-up alt-up");
+    assert_eq!(f.documents(None, cx), vec![f.in_folder, f.at_root, last]);
+    assert_eq!(folders(None, cx), vec![f.folder, empty]);
+    // The first folder cannot go above the first place, the last not below the last.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Folder(f.folder)), cx));
+    cx.simulate_keystrokes("alt-up");
+    assert_eq!(folders(None, cx), vec![f.folder, empty]);
+    cx.simulate_keystrokes("alt-down alt-down alt-down");
+    assert_eq!(folders(None, cx), vec![empty, f.folder]);
+    assert_eq!(f.documents(None, cx), vec![f.in_folder, f.at_root, last]);
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+
+    // A folder with its contents into the empty folder, and out to the root again.
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("empty");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(folders(None, cx), vec![empty]);
+    assert_eq!(folders(Some(empty), cx), vec![f.folder]);
+    assert_eq!(f.folder_of(f.in_inner, cx), Some(f.inner));
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("library root");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(folders(None, cx), vec![empty, f.folder]);
+    assert_eq!(folders(Some(empty), cx), vec![]);
+    f.toasts(cx);
+
+    // The API refuses what the picker does not offer, and says nothing was moved.
+    let result = f
+        .panel
+        .update(cx, |p, cx| p.move_item(Folder(f.folder), Some(f.inner), cx));
+    assert!(result.is_err());
+    assert_eq!(folders(None, cx), vec![empty, f.folder]);
+    // A reorder is refused while a filter hides the siblings.
+    f.panel.update(cx, |p, cx| {
+        p.set_filter("last", cx);
+        p.select(Some(Document(last)), cx);
+    });
+    assert!(!f.panel.update(cx, |p, cx| p.reorder_selected(-1, cx)));
+    assert_eq!(f.documents(None, cx), vec![f.in_folder, f.at_root, last]);
+}
+
+#[gpui::test]
+fn trashing_the_folder_of_the_open_document(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    // The editor shows "Idea", two folders down; the selection follows it.
+    f.panel
+        .update(cx, |p, cx| p.set_active_document(Some(f.in_inner), cx));
+    cx.run_until_parked();
+    assert_eq!(f.selected(cx), Some(Document(f.in_inner)));
+    let library_events: Rc<RefCell<Vec<writer_library::LibraryEvent>>> = Rc::default();
+    cx.update(|_, cx| {
+        let events = library_events.clone();
+        cx.subscribe(
+            &f.library,
+            move |_, event: &writer_library::LibraryEvent, _| {
+                events.borrow_mut().push(event.clone())
+            },
+        )
+        .detach();
+    });
+
+    // Trash the outer folder from the keyboard: left goes to "Notes", closes it, then
+    // goes on to "Book".
+    cx.simulate_keystrokes("left left left");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("cmd-backspace");
+    cx.run_until_parked();
+    assert_eq!(f.visible(cx), vec![Document(f.at_root)]);
+    // The app is told which documents went, so it can close the open one.
+    let trashed = library_events
+        .borrow()
+        .iter()
+        .find_map(|event| match event {
+            writer_library::LibraryEvent::FolderTrashed { id, documents } => {
+                Some((*id, documents.clone()))
+            }
+            _ => None,
+        })
+        .expect("no FolderTrashed event");
+    assert_eq!(trashed.0, f.folder);
+    assert!(trashed.1.contains(&f.in_inner) && trashed.1.contains(&f.in_folder));
+    // The panel no longer marks it as open, and the selection is on a row that exists.
+    assert_eq!(f.panel.read_with(cx, |p, _| p.active_document()), None);
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
+    assert!(f.panel_focused(cx));
+    assert_eq!(
+        f.toasts(cx),
+        vec!["Moved “Book” (2 documents, 1 subfolder) to the trash. Press ⌘Z to undo."]
+    );
+
+    // The editor's last autosave of the trashed document arrives late: the text is kept,
+    // the list does not change.
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Idea", "the last words typed"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(f.visible(cx), vec![Document(f.at_root)]);
+
+    // Undo brings the folder back with the late save in it; opening is the app's call.
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    assert_eq!(f.folder_of(f.in_inner, cx), Some(f.inner));
+    assert_eq!(
+        f.library
+            .read_with(cx, |l, _| l.document_meta(f.in_inner).unwrap().word_count),
+        4
+    );
+    assert_eq!(f.panel.read_with(cx, |p, _| p.active_document()), None);
+
+    // The same when only the open document's own folder goes, and when the document does.
+    f.panel
+        .update(cx, |p, cx| p.set_active_document(Some(f.in_inner), cx));
+    f.panel
+        .update(cx, |p, cx| p.trash_item(Folder(f.inner), cx));
+    cx.run_until_parked();
+    assert_eq!(f.panel.read_with(cx, |p, _| p.active_document()), None);
+    assert!(f.selected(cx).is_some());
+    cx.simulate_keystrokes("cmd-z");
+    f.panel
+        .update(cx, |p, cx| p.set_active_document(Some(f.in_inner), cx));
+    cx.simulate_keystrokes("cmd-backspace");
+    cx.run_until_parked();
+    assert_eq!(f.panel.read_with(cx, |p, _| p.active_document()), None);
+    assert_eq!(f.selected(cx), Some(Document(f.in_folder)));
+}
+
+#[gpui::test]
+fn restoring_when_the_original_folder_is_gone(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let location = |item: LibraryItem, cx: &mut VisualTestContext| {
+        f.panel.read_with(cx, |p, _| p.trash_location(item))
+    };
+    // "Idea" is trashed on its own, then its folder "Notes", then the folder is deleted
+    // for good.
+    f.library.update(cx, |l, cx| {
+        l.trash_document(f.in_inner, cx).unwrap();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        location(Document(f.in_inner), cx).as_deref(),
+        Some("Book / Notes")
+    );
+    f.library
+        .update(cx, |l, cx| l.trash_folder(f.inner, cx).unwrap());
+    cx.run_until_parked();
+    // The folder is in the trash itself: a restore of the document would go to the root,
+    // and the trash view says so.
+    assert_eq!(
+        location(Document(f.in_inner), cx).as_deref(),
+        Some("Library root")
+    );
+    f.library
+        .update(cx, |l, cx| l.purge_folder(f.inner, cx).unwrap());
+    cx.run_until_parked();
+    assert_eq!(
+        f.panel.read_with(cx, |p, _| p.trash_items()),
+        vec![Document(f.in_inner)]
+    );
+    assert_eq!(
+        location(Document(f.in_inner), cx).as_deref(),
+        Some("Library root")
+    );
+    f.toasts(cx);
+
+    // Restore it from the trash view.
+    cx.simulate_keystrokes("t enter");
+    assert_eq!(f.folder_of(f.in_inner, cx), None);
+    assert_eq!(f.documents(None, cx), vec![f.at_root, f.in_inner]);
+    assert_eq!(f.toasts(cx), vec!["Restored “Idea” to the library root."]);
+    assert!(f.panel.read_with(cx, |p, _| p.trash_items()).is_empty());
+    // Back in the tree it is selected and visible.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(f.selected(cx), Some(Document(f.in_inner)));
+    assert!(f.visible(cx).contains(&Document(f.in_inner)));
+
+    // The folder is only in the trash, not deleted: the document still goes to the root,
+    // and restoring the folder afterwards does not take it back.
+    f.library.update(cx, |l, cx| {
+        l.trash_document(f.in_folder, cx).unwrap();
+        l.trash_folder(f.folder, cx).unwrap();
+    });
+    cx.run_until_parked();
+    f.toasts(cx);
+    // cmd-z undoes the folder first, so undo the document through the trash view instead.
+    cx.simulate_keystrokes("t");
+    f.panel.read_with(cx, |p, _| {
+        assert_eq!(
+            p.trash_items(),
+            vec![Folder(f.folder), Document(f.in_folder)]
+        );
+        assert_eq!(
+            p.trash_location(Document(f.in_folder)).as_deref(),
+            Some("Library root")
+        );
+    });
+    cx.simulate_keystrokes("down r");
+    assert_eq!(f.folder_of(f.in_folder, cx), None);
+    assert_eq!(
+        f.toasts(cx),
+        vec!["Restored “Chapter” to the library root."]
+    );
+    cx.simulate_keystrokes("r");
+    assert_eq!(f.toasts(cx), vec!["Restored “Book” to the library root."]);
+    assert_eq!(f.folder_of(f.in_folder, cx), None);
+    assert_eq!(f.documents(Some(f.folder), cx), vec![]);
+    // The trash is empty; restore and delete have nothing to act on.
+    cx.simulate_keystrokes("r enter cmd-backspace");
+    assert!(f.toasts(cx).is_empty());
+    assert!(
+        !f.panel
+            .read_with(cx, |p, cx| p.modal_layer().read(cx).has_modal())
+    );
+}
+
+#[gpui::test]
+fn a_filter_with_no_results(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    f.panel.update(cx, |p, cx| {
+        p.set_new_document_content("{}");
+        p.select(Some(Folder(f.folder)), cx);
+    });
+    let state = |cx: &mut VisualTestContext| {
+        f.panel.read_with(cx, |p, _| {
+            (
+                p.visible_items().len(),
+                p.selected(),
+                p.is_root_row_selected(),
+                p.is_trash_row_selected(),
+            )
+        })
+    };
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("zzz");
+    assert_eq!(state(cx), (0, None, false, false));
+    // In the field nothing can be selected or opened, and enter keeps the keyboard there
+    // so the text can be corrected.
+    cx.simulate_keystrokes("down up home end pagedown pageup enter");
+    assert_eq!(state(cx), (0, None, false, false));
+    assert!(f.events().is_empty());
+    assert!(!f.panel_focused(cx));
+    // One character less and the matches are back, the first one selected.
+    cx.simulate_keystrokes("backspace backspace backspace");
+    cx.simulate_input("ide");
+    assert_eq!(f.selected(cx), Some(Document(f.in_inner)));
+    cx.simulate_input("zz");
+    assert_eq!(state(cx).0, 0);
+
+    // tab moves to the (empty) list with the filter on: only the fixed rows are there.
+    cx.simulate_keystrokes("tab");
+    assert!(f.panel_focused(cx));
+    cx.simulate_keystrokes("down");
+    assert_eq!(state(cx), (0, None, false, true));
+    cx.simulate_keystrokes("up");
+    assert_eq!(state(cx), (0, None, true, false));
+    cx.simulate_keystrokes("j k right left enter r cmd-d m alt-up cmd-backspace");
+    assert_eq!(state(cx).0, 0);
+    assert_eq!(f.renaming(cx), None);
+    assert!(f.toasts(cx).is_empty());
+    assert!(f.events().is_empty());
+    // A new document can still be made (at the top level); the filter gives way so that
+    // its row can be named.
+    cx.simulate_keystrokes("up n");
+    assert!(matches!(f.renaming(cx), Some(Document(_))));
+    assert_eq!(f.panel.read_with(cx, |p, _| p.filter().to_string()), "");
+    cx.simulate_input("Found nothing");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.documents(None, cx).len(), 2);
+    f.events();
+
+    // escape in the list clears a filter that matches nothing and keeps the keyboard.
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("qqq");
+    cx.simulate_keystrokes("tab escape");
+    assert_eq!(f.panel.read_with(cx, |p, _| p.filter().to_string()), "");
+    assert_eq!(f.visible(cx).len(), 3);
+    assert!(f.panel_focused(cx));
+    assert!(f.events().is_empty());
+}
+
+#[gpui::test]
+fn long_names_and_deep_nesting(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let long =
+        "A very long working title that keeps going well past the edge of any sidebar ".repeat(8);
+    let long = long.trim();
+    // A document and a folder with very long names, the folder twelve levels down.
+    let document = f.create(None, long, cx);
+    let mut parent = f.inner;
+    let mut chain = Vec::new();
+    for depth in 0..12 {
+        // The deepest one ends in letters no other name has, for the move picker.
+        let tail = if depth == 11 { " zq" } else { "" };
+        parent = f.library.update(cx, |l, cx| {
+            l.create_folder(Some(parent), &format!("{long} {depth}{tail}"), cx)
+                .unwrap()
+                .id
+        });
+        chain.push(parent);
+    }
+    let deep = f.create(Some(parent), "Deep", cx);
+    cx.run_until_parked();
+    // Everything draws, at every depth, with the long rows selected.
+    assert!(f.panel.update(cx, |p, cx| p.reveal_document(deep, cx)));
+    cx.run_until_parked();
+    assert_eq!(f.visible(cx).len(), 2 + 12 + 1 + 1 + 3);
+    cx.simulate_keystrokes("up up home end");
+    assert_eq!(f.selected(cx), Some(Document(document)));
+
+    // The name is whole in the rename field; a longer one is stored whole.
+    cx.simulate_keystrokes("r");
+    let field_text = f.panel.read_with(cx, |p, cx| {
+        p.rename_field().unwrap().read(cx).text().to_string()
+    });
+    assert_eq!(field_text, long);
+    cx.simulate_keystrokes("end");
+    cx.simulate_input(" and then some");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.title(document, cx), format!("{long} and then some"));
+
+    // The filter finds words anywhere in a long name, and in the deep folder names.
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("then some");
+    assert_eq!(f.visible(cx), vec![Document(document)]);
+    cx.simulate_keystrokes("escape /");
+    cx.simulate_input("sidebar 11");
+    // The matching folder, what is in it, and the fourteen folders that lead to it.
+    assert_eq!(f.visible(cx).len(), 2 + 11 + 1 + 1);
+    assert_eq!(f.selected(cx), Some(Folder(chain[11])));
+    cx.simulate_keystrokes("escape");
+
+    // Messages carry the whole name; the move picker lists the whole path.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(document)), cx));
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("zq");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.folder_of(document, cx), Some(chain[11]));
+    let toast = f.toasts(cx).pop().unwrap();
+    assert!(toast.starts_with("Moved “A very long working title"));
+    assert!(toast.contains(" / "));
+    cx.simulate_keystrokes("cmd-backspace");
+    cx.run_until_parked();
+    let toast = f.toasts(cx).pop().unwrap();
+    assert!(toast.ends_with("and then some” to the trash. Press ⌘Z to undo."));
+    // The trash view shows it with the long path it came from.
+    cx.simulate_keystrokes("t");
+    cx.run_until_parked();
+    let location = f
+        .panel
+        .read_with(cx, |p, _| p.trash_location(Document(document)).unwrap());
+    assert_eq!(location.matches(" / ").count(), 13);
+    cx.simulate_keystrokes("enter escape");
+    assert_eq!(f.selected(cx), Some(Document(document)));
+}
+
+#[gpui::test]
+fn several_hundred_siblings(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    const COUNT: usize = 600;
+    let ids: Vec<DocumentId> = f.library.update(cx, |l, cx| {
+        (0..COUNT)
+            .map(|ix| {
+                l.create_document(Some(f.inner), &content(&format!("Scene {ix:03}"), "x"), cx)
+                    .unwrap()
+                    .id
+            })
+            .collect()
+    });
+    cx.run_until_parked();
+    // "Idea" was there first; the scenes follow it.
+    let order = |cx: &mut VisualTestContext| f.documents(Some(f.inner), cx);
+    assert_eq!(order(cx).len(), COUNT + 1);
+    f.panel.update(cx, |p, cx| {
+        p.reveal_document(ids[COUNT - 1], cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(f.visible(cx).len(), 4 + COUNT + 1);
+
+    // The last sibling: down is the edge; up moves it one place at a time.
+    cx.simulate_keystrokes("alt-down");
+    assert_eq!(order(cx)[COUNT], ids[COUNT - 1]);
+    let started = Instant::now();
+    for _ in 0..25 {
+        cx.simulate_keystrokes("alt-up");
+    }
+    let reordering = started.elapsed();
+    eprintln!(
+        "25 reorders among {} siblings took {reordering:?}",
+        COUNT + 1
+    );
+    assert_eq!(order(cx)[COUNT - 25], ids[COUNT - 1]);
+    assert_eq!(order(cx)[COUNT], ids[COUNT - 2]);
+    assert_eq!(f.selected(cx), Some(Document(ids[COUNT - 1])));
+    assert!(
+        reordering < Duration::from_secs(20),
+        "25 reorders took {reordering:?}"
+    );
+    // One undo takes the whole run back.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(order(cx)[COUNT], ids[COUNT - 1]);
+    assert_eq!(order(cx)[COUNT - 1], ids[COUNT - 2]);
+    f.toasts(cx);
+
+    // The first sibling: up is the edge.
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(f.in_inner)), cx));
+    cx.simulate_keystrokes("alt-up");
+    assert_eq!(order(cx)[0], f.in_inner);
+    cx.simulate_keystrokes("alt-down");
+    assert_eq!(&order(cx)[..2], &[ids[0], f.in_inner]);
+
+    // In the middle: a copy lands right after the original, a trashed row hands the
+    // selection to the next one, and undo puts it back in its place.
+    let middle = ids[300];
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(middle)), cx));
+    cx.simulate_keystrokes("cmd-d");
+    let now = order(cx);
+    let at = now.iter().position(|id| *id == middle).unwrap();
+    let copy = now[at + 1];
+    assert_eq!(f.title(copy, cx), "Scene 300 copy");
+    assert_eq!(f.selected(cx), Some(Document(copy)));
+    assert_eq!(now[at + 2], ids[301]);
+    cx.simulate_keystrokes("cmd-backspace");
+    cx.run_until_parked();
+    assert_eq!(f.selected(cx), Some(Document(ids[301])));
+    assert_eq!(order(cx).len(), COUNT + 1);
+    f.toasts(cx);
+
+    // Moving one out to the root and back keeps its place among the hundreds.
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(middle), None, cx).unwrap();
+    });
+    assert_eq!(order(cx).len(), COUNT);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(order(cx)[at], middle);
+    assert_eq!(order(cx)[at + 1], ids[301]);
+
+    // Page keys and the ends still land on rows.
+    cx.simulate_keystrokes("end");
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
+    cx.simulate_keystrokes("pageup pageup");
+    assert!(matches!(f.selected(cx), Some(Document(_))));
+    cx.simulate_keystrokes("home");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+}
+
+#[gpui::test]
+fn an_autosave_touches_one_row(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    f.panel.update(cx, |p, cx| {
+        p.reveal_document(f.in_inner, cx);
+        p.set_row_detail(RowDetail::Words, cx);
+    });
+    cx.run_until_parked();
+    let detail = |id: DocumentId, cx: &mut VisualTestContext| {
+        f.panel
+            .read_with(cx, |p, cx| p.item_detail(Document(id), cx))
+    };
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("1"));
+    let rows = f.visible(cx);
+
+    // The editor saves the open document: its row shows the new count, nothing else moves.
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Idea", "one two three four five"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("5"));
+    assert_eq!(detail(f.in_folder, cx).as_deref(), Some("1"));
+    assert_eq!(f.visible(cx), rows);
+    assert_eq!(f.selected(cx), Some(Document(f.in_inner)));
+    // The edit time follows too.
+    f.panel
+        .update(cx, |p, cx| p.set_row_detail(RowDetail::Edited, cx));
+    f.clock.advance_ms(3 * 60_000);
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("3m"));
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Idea", "one two"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("now"));
+
+    // A row that is not on screen (its folder is closed) needs nothing; opening the
+    // folder later shows the saved numbers.
+    f.panel.update(cx, |p, cx| {
+        p.set_expanded(f.inner, false, cx);
+        p.set_row_detail(RowDetail::Words, cx);
+    });
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Idea", "a b c d e f g"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(detail(f.in_inner, cx), None);
+    f.panel
+        .update(cx, |p, cx| p.set_expanded(f.inner, true, cx));
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("7"));
+
+    // Under a filter the row is updated just the same.
+    f.panel.update(cx, |p, cx| p.set_filter("idea", cx));
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Idea", "a b"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(detail(f.in_inner, cx).as_deref(), Some("2"));
+    // A save that changes the title is a change of the list: the filter is applied again.
+    f.library.update(cx, |l, cx| {
+        l.save_document(f.in_inner, &content("Thought", "a b"), cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert!(f.visible(cx).is_empty());
+    f.panel.update(cx, |p, cx| p.clear_filter(cx));
+    assert!(f.visible(cx).contains(&Document(f.in_inner)));
 }

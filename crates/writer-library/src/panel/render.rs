@@ -13,10 +13,11 @@ use writer_ui::theme::{
 };
 use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
+use super::rows::{count_documents, grouped};
 use super::{
     DeleteForever, Dismiss, EmptyTrash, FocusFilter, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
-    LibraryPanel, NewDocument, NewFolder, ROW_HEIGHT, RestoreSelected, ShowTrash, TRASH_ROW_HEIGHT,
-    View,
+    LibraryPanel, NewDocument, NewFolder, ROOT_ROW_HEIGHT, ROW_HEIGHT, RestoreSelected, ShowTrash,
+    TRASH_ROW_HEIGHT, View,
 };
 
 /// The height of the strip under the list: the trash row, or the key hints of the trash
@@ -70,6 +71,33 @@ impl Render for LibraryPanel {
                 }
             });
         }
+        // The row being renamed holds the keyboard, so it must be drawn. The list only
+        // draws the rows in view: keep that row in view (scrolling it out with the wheel
+        // stops at the edge), and end the rename if its row is gone from the list
+        // altogether (a folder above it was collapsed).
+        if let Some(item) = self.renaming {
+            match self.rows.iter().position(|row| row.item == item) {
+                Some(ix) if self.view == View::Tree => {
+                    self.scroll.scroll_to_item(ix, gpui::ScrollStrategy::Top)
+                }
+                _ => cx.defer_in(window, |this, window, cx| {
+                    let hidden = this
+                        .renaming
+                        .is_some_and(|item| !this.rows.iter().any(|row| row.item == item))
+                        || (this.renaming.is_some() && this.view != View::Tree);
+                    if hidden {
+                        let had_keyboard = this
+                            .rename_field
+                            .as_ref()
+                            .is_some_and(|field| field.focus_handle(cx).is_focused(window));
+                        this.finish_rename(true, cx);
+                        if had_keyboard {
+                            window.focus(&this.focus_handle);
+                        }
+                    }
+                }),
+            }
+        }
 
         let theme = cx.theme();
         let colors = theme.colors;
@@ -86,14 +114,16 @@ impl Render for LibraryPanel {
             },
         );
 
-        let (header, body, footer) = match self.view {
+        let (header, root_row, body, footer) = match self.view {
             View::Tree => (
                 self.render_filter_row(filter_field, filter_focused, cx),
+                Some(self.render_root_row(panel_focused, cx)),
                 self.render_tree(cx),
                 self.render_trash_footer(panel_focused, cx),
             ),
             View::Trash => (
                 self.render_trash_header(cx),
+                None,
                 self.render_trash_list(cx),
                 self.render_trash_hints(cx),
             ),
@@ -137,7 +167,16 @@ impl Render for LibraryPanel {
             .font_family(ui_font)
             .text_size(UI_TEXT_BASE)
             .line_height(px(18.))
+            // Draws nothing: its place in the frame tells whether the panel is on screen.
+            .child(
+                div()
+                    .id("library-on-screen")
+                    .track_focus(&self.probe)
+                    .absolute()
+                    .size_0(),
+            )
             .child(header)
+            .children(root_row)
             .child(body)
             .child(footer);
 
@@ -214,6 +253,61 @@ impl LibraryPanel {
             .into_any_element()
     }
 
+    /// The "Library" row above the tree: the root, selectable like any row, so that the
+    /// keyboard has a way to say "the top level" when every top-level item is a folder.
+    fn render_root_row(&self, panel_focused: bool, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let selected = self.on_root_row;
+        let tree = self.library.read(cx).tree();
+        let documents =
+            tree.documents.len() + tree.folders.iter().map(count_documents).sum::<usize>();
+        div()
+            .id("library-root-row")
+            .flex_none()
+            .h(ROOT_ROW_HEIGHT)
+            .px(SPACE_1)
+            .pt(SPACE_1)
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.click_root_row(window, cx)),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .h_full()
+                    .pl(SPACE_2)
+                    .pr(SPACE_2)
+                    .rounded(RADIUS_SM)
+                    .map(|el| match (selected, panel_focused) {
+                        (true, true) => el.bg(colors.accent_subtle),
+                        (true, false) => el.bg(colors.hover),
+                        (false, _) => el.hover(|style| style.bg(colors.hover)),
+                    })
+                    .children((selected && panel_focused).then(|| focus_mark(colors.accent)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(UI_TEXT_SM)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if selected { colors.ink } else { colors.muted })
+                            .child("Library"),
+                    )
+                    .when(documents > 0, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(UI_TEXT_XS)
+                                .text_color(colors.faint)
+                                .child(grouped(documents as u64)),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn render_tree(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         let list = div()
@@ -221,10 +315,11 @@ impl LibraryPanel {
             .flex_1()
             .min_h_0()
             .py(SPACE_1)
-            // A click below the last row clears the selection (new items then go to the root).
+            // A click below the last row selects the library itself (new items then go to
+            // the top level).
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if this.renaming.is_none() {
-                    this.set_selected(None, cx);
+                    this.select_root(cx);
                 }
             }));
         if !self.rows.is_empty() {

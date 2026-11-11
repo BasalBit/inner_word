@@ -543,3 +543,217 @@ fn snapshots_search_recents_and_quick_open(cx: &mut TestAppContext) {
         assert_eq!(all[0].meta.folder_id, Some(inner));
     });
 }
+
+#[gpui::test]
+fn a_content_save_updates_the_cached_tree_in_place(cx: &mut TestAppContext) {
+    let clock = Clock::manual(1_700_000_000_000);
+    let (library, events) = library_from(Library::in_memory_with_clock(clock.clone()).unwrap(), cx);
+    let (folder, nested, at_root, sibling) = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Book", cx).unwrap().id;
+        let inner = l.create_folder(Some(folder), "Part one", cx).unwrap().id;
+        let nested = l
+            .create_document(Some(inner), &content("Chapter", "one two"), cx)
+            .unwrap()
+            .id;
+        let sibling = l
+            .create_document(Some(inner), &content("Other chapter", "x"), cx)
+            .unwrap()
+            .id;
+        let at_root = l
+            .create_document(None, &content("Notes", "x"), cx)
+            .unwrap()
+            .id;
+        (folder, nested, at_root, sibling)
+    });
+    take(&events, cx);
+    // The address of the cached tree, without keeping it alive: a reload makes a new tree,
+    // an update in place keeps this one.
+    let address = |cx: &mut TestAppContext| {
+        library.read_with(cx, |l, _| std::sync::Arc::as_ptr(&l.tree()) as usize)
+    };
+    let cached = address(cx);
+
+    // An autosave: same title, more words, a later time.
+    clock.advance_ms(60_000);
+    for id in [nested, at_root] {
+        let saved = library.update(cx, |l, cx| {
+            let saved = l
+                .save_document(id, &content_of(id, nested, "one two three four"), cx)
+                .unwrap();
+            // Fresh inside the same update, as after every write.
+            assert_eq!(l.tree().find_document(id), Some(&saved));
+            saved
+        });
+        assert_eq!(saved.word_count, 4);
+        assert_eq!(saved.updated_at, 1_700_000_060_000);
+        assert_eq!(
+            take(&events, cx),
+            vec![LibraryEvent::DocumentSaved {
+                id,
+                title_changed: false
+            }]
+        );
+    }
+    assert_eq!(address(cx), cached, "a content save reloaded the tree");
+    // A title that changes with the text is taken in place too; views are told.
+    library.update(cx, |l, cx| {
+        l.save_document(
+            nested,
+            &content("Chapter one", "one two three four five"),
+            cx,
+        )
+        .unwrap()
+    });
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::DocumentSaved {
+                id: nested,
+                title_changed: true
+            },
+            LibraryEvent::TreeChanged
+        ]
+    );
+    assert_eq!(address(cx), cached, "a content save reloaded the tree");
+    // What is cached is exactly what a reload would read, and nothing else moved.
+    library.read_with(cx, |l, _| {
+        let tree = l.tree();
+        assert_eq!(*tree, l.store().library_tree().unwrap());
+        let chapters = tree.find_folder(folder).unwrap().folders[0]
+            .documents
+            .iter()
+            .map(|d| (d.id, d.title.as_str(), d.word_count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            chapters,
+            vec![(nested, "Chapter one", 5), (sibling, "Other chapter", 1)]
+        );
+    });
+
+    // Someone who took the tree before a save keeps what they took.
+    let before = library.read_with(cx, |l, _| l.tree());
+    library.update(cx, |l, cx| {
+        l.save_document(at_root, &content("Notes", "a b c d e f"), cx)
+            .unwrap()
+    });
+    assert_eq!(before.find_document(at_root).unwrap().word_count, 4);
+    assert_eq!(
+        library.read_with(cx, |l, _| l
+            .tree()
+            .find_document(at_root)
+            .unwrap()
+            .word_count),
+        6
+    );
+    drop(before);
+    take(&events, cx);
+
+    // A trashed document is saved (an autosave racing a delete loses no text) and stays
+    // out of the tree; its title changing is not a change of the tree.
+    library.update(cx, |l, cx| l.trash_document(at_root, cx).unwrap());
+    take(&events, cx);
+    let tree = library.read_with(cx, |l, _| l.tree());
+    library.update(cx, |l, cx| {
+        l.save_document(at_root, &content("Last words", "kept"), cx)
+            .unwrap()
+    });
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: at_root,
+            title_changed: true
+        }]
+    );
+    library.read_with(cx, |l, _| {
+        assert_eq!(*l.tree(), *tree);
+        assert_eq!(l.document(at_root).unwrap().meta.title, "Last words");
+    });
+    // Restored, it shows what was saved while it was in the trash.
+    library.update(cx, |l, cx| l.restore_document(at_root, cx).unwrap());
+    assert_eq!(
+        library.read_with(cx, |l, _| l
+            .tree()
+            .find_document(at_root)
+            .unwrap()
+            .title
+            .clone()),
+        "Last words"
+    );
+    take(&events, cx);
+
+    // A document that does not exist: an error, no event, nothing changed.
+    let result = library.update(cx, |l, cx| {
+        l.save_document(DocumentId(4040), &content("x", "x"), cx)
+    });
+    assert!(matches!(result, Err(StoreError::NotFound { .. })));
+    assert!(take(&events, cx).is_empty());
+}
+
+/// The content of a test save: the nested document keeps its title, the other one its own.
+fn content_of(id: DocumentId, nested: DocumentId, text: &str) -> DocumentContent<'_> {
+    content(if id == nested { "Chapter" } else { "Notes" }, text)
+}
+
+#[gpui::test]
+fn duplicating_a_folder_is_one_change(cx: &mut TestAppContext) {
+    let (library, events) = library(cx);
+    let (book, part) = library.update(cx, |l, cx| {
+        let book = l.create_folder(None, "Book", cx).unwrap().id;
+        let part = l.create_folder(Some(book), "Part one", cx).unwrap().id;
+        l.create_document(Some(part), &content("Chapter", "harbour"), cx)
+            .unwrap();
+        l.create_document(Some(book), &content("Outline", "x"), cx)
+            .unwrap();
+        (book, part)
+    });
+    take(&events, cx);
+    let copy = library.update(cx, |l, cx| {
+        let copy = l.duplicate_folder(book, cx).unwrap();
+        // The tree is fresh inside the same update.
+        assert!(l.tree().find_folder(copy.id).is_some());
+        copy
+    });
+    assert_eq!(copy.name, "Book copy");
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::FolderCreated(copy.id),
+            LibraryEvent::TreeChanged
+        ]
+    );
+    library.read_with(cx, |l, _| {
+        let tree = l.tree();
+        assert_eq!(
+            tree.folders
+                .iter()
+                .map(|n| n.folder.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Book", "Book copy"]
+        );
+        let copied = tree.find_folder(copy.id).unwrap();
+        assert_eq!(copied.documents[0].title, "Outline");
+        assert_eq!(copied.folders[0].folder.name, "Part one");
+        assert_ne!(copied.folders[0].folder.id, part);
+        assert_eq!(copied.folders[0].documents[0].title, "Chapter");
+        assert_eq!(
+            l.folder_path(Some(copied.folders[0].folder.id)),
+            vec!["Book copy", "Part one"]
+        );
+        // Quick open and search see the copies.
+        assert_eq!(l.all_documents().unwrap().len(), 4);
+        assert_eq!(l.search("harbour", 10).unwrap().len(), 2);
+    });
+    // A folder that is not live cannot be duplicated, and nothing is announced.
+    library.update(cx, |l, cx| l.trash_folder(copy.id, cx).unwrap());
+    take(&events, cx);
+    let result = library.update(cx, |l, cx| l.duplicate_folder(copy.id, cx));
+    assert!(matches!(result, Err(StoreError::NotFound { .. })));
+    assert!(take(&events, cx).is_empty());
+    // Trashing a folder still reports every document that went with it.
+    library.update(cx, |l, cx| l.trash_folder(book, cx).unwrap());
+    let trashed = take(&events, cx);
+    assert!(matches!(
+        &trashed[0],
+        LibraryEvent::FolderTrashed { id, documents } if *id == book && documents.len() == 2
+    ));
+}

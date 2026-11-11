@@ -24,6 +24,14 @@ impl LibraryPanel {
                 self.select_trash_index(next, ScrollStrategy::Bottom, cx);
             }
             View::Tree if self.on_trash_row => {}
+            // From the "Library" row down into the tree.
+            View::Tree if self.on_root_row => {
+                if self.rows.is_empty() {
+                    self.select_trash_row(cx);
+                } else {
+                    self.select_index(0, ScrollStrategy::Top, cx);
+                }
+            }
             View::Tree => match self.selected_index() {
                 Some(ix) if ix + 1 < self.rows.len() => {
                     self.select_index(ix + 1, ScrollStrategy::Bottom, cx)
@@ -47,7 +55,7 @@ impl LibraryPanel {
     pub(super) fn on_select_previous(
         &mut self,
         _: &SelectPrevious,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match self.view {
@@ -58,10 +66,23 @@ impl LibraryPanel {
                 };
                 self.select_trash_index(previous, ScrollStrategy::Top, cx);
             }
+            View::Tree if self.on_root_row => {}
             View::Tree => {
+                // Above the first row is the "Library" row, unless the user is typing a
+                // filter (the arrows then stay among the matches).
+                let to_root = match self.selected_index() {
+                    Some(ix) => ix == 0,
+                    None => self.rows.is_empty(),
+                };
+                if to_root {
+                    if self.focus_handle.is_focused(window) {
+                        self.select_root(cx);
+                    }
+                    return;
+                }
                 let previous = match self.selected_index() {
-                    Some(ix) => ix.saturating_sub(1),
-                    None => self.rows.len().saturating_sub(1),
+                    Some(ix) => ix - 1,
+                    None => self.rows.len() - 1,
                 };
                 self.select_index(previous, ScrollStrategy::Top, cx);
             }
@@ -171,6 +192,11 @@ impl LibraryPanel {
             self.show_trash(window, cx);
             return;
         }
+        if self.on_root_row {
+            // Into the library: its first row.
+            self.select_index(0, ScrollStrategy::Top, cx);
+            return;
+        }
         let Some(ix) = self.selected_index() else {
             return;
         };
@@ -190,7 +216,7 @@ impl LibraryPanel {
     pub(super) fn on_collapse(
         &mut self,
         _: &Collapse,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.view == View::Trash {
@@ -205,12 +231,18 @@ impl LibraryPanel {
             LibraryItem::Folder(id) if row.expanded && self.filter.is_none() => {
                 self.set_expanded(id, false, cx)
             }
-            _ => {
-                if let Some(parent) = row.parent {
+            _ => match row.parent {
+                Some(parent) => {
                     self.set_selected(Some(LibraryItem::Folder(parent)), cx);
                     self.scroll_to_selected(ScrollStrategy::Top);
                 }
-            }
+                // The parent of a top-level item is the library itself.
+                None => {
+                    if self.focus_handle.is_focused(window) {
+                        self.select_root(cx);
+                    }
+                }
+            },
         }
     }
 
@@ -436,6 +468,15 @@ impl LibraryPanel {
                 focus_editor: false,
             });
         }
+    }
+
+    /// A click on the "Library" row above the tree.
+    pub(super) fn click_root_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.renaming.is_some() {
+            self.finish_rename(true, cx);
+        }
+        window.focus(&self.focus_handle);
+        self.select_root(cx);
     }
 
     pub(super) fn click_disclosure(&mut self, ix: usize, cx: &mut Context<Self>) {

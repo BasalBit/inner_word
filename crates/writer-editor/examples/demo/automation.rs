@@ -90,6 +90,11 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
         Err(err) => return eprintln!("[automation] bad script: {err:#}"),
     };
     cx.spawn(async move |cx| {
+        // The view to draw through while the window is covered.
+        let view = window
+            .update(cx, |_, window, _| native_view(window).ok())
+            .ok()
+            .flatten();
         for step in steps {
             let label = format!("{step:?}");
             let result: Result<bool> = async {
@@ -98,9 +103,16 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                     Step::Keys(keys) => {
                         for key in keys {
                             let text = key.unparse();
+                            let started = Instant::now();
                             let handled = window
                                 .update(cx, |_, window, cx| window.dispatch_keystroke(key, cx))?;
-                            eprintln!("[automation] keys {text}: handled={handled}");
+                            let dispatch = started.elapsed();
+                            draw_frame(window, view, cx);
+                            eprintln!(
+                                "[automation] keys {text}: handled={handled} \
+                                 (dispatch {dispatch:?}, with frame {:?})",
+                                started.elapsed()
+                            );
                             cx.background_executor()
                                 .timer(Duration::from_millis(60))
                                 .await;
@@ -111,29 +123,39 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             window.update(cx, |_, window, cx| {
                                 window.dispatch_keystroke(keystroke_for_char(ch), cx);
                             })?;
+                            draw_frame(window, view, cx);
                         }
                         cx.background_executor()
                             .timer(Duration::from_millis(60))
                             .await;
                     }
                     Step::TypeSlow(text) => {
+                        // What one key costs: dispatching it (handlers
+                        // and events), and that plus the frame it causes.
                         let mut costs = Vec::new();
+                        let mut totals = Vec::new();
                         for ch in text.chars() {
                             let started = Instant::now();
                             window.update(cx, |_, window, cx| {
                                 window.dispatch_keystroke(keystroke_for_char(ch), cx);
                             })?;
                             costs.push(started.elapsed());
+                            draw_frame(window, view, cx);
+                            totals.push(started.elapsed());
                             cx.background_executor()
                                 .timer(Duration::from_millis(24))
                                 .await;
                         }
                         costs.sort();
+                        totals.sort();
                         eprintln!(
-                            "[automation] typeslow {} keys: dispatch median {:?}, max {:?}",
+                            "[automation] typeslow {} keys: dispatch median {:?}, max {:?}; \
+                             key to frame done median {:?}, max {:?}",
                             costs.len(),
                             costs.get(costs.len() / 2).copied().unwrap_or_default(),
                             costs.last().copied().unwrap_or_default(),
+                            totals.get(totals.len() / 2).copied().unwrap_or_default(),
+                            totals.last().copied().unwrap_or_default(),
                         );
                     }
                     Step::Theme(mode) => {
@@ -144,6 +166,7 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                     }
                     Step::Screenshot(path) => {
                         window.update(cx, |_, window, _| window.refresh())?;
+                        draw_frame(window, view, cx);
                         cx.background_executor()
                             .timer(Duration::from_millis(300))
                             .await;
@@ -170,6 +193,58 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
     })
     .detach();
 }
+
+/// The native view behind the window, for [`draw_frame`].
+#[derive(Clone, Copy)]
+struct NativeView(usize);
+
+#[cfg(target_os = "macos")]
+fn native_view(window: &Window) -> Result<NativeView> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window).map_err(|e| anyhow!("{e}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        bail!("not an AppKit window");
+    };
+    Ok(NativeView(appkit.ns_view.as_ptr() as usize))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_view(_: &Window) -> Result<NativeView> {
+    bail!("macOS only")
+}
+
+/// Draws a frame now if the window is dirty. GPUI draws from a display
+/// link, which macOS stops while a window is completely covered by other
+/// windows; a scripted run stays in the background, where that happens
+/// easily. Sending the view `displayLayer:` is the path AppKit itself uses
+/// for a synchronous frame (same as writer-app's `screenshot::force_frame`).
+/// Must be called outside any GPUI update.
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn draw_frame(window: AnyWindowHandle, view: Option<NativeView>, cx: &mut gpui::AsyncApp) {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    let Some(view) = view else {
+        return;
+    };
+    // The view pointer is only good while the window is open.
+    let open = cx
+        .update(|cx| cx.windows().contains(&window))
+        .unwrap_or(false);
+    if !open {
+        return;
+    }
+    let ns_view = view.0 as *mut Object;
+    // SAFETY: the NSView of a window that is still open, on the main
+    // thread; `layer` is a getter and `displayLayer:` is implemented by
+    // GPUI's view class.
+    unsafe {
+        let layer: *mut Object = msg_send![ns_view, layer];
+        let _: () = msg_send![ns_view, displayLayer: layer];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn draw_frame(_: AnyWindowHandle, _: Option<NativeView>, _: &mut gpui::AsyncApp) {}
 
 #[cfg(target_os = "macos")]
 #[allow(unexpected_cfgs)]

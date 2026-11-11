@@ -788,3 +788,149 @@ fn the_paragraph_keys_stop_at_line_breaks_inside_a_block(cx: &mut TestAppContext
     cx.simulate_keystrokes("ctrl-e");
     assert_eq!(at(cx), Position::new(1, 23));
 }
+
+/// Emoji that are several code points: a ZWJ family, a ZWJ profession
+/// with a skin tone, flags (regional indicator pairs, a ZWJ flag, a tag
+/// sequence), a skin tone modifier, keycaps, a variation selector.
+const EMOJI_SEQUENCES: [&str; 10] = [
+    "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+    "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}",
+    "\u{1f9d1}\u{1f3fd}\u{200d}\u{1f52c}",
+    "\u{1f1e6}\u{1f1f1}",
+    "\u{1f3f3}\u{fe0f}\u{200d}\u{1f308}",
+    "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}",
+    "\u{1f44d}\u{1f3fd}",
+    "1\u{fe0f}\u{20e3}",
+    "#\u{fe0f}\u{20e3}",
+    "\u{2764}\u{fe0f}",
+];
+
+#[gpui::test]
+fn emoji_sequences_are_one_character_each(cx: &mut TestAppContext) {
+    setup(cx);
+    // "a" + sequence + "b" for every sequence, on one line.
+    let content: String = EMOJI_SEQUENCES
+        .iter()
+        .map(|sequence| format!("a{sequence}b "))
+        .collect();
+    let content = content.trim_end().to_string();
+    let (editor, cx) = open(
+        Document::from_blocks(vec![Block::paragraph(&content)]),
+        EditorConfig::full(),
+        cx,
+    );
+    // Where each sequence starts and ends.
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for sequence in EMOJI_SEQUENCES {
+        spans.push(at + 1..at + 1 + sequence.len());
+        at += sequence.len() + 3;
+    }
+    for span in &spans {
+        assert_eq!(
+            text::next_grapheme_boundary(&content, span.start),
+            span.end,
+            "{:?} is one grapheme",
+            &content[span.clone()]
+        );
+    }
+
+    // The arrow keys step over a sequence as a whole, in both directions,
+    // and the caret advances by more than nothing each time.
+    let mut stops = vec![0];
+    let place = |editor: &Editor| {
+        let caret = editor.caret_bounds().unwrap();
+        (caret.top(), caret.left())
+    };
+    let mut last = editor.read_with(cx, |editor, _| place(editor));
+    loop {
+        cx.simulate_keystrokes("right");
+        let (offset, now) = editor.read_with(cx, |editor, _| (head(editor).offset, place(editor)));
+        if Some(&offset) == stops.last() {
+            break;
+        }
+        // Further right, or on a later row.
+        assert!(now > last, "the caret moves on at {offset}");
+        last = now;
+        stops.push(offset);
+    }
+    assert_eq!(*stops.last().unwrap(), content.len());
+    for span in &spans {
+        assert!(stops.contains(&span.start) && stops.contains(&span.end));
+        assert!(
+            !stops
+                .iter()
+                .any(|stop| *stop > span.start && *stop < span.end),
+            "no stop inside {:?}",
+            &content[span.clone()]
+        );
+    }
+    // Three stops per group (a, the sequence, b) and the spaces between.
+    assert_eq!(stops.len(), 1 + EMOJI_SEQUENCES.len() * 4 - 1);
+    let mut back = vec![content.len()];
+    for _ in 1..stops.len() {
+        cx.simulate_keystrokes("left");
+        back.push(editor.read_with(cx, |editor, _| head(editor).offset));
+    }
+    back.reverse();
+    assert_eq!(back, stops);
+
+    editor.read_with(cx, |editor, _| {
+        for span in &spans {
+            // A click anywhere on a sequence lands on one of its two edges.
+            let start = editor
+                .position_bounds(Position::new(0, span.start))
+                .unwrap();
+            let end = editor.position_bounds(Position::new(0, span.end)).unwrap();
+            assert!(end.left() > start.left());
+            for step in 0..=8 {
+                let x = start.left() + (end.left() - start.left()) * (step as f32 / 8.);
+                let hit = editor
+                    .position_at_point(gpui::point(x, start.center().y))
+                    .unwrap();
+                assert!(
+                    hit.offset == span.start || hit.offset == span.end,
+                    "a click inside {:?} gives {hit:?}",
+                    &content[span.clone()]
+                );
+            }
+            // The selection of a sequence is one rectangle as wide as it.
+            let rects = editor
+                .range_bounds(writer_core::TextRange::in_block(0, span.start, span.end))
+                .unwrap();
+            assert_eq!(rects.len(), 1);
+            assert!((rects[0].left() - start.left()).abs() < px(0.01));
+            assert!((rects[0].right() - end.left()).abs() < px(0.01));
+        }
+    });
+
+    // shift-right selects a whole sequence; typing replaces it; backspace
+    // after a sequence removes all of it.
+    let first = spans[0].clone();
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(0, first.start)), cx);
+    });
+    cx.simulate_keystrokes("shift-right");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), EMOJI_SEQUENCES[0]);
+    });
+    cx.simulate_input("x");
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.document().blocks()[0].text().starts_with("axb a"));
+    });
+    cx.simulate_keystrokes("cmd-z");
+    for (index, span) in spans.iter().enumerate().rev() {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(0, span.end)), cx);
+        });
+        cx.simulate_keystrokes("backspace");
+        editor.read_with(cx, |editor, _| {
+            let now = editor.document().blocks()[0].text();
+            assert_eq!(
+                &now[span.start - 1..span.start + 1],
+                "ab",
+                "sequence {index} went as a whole"
+            );
+        });
+    }
+}

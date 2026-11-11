@@ -31,9 +31,10 @@
 //! a comment composer (enter submits, shift-enter breaks the line).
 //!
 //! `THE_WRITER_DEMO_BLOCKS=10000` opens a generated book of that many
-//! blocks instead of the sample document, and `THE_WRITER_DEMO_PAGE_VIEW=1`
-//! starts in page view; the demo then prints how long opening and the
-//! background layout took.
+//! blocks instead of the sample document, `THE_WRITER_DEMO_FILE=<path>` a
+//! text file (one block per line, see `textfile.rs`), and
+//! `THE_WRITER_DEMO_PAGE_VIEW=1` starts in page view; the demo then prints
+//! how long opening and the background layout took.
 //!
 //! Visual QA (see `docs/gpui-notes.md`): build, then run the binary with
 //! `THE_WRITER_AUTOMATION`, e.g.
@@ -54,6 +55,7 @@
 //! `quit`.
 
 mod automation;
+mod textfile;
 
 use std::time::{Duration, Instant};
 
@@ -240,13 +242,22 @@ fn book(blocks: usize) -> Document {
     Document::from_blocks(out)
 }
 
-/// The document the demo opens: the sample, or a book of
+/// The document the demo opens: the sample, a text file
+/// (`THE_WRITER_DEMO_FILE`, see `textfile`), or a book of
 /// `THE_WRITER_DEMO_BLOCKS` blocks.
 fn initial_document() -> Document {
-    let document = std::env::var("THE_WRITER_DEMO_BLOCKS")
-        .ok()
-        .and_then(|blocks| blocks.trim().parse::<usize>().ok())
-        .map_or_else(sample_document, |blocks| book(blocks.max(1)));
+    let from_file = std::env::var("THE_WRITER_DEMO_FILE").ok().and_then(|path| {
+        textfile::load(&path)
+            .map_err(|err| eprintln!("[demo] reading {path}: {err}"))
+            .ok()
+    });
+    let document = match from_file {
+        Some(document) => document,
+        None => std::env::var("THE_WRITER_DEMO_BLOCKS")
+            .ok()
+            .and_then(|blocks| blocks.trim().parse::<usize>().ok())
+            .map_or_else(sample_document, |blocks| book(blocks.max(1))),
+    };
     if std::env::var("THE_WRITER_DEMO_PAGE_VIEW").is_ok() {
         document.with_settings(DocumentSettings {
             page_view: true,

@@ -1452,16 +1452,32 @@ fn writing_at_the_end_of_a_document_has_room_under_the_last_line(cx: &mut TestAp
             (viewport.bottom() - caret.bottom()) / viewport.size.height
         })
     };
-    // Going to the end shows the end, with a line under it.
-    cx.simulate_keystrokes("cmd-down");
+    // Arriving on the last line some other way (a search, the arrow
+    // keys, a click) shows it with a line under it.
+    let end = editor.read_with(cx, |editor, _| editor.document().end());
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(end), cx)
+    });
+    assert!(room(cx) < 0.2, "{}", room(cx));
     let scroll_at_end = editor.read_with(cx, |editor, _| editor.scroll_offset());
-    assert!(room(cx) < 0.2);
     // Typing there lifts the line: about a third of the window stays
     // free under it, and it stays there line after line.
-    cx.simulate_input(" More");
+    cx.simulate_input("More ");
     let after_typing = room(cx);
     assert!((0.29..0.36).contains(&after_typing), "{after_typing}");
     assert!(editor.read_with(cx, |editor, _| editor.scroll_offset()) > scroll_at_end);
+    // Jumping to the end brings it up at once: nothing moves at the first
+    // letter typed after it.
+    cx.simulate_keystrokes("cmd-up cmd-down");
+    let at_end = room(cx);
+    assert!((0.29..0.36).contains(&at_end), "{at_end}");
+    let scroll = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        scroll
+    );
     for _ in 0..5 {
         cx.simulate_keystrokes("enter");
         cx.simulate_input("Another line.");

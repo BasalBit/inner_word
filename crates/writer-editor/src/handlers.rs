@@ -297,7 +297,11 @@ impl Editor {
         self.movement(Movement::DocStart, false, cx)
     }
     fn move_to_document_end(&mut self, _: &mut Window, cx: Cx) {
-        self.movement(Movement::DocEnd, false, cx)
+        self.movement(Movement::DocEnd, false, cx);
+        // Whoever goes to the end goes there to write on: the last line
+        // comes up with room under it (flow view), instead of jumping up
+        // at the first letter.
+        self.request_scroll(PendingScroll::Writing);
     }
     fn move_page_up(&mut self, _: &mut Window, cx: Cx) {
         self.page(-1, false, cx)

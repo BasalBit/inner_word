@@ -956,8 +956,9 @@ fn main() {
             {
                 cx.activate(true);
             }
-            // Scripted runs with posted events: what GPUI made of each key.
-            if std::env::var_os(automation::ENV).is_some() {
+            // Runs with posted events (`THE_WRITER_DEMO_LOG_KEYS=1`): what
+            // GPUI made of each key.
+            if std::env::var_os("THE_WRITER_DEMO_LOG_KEYS").is_some() {
                 cx.observe_keystrokes(|event, _, _| {
                     eprintln!(
                         "[key] {} action {:?}",

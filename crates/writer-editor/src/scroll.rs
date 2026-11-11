@@ -44,10 +44,11 @@ pub(crate) enum PendingScroll {
     /// Bring a position (`None`: the caret, see `Editor::caret_position`)
     /// into view.
     Position(Option<Position>, Autoscroll),
-    /// Bring the caret into view after a change to the text. Like
-    /// `Position(None, Autoscroll::Fit)`, but whoever writes at the very
-    /// end of the document gets room under the last line instead of
-    /// writing along the bottom edge of the window.
+    /// Bring the caret into view after a change to the text, or after a
+    /// jump to the end of the document. Like `Position(None,
+    /// Autoscroll::Fit)`, but whoever writes at the very end of the
+    /// document gets room under the last line instead of writing along
+    /// the bottom edge of the window.
     Writing,
     /// Put the caret's row `viewport_y` pixels below the top of the
     /// viewport (page-wise movement, switching between flow and page

@@ -44,7 +44,7 @@
 //! | Show a context menu for the text | [`EditorEvent::ContextMenuRequested`] with a [`ContextMenuRequest`] (right-click, `ctrl`-click, `ctrl-enter`) |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
 //! | Comments | [`EditorConfig::comments_visible`], [`Editor::set_active_comment`], [`Editor::set_hidden_comments`] |
-//! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`] |
+//! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`], [`EditorEvent::StatsChanged`], [`EditorEvent::LayoutSettled`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
@@ -115,7 +115,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | `editor` | the entity: state, config, mutation seam, interception and key context API, highlights and comments API, `Render` |
-//! | `layout` | `DocumentLayout` (a slot per block with its measure, lazy placement, shaped layouts for what is on screen, background refinement, scroll anchor, word counts), `layout::block` (shaping, rows, hit testing), `layout::style` (fonts, colours, metrics), `layout::pages` (placement in flow view and on sheets) |
+//! | `layout` | `DocumentLayout` (a slot per block with its measure, lazy placement, shaped layouts for what is on screen, background refinement, scroll anchor, word counts), `layout::block` (shaping, rows, hit testing), `layout::wrap` (where rows break, the size of inline code), `layout::style` (fonts, colours, metrics), `layout::pages` (placement in flow view and on sheets) |
 //! | `element` | `EditorElement`: measure, prepaint (frame plan), paint, listeners |
 //! | `paint` | painting one visual row: glyphs, backgrounds, underlines |
 //! | `decorations` | per block kind painting: markers, quote bar, code panel, rules |
@@ -142,8 +142,21 @@
 //! consumer this means: positions on screen are exact, while the scroll
 //! range, [`Editor::page_count`] and the window y of positions far from the
 //! viewport can still settle for a moment after a long document opens
-//! ([`Editor::layout_pending`]). Word counts work the same way
-//! ([`Editor::stats`], [`EditorEvent::StatsChanged`]).
+//! ([`Editor::layout_pending`], then [`EditorEvent::LayoutSettled`]). Word
+//! counts work the same way ([`Editor::stats`],
+//! [`EditorEvent::StatsChanged`]).
+//!
+//! # The mouse
+//!
+//! Everything in the text can be done with the pointer alone: click,
+//! shift-click, drag (which scrolls at the edges), double and triple
+//! click, the to-do checkboxes, `cmd`-click on a link (resting on a link
+//! shows its address and says so), the wheel and the scroll bar. A
+//! right-click or `ctrl`-click, and `ctrl-enter` from the keyboard, ask
+//! for the context menu: the editor adjusts the selection as a macOS text
+//! view does and emits [`EditorEvent::ContextMenuRequested`] with a
+//! [`ContextMenuRequest`]; whoever shows menus (writer-editor-tools)
+//! opens one. The editor draws no menu itself.
 
 pub mod actions;
 mod commands;

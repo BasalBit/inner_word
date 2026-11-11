@@ -1,0 +1,68 @@
+The Writer
+==========
+
+A keyboard-first writing app for macOS.
+
+
+Install
+-------
+
+1. Drag "The Writer" onto the "Applications" folder in this window.
+2. Eject this disk image.
+
+
+The first launch is blocked. That is expected.
+----------------------------------------------
+
+This build is not signed with an Apple developer certificate and is not
+notarised by Apple, so macOS refuses to open it the first time. You have to
+approve it once. After that it opens like any other app.
+
+Option A: System Settings
+
+1. Open The Writer from the Applications folder. macOS shows a message like
+   "Apple could not verify "The Writer" is free of malware that may harm your
+   Mac or compromise your privacy." Click Done. Do not click Move to Trash.
+2. Open System Settings, then Privacy & Security.
+3. Scroll down to the Security section. It says that "The Writer" was blocked
+   to protect your Mac. Click Open Anyway. (The button stays there for about
+   an hour after the blocked launch. If it is gone, repeat step 1.)
+4. Confirm with Open Anyway, then enter your password or use Touch ID.
+
+On macOS 14 and earlier you can instead Control-click the app in the
+Applications folder, choose Open, and click Open in the dialog. On macOS 15
+and later that shortcut no longer works; use the steps above.
+
+Option B: Terminal
+
+After dragging the app to Applications, open Terminal and run:
+
+    xattr -dr com.apple.quarantine "/Applications/The Writer.app"
+
+This removes the "downloaded from the internet" mark from the app. It then
+opens normally with no warning.
+
+
+If macOS says the app "is damaged and can't be opened"
+-----------------------------------------------------
+
+It is the same block with a different message. Use Option B.
+
+
+Requirements
+------------
+
+macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on a Mac with Apple
+silicon. The name of the disk image says which kind of Mac it is for:
+"arm64" is Apple silicon, "x86_64" is Intel, "universal" runs on both.
+
+
+Your documents
+--------------
+
+The Writer keeps your library in
+
+    ~/Library/Application Support/The Writer
+
+Removing the app does not remove your documents. Back up that folder to keep
+a copy of them.

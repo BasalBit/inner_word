@@ -240,7 +240,6 @@ impl Render for VimStatusItem {
             .whitespace_nowrap()
             .cursor_pointer()
             .hover(|style| style.opacity(0.8))
-            .tooltip(tip("Vim mode: click for its commands", None))
             .on_mouse_down(MouseButton::Left, cx.listener(open_menu))
             .on_mouse_down(MouseButton::Right, cx.listener(open_menu))
             .child(status.mode_label())
@@ -438,7 +437,7 @@ impl Render for VimCommandLine {
                     .rounded(RADIUS_SM)
                     .cursor_pointer()
                     .hover(|style| style.bg(colors.hover))
-                    .tooltip(tip("Close the command line", Some("escape")))
+                    .tooltip(tip("Close the command line", "escape"))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx)))
                     .child(Icon::new(IconName::Close).size(px(12.)).color(colors.muted)),
@@ -485,12 +484,12 @@ impl Render for Tip {
 /// `keystroke` (GPUI spelling).
 fn tip(
     label: &'static str,
-    keystroke: Option<&'static str>,
+    keystroke: &'static str,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     move |_, cx| {
         cx.new(|_| Tip {
             label: label.into(),
-            hint: keystroke.and_then(KeyHint::parse),
+            hint: KeyHint::parse(keystroke),
         })
         .into()
     }

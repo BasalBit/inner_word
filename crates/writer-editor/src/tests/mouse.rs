@@ -1,16 +1,16 @@
 //! The mouse: clicks, drags, checkboxes, links, the wheel and the scroll
 //! bar. Never required, but it has to work.
 
-use std::time::Duration;
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, ScrollDelta,
     ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point, px,
 };
-use writer_core::{Block, BlockKind, Document, InlineAttrs, Position, Selection};
+use writer_core::{Block, BlockKind, Document, InlineAttrs, Position, Selection, TextRange};
 
 use super::slice::{open, setup};
-use crate::{Editor, EditorConfig};
+use crate::{ContextMenuRequest, Editor, EditorConfig, EditorEvent};
 
 fn paragraphs(count: usize) -> Document {
     Document::from_blocks(
@@ -506,4 +506,508 @@ fn a_click_past_the_end_of_a_wrapped_row_stays_on_it(cx: &mut TestAppContext) {
     });
     click(cx, past, 1, Modifiers::none());
     assert_eq!(caret(cx).0, Position::new(0, 129));
+}
+
+// --- The context menu request -----------------------------------------------
+
+fn right_click(cx: &mut VisualTestContext, at: Point<Pixels>) {
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+}
+
+/// Collects the editor's events; the returned closure takes what arrived.
+fn record_events(
+    editor: &gpui::Entity<Editor>,
+    cx: &mut VisualTestContext,
+) -> impl Fn(&mut VisualTestContext) -> Vec<EditorEvent> + use<> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    cx.update(|_, cx| {
+        let events = events.clone();
+        cx.subscribe(editor, move |_, event: &EditorEvent, _| {
+            events.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    move |cx| {
+        cx.run_until_parked();
+        std::mem::take(&mut *events.borrow_mut())
+    }
+}
+
+/// The one context menu request among `events`.
+fn request_in(events: &[EditorEvent]) -> ContextMenuRequest {
+    let mut requests = events.iter().filter_map(|event| match event {
+        EditorEvent::ContextMenuRequested(request) => Some(request.clone()),
+        _ => None,
+    });
+    let request = requests.next().expect("a context menu request");
+    assert!(requests.next().is_none(), "one request per click");
+    request
+}
+
+fn context_document() -> Document {
+    let link = InlineAttrs {
+        link: Some("https://example.com/page".into()),
+        ..InlineAttrs::default()
+    };
+    Document::from_blocks(vec![
+        Block::paragraph("alpha beta gamma, delta"),
+        Block::new(BlockKind::Paragraph)
+            .with_span("see ", InlineAttrs::default())
+            .with_span("the page", link)
+            .with_span(" for more", InlineAttrs::default()),
+        Block::new(BlockKind::Divider),
+        Block::with_text(BlockKind::todo(), "buy milk"),
+        Block::paragraph(""),
+        Block::paragraph("last words here"),
+    ])
+}
+
+#[gpui::test]
+fn a_right_click_selects_the_word_and_asks_for_the_menu(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(context_document(), EditorConfig::full(), cx);
+    let take = record_events(&editor, cx);
+    let on = |cx: &mut VisualTestContext, block, offset| {
+        // A little right of the boundary: on the character that starts there.
+        editor.read_with(cx, |editor, _| {
+            point_of(editor, block, offset) + point(px(3.), px(0.))
+        })
+    };
+
+    // On a word: the word is selected, as in a macOS text view.
+    let at = on(cx, 0, 7);
+    right_click(cx, at);
+    let events = take(cx);
+    let request = request_in(&events);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "beta");
+    });
+    assert_eq!(request.position, at);
+    assert_eq!(request.document_position, Position::new(0, 7));
+    assert_eq!(request.block, 0);
+    assert!(request.has_selection);
+    assert_eq!(request.link, None);
+    assert_eq!(request.link_range, None);
+    assert!(request.comments.is_empty());
+    assert!(!request.on_checkbox);
+    assert!(!request.from_keyboard);
+    // The selection change is announced before the request.
+    assert_eq!(events[0], EditorEvent::SelectionChanged);
+    assert!(matches!(
+        events.last(),
+        Some(EditorEvent::ContextMenuRequested(_))
+    ));
+    // Nothing was edited and no drag started.
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EditorEvent::Edited { .. }))
+    );
+    editor.read_with(cx, |editor, _| assert!(!editor.mouse_busy()));
+    let elsewhere = on(cx, 5, 3);
+    cx.simulate_mouse_move(elsewhere, None, Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "beta");
+    });
+
+    // Inside the selection: it is kept, and nothing but the request is
+    // emitted.
+    let at = on(cx, 0, 8);
+    right_click(cx, at);
+    let events = take(cx);
+    let request = request_in(&events);
+    assert_eq!(events.len(), 1);
+    assert!(request.has_selection);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 6), Position::new(0, 10))
+        );
+    });
+
+    // On another word: the selection moves there.
+    let at = on(cx, 0, 13);
+    right_click(cx, at);
+    assert!(request_in(&take(cx)).has_selection);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "gamma");
+    });
+
+    // On a space or a punctuation mark: only the caret.
+    for (offset, caret) in [(10, 10), (16, 16)] {
+        let at = on(cx, 0, offset);
+        right_click(cx, at);
+        let request = request_in(&take(cx));
+        assert!(!request.has_selection, "offset {offset}");
+        assert_eq!(request.document_position, Position::new(0, caret));
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(
+                editor.selection(),
+                Selection::caret(Position::new(0, caret))
+            );
+        });
+    }
+
+    // A selection over several blocks is kept by a right-click anywhere
+    // in it: on a character, past the end of a row, in the left margin.
+    let whole = Selection::new(Position::new(0, 6), Position::new(5, 4));
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_selection(whole), cx)
+    });
+    take(cx);
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    let row_1 = on(cx, 1, 2);
+    for at in [
+        on(cx, 1, 6),
+        point(viewport.right() - px(40.), row_1.y),
+        point(viewport.left() + px(4.), row_1.y),
+        on(cx, 5, 2),
+    ] {
+        right_click(cx, at);
+        let events = take(cx);
+        assert_eq!(events.len(), 1, "{at:?}");
+        assert!(request_in(&events).has_selection);
+        editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), whole));
+    }
+    // Outside it (after its end, before its start) it is replaced.
+    let at = on(cx, 5, 6);
+    right_click(cx, at);
+    take(cx);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "words");
+    });
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_selection(whole), cx)
+    });
+    let at = on(cx, 0, 2);
+    right_click(cx, at);
+    take(cx);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "alpha");
+    });
+}
+
+#[gpui::test]
+fn a_right_click_reports_what_is_under_the_pointer(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(context_document(), EditorConfig::full(), cx);
+    // Two comment threads on "gamma", one of them hidden; one on "beta".
+    let (beta, gamma, hidden) = editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                let mut comment = |from: usize, to: usize| {
+                    state.set_selection(Selection::new(
+                        Position::new(0, from),
+                        Position::new(0, to),
+                    ));
+                    state.add_comment("note", "me", 0).unwrap()
+                };
+                let ids = (comment(6, 10), comment(11, 16), comment(11, 16));
+                state.set_caret(Position::ZERO);
+                ids
+            },
+            cx,
+        )
+    });
+    editor.update(cx, |editor, cx| editor.set_hidden_comments([hidden], cx));
+    let take = record_events(&editor, cx);
+    let on = |cx: &mut VisualTestContext, block, offset| {
+        editor.read_with(cx, |editor, _| {
+            point_of(editor, block, offset) + point(px(3.), px(0.))
+        })
+    };
+
+    // Commented text: the threads on that character, hidden ones left out.
+    let at = on(cx, 0, 12);
+    right_click(cx, at);
+    let request = request_in(&take(cx));
+    assert_eq!(request.comments, vec![gamma]);
+    assert!(request.has_selection);
+    let at = on(cx, 0, 7);
+    right_click(cx, at);
+    assert_eq!(request_in(&take(cx)).comments, vec![beta]);
+    let at = on(cx, 0, 2);
+    right_click(cx, at);
+    assert!(request_in(&take(cx)).comments.is_empty());
+    // The threads are reported whether or not the tints are drawn.
+    editor.update(cx, |editor, cx| editor.set_comments_visible(false, cx));
+    let at = on(cx, 0, 7);
+    right_click(cx, at);
+    assert_eq!(request_in(&take(cx)).comments, vec![beta]);
+
+    // A link: its address and the whole linked text, on its first and on
+    // its last character, and not on the characters around it.
+    for offset in [4, 8, 11] {
+        let at = on(cx, 1, offset);
+        right_click(cx, at);
+        let request = request_in(&take(cx));
+        assert_eq!(
+            request.link.as_deref(),
+            Some("https://example.com/page"),
+            "offset {offset}"
+        );
+        assert_eq!(
+            request.link_range,
+            Some(TextRange::in_block(1, 4, 12)),
+            "offset {offset}"
+        );
+        assert_eq!(request.block, 1);
+    }
+    for offset in [2, 13] {
+        let at = on(cx, 1, offset);
+        right_click(cx, at);
+        let request = request_in(&take(cx));
+        assert_eq!(request.link, None, "offset {offset}");
+        assert_eq!(request.link_range, None);
+    }
+    // A right-click never opens the link.
+    assert_eq!(cx.opened_url(), None);
+
+    // A divider: the caret goes there, nothing is selected.
+    let divider = editor.read_with(cx, |editor, _| {
+        editor.position_bounds(Position::new(2, 0)).unwrap()
+    });
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    right_click(cx, point(viewport.center().x, divider.center().y));
+    let request = request_in(&take(cx));
+    assert_eq!(request.block, 2);
+    assert!(!request.has_selection);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), Selection::caret(Position::new(2, 0)));
+    });
+
+    // A to-do checkbox: reported, not toggled; the caret is in the item.
+    let boxes = editor.read_with(cx, |editor, _| editor.checkbox_hits.clone());
+    assert_eq!(boxes.len(), 1);
+    right_click(cx, boxes[0].bounds.center());
+    let events = take(cx);
+    let request = request_in(&events);
+    assert!(request.on_checkbox);
+    assert_eq!(request.block, 3);
+    assert_eq!(request.document_position, Position::new(3, 0));
+    assert!(!request.has_selection);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EditorEvent::Edited { .. }))
+    );
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[3].kind(), &BlockKind::todo());
+        assert_eq!(editor.selection(), Selection::caret(Position::new(3, 0)));
+    });
+    // On the item's text it is an ordinary right-click.
+    let at = on(cx, 3, 5);
+    right_click(cx, at);
+    let request = request_in(&take(cx));
+    assert!(!request.on_checkbox);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "milk");
+    });
+
+    // An empty paragraph and the space below the text: just the caret.
+    let empty = editor.read_with(cx, |editor, _| point_of(editor, 4, 0));
+    right_click(cx, empty + point(px(30.), px(0.)));
+    let request = request_in(&take(cx));
+    assert_eq!(request.document_position, Position::new(4, 0));
+    assert!(!request.has_selection);
+    right_click(cx, point(viewport.center().x, viewport.bottom() - px(20.)));
+    let request = request_in(&take(cx));
+    assert_eq!(request.block, 5);
+    assert!(!request.has_selection);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), Selection::caret(Position::new(5, 15)));
+    });
+
+    // Past the end of a row: the caret at its end, nothing selected.
+    let row = on(cx, 0, 2);
+    right_click(cx, point(viewport.right() - px(40.), row.y));
+    let request = request_in(&take(cx));
+    assert_eq!(request.document_position, Position::new(0, 23));
+    assert!(!request.has_selection);
+}
+
+#[gpui::test]
+fn a_right_click_focuses_and_works_read_only_and_on_sheets(cx: &mut TestAppContext) {
+    setup(cx);
+    let long = "A sentence that is long enough to wrap in the text area of a page. ".repeat(6);
+    let blocks: Vec<Block> = (0..40).map(|_| Block::paragraph(long.trim_end())).collect();
+    let (editor, cx) = open(Document::from_blocks(blocks), EditorConfig::full(), cx);
+    let take = record_events(&editor, cx);
+
+    // Page view, on a later sheet.
+    editor.update(cx, |editor, cx| {
+        editor.set_page_view(true, cx);
+        editor.scroll_to_position(Position::new(20, 0), crate::Autoscroll::Center, cx);
+    });
+    cx.run_until_parked();
+    take(cx);
+    let scroll = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    let at = editor.read_with(cx, |editor, _| {
+        point_of(editor, 20, 12) + point(px(3.), px(0.))
+    });
+    right_click(cx, at);
+    let request = request_in(&take(cx));
+    assert_eq!(request.document_position, Position::new(20, 12));
+    assert_eq!(request.position, at);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "that");
+        // The view does not move under the menu.
+        assert_eq!(editor.scroll_offset(), scroll);
+    });
+    // On the desk beside the sheet: the caret, on the row at that height.
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    right_click(cx, point(viewport.left() + px(4.), at.y));
+    let request = request_in(&take(cx));
+    assert_eq!(request.block, 20);
+    assert!(!request.has_selection);
+
+    // Read-only: the word is still selected (it can be copied).
+    editor.update(cx, |editor, cx| editor.set_read_only(true, cx));
+    cx.run_until_parked();
+    take(cx);
+    right_click(cx, at);
+    assert!(request_in(&take(cx)).has_selection);
+    editor.update(cx, |editor, cx| editor.set_read_only(false, cx));
+
+    // The scroll bar strip is not text.
+    right_click(cx, point(viewport.right() - px(4.), viewport.center().y));
+    assert!(take(cx).is_empty());
+
+    // A right-click brings the keyboard to the editor.
+    cx.update(|window, _| window.blur());
+    cx.run_until_parked();
+    take(cx);
+    editor.update_in(cx, |editor, window, _| assert!(!editor.is_focused(window)));
+    right_click(cx, at);
+    let events = take(cx);
+    request_in(&events);
+    assert!(events.contains(&EditorEvent::Focused));
+    editor.update_in(cx, |editor, window, _| assert!(editor.is_focused(window)));
+
+    // While the left button is dragging, the right one is ignored.
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    take(cx);
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+    assert!(
+        !take(cx)
+            .iter()
+            .any(|event| matches!(event, EditorEvent::ContextMenuRequested(_)))
+    );
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+}
+
+#[gpui::test]
+fn ctrl_click_is_a_right_click(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(context_document(), EditorConfig::full(), cx);
+    let take = record_events(&editor, cx);
+    // GPUI's macOS platform reports a ctrl-click as the right button; a
+    // left press that still carries ctrl is taken the same way and does
+    // not start a drag selection.
+    let at = editor.read_with(cx, |editor, _| {
+        point_of(editor, 0, 7) + point(px(3.), px(0.))
+    });
+    click(cx, at, 1, Modifiers::control());
+    let request = request_in(&take(cx));
+    assert!(request.has_selection);
+    assert!(!request.from_keyboard);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.state().selected_text(), "beta");
+        assert!(!editor.mouse_busy());
+    });
+}
+
+#[gpui::test]
+fn ctrl_enter_asks_for_the_menu_at_the_caret(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(context_document(), EditorConfig::full(), cx);
+    let comment = editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_selection(Selection::new(Position::new(0, 6), Position::new(0, 10)));
+                let id = state.add_comment("note", "me", 0).unwrap();
+                state.set_caret(Position::new(0, 8));
+                id
+            },
+            cx,
+        )
+    });
+    let take = record_events(&editor, cx);
+
+    // At the caret: under its row, at its x.
+    cx.simulate_keystrokes("ctrl-enter");
+    let events = take(cx);
+    let request = request_in(&events);
+    assert_eq!(events.len(), 1, "the selection is left alone");
+    let caret = editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap());
+    assert_eq!(request.position, point(caret.left(), caret.bottom()));
+    assert_eq!(request.document_position, Position::new(0, 8));
+    assert_eq!(request.block, 0);
+    assert!(request.from_keyboard);
+    assert!(!request.has_selection);
+    assert!(!request.on_checkbox);
+    assert_eq!(request.comments, vec![comment]);
+    assert_eq!(request.link, None);
+
+    // With a selection: it is kept and reported.
+    cx.simulate_keystrokes("shift-right shift-right");
+    take(cx);
+    cx.simulate_keystrokes("ctrl-enter");
+    let request = request_in(&take(cx));
+    assert!(request.has_selection);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 8), Position::new(0, 10))
+        );
+    });
+
+    // In a link, and at either end of it.
+    for offset in [4, 8, 12] {
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(1, offset)), cx)
+        });
+        take(cx);
+        cx.simulate_keystrokes("ctrl-enter");
+        let request = request_in(&take(cx));
+        assert_eq!(request.link.as_deref(), Some("https://example.com/page"));
+        assert_eq!(request.link_range, Some(TextRange::in_block(1, 4, 12)));
+    }
+
+    // The action is listed as a command and its key is in the keymap.
+    assert!(
+        crate::commands()
+            .iter()
+            .any(|command| command.title == "Context Menu")
+    );
+
+    // Read-only editors answer too.
+    editor.update(cx, |editor, cx| editor.set_read_only(true, cx));
+    cx.run_until_parked();
+    take(cx);
+    cx.simulate_keystrokes("ctrl-enter");
+    request_in(&take(cx));
+}
+
+#[gpui::test]
+fn ctrl_enter_far_from_the_viewport_scrolls_to_the_caret(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(paragraphs(300), EditorConfig::full(), cx);
+    let take = record_events(&editor, cx);
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    // The caret is at the start; scroll it far out of view.
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    take(cx);
+    cx.simulate_keystrokes("ctrl-enter");
+    let request = request_in(&take(cx));
+    assert!(viewport.contains(&request.position), "{request:?}");
+    let caret = editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap());
+    assert_eq!(request.position, point(caret.left(), caret.bottom()));
+    assert!(editor.read_with(cx, |editor, _| editor.scroll_offset()) < px(100.));
 }

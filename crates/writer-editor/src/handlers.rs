@@ -129,6 +129,7 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         Cut => cut,
         Paste => paste,
         PasteAsPlainText => paste_as_plain_text,
+        OpenContextMenu => open_context_menu,
     })
 }
 

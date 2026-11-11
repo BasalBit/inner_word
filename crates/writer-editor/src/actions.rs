@@ -192,6 +192,12 @@ actions!(
         Paste,
         /// Paste the clipboard as plain text.
         PasteAsPlainText,
+        // --- Context menu ---
+        /// Ask for the context menu at the caret or the selection: the
+        /// keyboard's right-click. The editor emits
+        /// [`crate::EditorEvent::ContextMenuRequested`]; it shows no menu
+        /// itself.
+        OpenContextMenu,
     ]
 );
 
@@ -309,5 +315,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-x", Cut, c),
         KeyBinding::new("cmd-v", Paste, c),
         KeyBinding::new("cmd-shift-v", PasteAsPlainText, c),
+        // The key macOS itself uses for "show contextual menu".
+        KeyBinding::new("ctrl-enter", OpenContextMenu, c),
     ]
 }

@@ -78,5 +78,10 @@ pub fn commands() -> Vec<CommandDescriptor> {
         c("Paste", CATEGORY_EDIT, Paste),
         c("Paste as Plain Text", CATEGORY_EDIT, PasteAsPlainText).keywords(["unformatted"]),
         c("Select All", CATEGORY_EDIT, SelectAll),
+        c("Context Menu", CATEGORY_EDIT, OpenContextMenu).keywords([
+            "right click",
+            "actions",
+            "menu",
+        ]),
     ]
 }

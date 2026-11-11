@@ -41,6 +41,7 @@
 //! | Vertical movement over wrapped rows | [`Editor::visual_row`], [`Editor::move_by_visual_rows`], [`Editor::column_x`], [`Editor::rows_per_page`], [`Editor::visible_rows`], [`Editor::first_visible_row`], [`Editor::last_visible_row`] |
 //! | Scroll | [`Editor::scroll_to_caret`], [`Editor::scroll_to_position`], [`Editor::scroll_by_rows`], [`Editor::scroll_by_pages`], [`Editor::scroll_by_pixels`] with [`Autoscroll`] |
 //! | Float a view at the caret | [`Editor::show_popup`], [`Editor::hide_popup`] with [`PopupAnchor`], [`PopupPlacement`] |
+//! | Show a context menu for the text | [`EditorEvent::ContextMenuRequested`] with a [`ContextMenuRequest`] (right-click, `ctrl`-click, `ctrl-enter`) |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
 //! | Comments | [`EditorConfig::comments_visible`], [`Editor::set_active_comment`], [`Editor::set_hidden_comments`] |
 //! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`] |
@@ -175,7 +176,7 @@ pub use config::{CaretStyle, CompactOptions, EditorConfig, EditorMode};
 pub use editor::Editor;
 #[doc(hidden)]
 pub use editor::FramePerf;
-pub use events::EditorEvent;
+pub use events::{ContextMenuRequest, EditorEvent};
 pub use highlights::HighlightStyle;
 pub use intercept::{InterceptPriority, KeyDisposition};
 pub use movement::{RowMove, RowOracle, VisualRow};

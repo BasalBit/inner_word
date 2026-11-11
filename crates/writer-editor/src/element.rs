@@ -812,10 +812,18 @@ impl EditorElement {
         let editor = self.editor.clone();
         let down_hitbox = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble
-                && event.button == MouseButton::Left
-                && down_hitbox.is_hovered(window)
-            {
+            if phase != DispatchPhase::Bubble || !down_hitbox.is_hovered(window) {
+                return;
+            }
+            // The secondary button asks for the context menu. So does a
+            // ctrl-click: GPUI's macOS platform already reports it as the
+            // right button; a left press that still carries `ctrl` is
+            // taken the same way.
+            let secondary = event.button == MouseButton::Right
+                || (event.button == MouseButton::Left && event.modifiers.control);
+            if secondary {
+                editor.update(cx, |editor, cx| editor.context_click(event, window, cx));
+            } else if event.button == MouseButton::Left {
                 editor.update(cx, |editor, cx| editor.mouse_down(event, window, cx));
             }
         });

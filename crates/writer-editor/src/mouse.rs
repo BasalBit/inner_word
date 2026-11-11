@@ -6,19 +6,29 @@
 //!   the viewport;
 //! - clicking a to-do checkbox toggles it without moving the caret;
 //! - `cmd`-click opens a link;
+//! - a right-click (the secondary button, or `ctrl`-click) adjusts the
+//!   selection as a macOS text view does and asks for the context menu
+//!   ([`EditorEvent::ContextMenuRequested`]); `ctrl-enter` asks for the
+//!   same menu at the caret;
 //! - the wheel and the trackpad scroll, and the overlay scroll bar can be
 //!   dragged.
 //!
 //! The element registers window-level listeners in paint (they live for one
 //! frame) and forwards the events here. The mouse is never required: every
-//! one of these has a keyboard equivalent.
+//! one of these has a keyboard equivalent. Nor is the keyboard: what has no
+//! pointer gesture of its own is in the context menu.
 
 use std::{ops::Range, time::Duration};
 
 use gpui::{Context, MouseDownEvent, MouseMoveEvent, Pixels, Point, Window, point, px};
 use writer_core::{Position, Selection, TextRange, text};
 
-use crate::{editor::Editor, element::SCROLLBAR_ZONE, scroll::Autoscroll};
+use crate::{
+    editor::Editor,
+    element::SCROLLBAR_ZONE,
+    events::{ContextMenuRequest, EditorEvent},
+    scroll::{Autoscroll, PendingScroll},
+};
 
 /// How often a drag outside the viewport scrolls.
 const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(30);
@@ -125,6 +135,161 @@ impl Editor {
             _ => Drag::Characters,
         });
         self.last_mouse = event.position;
+        cx.notify();
+    }
+
+    /// A press of the secondary button inside the editor (GPUI turns a
+    /// `ctrl`-click into one on macOS; a left press that still carries
+    /// `ctrl` is taken the same way). Adjusts the selection as macOS text
+    /// views do and asks for the context menu.
+    pub(crate) fn context_click(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Not while the left button is selecting or dragging the thumb,
+        // and not on the scroll bar strip.
+        if self.mouse_busy() {
+            return;
+        }
+        if let Some(geometry) = self.scrollbar.geometry
+            && !self.config.mode.is_compact()
+            && event.position.x >= geometry.track.right() + px(3.) - SCROLLBAR_ZONE
+        {
+            return;
+        }
+        let Some((position, upstream)) = self.caret_at_point(event.position) else {
+            return;
+        };
+        window.focus(&self.focus_handle);
+        self.restart_blink(cx);
+        self.end_composition();
+
+        let checkbox = self
+            .checkbox_hits
+            .iter()
+            .find(|hit| hit.bounds.contains(&event.position))
+            .copied();
+        // The character the pointer is on, if it is on one.
+        let under = if checkbox.is_some() {
+            None
+        } else {
+            self.position_under_point(event.position)
+        };
+        let position = match checkbox {
+            // The gutter belongs to the item: its start, wherever the
+            // nearest row boundary is.
+            Some(hit) => Position::new(hit.block, 0),
+            None => position,
+        };
+
+        let selection = self.state.selection();
+        let range = selection.range();
+        let inside = !selection.is_collapsed()
+            && match under {
+                Some(under) => range.start <= under && under < range.end,
+                // Not on a character (a margin, the end of a row, between
+                // two blocks): inside when the selection runs past it on
+                // both sides.
+                None => range.start < position && position < range.end,
+            };
+        if !inside {
+            // The word under the pointer, or just the caret.
+            let word = under.and_then(|under| {
+                let block = self.state.document().block(under.block)?;
+                let segment = text::segment_at(block.text(), under.offset);
+                block.text()[segment.clone()]
+                    .chars()
+                    .any(|c| c.is_alphanumeric())
+                    .then(|| TextRange::in_block(under.block, segment.start, segment.end))
+            });
+            self.edit_with(
+                Autoscroll::None,
+                |state| match word {
+                    Some(word) => state.set_selection(Selection::from_range(word)),
+                    None => state.set_caret(position),
+                },
+                cx,
+            );
+            self.state.break_undo_group();
+            self.caret_upstream =
+                upstream && word.is_none() && checkbox.is_none() && self.caret_has_affinity();
+        }
+
+        let document = self.state.document();
+        let attrs = under.and_then(|under| document.block(under.block)?.attrs_at(under.offset));
+        let link = attrs.and_then(|attrs| attrs.link.clone());
+        // `link_at` looks at the character before a position first.
+        let link_range = link.as_ref().and_then(|url| {
+            let under = under?;
+            let after = document
+                .block(under.block)
+                .map(|block| text::next_grapheme_boundary(block.text(), under.offset))?;
+            document
+                .link_at(Position::new(under.block, after))
+                .filter(|info| &info.url == url)
+                .map(|info| info.range)
+        });
+        let comments = attrs
+            .map(|attrs| {
+                attrs
+                    .comments
+                    .iter()
+                    .copied()
+                    .filter(|id| !self.hidden_comments.contains(id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let request = ContextMenuRequest {
+            position: event.position,
+            document_position: position,
+            block: position.block,
+            has_selection: !self.state.selection().is_collapsed(),
+            link,
+            link_range,
+            comments,
+            on_checkbox: checkbox.is_some(),
+            from_keyboard: false,
+        };
+        cx.emit(EditorEvent::ContextMenuRequested(request));
+        cx.notify();
+    }
+
+    /// `ctrl-enter`: asks for the context menu at the caret, which is
+    /// brought into view first. The selection stays as it is.
+    pub(crate) fn open_context_menu(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.end_composition();
+        self.request_scroll(PendingScroll::Position(None, Autoscroll::Fit));
+        let position = self.caret_position();
+        let Some(caret) = self.caret_bounds() else {
+            return;
+        };
+        // Under the caret's row, and never outside the editor.
+        let mut at = point(caret.left(), caret.bottom());
+        if let Some(viewport) = self.viewport_bounds() {
+            at.x = at.x.clamp(viewport.left(), viewport.right());
+            at.y = at.y.clamp(viewport.top(), viewport.bottom());
+        }
+        let document = self.state.document();
+        let link = document.link_at(position);
+        let comments = document
+            .comments_at(position)
+            .into_iter()
+            .filter(|id| !self.hidden_comments.contains(id))
+            .collect();
+        let request = ContextMenuRequest {
+            position: at,
+            document_position: position,
+            block: position.block,
+            has_selection: !self.state.selection().is_collapsed(),
+            link: link.as_ref().map(|info| info.url.clone()),
+            link_range: link.map(|info| info.range),
+            comments,
+            on_checkbox: false,
+            from_keyboard: true,
+        };
+        cx.emit(EditorEvent::ContextMenuRequested(request));
         cx.notify();
     }
 

@@ -1,6 +1,74 @@
 //! Events emitted by the [`crate::Editor`] entity.
 
-use writer_core::{Change, TextRange};
+use gpui::{Pixels, Point};
+use writer_core::{Change, CommentId, Position, TextRange};
+
+/// What a context menu over the text needs to know: sent with
+/// [`EditorEvent::ContextMenuRequested`] when the user right-clicks in the
+/// text (the secondary button, or `ctrl`-click, which macOS treats the
+/// same) or presses `ctrl-enter` ([`crate::actions::OpenContextMenu`]).
+/// The editor shows no menu itself.
+///
+/// By the time the event is emitted the editor has the keyboard and the
+/// selection is what the menu's commands should act on:
+///
+/// - a right-click inside a non-empty selection keeps it;
+/// - a right-click on a word anywhere else selects that word, as macOS
+///   text views do;
+/// - a right-click on anything else (a space, punctuation, a margin, an
+///   empty block, a divider or page break, a to-do checkbox, the space
+///   below the text) only puts the caret there;
+/// - `ctrl-enter` leaves the selection alone (and scrolls the caret into
+///   view first).
+///
+/// A `SelectionChanged` for the changed selection comes before this
+/// event. Read [`crate::Editor::selection`] for the selection itself and
+/// the document for the block ([`ContextMenuRequest::block`] is an index
+/// into [`crate::Editor::document`]); `document.link_at(..)` gives the
+/// text range of a link.
+///
+/// ```ignore
+/// cx.subscribe_in(&editor, window, |this, editor, event: &EditorEvent, window, cx| {
+///     if let EditorEvent::ContextMenuRequested(request) = event {
+///         this.show_text_menu(request, window, cx); // anchored at request.position
+///     }
+/// })
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ContextMenuRequest {
+    /// Where to open the menu, in window coordinates: the pointer for a
+    /// right-click; for the keyboard the bottom left of the caret (inside
+    /// the editor's viewport).
+    pub position: Point<Pixels>,
+    /// The place in the document the request is about: for a right-click
+    /// the caret position nearest to the pointer (what a plain click
+    /// there would give), for the keyboard the caret.
+    pub document_position: Position,
+    /// Index of the block of [`ContextMenuRequest::document_position`].
+    pub block: usize,
+    /// The selection is not empty (after the right-click adjusted it).
+    pub has_selection: bool,
+    /// The URL of the link under the pointer; for the keyboard, of the
+    /// link the caret is in or next to.
+    pub link: Option<String>,
+    /// The whole stretch of text that carries that link.
+    pub link_range: Option<TextRange>,
+    /// The comment threads anchored to the character under the pointer
+    /// (for the keyboard: to the character before or after the caret),
+    /// ordered by id. Threads hidden with
+    /// [`crate::Editor::set_hidden_comments`] are left out; whether tints
+    /// are drawn at all ([`crate::EditorConfig::comments_visible`]) makes
+    /// no difference.
+    pub comments: Vec<CommentId>,
+    /// The pointer is on the checkbox of a to-do item (the item is
+    /// [`ContextMenuRequest::block`]). The click did not toggle it. Always
+    /// `false` for the keyboard.
+    pub on_checkbox: bool,
+    /// The request came from the keyboard (`ctrl-enter`), not from the
+    /// pointer.
+    pub from_keyboard: bool,
+}
 
 /// What an [`crate::Editor`] tells its subscribers
 /// (`cx.subscribe(&editor, |this, editor, event: &EditorEvent, cx| ..)`).
@@ -81,4 +149,10 @@ pub enum EditorEvent {
         /// `range.start`.
         replaced: Option<TextRange>,
     },
+    /// The user asked for the context menu of the text: a right-click
+    /// (secondary button or `ctrl`-click) or `ctrl-enter`. The editor has
+    /// already adjusted the selection as a macOS text view does; whoever
+    /// shows menus opens one at [`ContextMenuRequest::position`]. See
+    /// [`ContextMenuRequest`] for everything the event carries.
+    ContextMenuRequested(ContextMenuRequest),
 }

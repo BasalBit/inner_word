@@ -89,7 +89,8 @@ pub trait VimHost {
     /// holding `from`, at horizontal position `goal`.
     ///
     /// Rows continue across blocks. The result is clamped to the first and
-    /// last row of the document. It must be a character on the target row:
+    /// last row of the document; `rows` may be 0 (the character at `goal`
+    /// on the row of `from`). It must be a character on the target row:
     /// on a row shorter than the goal return its last character (not the
     /// offset after it, which on a wrapped row is the next row); for
     /// [`GoalColumn::EndOfRow`] return the row's last character. On an

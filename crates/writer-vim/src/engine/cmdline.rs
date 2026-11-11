@@ -402,6 +402,20 @@ impl Vim {
                 return;
             }
         };
+        let edits = match &parsed.command {
+            ExCommand::Delete { .. }
+            | ExCommand::Join
+            | ExCommand::ShiftRight(_)
+            | ExCommand::ShiftLeft(_)
+            | ExCommand::RepeatSubstitute { .. }
+            | ExCommand::Undo
+            | ExCommand::Redo => true,
+            ExCommand::Substitute(args) => !args.count_only,
+            _ => false,
+        };
+        if edits && !self.writable() {
+            return;
+        }
         let cur = self.cursor(cx).block;
         let here = cur..cur + 1;
         let origin = self.cursor(cx);

@@ -41,6 +41,10 @@ pub struct VimOptions {
     /// Spaces that `>` and `<` add to or remove from the lines of a code
     /// block. Default: 4.
     pub shift_width: usize,
+    /// Refuse every command that would change the document (with an error
+    /// message): moving, searching, selecting and yanking still work. For
+    /// documents the editor shows read-only. Default: off.
+    pub read_only: bool,
 }
 
 impl Default for VimOptions {
@@ -51,6 +55,7 @@ impl Default for VimOptions {
             incremental_search: true,
             highlight_search: true,
             shift_width: 4,
+            read_only: false,
         }
     }
 }
@@ -814,6 +819,16 @@ impl Vim {
         ClassOpts {
             big,
             apostrophe: self.options.apostrophe_in_words,
+        }
+    }
+
+    /// Whether the document may be changed; reports the refusal if not.
+    pub(crate) fn writable(&mut self) -> bool {
+        if self.options.read_only {
+            self.error("E21: Cannot make changes, the document is read-only");
+            false
+        } else {
+            true
         }
     }
 

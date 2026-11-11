@@ -434,3 +434,99 @@ fn typed_text_may_be_announced_before_it_is_inserted() {
     s.keys("<Esc>");
     assert_eq!(s.buffer(), "|ayz");
 }
+
+#[test]
+fn a_read_only_document_cannot_be_changed() {
+    let options = VimOptions {
+        read_only: true,
+        ..VimOptions::default()
+    };
+    let buffer = "one two\nth|ree (four)\n\nfive";
+    let changing = [
+        "x",
+        "X",
+        "dd",
+        "dw",
+        "D",
+        "cw",
+        "cc",
+        "C",
+        "s",
+        "S",
+        "rz",
+        "R",
+        "~",
+        "g~w",
+        "gUU",
+        "guiw",
+        "J",
+        "gJ",
+        ">>",
+        "<<",
+        "p",
+        "P",
+        "gp",
+        "ix",
+        "ax",
+        "Ix",
+        "Ax",
+        "ox",
+        "Ox",
+        "gi",
+        "gI",
+        ".",
+        "u",
+        "<C-r>",
+        "&",
+        "g&",
+        "vd",
+        "vc",
+        "vJ",
+        "vp",
+        "vrx",
+        "vU",
+        "V>",
+        "Vd",
+        ":d<CR>",
+        ":s/e/x/<CR>",
+        ":%j<CR>",
+        ":><CR>",
+        ":u<CR>",
+        ":red<CR>",
+        "yyp",
+        "\"ap",
+        "di(",
+        "ciw",
+        "d/five<CR>",
+        "yiwviwp",
+    ];
+    for keys in changing {
+        let mut s = Session::with(buffer, 1000, 10, options.clone());
+        let before = s.text();
+        s.clear_effects();
+        s.keys(keys);
+        assert_eq!(s.text(), before, "{keys} changed a read-only document");
+        assert!(!s.mode().is_insert(), "{keys} entered {:?}", s.mode());
+        assert_eq!(s.ed.undo_depth(), 0, "{keys} left an undo step");
+        s.keys("<Esc>");
+        assert!(s.check_invariants().is_ok());
+    }
+    // Everything else works.
+    let mut s = Session::with(buffer, 1000, 10, options.clone());
+    s.keys("ggwyiw");
+    assert_eq!(s.reg('"'), "two");
+    s.keys("/four<CR>");
+    assert_eq!(s.buffer(), "one two\nthree (|four)\n\nfive");
+    s.keys("vi(y:1<CR>");
+    assert_eq!(s.reg('"'), "four");
+    assert_eq!(s.buffer(), "|one two\nthree (four)\n\nfive");
+    s.keys("Vjy:s/o//gn<CR>");
+    assert!(s.messages().iter().any(|m| m.contains("2 matches")));
+    assert!(s.messages().iter().all(|m| !m.contains("E21")));
+    s.clear_effects();
+    s.keys("x");
+    assert!(s.messages().iter().any(|m| m.starts_with("E21")));
+    assert_eq!(s.bells(), 1);
+    s.keys(":w<CR>");
+    assert_eq!(s.requests().len(), 1);
+}

@@ -121,7 +121,7 @@ pub enum HostRequest {
 }
 
 /// One thing that happened during a call into the engine.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// The mode changed.
     ModeChanged(Mode),
@@ -143,7 +143,7 @@ pub enum Effect {
 }
 
 /// The result of handing the engine a key or a notification.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Outcome {
     /// Whether the engine used the key. A key that was not consumed must be
     /// handled by the host as if the engine were not there.

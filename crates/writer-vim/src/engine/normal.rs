@@ -471,7 +471,9 @@ impl Vim {
         widen: bool,
     ) {
         let reg = self.pending.register;
-        if reg.is_some_and(|r| !register::is_writable(r)) {
+        if (op != Operator::Yank && !self.writable())
+            || reg.is_some_and(|r| !register::is_writable(r))
+        {
             self.fail();
             return;
         }
@@ -848,6 +850,13 @@ impl Vim {
                 }
                 self.finish_command(cx, false);
             }
+            Await::G
+                if matches!(t, Tok::Ch('J' | 'i' | 'I' | 'p' | 'P' | '&'))
+                    && op.is_none()
+                    && !self.writable() =>
+            {
+                self.fail()
+            }
             Await::G => match t {
                 Tok::Ch('g') => self.run_motion(cx, Motion::FirstLine),
                 Tok::Ch('e') => self.run_motion(cx, Motion::WordEndBackward { big: false }),
@@ -1071,6 +1080,10 @@ impl Vim {
     // ----- Visual-mode keys ---------------------------------------------------------------
 
     fn visual_key(&mut self, t: Tok, cx: &mut Cx) -> bool {
+        if matches!(t, Tok::Ch('J' | 'p' | 'P' | 'r')) && !self.writable() {
+            self.fail();
+            return true;
+        }
         match t {
             Tok::Ch('x') | Tok::Named(KeyCode::Delete) => {
                 self.visual_operator(cx, Operator::Delete, false)
@@ -1141,6 +1154,29 @@ impl Vim {
     fn plain_key(&mut self, t: Tok, cx: &mut Cx) -> bool {
         let n = self.pending.count1();
         let cur = self.cursor(cx);
+        let edits = matches!(
+            t,
+            Tok::Ch(
+                'r' | 'R'
+                    | '~'
+                    | 'J'
+                    | 'p'
+                    | 'P'
+                    | 'u'
+                    | '.'
+                    | 'i'
+                    | 'a'
+                    | 'I'
+                    | 'A'
+                    | 'o'
+                    | 'O'
+                    | '&'
+            ) | Tok::Ctrl('r')
+        );
+        if edits && !self.writable() {
+            self.fail();
+            return true;
+        }
         match t {
             Tok::Ch('x') | Tok::Named(KeyCode::Delete) | Tok::Ch('X') => {
                 let doc = cx.ed.document();

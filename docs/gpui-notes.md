@@ -459,7 +459,9 @@ Dispatch rules (tested in `dispatch_precedence_and_chords`):
   `cmd-'`, `cmd-shift-.`, `cmd--` (minus), `cmd-[`. Key names: `enter escape backspace delete
   tab space up down left right home end pageup pagedown f1..`.
 - Display: `keystroke.to_string()` / `KeybindingKeystroke` Display use mac symbols in the order
-  ⌃⌥⌘⇧ + uppercase key (`cmd-alt-s` → "⌥⌘S", tested; note macOS menus order ⌃⌥⇧⌘).
+  `^` (ctrl, a caret, not ⌃) ⌥ ⌘ ⇧ + key (`cmd-alt-s` → "⌥⌘S", tested; source `display_modifiers`).
+  macOS menus use ⌃⌥⇧⌘; a shortcuts overlay that must match the menus should format keys itself
+  from `keystroke.modifiers()` / `.key()`.
   `unparse()` gives the parseable form ("alt-cmd-2").
   `window.keystroke_text_for(&action) -> String` = highest-precedence binding display, falls back to the action name.
 

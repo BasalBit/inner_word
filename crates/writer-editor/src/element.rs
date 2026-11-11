@@ -111,18 +111,16 @@ impl Editor {
             };
             Bounds::new(origin, size(width, height))
         });
-        let style = LayoutStyle::new(
-            theme,
-            &self.state.document().settings().typography,
-            compact,
-        );
+        let style = LayoutStyle::new(theme, &self.state.document().settings().typography, compact);
         let (column_left, column_width, pad_top, pad_bottom) = if compact {
             (viewport.left(), viewport.size.width, px(0.), px(0.))
         } else {
             let column_width = theme::DOCUMENT_COLUMN_WIDTH
                 .min(viewport.size.width - theme::SPACE_8 * 2.)
                 .max(MIN_COLUMN_WIDTH);
-            let inset = ((viewport.size.width - column_width) / 2.).max(px(0.)).round();
+            let inset = ((viewport.size.width - column_width) / 2.)
+                .max(px(0.))
+                .round();
             (
                 viewport.left() + inset,
                 column_width,
@@ -265,8 +263,7 @@ impl Editor {
             let mut row_ix = 0;
             for (line_ix, line) in block_layout.lines.iter().enumerate() {
                 // The first row of this hard line gives its top.
-                while row_ix < block_layout.rows.len() && block_layout.rows[row_ix].line < line_ix
-                {
+                while row_ix < block_layout.rows.len() && block_layout.rows[row_ix].line < line_ix {
                     row_ix += 1;
                 }
                 let Some(row) = block_layout.rows.get(row_ix) else {
@@ -327,12 +324,9 @@ impl Editor {
             };
             let origin = self.block_origin(layout, env, 0);
             plan.markers.push(PlannedMarker {
-                line: window.text_system().shape_line(
-                    text,
-                    block_layout.font_size,
-                    &[run],
-                    None,
-                ),
+                line: window
+                    .text_system()
+                    .shape_line(text, block_layout.font_size, &[run], None),
                 origin: point(
                     origin.x + block_layout.text_left,
                     origin.y + block_layout.rows[0].y,

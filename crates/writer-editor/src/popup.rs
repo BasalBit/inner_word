@@ -66,7 +66,9 @@ const POPUP_MARGIN: Pixels = px(8.);
 
 impl Editor {
     /// Shows `view` as the editor's popup, replacing any other. The editor
-    /// places it (see the [module docs](crate::popup)) and never touches
+    /// places it (left edge on the anchor's left edge, on the preferred
+    /// side, flipped when it does not fit there, always kept inside the
+    /// editor's viewport, re-placed every frame) and never touches
     /// focus: to give the popup the keyboard, focus something inside the
     /// view after this call and restore the editor's focus when you hide
     /// it; to keep typing in the document, leave focus alone and register

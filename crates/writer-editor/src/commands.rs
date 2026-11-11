@@ -58,7 +58,8 @@ pub fn commands() -> Vec<CommandDescriptor> {
         c("Align Centre", CATEGORY_LAYOUT, AlignCenter).keywords(["center", "middle"]),
         c("Align Right", CATEGORY_LAYOUT, AlignRight),
         c("Justify", CATEGORY_LAYOUT, AlignJustify).keywords(["align"]),
-        c("Larger Text", CATEGORY_LAYOUT, IncreaseTextSize).keywords(["size", "bigger", "increase"]),
+        c("Larger Text", CATEGORY_LAYOUT, IncreaseTextSize)
+            .keywords(["size", "bigger", "increase"]),
         c("Smaller Text", CATEGORY_LAYOUT, DecreaseTextSize).keywords(["size", "decrease"]),
         c("Reset Text Size", CATEGORY_LAYOUT, ResetTextSize).keywords(["default"]),
         c("Indent", CATEGORY_LAYOUT, Indent).keywords(["nest", "right"]),

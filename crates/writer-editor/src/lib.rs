@@ -35,7 +35,7 @@
 //! | Refuse typed text | [`Editor::set_text_input_enabled`] |
 //! | Join key dispatch with own bindings | [`Editor::set_key_context_value`], [`Editor::add_key_context_flag`], [`Editor::remove_key_context_entry`] |
 //! | Where is it on screen | [`Editor::caret_bounds`], [`Editor::position_bounds`], [`Editor::range_bounds`], [`Editor::selection_bounds`], [`Editor::position_at_point`], [`Editor::viewport_bounds`], [`Editor::visible_range`] |
-//! | Vertical movement over wrapped rows | [`Editor::visual_row`], [`Editor::move_by_visual_rows`], [`Editor::column_x`], [`Editor::rows_per_page`], [`Editor::first_visible_row`], [`Editor::last_visible_row`] |
+//! | Vertical movement over wrapped rows | [`Editor::visual_row`], [`Editor::move_by_visual_rows`], [`Editor::column_x`], [`Editor::rows_per_page`], [`Editor::visible_rows`], [`Editor::first_visible_row`], [`Editor::last_visible_row`] |
 //! | Scroll | [`Editor::scroll_to_caret`], [`Editor::scroll_to_position`], [`Editor::scroll_by_rows`], [`Editor::scroll_by_pages`], [`Editor::scroll_by_pixels`] with [`Autoscroll`] |
 //! | Float a view at the caret | [`Editor::show_popup`], [`Editor::hide_popup`] with [`PopupAnchor`], [`PopupPlacement`] |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
@@ -117,8 +117,8 @@ mod highlights;
 mod input;
 mod intercept;
 mod layout;
-mod movement;
 mod mouse;
+mod movement;
 mod popup;
 mod scroll;
 mod stats;

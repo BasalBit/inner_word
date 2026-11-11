@@ -56,7 +56,12 @@ pub(crate) struct Highlights {
 impl Highlights {
     /// Replaces (or creates) a layer. An existing layer keeps its place in
     /// the paint order.
-    pub(crate) fn set(&mut self, name: SharedString, ranges: Vec<TextRange>, style: HighlightStyle) {
+    pub(crate) fn set(
+        &mut self,
+        name: SharedString,
+        ranges: Vec<TextRange>,
+        style: HighlightStyle,
+    ) {
         let mut ranges: Vec<TextRange> = ranges
             .into_iter()
             .map(|range| TextRange::new(range.start, range.end))
@@ -111,7 +116,9 @@ impl HighlightLayer {
         let low = self
             .ranges
             .partition_point(|range| range.start.block + self.max_span < block);
-        let high = self.ranges.partition_point(|range| range.start.block <= block);
+        let high = self
+            .ranges
+            .partition_point(|range| range.start.block <= block);
         self.ranges[low..high]
             .iter()
             .filter(move |range| range.end.block >= block)

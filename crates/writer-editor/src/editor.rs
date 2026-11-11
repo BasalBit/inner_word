@@ -8,12 +8,10 @@
 use std::cell::{Cell, RefCell};
 
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyContext, Keystroke,
-    Pixels, Render, SharedString, Subscription, Window, div, prelude::*, px,
+    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyContext, Keystroke, Pixels,
+    Render, SharedString, Subscription, Window, div, prelude::*, px,
 };
-use writer_core::{
-    CommentId, Document, EditorOptions, EditorState, Selection, Stats, TextRange,
-};
+use writer_core::{CommentId, Document, EditorOptions, EditorState, Selection, Stats, TextRange};
 use writer_ui::theme::GlobalTheme;
 
 use crate::{
@@ -303,11 +301,7 @@ impl Editor {
     /// them in `state.grouped(|state| ..)` to make them one undo step too.
     /// `edit` is not blocked by read-only mode: check
     /// [`Editor::is_read_only`] before running a user command through it.
-    pub fn edit<R>(
-        &mut self,
-        f: impl FnOnce(&mut EditorState) -> R,
-        cx: &mut Context<Self>,
-    ) -> R {
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut EditorState) -> R, cx: &mut Context<Self>) -> R {
         self.edit_with(Autoscroll::Fit, f, cx)
     }
 

@@ -17,12 +17,7 @@ use writer_core::{
     Alignment, BlockKind, Choice, Fragment, Highlight, InlineStyle, Movement, Selection,
 };
 
-use crate::{
-    actions::*,
-    config::EditorMode,
-    editor::Editor,
-    events::EditorEvent,
-};
+use crate::{actions::*, config::EditorMode, editor::Editor, events::EditorEvent};
 
 /// Attaches `$editor.$method(window, cx)` as the listener of each action.
 macro_rules! on_actions {

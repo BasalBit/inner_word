@@ -213,12 +213,10 @@ impl LayoutStyle {
                             wavy: false,
                         },
                     ),
-                    strikethrough: (attrs.strikethrough || checked).then_some(
-                        StrikethroughStyle {
-                            thickness: px(1.),
-                            color: Some(color),
-                        },
-                    ),
+                    strikethrough: (attrs.strikethrough || checked).then_some(StrikethroughStyle {
+                        thickness: px(1.),
+                        color: Some(color),
+                    }),
                 }
             })
             .collect()

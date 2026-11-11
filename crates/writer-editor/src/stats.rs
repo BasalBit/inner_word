@@ -47,9 +47,8 @@ impl Editor {
     ///
     /// Status: skeleton, as [`Editor::page_count`].
     pub fn caret_page(&self) -> Option<usize> {
-        self.paginated().then(|| {
-            pages::page_of_block(self.state.document(), self.state.selection().head.block)
-        })
+        self.paginated()
+            .then(|| pages::page_of_block(self.state.document(), self.state.selection().head.block))
     }
 
     fn paginated(&self) -> bool {

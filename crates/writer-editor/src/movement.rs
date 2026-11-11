@@ -100,8 +100,7 @@ impl Editor {
             let start = layout.block(position.block)?;
             let mut block_ix = position.block;
             let mut row_ix = start.row_for_offset(position.offset);
-            let goal_x =
-                goal_x.unwrap_or_else(|| start.caret_bounds(position.offset).origin.x);
+            let goal_x = goal_x.unwrap_or_else(|| start.caret_bounds(position.offset).origin.x);
             let mut moved = 0;
             while moved != rows {
                 let block = layout.block(block_ix)?;
@@ -147,64 +146,56 @@ impl Editor {
         Some(rows.max(1))
     }
 
-    /// The first row that is completely inside the viewport (Vim `H`). When
-    /// no row fits completely, the row at the top edge.
-    pub fn first_visible_row(&self) -> Option<VisualRow> {
-        self.edge_row(false)
-    }
-
-    /// The last row that is completely inside the viewport (Vim `L`). When
-    /// no row fits completely, the row at the bottom edge.
-    pub fn last_visible_row(&self) -> Option<VisualRow> {
-        self.edge_row(true)
-    }
-
-    fn edge_row(&self, last: bool) -> Option<VisualRow> {
+    /// The rows that are completely inside the viewport, top to bottom
+    /// (Vim `H`, `M`, `L` and their counts index into this). Never empty:
+    /// when no row fits completely, it holds the row at the top edge.
+    pub fn visible_rows(&self) -> Option<Vec<VisualRow>> {
+        // Half a pixel of tolerance: a row scrolled exactly to an edge
+        // counts as visible despite float rounding.
+        let slack = gpui::px(0.5);
         self.with_layout(|layout, env| {
             let top = self.scroll_y;
             let bottom = top + env.viewport.size.height;
-            let edge = if last { bottom } else { top };
-            let mut block_ix = layout.block_at_y(edge);
-            let block = layout.block(block_ix)?;
-            let mut row_ix = block.row_at_y(edge - layout.block_top(block_ix));
-            // Step inwards once if the row at the edge is cut off.
-            let row = &block.rows[row_ix];
-            let row_top = layout.block_top(block_ix) + row.y;
-            let cut_off = if last {
-                row_top + block.line_height > bottom
-            } else {
-                row_top < top
-            };
-            if cut_off {
-                if last {
-                    if row_ix > 0 {
-                        row_ix -= 1;
-                    } else if block_ix > 0 {
-                        let previous = layout.block(block_ix - 1)?;
-                        // Only if that row is still below the top edge.
-                        let previous_row = previous.rows.len() - 1;
-                        if layout.block_top(block_ix - 1) + previous.rows[previous_row].y >= top {
-                            block_ix -= 1;
-                            row_ix = previous_row;
-                        }
+            let first_block = layout.block_at_y(top);
+            let mut rows = Vec::new();
+            for block_ix in first_block..layout.block_count() {
+                let block_top = layout.block_top(block_ix);
+                if block_top > bottom {
+                    break;
+                }
+                let block = layout.block(block_ix)?;
+                for row in &block.rows {
+                    let row_top = block_top + row.y;
+                    if row_top + slack >= top && row_top + block.line_height <= bottom + slack {
+                        rows.push(VisualRow {
+                            start: Position::new(block_ix, row.range.start),
+                            end: Position::new(block_ix, row.range.end),
+                        });
                     }
-                } else if row_ix + 1 < block.rows.len() {
-                    if row_top + block.line_height * 2. <= bottom {
-                        row_ix += 1;
-                    }
-                } else if block_ix + 1 < layout.block_count()
-                    && layout.block_top(block_ix + 1) < bottom
-                {
-                    block_ix += 1;
-                    row_ix = 0;
                 }
             }
-            let row = &layout.block(block_ix)?.rows[row_ix];
-            Some(VisualRow {
-                start: Position::new(block_ix, row.range.start),
-                end: Position::new(block_ix, row.range.end),
-            })
+            if rows.is_empty() {
+                let block = layout.block(first_block)?;
+                let row = &block.rows[block.row_at_y(top - layout.block_top(first_block))];
+                rows.push(VisualRow {
+                    start: Position::new(first_block, row.range.start),
+                    end: Position::new(first_block, row.range.end),
+                });
+            }
+            Some(rows)
         })
         .flatten()
+    }
+
+    /// The first row that is completely inside the viewport (Vim `H`): the
+    /// first of [`Editor::visible_rows`].
+    pub fn first_visible_row(&self) -> Option<VisualRow> {
+        self.visible_rows()?.first().copied()
+    }
+
+    /// The last row that is completely inside the viewport (Vim `L`): the
+    /// last of [`Editor::visible_rows`].
+    pub fn last_visible_row(&self) -> Option<VisualRow> {
+        self.visible_rows()?.last().copied()
     }
 }

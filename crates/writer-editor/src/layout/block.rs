@@ -12,7 +12,9 @@
 
 use std::ops::Range;
 
-use gpui::{Bounds, Pixels, SharedString, TextAlign, WindowTextSystem, WrappedLine, point, px, size};
+use gpui::{
+    Bounds, Pixels, SharedString, TextAlign, WindowTextSystem, WrappedLine, point, px, size,
+};
 use writer_core::{Alignment, Block, text};
 
 use super::style::LayoutStyle;
@@ -212,8 +214,8 @@ impl BlockLayout {
         let mut offset = row.line_start + line.unwrapped_layout.closest_index_for_x(local_x);
         offset = offset.clamp(row.range.start, row.range.end);
         if row.soft_wrapped && offset == row.range.end && row.range.end > row.range.start {
-            offset = row.line_start
-                + text::prev_grapheme_boundary(&line.text, offset - row.line_start);
+            offset =
+                row.line_start + text::prev_grapheme_boundary(&line.text, offset - row.line_start);
             offset = offset.max(row.range.start);
         }
         offset

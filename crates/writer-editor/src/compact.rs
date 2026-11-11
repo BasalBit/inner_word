@@ -29,7 +29,8 @@ impl Editor {
     /// Whether the document has no text at all.
     pub fn is_empty(&self) -> bool {
         let document = self.state.document();
-        document.block_count() == 1 && document.blocks()[0].is_empty()
+        document.block_count() == 1
+            && document.blocks()[0].is_empty()
             && !document.blocks()[0].is_void()
     }
 

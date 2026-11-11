@@ -224,3 +224,53 @@ fn keys_of_a_composition_do_not_reach_the_engine(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     assert_eq!(rig.mode(cx), Mode::Insert);
 }
+
+#[gpui::test]
+fn host_undo_and_paste_inside_an_insert_session(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["start"]), cx);
+    cx.simulate_keystrokes("shift-a");
+    cx.simulate_input(" one");
+    // The editor's own undo, in the middle of the session.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    assert!(rig.text_input(cx));
+    let after_undo = rig.text(cx);
+    assert!(after_undo.starts_with("start"));
+    cx.simulate_input(" two");
+    // A paste from the clipboard is an outside change, not typed text.
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("[pasted]".into()));
+    cx.simulate_keystrokes("cmd-v");
+    cx.simulate_input("!");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.text(cx), format!("{after_undo} two[pasted]!"));
+    // Only what was typed after the paste repeats.
+    rig.vim.read_with(cx, |vim, _| {
+        assert_eq!(vim.engine().last_inserted_text(), "!");
+    });
+    // Undo still works from Normal mode, down to the original text.
+    for _ in 0..8 {
+        cx.simulate_keystrokes("u");
+    }
+    assert_eq!(rig.text(cx), "start");
+    rig.editor
+        .read_with(cx, |editor, _| editor.state().check_invariants().unwrap());
+}
+
+#[gpui::test]
+fn a_document_replaced_under_an_open_command_line(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["old"]), cx);
+    cx.simulate_keystrokes("/ o l");
+    assert_eq!(rig.mode(cx), Mode::CommandLine);
+    rig.editor
+        .update(cx, |editor, cx| editor.set_document(doc(&["new one"]), cx));
+    cx.run_until_parked();
+    let status = rig.status(cx);
+    assert_eq!(status.mode, Mode::Normal);
+    assert_eq!(status.command_line, None);
+    assert_eq!(status.pending_keys, "");
+    cx.simulate_keystrokes("x");
+    assert_eq!(rig.text(cx), "ew one");
+}

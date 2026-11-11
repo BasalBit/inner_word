@@ -344,8 +344,13 @@ fn random_keys_never_ask_for_rows_without_a_layout(cx: &mut TestAppContext) {
         "ctrl-j",
         "shift-z",
     ];
+    // More steps with `VIM_MODE_WALK_STEPS=50000 cargo test -p writer-vim-mode random_keys`.
+    let steps = std::env::var("VIM_MODE_WALK_STEPS")
+        .ok()
+        .and_then(|steps| steps.parse().ok())
+        .unwrap_or(1500);
     let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
-    for step in 0..1500 {
+    for step in 0..steps {
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
@@ -353,6 +358,13 @@ fn random_keys_never_ask_for_rows_without_a_layout(cx: &mut TestAppContext) {
         cx.simulate_keystrokes(key);
         let fallbacks = rig.fallbacks(cx);
         assert_eq!(fallbacks, 0, "step {step}: {key:?} asked without a layout");
+        // The editor follows the engine after every key.
+        let mode = rig.mode(cx);
+        assert_eq!(rig.text_input(cx), mode.is_insert(), "step {step}: {key:?}");
+        assert_eq!(
+            rig.status(cx).command_line.is_some(),
+            mode == Mode::CommandLine
+        );
     }
     rig.editor.read_with(cx, |editor, _| {
         editor.state().check_invariants().unwrap();

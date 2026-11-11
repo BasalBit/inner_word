@@ -74,6 +74,9 @@ pub(crate) use session::{Session, display_title as session_title};
 /// The key context of the workspace root element.
 pub const KEY_CONTEXT: &str = "Workspace";
 
+/// The category under which the library panel publishes its commands.
+const LIBRARY_CATEGORY: &str = "Library";
+
 /// Default width of the right panel slot.
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 320.;
 
@@ -138,6 +141,13 @@ pub fn editor_config(settings: &Settings) -> EditorConfig {
         .placeholder("Start writing")
 }
 
+/// The stored content of a new, empty document with the user's defaults.
+pub fn new_document_json(settings: &Settings) -> String {
+    Document::new()
+        .with_settings(settings.new_document_settings())
+        .to_json()
+}
+
 impl Workspace {
     /// Builds the workspace over `library`, restores the last session (or
     /// creates the welcome document on the first run) and focuses the editor.
@@ -157,8 +167,16 @@ impl Workspace {
                 cx,
             )
         });
-        let panel = cx.new(|cx| LibraryPanel::new(library.clone(), cx));
         let modal_layer = cx.new(|_| ModalLayer::new());
+        let panel = cx.new(|cx| {
+            let mut panel = LibraryPanel::new(library.clone(), cx);
+            // One modal layer per window: the panel's pickers and
+            // confirmations open in the same one as the palette.
+            panel.set_modal_layer(modal_layer.clone(), cx);
+            // What the panel's own "new document" key stores.
+            panel.set_new_document_content(new_document_json(&settings));
+            panel
+        });
         let toast_layer = cx.new(|_| ToastLayer::new());
         ToastLayer::set_global(&toast_layer, cx);
 
@@ -166,6 +184,14 @@ impl Workspace {
             cx.subscribe_in(&editor, window, Self::on_editor_event),
             cx.subscribe_in(&library, window, Self::on_library_event),
             cx.subscribe_in(&panel, window, Self::on_panel_event),
+            // A modal that closes gives focus back to where it was. When
+            // that place is gone (a popup that closed meanwhile), focus
+            // would be nowhere and no key would reach anything.
+            cx.observe_in(&modal_layer, window, |this, layer, window, cx| {
+                if !layer.read(cx).has_modal() && window.focused(cx).is_none() {
+                    this.focus_editor(window, cx);
+                }
+            }),
             // Losing focus (another app or window comes to the front) is a
             // moment at which nothing must be left unsaved.
             cx.observe_window_activation(window, |this, window, cx| {
@@ -482,6 +508,11 @@ impl Workspace {
         if old.character_limit != new.character_limit {
             self.character_count = None;
         }
+        if old.new_document_settings() != new.new_document_settings() {
+            self.panel.update(cx, |panel, _| {
+                panel.set_new_document_content(new_document_json(&new));
+            });
+        }
     }
 
     // ----- commands --------------------------------------------------------------
@@ -496,6 +527,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.remember_command(&command.label(), cx);
+        // The library's commands act on the sidebar: make sure it is there.
+        if command.category.as_ref() == LIBRARY_CATEGORY && !self.settings.sidebar_visible {
+            self.dismiss_modal(window, cx);
+            self.set_sidebar_visible(true, window, cx);
+        }
         self.run_action(command.action(), window, cx);
     }
 

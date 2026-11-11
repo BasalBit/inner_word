@@ -56,6 +56,13 @@ fn sidebar_focus_keys_and_persistence(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("cmd-0 escape");
     assert!(editor_focused(&workspace, vcx));
 
+    // Focus never ends up nowhere: if whatever had it goes away, the
+    // editor takes it and the app keys keep working.
+    vcx.update(|window, _| window.blur());
+    workspace.update(vcx, |_, cx| cx.notify());
+    vcx.run_until_parked();
+    assert!(editor_focused(&workspace, vcx));
+
     // Keyboard resize, clamped and stored.
     vcx.simulate_keystrokes("cmd-alt-right");
     let width = workspace.read_with(vcx, |w, _| w.settings().sidebar_width);
@@ -300,4 +307,102 @@ fn menu_bar_follows_the_macos_layout(cx: &mut TestAppContext) {
             }
         }
     }
+}
+
+#[gpui::test]
+fn extensions_can_mount_when_a_workspace_is_created(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("One", "Text."), cx);
+    // What an extension crate's glue does at startup: wait for the
+    // workspace, then plug its views in.
+    let had_window = std::rc::Rc::new(std::cell::Cell::new(None));
+    let _subscription = cx.update(|cx| {
+        let had_window = had_window.clone();
+        cx.observe_new::<Workspace>(move |workspace, window, cx| {
+            had_window.set(Some(window.is_some()));
+            let item: AnyView = cx.new(|_| Marker("mounted-at-creation")).into();
+            workspace.set_status_item("probe", Some(item), cx);
+            // The session is already restored at this point.
+            assert!(workspace.open_document_id().is_some());
+        })
+    });
+    let (_workspace, vcx) = open_workspace(&library, cx);
+    assert_eq!(had_window.get(), Some(true));
+    assert!(vcx.debug_bounds("mounted-at-creation").is_some());
+}
+
+#[gpui::test]
+fn library_commands_work_from_the_editor_and_renaming_pins_the_title(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let id = add_document(&library, None, &simple_document("Draft one", "Text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let panel = workspace.read_with(vcx, |w, _| w.panel().clone());
+    workspace.update(vcx, |workspace, cx| {
+        workspace.write_setting(keys::NEW_DOCUMENT_FONT, "Georgia", cx)
+    });
+
+    // With the sidebar hidden and focus in the text, "Rename" from the
+    // palette brings the sidebar back and starts renaming the open document.
+    vcx.simulate_keystrokes("cmd-alt-s");
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.simulate_input("rename");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, _| w.settings().sidebar_visible));
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel.renaming()),
+        Some(writer_library::LibraryItem::Document(id))
+    );
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("Chosen in the sidebar");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let title = |id, cx: &mut VisualTestContext| {
+        library.read_with(cx, |library, _| library.document_meta(id).unwrap().title)
+    };
+    assert_eq!(title(id, vcx), "Chosen in the sidebar");
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.document_title().map(str::to_string)),
+        Some("Chosen in the sidebar".to_string())
+    );
+    // Editing the text no longer changes the title.
+    vcx.simulate_keystrokes("cmd-1");
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_input("Another first line. ");
+    workspace.update(vcx, |workspace, cx| workspace.flush(cx));
+    assert!(stored_text(&library, id, vcx).starts_with("Another first line."));
+    assert_eq!(title(id, vcx), "Chosen in the sidebar");
+
+    // The panel's own "new document" key stores a document with the
+    // user's defaults, and naming it there pins that name too.
+    vcx.simulate_keystrokes("cmd-0 n");
+    vcx.run_until_parked();
+    vcx.simulate_input("Named at birth");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let created = library.read_with(vcx, |library, _| {
+        library
+            .all_documents()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.meta.id != id)
+            .expect("the panel created a document")
+            .meta
+    });
+    assert_eq!(created.title, "Named at birth");
+    let content = library.read_with(vcx, |library, _| library.document(created.id).unwrap().content);
+    let document = Document::from_json(&content).unwrap();
+    assert_eq!(document.settings().typography.body_font, "Georgia");
+    // It opens in the editor; writing in it keeps the given name.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(created.id)
+    );
+    type_text(&workspace, "Body text", vcx);
+    workspace.update(vcx, |workspace, cx| workspace.flush(cx));
+    assert_eq!(title(created.id, vcx), "Named at birth");
+    assert_eq!(title(id, vcx), "Chosen in the sidebar");
 }

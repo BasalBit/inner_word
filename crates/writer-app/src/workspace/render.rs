@@ -351,6 +351,17 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_window_title(window);
+        // Focus must always be somewhere inside the workspace: with nothing
+        // focused, key bindings are dispatched at the window root and never
+        // reach the handlers below. This happens when the focused element
+        // goes away (a popup closes, a panel is removed).
+        if window.focused(cx).is_none() {
+            let target = match self.session {
+                Some(_) => self.editor.focus_handle(cx),
+                None => self.focus_handle.clone(),
+            };
+            window.focus(&target);
+        }
         let theme = cx.theme();
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
@@ -385,8 +396,10 @@ impl Render for Workspace {
                 .child(view)
         });
 
-        div()
-            .id("workspace")
+        // The library panel's commands (rename, move to trash, ...) work from
+        // anywhere in the window, e.g. after the palette handed focus back
+        // to the editor.
+        writer_library::forward_actions(div().id("workspace"), &self.panel)
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))

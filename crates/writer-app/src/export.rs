@@ -372,7 +372,7 @@ impl Workspace {
                     self.show_toast(
                         Toast::new(format!(
                             "Copied “{}” as {}",
-                            prepared.title,
+                            short_title(&prepared.title),
                             match choice.format {
                                 ExportFormat::Markdown => "Markdown",
                                 _ => "plain text",
@@ -422,7 +422,7 @@ impl Workspace {
                                     .ok();
                             }
                             let what = if prepared.documents == 1 {
-                                format!("“{}”", prepared.title)
+                                format!("“{}”", short_title(&prepared.title))
                             } else {
                                 format!("{} documents", prepared.documents)
                             };
@@ -462,6 +462,16 @@ impl Workspace {
         .find(|path| path.is_dir())
         .unwrap_or_else(|| PathBuf::from("/"))
     }
+}
+
+/// A title cut to fit a one-line notice.
+fn short_title(title: &str) -> String {
+    const MAX_CHARS: usize = 40;
+    if title.chars().count() <= MAX_CHARS {
+        return title.to_string();
+    }
+    let cut: String = title.chars().take(MAX_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// Makes sure the chosen path ends with the format's extension (the save

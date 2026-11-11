@@ -566,13 +566,18 @@ fn find_bar_buttons_have_tooltips_with_their_keys(cx: &mut TestAppContext) {
     let tooltip = |button: &str, cx: &mut VisualTestContext| {
         tools.read_with(cx, |tools, cx| tools.find_button_tooltip(button, cx))
     };
+    // (The kit decides how escape is written.)
+    let close = format!(
+        "Close {}",
+        writer_ui::KeyHint::parse("escape").unwrap().text()
+    );
     let expected = [
         ("find-disclosure", "Show replace ⌥⌘F"),
         ("find-case", "Match case ⌥⌘C"),
         ("find-word", "Whole word ⌥⌘W"),
         ("find-previous", "Previous match ⇧⌘G"),
         ("find-next", "Next match ⌘G"),
-        ("find-close", "Close ⎋"),
+        ("find-close", close.as_str()),
         ("find-replace-one", "Replace this match ↩"),
         ("find-replace-all", "Replace all matches ⌘↩"),
     ];

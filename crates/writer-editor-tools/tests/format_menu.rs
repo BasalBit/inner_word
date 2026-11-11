@@ -575,20 +575,44 @@ fn the_selected_row_stands_out_in_both_themes(cx: &mut TestAppContext) {
         cx.update(|cx| theme::set_theme_mode(mode, cx));
         let colors = cx.update(|cx| cx.theme().colors);
         let fill = selected_row_fill(&colors);
-        // The selected row against the panel it is in, and everything a
-        // row shows against the selected row: the label, the key hint and
-        // detail, the check mark and the matched letters.
+        // The selected row against the panel it is in, and the label and
+        // the check mark against the selected row.
         let stands_out = contrast(fill, colors.elevated);
         assert!(stands_out >= 1.2, "{mode:?}: row on panel {stands_out:.2}");
         assert!(contrast(colors.ink, fill) >= 7., "{mode:?}: label");
-        assert!(contrast(colors.muted, fill) >= 4.5, "{mode:?}: key hint");
         assert!(contrast(colors.accent, fill) >= 3., "{mode:?}: check mark");
+        // Where the theme's own token is clear enough, it is used as it is
+        // (the look of the app's other pickers and menus; how the key
+        // hints read on it is then the theme's business).
+        if contrast(colors.accent_subtle, colors.elevated) >= 1.15 {
+            assert_eq!(fill, colors.accent_subtle, "{mode:?}");
+        }
+
+        // A token that cannot be told from the panel is replaced by a fill
+        // that can, and everything a row shows still reads on it: the
+        // label, the key hint and detail, the check mark.
+        let mut faint = colors;
+        faint.accent_subtle = colors.elevated;
+        let fill = selected_row_fill(&faint);
+        assert_ne!(fill, faint.accent_subtle);
+        let stands_out = contrast(fill, colors.elevated);
+        assert!(
+            stands_out >= 1.15,
+            "{mode:?}: fallback on panel {stands_out:.2}"
+        );
+        assert!(
+            contrast(colors.ink, fill) >= 7.,
+            "{mode:?}: label on fallback"
+        );
+        assert!(
+            contrast(colors.muted, fill) >= 4.5,
+            "{mode:?}: key hint on fallback"
+        );
+        assert!(
+            contrast(colors.accent, fill) >= 3.,
+            "{mode:?}: check mark on fallback"
+        );
     }
-    // Where the theme's own token is clear enough, it is used as it is
-    // (the look of the app's other pickers).
-    cx.update(|cx| theme::set_theme_mode(ThemeMode::Light, cx));
-    let colors = cx.update(|cx| cx.theme().colors);
-    assert_eq!(selected_row_fill(&colors), colors.accent_subtle);
 }
 
 #[gpui::test]

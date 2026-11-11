@@ -248,7 +248,11 @@ fn commands_cover_the_tools_and_show_real_bindings(cx: &mut TestAppContext) {
     assert_eq!(hint("Toggle Case Sensitive", cx).as_deref(), Some("⌥⌘C"));
     assert_eq!(hint("Toggle Whole Word", cx).as_deref(), Some("⌥⌘W"));
     assert_eq!(hint("Replace All", cx).as_deref(), Some("⌘↩"));
-    assert_eq!(hint("Close Find Bar", cx).as_deref(), Some("⎋"));
+    // (The kit decides how escape is written.)
+    assert_eq!(
+        hint("Close Find Bar", cx),
+        KeyHint::parse("escape").map(|hint| hint.text())
+    );
     assert_eq!(hint("Replace", cx), None);
     assert_eq!(hint("Insert Menu", cx), None);
     cx.update(|_, cx| {

@@ -79,7 +79,10 @@ use crate::{
     window::StoredBounds,
 };
 
-pub use render::{STATUS_BAR_HEIGHT, StatusLine, counted, group_digits};
+pub use render::{
+    MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
+    counted, group_digits, panel_layout,
+};
 pub use session::{
     AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost, SaveState,
     first_occurrence,
@@ -142,8 +145,13 @@ pub struct Workspace {
     pub(crate) editor_host: Option<AnyView>,
     pub(crate) right_panel: Option<AnyView>,
     pub(crate) right_panel_width: Pixels,
+    /// The panel beside the text that was used last: it keeps its place in
+    /// a window too narrow for both.
+    pub(crate) last_side_panel: SidePanel,
     pub(crate) strips: Vec<(SharedString, AnyView)>,
     pub(crate) status_items: Vec<(SharedString, AnyView)>,
+    /// The Vim mode indicator the workspace put in the status bar itself.
+    pub(crate) vim_status_id: gpui::EntityId,
     pub(crate) character_count: Option<(u64, writer_export::SocialCount)>,
     /// The per-block counts behind `character_count`, for the open document.
     pub(crate) limit_counter: Option<crate::character_limit::LimitCounter>,
@@ -264,6 +272,22 @@ impl Workspace {
                 async {}
             }),
         ];
+        // A library command that puts the keyboard in the sidebar while the
+        // sidebar is not drawn (closed, or stepped aside in a narrow
+        // window) asks for it to be shown.
+        let weak = cx.weak_entity();
+        panel.update(cx, |panel, _| {
+            panel.set_reveal_handler(move |window, cx| {
+                weak.update(cx, |this: &mut Self, cx| {
+                    this.last_side_panel = SidePanel::Library;
+                    if !this.settings.sidebar_visible {
+                        this.set_sidebar_visible(true, window, cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+        });
         // Closing the window (red button, cmd-w through the system) flushes too.
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -294,7 +318,9 @@ impl Workspace {
             sidebar_dragging: false,
             right_panel: None,
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
+            last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
+            vim_status_id: vim_status.entity_id(),
             status_items: vec![(VIM_STATUS_KEY.into(), vim_status.into())],
             character_count: None,
             limit_counter: None,
@@ -402,9 +428,10 @@ impl Workspace {
         self.right_panel.is_some()
     }
 
-    /// Sets the width of the right panel slot (clamped to 220..=560).
+    /// Sets the width of the right panel slot (clamped to 220..=560). In a
+    /// narrow window the panel is drawn narrower, see [`panel_layout`].
     pub fn set_right_panel_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        self.right_panel_width = width.clamp(px(220.), px(560.));
+        self.right_panel_width = width.clamp(px(MIN_RIGHT_PANEL_WIDTH), px(560.));
         cx.notify();
     }
 
@@ -475,6 +502,9 @@ impl Workspace {
         if !self.settings.sidebar_visible {
             self.set_sidebar_visible(true, window, cx);
         }
+        // In a window too narrow for both side panels the library is now
+        // the one that is drawn.
+        self.last_side_panel = SidePanel::Library;
         let panel = self.panel.clone();
         if panel.read(cx).selected().is_none() {
             let target = self
@@ -675,9 +705,13 @@ impl Workspace {
     ) {
         self.remember_command(&command.label(), cx);
         // The library's commands act on the sidebar: make sure it is there.
-        if command.category.as_ref() == LIBRARY_CATEGORY && !self.settings.sidebar_visible {
-            self.dismiss_modal(window, cx);
-            self.set_sidebar_visible(true, window, cx);
+        if command.category.as_ref() == LIBRARY_CATEGORY {
+            // Also in a window too narrow for both side panels.
+            self.last_side_panel = SidePanel::Library;
+            if !self.settings.sidebar_visible {
+                self.dismiss_modal(window, cx);
+                self.set_sidebar_visible(true, window, cx);
+            }
         }
         self.run_action(command.action(), window, cx);
     }

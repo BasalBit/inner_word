@@ -424,6 +424,7 @@ impl Workspace {
         if !self.settings.sidebar_visible {
             self.set_sidebar_visible(true, window, cx);
         }
+        self.last_side_panel = super::SidePanel::Library;
         let panel = self.panel.clone();
         window.focus(&gpui::Focusable::focus_handle(panel.read(cx), cx));
         panel.update(cx, |panel, cx| {
@@ -583,7 +584,7 @@ impl Workspace {
             SaveOutcome::Saved(saved) => {
                 // Clean only if nothing was edited while the save ran.
                 let unchanged = self.editor.read(cx).state().revision() == in_flight.revision;
-                session.title = saved.meta.title;
+                session.title = saved.meta.title.clone();
                 if let Some(view_state) = saved.view_state {
                     session.stored_view_state = Some(view_state);
                 }
@@ -594,8 +595,11 @@ impl Workspace {
                 }
                 let recovered = session.failure.take().is_some();
                 // The write went past the library's own connection: its
-                // cached tree (title, counts, edit time) has to catch up.
-                if let Err(error) = self.library.update(cx, |library, cx| library.refresh(cx)) {
+                // cached tree (title, counts, edit time) and its
+                // subscribers have to hear of it.
+                if let Err(error) = self.library.update(cx, |library, cx| {
+                    library.document_saved_elsewhere(&saved.meta, cx)
+                }) {
                     eprintln!("The Writer: could not re-read the library: {error}");
                 }
                 if recovered {

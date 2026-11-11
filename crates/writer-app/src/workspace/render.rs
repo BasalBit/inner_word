@@ -2,7 +2,7 @@
 //! status bar, and the modal and toast layers on top.
 
 use gpui::{
-    AnyElement, ClickEvent, Context, CursorStyle, Focusable, MouseButton, MouseMoveEvent,
+    AnyElement, App, ClickEvent, Context, CursorStyle, Focusable, MouseButton, MouseMoveEvent,
     MouseUpEvent, SharedString, Window, div, prelude::*, px,
 };
 use writer_ui::{
@@ -25,8 +25,89 @@ use crate::{
 /// Height of the status bar.
 pub const STATUS_BAR_HEIGHT: f32 = 26.;
 
-/// The sidebar gives way before the text column gets narrower than this.
-const MIN_EDITOR_WIDTH: f32 = 360.;
+/// The side panels give way before the text column gets narrower than this.
+pub const MIN_EDITOR_WIDTH: f32 = 360.;
+
+/// The narrowest the panel at the right of the text is drawn.
+pub const MIN_RIGHT_PANEL_WIDTH: f32 = 220.;
+
+/// One of the two panels beside the text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidePanel {
+    /// The library sidebar, at the left.
+    Library,
+    /// The panel at the right (the comments).
+    Right,
+}
+
+/// The widths the panels beside the text are drawn at; `None` for a panel
+/// that is not drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PanelLayout {
+    /// The library sidebar.
+    pub sidebar: Option<f32>,
+    /// The panel at the right.
+    pub right: Option<f32>,
+}
+
+/// How the panels beside the text share a window `viewport` wide, so that
+/// the text keeps at least [`MIN_EDITOR_WIDTH`].
+///
+/// `sidebar` and `right` are the widths the panels would like (`None`: the
+/// panel is not shown at all). While there is room both get it. In a
+/// narrower window both shrink towards their minimum, each by its share of
+/// what they have to give. When even the minimums do not fit beside the
+/// text, only one panel is drawn: `keep`, the one that was used last.
+pub fn panel_layout(
+    viewport: f32,
+    sidebar: Option<f32>,
+    right: Option<f32>,
+    keep: SidePanel,
+) -> PanelLayout {
+    let room = (viewport - MIN_EDITOR_WIDTH).max(0.);
+    let alone = |width: f32, min: f32| width.min(room).max(min);
+    match (sidebar, right) {
+        (None, None) => PanelLayout::default(),
+        (Some(sidebar), None) => PanelLayout {
+            sidebar: Some(alone(sidebar, MIN_SIDEBAR_WIDTH)),
+            right: None,
+        },
+        (None, Some(right)) => PanelLayout {
+            sidebar: None,
+            right: Some(alone(right, MIN_RIGHT_PANEL_WIDTH)),
+        },
+        (Some(sidebar), Some(right)) => {
+            let sidebar = sidebar.max(MIN_SIDEBAR_WIDTH);
+            let right = right.max(MIN_RIGHT_PANEL_WIDTH);
+            let over = sidebar + right - room;
+            if over <= 0. {
+                PanelLayout {
+                    sidebar: Some(sidebar),
+                    right: Some(right),
+                }
+            } else if room >= MIN_SIDEBAR_WIDTH + MIN_RIGHT_PANEL_WIDTH {
+                let give_sidebar = sidebar - MIN_SIDEBAR_WIDTH;
+                let give_right = right - MIN_RIGHT_PANEL_WIDTH;
+                let give = give_sidebar + give_right;
+                PanelLayout {
+                    sidebar: Some(sidebar - over * give_sidebar / give),
+                    right: Some(right - over * give_right / give),
+                }
+            } else {
+                match keep {
+                    SidePanel::Library => PanelLayout {
+                        sidebar: Some(alone(sidebar, MIN_SIDEBAR_WIDTH)),
+                        right: None,
+                    },
+                    SidePanel::Right => PanelLayout {
+                        sidebar: None,
+                        right: Some(alone(right, MIN_RIGHT_PANEL_WIDTH)),
+                    },
+                }
+            }
+        }
+    }
+}
 
 /// Width of the strip at the sidebar edge that takes the resize drag.
 const RESIZE_HANDLE_WIDTH: f32 = 7.;
@@ -152,9 +233,8 @@ impl Workspace {
         }
     }
 
-    fn render_titlebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_titlebar(&mut self, sidebar_visible: bool, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
-        let sidebar_visible = self.settings.sidebar_visible;
         div()
             .id("titlebar")
             .h(TITLEBAR_HEIGHT)
@@ -184,18 +264,32 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The width the sidebar is drawn at: the chosen width, less in a
-    /// narrow window so the text keeps a usable column.
-    fn sidebar_width_in(&self, window: &Window) -> f32 {
-        let room = f32::from(window.viewport_size().width) - MIN_EDITOR_WIDTH;
-        self.settings.sidebar_width.min(room).max(MIN_SIDEBAR_WIDTH)
+    /// How the panels beside the text are drawn in this window: see
+    /// [`panel_layout`]. Also notes which of them was used last.
+    pub fn side_panels(&mut self, window: &Window, cx: &App) -> PanelLayout {
+        if self.comments.read(cx).has_focus(window, cx) {
+            self.last_side_panel = SidePanel::Right;
+        } else if self.panel_has_focus(window, cx) {
+            self.last_side_panel = SidePanel::Library;
+        }
+        panel_layout(
+            f32::from(window.viewport_size().width),
+            self.settings
+                .sidebar_visible
+                .then_some(self.settings.sidebar_width),
+            self.right_panel
+                .is_some()
+                .then_some(f32::from(self.right_panel_width)),
+            self.last_side_panel,
+        )
     }
 
-    fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         div()
             .id("sidebar")
-            .w(px(self.sidebar_width_in(window)))
+            .debug_selector(|| "sidebar".into())
+            .w(px(width))
             .h_full()
             .flex_none()
             .flex()
@@ -215,10 +309,9 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_resize_handle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_resize_handle(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         let dragging = self.sidebar_dragging;
-        let width = self.sidebar_width_in(window);
         div()
             .id("sidebar-resize")
             .absolute()
@@ -299,6 +392,9 @@ impl Workspace {
         let colors = cx.theme().colors;
         let text = |text: String| div().flex_none().whitespace_nowrap().child(text);
 
+        // The Vim indicator draws nothing while Vim mode is off; leave it
+        // out then, or the gap before the next text would be doubled.
+        let vim_on = self.vim.read(cx).is_attached();
         let left = div()
             .flex()
             .items_center()
@@ -307,6 +403,7 @@ impl Workspace {
             .children(
                 self.status_items
                     .iter()
+                    .filter(|(_, view)| vim_on || view.entity_id() != self.vim_status_id)
                     .map(|(_, view)| div().flex_none().child(view.clone())),
             )
             .when(!status.save.is_empty(), |el| {
@@ -382,13 +479,15 @@ impl Render for Workspace {
         let theme = cx.theme();
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
-        let sidebar_visible = self.settings.sidebar_visible;
+        let layout = self.side_panels(window, cx);
 
-        let titlebar = self.render_titlebar(window, cx);
+        let titlebar = self.render_titlebar(layout.sidebar.is_some(), cx);
         let editor_area = self.render_editor_area(cx);
         let status_bar = self.render_status_bar(cx);
-        let sidebar = sidebar_visible.then(|| self.render_sidebar(window, cx));
-        let resize_handle = sidebar_visible.then(|| self.render_resize_handle(window, cx));
+        let sidebar = layout.sidebar.map(|width| self.render_sidebar(width, cx));
+        let resize_handle = layout
+            .sidebar
+            .map(|width| self.render_resize_handle(width, cx));
         let strips: Vec<AnyElement> = self
             .strips
             .iter()
@@ -400,18 +499,23 @@ impl Render for Workspace {
                     .into_any_element()
             })
             .collect();
-        let right_panel = self.right_panel.clone().map(|view| {
-            div()
-                .id("right-panel")
-                .w(self.right_panel_width)
-                .h_full()
-                .flex_none()
-                .overflow_hidden()
-                .border_l_1()
-                .border_color(colors.hairline)
-                .bg(colors.sidebar)
-                .child(view)
-        });
+        let right_panel = self
+            .right_panel
+            .clone()
+            .zip(layout.right)
+            .map(|(view, width)| {
+                div()
+                    .id("right-panel")
+                    .debug_selector(|| "right-panel".into())
+                    .w(px(width))
+                    .h_full()
+                    .flex_none()
+                    .overflow_hidden()
+                    .border_l_1()
+                    .border_color(colors.hairline)
+                    .bg(colors.sidebar)
+                    .child(view)
+            });
 
         // The library panel's commands (rename, move to trash, ...) work from
         // anywhere in the window, e.g. after the palette handed focus back
@@ -526,6 +630,7 @@ impl Render for Workspace {
                                     .child(
                                         div()
                                             .id("editor-area")
+                                            .debug_selector(|| "editor-area".into())
                                             .flex_1()
                                             .min_h_0()
                                             .w_full()

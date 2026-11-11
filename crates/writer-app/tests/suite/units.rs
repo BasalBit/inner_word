@@ -728,3 +728,83 @@ mod shortcut_places {
         assert!(Place::Anywhere < Place::Text && Place::Text < Place::Library);
     }
 }
+
+mod panel_layout {
+    use writer_app::workspace::{
+        MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, SidePanel, panel_layout,
+    };
+
+    #[test]
+    fn the_text_keeps_its_room() {
+        let both = |viewport: f32, keep| panel_layout(viewport, Some(260.), Some(320.), keep);
+        // Room for everything.
+        assert_eq!(
+            both(1200., SidePanel::Right),
+            PanelLayout {
+                sidebar: Some(260.),
+                right: Some(320.)
+            }
+        );
+        // Tighter: both give, the text has its minimum.
+        let tight = both(900., SidePanel::Right);
+        let (sidebar, right) = (tight.sidebar.unwrap(), tight.right.unwrap());
+        assert!((sidebar + right + MIN_EDITOR_WIDTH - 900.).abs() < 0.01);
+        assert!(sidebar >= 200. && sidebar < 260.);
+        assert!(right >= MIN_RIGHT_PANEL_WIDTH && right < 320.);
+        // At the point where both are at their minimum.
+        assert_eq!(
+            both(780., SidePanel::Library),
+            PanelLayout {
+                sidebar: Some(200.),
+                right: Some(220.)
+            }
+        );
+        // Narrower still: one panel, the one used last, and never both.
+        assert_eq!(
+            both(700., SidePanel::Right),
+            PanelLayout {
+                sidebar: None,
+                right: Some(320.)
+            }
+        );
+        assert_eq!(
+            both(700., SidePanel::Library),
+            PanelLayout {
+                sidebar: Some(260.),
+                right: None
+            }
+        );
+        assert_eq!(both(640., SidePanel::Right).right, Some(280.));
+        assert_eq!(both(640., SidePanel::Library).sidebar, Some(260.));
+        // A single panel yields down to its minimum.
+        assert_eq!(
+            panel_layout(640., Some(400.), None, SidePanel::Right).sidebar,
+            Some(280.)
+        );
+        assert_eq!(
+            panel_layout(500., Some(400.), None, SidePanel::Right).sidebar,
+            Some(200.)
+        );
+        assert_eq!(
+            panel_layout(500., None, Some(400.), SidePanel::Library).right,
+            Some(220.)
+        );
+        assert_eq!(
+            panel_layout(1000., None, None, SidePanel::Right),
+            PanelLayout::default()
+        );
+        // Whatever the window, the text keeps its minimum while one panel
+        // at its minimum fits beside it.
+        for viewport in (640..=1600).step_by(20) {
+            for keep in [SidePanel::Library, SidePanel::Right] {
+                let layout = both(viewport as f32, keep);
+                let panels = layout.sidebar.unwrap_or(0.) + layout.right.unwrap_or(0.);
+                assert!(
+                    viewport as f32 - panels >= MIN_EDITOR_WIDTH - 0.01,
+                    "{viewport}: {layout:?}"
+                );
+                assert!(layout.sidebar.is_some() || layout.right.is_some());
+            }
+        }
+    }
+}

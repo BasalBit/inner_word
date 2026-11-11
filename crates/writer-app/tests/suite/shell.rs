@@ -573,3 +573,84 @@ fn edit_menu_items_act_where_the_keyboard_is(cx: &mut TestAppContext) {
     vcx.dispatch_action(editor::Copy);
     assert_eq!(clipboard(vcx), "Menu\nBody text.");
 }
+
+#[gpui::test]
+fn the_text_keeps_its_room_in_a_narrow_window(cx: &mut TestAppContext) {
+    use writer_core::{EditorState, Selection};
+
+    init(cx);
+    let library = library(cx);
+    // A document with a comment, so the comments panel is beside the text.
+    let mut state = EditorState::new(simple_document("Narrow", "Salt is dear this year."));
+    state.set_selection(Selection::new(
+        writer_core::Position::new(1, 0),
+        writer_core::Position::new(1, 4),
+    ));
+    state
+        .add_comment("How dear?", "Ada", 1_700_000_000_000)
+        .unwrap();
+    add_document(&library, None, &state.into_document(), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    // The widths of the sidebar, the text area and the comments panel as
+    // they are drawn (`None`: not drawn).
+    let widths = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        let layout = workspace.update_in(cx, |w, window, cx| w.side_panels(window, cx));
+        let drawn = |name: &'static str, cx: &mut VisualTestContext| {
+            cx.debug_bounds(name)
+                .map(|bounds| f32::from(bounds.size.width))
+        };
+        let text = drawn("editor-area", cx);
+        // What is laid out is what is on screen.
+        let sidebar_on_screen =
+            workspace.update_in(cx, |w, window, cx| w.panel().read(cx).is_on_screen(window));
+        assert_eq!(layout.sidebar.is_some(), sidebar_on_screen);
+        if let Some(width) = layout.sidebar {
+            assert_eq!(drawn("sidebar", cx), Some(width));
+        }
+        if let Some(width) = layout.right {
+            assert_eq!(drawn("right-panel", cx), Some(width));
+        }
+        (layout.sidebar, text, layout.right)
+    };
+
+    // A normal window: everything at its own width.
+    vcx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    assert_eq!(widths(vcx), (Some(260.), Some(620.), Some(320.)));
+
+    // Narrower: both panels give way, the text keeps its minimum.
+    vcx.simulate_resize(gpui::size(px(900.), px(800.)));
+    let (sidebar, text, right) = widths(vcx);
+    assert_eq!(text, Some(360.));
+    assert!(sidebar.unwrap() < 260. && sidebar.unwrap() >= 200.);
+    assert!(right.unwrap() < 320. && right.unwrap() >= 220.);
+
+    // Too narrow for both: the comments stay (nothing else was used yet),
+    // the library steps aside. Its setting is untouched.
+    vcx.simulate_resize(gpui::size(px(700.), px(800.)));
+    assert_eq!(widths(vcx), (None, Some(380.), Some(320.)));
+    assert!(workspace.read_with(vcx, |w, _| w.settings().sidebar_visible));
+    assert!(editor_focused(&workspace, vcx));
+
+    // Going to the library brings it in, in place of the comments, with
+    // the keyboard in it.
+    vcx.simulate_keystrokes("cmd-0");
+    assert_eq!(widths(vcx), (Some(260.), Some(440.), None));
+    assert!(workspace.update_in(vcx, |w, window, cx| {
+        gpui::Focusable::focus_handle(w.panel().read(cx), cx).contains_focused(window, cx)
+    }));
+    // Back in the text the library stays: it was used last.
+    vcx.simulate_keystrokes("cmd-1");
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(widths(vcx), (Some(260.), Some(440.), None));
+    // Going to the comments swaps them back, with the keyboard there.
+    vcx.simulate_keystrokes("cmd-2");
+    assert_eq!(widths(vcx), (None, Some(380.), Some(320.)));
+    assert!(workspace.update_in(vcx, |w, window, cx| {
+        w.comments().read(cx).has_focus(window, cx)
+    }));
+
+    // With room again both are back.
+    vcx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    assert_eq!(widths(vcx), (Some(260.), Some(620.), Some(320.)));
+}

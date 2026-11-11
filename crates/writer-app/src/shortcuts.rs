@@ -10,9 +10,7 @@
 use std::collections::HashSet;
 
 use gpui::{Action, App, Context, SharedString, WeakEntity, Window};
-use writer_ui::{
-    KeyHint, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::fuzzy_match,
-};
+use writer_ui::{KeyHint, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::fuzzy_match};
 
 use crate::{commands, workspace::Workspace};
 

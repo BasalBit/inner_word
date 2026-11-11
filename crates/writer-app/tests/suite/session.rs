@@ -6,7 +6,7 @@ use writer_app::{
     SaveState, Workspace,
     actions::UseTitleFromText,
     settings::keys,
-    workspace::{AUTOSAVE_DELAY, RETRY_DELAY},
+    workspace::{AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY},
 };
 use writer_core::{Document, Movement, Position};
 use writer_library::{DocumentContent, Library, LibraryItem};
@@ -44,7 +44,10 @@ fn autosave_is_debounced_and_the_session_is_restored(cx: &mut TestAppContext) {
     let library = library(cx);
     let id = add_document(&library, None, &simple_document("Notes", "First."), cx);
     let (workspace, vcx) = open_workspace(&library, cx);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.save_state()),
         Some(SaveState::Saved)
@@ -142,7 +145,10 @@ fn switching_documents_flushes_and_keeps_both_intact(cx: &mut TestAppContext) {
     vcx.executor().advance_clock(AUTOSAVE_DELAY * 3);
     vcx.run_until_parked();
     assert!(!stored_text(&library, a, vcx).contains("B-edit"));
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(a));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(a)
+    );
     assert_eq!(
         library.read_with(vcx, |library, _| {
             library
@@ -180,7 +186,9 @@ fn title_follows_the_text_until_the_user_renames(cx: &mut TestAppContext) {
     let library = library(cx);
     let (workspace, vcx) = open_workspace(&library, cx);
     let id = workspace
-        .update_in(vcx, |workspace, window, cx| workspace.new_document(window, cx))
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.new_document(window, cx)
+        })
         .unwrap();
     let title = |cx: &mut gpui::VisualTestContext| {
         library.read_with(cx, |library, _| library.document_meta(id).unwrap().title)
@@ -231,7 +239,12 @@ fn trashing_the_open_document_saves_it_and_moves_on(cx: &mut TestAppContext) {
     let folder = library.update(cx, |library, cx| {
         library.create_folder(None, "Drafts", cx).unwrap().id
     });
-    let b = add_document(&library, Some(folder), &simple_document("Gone", "Soon."), cx);
+    let b = add_document(
+        &library,
+        Some(folder),
+        &simple_document("Gone", "Soon."),
+        cx,
+    );
     let (workspace, vcx) = open_workspace(&library, cx);
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.open_document(b, true, window, cx);
@@ -241,7 +254,10 @@ fn trashing_the_open_document_saves_it_and_moves_on(cx: &mut TestAppContext) {
     // Trash the whole folder with the open document inside.
     library.update(vcx, |library, cx| library.trash_folder(folder, cx).unwrap());
     vcx.run_until_parked();
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(a));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(a)
+    );
     assert!(editor_focused(&workspace, vcx));
     // What was typed went into the trashed document, not into thin air.
     assert!(stored_text(&library, b, vcx).contains("last words"));
@@ -254,7 +270,11 @@ fn trashing_the_open_document_saves_it_and_moves_on(cx: &mut TestAppContext) {
     assert_eq!(workspace.read_with(vcx, |w, _| w.save_state()), None);
     vcx.simulate_keystrokes("cmd-n");
     vcx.run_until_parked();
-    assert!(workspace.read_with(vcx, |w, _| w.open_document_id()).is_some());
+    assert!(
+        workspace
+            .read_with(vcx, |w, _| w.open_document_id())
+            .is_some()
+    );
     assert!(editor_focused(&workspace, vcx));
 }
 
@@ -265,7 +285,9 @@ fn a_failed_save_is_reported_kept_and_retried(cx: &mut TestAppContext) {
     let path = dir.path().join("library.db");
     let library = cx.new(|_| Library::open(&path).unwrap());
     library.update(cx, |library, cx| {
-        library.set_setting(keys::WELCOME_CREATED, &true, cx).unwrap();
+        library
+            .set_setting(keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
     });
     let id = add_document(&library, None, &simple_document("Fragile", "Text."), cx);
     let (workspace, vcx) = open_workspace(&library, cx);
@@ -323,7 +345,10 @@ fn unreadable_content_opens_as_plain_text_and_keeps_the_original(cx: &mut TestAp
             .id
     });
     let (workspace, vcx) = open_workspace(&library, cx);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
     assert_eq!(
         editor_text(&workspace, vcx),
         "this was never JSON\nsecond line"
@@ -373,7 +398,10 @@ fn new_document_and_new_folder(cx: &mut TestAppContext) {
     assert_eq!(meta.folder_id, Some(folder));
     assert_eq!(meta.title, "Untitled");
     assert!(editor_focused(&workspace, vcx));
-    assert_eq!(panel.read_with(vcx, |panel, _| panel.active_document()), Some(id));
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel.active_document()),
+        Some(id)
+    );
     vcx.simulate_input("Fresh page");
     assert_eq!(editor_text(&workspace, vcx), "Fresh page");
 
@@ -391,9 +419,39 @@ fn new_document_and_new_folder(cx: &mut TestAppContext) {
     );
     assert!(!editor_focused(&workspace, vcx));
     // The typed text of the new document was not lost on the way.
-    assert!(stored_text(&library, id, vcx).contains("Fresh page") || {
-        workspace.update(vcx, |workspace, cx| workspace.flush(cx));
-        stored_text(&library, id, vcx).contains("Fresh page")
-    });
+    assert!(
+        stored_text(&library, id, vcx).contains("Fresh page") || {
+            workspace.update(vcx, |workspace, cx| workspace.flush(cx));
+            stored_text(&library, id, vcx).contains("Fresh page")
+        }
+    );
     let _: &gpui::Entity<Workspace> = &workspace;
+}
+
+#[gpui::test]
+fn steady_typing_is_saved_without_a_pause(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let id = add_document(&library, None, &simple_document("Flow", ""), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    // A key every half second: never a pause as long as the debounce.
+    let step = AUTOSAVE_DELAY / 2;
+    let mut typed = 0;
+    while step * typed <= MAX_AUTOSAVE_WAIT + AUTOSAVE_DELAY {
+        type_text(&workspace, "x", vcx);
+        vcx.executor().advance_clock(step);
+        vcx.run_until_parked();
+        typed += 1;
+    }
+    let stored = stored_text(&library, id, vcx);
+    let saved = stored.matches('x').count();
+    assert!(saved > 0, "nothing was saved during {typed} keystrokes");
+    assert!(saved <= typed as usize);
+    // And the pause at the end saves the rest.
+    vcx.executor().advance_clock(AUTOSAVE_DELAY * 2);
+    vcx.run_until_parked();
+    assert_eq!(
+        stored_text(&library, id, vcx).matches('x').count(),
+        typed as usize
+    );
 }

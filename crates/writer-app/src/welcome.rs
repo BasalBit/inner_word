@@ -91,9 +91,7 @@ pub fn welcome_document() -> Document {
         ),
         heading(2, "Find anything"),
         bullet("{k:⇧⌘P} opens the command palette: every command, with its shortcut beside it."),
-        bullet(
-            "{k:⌘P} jumps to a document by name. {k:⇧⌘F} searches the text of every document.",
-        ),
+        bullet("{k:⌘P} jumps to a document by name. {k:⇧⌘F} searches the text of every document."),
         bullet(
             "{k:⌘0} moves to the library on the left and {k:⌘1} comes back to the text. \
              {k:⌘N} starts a new document, {k:⇧⌘N} a new folder.",
@@ -128,9 +126,7 @@ pub fn welcome_document() -> Document {
             "{k:⌥⌘P} switches between the flowing column and page view. Paper size and the \
              defaults for new documents are in Settings, {k:⌘,}.",
         ),
-        bullet(
-            "{k:⌥⌘M} adds a comment to the selected text. {k:⌥⌘C} shows or hides comments.",
-        ),
+        bullet("{k:⌥⌘M} adds a comment to the selected text. {k:⌥⌘C} shows or hides comments."),
         bullet("{k:⌥⌘V} turns Vim mode on or off."),
         heading(2, "Take your words elsewhere"),
         paragraph(
@@ -239,8 +235,14 @@ pub fn seed_demo_library(library: &mut Library, cx: &mut gpui::Context<Library>)
         Some(novel),
         vec![
             heading(1, "Outline"),
-            rich(BlockKind::NumberedItem, "Mara returns; the house; the letter."),
-            rich(BlockKind::NumberedItem, "The salt works and the strike of {i:'62}."),
+            rich(
+                BlockKind::NumberedItem,
+                "Mara returns; the house; the letter.",
+            ),
+            rich(
+                BlockKind::NumberedItem,
+                "The salt works and the strike of {i:'62}.",
+            ),
             rich(BlockKind::NumberedItem, "What the harbour master kept."),
             todo(true, "Decide who wrote the letter"),
             todo(false, "Check ferry timetables for the period"),

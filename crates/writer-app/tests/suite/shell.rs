@@ -91,7 +91,10 @@ fn sidebar_focus_keys_and_persistence(cx: &mut TestAppContext) {
         gpui::MouseButton::Left,
         gpui::Modifiers::default(),
     );
-    assert_eq!(workspace.read_with(vcx, |w, _| w.settings().sidebar_width), 300.);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.settings().sidebar_width),
+        300.
+    );
     assert_eq!(setting(keys::SIDEBAR_WIDTH, vcx), Some(300.));
 
     // cmd-alt-s hides it; hiding while the library has focus hands focus
@@ -206,7 +209,9 @@ fn status_bar_counts_words_selection_and_pages(cx: &mut TestAppContext) {
     assert_eq!(status.save, "Edited");
 
     // No document: an empty status line.
-    workspace.update_in(vcx, |workspace, window, cx| workspace.close_document(window, cx));
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.close_document(window, cx)
+    });
     let status = workspace.update(vcx, |w, cx| w.status_line(cx));
     assert_eq!(status, Default::default());
 }
@@ -221,7 +226,8 @@ fn window_bounds_are_stored_and_read_back(cx: &mut TestAppContext) {
 
     // A resize is stored after it settles.
     vcx.simulate_resize(gpui::size(px(900.), px(700.)));
-    vcx.executor().advance_clock(std::time::Duration::from_secs(2));
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
     vcx.run_until_parked();
     let stored: Option<StoredBounds> = library.read_with(vcx, |library, _| {
         library.setting(keys::WINDOW_BOUNDS).unwrap()
@@ -230,7 +236,10 @@ fn window_bounds_are_stored_and_read_back(cx: &mut TestAppContext) {
     assert_eq!((stored.width, stored.height), (900., 700.));
     assert_eq!(stored.mode, StoredWindowMode::Windowed);
     let restored = vcx.update(|_, cx| stored_window_bounds(library.read(cx), cx));
-    assert_eq!(restored.map(|bounds| bounds.get_bounds().size), Some(gpui::size(px(900.), px(700.))));
+    assert_eq!(
+        restored.map(|bounds| bounds.get_bounds().size),
+        Some(gpui::size(px(900.), px(700.)))
+    );
 
     // Bounds that make no sense are ignored at the next launch.
     library.update(vcx, |library, cx| {
@@ -254,7 +263,10 @@ fn menu_bar_follows_the_macos_layout(cx: &mut TestAppContext) {
     init(cx);
     let menus = writer_app::menus::app_menus();
     let names: Vec<String> = menus.iter().map(|menu| menu.name.to_string()).collect();
-    assert_eq!(names, ["The Writer", "File", "Edit", "View", "Window", "Help"]);
+    assert_eq!(
+        names,
+        ["The Writer", "File", "Edit", "View", "Window", "Help"]
+    );
     let items = |menu: &gpui::Menu| -> Vec<String> {
         menu.items
             .iter()
@@ -270,7 +282,15 @@ fn menu_bar_follows_the_macos_layout(cx: &mut TestAppContext) {
     assert_eq!(app.last().map(String::as_str), Some("Quit The Writer"));
     assert_eq!(
         items(&menus[2]),
-        ["Undo", "Redo", "Cut", "Copy", "Paste", "Paste as Plain Text", "Select All"]
+        [
+            "Undo",
+            "Redo",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Paste as Plain Text",
+            "Select All"
+        ]
     );
     assert!(items(&menus[3]).contains(&"Page View".to_string()));
     assert_eq!(items(&menus[5]), ["Keyboard Shortcuts"]);
@@ -393,7 +413,9 @@ fn library_commands_work_from_the_editor_and_renaming_pins_the_title(cx: &mut Te
             .meta
     });
     assert_eq!(created.title, "Named at birth");
-    let content = library.read_with(vcx, |library, _| library.document(created.id).unwrap().content);
+    let content = library.read_with(vcx, |library, _| {
+        library.document(created.id).unwrap().content
+    });
     let document = Document::from_json(&content).unwrap();
     assert_eq!(document.settings().typography.body_font, "Georgia");
     // It opens in the editor; writing in it keeps the given name.

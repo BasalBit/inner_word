@@ -5,7 +5,8 @@
 //! the library holds the last saved state. The rules:
 //!
 //! - Every edit marks the session dirty and (re)starts a short timer
-//!   ([`AUTOSAVE_DELAY`]); when it fires the document is saved.
+//!   ([`AUTOSAVE_DELAY`]); when it fires the document is saved. Typing
+//!   without such a pause still saves every [`MAX_AUTOSAVE_WAIT`].
 //! - [`Workspace::flush`] saves synchronously. It runs before another
 //!   document is opened, when the window closes, when the app quits and when
 //!   the window loses focus.
@@ -34,6 +35,9 @@ use crate::{
 
 /// How long after the last edit the document is saved.
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
+/// The longest edits stay unsaved while the writer keeps typing without a
+/// pause long enough for [`AUTOSAVE_DELAY`].
+pub const MAX_AUTOSAVE_WAIT: Duration = Duration::from_secs(5);
 /// How long after a failed save the next attempt is made.
 pub const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// The minimum age of the newest version snapshot before another is taken.
@@ -59,6 +63,8 @@ pub(crate) struct Session {
     pub custom_title: bool,
     /// The text changed since the last successful save.
     pub dirty: bool,
+    /// When the oldest unsaved edit was made.
+    pub dirty_since: Option<std::time::Instant>,
     /// The view state (caret, scroll) as last written to the library.
     pub stored_view_state: Option<String>,
     /// The message of the last failed save, while it has not succeeded since.
@@ -94,7 +100,10 @@ impl Workspace {
                 let tree = library.tree();
                 tree.folders.is_empty()
                     && tree.documents.is_empty()
-                    && library.trash().map(|trash| trash.is_empty()).unwrap_or(false)
+                    && library
+                        .trash()
+                        .map(|trash| trash.is_empty())
+                        .unwrap_or(false)
             };
             let result = self.library.update(cx, |library, cx| {
                 let created = if empty {
@@ -204,6 +213,7 @@ impl Workspace {
             title: stored.meta.title.clone(),
             custom_title,
             dirty: false,
+            dirty_since: None,
             stored_view_state: stored.view_state.clone(),
             failure: None,
             save_task: None,
@@ -244,11 +254,7 @@ impl Workspace {
         });
         self.panel
             .update(cx, |panel, cx| panel.set_active_document(None, cx));
-        if self
-            .editor
-            .read(cx)
-            .is_focused(window)
-        {
+        if self.editor.read(cx).is_focused(window) {
             window.focus(&self.focus_handle);
         }
         self.update_window_title(window);
@@ -293,7 +299,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<DocumentId> {
-        self.create_document(Some(name.trim()).filter(|name| !name.is_empty()), window, cx)
+        self.create_document(
+            Some(name.trim()).filter(|name| !name.is_empty()),
+            window,
+            cx,
+        )
     }
 
     fn create_document(
@@ -375,12 +385,17 @@ impl Workspace {
             return;
         };
         session.dirty = true;
-        // While a save is failing, keep the retry rhythm instead of
-        // hammering the store on every keystroke.
+        let now = cx.background_executor().now();
+        let since = *session.dirty_since.get_or_insert(now);
         let delay = if session.failure.is_some() {
+            // While a save is failing, keep the retry rhythm instead of
+            // hammering the store on every keystroke.
             RETRY_DELAY
         } else {
-            AUTOSAVE_DELAY
+            // Debounce, but never let steady typing postpone the save
+            // beyond MAX_AUTOSAVE_WAIT.
+            let waited = now.saturating_duration_since(since);
+            AUTOSAVE_DELAY.min(MAX_AUTOSAVE_WAIT.saturating_sub(waited))
         };
         self.schedule_save(delay, cx);
         cx.notify();
@@ -430,7 +445,11 @@ impl Workspace {
         } else {
             None
         };
-        let form = StoredForm::of(self.editor.read(cx).document(), kept_title.as_deref());
+        let form = {
+            let editor = self.editor.read(cx);
+            // The editor keeps the statistics current; no need to recount.
+            StoredForm::with_stats(editor.document(), kept_title.as_deref(), editor.stats())
+        };
         let result = self.library.update(cx, |library, cx| {
             library.save_document(id, &form.content(), cx)
         });
@@ -439,6 +458,7 @@ impl Workspace {
             Ok(meta) => {
                 let session = self.session.as_mut().expect("session checked above");
                 session.dirty = false;
+                session.dirty_since = None;
                 session.title = meta.title;
                 session.save_task = None;
                 let recovered = session.failure.take().is_some();

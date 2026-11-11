@@ -23,22 +23,27 @@ macro_rules! modal {
 }
 
 fn has_modal(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
-    workspace.read_with(cx, |workspace, cx| workspace.modal_layer().read(cx).has_modal())
+    workspace.read_with(cx, |workspace, cx| {
+        workspace.modal_layer().read(cx).has_modal()
+    })
 }
 
 #[gpui::test]
 fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);
-    add_document(&library, None, &simple_document("Title", "Make me bold."), cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Title", "Make me bold."),
+        cx,
+    );
     let (workspace, vcx) = open_workspace(&library, cx);
     let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
     // Select "bold" in the paragraph.
     editor.update(vcx, |editor, cx| {
         editor.edit(
-            |state| {
-                state.set_selection(Selection::new(Position::new(1, 8), Position::new(1, 12)))
-            },
+            |state| state.set_selection(Selection::new(Position::new(1, 8), Position::new(1, 12))),
             cx,
         );
     });
@@ -50,7 +55,13 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
     // Browsing: every category is there, with the editor's and the
     // library's commands beside the app's own.
     let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
-    for expected in ["New document", "Bold", "Settings", "Expand folder", "Heading 1"] {
+    for expected in [
+        "New document",
+        "Bold",
+        "Settings",
+        "Expand folder",
+        "Heading 1",
+    ] {
         assert!(
             titles.iter().any(|title| title == expected),
             "{expected} is listed in {titles:?}"
@@ -73,7 +84,11 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
                 .collect::<Vec<_>>()
         })
     };
-    assert!(details(&palette, vcx).iter().all(|(_, detail, _)| detail.is_none()));
+    assert!(
+        details(&palette, vcx)
+            .iter()
+            .all(|(_, detail, _)| detail.is_none())
+    );
 
     vcx.simulate_input("bold");
     let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
@@ -81,7 +96,11 @@ fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
     // In search results the category and the real key are beside the title.
     assert_eq!(
         details(&palette, vcx)[0],
-        ("Bold".to_string(), Some("Format".to_string()), Some("⌘B".to_string()))
+        (
+            "Bold".to_string(),
+            Some("Format".to_string()),
+            Some("⌘B".to_string())
+        )
     );
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
@@ -234,7 +253,12 @@ fn quick_open_finds_opens_and_creates(cx: &mut TestAppContext) {
 fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);
-    add_document(&library, None, &simple_document("Bread", "She bought bread."), cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Bread", "She bought bread."),
+        cx,
+    );
     let salt = add_document(
         &library,
         None,
@@ -267,7 +291,10 @@ fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
     assert!(!has_modal(&workspace, vcx));
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(salt));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(salt)
+    );
     assert!(editor_focused(&workspace, vcx));
     let selected = workspace.read_with(vcx, |w, cx| {
         let editor = w.editor().read(cx);
@@ -283,7 +310,10 @@ fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
     assert!(picker.read_with(vcx, |picker, _| picker.delegate.hits().is_empty()));
     vcx.simulate_keystrokes("enter escape");
     assert!(!has_modal(&workspace, vcx));
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(salt));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(salt)
+    );
 }
 
 #[gpui::test]
@@ -325,7 +355,11 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
         ("Editing keys".into(), "Move word left".into(), "⌥←".into())
     );
     // Commands without a binding are not shortcuts.
-    assert!(!listed.iter().any(|(_, title, _)| title == "Use Night theme"));
+    assert!(
+        !listed
+            .iter()
+            .any(|(_, title, _)| title == "Use Night theme")
+    );
     // Nothing is listed twice.
     let mut titles: Vec<_> = listed.iter().map(|(c, t, _)| (c, t)).collect();
     let total = titles.len();
@@ -336,7 +370,11 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     // Searchable, and enter runs the shortcut's command.
     vcx.simulate_input("document end");
     let first = overlay.read_with(vcx, |overlay, _| {
-        overlay.delegate.listed().first().map(|s| s.title.to_string())
+        overlay
+            .delegate
+            .listed()
+            .first()
+            .map(|s| s.title.to_string())
     });
     assert_eq!(first.as_deref(), Some("Move to document end"));
     vcx.simulate_keystrokes("enter");

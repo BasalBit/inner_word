@@ -6,9 +6,7 @@
 
 use gpui::{App, Context, Entity, SharedString, WeakEntity, Window};
 use writer_library::{DocumentEntry, DocumentId, Library};
-use writer_ui::{
-    IconName, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings,
-};
+use writer_ui::{IconName, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings};
 
 use crate::{document_io::UNTITLED, workspace::Workspace};
 
@@ -63,7 +61,10 @@ impl QuickOpenDelegate {
 
     /// What each listed row would do, in order (headers excluded).
     pub fn choices(&self) -> Vec<QuickOpenChoice> {
-        self.rows.iter().filter_map(|row| self.choice(row)).collect()
+        self.rows
+            .iter()
+            .filter_map(|row| self.choice(row))
+            .collect()
     }
 
     fn choice(&self, row: &Row) -> Option<QuickOpenChoice> {

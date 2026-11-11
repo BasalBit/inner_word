@@ -145,9 +145,7 @@ impl SettingRow {
         match self {
             SettingRow::Theme => "Paper is light, Night is dark.",
             SettingRow::VimMode => "Modal editing with Vim keys.",
-            SettingRow::MarkdownShortcuts => {
-                "Typing # , - , > or **bold** formats as you go."
-            }
+            SettingRow::MarkdownShortcuts => "Typing # , - , > or **bold** formats as you go.",
             SettingRow::SmartPunctuation => "Curly quotes, dashes and ellipses.",
             SettingRow::Author => "Written on the comments you add.",
             SettingRow::Font => "Body text of a new document.",
@@ -343,7 +341,10 @@ impl SettingsView {
             },
             SettingRow::PageView => Control::Switch(settings.new_document_page_view),
             SettingRow::Paper => Control::Segments {
-                options: Paper::ALL.iter().map(|paper| paper.label().into()).collect(),
+                options: Paper::ALL
+                    .iter()
+                    .map(|paper| paper.label().into())
+                    .collect(),
                 selected: Paper::ALL
                     .iter()
                     .position(|paper| *paper == settings.new_document_paper)
@@ -358,9 +359,7 @@ impl SettingsView {
                 Control::Stepper {
                     value: match settings.character_limit {
                         None => "Off".into(),
-                        Some(network) => {
-                            format!("{} ({})", network.name(), network.limit()).into()
-                        }
+                        Some(network) => format!("{} ({})", network.name(), network.limit()).into(),
                     },
                     index,
                     count: options.len(),
@@ -382,9 +381,7 @@ impl SettingsView {
             }
             SettingRow::VimMode => self.write(keys::VIM_MODE, &(index != 0), cx),
             SettingRow::MarkdownShortcuts => self.write(keys::INPUT_RULES, &(index != 0), cx),
-            SettingRow::SmartPunctuation => {
-                self.write(keys::SMART_PUNCTUATION, &(index != 0), cx)
-            }
+            SettingRow::SmartPunctuation => self.write(keys::SMART_PUNCTUATION, &(index != 0), cx),
             SettingRow::Author => {}
             SettingRow::Font => {
                 if let Some(font) = self.fonts.get(index).cloned() {
@@ -515,7 +512,11 @@ impl SettingsView {
                 .h(px(18.))
                 .p(px(2.))
                 .rounded_full()
-                .bg(if on { colors.accent } else { colors.border_strong })
+                .bg(if on {
+                    colors.accent
+                } else {
+                    colors.border_strong
+                })
                 .flex()
                 .when(on, |el| el.justify_end())
                 .child(
@@ -549,10 +550,14 @@ impl SettingsView {
                         .cursor_pointer()
                         .map(|el| {
                             if is_selected {
-                                el.bg(if dark { colors.border_strong } else { colors.page })
-                                    .text_color(colors.ink)
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .shadow(popover_shadow.clone())
+                                el.bg(if dark {
+                                    colors.border_strong
+                                } else {
+                                    colors.page
+                                })
+                                .text_color(colors.ink)
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .shadow(popover_shadow.clone())
                             } else {
                                 el.text_color(colors.muted)
                                     .hover(|style| style.text_color(colors.ink))
@@ -658,15 +663,15 @@ impl SettingsView {
                     el.key_context(ROW_KEY_CONTEXT)
                         .track_focus(&handle)
                         .cursor_pointer()
-                        .on_action(cx.listener(move |this, _: &Increase, _, cx| {
-                            this.step(row, 1, cx)
-                        }))
-                        .on_action(cx.listener(move |this, _: &Decrease, _, cx| {
-                            this.step(row, -1, cx)
-                        }))
-                        .on_action(cx.listener(move |this, _: &Activate, _, cx| {
-                            this.activate(row, cx)
-                        }))
+                        .on_action(
+                            cx.listener(move |this, _: &Increase, _, cx| this.step(row, 1, cx)),
+                        )
+                        .on_action(
+                            cx.listener(move |this, _: &Decrease, _, cx| this.step(row, -1, cx)),
+                        )
+                        .on_action(
+                            cx.listener(move |this, _: &Activate, _, cx| this.activate(row, cx)),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| this.activate(row, cx)))
                 }
             })

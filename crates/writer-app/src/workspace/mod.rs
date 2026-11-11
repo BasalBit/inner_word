@@ -68,7 +68,9 @@ use crate::{
 };
 
 pub use render::{STATUS_BAR_HEIGHT, StatusLine, counted, group_digits};
-pub use session::{AUTOSAVE_DELAY, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveState, first_occurrence};
+pub use session::{
+    AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveState, first_occurrence,
+};
 pub(crate) use session::{Session, display_title as session_title};
 
 /// The key context of the workspace root element.
@@ -721,13 +723,7 @@ impl Workspace {
             env!("CARGO_PKG_VERSION")
         );
         // The answer does not matter; dropping the receiver is fine.
-        drop(window.prompt(
-            PromptLevel::Info,
-            "The Writer",
-            Some(&detail),
-            &["OK"],
-            cx,
-        ));
+        drop(window.prompt(PromptLevel::Info, "The Writer", Some(&detail), &["OK"], cx));
     }
 
     // ----- events ----------------------------------------------------------------

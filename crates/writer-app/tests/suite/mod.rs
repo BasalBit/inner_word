@@ -2,11 +2,11 @@
 //! never the user's data directory.
 
 mod commands;
-mod units;
 mod export;
 mod session;
 mod settings;
 mod shell;
+mod units;
 
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use writer_app::{Workspace, document_io::StoredForm};

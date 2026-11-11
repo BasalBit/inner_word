@@ -8,7 +8,11 @@ use writer_export::ExportFormat;
 
 use super::*;
 
-fn choice(scope: ExportScope, format: ExportFormat, destination: ExportDestination) -> ExportChoice {
+fn choice(
+    scope: ExportScope,
+    format: ExportFormat,
+    destination: ExportDestination,
+) -> ExportChoice {
     ExportChoice::new(scope, format, destination)
 }
 
@@ -46,7 +50,9 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     // The picker: five ways for the document, three for the folder.
     vcx.simulate_keystrokes("cmd-shift-s");
     let picker = workspace
-        .read_with(vcx, |w, cx| w.modal_layer().read(cx).active::<ExportPicker>())
+        .read_with(vcx, |w, cx| {
+            w.modal_layer().read(cx).active::<ExportPicker>()
+        })
         .expect("the export picker is open");
     let choices = picker.read_with(vcx, |picker, _| picker.delegate.choices());
     assert_eq!(choices, ExportChoice::ALL.to_vec());
@@ -64,7 +70,10 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     let written = out.path().join("picked name.md");
     let markdown = std::fs::read_to_string(&written).expect("the Markdown file exists");
-    assert!(markdown.starts_with("# Fresh. Chapter 1: Arrival"), "{markdown}");
+    assert!(
+        markdown.starts_with("# Fresh. Chapter 1: Arrival"),
+        "{markdown}"
+    );
     assert!(markdown.contains("The ferry came in late."));
     assert_eq!(toast_count(&workspace, vcx), 1);
     assert!(editor_focused(&workspace, vcx));
@@ -72,7 +81,11 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     // Word document.
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.export(
-            choice(ExportScope::Document, ExportFormat::Docx, ExportDestination::File),
+            choice(
+                ExportScope::Document,
+                ExportFormat::Docx,
+                ExportDestination::File,
+            ),
             window,
             cx,
         );
@@ -96,7 +109,11 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     // The whole folder as one plain text file.
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.export(
-            choice(ExportScope::Folder, ExportFormat::PlainText, ExportDestination::File),
+            choice(
+                ExportScope::Folder,
+                ExportFormat::PlainText,
+                ExportDestination::File,
+            ),
             window,
             cx,
         );
@@ -124,7 +141,10 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
             cx,
         );
     });
-    let clipboard = vcx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    let clipboard = vcx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
     assert!(clipboard.contains("The ferry came in late."));
     assert!(!clipboard.contains('#'));
 
@@ -138,7 +158,11 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     assert_eq!(toasts, 0);
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.export(
-            choice(ExportScope::Document, ExportFormat::Markdown, ExportDestination::File),
+            choice(
+                ExportScope::Document,
+                ExportFormat::Markdown,
+                ExportDestination::File,
+            ),
             window,
             cx,
         );
@@ -151,7 +175,11 @@ fn export_writes_files_and_copies(cx: &mut TestAppContext) {
     // A path that cannot be written is an error toast, not silence.
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.export(
-            choice(ExportScope::Document, ExportFormat::Markdown, ExportDestination::File),
+            choice(
+                ExportScope::Document,
+                ExportFormat::Markdown,
+                ExportDestination::File,
+            ),
             window,
             cx,
         );
@@ -195,7 +223,10 @@ fn export_of_a_top_level_document_names_the_library(cx: &mut TestAppContext) {
     // The keyboard path to "Copy as Markdown": fourth row of the picker.
     vcx.simulate_keystrokes("cmd-shift-s down down down enter");
     vcx.run_until_parked();
-    let clipboard = vcx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    let clipboard = vcx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
     assert!(clipboard.starts_with("# Leaf"), "{clipboard}");
     assert_eq!(toast_count(&workspace, vcx), 1);
     assert!(editor_focused(&workspace, vcx));
@@ -203,11 +234,17 @@ fn export_of_a_top_level_document_names_the_library(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("cmd-shift-s");
     vcx.simulate_input("word");
     let picker = workspace
-        .read_with(vcx, |w, cx| w.modal_layer().read(cx).active::<ExportPicker>())
+        .read_with(vcx, |w, cx| {
+            w.modal_layer().read(cx).active::<ExportPicker>()
+        })
         .unwrap();
     let filtered = picker.read_with(vcx, |picker, _| picker.delegate.choices());
     assert_eq!(filtered.len(), 2);
-    assert!(filtered.iter().all(|choice| choice.format == ExportFormat::Docx));
+    assert!(
+        filtered
+            .iter()
+            .all(|choice| choice.format == ExportFormat::Docx)
+    );
     vcx.simulate_keystrokes("escape");
 
     // Without a document there is nothing to export, and no picker.

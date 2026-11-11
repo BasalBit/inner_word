@@ -59,9 +59,21 @@ pub struct ExportChoice {
 impl ExportChoice {
     /// The choices offered, in menu order.
     pub const ALL: [ExportChoice; 8] = [
-        ExportChoice::new(ExportScope::Document, ExportFormat::Markdown, ExportDestination::File),
-        ExportChoice::new(ExportScope::Document, ExportFormat::Docx, ExportDestination::File),
-        ExportChoice::new(ExportScope::Document, ExportFormat::PlainText, ExportDestination::File),
+        ExportChoice::new(
+            ExportScope::Document,
+            ExportFormat::Markdown,
+            ExportDestination::File,
+        ),
+        ExportChoice::new(
+            ExportScope::Document,
+            ExportFormat::Docx,
+            ExportDestination::File,
+        ),
+        ExportChoice::new(
+            ExportScope::Document,
+            ExportFormat::PlainText,
+            ExportDestination::File,
+        ),
         ExportChoice::new(
             ExportScope::Document,
             ExportFormat::Markdown,
@@ -72,9 +84,21 @@ impl ExportChoice {
             ExportFormat::PlainText,
             ExportDestination::Clipboard,
         ),
-        ExportChoice::new(ExportScope::Folder, ExportFormat::Markdown, ExportDestination::File),
-        ExportChoice::new(ExportScope::Folder, ExportFormat::Docx, ExportDestination::File),
-        ExportChoice::new(ExportScope::Folder, ExportFormat::PlainText, ExportDestination::File),
+        ExportChoice::new(
+            ExportScope::Folder,
+            ExportFormat::Markdown,
+            ExportDestination::File,
+        ),
+        ExportChoice::new(
+            ExportScope::Folder,
+            ExportFormat::Docx,
+            ExportDestination::File,
+        ),
+        ExportChoice::new(
+            ExportScope::Folder,
+            ExportFormat::PlainText,
+            ExportDestination::File,
+        ),
     ];
 
     /// A choice.
@@ -290,7 +314,9 @@ impl Workspace {
         };
         self.flush(cx);
         let library = self.library.read(cx);
-        let meta = library.document_meta(id).map_err(|error| error.to_string())?;
+        let meta = library
+            .document_meta(id)
+            .map_err(|error| error.to_string())?;
 
         match scope {
             ExportScope::Document => {
@@ -340,13 +366,19 @@ impl Workspace {
                 let modified = metas.iter().map(|m| m.updated_at).max().unwrap_or(0);
                 let source = ExportSource::collection(
                     name.clone(),
-                    parts.iter().map(|(title, document)| (title.as_str(), document)),
+                    parts
+                        .iter()
+                        .map(|(title, document)| (title.as_str(), document)),
                 );
                 Ok(PreparedExport {
                     file_name: suggested_file_name(source.title(), format),
                     title: name,
                     format,
-                    bytes: writer_export::export(&source, format, &export_options(created, modified)),
+                    bytes: writer_export::export(
+                        &source,
+                        format,
+                        &export_options(created, modified),
+                    ),
                     documents: parts.len(),
                 })
             }

@@ -16,11 +16,14 @@ use writer_ui::{
 use super::{KEY_CONTEXT, SaveState, Workspace};
 use crate::{
     actions::{FocusLibrary, NewDocument, QuickOpen, ToggleCommandPalette},
-    settings::{DEFAULT_SIDEBAR_WIDTH, keys},
+    settings::{DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, keys},
 };
 
 /// Height of the status bar.
 pub const STATUS_BAR_HEIGHT: f32 = 26.;
+
+/// The sidebar gives way before the text column gets narrower than this.
+const MIN_EDITOR_WIDTH: f32 = 360.;
 
 /// Width of the strip at the sidebar edge that takes the resize drag.
 const RESIZE_HANDLE_WIDTH: f32 = 7.;
@@ -168,11 +171,18 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_sidebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The width the sidebar is drawn at: the chosen width, less in a
+    /// narrow window so the text keeps a usable column.
+    fn sidebar_width_in(&self, window: &Window) -> f32 {
+        let room = f32::from(window.viewport_size().width) - MIN_EDITOR_WIDTH;
+        self.settings.sidebar_width.min(room).max(MIN_SIDEBAR_WIDTH)
+    }
+
+    fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         div()
             .id("sidebar")
-            .w(px(self.settings.sidebar_width))
+            .w(px(self.sidebar_width_in(window)))
             .h_full()
             .flex_none()
             .flex()
@@ -192,15 +202,16 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_resize_handle(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_resize_handle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         let dragging = self.sidebar_dragging;
+        let width = self.sidebar_width_in(window);
         div()
             .id("sidebar-resize")
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px(self.settings.sidebar_width - RESIZE_HANDLE_WIDTH / 2.))
+            .left(px(width - RESIZE_HANDLE_WIDTH / 2.))
             .w(px(RESIZE_HANDLE_WIDTH))
             .cursor(CursorStyle::ResizeLeftRight)
             .flex()
@@ -259,7 +270,10 @@ impl Workspace {
             .child(div().h(SPACE_2))
             .child(hint("New document", KeyHint::for_action(&NewDocument, cx)))
             .child(hint("Open a document", KeyHint::for_action(&QuickOpen, cx)))
-            .child(hint("Go to the library", KeyHint::for_action(&FocusLibrary, cx)))
+            .child(hint(
+                "Go to the library",
+                KeyHint::for_action(&FocusLibrary, cx),
+            ))
             .child(hint(
                 "Every command",
                 KeyHint::for_action(&ToggleCommandPalette, cx),
@@ -371,7 +385,7 @@ impl Render for Workspace {
         let editor_area = self.render_editor_area(cx);
         let status_bar = self.render_status_bar(cx);
         let sidebar = sidebar_visible.then(|| self.render_sidebar(window, cx));
-        let resize_handle = sidebar_visible.then(|| self.render_resize_handle(cx));
+        let resize_handle = sidebar_visible.then(|| self.render_resize_handle(window, cx));
         let strips: Vec<AnyElement> = self
             .strips
             .iter()

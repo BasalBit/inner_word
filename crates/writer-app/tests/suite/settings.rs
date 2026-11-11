@@ -83,7 +83,10 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
     // Text size: right steps up from 17 to 18.
     vcx.simulate_keystrokes("down right");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::TextSize));
-    assert_eq!(workspace.read_with(vcx, |w, _| w.settings().new_document_size), 18.);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.settings().new_document_size),
+        18.
+    );
     // Line height down, page view on, paper to US Letter.
     vcx.simulate_keystrokes("down left down space down right");
     let settings = workspace.read_with(vcx, |w, _| w.settings().clone());
@@ -108,7 +111,9 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
 
     // A new document picks the defaults up.
     let id = workspace
-        .update_in(vcx, |workspace, window, cx| workspace.new_document(window, cx))
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.new_document(window, cx)
+        })
         .unwrap();
     let document = workspace.read_with(vcx, |w, cx| w.editor().read(cx).document().clone());
     assert_eq!(document.settings().typography.base_size, 18.);
@@ -147,7 +152,11 @@ fn settings_survive_a_relaunch(cx: &mut TestAppContext) {
             workspace.write_setting(keys::CHARACTER_LIMIT, "mastodon", cx);
         });
         // The first run created the welcome document.
-        assert!(workspace.read_with(vcx, |w, _| w.open_document_id()).is_some());
+        assert!(
+            workspace
+                .read_with(vcx, |w, _| w.open_document_id())
+                .is_some()
+        );
     }
     cx.run_until_parked();
 
@@ -188,9 +197,12 @@ fn view_toggles_flip_settings_and_the_document(cx: &mut TestAppContext) {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let _subscription = vcx.update(|_, cx| {
         let seen = seen.clone();
-        cx.subscribe(&workspace, move |_, event: &writer_app::WorkspaceEvent, _| {
-            seen.borrow_mut().push(event.clone());
-        })
+        cx.subscribe(
+            &workspace,
+            move |_, event: &writer_app::WorkspaceEvent, _| {
+                seen.borrow_mut().push(event.clone());
+            },
+        )
     });
 
     // cmd-alt-p: page view, stored in the document.
@@ -205,7 +217,9 @@ fn view_toggles_flip_settings_and_the_document(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("cmd-alt-v");
     assert!(workspace.read_with(vcx, |w, _| w.settings().vim_mode));
     assert_eq!(
-        library.read_with(vcx, |library, _| library.setting::<bool>(keys::VIM_MODE).unwrap()),
+        library.read_with(vcx, |library, _| library
+            .setting::<bool>(keys::VIM_MODE)
+            .unwrap()),
         Some(true)
     );
 
@@ -219,7 +233,9 @@ fn view_toggles_flip_settings_and_the_document(cx: &mut TestAppContext) {
     // A setting written by someone else (another crate, the settings
     // modal) is applied the same way.
     library.update(vcx, |library, cx| {
-        library.set_setting(keys::SMART_PUNCTUATION, &false, cx).unwrap()
+        library
+            .set_setting(keys::SMART_PUNCTUATION, &false, cx)
+            .unwrap()
     });
     vcx.run_until_parked();
     assert!(!workspace.read_with(vcx, |w, cx| w.editor().read(cx).config().smart_punctuation));

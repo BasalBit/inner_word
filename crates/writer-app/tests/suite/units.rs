@@ -2,8 +2,8 @@
 //! live here rather than in the lib so the crate has a single test binary.
 
 mod automation {
-    use std::time::Duration;
     use gpui::Keystroke;
+    use std::time::Duration;
     use writer_app::automation::*;
     use writer_ui::ThemeMode;
 
@@ -195,9 +195,12 @@ mod welcome {
         }
         // Real formatting, not literal markup.
         assert!(!text.contains("{k:"));
-        assert!(document.blocks().iter().any(|block| {
-            block.text_spans().any(|(_, _, attrs)| attrs.code)
-        }));
+        assert!(
+            document
+                .blocks()
+                .iter()
+                .any(|block| { block.text_spans().any(|(_, _, attrs)| attrs.code) })
+        );
     }
 }
 
@@ -242,7 +245,10 @@ mod shortcuts {
 
     #[test]
     fn action_names_read_as_phrases() {
-        assert_eq!(humanize_action_name("editor::MoveWordLeft"), "Move word left");
+        assert_eq!(
+            humanize_action_name("editor::MoveWordLeft"),
+            "Move word left"
+        );
         assert_eq!(humanize_action_name("editor::SetHeading1"), "Set heading 1");
         assert_eq!(humanize_action_name("Backspace"), "Backspace");
         assert_eq!(
@@ -268,7 +274,10 @@ mod export {
         assert_eq!(f("/tmp/a.MD", ExportFormat::Markdown), "/tmp/a.MD");
         assert_eq!(f("/tmp/a", ExportFormat::Docx), "/tmp/a.docx");
         assert_eq!(f("/tmp/a.txt", ExportFormat::Docx), "/tmp/a.txt.docx");
-        assert_eq!(f("/tmp/v1.2 notes", ExportFormat::PlainText), "/tmp/v1.2 notes.txt");
+        assert_eq!(
+            f("/tmp/v1.2 notes", ExportFormat::PlainText),
+            "/tmp/v1.2 notes.txt"
+        );
     }
 
     #[test]
@@ -345,12 +354,24 @@ mod window {
         // No display information: trust the numbers.
         assert!(good.is_usable(&[]));
         // Too small.
-        assert!(!StoredBounds { width: 300., ..good }.is_usable(&display()));
+        assert!(
+            !StoredBounds {
+                width: 300.,
+                ..good
+            }
+            .is_usable(&display())
+        );
         // On a display that is no longer there.
         assert!(!StoredBounds { x: 4000., ..good }.is_usable(&display()));
         assert!(!StoredBounds { y: -900., ..good }.is_usable(&display()));
         // Garbage.
-        assert!(!StoredBounds { x: f32::NAN, ..good }.is_usable(&display()));
+        assert!(
+            !StoredBounds {
+                x: f32::NAN,
+                ..good
+            }
+            .is_usable(&display())
+        );
         // Partly off the left edge but still grabbable.
         assert!(StoredBounds { x: -300., ..good }.is_usable(&display()));
     }

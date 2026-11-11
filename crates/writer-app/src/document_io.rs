@@ -27,7 +27,13 @@ impl StoredForm {
     /// kept (the user named the document); without it the title comes from
     /// the text ([`Document::title`]), or is [`UNTITLED`].
     pub fn of(document: &Document, title: Option<&str>) -> Self {
-        let stats = document.stats();
+        Self::with_stats(document, title, document.stats())
+    }
+
+    /// Like [`StoredForm::of`], with statistics the caller already has (the
+    /// editor keeps them current), so a long document is not counted again
+    /// on every save.
+    pub fn with_stats(document: &Document, title: Option<&str>, stats: writer_core::Stats) -> Self {
         Self {
             json: document.to_json(),
             title: match title {

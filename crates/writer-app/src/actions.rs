@@ -98,7 +98,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // in the list: key hints and menus show the binding added last, and
         // that must stay cmd-q.
         KeyBinding::new("enter", Quit, Some(crate::window::ERROR_WINDOW_KEY_CONTEXT)),
-        KeyBinding::new("escape", Quit, Some(crate::window::ERROR_WINDOW_KEY_CONTEXT)),
+        KeyBinding::new(
+            "escape",
+            Quit,
+            Some(crate::window::ERROR_WINDOW_KEY_CONTEXT),
+        ),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-h", Hide, None),
@@ -129,18 +133,35 @@ pub fn commands() -> Vec<CommandDescriptor> {
     vec![
         CommandDescriptor::new("New document", CATEGORY_FILE, NewDocument)
             .keywords(["create", "add", "page", "file"]),
-        CommandDescriptor::new("New folder", CATEGORY_FILE, NewFolder)
-            .keywords(["create", "add", "directory", "group"]),
+        CommandDescriptor::new("New folder", CATEGORY_FILE, NewFolder).keywords([
+            "create",
+            "add",
+            "directory",
+            "group",
+        ]),
         CommandDescriptor::new("Export", CATEGORY_FILE, Export).keywords([
-            "markdown", "word", "docx", "plain text", "save as", "copy",
+            "markdown",
+            "word",
+            "docx",
+            "plain text",
+            "save as",
+            "copy",
         ]),
         CommandDescriptor::new("Take title from text", CATEGORY_FILE, UseTitleFromText)
             .keywords(["rename", "name", "derive", "reset"]),
         CommandDescriptor::new("Close window", CATEGORY_FILE, CloseWindow),
-        CommandDescriptor::new("Open document", CATEGORY_GO, QuickOpen)
-            .keywords(["quick open", "switch", "find file", "go to"]),
-        CommandDescriptor::new("Search library", CATEGORY_GO, SearchLibrary)
-            .keywords(["find", "full text", "everywhere", "all documents"]),
+        CommandDescriptor::new("Open document", CATEGORY_GO, QuickOpen).keywords([
+            "quick open",
+            "switch",
+            "find file",
+            "go to",
+        ]),
+        CommandDescriptor::new("Search library", CATEGORY_GO, SearchLibrary).keywords([
+            "find",
+            "full text",
+            "everywhere",
+            "all documents",
+        ]),
         CommandDescriptor::new("Focus library", CATEGORY_GO, FocusLibrary)
             .keywords(["sidebar", "folders", "tree"]),
         CommandDescriptor::new("Focus editor", CATEGORY_GO, FocusEditor)
@@ -153,23 +174,44 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["sidebar", "resize", "bigger"]),
         CommandDescriptor::new("Narrow library", CATEGORY_VIEW, NarrowSidebar)
             .keywords(["sidebar", "resize", "smaller"]),
-        CommandDescriptor::new("Toggle page view", CATEGORY_VIEW, TogglePageView)
-            .keywords(["paper", "pages", "print layout", "flow"]),
-        CommandDescriptor::new("Toggle Vim mode", CATEGORY_VIEW, ToggleVimMode)
-            .keywords(["vi", "modal", "normal mode"]),
+        CommandDescriptor::new("Toggle page view", CATEGORY_VIEW, TogglePageView).keywords([
+            "paper",
+            "pages",
+            "print layout",
+            "flow",
+        ]),
+        CommandDescriptor::new("Toggle Vim mode", CATEGORY_VIEW, ToggleVimMode).keywords([
+            "vi",
+            "modal",
+            "normal mode",
+        ]),
         CommandDescriptor::new("Show or hide comments", CATEGORY_VIEW, ToggleComments)
             .keywords(["notes", "review", "threads", "toggle"]),
-        CommandDescriptor::new("Use Paper theme", CATEGORY_VIEW, UseLightTheme)
-            .keywords(["light", "appearance", "day"]),
+        CommandDescriptor::new("Use Paper theme", CATEGORY_VIEW, UseLightTheme).keywords([
+            "light",
+            "appearance",
+            "day",
+        ]),
         CommandDescriptor::new("Use Night theme", CATEGORY_VIEW, UseDarkTheme)
             .keywords(["dark", "appearance"]),
         CommandDescriptor::new("Follow system appearance", CATEGORY_VIEW, UseSystemTheme)
             .keywords(["theme", "automatic", "light", "dark"]),
-        CommandDescriptor::new("Enter or leave full screen", CATEGORY_VIEW, ToggleFullScreen),
-        CommandDescriptor::new("Settings", CATEGORY_APP, OpenSettings)
-            .keywords(["preferences", "options", "configure"]),
-        CommandDescriptor::new("Keyboard shortcuts", CATEGORY_APP, ShowShortcuts)
-            .keywords(["keys", "bindings", "help", "cheat sheet"]),
+        CommandDescriptor::new(
+            "Enter or leave full screen",
+            CATEGORY_VIEW,
+            ToggleFullScreen,
+        ),
+        CommandDescriptor::new("Settings", CATEGORY_APP, OpenSettings).keywords([
+            "preferences",
+            "options",
+            "configure",
+        ]),
+        CommandDescriptor::new("Keyboard shortcuts", CATEGORY_APP, ShowShortcuts).keywords([
+            "keys",
+            "bindings",
+            "help",
+            "cheat sheet",
+        ]),
         CommandDescriptor::new("Dismiss notifications", CATEGORY_APP, DismissNotifications)
             .keywords(["toast", "message", "clear"]),
         CommandDescriptor::new("About The Writer", CATEGORY_APP, About).keywords(["version"]),

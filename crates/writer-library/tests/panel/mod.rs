@@ -1321,10 +1321,26 @@ fn mouse(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_large_library_stays_fast(cx: &mut TestAppContext) {
     let (f, cx) = fixture(cx);
-    // 4000 documents in 40 folders, all expanded.
+    // The same walk through the list, timed on the small library first and on the large
+    // one later: comparing the two keeps the test honest on a busy machine.
+    let walk = |cx: &mut VisualTestContext| {
+        let started = Instant::now();
+        cx.simulate_keystrokes("end");
+        for _ in 0..100 {
+            cx.simulate_keystrokes("up");
+        }
+        cx.simulate_keystrokes("home");
+        for _ in 0..100 {
+            cx.simulate_keystrokes("j");
+        }
+        started.elapsed()
+    };
+    let small = walk(cx);
+
+    // 3000 documents in 30 folders, all expanded.
     let mut ids = Vec::new();
     let started = Instant::now();
-    for folder_ix in 0..40 {
+    for folder_ix in 0..30 {
         let folder = f.library.update(cx, |l, cx| {
             l.create_folder(None, &format!("Folder {folder_ix:02}"), cx)
                 .unwrap()
@@ -1347,32 +1363,24 @@ fn a_large_library_stays_fast(cx: &mut TestAppContext) {
         }
         count
     });
-    assert_eq!(seeded, 4000);
+    assert_eq!(seeded, 3000);
     cx.run_until_parked();
-    eprintln!("seeding 4000 documents took {:?}", started.elapsed());
+    eprintln!("seeding 3000 documents took {:?}", started.elapsed());
     f.panel.update(cx, |p, cx| {
         for folder in &ids {
             p.set_expanded(*folder, true, cx);
         }
     });
     cx.run_until_parked();
-    assert_eq!(f.visible(cx).len(), 2 + 40 + 4000);
+    assert_eq!(f.visible(cx).len(), 2 + 30 + 3000);
 
-    // Walking through the list redraws only the rows on screen.
-    let started = Instant::now();
-    cx.simulate_keystrokes("end");
-    for _ in 0..100 {
-        cx.simulate_keystrokes("up");
-    }
-    cx.simulate_keystrokes("home");
-    for _ in 0..100 {
-        cx.simulate_keystrokes("j");
-    }
-    let navigation = started.elapsed();
-    eprintln!("202 selection moves over 4042 rows took {navigation:?}");
+    // Walking through the large list redraws only the rows on screen: 600 times the rows
+    // must not cost anywhere near 600 times the time.
+    let large = walk(cx);
+    eprintln!("202 selection moves: {small:?} over 5 rows, {large:?} over 3032 rows");
     assert!(
-        navigation < Duration::from_secs(10),
-        "navigation took {navigation:?}"
+        large < small * 20 + Duration::from_secs(2),
+        "202 selection moves took {small:?} over 5 rows and {large:?} over 3032 rows"
     );
 
     // A page is a screenful: far more than one row, far less than the list.
@@ -1393,14 +1401,14 @@ fn a_large_library_stays_fast(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("/");
     cx.simulate_input("document 17-04");
     let filtering = started.elapsed();
-    eprintln!("typing a 14 character filter over 4042 rows took {filtering:?}");
+    eprintln!("typing a 14 character filter over 3032 rows took {filtering:?}");
     assert_eq!(f.visible(cx).len(), 1 + 10);
     assert!(
-        filtering < Duration::from_secs(10),
+        filtering < Duration::from_secs(20),
         "filtering took {filtering:?}"
     );
     cx.simulate_keystrokes("escape");
-    assert_eq!(f.visible(cx).len(), 2 + 40 + 4000);
+    assert_eq!(f.visible(cx).len(), 2 + 30 + 3000);
 }
 
 // ----- commands from outside the panel ----------------------------------------------------

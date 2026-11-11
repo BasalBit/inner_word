@@ -322,7 +322,7 @@ fn a_version_1_library_file_is_upgraded_on_open() {
     clock.advance_ms(DAY);
     let mut store = Store::open_with(&path, opts(&clock)).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert!(SCHEMA_VERSION >= 2);
+    const { assert!(SCHEMA_VERSION >= 2) };
     assert!(matches!(store.backup_on_open(), Some(Ok(_))));
     let backups = list_backups(&backups_dir(&path)).unwrap();
     assert_eq!(backups.len(), 1);

@@ -194,6 +194,7 @@ pub use runs::Run;
 pub use search::SearchOptions;
 pub use serial::LoadError;
 pub use settings::{
-    DocumentSettings, Margins, Orientation, POINTS_PER_INCH, PageSetup, PaperSize, Typography,
+    DocumentSettings, HEADING_MAX_LINE_HEIGHT, Margins, Orientation, POINTS_PER_INCH, PageSetup,
+    PaperSize, Typography,
 };
 pub use stats::{Stats, WORDS_PER_MINUTE};

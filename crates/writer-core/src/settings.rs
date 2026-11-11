@@ -159,6 +159,11 @@ impl PageSetup {
     }
 }
 
+/// The loosest line height (a multiple of the text size) a heading is set
+/// at, whatever the document's line height: see
+/// [`Typography::line_height_for`].
+pub const HEADING_MAX_LINE_HEIGHT: f32 = 1.3;
+
 /// Typography defaults of the document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Typography {
@@ -205,6 +210,20 @@ impl Typography {
             _ => 1.0,
         };
         (self.base_size * factor).round()
+    }
+
+    /// The line height (a multiple of the text size) a block of `kind` is
+    /// set at: [`Typography::line_height`], except that a heading is never
+    /// set looser than [`HEADING_MAX_LINE_HEIGHT`]. Large type with the
+    /// leading of body text falls apart into separate lines; a heading of
+    /// two lines has to read as one thing. The editor's page view and the
+    /// DOCX export both follow this.
+    pub fn line_height_for(&self, kind: &BlockKind) -> f32 {
+        if kind.heading_level().is_some() {
+            self.line_height.min(HEADING_MAX_LINE_HEIGHT)
+        } else {
+            self.line_height
+        }
     }
 
     /// The text size in points `block` is shown at: its override, else
@@ -258,6 +277,21 @@ impl DocumentSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headings_are_set_tighter_than_loose_body_text() {
+        let mut t = Typography::default();
+        assert_eq!(t.line_height_for(&BlockKind::Paragraph), 1.6);
+        assert_eq!(t.line_height_for(&BlockKind::heading(1)), 1.3);
+        assert_eq!(t.line_height_for(&BlockKind::heading(6)), 1.3);
+        // Double spacing leaves headings at their own leading; a tight
+        // document tightens them too.
+        t.line_height = 2.0;
+        assert_eq!(t.line_height_for(&BlockKind::Quote), 2.0);
+        assert_eq!(t.line_height_for(&BlockKind::heading(2)), HEADING_MAX_LINE_HEIGHT);
+        t.line_height = 1.1;
+        assert_eq!(t.line_height_for(&BlockKind::heading(2)), 1.1);
+    }
 
     #[test]
     fn defaults() {

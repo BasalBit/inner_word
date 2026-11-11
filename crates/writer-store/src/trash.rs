@@ -15,9 +15,13 @@ use crate::documents::{
 use crate::error::{ItemKind, Result, StoreError};
 use crate::folders::{
     FOLDER_COLS, Folder, Siblings, folder_from_row, is_live_folder, load_folder, next_position,
-    require_live_folder, sibling_ids, write_positions,
+    place_at, require_live_folder, sibling_ids, write_positions,
 };
 use crate::ids::{DocumentId, FolderId};
+
+/// The position of a trashed item whose folder was deleted for good: it has no place to
+/// go back to, and a restore puts it at the end of the root.
+const NO_PLACE: i64 = -1;
 
 /// One top-level entry in the trash.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,9 +181,12 @@ impl Store {
         Ok(entries)
     }
 
-    /// Restores a trashed document into its original folder when that folder is live,
-    /// otherwise to the root, placed after the documents there. Returns the restored
-    /// metadata. [`StoreError::NotInTrash`] unless it is a top-level trash entry.
+    /// Restores a trashed document into its original folder when that folder is live, at
+    /// the place it had among the documents there (exactly so when it is the last thing
+    /// trashed from that folder and nothing was reordered since, which is what an undo
+    /// does). When the folder is gone it goes to the root, after the documents there.
+    /// Returns the restored metadata. [`StoreError::NotInTrash`] unless it is a top-level
+    /// trash entry.
     pub fn restore_document(&mut self, id: DocumentId) -> Result<DocumentMeta> {
         let tx = self
             .conn
@@ -195,14 +202,21 @@ impl Store {
                  position = ?3 WHERE id = ?1",
             params![id, target, position],
         )?;
+        if target == meta.folder_id && meta.position != NO_PLACE {
+            // Its old position is its old index: trashing renumbered the others without
+            // a gap.
+            let index = usize::try_from(meta.position).unwrap_or(0);
+            place_at(&tx, Siblings::Documents, target, id.0, index)?;
+        }
         let meta = load_meta(&tx, id)?;
         tx.commit()?;
         Ok(meta)
     }
 
     /// Restores a trashed folder together with everything trashed with it, into its
-    /// original parent when that is live, otherwise to the root, after the folders there.
-    /// Items inside it that were trashed separately stay in the trash.
+    /// original parent when that is live, at the place it had among the folders there (see
+    /// [`Store::restore_document`]); otherwise to the root, after the folders there. Items
+    /// inside it that were trashed separately stay in the trash.
     pub fn restore_folder(&mut self, id: FolderId) -> Result<Folder> {
         let tx = self
             .conn
@@ -225,6 +239,10 @@ impl Store {
             "UPDATE folders SET trashed_at = NULL, parent_id = ?2, position = ?3 WHERE id = ?1",
             params![id, target, position],
         )?;
+        if target == folder.parent_id && folder.position != NO_PLACE {
+            let index = usize::try_from(folder.position).unwrap_or(0);
+            place_at(&tx, Siblings::Folders, target, id.0, index)?;
+        }
         let folder = load_folder(&tx, id)?;
         tx.commit()?;
         Ok(folder)
@@ -247,6 +265,24 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_trash_folder(&tx, id)?;
+        // What was trashed on its own inside this folder survives and loses its folder
+        // (the foreign key sets it to the root). It never had a place at the root, so
+        // mark it: a restore then puts it at the end instead of at its old index.
+        const DOOMED: &str = "SELECT id FROM folders WHERE id = ?1 OR trashed_with = ?1";
+        tx.execute(
+            &format!(
+                "UPDATE documents SET position = {NO_PLACE}
+                 WHERE trashed_with IS NOT ?1 AND folder_id IN ({DOOMED})"
+            ),
+            [id],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE folders SET position = {NO_PLACE}
+                 WHERE id != ?1 AND trashed_with IS NOT ?1 AND parent_id IN ({DOOMED})"
+            ),
+            [id],
+        )?;
         tx.execute("DELETE FROM documents WHERE trashed_with = ?1", [id])?;
         tx.execute("DELETE FROM folders WHERE trashed_with = ?1", [id])?;
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;

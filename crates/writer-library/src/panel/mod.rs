@@ -441,6 +441,9 @@ pub struct LibraryPanel {
     filter_text: String,
     filter: Option<Filter>,
     filter_field: Option<Entity<TextField>>,
+    /// What was selected when the filter was switched on: where to go back to when it is
+    /// cleared with nothing selected (it matched nothing).
+    selection_before_filter: Option<LibraryItem>,
 
     // Trash.
     trash_rows: Vec<TrashRow>,
@@ -521,6 +524,7 @@ impl LibraryPanel {
             filter_text: String::new(),
             filter: None,
             filter_field: None,
+            selection_before_filter: None,
             trash_rows,
             trash_selected: None,
             trash_scroll: UniformListScrollHandle::new(),
@@ -1473,16 +1477,25 @@ impl LibraryPanel {
         self.apply_filter(text.to_string(), cx);
     }
 
-    /// Clears the filter. The selection stays where it is and is revealed in the full tree.
+    /// Clears the filter. The selection stays where it is and is revealed in the full
+    /// tree; when the filter matched nothing, the selection goes back to what it was before
+    /// the filter.
     pub fn clear_filter(&mut self, cx: &mut Context<Self>) {
         if self.filter_text.is_empty() {
             return;
         }
         self.reset_filter(cx);
-        if let Some(item) = self.selected {
+        self.reveal_after_filter(cx);
+        cx.notify();
+    }
+
+    /// The filter is off again: show the selection in the full tree, or go back to the
+    /// selection from before the filter if nothing is selected.
+    fn reveal_after_filter(&mut self, cx: &mut Context<Self>) {
+        let before = self.selection_before_filter.take();
+        if let Some(item) = self.selected.or(before) {
             self.reveal(item, cx);
         }
-        cx.notify();
     }
 
     /// Shows the tree and puts the keyboard focus in the filter field.
@@ -1515,12 +1528,13 @@ impl LibraryPanel {
             self.filter_text = text;
             if self.filter.take().is_some() {
                 self.rebuild_rows(cx);
-                if let Some(item) = self.selected {
-                    self.reveal(item, cx);
-                }
+                self.reveal_after_filter(cx);
             }
             cx.notify();
             return;
+        }
+        if self.filter.is_none() {
+            self.selection_before_filter = self.selected;
         }
         self.filter = Filter::new(&text);
         self.filter_text = text;

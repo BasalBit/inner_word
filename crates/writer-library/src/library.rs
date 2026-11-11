@@ -494,8 +494,9 @@ impl Library {
         self.store.trash()
     }
 
-    /// Restores a trashed document to its original folder (or the root if that folder is
-    /// gone). Emits `DocumentRestored`, `TrashChanged`, `TreeChanged`.
+    /// Restores a trashed document to its original folder, at the place it had among the
+    /// documents there (or to the end of the root if that folder is gone).
+    /// Emits `DocumentRestored`, `TrashChanged`, `TreeChanged`.
     pub fn restore_document(
         &mut self,
         id: DocumentId,
@@ -506,7 +507,8 @@ impl Library {
         Ok(meta)
     }
 
-    /// Restores a trashed folder with everything that was trashed with it.
+    /// Restores a trashed folder with everything that was trashed with it, at the place it
+    /// had among its sibling folders (or to the end of the root if its parent is gone).
     /// Emits `FolderRestored`, `TrashChanged`, `TreeChanged`.
     pub fn restore_folder(&mut self, id: FolderId, cx: &mut Context<Self>) -> Result<Folder> {
         let folder = self.store.restore_folder(id)?;

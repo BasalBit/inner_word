@@ -8,8 +8,7 @@ use gpui::{
     div, point, prelude::*, px, uniform_list,
 };
 use writer_ui::theme::{
-    ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, SPACE_4, UI_TEXT_BASE, UI_TEXT_SM,
-    UI_TEXT_XS,
+    ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
 };
 use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
@@ -360,10 +359,11 @@ impl LibraryPanel {
                 .child(hint("New folder", KeyHint::for_action(&NewFolder, cx)))
                 .into_any_element()
         };
+        // Lined up with the "Library" label above it.
         list.child(
             div()
-                .px(SPACE_4)
-                .py(SPACE_3)
+                .px(SPACE_3)
+                .py(SPACE_2)
                 .text_color(colors.muted)
                 .child(message),
         )
@@ -616,8 +616,8 @@ impl LibraryPanel {
             return list
                 .child(
                     div()
-                        .px(SPACE_4)
-                        .py(SPACE_3)
+                        .px(SPACE_3)
+                        .py(SPACE_2)
                         .text_color(colors.muted)
                         .child("The trash is empty."),
                 )

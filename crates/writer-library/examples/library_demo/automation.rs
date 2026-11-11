@@ -3,6 +3,11 @@
 //! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `theme:<light|dark|system>`,
 //! `screenshot:<path>`, `log:<text>`, `quit`. Steps are separated by `;` or
 //! newlines; `THE_WRITER_AUTOMATION=@file` reads a file.
+//!
+//! A scripted run stays in the background. While its window is completely covered macOS
+//! stops GPUI's display link and nothing is drawn, so the script draws a frame itself
+//! after every step and before every capture (`force_frame`, the same way writer-app's
+//! automation does it).
 
 use std::{path::PathBuf, process::Command, time::Duration};
 
@@ -82,20 +87,40 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
         Err(err) => return eprintln!("[automation] bad script: {err:#}"),
     };
     cx.spawn(async move |cx| {
+        let view = window
+            .update(cx, |_, window, _| native_view(window).ok())
+            .ok()
+            .flatten();
+        // Draws a frame now, also while the window is covered. Not inside an update: the
+        // frame callback updates the app itself.
+        let draw = |cx: &mut gpui::AsyncApp| {
+            let open = cx
+                .update(|cx| cx.windows().contains(&window))
+                .unwrap_or(false);
+            if let (Some(view), true) = (view, open) {
+                force_frame(view);
+            }
+        };
         for step in steps {
             let label = format!("{step:?}");
             let result: Result<bool> = async {
                 match step {
-                    Step::Wait(d) => cx.background_executor().timer(d).await,
+                    Step::Wait(d) => {
+                        draw(cx);
+                        cx.background_executor().timer(d).await;
+                        draw(cx);
+                    }
                     Step::Keys(keys) => {
                         for key in keys {
                             let text = key.unparse();
                             let handled = window
                                 .update(cx, |_, window, cx| window.dispatch_keystroke(key, cx))?;
                             eprintln!("[automation] keys {text}: handled={handled}");
+                            draw(cx);
                             cx.background_executor()
                                 .timer(Duration::from_millis(60))
                                 .await;
+                            draw(cx);
                         }
                     }
                     Step::Type(text) => {
@@ -103,22 +128,29 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             window.update(cx, |_, window, cx| {
                                 window.dispatch_keystroke(keystroke_for_char(ch), cx);
                             })?;
+                            draw(cx);
                         }
                         cx.background_executor()
                             .timer(Duration::from_millis(60))
                             .await;
+                        draw(cx);
                     }
                     Step::Theme(mode) => {
                         cx.update(|cx| theme::set_theme_mode(mode, cx))?;
+                        draw(cx);
                         cx.background_executor()
                             .timer(Duration::from_millis(60))
                             .await;
+                        draw(cx);
                     }
                     Step::Screenshot(path) => {
                         window.update(cx, |_, window, _| window.refresh())?;
+                        draw(cx);
                         cx.background_executor()
                             .timer(Duration::from_millis(300))
                             .await;
+                        window.update(cx, |_, window, _| window.refresh())?;
+                        draw(cx);
                         let number = window.update(cx, |_, window, _| window_number(window))??;
                         cx.background_executor()
                             .spawn(async move { capture(number, &path) })
@@ -168,6 +200,44 @@ fn window_number(window: &Window) -> Result<u32> {
 fn window_number(_: &Window) -> Result<u32> {
     bail!("macOS only")
 }
+
+/// The native view behind a GPUI window, for [`force_frame`].
+#[derive(Clone, Copy)]
+struct NativeView(usize);
+
+#[cfg(target_os = "macos")]
+fn native_view(window: &Window) -> Result<NativeView> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window).map_err(|e| anyhow!("{e}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        bail!("not an AppKit window");
+    };
+    Ok(NativeView(appkit.ns_view.as_ptr() as usize))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_view(_: &Window) -> Result<NativeView> {
+    bail!("macOS only")
+}
+
+/// Makes the window draw a frame now if anything changed, also while it is covered by
+/// other windows (`displayLayer:` is the path AppKit uses for a synchronous frame). Call
+/// it on the main thread, outside any GPUI update, while the window is open.
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn force_frame(view: NativeView) {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    let ns_view = view.0 as *mut Object;
+    // SAFETY: the NSView of a window that is still open (checked by the caller), used on
+    // the main thread; `layer` is a getter and `displayLayer:` is GPUI's own frame path.
+    unsafe {
+        let layer: *mut Object = msg_send![ns_view, layer];
+        let _: () = msg_send![ns_view, displayLayer: layer];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn force_frame(_: NativeView) {}
 
 fn capture(number: u32, path: &PathBuf) -> Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

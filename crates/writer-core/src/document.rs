@@ -411,7 +411,25 @@ impl Document {
             .find(|b| b.kind.heading_level().is_some() && !b.text.trim().is_empty());
         let pick = heading.or_else(|| self.blocks.iter().find(|b| !b.text.trim().is_empty()))?;
         let line = pick.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        // Only the start of the line can end up in a title, so whitespace
+        // is collapsed just far enough to have more than the longest title
+        // needs: a caller may ask after every keystroke, and the line can
+        // be a paragraph of any length.
+        let enough = TITLE_MAX_CHARS * 8;
+        let mut collapsed = String::new();
+        for word in line.split_whitespace() {
+            if !collapsed.is_empty() {
+                collapsed.push(' ');
+            }
+            let mut end = word.len().min(enough);
+            while !word.is_char_boundary(end) {
+                end += 1;
+            }
+            collapsed.push_str(&word[..end]);
+            if collapsed.len() > enough {
+                break;
+            }
+        }
         if heading.is_some() {
             return Some(shortened_title(&collapsed, TITLE_MAX_CHARS));
         }
@@ -838,6 +856,34 @@ mod tests {
         let t = d.title().unwrap();
         assert!(t.chars().count() <= TITLE_TEXT_CHARS);
         assert!(t.ends_with("word\u{2026}"), "{t}");
+    }
+
+    /// The title looks at the start of the line only, so asking for it
+    /// costs the same for a paragraph of any length (the app asks after
+    /// every edit), and the answer is the one the whole line would give.
+    #[test]
+    fn title_of_a_very_long_line_is_that_of_its_start() {
+        let title = |kind: BlockKind, text: &str| {
+            Document::from_blocks(vec![Block::with_text(kind, text)])
+                .title()
+                .unwrap()
+        };
+        let sentence = "Salt was dear that year, and the road to the coast was long and ";
+        let words = sentence.repeat(20_000);
+        let unbroken = "\u{e9}".repeat(1_000_000);
+        let spaced = format!("One{}two three. {words}", " ".repeat(5_000));
+        for text in [words.as_str(), unbroken.as_str(), spaced.as_str()] {
+            let start: String = text
+                .split_whitespace()
+                .take(60)
+                .map(|word| word.chars().take(400).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ");
+            for kind in [BlockKind::Paragraph, BlockKind::heading(1)] {
+                assert_eq!(title(kind.clone(), text), title(kind, &start));
+            }
+        }
+        assert_eq!(title(BlockKind::Paragraph, &spaced), "One two three");
     }
 
     #[test]

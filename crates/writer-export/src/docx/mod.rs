@@ -10,7 +10,13 @@
 //!   result can be restyled in Word by changing a style.
 //! - **Blocks.** Headings, paragraphs, quotes and code blocks use those
 //!   styles. Bullet and numbered items use real Word numbering, nested by
-//!   indent level, and every separate numbered list restarts at 1. To-dos
+//!   indent level, and every separate numbered list restarts at 1: a list
+//!   that restarts is a numbering instance with a start override, and
+//!   instances are reused wherever a reader restarts or continues the
+//!   count by itself. Word cannot address more than 2,046 instances, so at
+//!   most 1,000 are written, over at most 128 list definitions, however
+//!   long the document is; numbered lists beyond that carry their numbers
+//!   as text. To-dos
 //!   are list paragraphs that start with a ballot box character (☐ / ☑). A
 //!   divider is an empty paragraph with a bottom border, a page break is a
 //!   page-break run at the start of the next paragraph. Code blocks keep
@@ -60,6 +66,7 @@
 //! ```
 
 mod body;
+mod numbering;
 mod styles;
 mod xml;
 mod zip;
@@ -270,7 +277,7 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
     );
     zip.add(
         parts::NUMBERING,
-        styles::numbering_xml(&metrics, body.numbered_lists).as_bytes(),
+        styles::numbering_xml(&metrics, &body.numbered).as_bytes(),
     );
     zip.add(parts::SETTINGS, settings_xml().as_bytes());
     if options.page_numbers {

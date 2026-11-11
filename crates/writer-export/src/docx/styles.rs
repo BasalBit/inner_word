@@ -2,6 +2,7 @@
 
 use writer_core::{BlockKind, Typography};
 
+use super::numbering::Instance;
 use super::xml::{DECLARATION, attr};
 use super::{Metrics, W_NS};
 
@@ -12,8 +13,10 @@ pub(crate) const LINK_COLOR: &str = "0563C1";
 /// Colour of the quote bar and of dividers.
 pub(crate) const RULE_COLOR: &str = "B5AFA5";
 
-/// The bullet numbering instance. Numbered lists use the ids above it.
+/// The bullet numbering instance. Numbered lists use the ids from
+/// [`FIRST_DECIMAL_NUM_ID`].
 pub(crate) const BULLET_NUM_ID: u32 = 1;
+pub(crate) const FIRST_DECIMAL_NUM_ID: u32 = 2;
 const BULLET_ABSTRACT: u32 = 0;
 const FIRST_DECIMAL_ABSTRACT: u32 = 1;
 
@@ -110,15 +113,16 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
     s
 }
 
-/// `word/numbering.xml`: one multi-level bullet definition, and one
-/// multi-level decimal definition per numbered list.
+/// `word/numbering.xml`: the multi-level bullet definition and a bounded
+/// number of identical multi-level decimal definitions.
 ///
-/// `numbered_lists` numbering instances (ids from `BULLET_NUM_ID + 1`) each
-/// get a definition of their own, so every separate list in the document
-/// counts from 1. Sharing one definition and restarting with
-/// `w:startOverride` is enough for Word, but Quick Look and other readers
-/// then number all lists as one.
-pub(crate) fn numbering_xml(m: &Metrics, numbered_lists: u32) -> String {
+/// All bullets use one numbering instance. Every entry of `numbered` is an
+/// instance of a decimal definition (ids from [`FIRST_DECIMAL_NUM_ID`])
+/// that restarts every level at the given number through
+/// `w:lvlOverride` / `w:startOverride`. The body decides which list items
+/// share an instance and which instances share a definition; see
+/// [`super::numbering`] for the limits behind that.
+pub(crate) fn numbering_xml(m: &Metrics, numbered: &[Instance]) -> String {
     let gutter = m.marker_gutter();
     let mut s = String::with_capacity(4096);
     s.push_str(DECLARATION);
@@ -148,7 +152,8 @@ pub(crate) fn numbering_xml(m: &Metrics, numbered_lists: u32) -> String {
             m.indent(level as u8) + gutter,
         ));
     }
-    for i in 0..numbered_lists {
+    let definitions = numbered.iter().map(|i| i.definition + 1).max().unwrap_or(0) as u32;
+    for i in 0..definitions {
         s.push_str(&format!(
             "<w:abstractNum w:abstractNumId=\"{}\">{}<w:multiLevelType w:val=\"hybridMultilevel\"/>{decimal_levels}</w:abstractNum>",
             FIRST_DECIMAL_ABSTRACT + i,
@@ -158,12 +163,18 @@ pub(crate) fn numbering_xml(m: &Metrics, numbered_lists: u32) -> String {
     s.push_str(&format!(
         "<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"{BULLET_ABSTRACT}\"/></w:num>"
     ));
-    for i in 0..numbered_lists {
+    for (i, instance) in numbered.iter().enumerate() {
         s.push_str(&format!(
-            "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"{}\"/></w:num>",
-            BULLET_NUM_ID + 1 + i,
-            FIRST_DECIMAL_ABSTRACT + i
+            "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"{}\"/>",
+            FIRST_DECIMAL_NUM_ID + i as u32,
+            FIRST_DECIMAL_ABSTRACT + instance.definition as u32,
         ));
+        for (level, start) in instance.starts.iter().enumerate() {
+            s.push_str(&format!(
+                "<w:lvlOverride w:ilvl=\"{level}\"><w:startOverride w:val=\"{start}\"/></w:lvlOverride>"
+            ));
+        }
+        s.push_str("</w:num>");
     }
     s.push_str("</w:numbering>");
     s

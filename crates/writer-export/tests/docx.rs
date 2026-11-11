@@ -312,6 +312,80 @@ impl Package {
             .collect()
     }
 
+    /// The numbering part: per `w:num`, its definition and start
+    /// overrides; per `w:abstractNum`, whether it is a bullet list.
+    fn numbering(&self) -> Numbering {
+        let xml = roxmltree::Document::parse(self.part(parts::NUMBERING)).unwrap();
+        let mut out = Numbering::default();
+        for n in xml.root_element().children().filter(Node::is_element) {
+            if n.has_tag_name((W, "abstractNum")) {
+                let id: u32 = n.attribute((W, "abstractNumId")).unwrap().parse().unwrap();
+                let bullet = n
+                    .children()
+                    .filter(|l| l.has_tag_name((W, "lvl")))
+                    .all(|l| val(l, "numFmt") == Some("bullet"));
+                assert!(out.bullet.insert(id, bullet).is_none(), "duplicate definition");
+            } else if n.has_tag_name((W, "num")) {
+                let id: u32 = n.attribute((W, "numId")).unwrap().parse().unwrap();
+                let definition: u32 = val(n, "abstractNumId").unwrap().parse().unwrap();
+                let mut starts = BTreeMap::new();
+                for o in n.children().filter(|o| o.has_tag_name((W, "lvlOverride"))) {
+                    let level: u32 = o.attribute((W, "ilvl")).unwrap().parse().unwrap();
+                    let start: u32 = val(o, "startOverride").unwrap().parse().unwrap();
+                    assert!(starts.insert(level, start).is_none());
+                }
+                assert!(out.nums.insert(id, (definition, starts)).is_none(), "duplicate instance");
+            }
+        }
+        out
+    }
+
+    /// The number every paragraph shows in front of its text, as `reader`
+    /// counts: `None` for paragraphs without a number. A number written
+    /// as text ("12." and a tab in a hanging indent) counts too.
+    fn shown_numbers(&self, reader: Reader) -> Vec<Option<u32>> {
+        let numbering = self.numbering();
+        // Counters per list, where a list is a definition or an instance.
+        let mut counters: BTreeMap<u32, [Option<u32>; 9]> = BTreeMap::new();
+        let mut used: BTreeSet<(u32, u32)> = BTreeSet::new();
+        self.paragraphs()
+            .iter()
+            .map(|p| {
+                let Some((num, level)) = p.num else {
+                    let first = p.runs.first().map(|r| r.text.as_str()).unwrap_or("");
+                    return first
+                        .strip_suffix(".\t")
+                        .filter(|_| p.hanging.is_some())
+                        .and_then(|n| n.parse().ok());
+                };
+                let (definition, starts) = &numbering.nums[&num];
+                if numbering.bullet[definition] {
+                    return None;
+                }
+                let first_use = used.insert((num, level));
+                let (list, start) = match reader {
+                    Reader::Word => (*definition, starts.get(&level).copied()),
+                    Reader::LibreOffice => (num, starts.get(&level).copied()),
+                    Reader::QuickLook => (*definition, None),
+                };
+                let c = counters.entry(list).or_default();
+                let l = level as usize;
+                let shown = match (start, c[l]) {
+                    // Word restarts at the override where the instance
+                    // first uses the level.
+                    (Some(start), _) if first_use && reader == Reader::Word => start,
+                    (_, Some(n)) => n + 1,
+                    (start, None) => start.unwrap_or(1),
+                };
+                c[l] = Some(shown);
+                for deeper in c.iter_mut().skip(l + 1) {
+                    *deeper = None;
+                }
+                Some(shown)
+            })
+            .collect()
+    }
+
     /// The `w:sectPr` elements in document order.
     fn sections(&self) -> Vec<Section> {
         let document = roxmltree::Document::parse(self.part(parts::DOCUMENT)).unwrap();
@@ -337,6 +411,36 @@ impl Package {
             })
             .collect()
     }
+}
+
+/// `word/numbering.xml` as the tests see it.
+#[derive(Default)]
+struct Numbering {
+    /// Definition id to "is a bullet list".
+    bullet: BTreeMap<u32, bool>,
+    /// Instance id to its definition and its start override per level.
+    nums: BTreeMap<u32, (u32, BTreeMap<u32, u32>)>,
+}
+
+/// How a reader counts list items. Word keeps one set of counters per
+/// definition and restarts a level where an instance with a start override
+/// first uses it. LibreOffice keeps every instance apart. Quick Look counts
+/// per definition and ignores overrides. In all three an item restarts the
+/// levels below it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Reader {
+    Word,
+    LibreOffice,
+    QuickLook,
+}
+
+/// What the document says every block shows: the ordinal of numbered
+/// items.
+fn ordinals(doc: &Document) -> Vec<Option<u32>> {
+    doc.numbered_ordinals(0..doc.block_count())
+        .into_iter()
+        .map(|n| n.map(|n| n as u32))
+        .collect()
 }
 
 /// A section: `(width, height, orientation, top, right, bottom, left, has a footer)`, lengths in twips.
@@ -708,17 +812,20 @@ fn lists_use_numbering_with_levels() {
         Block::with_text(BlockKind::NumberedItem, "nested one").with_indent(1),
         Block::with_text(BlockKind::NumberedItem, "nested two").with_indent(1),
         Block::with_text(BlockKind::NumberedItem, "three"),
+        Block::with_text(BlockKind::NumberedItem, "nested again").with_indent(1),
     ]);
     assert!(ps.iter().all(|p| p.style == "ListParagraph"));
     assert_eq!(ps[0].num, Some((1, 0)));
     assert_eq!(ps[1].num, Some((1, 1)));
     assert_eq!(ps[2].num, Some((1, 8)));
-    // One numbering instance for the outer list, another for the nested one.
+    // One numbering instance for the whole numbered list: readers restart
+    // a nested level after an item of the outer one.
     assert_eq!(ps[3].num, Some((2, 0)));
     assert_eq!(ps[4].num, Some((2, 0)));
-    assert_eq!(ps[5].num, Some((3, 1)));
-    assert_eq!(ps[6].num, Some((3, 1)));
+    assert_eq!(ps[5].num, Some((2, 1)));
+    assert_eq!(ps[6].num, Some((2, 1)));
     assert_eq!(ps[7].num, Some((2, 0)));
+    assert_eq!(ps[8].num, Some((2, 1)));
 }
 
 #[test]
@@ -735,23 +842,24 @@ fn numbering_restarts_for_each_separate_list() {
         Block::with_text(BlockKind::NumberedItem, "2 again"),
     ]);
     // What the document says the numbers are.
-    assert_eq!(
-        doc.numbered_ordinals(0..9),
-        vec![
-            Some(1),
-            Some(2),
-            None,
-            Some(1),
-            Some(1),
-            None,
-            Some(1),
-            None,
-            Some(2)
-        ]
-    );
+    let expected = vec![
+        Some(1),
+        Some(2),
+        None,
+        Some(1),
+        Some(1),
+        None,
+        Some(1),
+        None,
+        Some(2),
+    ];
+    assert_eq!(ordinals(&doc), expected);
     let package = Package::of(&doc);
     let ps = package.paragraphs();
     let nums: Vec<Option<(u32, u32)>> = ps.iter().map(|p| p.num).collect();
+    // Instance 1 is the bullets. The second list restarts in instance 3
+    // and its nested list rides along; the nested list after the bullet
+    // has nothing that restarts it and takes instance 4.
     assert_eq!(
         nums,
         vec![
@@ -759,31 +867,32 @@ fn numbering_restarts_for_each_separate_list() {
             Some((2, 0)),
             None,
             Some((3, 0)),
-            Some((4, 1)),
+            Some((3, 1)),
             Some((1, 1)),
-            Some((5, 1)),
+            Some((4, 1)),
             None,
             Some((3, 0))
         ]
     );
-    // Every numbered list has a numbering instance and a definition of its
-    // own, so each counts from 1; instance 1 is the bullets.
-    let numbering = roxmltree::Document::parse(package.part(parts::NUMBERING)).unwrap();
-    let nums: Vec<Node> = numbering
-        .descendants()
-        .filter(|n| n.has_tag_name((W, "num")))
-        .collect();
-    assert_eq!(nums.len(), 5);
-    let definitions: BTreeSet<&str> = nums
-        .iter()
-        .map(|n| val(*n, "abstractNumId").unwrap())
-        .collect();
-    assert_eq!(definitions.len(), 5);
-    let abstracts: Vec<Node> = numbering
+    for reader in [Reader::Word, Reader::LibreOffice, Reader::QuickLook] {
+        assert_eq!(package.shown_numbers(reader), expected, "{reader:?}");
+    }
+    let numbering = package.numbering();
+    assert_eq!(numbering.nums.len(), 4);
+    // The bullet instance has no overrides; every numbered instance
+    // restarts all nine levels at 1.
+    assert!(numbering.nums[&1].1.is_empty());
+    for id in 2..=4 {
+        let (_, starts) = &numbering.nums[&id];
+        assert_eq!(starts.len(), 9);
+        assert!(starts.values().all(|s| *s == 1));
+    }
+    let xml = roxmltree::Document::parse(package.part(parts::NUMBERING)).unwrap();
+    let abstracts: Vec<Node> = xml
         .descendants()
         .filter(|n| n.has_tag_name((W, "abstractNum")))
         .collect();
-    assert_eq!(abstracts.len(), 5);
+    assert_eq!(abstracts.len(), 4);
     for (i, a) in abstracts.iter().enumerate() {
         let format = if i == 0 { "bullet" } else { "decimal" };
         let levels: Vec<Node> = a
@@ -825,6 +934,136 @@ fn numbering_restarts_for_each_separate_list() {
     assert!(xml.rfind("<w:abstractNum ").unwrap() < xml.find("<w:num ").unwrap());
     // The paragraph nested in the list is indented one level (24 pt).
     assert_eq!(ps[7].left, Some(480));
+}
+
+/// A document of `lists` separate two-item numbered lists.
+fn many_lists(lists: usize) -> Document {
+    let mut blocks = Vec::new();
+    for i in 0..lists {
+        blocks.push(Block::paragraph(&format!("List {i}")));
+        blocks.push(Block::with_text(BlockKind::NumberedItem, "first"));
+        blocks.push(Block::with_text(BlockKind::NumberedItem, "nested").with_indent(1));
+        blocks.push(Block::with_text(BlockKind::NumberedItem, "second"));
+    }
+    Document::from_blocks(blocks)
+}
+
+#[test]
+fn list_definitions_and_instances_stay_inside_words_limits() {
+    // Word addresses 2,046 numbering instances. However many lists a
+    // document has, the export writes at most 1,001 instances (one for
+    // the bullets) over at most 129 definitions.
+    for (lists, instances, definitions) in [
+        (1, 2, 2),
+        (127, 128, 128),
+        (128, 129, 129),
+        (129, 130, 129),
+        (1000, 1001, 129),
+        (2500, 1001, 129),
+    ] {
+        let doc = many_lists(lists);
+        let package = Package::of(&doc);
+        package.check();
+        let numbering = package.numbering();
+        assert_eq!(numbering.nums.len(), instances, "{lists} lists");
+        assert_eq!(numbering.bullet.len(), definitions, "{lists} lists");
+        // Every reader that honours start overrides shows the document's
+        // numbers, also past the limit, where the numbers are text.
+        let expected = ordinals(&doc);
+        assert_eq!(package.shown_numbers(Reader::Word), expected);
+        assert_eq!(package.shown_numbers(Reader::LibreOffice), expected);
+        // Quick Look ignores overrides; it is right while every list has
+        // a definition of its own.
+        assert_eq!(
+            package.shown_numbers(Reader::QuickLook) == expected,
+            lists <= 128,
+            "{lists} lists"
+        );
+        let ps = package.paragraphs();
+        let literal = ps
+            .iter()
+            .filter(|p| p.num.is_none() && p.style == "ListParagraph")
+            .count();
+        assert_eq!(literal, lists.saturating_sub(1000) * 3, "{lists} lists");
+        if lists > 1000 {
+            // A list past the limit: the number is text in the gutter of
+            // a hanging indent, at the indent of a real list item.
+            let p = &ps[ps.len() - 3..];
+            assert_eq!(p[0].text(), "1.\tfirst");
+            assert_eq!((p[0].left, p[0].hanging), (Some(560), Some(560)));
+            assert_eq!(p[1].text(), "1.\tnested");
+            assert_eq!((p[1].left, p[1].hanging), (Some(1040), Some(560)));
+            assert_eq!(p[2].text(), "2.\tsecond");
+        }
+    }
+}
+
+#[test]
+fn random_lists_show_the_documents_numbers_in_every_reader() {
+    let seeds: u64 = std::env::var("WRITER_EXPORT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(400)
+        .min(20_000);
+    for seed in 1..=seeds {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let depth = 1 + rng.below(5);
+        let len = 1 + rng.below(80);
+        let mut indent = 0usize;
+        let blocks: Vec<Block> = (0..len)
+            .map(|i| {
+                // Mostly small steps in depth, as real lists have.
+                indent = match rng.below(6) {
+                    0 => rng.below(depth),
+                    1 => (indent + 1).min(depth - 1),
+                    2 => indent.saturating_sub(1),
+                    _ => indent,
+                };
+                let kind = match rng.below(10) {
+                    0 => BlockKind::BulletItem,
+                    1 => BlockKind::Paragraph,
+                    2 if rng.chance(30) => BlockKind::TodoItem { checked: false },
+                    3 if rng.chance(20) => BlockKind::heading(2),
+                    _ => BlockKind::NumberedItem,
+                };
+                Block::with_text(kind, &format!("block {i}")).with_indent(indent as u8)
+            })
+            .collect();
+        let doc = Document::from_blocks(blocks);
+        let package = Package::of(&doc);
+        let expected = ordinals(&doc);
+        for reader in [Reader::Word, Reader::LibreOffice, Reader::QuickLook] {
+            assert_eq!(
+                package.shown_numbers(reader),
+                expected,
+                "seed {seed}, {reader:?}"
+            );
+        }
+        // Never more instances than numbered items start at 1.
+        let restarts = expected.iter().filter(|n| **n == Some(1)).count();
+        assert!(package.numbering().nums.len() <= restarts + 1, "seed {seed}");
+    }
+}
+
+#[test]
+fn numbering_continues_correctly_across_the_parts_of_a_collection() {
+    let chapter = || {
+        Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Chapter"),
+            Block::with_text(BlockKind::NumberedItem, "a"),
+            Block::with_text(BlockKind::NumberedItem, "b").with_indent(1),
+            Block::with_text(BlockKind::NumberedItem, "c"),
+        ])
+    };
+    let (one, two) = (chapter(), chapter());
+    let source = ExportSource::collection("Book", [("Chapter", &one), ("Chapter", &two)]);
+    let package = Package::new(&source, &DocxOptions::default());
+    package.check();
+    let expected = [None, Some(1), Some(1), Some(2)].repeat(2);
+    for reader in [Reader::Word, Reader::LibreOffice, Reader::QuickLook] {
+        assert_eq!(package.shown_numbers(reader), expected, "{reader:?}");
+    }
+    assert_eq!(package.numbering().nums.len(), 3);
 }
 
 #[test]

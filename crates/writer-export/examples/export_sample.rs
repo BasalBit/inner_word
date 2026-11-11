@@ -6,7 +6,9 @@
 //! ```
 //!
 //! Files written: `sample.md`, `sample-footnotes.md`, `sample.txt`,
-//! `sample-social.txt`, `sample.docx`, `book.docx`, `book.md`.
+//! `sample-social.txt`, `sample.docx`, `lists.docx` (one page of lists that
+//! restart in every way, small enough for a Quick Look thumbnail),
+//! `book.docx`, `book.md`.
 
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
@@ -80,6 +82,22 @@ fn sample() -> Document {
         Block::paragraph("A second numbered list, which starts again at one:"),
         Block::with_text(BlockKind::NumberedItem, "Uno"),
         Block::with_text(BlockKind::NumberedItem, "Due"),
+        Block::paragraph("Lists that restart in different ways. Expected: 1, (1, 2), 2, (1), bullet, (1), indented text, 3:"),
+        Block::with_text(BlockKind::NumberedItem, "Alpha (1)"),
+        Block::with_text(BlockKind::NumberedItem, "Alpha a (1)").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "Alpha b (2)").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "Beta (2)"),
+        Block::with_text(BlockKind::NumberedItem, "Beta a (1)").with_indent(1),
+        Block::with_text(BlockKind::BulletItem, "A bullet between two nested lists").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "Beta, new list (1)").with_indent(1),
+        Block::paragraph("A paragraph inside the item.").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "Gamma (3)"),
+        Block::paragraph("Numbered lists under bullets. Expected: bullet, (1, 2), bullet, (1):"),
+        Block::with_text(BlockKind::BulletItem, "Fruit"),
+        Block::with_text(BlockKind::NumberedItem, "Apple (1)").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "Pear (2)").with_indent(1),
+        Block::with_text(BlockKind::BulletItem, "Vegetables"),
+        Block::with_text(BlockKind::NumberedItem, "Leek (1)").with_indent(1),
         Block::paragraph("To-dos:"),
         Block::with_text(BlockKind::TodoItem { checked: true }, "Write the exporter"),
         Block::with_text(BlockKind::TodoItem { checked: false }, "Open the file in Word"),
@@ -153,6 +171,36 @@ fn sample() -> Document {
     ed.into_document()
 }
 
+/// One page of numbered lists; every item says the number it must show.
+fn lists() -> Document {
+    let n = |text: &str, indent: u8| Block::with_text(BlockKind::NumberedItem, text).with_indent(indent);
+    let b = |text: &str, indent: u8| Block::with_text(BlockKind::BulletItem, text).with_indent(indent);
+    Document::from_blocks(vec![
+        n("one", 0),
+        n("two", 0),
+        Block::paragraph("A paragraph ends the list."),
+        n("one", 0),
+        n("one", 1),
+        n("two", 1),
+        n("two", 0),
+        n("one", 1),
+        b("bullet", 1),
+        n("one", 1),
+        Block::paragraph("Text inside the item.").with_indent(1),
+        n("three", 0),
+        Block::with_text(BlockKind::heading(3), "Under bullets"),
+        b("bullet", 0),
+        n("one", 1),
+        n("two", 1),
+        b("bullet", 0),
+        n("one", 1),
+        n("one", 2),
+        n("two", 1),
+        n("one", 2),
+        n("two", 2),
+    ])
+}
+
 fn main() -> std::io::Result<()> {
     let dir = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let dir = std::path::Path::new(&dir);
@@ -187,6 +235,11 @@ fn main() -> std::io::Result<()> {
         to_plain_text(&source, &PlainTextOptions::social()),
     )?;
     std::fs::write(dir.join("sample.docx"), to_docx(&source, &docx))?;
+    let lists = lists();
+    std::fs::write(
+        dir.join("lists.docx"),
+        to_docx(&ExportSource::single("Lists", &lists), &docx),
+    )?;
 
     // A folder exported as one file: three chapters, the second in landscape.
     let chapter = |n: usize, with_heading: bool| {

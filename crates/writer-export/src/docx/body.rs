@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientation};
 
-use super::styles::{BULLET_NUM_ID, CODE_FILL, RULE_COLOR};
+use super::numbering::{Allocator, Instance, Slot};
+use super::styles::{BULLET_NUM_ID, CODE_FILL, FIRST_DECIMAL_NUM_ID, RULE_COLOR};
 use super::xml::{DECLARATION, attr, text, uri};
 use super::{Comment, DocxOptions, FIRST_LINK_REL, FOOTER_REL, Metrics, R_NS, W_NS, page_twips};
 use crate::common::{first_comment_ranges, ordinals, part_needs_title, thread_entries};
@@ -18,8 +19,9 @@ pub(crate) struct Body {
     /// Hyperlink targets; the relationship id of `links[i]` is
     /// `rId{FIRST_LINK_REL + i}`.
     pub links: Vec<String>,
-    /// How many numbered-list instances the body refers to.
-    pub numbered_lists: u32,
+    /// The numbering instances of the numbered lists; `numbered[i]` has
+    /// the id `FIRST_DECIMAL_NUM_ID + i`.
+    pub numbered: Vec<Instance>,
     /// The comments, in id order.
     pub comments: Vec<Comment>,
 }
@@ -256,7 +258,7 @@ struct Builder<'a> {
     metrics: &'a Metrics,
     links: Vec<String>,
     link_ids: HashMap<String, usize>,
-    numbered_lists: u32,
+    numbering: Allocator,
     comments: Vec<Comment>,
 }
 
@@ -479,8 +481,6 @@ impl Builder<'_> {
                 ..Para::default()
             });
         }
-        // The numbering instance of the list in progress at each level.
-        let mut list_ids: [Option<u32>; 9] = [None; 9];
         let mut pending_break = false;
 
         for (index, block) in doc.blocks().iter().enumerate() {
@@ -520,6 +520,9 @@ impl Builder<'_> {
                 ..Para::default()
             };
             let indented = (level > 0).then(|| (self.metrics.indent(level), 0));
+            // A list marker written as text: a to-do's box, or the number
+            // of a list item that has no numbering instance.
+            let mut literal_marker: Option<String> = None;
             match block.kind() {
                 BlockKind::Paragraph => para.indent = indented,
                 BlockKind::Heading { level: n } => {
@@ -551,16 +554,21 @@ impl Builder<'_> {
                     para.numbering = Some((BULLET_NUM_ID, level));
                 }
                 BlockKind::NumberedItem => {
-                    let id = match (ordinals[index], list_ids[level as usize]) {
-                        (Some(n), Some(id)) if n > 1 => id,
-                        _ => {
-                            self.numbered_lists += 1;
-                            BULLET_NUM_ID + self.numbered_lists
-                        }
-                    };
-                    list_ids[level as usize] = Some(id);
                     para.style = Some("ListParagraph");
-                    para.numbering = Some((id, level));
+                    let ordinal = ordinals[index].unwrap_or(1);
+                    let ordinal = u32::try_from(ordinal).unwrap_or(u32::MAX);
+                    match self.numbering.item(level as usize, ordinal) {
+                        Slot::Instance(i) => {
+                            para.numbering = Some((FIRST_DECIMAL_NUM_ID + i as u32, level));
+                        }
+                        Slot::Literal => {
+                            // No numbering instance left (see `numbering`):
+                            // the number is text in the marker gutter.
+                            let gutter = self.metrics.marker_gutter();
+                            para.indent = Some((self.metrics.indent(level) + gutter, gutter));
+                            literal_marker = Some(format!("{ordinal}."));
+                        }
+                    }
                 }
                 BlockKind::TodoItem { .. } => {
                     para.style = Some("ListParagraph");
@@ -570,14 +578,16 @@ impl Builder<'_> {
                 BlockKind::PageBreak => {}
             }
             if let BlockKind::TodoItem { checked } = block.kind() {
+                literal_marker = Some(if *checked { "\u{2611}" } else { "\u{2610}" }.to_string());
+            }
+            if let Some(marker) = literal_marker {
                 let props = RunProps {
                     size,
                     ..RunProps::default()
                 };
                 para.content.push_str(&format!(
-                    "<w:r>{}<w:t>{}</w:t><w:tab/></w:r>",
-                    props.xml(),
-                    if *checked { '\u{2611}' } else { '\u{2610}' }
+                    "<w:r>{}<w:t>{marker}</w:t><w:tab/></w:r>",
+                    props.xml()
                 ));
             }
             para.content
@@ -648,7 +658,7 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
         metrics,
         links: Vec::new(),
         link_ids: HashMap::new(),
-        numbered_lists: 0,
+        numbering: Allocator::new(),
         comments: Vec::new(),
     };
     let mut xml = String::from(DECLARATION);
@@ -688,7 +698,7 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
     Body {
         document: xml,
         links: builder.links,
-        numbered_lists: builder.numbered_lists,
+        numbered: builder.numbering.into_instances(),
         comments: builder.comments,
     }
 }

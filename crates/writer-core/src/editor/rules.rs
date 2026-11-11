@@ -197,7 +197,7 @@ impl EditorState {
                 ed.caret_to(caret);
                 let mut pending = inherited_attrs(&ed.doc.blocks[i], content_end);
                 effect.unapply(&mut pending);
-                ed.pending = Some(pending);
+                ed.set_pending(pending);
             });
         }
         false
@@ -230,10 +230,8 @@ impl EditorState {
                     }
                 }
             }
-            '.' => {
-                if t[..o].ends_with("...") && char_before(t, o - 3) != Some('.') {
-                    reps.push((o - 3..o, "\u{2026}"));
-                }
+            '.' if t[..o].ends_with("...") && char_before(t, o - 3) != Some('.') => {
+                reps.push((o - 3..o, "\u{2026}"));
             }
             _ => {}
         }

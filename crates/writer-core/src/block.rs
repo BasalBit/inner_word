@@ -678,7 +678,7 @@ pub(crate) fn rebuild(text: &str, src_runs: &[Run]) -> (String, Vec<Run>) {
         while *run_idx < src_runs.len() && byte >= *run_end {
             *run_idx += 1;
             if *run_idx < src_runs.len() {
-                *run_end += src_runs[*run_idx].len;
+                *run_end = run_end.saturating_add(src_runs[*run_idx].len);
             }
         }
         if *run_idx < src_runs.len() {

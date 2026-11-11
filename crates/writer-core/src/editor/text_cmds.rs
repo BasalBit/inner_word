@@ -194,7 +194,7 @@ impl EditorState {
         }
         let p = self.split_block(pos);
         self.caret_to(p);
-        self.pending = Some(carry);
+        self.set_pending(carry);
     }
 
     fn code_enter(&mut self, pos: Position) {

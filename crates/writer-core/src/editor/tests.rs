@@ -224,6 +224,14 @@ fn pending_attributes() {
     e.clear_formatting();
     typ(&mut e, "y");
     assert!(e.document().blocks()[0].attrs_at(3).unwrap().is_plain());
+    // An edit that moves the caret drops pending attributes too.
+    e.toggle_italic();
+    e.backspace();
+    assert!(e.pending_attrs().is_none());
+    // A block command that keeps the caret keeps them.
+    e.toggle_italic();
+    e.set_block_kind(BlockKind::Quote);
+    assert!(e.pending_attrs().is_some_and(|a| a.italic));
 }
 
 #[test]
@@ -1427,4 +1435,53 @@ fn large_document_edits_are_local() {
     assert!(stats.words > 100_000);
     let _ = e.stats();
     assert!(t1.elapsed().as_secs_f64() < 10.0);
+}
+
+#[test]
+fn extreme_inputs_do_not_panic() {
+    let mut e = ed(vec![para("ab"), Block::new(BlockKind::Divider), para("中")]);
+    let far = Position::new(usize::MAX, usize::MAX);
+    e.set_selection(Selection::new(far, Position::ZERO));
+    e.set_caret(far);
+    e.select_block(usize::MAX);
+    e.select_word_at(far);
+    assert!(e.step_text_size(i32::MIN));
+    e.step_text_size(i32::MAX);
+    e.set_text_size(Some(f32::NAN));
+    e.set_text_size(Some(f32::INFINITY));
+    e.set_text_size(Some(-5.0));
+    e.set_undo_limit(0);
+    e.insert_blocks_at(usize::MAX, &Fragment::from_plain_text("z"));
+    e.delete_range(TextRange::new(far, Position::new(1, 5)));
+    e.replace_range(TextRange::new(far, far), "tail");
+    let d = e.document();
+    assert!(d.numbered_ordinals(usize::MAX..0).is_empty());
+    let _ = d.text_in(TextRange { start: far, end: Position::ZERO });
+    let _ = d.stats_in(TextRange { start: far, end: Position::ZERO });
+    let _ = d.fragment(TextRange { start: far, end: Position::ZERO });
+    let _ = d.position_from_flat(usize::MAX);
+    let _ = d.flat_offset(far);
+    let _ = d.link_at(far);
+    let _ = d.comments_at(far);
+    let _ = d.next_comment(far, true);
+    let _ = d.moved(far, Movement::WordRight);
+    let _ = d.find_in_block(usize::MAX, "a", SearchOptions::default());
+    let b = &d.blocks()[0];
+    let _ = b.utf16_to_offset(usize::MAX);
+    let _ = b.offset_to_utf16(usize::MAX);
+    let _ = b.attrs_before(usize::MAX);
+    let _ = b.line_range(usize::MAX);
+    let _ = crate::text::utf16_range_to_utf8("abc", 9..2);
+    e.set_settings(crate::DocumentSettings {
+        typography: crate::Typography {
+            base_size: f32::NAN,
+            line_height: -1.0,
+            body_font: "   ".into(),
+            paragraph_spacing: 1e9,
+        },
+        ..Default::default()
+    });
+    assert_eq!(e.document().settings().typography.body_font, "Charter");
+    check(&e);
+    assert_eq!(e.undo_depth(), 1);
 }

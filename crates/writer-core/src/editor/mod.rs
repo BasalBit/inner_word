@@ -135,6 +135,8 @@ struct Tx {
     comments: bool,
     first_class: Option<CharClass>,
     last_class: Option<CharClass>,
+    /// Whether the command set the pending attributes on purpose.
+    pending_set: bool,
 }
 
 /// The headless editor: a document, a selection, pending inline attributes
@@ -484,6 +486,7 @@ impl EditorState {
                 comments: false,
                 first_class: None,
                 last_class: None,
+                pending_set: false,
             }));
         }
         let before = self.tx_mut().op_count;
@@ -508,6 +511,11 @@ impl EditorState {
 
     fn finish(&mut self, tx: Tx) {
         self.selection = self.normalized(self.selection);
+        // Pending attributes belong to a caret position: a command that moved
+        // the caret drops them unless it set them on purpose.
+        if !tx.pending_set && self.selection != tx.before {
+            self.pending = None;
+        }
         if tx.ops.is_empty() {
             return;
         }
@@ -640,6 +648,15 @@ impl EditorState {
         tx.ops.push(Op::Thread { id, thread: prev });
         tx.op_count += 1;
         tx.comments = true;
+    }
+
+    /// Sets the pending attributes from inside a command, keeping them even
+    /// though the command moves the caret.
+    pub(crate) fn set_pending(&mut self, attrs: InlineAttrs) {
+        self.pending = Some(attrs);
+        if let Some(tx) = self.tx.as_mut() {
+            tx.pending_set = true;
+        }
     }
 
     /// Sets the selection from inside a command (no group closing).

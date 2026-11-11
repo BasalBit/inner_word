@@ -13,6 +13,10 @@ use crate::text;
 /// Maximum length of [`Document::title`] in characters.
 pub const TITLE_MAX_CHARS: usize = 80;
 
+/// Ids at or above this value in loaded data are treated as invalid and
+/// replaced, so id counters can never overflow.
+pub(crate) const MAX_ID: u64 = 1 << 52;
+
 /// A rich-text document.
 ///
 /// Invariants (checked by [`Document::check_invariants`]):
@@ -88,23 +92,24 @@ impl Document {
             out.push(Block::new(BlockKind::Paragraph));
         }
         // Ids.
-        let max_id = out.iter().map(|b| b.id.0).max().unwrap_or(0);
+        let valid = |id: u64| id != 0 && id < MAX_ID;
+        let max_id = out.iter().map(|b| b.id.0).filter(|&i| valid(i)).max().unwrap_or(0);
         let mut next_block_id = max_id + 1;
         let mut seen = HashSet::with_capacity(out.len());
         for b in &mut out {
-            if b.id == BlockId::UNASSIGNED || !seen.insert(b.id) {
+            if !valid(b.id.0) || !seen.insert(b.id) {
                 b.id = BlockId(next_block_id);
                 next_block_id += 1;
                 seen.insert(b.id);
             }
         }
         // Threads.
-        let max_cid = threads.iter().map(|t| t.id.0).max().unwrap_or(0);
+        let max_cid = threads.iter().map(|t| t.id.0).filter(|&i| valid(i)).max().unwrap_or(0);
         let mut next_comment_id = max_cid + 1;
         let mut comments = BTreeMap::new();
         for mut t in threads {
             t.repair();
-            if t.id.0 == 0 || comments.contains_key(&t.id) {
+            if !valid(t.id.0) || comments.contains_key(&t.id) {
                 t.id = CommentId(next_comment_id);
                 next_comment_id += 1;
             }
@@ -421,7 +426,7 @@ impl Document {
                 }
             }
         }
-        out.sort_by(|a, b| (a.1.start, a.0).cmp(&(b.1.start, b.0)));
+        out.sort_by_key(|a| (a.1.start, a.0));
         out
     }
 

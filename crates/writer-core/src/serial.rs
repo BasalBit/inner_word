@@ -700,6 +700,30 @@ mod tests {
     }
 
     #[test]
+    fn extreme_numbers_are_repaired() {
+        let json = format!(
+            r#"{{"blocks": [
+                {{"id": {max}, "text": "ab", "runs": [{{"len": 1e300, "bold": true}}, {{"len": {max}}}]}},
+                {{"id": 18446744073709551615, "indent": 1e9, "size": 1e39, "text": "c"}}
+            ],
+            "comments": [{{"id": {max}, "created": -1e300, "replies": [{{"id": {max}}}]}}]}}"#,
+            max = u64::MAX
+        );
+        let d = Document::from_json(&json).unwrap();
+        d.check_invariants().unwrap();
+        assert!(d.blocks()[0].attrs_at(1).unwrap().bold);
+        assert_eq!(d.blocks()[1].indent(), crate::MAX_INDENT);
+        let mut e = crate::EditorState::new(d);
+        e.select_all();
+        let id = e.add_comment("x", "y", 0).unwrap();
+        let t = e.document().comments().next().unwrap().id;
+        assert!(e.add_reply(t, "r", "a", 0).is_some());
+        assert_ne!(id, t);
+        e.insert_paragraph_break();
+        e.check_invariants().unwrap();
+    }
+
+    #[test]
     fn unrecoverable_inputs() {
         assert!(matches!(Document::from_json("nope"), Err(LoadError::Json(_))));
         assert!(matches!(Document::from_json("[]"), Err(LoadError::NotADocument(_))));

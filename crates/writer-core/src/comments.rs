@@ -55,15 +55,23 @@ impl CommentThread {
 
     /// The next free reply id.
     pub(crate) fn next_reply_id(&self) -> ReplyId {
-        ReplyId(self.replies.iter().map(|r| r.id.0).max().unwrap_or(0) + 1)
+        ReplyId(self.replies.iter().map(|r| r.id.0).max().unwrap_or(0).saturating_add(1))
     }
 
     /// Makes reply ids unique and non-zero.
     pub(crate) fn repair(&mut self) {
         let mut seen = std::collections::BTreeSet::new();
-        let mut next = self.replies.iter().map(|r| r.id.0).max().unwrap_or(0) + 1;
+        let valid = |id: u64| id != 0 && id < crate::document::MAX_ID;
+        let mut next = self
+            .replies
+            .iter()
+            .map(|r| r.id.0)
+            .filter(|&id| valid(id))
+            .max()
+            .unwrap_or(0)
+            + 1;
         for r in &mut self.replies {
-            if r.id.0 == 0 || !seen.insert(r.id) {
+            if !valid(r.id.0) || !seen.insert(r.id) {
                 r.id = ReplyId(next);
                 seen.insert(r.id);
                 next += 1;

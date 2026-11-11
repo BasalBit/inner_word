@@ -2,8 +2,8 @@
 //! attaching and detaching.
 
 use gpui::{
-    EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
-    TestAppContext, VisualTestContext, point, px,
+    EntityInputHandler, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
+    Point, TestAppContext, VisualTestContext, point, px,
 };
 use writer_core::Selection;
 use writer_editor::{CaretStyle, InterceptPriority, KeyDisposition};
@@ -558,5 +558,64 @@ fn a_key_that_types_nothing_is_not_reported_as_typed(cx: &mut TestAppContext) {
     assert_eq!(rig.text(cx), "xzabc");
     rig.vim.read_with(cx, |vim, _| {
         assert_eq!(vim.engine().last_inserted_text(), "xz");
+    });
+}
+
+/// A key press as the platform reports it: the key by its Latin position
+/// and the character the layout types for it.
+fn press(cx: &mut VisualTestContext, key: &str, typed: &str, modifiers: Modifiers) {
+    cx.update(|window, cx| {
+        window.dispatch_keystroke(
+            Keystroke {
+                modifiers,
+                key: key.into(),
+                key_char: Some(typed.into()),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn commands_work_on_other_keyboard_layouts(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["один два", "три {x} y"]), cx);
+
+    // A Russian layout: the "j" key types "о", "w" types "ц", "x" types "ч".
+    press(cx, "j", "о", Modifiers::none());
+    assert_eq!(rig.head(cx).block, 1);
+    press(cx, "w", "ц", Modifiers::none());
+    assert_eq!(rig.head(cx), at(1, 7));
+    // A German layout: option-8 types "{".
+    press(cx, "$", "$", Modifiers::none());
+    press(
+        cx,
+        "8",
+        "{",
+        Modifiers {
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    assert_eq!(rig.head(cx).block, 0, "the paragraph motion ran");
+
+    // Where a character is wanted, the typed one counts: `f` + "д", a
+    // search, and of course Insert mode.
+    press(cx, "f", "а", Modifiers::none());
+    press(cx, "l", "д", Modifiers::none());
+    assert_eq!(rig.head(cx), at(0, "о".len()));
+    press(cx, "/", "/", Modifiers::none());
+    press(cx, "n", "т", Modifiers::none());
+    assert_eq!(rig.status(cx).command_line.unwrap().text, "т");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(rig.head(cx), at(1, 0));
+    press(cx, "i", "ш", Modifiers::none());
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    press(cx, "j", "о", Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.text(cx), "один два\nотри {x} y");
+    rig.vim.read_with(cx, |vim, _| {
+        assert_eq!(vim.engine().last_inserted_text(), "о");
     });
 }

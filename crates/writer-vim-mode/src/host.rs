@@ -106,7 +106,8 @@ impl VimHost for EditorHost<'_> {
         let line = hard_line(document, pos);
         let text = document.blocks()[pos.block.min(document.block_count() - 1)].text();
         let upto = pos.offset.clamp(line.start, line.end);
-        text::grapheme_count(&text[line.start..upto]) as f32 * FALLBACK_CELL
+        let before = text.get(line.start..upto).unwrap_or_default();
+        text::grapheme_count(before) as f32 * FALLBACK_CELL
     }
 
     fn move_by_rows(

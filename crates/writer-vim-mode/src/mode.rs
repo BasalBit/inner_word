@@ -403,7 +403,7 @@ impl VimMode {
         if modifiers.function {
             return KeyDisposition::Pass;
         }
-        let Some(key) = key_from_keystroke(keystroke) else {
+        let Some(key) = key_from_keystroke(keystroke, wants_literal_key(&self.vim)) else {
             return KeyDisposition::Pass;
         };
         let outcome = self.engine_call(Call::Key(key), cx);
@@ -797,20 +797,36 @@ fn neighbour_row(editor: &Editor, position: Position, rows: isize) -> Position {
 }
 
 /// The engine's key for a GPUI keystroke; `None` for keys the engine has
-/// no use for.
+/// no use for. `literal` says that the key stands for the character it
+/// types (text, a search pattern, the target of `f` or `r`) rather than for
+/// a command.
 ///
-/// On keyboard layouts that type `[`, `{`, `|`, `@` or `~` with the option
-/// key, those are characters, not option chords: when option turns the key
-/// into another ASCII character, the engine gets that character without the
-/// option flag, so `{` and `}` work as motions on a German keyboard.
-fn key_from_keystroke(keystroke: &Keystroke) -> Option<Key> {
+/// Two things about keyboard layouts:
+///
+/// - Where `[`, `{`, `|`, `@` or `~` are typed with the option key, they
+///   are characters, not option chords: when option turns the key into
+///   another ASCII character, the engine gets that character without the
+///   option flag, so `{` and `}` work as motions on a German keyboard.
+/// - On a layout without Latin letters (Russian, Greek) GPUI still names
+///   the key by its Latin position. Commands are Latin, so a command key
+///   that types a non-ASCII character is taken by its position: `j` moves
+///   down whatever the layout types for it (Vim's `langmap`).
+fn key_from_keystroke(keystroke: &Keystroke, literal: bool) -> Option<Key> {
     let modifiers = keystroke.modifiers;
-    let key_char = keystroke.key_char.as_deref();
+    let mut key_char = keystroke.key_char.as_deref();
     let typed_with_option = modifiers.alt
         && !modifiers.control
         && key_char.is_some_and(|typed| {
             typed.len() == 1 && typed.as_bytes()[0].is_ascii_graphic() && typed != keystroke.key
         });
+    let latin_position = keystroke.key.len() == 1 && keystroke.key.is_ascii();
+    if !literal
+        && !modifiers.alt
+        && latin_position
+        && key_char.is_some_and(|typed| !typed.is_ascii())
+    {
+        key_char = None;
+    }
     Key::from_keystroke(
         &keystroke.key,
         key_char,
@@ -818,6 +834,14 @@ fn key_from_keystroke(keystroke: &Keystroke) -> Option<Key> {
         modifiers.alt && !typed_with_option,
         modifiers.shift,
     )
+}
+
+/// Whether the engine takes the next key as a character rather than as a
+/// command: in Insert and Replace mode, in the command line, and for the
+/// argument of `f`, `F`, `t`, `T` and `r`.
+fn wants_literal_key(vim: &Vim) -> bool {
+    matches!(vim.mode(), Mode::Insert | Mode::Replace | Mode::CommandLine)
+        || vim.pending_keys().ends_with(['f', 'F', 't', 'T', 'r'])
 }
 
 /// The text the editor will insert for a key the engine left to it, if the

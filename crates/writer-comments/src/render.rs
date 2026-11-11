@@ -2,16 +2,20 @@
 //!
 //! ```text
 //! root (CommentsPanel)                 action listeners
-//! ├── header: "Comments", open count
-//! ├── new-comment composer             (CommentComposer > Editor)
+//! ├── header: "Comments", open count, buttons: add a comment, hide
+//! ├── new-comment composer             (CommentComposer > Editor), save and cancel buttons
 //! ├── thread list (CommentThreads)     focus handle, scrolls
-//! │   ├── thread card ...
+//! │   ├── thread card ...              buttons on hover and while active: reply, resolve
 //! │   ├── "Detached" heading
 //! │   └── thread card ...
-//! └── footer: show / hide resolved
+//! └── footer: show / hide resolved     (a button)
 //! ```
 //!
 //! A reply or an edit puts the composer inside the thread card instead.
+//!
+//! Everything a key does here a click does too. The buttons are in
+//! `controls`; what a click on a card or a reply means is in
+//! `panel::pointer`.
 //!
 //! The thread list is a `gpui::list`: only the cards near the visible part
 //! are built, laid out and painted, so a document with a thousand threads
@@ -23,7 +27,7 @@ use gpui::{
 };
 use writer_core::{CommentId, Reply, ReplyId};
 use writer_ui::{
-    Button, ButtonSize, KeyHint, SectionLabel,
+    IconName, KeyHint, SectionLabel,
     theme::{
         ActiveTheme, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, ThemeColors,
         UI_LINE_HEIGHT, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
@@ -38,6 +42,7 @@ use crate::{
         SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment,
         THREADS_CONTEXT, ToggleComments, ToggleResolved, ToggleShowResolved,
     },
+    controls::{ICON_BUTTON, Look, Press, icon_button, text_button},
     panel::{CommentsPanel, DeleteTarget, DraftKind, Row, panel_for_actions},
     threads::ThreadEntry,
     time::relative_time,
@@ -166,14 +171,8 @@ impl Render for CommentsPanel {
             .filter(|entry| !entry.is_resolved())
             .count();
         let threads: AnyElement = if self.rows.is_empty() && self.draft.is_none() {
-            // Every thread is resolved and hidden. The list still holds the
-            // focus; the footer below leads back to the resolved threads.
-            div()
-                .debug_selector(|| "comments-empty".into())
-                .px(SPACE_3)
-                .py(SPACE_3)
-                .text_color(colors.muted)
-                .child("No open comments.")
+            // Every thread is resolved and hidden.
+            self.render_no_open_comments(self.focus_handle.is_focused(window), &colors, cx)
                 .into_any_element()
         } else {
             let panel = panel.clone();
@@ -209,16 +208,62 @@ impl Render for CommentsPanel {
                 .items_center()
                 .justify_between()
                 .h(px(36.))
-                .px(SPACE_3)
+                .pl(SPACE_3)
+                .pr(SPACE_2)
                 .border_b_1()
                 .border_color(colors.hairline)
                 .child(SectionLabel::new("Comments"))
-                .child(div().text_size(UI_TEXT_XS).text_color(colors.muted).child(
-                    match open_count {
-                        1 => "1 open".to_string(),
-                        count => format!("{count} open"),
-                    },
-                )),
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(SPACE_0_5)
+                        .child(
+                            div()
+                                .mr(SPACE_1)
+                                .text_size(UI_TEXT_XS)
+                                .text_color(colors.muted)
+                                .child(match open_count {
+                                    1 => "1 open".to_string(),
+                                    count => format!("{count} open"),
+                                }),
+                        )
+                        .child(
+                            icon_button(
+                                "comments-add",
+                                "comments-add".into(),
+                                IconName::Plus,
+                                "Add comment on selection",
+                                KeyHint::for_action(&AddComment, cx),
+                                Press::KeepFocus,
+                                &colors,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.add_comment(window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            icon_button(
+                                "comments-hide",
+                                "comments-hide".into(),
+                                IconName::Close,
+                                "Hide comments",
+                                KeyHint::for_action(&ToggleComments, cx),
+                                Press::KeepFocus,
+                                &colors,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.set_visible(false, window, cx);
+                                },
+                            )),
+                        ),
+                ),
         )
         .when_some(
             self.render_new_composer(composer_focused, &colors, cx),
@@ -295,7 +340,12 @@ impl CommentsPanel {
     }
 
     /// What the panel shows in a document without comments.
-    fn render_no_comments(&self, colors: &ThemeColors, ui_font: SharedString, cx: &App) -> Div {
+    fn render_no_comments(
+        &self,
+        colors: &ThemeColors,
+        ui_font: SharedString,
+        cx: &Context<Self>,
+    ) -> Div {
         div()
             .debug_selector(|| "comments-none".into())
             .size_full()
@@ -310,11 +360,98 @@ impl CommentsPanel {
             .text_color(colors.muted)
             .child(SectionLabel::new("Comments"))
             .child("No comments in this document.")
-            .child(hint_row(colors).child(hint(
-                "Add one on the selected text",
-                KeyHint::for_action(&AddComment, cx),
-                colors,
-            )))
+            .child(
+                hint_row(colors).child(
+                    text_button(
+                        "comments-none-add",
+                        "comments-none-add".into(),
+                        "Add one on the selected text",
+                        KeyHint::for_action(&AddComment, cx),
+                        Look::Hint,
+                        false,
+                        Press::KeepFocus,
+                        colors,
+                    )
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.add_comment(window, cx);
+                        },
+                    )),
+                ),
+            )
+    }
+
+    /// What the list shows when every thread is resolved and resolved
+    /// threads are hidden. While it has the keyboard it is marked like an
+    /// active card and names the two keys that lead somewhere.
+    fn render_no_open_comments(
+        &self,
+        list_focused: bool,
+        colors: &ThemeColors,
+        cx: &Context<Self>,
+    ) -> Div {
+        div().px(SPACE_1).py(SPACE_2).child(
+            div()
+                .debug_selector(|| "comments-empty".into())
+                .flex()
+                .flex_col()
+                .gap(SPACE_1)
+                .py(SPACE_2)
+                .pr(SPACE_2)
+                .pl(px(6.))
+                .rounded_r(RADIUS_MD)
+                .border_l_2()
+                .border_color(if list_focused {
+                    colors.accent
+                } else {
+                    gpui::transparent_black()
+                })
+                .when(list_focused, |block| block.bg(colors.accent_subtle))
+                .child(div().text_color(colors.muted).child("No open comments."))
+                .when(list_focused, |block| {
+                    block.child(
+                        hint_row(colors)
+                            .debug_selector(|| "comments-empty-hints".into())
+                            .child(
+                                text_button(
+                                    "comments-empty-show",
+                                    "comments-empty-show".into(),
+                                    "Show resolved",
+                                    KeyHint::for_action(&ToggleShowResolved, cx),
+                                    Look::Hint,
+                                    false,
+                                    Press::Bubble,
+                                    colors,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.toggle_show_resolved(window, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                text_button(
+                                    "comments-empty-back",
+                                    "comments-empty-back".into(),
+                                    "Back to the text",
+                                    KeyHint::for_action(&FocusEditor, cx),
+                                    Look::Hint,
+                                    false,
+                                    Press::Bubble,
+                                    colors,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.focus_editor(window, cx);
+                                    },
+                                )),
+                            ),
+                    )
+                }),
+        )
     }
 
     fn render_detached_heading(&self, colors: &ThemeColors) -> Div {
@@ -354,48 +491,70 @@ impl CommentsPanel {
             .child(self.composer.clone())
     }
 
-    /// The keys of the composer, read from the keymap: `enter` (the
-    /// compact editor's own submit-on-enter, bound as its `Newline`) and
-    /// `cmd-enter` both save, `shift-enter` breaks the line, `escape`
-    /// cancels.
-    fn render_composer_hints(
+    /// Under the composer: the buttons that save and discard what is
+    /// written, each with its key from the keymap (`enter`, the compact
+    /// editor's own submit-on-enter, bound as its `Newline`; `cmd-enter`
+    /// saves too), and the key of a line break. The save button is dimmed
+    /// while there is nothing it could save.
+    fn render_composer_actions(
         &self,
         submit_label: &'static str,
         colors: &ThemeColors,
-        cx: &App,
+        cx: &Context<Self>,
     ) -> Div {
-        let key =
-            |hint: Option<KeyHint>| hint.map(|hint| hint.color(colors.muted).size(UI_TEXT_XS));
-        hint_row(colors)
+        let can_submit = self.can_submit(cx);
+        let submit = text_button(
+            "comment-submit",
+            "comment-submit".into(),
+            submit_label,
+            KeyHint::for_action(&writer_editor::actions::Newline, cx),
+            Look::Primary,
+            !can_submit,
+            Press::KeepFocus,
+            colors,
+        );
+        div()
             .debug_selector(|| "comment-composer-hints".into())
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(SPACE_2)
+            .gap_y(SPACE_1)
+            .child(if can_submit {
+                submit.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.submit(window, cx);
+                }))
+            } else {
+                // Still stops the click: it is not one on the card.
+                submit.on_click(|_, _, cx| cx.stop_propagation())
+            })
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(SPACE_1)
-                    .child(submit_label)
-                    .children(key(KeyHint::for_action(
-                        &writer_editor::actions::Newline,
-                        cx,
-                    )))
-                    .child("or")
-                    .children(key(KeyHint::for_action(&SubmitComment, cx))),
+                text_button(
+                    "comment-cancel",
+                    "comment-cancel".into(),
+                    "Cancel",
+                    KeyHint::for_action(&CancelComment, cx),
+                    Look::Quiet,
+                    false,
+                    Press::KeepFocus,
+                    colors,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.cancel(window, cx);
+                })),
             )
-            .child(hint(
+            .child(hint_row(colors).flex_1().justify_end().child(hint(
                 "Line break",
                 KeyHint::for_action(&writer_editor::actions::InsertSoftBreak, cx),
                 colors,
-            ))
-            .child(hint(
-                "Cancel",
-                KeyHint::for_action(&CancelComment, cx),
-                colors,
-            ))
+            )))
     }
 
     /// In place of the quote when the text a new comment was started on
     /// was deleted meanwhile: what happened, and the two ways out.
-    fn render_target_lost(&self, colors: &ThemeColors, cx: &App) -> Div {
+    fn render_target_lost(&self, colors: &ThemeColors, cx: &Context<Self>) -> Div {
         div()
             .debug_selector(|| "comment-target-lost".into())
             .flex()
@@ -418,11 +577,26 @@ impl CommentsPanel {
                         "The text for this comment was deleted. Undo that in the \
                                  text, or point the comment at other text.",
                     ))
-                    .child(hint_row(colors).child(hint(
-                        "Use the selection",
-                        KeyHint::for_action(&AddComment, cx),
-                        colors,
-                    ))),
+                    .child(
+                        hint_row(colors).child(
+                            text_button(
+                                "comment-retarget",
+                                "comment-retarget".into(),
+                                "Use the selection",
+                                KeyHint::for_action(&AddComment, cx),
+                                Look::Hint,
+                                false,
+                                Press::KeepFocus,
+                                colors,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.add_comment(window, cx);
+                                },
+                            )),
+                        ),
+                    ),
             )
     }
 
@@ -432,7 +606,7 @@ impl CommentsPanel {
         &self,
         composer_focused: bool,
         colors: &ThemeColors,
-        cx: &App,
+        cx: &Context<Self>,
     ) -> Option<Div> {
         let draft = self.draft.as_ref()?;
         if !matches!(draft.kind, DraftKind::New { .. }) {
@@ -453,7 +627,7 @@ impl CommentsPanel {
                     quote_line(draft.quote.clone().into(), colors)
                 })
                 .child(self.render_composer_box(composer_focused, colors))
-                .child(self.render_composer_hints("Comment", colors, cx)),
+                .child(self.render_composer_actions("Comment", colors, cx)),
         )
     }
 
@@ -519,32 +693,50 @@ impl CommentsPanel {
             .when(!is_active, |card| {
                 card.hover(|style| style.bg(colors.hover))
             })
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hover_thread(id, *hovered, cx);
+            }))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.click_thread(id, window, cx);
             }));
 
+        // A resolved thread steps back: its words are done with.
+        let resolved = entry.is_resolved();
+        let (name_color, body_color) = if resolved {
+            (colors.muted, colors.muted)
+        } else {
+            (colors.ink, colors.ink)
+        };
         if !entry.quote.is_empty() {
             card = card.child(quote_line(entry.quote.clone().into(), colors));
         }
-        card = card.child(meta_line(
-            &entry.thread.author,
-            relative_time(entry.thread.created_at, now),
-            entry.is_resolved(),
-            colors,
-        ));
+        // The card's buttons sit at the end of the line with the name.
+        // Their room is always kept, so the card does not move when they
+        // appear under the pointer.
+        let controls_shown = is_active || self.hovered == Some(id);
+        card = card.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(SPACE_2)
+                .child(
+                    meta_line(
+                        &entry.thread.author,
+                        relative_time(entry.thread.created_at, now),
+                        resolved,
+                        name_color,
+                        colors,
+                    )
+                    .flex_1()
+                    .min_w_0(),
+                )
+                .child(self.render_thread_controls(entry, controls_shown, colors, cx)),
+        );
         card = if editing_comment {
             card.child(self.render_composer_box(composer_focused, colors))
-                .child(self.render_composer_hints("Save", colors, cx))
+                .child(self.render_composer_actions("Save", colors, cx))
         } else {
-            // A resolved thread steps back: its words are done with.
-            card.child(body_text(
-                &entry.thread.body,
-                if entry.is_resolved() {
-                    colors.muted
-                } else {
-                    colors.ink
-                },
-            ))
+            card.child(body_text(&entry.thread.body, body_color))
         };
 
         if !entry.thread.replies.is_empty() {
@@ -559,12 +751,23 @@ impl CommentsPanel {
                             &reply.author,
                             relative_time(reply.created_at, now),
                             false,
+                            name_color,
                             colors,
                         ))
                         .child(self.render_composer_box(composer_focused, colors))
-                        .child(self.render_composer_hints("Save", colors, cx))
+                        .child(self.render_composer_actions("Save", colors, cx))
+                        .into_any_element()
                 } else {
-                    reply_block(id, reply, selected == Some(reply.id), now, colors)
+                    self.render_reply(
+                        id,
+                        reply,
+                        selected == Some(reply.id),
+                        (name_color, body_color),
+                        now,
+                        colors,
+                        cx,
+                    )
+                    .into_any_element()
                 }
             });
             card = card.child(
@@ -587,7 +790,7 @@ impl CommentsPanel {
                     self.render_composer_box(composer_focused, colors)
                         .mt(SPACE_1),
                 )
-                .child(self.render_composer_hints("Reply", colors, cx));
+                .child(self.render_composer_actions("Reply", colors, cx));
         }
 
         if let Some(target) = pending_delete {
@@ -598,36 +801,177 @@ impl CommentsPanel {
         card
     }
 
-    /// The keys that act on the active thread, shown while the list has
-    /// focus. The glyphs come from the keymap.
-    fn render_thread_hints(&self, entry: &ThreadEntry, colors: &ThemeColors, cx: &App) -> Div {
-        let on_reply = self.selected_reply.is_some();
-        hint_row(colors)
-            .mt(SPACE_1)
-            .child(hint(
+    /// The buttons of a card: reply, resolve or reopen. They are drawn
+    /// while the card is active or under the pointer; their room is kept
+    /// otherwise. Each acts on its own card, whichever thread is active.
+    fn render_thread_controls(
+        &self,
+        entry: &ThreadEntry,
+        shown: bool,
+        colors: &ThemeColors,
+        cx: &Context<Self>,
+    ) -> Div {
+        let id = entry.id;
+        let n = id.0 as usize;
+        let row = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_end()
+            .gap(SPACE_0_5)
+            .h(ICON_BUTTON)
+            .w(ICON_BUTTON * 2. + SPACE_0_5);
+        if !shown || self.editor.read(cx).is_read_only() {
+            return row;
+        }
+        let resolved = entry.is_resolved();
+        row.child(
+            icon_button(
+                ("comment-reply-button", n),
+                format!("comment-reply-button-{}", id.0),
+                IconName::Comment,
                 "Reply",
                 KeyHint::for_action(&ReplyToThread, cx),
+                Press::Bubble,
                 colors,
-            ))
-            .child(hint(
-                if on_reply { "Edit reply" } else { "Edit" },
-                KeyHint::for_action(&EditComment, cx),
-                colors,
-            ))
-            .child(hint(
-                if entry.is_resolved() {
-                    "Reopen"
-                } else {
-                    "Resolve"
-                },
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.reply_to(id, window, cx);
+            })),
+        )
+        .child(
+            icon_button(
+                ("comment-resolve-button", n),
+                format!("comment-resolve-button-{}", id.0),
+                IconName::Check,
+                if resolved { "Reopen" } else { "Resolve" },
                 KeyHint::for_action(&ToggleResolved, cx),
+                Press::Bubble,
+                colors,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.toggle_resolved_of(id, window, cx);
+            })),
+        )
+    }
+
+    /// One reply. A click selects it, as the arrow keys do.
+    #[allow(clippy::too_many_arguments)]
+    fn render_reply(
+        &self,
+        thread: CommentId,
+        reply: &Reply,
+        selected: bool,
+        (name_color, body_color): (Hsla, Hsla),
+        now: i64,
+        colors: &ThemeColors,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let reply_id = reply.id;
+        let ReplyId(n) = reply_id;
+        div()
+            .id(("comment-reply", n as usize))
+            .debug_selector(move || format!("comment-reply-{}-{}", thread.0, n))
+            .flex()
+            .flex_col()
+            .gap(SPACE_0_5)
+            .px(SPACE_1)
+            .py(SPACE_0_5)
+            .rounded(RADIUS_SM)
+            .when(selected, |block| block.bg(colors.selection))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hover_reply(thread, reply_id, *hovered, cx);
+            }))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.select_reply(thread, reply_id, window, cx);
+            }))
+            .child(meta_line(
+                &reply.author,
+                relative_time(reply.created_at, now),
+                false,
+                name_color,
                 colors,
             ))
-            .child(hint(
-                if on_reply { "Delete reply" } else { "Delete" },
-                KeyHint::for_action(&DeleteComment, cx),
+            .child(body_text(&reply.body, body_color))
+    }
+
+    /// The commands on the active thread with their keys, shown while the
+    /// list has the keyboard. The glyphs come from the keymap, and each
+    /// label is a button that does what its key does.
+    fn render_thread_hints(
+        &self,
+        entry: &ThreadEntry,
+        colors: &ThemeColors,
+        cx: &Context<Self>,
+    ) -> Div {
+        let on_reply = self.selected_reply.is_some();
+        let n = entry.id.0;
+        let button = |name: &'static str, label: &'static str, key: Option<KeyHint>| {
+            text_button(
+                name,
+                format!("{name}-{n}"),
+                label,
+                key,
+                Look::Hint,
+                false,
+                Press::Bubble,
                 colors,
-            ))
+            )
+        };
+        hint_row(colors)
+            .debug_selector(|| "comment-thread-hints".into())
+            .mt(SPACE_1)
+            .child(
+                button(
+                    "comment-hint-reply",
+                    "Reply",
+                    KeyHint::for_action(&ReplyToThread, cx),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.reply(window, cx);
+                })),
+            )
+            .child(
+                button(
+                    "comment-hint-edit",
+                    if on_reply { "Edit reply" } else { "Edit" },
+                    KeyHint::for_action(&EditComment, cx),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.edit(window, cx);
+                })),
+            )
+            .child(
+                button(
+                    "comment-hint-resolve",
+                    if entry.is_resolved() {
+                        "Reopen"
+                    } else {
+                        "Resolve"
+                    },
+                    KeyHint::for_action(&ToggleResolved, cx),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_resolved(window, cx);
+                })),
+            )
+            .child(
+                button(
+                    "comment-hint-delete",
+                    if on_reply { "Delete reply" } else { "Delete" },
+                    KeyHint::for_action(&DeleteComment, cx),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.request_delete(window, cx);
+                })),
+            )
     }
 
     fn render_delete_confirmation(
@@ -659,22 +1003,43 @@ impl CommentsPanel {
                 div()
                     .flex()
                     .gap(SPACE_2)
+                    // The two buttons leave the keyboard on the list, where
+                    // `enter` and `escape` answer the question.
                     .child(
-                        Button::new("confirm-delete-comment", "Delete")
-                            .danger()
-                            .size(ButtonSize::Compact)
-                            .key_hint(KeyHint::for_action(&ConfirmDelete, cx))
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        text_button(
+                            "confirm-delete-comment",
+                            "confirm-delete-comment".into(),
+                            "Delete",
+                            KeyHint::for_action(&ConfirmDelete, cx),
+                            Look::Danger,
+                            false,
+                            Press::Bubble,
+                            colors,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
                                 this.confirm_delete(window, cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        Button::new("cancel-delete-comment", "Keep")
-                            .size(ButtonSize::Compact)
-                            .key_hint(KeyHint::for_action(&CancelDelete, cx))
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        text_button(
+                            "cancel-delete-comment",
+                            "cancel-delete-comment".into(),
+                            "Keep",
+                            KeyHint::for_action(&CancelDelete, cx),
+                            Look::Quiet,
+                            false,
+                            Press::Bubble,
+                            colors,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
                                 this.cancel_delete(window, cx);
-                            })),
+                            },
+                        )),
                     ),
             )
     }
@@ -716,17 +1081,6 @@ impl CommentsPanel {
                 }),
         )
     }
-
-    /// A click on a thread: it becomes active, the editor scrolls to its
-    /// anchor, and the list takes focus (unless a composer is open, which
-    /// keeps it).
-    fn click_thread(&mut self, id: CommentId, window: &mut Window, cx: &mut Context<Self>) {
-        self.select_thread(Some(id), cx);
-        if self.draft.is_none() {
-            window.focus(&self.focus_handle);
-        }
-        cx.notify();
-    }
 }
 
 /// The anchored text, quoted beside a bar in the comment colour.
@@ -753,7 +1107,13 @@ fn quote_line(quote: SharedString, colors: &ThemeColors) -> Div {
 }
 
 /// "Author  5 min ago", plus "Resolved" for a resolved thread.
-fn meta_line(author: &str, time: String, resolved: bool, colors: &ThemeColors) -> Div {
+fn meta_line(
+    author: &str,
+    time: String,
+    resolved: bool,
+    name_color: Hsla,
+    colors: &ThemeColors,
+) -> Div {
     let author: SharedString = if author.is_empty() {
         "Unknown".into()
     } else {
@@ -769,7 +1129,7 @@ fn meta_line(author: &str, time: String, resolved: bool, colors: &ThemeColors) -
                 .truncate()
                 .text_size(UI_TEXT_SM)
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors.ink)
+                .text_color(name_color)
                 .child(author),
         )
         .child(
@@ -795,32 +1155,6 @@ fn body_text(body: &str, color: Hsla) -> Div {
         .min_w_0()
         .text_color(color)
         .child(SharedString::from(body.to_string()))
-}
-
-fn reply_block(
-    thread: CommentId,
-    reply: &Reply,
-    selected: bool,
-    now: i64,
-    colors: &ThemeColors,
-) -> Div {
-    let ReplyId(reply_id) = reply.id;
-    div()
-        .debug_selector(|| format!("comment-reply-{}-{}", thread.0, reply_id))
-        .flex()
-        .flex_col()
-        .gap(SPACE_0_5)
-        .px(SPACE_1)
-        .py(SPACE_0_5)
-        .rounded(RADIUS_SM)
-        .when(selected, |block| block.bg(colors.selection))
-        .child(meta_line(
-            &reply.author,
-            relative_time(reply.created_at, now),
-            false,
-            colors,
-        ))
-        .child(body_text(&reply.body, colors.ink))
 }
 
 fn hint_row(colors: &ThemeColors) -> Div {

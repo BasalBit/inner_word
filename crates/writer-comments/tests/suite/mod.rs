@@ -1,6 +1,7 @@
 mod compose;
 mod drafts;
 mod layout;
+mod mouse;
 mod navigation;
 mod pure;
 mod random;

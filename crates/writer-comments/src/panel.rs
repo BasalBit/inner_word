@@ -31,6 +31,7 @@ use crate::{
 
 mod compose;
 mod navigation;
+mod pointer;
 mod resolve;
 
 /// The editor highlight layer that marks the text a new comment will be
@@ -223,6 +224,13 @@ pub struct CommentsPanel {
     /// How many rows of the list were built so far (see
     /// [`CommentsPanel::rows_built`]).
     pub(crate) rows_built: u64,
+    /// The thread card the pointer is over: it shows its buttons.
+    pub(crate) hovered: Option<CommentId>,
+    /// The reply the pointer is over.
+    pub(crate) hovered_reply: Option<(CommentId, ReplyId)>,
+    /// Whether the composer holds nothing but white space (its save button
+    /// is disabled then).
+    pub(crate) composer_empty: bool,
     clock: Rc<dyn Fn() -> Timestamp>,
     _editor_subscriptions: [Subscription; 2],
     _subscriptions: Vec<Subscription>,
@@ -326,6 +334,15 @@ impl CommentsPanel {
         });
 
         subscriptions.push(cx.observe_self(Self::report_open));
+        // The save button of the composer is live only while there is
+        // something to save.
+        subscriptions.push(cx.observe(&composer, |this, composer, cx| {
+            let empty = composer.read(cx).plain_text().trim().is_empty();
+            if empty != this.composer_empty {
+                this.composer_empty = empty;
+                cx.notify();
+            }
+        }));
         let focus_handle = cx.focus_handle();
         register_panel(window.window_handle(), cx.weak_entity(), cx);
 
@@ -349,6 +366,9 @@ impl CommentsPanel {
             list: ListState::new(0, ListAlignment::Top, LIST_OVERDRAW),
             reveal: None,
             rows_built: 0,
+            hovered: None,
+            hovered_reply: None,
+            composer_empty: true,
             clock: Rc::new(time::now),
             _subscriptions: subscriptions,
             _refresh_times: refresh_times,
@@ -808,20 +828,21 @@ impl CommentsPanel {
         cx.notify();
     }
 
-    /// A thread the panel does not list has no tint in the text either: a
-    /// resolved thread is tinted only while "show resolved" is on. (The
+    /// A resolved thread is done with, and its text reads as plain text
+    /// again: it has no tint, whether the panel lists it or not. The one
+    /// exception is the resolved thread that is the active one (which it
+    /// can only be while "show resolved" is on): its text is marked, so
+    /// that choosing it in the panel still shows what it is about. (The
     /// editor forgets the set when its document is replaced, and does not
     /// follow edits, so this runs with every refresh.)
     fn sync_hidden_tints(&mut self, cx: &mut Context<Self>) {
-        let mut hidden: Vec<CommentId> = if self.show_resolved {
-            Vec::new()
-        } else {
-            self.threads
-                .iter()
-                .filter(|entry| entry.is_resolved())
-                .map(|entry| entry.id)
-                .collect()
-        };
+        let active = self.active;
+        let mut hidden: Vec<CommentId> = self
+            .threads
+            .iter()
+            .filter(|entry| entry.is_resolved() && Some(entry.id) != active)
+            .map(|entry| entry.id)
+            .collect();
         hidden.sort_unstable();
         let mut current: Vec<CommentId> = self.editor.read(cx).hidden_comments().collect();
         current.sort_unstable();
@@ -924,6 +945,10 @@ impl CommentsPanel {
                 editor.scroll_to_position(anchor.start, Autoscroll::Center, cx);
             }
         });
+        if changed {
+            // A resolved thread is tinted only while it is the active one.
+            self.sync_hidden_tints(cx);
+        }
         self.scroll_list_to_active(cx);
         if changed {
             cx.emit(CommentsEvent::ActiveThreadChanged(id));

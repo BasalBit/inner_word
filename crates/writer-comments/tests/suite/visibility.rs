@@ -124,11 +124,14 @@ fn show_resolved_is_reported(cx: &mut TestAppContext) {
     let (f, cx) = open(sample(), cx);
     f.comment(0, 4, 9, "Tighten this", cx);
     cx.simulate_keystrokes("cmd-2 x");
-    cx.simulate_keystrokes("s");
-    assert_eq!(
-        f.events(cx).last(),
-        Some(&CommentsEvent::ShowResolvedChanged(true))
+    // The last open thread is resolved: the keyboard is back in the text.
+    cx.simulate_keystrokes("cmd-2 s");
+    assert!(
+        f.events(cx)
+            .contains(&CommentsEvent::ShowResolvedChanged(true))
     );
+    f.panel
+        .read_with(cx, |panel, _| assert!(panel.show_resolved()));
     // The footer row does the same with the mouse.
     let footer = cx
         .debug_bounds("comments-resolved-toggle")

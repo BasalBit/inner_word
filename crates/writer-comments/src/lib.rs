@@ -131,6 +131,7 @@
 #![warn(missing_docs)]
 
 mod actions;
+mod controls;
 mod panel;
 mod render;
 pub mod threads;

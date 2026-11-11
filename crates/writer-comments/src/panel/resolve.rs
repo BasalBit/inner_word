@@ -27,6 +27,21 @@ impl CommentsPanel {
         });
         self.activate_neighbour(position, window, cx);
         self.repair_focus(window, cx);
+        self.leave_empty_list(window, cx);
+    }
+
+    /// After a command emptied the list while threads remain that are not
+    /// listed (the last open thread was resolved or deleted, resolved ones
+    /// are hidden): nothing is left to act on, so the keyboard goes back
+    /// to the text instead of staying on a list without a thread.
+    fn leave_empty_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_handle.is_focused(window)
+            && self.draft.is_none()
+            && self.listed_threads().next().is_none()
+        {
+            self.editor.read(cx).focus(window);
+            cx.notify();
+        }
     }
 
     /// After the active thread left the list: with focus in the list, the
@@ -103,6 +118,7 @@ impl CommentsPanel {
             self.repair_focus(window, cx);
         }
         self.restore_kept_draft(cx);
+        self.leave_empty_list(window, cx);
         cx.notify();
     }
 

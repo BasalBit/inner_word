@@ -154,12 +154,18 @@ fn resolve_hides_reopen_brings_back(cx: &mut TestAppContext) {
     f.panel
         .read_with(cx, |panel, _| assert!(panel.show_resolved()));
     assert_eq!(f.listed_ids(cx), vec![first, second]);
-    assert_eq!(hidden(&f, cx), vec![]);
+    // Listed again, but done with: its text stays plain until the thread
+    // is the active one.
+    assert_eq!(hidden(&f, cx), vec![first]);
     cx.simulate_keystrokes("s");
     assert_eq!(hidden(&f, cx), vec![first]);
     cx.simulate_keystrokes("s");
     cx.simulate_keystrokes("up");
     assert_eq!(f.active(cx), Some(first));
+    assert_eq!(hidden(&f, cx), vec![]);
+    cx.simulate_keystrokes("down");
+    assert_eq!(hidden(&f, cx), vec![first]);
+    cx.simulate_keystrokes("up");
     cx.simulate_keystrokes("x");
     f.panel.read_with(cx, |panel, _| {
         assert!(!panel.thread(first).unwrap().is_resolved());
@@ -179,18 +185,34 @@ fn resolve_hides_reopen_brings_back(cx: &mut TestAppContext) {
     });
 
     // Resolve everything with resolved threads hidden: the panel stays (its
-    // footer leads back to them) and the list keeps focus.
+    // footer leads back to them), and with nothing left to act on the
+    // keyboard is back in the text.
     cx.simulate_keystrokes("s");
     f.panel
         .read_with(cx, |panel, _| assert!(!panel.show_resolved()));
-    cx.simulate_keystrokes("x x");
+    cx.simulate_keystrokes("x");
+    assert_eq!(f.focus(cx), Focus::List);
+    cx.simulate_keystrokes("x");
     assert!(f.listed_ids(cx).is_empty());
     assert_eq!(f.active(cx), None);
-    assert_eq!(f.focus(cx), Focus::List);
+    assert_eq!(f.focus(cx), Focus::Editor);
     f.panel.read_with(cx, |panel, _| {
         assert!(panel.is_open());
         assert_eq!(panel.resolved_count(), 2);
     });
+    // What is typed now is text, not a list command.
+    let before = f.editor.read_with(cx, |editor, _| editor.plain_text());
+    cx.simulate_input("zz");
+    let after = f.editor.read_with(cx, |editor, _| editor.plain_text());
+    assert_eq!(after.len(), before.len() + 2);
+    cx.simulate_keystrokes("cmd-z");
+
+    // The empty list can still be entered: it says that it has the
+    // keyboard and which keys lead on.
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::List);
+    assert!(cx.debug_bounds("comments-empty").is_some());
+    assert!(cx.debug_bounds("comments-empty-hints").is_some());
     cx.simulate_keystrokes("s down");
     assert_eq!(f.active(cx), Some(first));
 }

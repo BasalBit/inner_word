@@ -8,7 +8,10 @@
 //! Files written: `sample.md`, `sample-footnotes.md`, `sample.txt`,
 //! `sample-social.txt`, `sample.docx`, `lists.docx` (one page of lists that
 //! restart in every way, small enough for a Quick Look thumbnail),
-//! `book.docx`, `book.md`.
+//! `book.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
+//! numbered items say their own number ("item 2"), which passes every
+//! limit the DOCX numbering has (a definition per list, shared
+//! definitions, numbers as text).
 
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
@@ -204,6 +207,40 @@ fn lists() -> Document {
     ])
 }
 
+/// A long book: every section has prose, a numbered list with a nested
+/// list, and now and then bullets, a quote and code.
+fn long_book(sections: usize) -> Document {
+    let n = |number: usize, indent: u8| {
+        Block::with_text(BlockKind::NumberedItem, &format!("item {number}")).with_indent(indent)
+    };
+    let mut blocks = Vec::new();
+    for i in 1..=sections {
+        if i % 20 == 1 {
+            blocks.push(Block::with_text(
+                BlockKind::heading(1),
+                &format!("Chapter {}", i / 20 + 1),
+            ));
+        }
+        blocks.push(Block::with_text(BlockKind::heading(2), &format!("Section {i}")));
+        blocks.push(Block::paragraph(
+            "The quick brown fox jumps over the lazy dog, and then the dog, being lazy, does nothing at all \
+             about it, which is exactly what the fox was counting on when it planned the jump.",
+        ));
+        blocks.extend([n(1, 0), n(1, 1), n(2, 1), n(2, 0), n(1, 1), n(3, 0)]);
+        if i % 3 == 0 {
+            blocks.push(Block::with_text(BlockKind::BulletItem, "A bullet"));
+            blocks.extend([n(1, 1), n(2, 1)]);
+        }
+        if i % 7 == 0 {
+            blocks.push(Block::with_text(BlockKind::Quote, "A quote between the lists."));
+        }
+        if i % 11 == 0 {
+            blocks.push(Block::with_text(BlockKind::code(), "let x = 1;\nlet y = 2;"));
+        }
+    }
+    Document::from_blocks(blocks)
+}
+
 fn main() -> std::io::Result<()> {
     let dir = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let dir = std::path::Path::new(&dir);
@@ -242,6 +279,12 @@ fn main() -> std::io::Result<()> {
     std::fs::write(
         dir.join("lists.docx"),
         to_docx(&ExportSource::single("Lists", &lists), &docx),
+    )?;
+
+    let long = long_book(1200);
+    std::fs::write(
+        dir.join("long.docx"),
+        to_docx(&ExportSource::single("A Long Book", &long), &docx),
     )?;
 
     // A folder exported as one file: three chapters, the second in landscape.

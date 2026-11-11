@@ -161,9 +161,7 @@ impl Allocator {
         // so does a list nested in one.
         let continues_literal =
             (self.literal_at[level] && ordinal > 1) || self.literal_at[..level].iter().any(|l| *l);
-        for deeper in level + 1..LEVELS {
-            self.literal_at[deeper] = false;
-        }
+        self.literal_at[level + 1..].fill(false);
         let candidates = [self.last_at[level], self.last];
         let reuse = candidates
             .into_iter()
@@ -193,10 +191,8 @@ impl Allocator {
         own.used[level] = true;
         own.counters[level] = Some(ordinal);
         shared[level] = Some(ordinal);
-        for deeper in level + 1..LEVELS {
-            own.counters[deeper] = None;
-            shared[deeper] = None;
-        }
+        own.counters[level + 1..].fill(None);
+        shared[level + 1..].fill(None);
         self.last_at[level] = Some(index);
         self.last = Some(index);
         Slot::Instance(index)

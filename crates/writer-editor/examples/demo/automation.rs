@@ -2,7 +2,11 @@
 //! writer-app). Same script syntax, subset of steps:
 //! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `typeslow:<text>`,
 //! `bench:<count> <keystrokes>`, `theme:<light|dark|system>`,
-//! `screenshot:<path>`, `log:<text>`, `quit`.
+//! `screenshot:<path>`, `log:<text>`, `quit`, and for runs that post real
+//! mouse events to the process: `frame` (draw one; a background window
+//! draws none by itself), `state` (selection, selected text, scroll,
+//! link tooltip, to-dos, last event) and `where:<block>:<offset>` (the
+//! window point of a position, which is what a posted click needs).
 //! Steps are separated by `;` or newlines; `THE_WRITER_AUTOMATION=@file`
 //! reads a file. `typeslow` types one character per frame and `bench`
 //! presses a sequence of keys `count` times; both draw a frame after
@@ -31,6 +35,9 @@ enum Step {
     Theme(ThemeMode),
     Screenshot(PathBuf),
     Log(String),
+    Frame,
+    State,
+    Where(usize, usize),
     Quit,
 }
 
@@ -69,6 +76,14 @@ fn parse(source: &str) -> Result<Vec<Step>> {
             }
             "screenshot" => Step::Screenshot(PathBuf::from(arg.trim())),
             "log" => Step::Log(arg.to_string()),
+            "frame" => Step::Frame,
+            "state" => Step::State,
+            "where" => {
+                let (block, offset) = arg
+                    .split_once(':')
+                    .ok_or_else(|| anyhow!("where needs <block>:<offset>"))?;
+                Step::Where(block.trim().parse()?, offset.trim().parse()?)
+            }
             "quit" => Step::Quit,
             other => bail!("unknown step {other:?}"),
         });
@@ -230,6 +245,33 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             .await?;
                     }
                     Step::Log(text) => eprintln!("[automation] {text}"),
+                    Step::Frame => {
+                        window.update(cx, |_, window, _| window.refresh())?;
+                        draw_frame(window, view, cx);
+                    }
+                    Step::State => {
+                        window.update(cx, |_, window, _| window.refresh())?;
+                        draw_frame(window, view, cx);
+                        let line = window.update(cx, |root, _, cx| {
+                            root.downcast::<crate::Demo>()
+                                .map(|demo| demo.read(cx).state_line(cx))
+                                .unwrap_or_default()
+                        })?;
+                        eprintln!("[automation] state {line}");
+                    }
+                    Step::Where(block, offset) => {
+                        let at = window.update(cx, |root, _, cx| {
+                            root.downcast::<crate::Demo>()
+                                .ok()
+                                .and_then(|demo| demo.read(cx).where_is(block, offset, cx))
+                        })?;
+                        match at {
+                            Some((x, y)) => {
+                                eprintln!("[automation] where {block}:{offset} {x:.1} {y:.1}")
+                            }
+                            None => eprintln!("[automation] where {block}:{offset} unknown"),
+                        }
+                    }
                     Step::Quit => return Ok(true),
                 }
                 Ok(false)

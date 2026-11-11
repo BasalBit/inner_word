@@ -399,6 +399,12 @@ impl Demo {
         });
         let subscriptions = vec![
             cx.subscribe(&editor, |this: &mut Self, _, event: &EditorEvent, cx| {
+                // Scripted runs with posted mouse events read these.
+                if std::env::var_os(automation::ENV).is_some()
+                    && let EditorEvent::ContextMenuRequested(request) = event
+                {
+                    eprintln!("[event] {request:?}");
+                }
                 this.last_event = match event {
                     EditorEvent::Edited { change } => {
                         format!("Edited (revision {})", change.revision).into()
@@ -691,6 +697,57 @@ impl Demo {
         self.composer.read(cx).focus(window);
     }
 
+    /// One line about the editor for scripted runs (`state`).
+    fn state_line(&self, cx: &App) -> String {
+        let editor = self.editor.read(cx);
+        let selection = editor.selection();
+        let mut selected: String = editor.state().selected_text().chars().take(60).collect();
+        selected = selected.replace('\n', "\\n");
+        let todos: Vec<String> = editor
+            .document()
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| match block.kind() {
+                writer_core::BlockKind::TodoItem { checked } => Some(format!("{index}:{checked}")),
+                _ => None,
+            })
+            .take(8)
+            .collect();
+        format!(
+            "selection {}:{}-{}:{} selected {:?} scroll {:.0} page_view {} tip {:?} todos [{}] \
+             viewport {:?} last_event {}",
+            selection.anchor.block,
+            selection.anchor.offset,
+            selection.head.block,
+            selection.head.offset,
+            selected,
+            f32::from(editor.scroll_offset()),
+            editor.page_view(),
+            editor.link_tooltip(cx),
+            todos.join(" "),
+            editor.viewport_bounds().map(|viewport| {
+                (
+                    f32::from(viewport.left()),
+                    f32::from(viewport.top()),
+                    f32::from(viewport.right()),
+                    f32::from(viewport.bottom()),
+                )
+            }),
+            self.last_event,
+        )
+    }
+
+    /// The window point in the middle of the row at a position (`where`).
+    fn where_is(&self, block: usize, offset: usize, cx: &App) -> Option<(f32, f32)> {
+        let bounds = self
+            .editor
+            .read(cx)
+            .position_bounds(Position::new(block, offset))?;
+        let center = bounds.center();
+        Some((f32::from(center.x), f32::from(center.y)))
+    }
+
     fn status(&self, cx: &App) -> String {
         let editor = self.editor.read(cx);
         let stats = editor.stats();
@@ -898,6 +955,17 @@ fn main() {
                 || std::env::var_os("THE_WRITER_AUTOMATION_FOREGROUND").is_some()
             {
                 cx.activate(true);
+            }
+            // Scripted runs with posted events: what GPUI made of each key.
+            if std::env::var_os(automation::ENV).is_some() {
+                cx.observe_keystrokes(|event, _, _| {
+                    eprintln!(
+                        "[key] {} action {:?}",
+                        event.keystroke.unparse(),
+                        event.action.as_ref().map(|action| action.name())
+                    );
+                })
+                .detach();
             }
             automation::run_from_env(window.into(), cx);
         });

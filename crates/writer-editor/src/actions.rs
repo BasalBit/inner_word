@@ -35,9 +35,9 @@ actions!(
         MoveWordLeft,
         /// Move the caret to the next word end.
         MoveWordRight,
-        /// Move the caret to the start of the line.
+        /// Move the caret to the start of the visual row.
         MoveToLineStart,
-        /// Move the caret to the end of the line.
+        /// Move the caret to the end of the visual row.
         MoveToLineEnd,
         /// Move the caret to the start of the document.
         MoveToDocumentStart,
@@ -60,9 +60,9 @@ actions!(
         SelectWordLeft,
         /// Extend the selection to the next word end.
         SelectWordRight,
-        /// Extend the selection to the start of the line.
+        /// Extend the selection to the start of the visual row.
         SelectToLineStart,
-        /// Extend the selection to the end of the line.
+        /// Extend the selection to the end of the visual row.
         SelectToLineEnd,
         /// Extend the selection to the start of the document.
         SelectToDocumentStart,
@@ -83,9 +83,9 @@ actions!(
         DeleteWordBackward,
         /// Delete forward to the next word end.
         DeleteWordForward,
-        /// Delete back to the start of the line.
+        /// Delete back to the start of the visual row.
         DeleteToLineStart,
-        /// Delete forward to the end of the line.
+        /// Delete forward to the end of the visual row.
         DeleteToLineEnd,
         // --- Insertion ---
         /// Start a new paragraph (in compact mode with submit-on-enter:

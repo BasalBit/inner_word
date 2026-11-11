@@ -136,6 +136,51 @@ impl Editor {
         self.reveal_caret(cx);
     }
 
+    /// The start or the end of the visual row the selection head is on:
+    /// what `cmd-left` / `cmd-right` go to in a wrapped paragraph. `None`
+    /// before the first layout.
+    fn row_edge(&self, end: bool) -> Option<Position> {
+        let row = self.visual_row(self.state.selection().head)?;
+        if !end {
+            return Some(row.start);
+        }
+        // A row that ends at a soft wrap ends where the next one starts;
+        // the caret stays on this row, before the space it wraps at.
+        let block = self.state.document().block(row.end.block)?;
+        let content = block.text();
+        let soft_wrapped =
+            row.end.offset < content.len() && content.as_bytes()[row.end.offset] != b'\n';
+        if soft_wrapped && row.end.offset > row.start.offset {
+            let before = text::prev_grapheme_boundary(content, row.end.offset);
+            Some(Position::new(row.end.block, before.max(row.start.offset)))
+        } else {
+            Some(row.end)
+        }
+    }
+
+    /// Moves or extends to the start or end of the visual row (of the hard
+    /// line when there is no layout yet).
+    fn line_edge(&mut self, end: bool, extend: bool, cx: Cx) {
+        let Some(target) = self.row_edge(end) else {
+            let movement = if end {
+                Movement::LineEnd
+            } else {
+                Movement::LineStart
+            };
+            return self.movement(movement, extend, cx);
+        };
+        let anchor = if extend {
+            self.state.selection().anchor
+        } else {
+            target
+        };
+        self.edit(
+            |state| state.set_selection(Selection::new(anchor, target)),
+            cx,
+        );
+        self.reveal_caret(cx);
+    }
+
     /// A movement key brings the caret into view even when the caret has
     /// nowhere to go (`cmd-up` at the start of a document that is scrolled
     /// down).
@@ -218,10 +263,10 @@ impl Editor {
         self.movement(Movement::WordRight, false, cx)
     }
     fn move_to_line_start(&mut self, _: &mut Window, cx: Cx) {
-        self.movement(Movement::LineStart, false, cx)
+        self.line_edge(false, false, cx)
     }
     fn move_to_line_end(&mut self, _: &mut Window, cx: Cx) {
-        self.movement(Movement::LineEnd, false, cx)
+        self.line_edge(true, false, cx)
     }
     fn move_to_document_start(&mut self, _: &mut Window, cx: Cx) {
         self.movement(Movement::DocStart, false, cx)
@@ -254,10 +299,10 @@ impl Editor {
         self.movement(Movement::WordRight, true, cx)
     }
     fn select_to_line_start(&mut self, _: &mut Window, cx: Cx) {
-        self.movement(Movement::LineStart, true, cx)
+        self.line_edge(false, true, cx)
     }
     fn select_to_line_end(&mut self, _: &mut Window, cx: Cx) {
-        self.movement(Movement::LineEnd, true, cx)
+        self.line_edge(true, true, cx)
     }
     fn select_to_document_start(&mut self, _: &mut Window, cx: Cx) {
         self.movement(Movement::DocStart, true, cx)
@@ -291,11 +336,51 @@ impl Editor {
     fn delete_word_forward(&mut self, _: &mut Window, cx: Cx) {
         self.user_edit(|state| state.delete_word_forward(), cx);
     }
+    /// Deletes back to the start of the visual row (with a selection, or
+    /// at the start of a row, what the engine's line deletion does).
     fn delete_to_line_start(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.delete_to_line_start(), cx);
+        let selection = self.state.selection();
+        let range = selection
+            .is_collapsed()
+            .then(|| self.visual_row(selection.head))
+            .flatten()
+            .map(|row| TextRange::new(row.start, selection.head))
+            .filter(|range| !range.is_empty());
+        match range {
+            Some(range) => self.delete_text(range, cx),
+            None => {
+                self.user_edit(|state| state.delete_to_line_start(), cx);
+            }
+        }
     }
+    /// Deletes forward to the end of the visual row.
     fn delete_to_line_end(&mut self, _: &mut Window, cx: Cx) {
-        self.user_edit(|state| state.delete_to_line_end(), cx);
+        let selection = self.state.selection();
+        let range = selection
+            .is_collapsed()
+            .then(|| self.visual_row(selection.head))
+            .flatten()
+            .map(|row| TextRange::new(selection.head, row.end))
+            .filter(|range| !range.is_empty());
+        match range {
+            Some(range) => self.delete_text(range, cx),
+            None => {
+                self.user_edit(|state| state.delete_to_line_end(), cx);
+            }
+        }
+    }
+
+    /// Deletes a range as one user edit, leaving the caret at its start.
+    fn delete_text(&mut self, range: TextRange, cx: Cx) {
+        self.user_edit(
+            |state| {
+                state.grouped(|state| {
+                    state.select_range(range);
+                    state.delete_selection()
+                })
+            },
+            cx,
+        );
     }
 
     fn newline(&mut self, _: &mut Window, cx: Cx) {

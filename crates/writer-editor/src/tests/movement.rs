@@ -2,7 +2,7 @@
 //! and hit testing round trips.
 
 use gpui::{TestAppContext, px};
-use writer_core::{Alignment, Block, BlockKind, Document, Position, text};
+use writer_core::{Alignment, Block, BlockKind, Document, Position, Selection, text};
 
 use super::slice::{open, setup};
 use crate::{Editor, EditorConfig};
@@ -108,6 +108,79 @@ fn vertical_movement_keeps_a_goal_column(cx: &mut TestAppContext) {
     editor.read_with(cx, |editor, _| {
         assert_eq!(head(editor), editor.document().end());
     });
+}
+
+#[gpui::test]
+fn line_keys_work_on_visual_rows(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(wrapping(), EditorConfig::full(), cx);
+    let at = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| head(editor));
+    // Rows of the first paragraph are 65 bytes ("word " thirteen times).
+    let second = editor.read_with(cx, |editor, _| {
+        editor.visual_row(Position::new(0, 70)).unwrap()
+    });
+    assert_eq!((second.start.offset, second.end.offset), (65, 130));
+
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(0, 70)), cx);
+    });
+    // The start of the row, not of the paragraph.
+    cx.simulate_keystrokes("cmd-left");
+    assert_eq!(at(cx), Position::new(0, 65));
+    cx.simulate_keystrokes("cmd-left");
+    assert_eq!(at(cx), Position::new(0, 65));
+    // The end of the row: after its last word, before the space it wraps
+    // at, so the caret stays on the row.
+    cx.simulate_keystrokes("cmd-right");
+    assert_eq!(at(cx), Position::new(0, 129));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.visual_row(head(editor)).unwrap(), second);
+    });
+    cx.simulate_keystrokes("end ctrl-e");
+    assert_eq!(at(cx), Position::new(0, 129));
+    cx.simulate_keystrokes("home");
+    assert_eq!(at(cx), Position::new(0, 65));
+    // Extending selects the row.
+    cx.simulate_keystrokes("cmd-shift-right");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 65), Position::new(0, 129))
+        );
+    });
+    cx.simulate_keystrokes("right shift-home");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.selection(),
+            Selection::new(Position::new(0, 129), Position::new(0, 65))
+        );
+    });
+    // The last row of the paragraph ends at the end of the block.
+    cx.simulate_keystrokes("cmd-down cmd-up down down down down cmd-right");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            head(editor),
+            Position::new(0, editor.document().blocks()[0].len())
+        );
+    });
+
+    // Deleting to the start and to the end of the row.
+    let length = |cx: &mut gpui::VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.document().blocks()[0].len())
+    };
+    let before = length(cx);
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(0, 70)), cx);
+    });
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(at(cx), Position::new(0, 65));
+    assert_eq!(length(cx), before - 5);
+    cx.simulate_keystrokes("right right cmd-delete");
+    assert_eq!(at(cx), Position::new(0, 67));
+    // The row was 65 bytes again after the first deletion; 63 of them go.
+    assert_eq!(length(cx), before - 5 - 63);
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    assert_eq!(length(cx), before);
 }
 
 #[gpui::test]

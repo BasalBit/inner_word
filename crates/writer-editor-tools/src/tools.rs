@@ -2,7 +2,7 @@
 
 use gpui::{
     AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement,
-    Render, Subscription, Window, div, prelude::*,
+    Render, Subscription, WeakEntity, Window, div, prelude::*,
 };
 use writer_editor::{Editor, EditorEvent, PopupAnchor, PopupPlacement};
 use writer_ui::theme::GlobalTheme;
@@ -15,6 +15,7 @@ use crate::{
     insert_menu::InsertMenu,
     link::LinkTool,
     menu::{Mark, Menu, MenuEntry, MenuEvent},
+    text_menu::{OpenTextMenu, TextMenuExtension},
 };
 
 /// The tools of this crate.
@@ -30,6 +31,8 @@ pub enum ToolKind {
     Font,
     /// The find and replace bar (`cmd-f`, `cmd-alt-f`).
     Find,
+    /// The context menu of the text (right-click, `ctrl-enter`).
+    ContextMenu,
 }
 
 /// Emitted by [`EditorTools`] when a tool opens or closes.
@@ -122,6 +125,12 @@ pub struct EditorTools {
     /// `/` (set by `EditorEvent::TextInput`, consumed by the `Edited` that
     /// always follows it).
     slash_typed: bool,
+    /// The open context menu of the text.
+    pub(crate) text_menu: Option<OpenTextMenu>,
+    /// The host's items for the text context menu.
+    pub(crate) text_menu_extension: Option<TextMenuExtension>,
+    /// This view, for the handlers of menu items.
+    pub(crate) this: WeakEntity<Self>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -157,6 +166,9 @@ impl EditorTools {
             find_bar: None,
             find_placement: FindBarPlacement::default(),
             slash_typed: false,
+            text_menu: None,
+            text_menu_extension: None,
+            this: cx.weak_entity(),
             _subscriptions: subscriptions,
         }
     }
@@ -179,8 +191,12 @@ impl EditorTools {
         self.find_placement
     }
 
-    /// The open tool: a popup tool if one is open, else the find bar.
+    /// The open tool: the text context menu if it is open, else a popup
+    /// tool, else the find bar.
     pub fn active_tool(&self) -> Option<ToolKind> {
+        if self.text_menu.is_some() {
+            return Some(ToolKind::ContextMenu);
+        }
         match &self.popup {
             Some(popup) => Some(popup.kind()),
             None => self.find_bar.as_ref().map(|_| ToolKind::Find),
@@ -191,6 +207,7 @@ impl EditorTools {
     pub fn is_open(&self, kind: ToolKind) -> bool {
         match kind {
             ToolKind::Find => self.find_bar.is_some(),
+            ToolKind::ContextMenu => self.text_menu.is_some(),
             _ => self
                 .popup
                 .as_ref()
@@ -200,6 +217,7 @@ impl EditorTools {
 
     /// Closes whatever is open and returns focus to the editor.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_text_menu(window, cx);
         self.close_popup(false, window, cx);
         self.close_find_bar(cx);
         self.end_find_flash(cx);
@@ -352,6 +370,11 @@ impl EditorTools {
             MenuEvent::Dismissed => self.close_popup(true, window, cx),
             MenuEvent::Blurred => self.popup_lost_focus(window, cx),
             MenuEvent::ClickedOutside => self.popup_clicked_outside(window, cx),
+            MenuEvent::RowMenu { position } => {
+                if matches!(self.popup, Some(PopupTool::Font(_))) {
+                    self.open_font_row_menu(*position, window, cx);
+                }
+            }
         }
     }
 
@@ -429,7 +452,12 @@ impl EditorTools {
                     self.close_popup(false, window, cx);
                 }
             }
+            EditorEvent::ContextMenuRequested(request) => {
+                self.open_text_menu(request.clone(), window, cx);
+            }
             EditorEvent::DocumentReplaced => {
+                // The menu was composed for the old document.
+                self.close_text_menu(window, cx);
                 // The editor dropped its popup and its highlight layers. If
                 // the popup had the keyboard, the editor gets it back.
                 let had_focus = self.popup_has_focus(window, cx);

@@ -49,7 +49,7 @@ pub const TEXT_COLORS: [(&str, Rgb); 6] = [
 const SCAN_LIMIT: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Section {
+pub(crate) enum Section {
     Text,
     Highlight,
     Color,
@@ -89,26 +89,33 @@ const BLOCK_FIRST: [Section; 6] = [
 ];
 
 #[derive(Clone)]
-enum Effect {
+pub(crate) enum Effect {
     /// Dispatch an editor action to the editor.
     Editor(Rc<dyn Action>),
+    /// Toggle a highlight colour.
     Highlight(Highlight),
+    /// Take the highlight off (the context menu's "None").
+    NoHighlight,
     Color(Option<Rgb>),
     Link,
     Font,
 }
 
-struct FormatItem {
-    section: Section,
-    label: SharedString,
+pub(crate) struct FormatItem {
+    pub(crate) section: Section,
+    pub(crate) label: SharedString,
+    /// The row's name in the text context menu, where the section is a
+    /// submenu and its title need not be repeated ("Yellow" under
+    /// "Highlight", "Left" under "Align").
+    pub(crate) short: &'static str,
     keywords: &'static str,
     /// The current value, where a mark cannot say it (the font's name,
     /// the text size).
-    detail: Option<SharedString>,
-    mark: Mark,
-    swatch: Option<Hsla>,
-    key_hint: Option<KeyHint>,
-    effect: Effect,
+    pub(crate) detail: Option<SharedString>,
+    pub(crate) mark: Mark,
+    pub(crate) swatch: Option<Hsla>,
+    pub(crate) key_hint: Option<KeyHint>,
+    pub(crate) effect: Effect,
 }
 
 pub(crate) struct FormatMenu {
@@ -251,6 +258,17 @@ impl EditorTools {
             return;
         };
         self.close_popup(true, window, cx);
+        self.apply_format_effect(effect, window, cx);
+    }
+
+    /// Does what a row of the format menu (or the same row in the text
+    /// context menu) stands for.
+    pub(crate) fn apply_format_effect(
+        &mut self,
+        effect: Effect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match effect {
             Effect::Editor(action) => {
                 // The same path as the action's key binding.
@@ -260,6 +278,11 @@ impl EditorTools {
             Effect::Highlight(highlight) => self.editor.update(cx, |editor, cx| {
                 if !editor.is_read_only() {
                     editor.edit(|state| state.toggle_highlight(highlight), cx);
+                }
+            }),
+            Effect::NoHighlight => self.editor.update(cx, |editor, cx| {
+                if !editor.is_read_only() {
+                    editor.edit(|state| state.set_highlight(None), cx);
                 }
             }),
             Effect::Color(color) => self.editor.update(cx, |editor, cx| {
@@ -346,6 +369,18 @@ fn present_values(state: &EditorState, format: &FormatState) -> Present {
     present
 }
 
+/// A highlight colour's name as a menu row.
+fn highlight_title(highlight: Highlight) -> &'static str {
+    match highlight {
+        Highlight::Yellow => "Yellow",
+        Highlight::Green => "Green",
+        Highlight::Blue => "Blue",
+        Highlight::Pink => "Pink",
+        Highlight::Orange => "Orange",
+        Highlight::Purple => "Purple",
+    }
+}
+
 fn rgb_color(rgb: Rgb) -> Hsla {
     Rgba {
         r: f32::from(rgb.r) / 255.,
@@ -358,58 +393,60 @@ fn rgb_color(rgb: Rgb) -> Hsla {
 
 /// Every row of the format menu with its current state, in canonical
 /// order (the menu reorders the sections).
-fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
+pub(crate) fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     let format = state.format_state();
     let present = present_values(state, &format);
     let colors = cx.theme().colors;
     let mut items = Vec::new();
 
-    let mut action = |section, label: &str, keywords, mark, action: Rc<dyn Action>| {
-        items.push(FormatItem {
-            section,
-            label: SharedString::from(label.to_string()),
-            keywords,
-            detail: None,
-            mark,
-            swatch: None,
-            key_hint: KeyHint::for_action(action.as_ref(), cx),
-            effect: Effect::Editor(action),
-        });
-    };
+    let mut action =
+        |section, (label, short): (&str, &'static str), keywords, mark, action: Rc<dyn Action>| {
+            items.push(FormatItem {
+                section,
+                label: SharedString::from(label.to_string()),
+                short,
+                keywords,
+                detail: None,
+                mark,
+                swatch: None,
+                key_hint: KeyHint::for_action(action.as_ref(), cx),
+                effect: Effect::Editor(action),
+            });
+        };
 
     // Inline formatting.
     let text = Section::Text;
     action(
         text,
-        "Bold",
+        ("Bold", "Bold"),
         "strong weight",
         toggle_mark(format.bold),
         Rc::new(editor::ToggleBold),
     );
     action(
         text,
-        "Italic",
+        ("Italic", "Italic"),
         "emphasis slanted",
         toggle_mark(format.italic),
         Rc::new(editor::ToggleItalic),
     );
     action(
         text,
-        "Underline",
+        ("Underline", "Underline"),
         "",
         toggle_mark(format.underline),
         Rc::new(editor::ToggleUnderline),
     );
     action(
         text,
-        "Strikethrough",
+        ("Strikethrough", "Strikethrough"),
         "strike crossed out deleted",
         toggle_mark(format.strikethrough),
         Rc::new(editor::ToggleStrikethrough),
     );
     action(
         text,
-        "Inline code",
+        ("Inline code", "Inline Code"),
         "monospace",
         toggle_mark(format.code),
         Rc::new(editor::ToggleInlineCode),
@@ -421,12 +458,12 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     let turn = Section::TurnInto;
     action(
         turn,
-        "Paragraph",
+        ("Paragraph", "Paragraph"),
         "text body normal plain",
         kind_mark(&BlockKind::Paragraph),
         Rc::new(editor::SetParagraph),
     );
-    let headings: [(Rc<dyn Action>, &str, &str); 6] = [
+    let headings: [(Rc<dyn Action>, &'static str, &str); 6] = [
         (Rc::new(editor::SetHeading1), "Heading 1", "h1 title"),
         (Rc::new(editor::SetHeading2), "Heading 2", "h2 section"),
         (Rc::new(editor::SetHeading3), "Heading 3", "h3 subsection"),
@@ -436,39 +473,39 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     ];
     for (level, (heading, label, keywords)) in headings.into_iter().enumerate() {
         let kind = BlockKind::heading(level as u8 + 1);
-        action(turn, label, keywords, kind_mark(&kind), heading);
+        action(turn, (label, label), keywords, kind_mark(&kind), heading);
     }
     action(
         turn,
-        "Bullet list",
+        ("Bullet list", "Bullet List"),
         "ul unordered points",
         kind_mark(&BlockKind::BulletItem),
         Rc::new(editor::ToggleBulletList),
     );
     action(
         turn,
-        "Numbered list",
+        ("Numbered list", "Numbered List"),
         "ol ordered steps",
         kind_mark(&BlockKind::NumberedItem),
         Rc::new(editor::ToggleNumberedList),
     );
     action(
         turn,
-        "To-do list",
+        ("To-do list", "To-do List"),
         "todo task checkbox checklist",
         kind_mark(&BlockKind::todo()),
         Rc::new(editor::ToggleTodoList),
     );
     action(
         turn,
-        "Quote",
+        ("Quote", "Quote"),
         "blockquote citation",
         kind_mark(&BlockKind::Quote),
         Rc::new(editor::ToggleQuote),
     );
     action(
         turn,
-        "Code block",
+        ("Code block", "Code Block"),
         "pre monospace snippet",
         kind_mark(&BlockKind::code()),
         Rc::new(editor::ToggleCodeBlock),
@@ -483,28 +520,28 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     let align = Section::Align;
     action(
         align,
-        "Align left",
+        ("Align left", "Left"),
         "",
         align_mark(Alignment::Left),
         Rc::new(editor::AlignLeft),
     );
     action(
         align,
-        "Align centre",
+        ("Align centre", "Centre"),
         "center middle",
         align_mark(Alignment::Center),
         Rc::new(editor::AlignCenter),
     );
     action(
         align,
-        "Align right",
+        ("Align right", "Right"),
         "",
         align_mark(Alignment::Right),
         Rc::new(editor::AlignRight),
     );
     action(
         align,
-        "Justify",
+        ("Justify", "Justify"),
         "align both edges",
         align_mark(Alignment::Justify),
         Rc::new(editor::AlignJustify),
@@ -514,14 +551,14 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     let size = Section::Size;
     action(
         size,
-        "Larger text",
+        ("Larger text", "Larger"),
         "bigger increase size",
         Mark::None,
         Rc::new(editor::IncreaseTextSize),
     );
     action(
         size,
-        "Smaller text",
+        ("Smaller text", "Smaller"),
         "decrease size",
         Mark::None,
         Rc::new(editor::DecreaseTextSize),
@@ -530,6 +567,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     items.push(FormatItem {
         section: Section::Size,
         label: "Reset text size".into(),
+        short: "Reset",
         keywords: "default normal size",
         detail: match &format.text_size {
             Choice::Same(Some(points)) => Some(format!("Now {points} pt").into()),
@@ -549,6 +587,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         items.push(FormatItem {
             section: Section::Highlight,
             label: label.into(),
+            short: highlight_title(highlight),
             keywords: "marker background",
             detail: None,
             mark: choice_mark(&format.highlight, &present.highlights, |value| {
@@ -566,6 +605,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     items.push(FormatItem {
         section: Section::Color,
         label: "Default text colour".into(),
+        short: "Default",
         keywords: "color automatic ink black reset",
         detail: None,
         mark: choice_mark(&format.color, &present.colors, |value| value.is_none()),
@@ -577,6 +617,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
         items.push(FormatItem {
             section: Section::Color,
             label: format!("{name} text").into(),
+            short: name,
             keywords: "color colour",
             detail: None,
             mark: choice_mark(&format.color, &present.colors, |value| *value == Some(rgb)),
@@ -595,6 +636,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     items.push(FormatItem {
         section: Section::Text,
         label: "Link".into(),
+        short: "Link",
         keywords: "url hyperlink web address",
         detail: None,
         mark: link_mark,
@@ -605,6 +647,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     items.push(FormatItem {
         section: Section::Text,
         label: "Font".into(),
+        short: "Font",
         keywords: "typeface family",
         detail: match &format.font {
             Choice::Same(Some(family)) => Some(family.clone().into()),
@@ -620,6 +663,7 @@ fn format_items(state: &EditorState, cx: &App) -> Vec<FormatItem> {
     items.push(FormatItem {
         section: Section::Text,
         label: "Clear formatting".into(),
+        short: "Clear Formatting",
         keywords: "remove plain reset styles",
         detail: None,
         mark: Mark::None,

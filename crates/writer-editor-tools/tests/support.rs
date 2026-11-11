@@ -88,3 +88,41 @@ pub fn editor_focused(editor: &Entity<Editor>, cx: &mut VisualTestContext) -> bo
     let editor = editor.clone();
     cx.update(|window, cx| editor.read(cx).is_focused(window))
 }
+
+/// A root view that mounts what the app's root view mounts for menus: the
+/// layer that draws the open `writer_ui::ContextMenu`.
+pub struct MenuHost {
+    tools: Entity<EditorTools>,
+}
+
+impl gpui::Render for MenuHost {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        gpui::div()
+            .size_full()
+            .child(self.tools.clone())
+            .child(writer_ui::ContextMenuLayer)
+    }
+}
+
+/// Like [`open`], in a window that draws context menus.
+pub fn open_with_menus(
+    document: Document,
+    cx: &mut TestAppContext,
+) -> (Entity<EditorTools>, Entity<Editor>, &mut VisualTestContext) {
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        let editor = cx.new(|cx| Editor::new(document, EditorConfig::full(), window, cx));
+        editor.read(cx).focus(window);
+        let tools = cx.new(|cx| EditorTools::new(editor, window, cx));
+        MenuHost { tools }
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let tools = host.read_with(cx, |host, _| host.tools.clone());
+    let editor = tools.read_with(cx, |tools, _| tools.editor().clone());
+    (tools, editor, cx)
+}

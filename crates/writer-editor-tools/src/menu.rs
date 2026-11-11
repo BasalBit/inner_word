@@ -12,15 +12,17 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton, Pixels, Rgba,
-    ScrollStrategy, SharedString, Subscription, UniformListScrollHandle, Window, div, prelude::*,
-    px, uniform_list,
+    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton,
+    MouseDownEvent, Pixels, Point, Rgba, ScrollStrategy, SharedString, Subscription,
+    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use writer_ui::{
-    Divider, FieldAppearance, HighlightedLabel, Icon, IconName, KeyHint, TextField, TextFieldEvent,
-    picker,
+    ContextMenu, Divider, FieldAppearance, HighlightedLabel, Icon, IconName, KeyHint, TextField,
+    TextFieldEvent, picker,
     theme::{ActiveTheme, RADIUS_LG, RADIUS_MD, ThemeColors, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
 };
+
+use crate::tip::tip;
 
 /// The state mark in front of a row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,6 +50,10 @@ pub(crate) struct MenuItem {
     /// A font family to show a short sample in.
     pub(crate) sample_font: Option<SharedString>,
     pub(crate) key_hint: Option<KeyHint>,
+    /// The row has more than one thing it can do: a right-click on it, or
+    /// a click on the small "more" button the selected row shows, asks
+    /// for its menu ([`MenuEvent::RowMenu`]).
+    pub(crate) more: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -56,7 +62,7 @@ pub(crate) enum MenuEntry {
     Item(MenuItem),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum MenuEvent {
     /// The text of the query field changed.
     QueryChanged,
@@ -69,6 +75,10 @@ pub(crate) enum MenuEvent {
     Blurred,
     /// A mouse button went down somewhere outside the menu.
     ClickedOutside,
+    /// The selected row was right-clicked, or its "more" button was
+    /// clicked: the owner shows the row's own menu at `position` (window
+    /// coordinates).
+    RowMenu { position: Point<Pixels> },
 }
 
 pub(crate) struct MenuOptions {
@@ -401,10 +411,37 @@ impl Menu {
                                         .child("Aa Bb Cc"),
                                 )
                         });
+                        // A visible way to the row's own menu, for whoever
+                        // would not think of a right-click.
+                        let more = (item.more && selected).then(|| {
+                            div()
+                                .id(("menu-row-more", ix))
+                                .debug_selector(|| format!("menu-row-more-{ix}"))
+                                .flex_none()
+                                .size(px(20.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(RADIUS_MD)
+                                .hover(|style| style.bg(colors.hover))
+                                .tooltip(tip("More for this row", None))
+                                .child(Icon::new(IconName::More).size(px(14.)).color(colors.muted))
+                                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                    // Not a click on the row.
+                                    cx.stop_propagation();
+                                    this.selected = Some(ix);
+                                    cx.emit(MenuEvent::RowMenu {
+                                        position: event.position(),
+                                    });
+                                    cx.notify();
+                                }))
+                        });
                         outer
                             .cursor_pointer()
-                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                                if this.selected != Some(ix) {
+                            .on_mouse_move(cx.listener(move |this, _, window, cx| {
+                                // While a context menu is open the pointer
+                                // is on its way to that menu.
+                                if this.selected != Some(ix) && !ContextMenu::is_open(window, cx) {
                                     this.selected = Some(ix);
                                     cx.notify();
                                 }
@@ -413,6 +450,18 @@ impl Menu {
                                 this.selected = Some(ix);
                                 this.confirm(false, cx);
                             }))
+                            .when(item.more, |el| {
+                                el.on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        this.selected = Some(ix);
+                                        cx.emit(MenuEvent::RowMenu {
+                                            position: event.position,
+                                        });
+                                        cx.notify();
+                                    }),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -453,7 +502,8 @@ impl Menu {
                                             }),
                                     )
                                     .children(sample)
-                                    .children(item.key_hint),
+                                    .children(item.key_hint)
+                                    .children(more),
                             )
                             .into_any_element()
                     }
@@ -509,11 +559,17 @@ impl Render for Menu {
             // text under it, and must not take focus from the query field
             // (or, without a field, from the editor).
             .occlude()
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            .on_any_mouse_down(|_, window, _| window.prevent_default())
             // A press anywhere else closes the menu, also where the press
             // does not move the keyboard (the find bar's buttons, the
-            // window's chrome).
-            .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(MenuEvent::ClickedOutside)))
+            // window's chrome). A press while a context menu is open
+            // belongs to that menu (it chooses one of its items, or only
+            // closes it).
+            .on_mouse_down_out(cx.listener(|_, _, window, cx| {
+                if !ContextMenu::is_open(window, cx) {
+                    cx.emit(MenuEvent::ClickedOutside)
+                }
+            }))
             .on_action(cx.listener(|this, _: &picker::SelectPrev, _, cx| this.select_prev(cx)))
             .on_action(cx.listener(|this, _: &picker::SelectNext, _, cx| this.select_next(cx)))
             .on_action(cx.listener(|this, _: &picker::SelectFirst, _, cx| this.select_first(cx)))

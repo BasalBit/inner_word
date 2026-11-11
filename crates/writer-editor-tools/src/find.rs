@@ -19,8 +19,8 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, Entity, MouseButton, SharedString, Subscription, Task,
-    Transformation, Window, div, percentage, prelude::*, px, svg,
+    AnyElement, App, Context, Entity, SharedString, Subscription, Task, Transformation, Window,
+    div, percentage, prelude::*, px, svg,
 };
 use writer_core::{Change, Position, SearchOptions, TextRange};
 use writer_editor::{Autoscroll, HighlightStyle};
@@ -1032,7 +1032,7 @@ impl EditorTools {
                 .line_height(px(18.))
                 .text_color(colors.ink)
                 // Clicks on the bar's chrome keep focus where it is.
-                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                .on_any_mouse_down(|_, window, _| window.prevent_default())
                 .child(
                     div()
                         .w_full()

@@ -11,4 +11,5 @@ mod link;
 mod mouse;
 mod perf;
 mod support;
+mod text_menu;
 mod util;

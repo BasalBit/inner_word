@@ -5,13 +5,13 @@
 //! outside a link, `enter` inserts the URL as linked text.
 
 use gpui::{
-    App, Context, Entity, EventEmitter, MouseButton, SharedString, Subscription, Window, div,
-    point, prelude::*, px,
+    App, Context, Entity, EventEmitter, SharedString, Subscription, Window, div, point, prelude::*,
+    px,
 };
 use writer_core::{Choice, Position, TextRange};
 use writer_editor::{Editor, PopupAnchor};
 use writer_ui::{
-    Divider, FieldAppearance, KeyHint, TextField, TextFieldEvent,
+    ContextMenu, Divider, FieldAppearance, KeyHint, TextField, TextFieldEvent,
     theme::{ActiveTheme, RADIUS_LG, RADIUS_SM, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
 };
 
@@ -175,8 +175,14 @@ impl Render for LinkPopover {
             .debug_selector(|| "link-popover".into())
             .occlude()
             // Clicks on the panel keep focus in the field.
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-            .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(LinkEvent::ClickedOutside)))
+            .on_any_mouse_down(|_, window, _| window.prevent_default())
+            // (A press while a context menu is open, the field's own for
+            // example, belongs to that menu.)
+            .on_mouse_down_out(cx.listener(|_, _, window, cx| {
+                if !ContextMenu::is_open(window, cx) {
+                    cx.emit(LinkEvent::ClickedOutside)
+                }
+            }))
             .on_action(cx.listener(|_, _: &OpenLinkInBrowser, _, cx| cx.emit(LinkEvent::Open)))
             .w(px(380.))
             .flex()

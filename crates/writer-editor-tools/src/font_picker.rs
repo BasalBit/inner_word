@@ -13,11 +13,12 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, Focusable, Global, SharedString, Subscription, Window, px,
+    App, AppContext, Context, Entity, Focusable, Global, Pixels, Point, SharedString, Subscription,
+    Window, px,
 };
 use writer_core::{Choice, Typography};
 use writer_editor::PopupAnchor;
-use writer_ui::{KeyHint, fuzzy};
+use writer_ui::{ContextMenu, ContextMenuItem, KeyHint, fuzzy};
 
 use crate::{
     menu::{Mark, Menu, MenuEntry, MenuItem, MenuOptions},
@@ -168,6 +169,7 @@ impl FontMenu {
                 positions,
                 detail: Some(self.body_font.clone()),
                 mark,
+                more: true,
                 ..MenuItem::default()
             },
             _ => {
@@ -178,6 +180,7 @@ impl FontMenu {
                     positions,
                     mark,
                     sample_font: Some(family),
+                    more: true,
                     ..MenuItem::default()
                 }
             }
@@ -318,6 +321,70 @@ impl EditorTools {
         let Some(id) = tool.menu.read(cx).selected_id() else {
             return;
         };
+        self.confirm_font_row(id, as_body_font, window, cx);
+    }
+
+    /// The menu of a row of the font picker (a right-click on the row, or
+    /// its "more" button): the two things `enter` and `cmd-enter` do with
+    /// the family, so that both can be chosen with the mouse.
+    pub(crate) fn open_font_row_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(PopupTool::Font(tool)) = &self.popup else {
+            return;
+        };
+        let Some(id) = tool.menu.read(cx).selected_id() else {
+            return;
+        };
+        let collapsed = self.editor.read(cx).selection().is_collapsed();
+        let this = cx.weak_entity();
+        let item = |label: &'static str, as_body_font: bool, keys: &str| {
+            let this = this.clone();
+            ContextMenuItem::new(label, move |window, cx| {
+                this.update(cx, |tools, cx| {
+                    tools.confirm_font_row(id, as_body_font, window, cx)
+                })
+                .ok();
+            })
+            .key_hint(KeyHint::parse(keys))
+        };
+        ContextMenu::open(
+            position,
+            vec![
+                item(
+                    if collapsed {
+                        "Use for the Text Typed Next"
+                    } else {
+                        "Apply to the Selection"
+                    },
+                    false,
+                    "enter",
+                ),
+                item("Set as Document Font", true, "cmd-enter"),
+            ],
+            window,
+            cx,
+        );
+    }
+
+    /// Applies row `id` of the open font picker (0 is "Document
+    /// default").
+    fn confirm_font_row(
+        &mut self,
+        id: usize,
+        as_body_font: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(PopupTool::Font(tool)) = &self.popup else {
+            return;
+        };
+        if id > tool.families.len() {
+            return;
+        }
         let family = (id > 0).then(|| tool.families[id - 1].clone());
         self.close_popup(true, window, cx);
         self.editor.update(cx, |editor, cx| {

@@ -1,9 +1,11 @@
 //! The contextual tools of the editor: the format menu, the insert menu,
-//! the link popover, the font picker, and find and replace.
+//! the link popover, the font picker, find and replace, and the context
+//! menu of the text.
 //!
-//! Everything here is driven from the keyboard and plugs into
-//! `writer_editor::Editor` through its public seams (the mutation seam,
-//! key interception, popup hosting, highlight layers).
+//! Everything here works from the keyboard alone and with the mouse alone,
+//! and plugs into `writer_editor::Editor` through its public seams (the
+//! mutation seam, key interception, popup hosting, highlight layers, the
+//! context menu request).
 //!
 //! # Setup
 //!
@@ -37,6 +39,15 @@
 //! | Link popover | `cmd-k` | `enter` applies (inserts the URL as linked text at a collapsed caret outside a link), `cmd-enter` opens the URL in the browser, `cmd-shift-k` removes the link, `escape` cancels. |
 //! | Font picker | `cmd-t` | Document default, recent, all families. `enter` applies to the selection or to the text typed next, `cmd-enter` sets the document's body font. |
 //! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `cmd-alt-f` in the bar shows or hides the replace row, `escape` (in the bar or in the document) closes and leaves the current match selected. |
+//!
+//! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
+//!
+//! With the mouse: every row of the menus can be clicked (the row under
+//! the pointer is the selected one), the buttons of the link popover and
+//! of the find bar have tooltips with their keys, a press outside a popup
+//! closes it, and a row of the font picker has a menu of its own
+//! (right-click, or the small button the selected row shows) for "Set as
+//! Document Font".
 //!
 //! The editor hosts one popup, so opening a popup tool closes the popup
 //! tool that is open. The find bar is not a popup: it stays open, with its
@@ -72,6 +83,14 @@
 //!   opens a modal while such a tool has focus, the tool closes and the
 //!   focus handle the modal remembered is gone: fall back to focusing the
 //!   tools view when restoring focus fails.
+//! - **The context menu** is `writer_ui::ContextMenu`, drawn by the
+//!   window's `writer_ui::ContextMenuLayer` (the toast layer has one). The
+//!   editor asks for it (`EditorEvent::ContextMenuRequested`) and this
+//!   view opens it; add the app's own items with
+//!   [`EditorTools::set_text_menu_extension`] ("Add Comment" for a
+//!   selection, "Go to Comment" on commented text). The menu never takes
+//!   the keyboard: the editor keeps it, and an action item is dispatched
+//!   from the editor outwards as its key binding is.
 //! - **Key contexts.** The bindings live in `"EditorTools"` (the whole
 //!   view), `"FindBar"` and `"LinkPopover"`. Inside the find bar
 //!   `cmd-alt-c` toggles case sensitivity; a context-free binding for the
@@ -95,7 +114,9 @@
 //! - **State for a status line or automation:**
 //!   [`EditorTools::active_tool`], [`EditorTools::menu_rows`],
 //!   [`EditorTools::find_status`], [`EditorTools::find_flash_visible`],
-//!   [`EditorTools::find_button_tooltip`], and [`ToolsEvent`] on open and
+//!   [`EditorTools::find_button_tooltip`],
+//!   [`EditorTools::link_button_enabled`], [`EditorTools::text_menu`] and
+//!   [`EditorTools::text_menu_request`], and [`ToolsEvent`] on open and
 //!   close.
 //! - **Highlight layers.** Find uses the editor layers [`FIND_LAYER`] and
 //!   [`FIND_CURRENT_LAYER`]; other crates should pick other names.
@@ -107,6 +128,7 @@
 //! | `tools` | [`EditorTools`]: state, action handlers, editor events, popup plumbing, render |
 //! | `menu` | the popup list shared by the format menu, the insert menu and the font picker |
 //! | `format_menu`, `insert_menu`, `link`, `font_picker`, `find` | one tool each, as `impl EditorTools` blocks |
+//! | `text_menu` | the context menu of the text: its items for a request, the host's extension, what each row runs |
 //! | [`actions`] | actions and key bindings |
 //! | `tip` | the tooltip of a button: its name and key |
 //! | `util` | today's date, URL clean-up |
@@ -119,6 +141,7 @@ mod format_menu;
 mod insert_menu;
 mod link;
 mod menu;
+mod text_menu;
 mod tip;
 mod tools;
 mod util;

@@ -281,3 +281,114 @@ fn a_click_outside_closes_a_popup(cx: &mut TestAppContext) {
         Some("example.com")
     );
 }
+
+#[gpui::test]
+fn both_uses_of_a_font_can_be_chosen_with_the_mouse(cx: &mut TestAppContext) {
+    use writer_ui::ContextMenu;
+    setup(cx);
+    cx.update(|cx| {
+        writer_editor_tools::set_font_families(["Baskerville", "Georgia", "Menlo", "Zapfino"], cx)
+    });
+    let (tools, editor, cx) = open_with_menus(paragraphs(&["Set this in another face"]), cx);
+    select(&editor, TextRange::in_block(0, 4, 8), cx);
+    let body_font = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            editor.document().settings().typography.body_font.clone()
+        })
+    };
+    let font_at = |offset: usize, cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            editor.document().blocks()[0]
+                .attrs_at(offset)
+                .and_then(|attrs| attrs.font.clone())
+        })
+    };
+    let menu_labels = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| ContextMenu::current(window, cx).map(|menu| menu.read(cx).labels()))
+    };
+    let row_of = |label: &str, cx: &mut VisualTestContext| {
+        rows(&tools, cx)
+            .iter()
+            .rposition(|row| row.label == label)
+            .unwrap()
+    };
+
+    // The row under the pointer shows a small "more" button; it opens the
+    // row's menu with both things a family can be used for.
+    cx.simulate_keystrokes("cmd-t");
+    let georgia = row_of("Georgia", cx);
+    let row = cx
+        .debug_bounds(Box::leak(format!("menu-row-{georgia}").into_boxed_str()))
+        .unwrap();
+    cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Georgia"));
+    let more = cx
+        .debug_bounds(Box::leak(
+            format!("menu-row-more-{georgia}").into_boxed_str(),
+        ))
+        .expect("the selected row has a more button");
+    cx.simulate_click(more.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        menu_labels(cx),
+        Some(vec![
+            "Apply to the Selection".to_string(),
+            "Set as Document Font".to_string()
+        ])
+    );
+    assert_eq!(active(&tools, cx), Some(ToolKind::Font), "the picker stays");
+    assert_eq!(
+        font_at(5, cx),
+        None,
+        "the click on the button applied nothing"
+    );
+
+    // A click on the menu's row (outside the picker) chooses it.
+    let item = cx.update(|window, cx| {
+        ContextMenu::current(window, cx)
+            .unwrap()
+            .read(cx)
+            .item_bounds(1)
+            .unwrap()
+            .center()
+    });
+    cx.simulate_mouse_move(item, None, Modifiers::none());
+    cx.simulate_click(item, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(body_font(cx), "Georgia");
+    assert_eq!(font_at(5, cx), None);
+    assert_eq!(active(&tools, cx), None);
+    assert!(editor_focused(&editor, cx));
+
+    // A right-click on a row opens the same menu.
+    cx.simulate_keystrokes("cmd-t");
+    let menlo = row_of("Menlo", cx);
+    let row = cx
+        .debug_bounds(Box::leak(format!("menu-row-{menlo}").into_boxed_str()))
+        .unwrap();
+    cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(row.center(), gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(menu_labels(cx).map(|labels| labels.len()), Some(2));
+    assert!(cx.update(|window, cx| ContextMenu::choose("Apply to the Selection", window, cx)));
+    cx.run_until_parked();
+    assert_eq!(font_at(5, cx).as_deref(), Some("Menlo"));
+    assert_eq!(body_font(cx), "Georgia");
+    assert_eq!(active(&tools, cx), None);
+
+    // Escape closes the row's menu first, then the picker.
+    cx.simulate_keystrokes("cmd-t");
+    let row = cx
+        .debug_bounds(Box::leak(format!("menu-row-{menlo}").into_boxed_str()))
+        .unwrap();
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(row.center(), gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert!(menu_labels(cx).is_some());
+    cx.simulate_keystrokes("escape");
+    assert!(menu_labels(cx).is_none());
+    assert_eq!(active(&tools, cx), Some(ToolKind::Font));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(active(&tools, cx), None);
+}

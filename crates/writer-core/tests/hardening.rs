@@ -684,3 +684,52 @@ fn typing_over_a_selection_continues_the_replaced_formatting() {
     assert!(e.document().blocks()[0].attrs_at(8).unwrap().bold);
     e.check_invariants().unwrap();
 }
+
+#[test]
+fn word_movement_stops_at_emoji() {
+    let family = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let text = format!("hello {family} \u{1F1EB}\u{1F1F7}\u{2764}\u{FE0F} wor-ld!! \u{2014} end");
+    let d = Document::from_blocks(vec![para(&text)]);
+    let mut stops = Vec::new();
+    let mut pos = d.start();
+    loop {
+        let next = d.moved(pos, Movement::WordRight);
+        if next == pos {
+            break;
+        }
+        stops.push(text[pos.offset..next.offset].to_string());
+        pos = next;
+    }
+    assert_eq!(
+        stops,
+        [
+            "hello".to_string(),
+            format!(" {family}"),
+            " \u{1F1EB}\u{1F1F7}".to_string(),
+            "\u{2764}\u{FE0F}".to_string(),
+            " wor".to_string(),
+            "-ld".to_string(),
+            "!! \u{2014} end".to_string(),
+        ]
+    );
+    // And back again, landing on the same word starts.
+    let mut back = Vec::new();
+    loop {
+        let prev = d.moved(pos, Movement::WordLeft);
+        if prev == pos {
+            break;
+        }
+        back.push(prev.offset);
+        pos = prev;
+    }
+    let starts: Vec<usize> = text::word_ranges(&text).map(|r| r.start).collect();
+    back.reverse();
+    assert_eq!(back, starts);
+    // Option-backspace takes one emoji, not the word before it too.
+    let mut e = ed(vec![para(&format!("hello {family} "))]);
+    e.move_caret(Movement::DocEnd, false);
+    e.delete_word_backward();
+    assert_eq!(texts(&e), ["hello "]);
+    // Emoji are not counted as words.
+    assert_eq!(Stats::of_text(&text).words, 4);
+}

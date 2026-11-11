@@ -124,14 +124,28 @@ pub fn utf16_range_to_utf8(text: &str, range: Range<usize>) -> Range<usize> {
     utf16_to_utf8(text, range.start)..utf16_to_utf8(text, range.end)
 }
 
-/// Whether a word segment (as produced by Unicode word segmentation)
-/// counts as a word: it contains at least one alphanumeric character.
-fn is_word_segment(seg: &str) -> bool {
-    seg.chars().any(char::is_alphanumeric)
+/// Whether `c` is a pictograph (emoji and similar symbols). Word movement
+/// stops at these like at words, as macOS does; they are not counted as
+/// words by [`Stats`](crate::Stats).
+fn is_pictograph(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x231A..=0x23FF | 0x2B50 | 0x2B55
+    )
 }
 
-/// Ranges of the words of `text` (Unicode word segmentation, keeping only
-/// segments with an alphanumeric character), in order.
+/// Whether a word segment (as produced by Unicode word segmentation)
+/// counts as a word for movement: it contains at least one alphanumeric
+/// character or pictograph.
+fn is_word_segment(seg: &str) -> bool {
+    seg.chars().any(|c| c.is_alphanumeric() || is_pictograph(c))
+}
+
+/// Ranges of the words of `text` in order: the segments of Unicode word
+/// segmentation (UAX #29) that contain a letter, a digit or an emoji.
+/// Whitespace and punctuation are skipped; an emoji sequence (a ZWJ family,
+/// a flag) is one word. This is the unit of option-arrow movement and
+/// option-delete.
 pub fn word_ranges(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     text.split_word_bound_indices()
         .filter(|(_, s)| is_word_segment(s))

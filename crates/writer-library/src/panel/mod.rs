@@ -198,7 +198,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("i", ToggleRowDetail, tree),
         KeyBinding::new("alt-right", ExpandAll, tree),
         KeyBinding::new("alt-left", CollapseAll, tree),
-        // The key macOS itself uses for context menus.
+        // The key macOS itself uses for context menus, and before it (so
+        // that key hints show `ctrl-enter`) the one other systems use.
+        KeyBinding::new("shift-f10", OpenContextMenu, list),
         KeyBinding::new("ctrl-enter", OpenContextMenu, list),
         KeyBinding::new("cmd-shift-backspace", EmptyTrash, list),
         // After the generic bindings, so these win in the trash view.

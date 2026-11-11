@@ -25,10 +25,11 @@ use gpui::{
     Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
 use writer_library::{
-    Clock, DocumentContent, DocumentId, FolderId, Library, LibraryPanel, LibraryPanelEvent,
+    Clock, DocumentContent, DocumentId, FolderId, Library, LibraryMenuTarget, LibraryPanel,
+    LibraryPanelEvent,
 };
 use writer_ui::{
-    ModalLayer, ToastLayer,
+    ContextMenuItem, ModalLayer, ToastLayer,
     theme::{self, ActiveTheme, ThemeMode, UI_TEXT_SM, UI_TEXT_TITLE},
 };
 
@@ -276,6 +277,29 @@ impl Demo {
             let mut panel = LibraryPanel::new(library.clone(), cx);
             panel.set_modal_layer(modal_layer.clone(), cx);
             panel.set_new_document_content("{}");
+            // What the app adds to the row menus (it exports and keeps versions; the
+            // panel does not know about either). Here they only say that they ran.
+            panel.set_menu_extension(|target, _window, _cx| {
+                let say = |what: &'static str| {
+                    move |_: &mut Window, cx: &mut App| {
+                        writer_ui::toast::show_toast(writer_ui::Toast::new(what), cx);
+                    }
+                };
+                match target {
+                    LibraryMenuTarget::Document(_) => vec![
+                        ContextMenuItem::new("Export…", say("The app would export it.")),
+                        ContextMenuItem::new(
+                            "Version History",
+                            say("The app would show its versions."),
+                        ),
+                    ],
+                    LibraryMenuTarget::Folder(_) => vec![ContextMenuItem::new(
+                        "Export…",
+                        say("The app would export the folder."),
+                    )],
+                    _ => Vec::new(),
+                }
+            });
             panel
         });
         panel.update(cx, |panel, cx| panel.set_active_document(open, cx));

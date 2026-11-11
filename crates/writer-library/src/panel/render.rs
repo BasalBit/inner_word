@@ -4,19 +4,24 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Focusable, FontWeight, KeyContext, Window, anchored, deferred,
-    div, point, prelude::*, px, uniform_list,
+    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, Focusable, FontWeight, KeyContext,
+    MouseButton, MouseDownEvent, Pixels, Window, anchored, canvas, deferred, div, point,
+    prelude::*, px, uniform_list,
 };
+use writer_ui::context_menu::OpenContextMenu;
 use writer_ui::theme::{
     ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
 };
 use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
+use super::controls::{ICON_BUTTON, hover_fill, icon_button, rest_fill, text_button};
+use super::drag::{DragPreview, DraggedItem, DropTarget};
+use super::menu::MenuKind;
 use super::rows::{count_documents, grouped, label_around_match};
 use super::{
-    DeleteForever, Dismiss, EmptyTrash, FocusFilter, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
-    LibraryPanel, NewDocument, NewFolder, ROOT_ROW_HEIGHT, ROW_HEIGHT, RestoreSelected, ShowTrash,
-    TRASH_ROW_HEIGHT, View,
+    Anchors, DeleteForever, Dismiss, EmptyTrash, FocusFilter, HEADER_HEIGHT, KEY_CONTEXT,
+    LibraryItem, LibraryPanel, NewDocument, NewFolder, ROOT_ROW_HEIGHT, ROW_HEIGHT,
+    RestoreSelected, ShowTrash, TRASH_ROW_HEIGHT, View,
 };
 
 /// The height of the strip under the list: the trash row, or the key hints of the trash
@@ -24,6 +29,23 @@ use super::{
 const FOOTER_HEIGHT: gpui::Pixels = px(32.);
 /// How far each level of the tree is indented.
 const INDENT: gpui::Pixels = px(14.);
+/// The hover group of a tree row: its "more" button appears while the pointer is on the row.
+const ROW_GROUP: &str = "library-row";
+
+/// Draws nothing; remembers where its parent was drawn, so that a menu opened from the
+/// keyboard appears at the thing it belongs to.
+fn remember_bounds(
+    anchors: &std::rc::Rc<Anchors>,
+    cell: fn(&Anchors) -> &std::cell::Cell<Bounds<Pixels>>,
+) -> impl IntoElement {
+    let anchors = anchors.clone();
+    canvas(
+        move |bounds, _, _| cell(&anchors).set(bounds),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
 
 /// The mark at the left edge of the selected row while the panel has the keyboard.
 fn focus_mark(color: gpui::Hsla) -> gpui::Div {
@@ -37,14 +59,26 @@ fn focus_mark(color: gpui::Hsla) -> gpui::Div {
         .bg(color)
 }
 
+/// The frame around the row that a dragged item would go into.
+fn drop_outline(color: gpui::Hsla) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(RADIUS_SM)
+        .border_1()
+        .border_color(color)
+}
+
 /// About how many characters of a name fit in a tree row that is `width` wide, at `depth`,
 /// beside `detail`. An estimate (the interface font is not monospaced), erring on the
 /// side of fewer.
 fn name_fit(width: gpui::Pixels, depth: usize, detail: Option<&str>) -> usize {
     // Left of the name: row and cell padding, the disclosure, the icon and their gaps.
     let left = px(50.) + INDENT * depth as f32;
-    // Right of it: the detail in the small size, its gap, and the padding.
-    let right = px(16.) + px(6.5) * detail.map_or(0, |detail| detail.chars().count()) as f32;
+    // Right of it: the detail in the small size (or the "more" button, whichever is
+    // wider), its gap, and the padding.
+    let detail = px(6.5) * detail.map_or(0, |detail| detail.chars().count()) as f32;
+    let right = px(16.) + detail.max(ICON_BUTTON);
     let room = width - left - right;
     (room / px(7.2)).floor().max(0.) as usize
 }
@@ -110,10 +144,17 @@ impl Render for LibraryPanel {
             }
         }
 
+        // A drag that ended anywhere but on a place in the tree leaves no indicator behind.
+        if self.drop_target.is_some() && !cx.has_active_drag() {
+            self.drop_target = None;
+            self.drop_expand = None;
+        }
+
         let theme = cx.theme();
         let colors = theme.colors;
         let ui_font = theme.fonts.ui.clone();
         let panel_focused = self.focus_handle.contains_focused(window, cx);
+        self.keyboard_inside = panel_focused;
 
         let mut context = KeyContext::default();
         context.add(KEY_CONTEXT);
@@ -170,6 +211,21 @@ impl Render for LibraryPanel {
             .on_action(cx.listener(Self::on_delete_forever))
             .on_action(cx.listener(Self::on_empty_trash))
             .on_action(cx.listener(Self::on_toggle_row_detail))
+            .on_action(cx.listener(Self::on_expand_all))
+            .on_action(cx.listener(Self::on_collapse_all))
+            .on_action(cx.listener(Self::on_open_context_menu))
+            // A drag that leaves the tree (over the filter, out of the sidebar) has no
+            // place to land any more. Listeners of the parts inside run after this one.
+            .on_drag_move::<DraggedItem>(cx.listener(
+                |this, event: &DragMoveEvent<DraggedItem>, _, cx| {
+                    let position = event.event.position;
+                    let inside = event.bounds.contains(&position)
+                        && position.y > event.bounds.top() + HEADER_HEIGHT;
+                    if !inside {
+                        this.clear_drop_target(cx);
+                    }
+                },
+            ))
             .size_full()
             .flex()
             .flex_col()
@@ -237,7 +293,8 @@ impl LibraryPanel {
             .items_center()
             .gap(SPACE_2)
             .h(HEADER_HEIGHT)
-            .px(SPACE_3)
+            .pl(SPACE_3)
+            .pr(SPACE_2)
             .border_b_1()
             .border_color(colors.hairline)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.focus_filter(window, cx)))
@@ -261,26 +318,69 @@ impl LibraryPanel {
                         .child(count.to_string()),
                 )
             })
+            // The visible way to create something with the mouse.
+            .child(
+                icon_button(
+                    "library-add",
+                    IconName::Plus,
+                    "New document or folder",
+                    None,
+                    &colors,
+                )
+                .relative()
+                .debug_selector(|| "library-add".into())
+                .child(remember_bounds(&self.anchors, |anchors| {
+                    &anchors.add_button
+                }))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_add_menu(window, cx);
+                })),
+            )
             .into_any_element()
     }
 
     /// The "Library" row above the tree: the root, selectable like any row, so that the
     /// keyboard has a way to say "the top level" when every top-level item is a folder.
+    /// A drag dropped on it moves the item to the top level.
     fn render_root_row(&self, panel_focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
         let selected = self.on_root_row;
+        let drop_here = self.drop_target == Some(DropTarget::Into(None));
+        let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let tree = self.library.read(cx).tree();
         let documents =
             tree.documents.len() + tree.folders.iter().map(count_documents).sum::<usize>();
         div()
             .id("library-root-row")
+            .relative()
             .flex_none()
             .h(ROOT_ROW_HEIGHT)
             .px(SPACE_1)
             .pt(SPACE_1)
+            .child(remember_bounds(&self.anchors, |anchors| &anchors.root_row))
             .on_click(
                 cx.listener(|this, _: &ClickEvent, window, cx| this.click_root_row(window, cx)),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.click_root_row(window, cx);
+                    this.open_menu(MenuKind::Library, event.position, window, cx);
+                }),
+            )
+            .on_drag_move::<DraggedItem>(cx.listener(
+                |this, event: &DragMoveEvent<DraggedItem>, _, cx| {
+                    if event.bounds.contains(&event.event.position) {
+                        let dragged = event.drag(cx).item;
+                        let target = this.drop_target_on_root(dragged, cx);
+                        this.set_drop_target(target, cx);
+                    }
+                },
+            ))
+            .on_drop::<DraggedItem>(cx.listener(|this, dragged: &DraggedItem, window, cx| {
+                this.finish_drop(dragged, window, cx)
+            }))
             .child(
                 div()
                     .relative()
@@ -292,10 +392,12 @@ impl LibraryPanel {
                     .pr(SPACE_2)
                     .rounded(RADIUS_SM)
                     .map(|el| match (selected, panel_focused) {
+                        _ if drop_here => el.bg(colors.accent_subtle),
                         (true, true) => el.bg(colors.accent_subtle),
-                        (true, false) => el.bg(colors.hover),
-                        (false, _) => el.hover(|style| style.bg(colors.hover)),
+                        (true, false) => el.bg(rest),
+                        (false, _) => el.hover(move |style| style.bg(hover)),
                     })
+                    .children(drop_here.then(|| drop_outline(colors.accent)))
                     .children((selected && panel_focused).then(|| focus_mark(colors.accent)))
                     .child(
                         div()
@@ -303,7 +405,11 @@ impl LibraryPanel {
                             .min_w_0()
                             .text_size(UI_TEXT_SM)
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(if selected { colors.ink } else { colors.muted })
+                            .text_color(if selected || drop_here {
+                                colors.ink
+                            } else {
+                                colors.muted
+                            })
                             .child("Library"),
                     )
                     .when(documents > 0, |el| {
@@ -332,6 +438,35 @@ impl LibraryPanel {
                 if this.renaming.is_none() {
                     this.select_root(cx);
                 }
+            }))
+            // A right click there opens the menu of the library (rows take their own).
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.click_root_row(window, cx);
+                    this.open_menu(MenuKind::Library, event.position, window, cx);
+                }),
+            )
+            // A drag over the empty area under the rows means the top level; close to
+            // the top or bottom edge it scrolls the list.
+            .on_drag_move::<DraggedItem>(cx.listener(
+                |this, event: &DragMoveEvent<DraggedItem>, _, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    if this.scroll_for_drag(position) {
+                        cx.notify();
+                    }
+                    if this.row_at(position).is_none() {
+                        let dragged = event.drag(cx).item;
+                        let target = this.drop_target_on_root(dragged, cx);
+                        this.set_drop_target(target, cx);
+                    }
+                },
+            ))
+            .on_drop::<DraggedItem>(cx.listener(|this, dragged: &DraggedItem, window, cx| {
+                this.finish_drop(dragged, window, cx)
             }));
         if !self.rows.is_empty() {
             return list
@@ -350,31 +485,70 @@ impl LibraryPanel {
         }
         let message = if self.filter.is_some() {
             div()
+                .px(SPACE_1)
                 .child(format!("Nothing is named “{}”.", self.filter_text.trim()))
                 .into_any_element()
         } else {
-            let hint = |label: &'static str, hint: Option<KeyHint>| {
+            // The two ways to begin, as buttons that also show their keys.
+            let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
+            let begin = |id: &'static str, label: &'static str, hint: Option<KeyHint>| {
                 div()
+                    .id(id)
+                    .debug_selector(move || id.into())
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(SPACE_2)
+                    .h(ROW_HEIGHT)
+                    .px(SPACE_1)
+                    .rounded(RADIUS_SM)
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(rest))
                     .child(label)
                     .children(hint.map(|hint| hint.boxed()))
             };
             div()
                 .flex()
                 .flex_col()
-                .gap(SPACE_2)
-                .child(div().text_color(colors.ink).child("The library is empty."))
-                .child(hint("New document", KeyHint::for_action(&NewDocument, cx)))
-                .child(hint("New folder", KeyHint::for_action(&NewFolder, cx)))
+                .child(
+                    div()
+                        .px(SPACE_1)
+                        .pb(SPACE_2)
+                        .text_color(colors.ink)
+                        .child("The library is empty."),
+                )
+                .child(
+                    begin(
+                        "library-empty-new-document",
+                        "New document",
+                        KeyHint::for_action(&NewDocument, cx),
+                    )
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.run_from_mouse(Box::new(NewDocument), window, cx);
+                        },
+                    )),
+                )
+                .child(
+                    begin(
+                        "library-empty-new-folder",
+                        "New folder",
+                        KeyHint::for_action(&NewFolder, cx),
+                    )
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.run_from_mouse(Box::new(NewFolder), window, cx);
+                        },
+                    )),
+                )
                 .into_any_element()
         };
         // Lined up with the "Library" label above it.
         list.child(
             div()
-                .px(SPACE_3)
+                .px(SPACE_2)
                 .py(SPACE_2)
                 .text_color(colors.muted)
                 .child(message),
@@ -389,8 +563,10 @@ impl LibraryPanel {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let colors = cx.theme().colors;
+        let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let panel_focused = self.focus_handle.contains_focused(window, cx);
         let now = self.library.read(cx).clock().now_ms();
+        let menu_hint = KeyHint::for_action(&OpenContextMenu, cx);
         // The width of a row as of the last layout, to judge how much of a name fits.
         let row_width = self
             .scroll
@@ -410,7 +586,21 @@ impl LibraryPanel {
             let rename_field = (self.renaming == Some(row.item))
                 .then(|| self.rename_field.clone())
                 .flatten();
+            let renaming = rename_field.is_some();
             let detail = self.detail_text(row, now);
+            // Where a dragged item would land, if on this row.
+            let drop_into = matches!(
+                (self.drop_target, row.item),
+                (Some(DropTarget::Into(Some(target))), LibraryItem::Folder(folder)) if target == folder
+            );
+            let drop_line = match self.drop_target {
+                Some(DropTarget::Between {
+                    row: line_row,
+                    below,
+                    ..
+                }) if line_row == ix => Some(below),
+                _ => None,
+            };
             // A match that the row would cut off is brought into view.
             let (label_text, label_positions) = row_width
                 .filter(|_| !row.positions.is_empty())
@@ -430,7 +620,7 @@ impl LibraryPanel {
                 .size(px(16.))
                 .when(is_folder && row.has_children, |el| {
                     el.rounded(RADIUS_SM)
-                        .hover(|style| style.bg(colors.hover))
+                        .hover(move |style| style.bg(rest))
                         .child(
                             Icon::new(if row.expanded {
                                 IconName::ChevronDown
@@ -452,7 +642,7 @@ impl LibraryPanel {
             })
             .color(if active {
                 colors.accent
-            } else if selected {
+            } else if selected || drop_into {
                 colors.ink
             } else {
                 colors.muted
@@ -489,12 +679,74 @@ impl LibraryPanel {
                             },
                         )),
                 });
-            // Keyboard focus is visible as a red-pencil mark on the selected row.
-            let focus_mark = (selected && panel_focused).then(|| focus_mark(colors.accent));
+            // Keyboard focus is visible as a red-pencil mark on the selected row. The
+            // document open in the editor keeps a paler mark wherever the keyboard is, so
+            // it can be found at a glance.
+            let mark = if selected && panel_focused {
+                Some(focus_mark(colors.accent))
+            } else if active {
+                Some(focus_mark(colors.accent.opacity(0.5)))
+            } else {
+                None
+            };
+            // The detail and the "more" button share the right end of the row: on the
+            // selected row both are there, on any other row the button takes the place
+            // of the detail while the pointer is on the row.
+            let more = icon_button(
+                ("library-row-more", ix),
+                IconName::More,
+                "More actions",
+                menu_hint.clone(),
+                &colors,
+            )
+            .debug_selector(move || format!("library-row-more-{ix}"))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_row_menu(ix, event.position(), window, cx);
+            }));
+            let trailing = div()
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_end()
+                .gap(SPACE_1)
+                .h_full()
+                .min_w(ICON_BUTTON)
+                .when_some(detail, |el, detail| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .text_size(UI_TEXT_XS)
+                            .text_color(if is_folder {
+                                colors.faint
+                            } else {
+                                colors.muted
+                            })
+                            .when(!selected, |el| {
+                                el.group_hover(ROW_GROUP, |style| style.invisible())
+                            })
+                            .child(detail),
+                    )
+                })
+                .when(!renaming, |el| {
+                    el.child(if selected {
+                        more
+                    } else {
+                        more.absolute()
+                            .right_0()
+                            .top((ROW_HEIGHT - ICON_BUTTON) / 2.)
+                            .invisible()
+                            .group_hover(ROW_GROUP, |style| style.visible())
+                    })
+                });
 
+            let indent = SPACE_1 + INDENT * row.depth as f32;
             elements.push(
                 div()
                     .id(("library-row", ix))
+                    .group(ROW_GROUP)
+                    .relative()
                     .h(ROW_HEIGHT)
                     .w_full()
                     .px(SPACE_1)
@@ -502,6 +754,40 @@ impl LibraryPanel {
                         cx.stop_propagation();
                         this.click_row(ix, event.click_count(), window, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_row_menu(ix, event.position, window, cx);
+                        }),
+                    )
+                    .when(!renaming, |el| {
+                        el.on_drag(
+                            DraggedItem {
+                                item: row.item,
+                                label: row.label.clone(),
+                            },
+                            |dragged, _, _, cx| cx.new(|_| DragPreview::new(dragged.clone())),
+                        )
+                    })
+                    .on_drag_move::<DraggedItem>(cx.listener(
+                        move |this, event: &DragMoveEvent<DraggedItem>, _, cx| {
+                            let position = event.event.position;
+                            if !event.bounds.contains(&position) {
+                                return;
+                            }
+                            let fraction =
+                                (position.y - event.bounds.top()) / event.bounds.size.height;
+                            let dragged = event.drag(cx).item;
+                            let target = this.drop_target_on_row(dragged, ix, fraction, cx);
+                            this.set_drop_target(target, cx);
+                        },
+                    ))
+                    .on_drop::<DraggedItem>(cx.listener(
+                        |this, dragged: &DraggedItem, window, cx| {
+                            this.finish_drop(dragged, window, cx)
+                        },
+                    ))
                     .child(
                         div()
                             .flex()
@@ -509,52 +795,81 @@ impl LibraryPanel {
                             .gap(SPACE_1)
                             .relative()
                             .h_full()
-                            .pl(SPACE_1 + INDENT * row.depth as f32)
-                            .pr(SPACE_2)
+                            .pl(indent)
+                            .pr(SPACE_1)
                             .rounded(RADIUS_SM)
                             .map(|el| match (selected, panel_focused) {
+                                _ if drop_into => el.bg(colors.accent_subtle),
                                 (true, true) => el.bg(colors.accent_subtle),
-                                (true, false) => el.bg(colors.hover),
-                                (false, _) => el.hover(|style| style.bg(colors.hover)),
+                                (true, false) => el.bg(rest),
+                                (false, _) => el.hover(move |style| style.bg(hover)),
                             })
-                            .children(focus_mark)
+                            .children(drop_into.then(|| drop_outline(colors.accent)))
+                            .children(mark)
                             .child(disclosure)
                             .child(icon)
                             .child(label)
-                            .when_some(detail, |el, detail| {
-                                el.child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(UI_TEXT_XS)
-                                        .text_color(if is_folder {
-                                            colors.faint
-                                        } else {
-                                            colors.muted
-                                        })
-                                        .child(detail),
-                                )
-                            }),
+                            .child(trailing),
                     )
+                    // The place between two rows where a dragged item would land.
+                    .children(drop_line.map(|below| {
+                        div()
+                            .absolute()
+                            .left(SPACE_1 + indent)
+                            .right(SPACE_2)
+                            .h(px(2.))
+                            .rounded(px(1.))
+                            .bg(colors.accent)
+                            .map(|el| {
+                                if below {
+                                    el.bottom(px(-1.))
+                                } else {
+                                    el.top(px(-1.))
+                                }
+                            })
+                    }))
                     .into_any_element(),
             );
         }
         elements
     }
 
-    /// The "Trash" row under the tree: the way into the trash view.
+    /// The "Trash" row under the tree: the way into the trash view. A drag dropped on it
+    /// moves the item to the trash.
     fn render_trash_footer(&self, panel_focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
+        let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let selected = self.on_trash_row;
+        let drop_here = self.drop_target == Some(DropTarget::Trash);
         let count = self.trash_rows.len();
         div()
             .id("library-trash-row")
+            .relative()
             .flex_none()
             .h(FOOTER_HEIGHT)
             .px(SPACE_1)
             .py(px(3.))
             .border_t_1()
             .border_color(colors.hairline)
+            .child(remember_bounds(&self.anchors, |anchors| &anchors.trash_row))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_trash(window, cx)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.click_trash_footer(window, cx);
+                    this.open_menu(MenuKind::TrashRow, event.position, window, cx);
+                }),
+            )
+            .on_drag_move::<DraggedItem>(cx.listener(
+                |this, event: &DragMoveEvent<DraggedItem>, _, cx| {
+                    if event.bounds.contains(&event.event.position) {
+                        this.set_drop_target(Some(DropTarget::Trash), cx);
+                    }
+                },
+            ))
+            .on_drop::<DraggedItem>(cx.listener(|this, dragged: &DraggedItem, window, cx| {
+                this.finish_drop(dragged, window, cx)
+            }))
             .child(
                 div()
                     .relative()
@@ -565,20 +880,28 @@ impl LibraryPanel {
                     .px(SPACE_2)
                     .rounded(RADIUS_SM)
                     .map(|el| match (selected, panel_focused) {
+                        _ if drop_here => el.bg(colors.accent_subtle),
                         (true, true) => el.bg(colors.accent_subtle),
-                        (true, false) => el.bg(colors.hover),
-                        (false, _) => el.hover(|style| style.bg(colors.hover)),
+                        (true, false) => el.bg(rest),
+                        (false, _) => el.hover(move |style| style.bg(hover)),
                     })
+                    .children(drop_here.then(|| drop_outline(colors.accent)))
                     .children((selected && panel_focused).then(|| focus_mark(colors.accent)))
-                    .child(Icon::new(IconName::Trash).size(px(14.)).color(if selected {
-                        colors.ink
-                    } else {
-                        colors.muted
-                    }))
+                    .child(Icon::new(IconName::Trash).size(px(14.)).color(
+                        if selected || drop_here {
+                            colors.ink
+                        } else {
+                            colors.muted
+                        },
+                    ))
                     .child(
                         div()
                             .flex_none()
-                            .text_color(if selected { colors.ink } else { colors.muted })
+                            .text_color(if selected || drop_here {
+                                colors.ink
+                            } else {
+                                colors.muted
+                            })
                             .child("Trash"),
                     )
                     // How many items are in it, right after the name.
@@ -605,7 +928,8 @@ impl LibraryPanel {
             .items_center()
             .gap(SPACE_2)
             .h(HEADER_HEIGHT)
-            .px(SPACE_3)
+            .pl(SPACE_3)
+            .pr(SPACE_2)
             .border_b_1()
             .border_color(colors.hairline)
             .child(Icon::new(IconName::Trash).size(px(14.)).color(colors.ink))
@@ -617,27 +941,35 @@ impl LibraryPanel {
                     .child("Trash"),
             )
             .child(
-                div()
-                    .id("library-trash-back")
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(SPACE_1)
-                    .px(SPACE_1)
-                    .rounded(RADIUS_SM)
-                    .text_size(UI_TEXT_SM)
-                    .text_color(colors.muted)
-                    .hover(|style| style.bg(colors.hover))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_tree(cx)))
-                    .child("Back")
-                    .children(KeyHint::for_action(&Dismiss, cx)),
+                text_button(
+                    "library-trash-back",
+                    "Back",
+                    KeyHint::for_action(&Dismiss, cx),
+                    &colors,
+                )
+                .debug_selector(|| "library-trash-back".into())
+                .text_size(UI_TEXT_SM)
+                .text_color(colors.muted)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_tree(cx))),
             )
             .into_any_element()
     }
 
     fn render_trash_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
-        let list = div().id("library-trash").flex_1().min_h_0().py(SPACE_1);
+        let list = div()
+            .id("library-trash")
+            .flex_1()
+            .min_h_0()
+            .py(SPACE_1)
+            // A right click beside the items: what can be done with the trash as a whole.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle);
+                    this.open_menu(MenuKind::TrashBackground, event.position, window, cx);
+                }),
+            );
         if self.trash_rows.is_empty() {
             return list
                 .child(
@@ -670,7 +1002,9 @@ impl LibraryPanel {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let colors = cx.theme().colors;
+        let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let panel_focused = self.focus_handle.contains_focused(window, cx);
+        let menu_hint = KeyHint::for_action(&OpenContextMenu, cx);
         let mut elements = Vec::with_capacity(range.len());
         for ix in range {
             let Some(row) = self.trash_rows.get(ix) else {
@@ -682,15 +1016,35 @@ impl LibraryPanel {
                 origin.push_str(" · ");
                 origin.push_str(contents);
             }
+            let more = icon_button(
+                ("library-trash-more", ix),
+                IconName::More,
+                "More actions",
+                menu_hint.clone(),
+                &colors,
+            )
+            .debug_selector(move || format!("library-trash-more-{ix}"))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_trash_item_menu(ix, event.position(), window, cx);
+            }));
             elements.push(
                 div()
                     .id(("library-trash-row", ix))
+                    .group(ROW_GROUP)
                     .h(TRASH_ROW_HEIGHT)
                     .w_full()
                     .px(SPACE_1)
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         this.click_trash_row(ix, event.click_count(), window, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_trash_item_menu(ix, event.position, window, cx);
+                        }),
+                    )
                     .child(
                         div()
                             .relative()
@@ -698,12 +1052,13 @@ impl LibraryPanel {
                             .items_center()
                             .gap(SPACE_2)
                             .h_full()
-                            .px(SPACE_2)
+                            .pl(SPACE_2)
+                            .pr(SPACE_1)
                             .rounded(RADIUS_SM)
                             .map(|el| match (selected, panel_focused) {
                                 (true, true) => el.bg(colors.accent_subtle),
-                                (true, false) => el.bg(colors.hover),
-                                (false, _) => el.hover(|style| style.bg(colors.hover)),
+                                (true, false) => el.bg(rest),
+                                (false, _) => el.hover(move |style| style.bg(hover)),
                             })
                             .children(
                                 (selected && panel_focused).then(|| focus_mark(colors.accent)),
@@ -748,7 +1103,15 @@ impl LibraryPanel {
                                             .text_color(colors.muted)
                                             .child(origin),
                                     ),
-                            ),
+                            )
+                            // The "more" button: always on the selected row, on any other
+                            // row while the pointer is on it.
+                            .child(if selected {
+                                more
+                            } else {
+                                more.invisible()
+                                    .group_hover(ROW_GROUP, |style| style.visible())
+                            }),
                     )
                     .into_any_element(),
             );
@@ -756,34 +1119,63 @@ impl LibraryPanel {
         elements
     }
 
-    /// The keys of the trash view, under its list.
+    /// What can be done in the trash view, under its list: buttons that show their keys.
     fn render_trash_hints(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors;
-        let hint = |label: &'static str, hint: Option<KeyHint>| {
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(SPACE_1)
-                .child(label)
-                .children(hint)
-        };
+        let has_selection = self.selected_trash_row().is_some();
+        let has_items = !self.trash_rows.is_empty();
+        let button =
+            |id: &'static str, label: &'static str, hint: Option<KeyHint>, enabled: bool| {
+                text_button(id, label, hint, &colors)
+                    .debug_selector(move || id.into())
+                    .when(!enabled, |el| el.opacity(0.45))
+            };
         div()
             .flex()
             .flex_none()
             .flex_wrap()
             .items_center()
-            .gap_x(SPACE_3)
+            .gap_x(SPACE_1)
             .min_h(FOOTER_HEIGHT)
-            .px(SPACE_3)
+            .px(SPACE_2)
             .py(SPACE_1)
             .border_t_1()
             .border_color(colors.hairline)
             .text_size(UI_TEXT_SM)
             .text_color(colors.muted)
-            .child(hint("Restore", KeyHint::for_action(&RestoreSelected, cx)))
-            .child(hint("Delete", KeyHint::for_action(&DeleteForever, cx)))
-            .child(hint("Empty", KeyHint::for_action(&EmptyTrash, cx)))
+            .child(
+                button(
+                    "library-trash-restore",
+                    "Restore",
+                    KeyHint::for_action(&RestoreSelected, cx),
+                    has_selection,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.run_from_mouse(Box::new(RestoreSelected), window, cx);
+                })),
+            )
+            .child(
+                button(
+                    "library-trash-delete",
+                    "Delete",
+                    KeyHint::for_action(&DeleteForever, cx),
+                    has_selection,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.run_from_mouse(Box::new(DeleteForever), window, cx);
+                })),
+            )
+            .child(
+                button(
+                    "library-trash-empty",
+                    "Empty",
+                    KeyHint::for_action(&EmptyTrash, cx),
+                    has_items,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.run_from_mouse(Box::new(EmptyTrash), window, cx);
+                })),
+            )
             .into_any_element()
     }
 }

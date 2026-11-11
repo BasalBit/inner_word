@@ -60,6 +60,22 @@ impl LibraryPanel {
         });
     }
 
+    /// Remembers where `item` was before it was dragged somewhere else: to another folder
+    /// (`moved`) or to another place among its siblings. Every drop is a step of its own.
+    pub(super) fn remember_place(
+        &mut self,
+        item: LibraryItem,
+        from: (Option<FolderId>, usize),
+        moved: bool,
+    ) {
+        self.remember(UndoEntry::Place {
+            item,
+            parent: from.0,
+            index: from.1,
+            moved,
+        });
+    }
+
     /// Remembers where `item` was before a reorder. A run of reorders of the same item
     /// (holding `alt-up`) is one change: the place it started from.
     pub(super) fn remember_reorder(&mut self, item: LibraryItem, from: (Option<FolderId>, usize)) {

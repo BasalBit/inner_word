@@ -4,11 +4,11 @@ use gpui::{Context, ScrollStrategy, Window};
 
 use super::rows::Row;
 use super::{
-    Collapse, DeleteForever, Dismiss, Duplicate, EmptyTrash, Expand, FocusFilter, FocusTree,
-    LibraryItem, LibraryPanel, LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash, MoveUp,
-    NewDocument, NewFolder, OpenSelected, ROW_HEIGHT, Rename, RestoreSelected, RowDetail,
-    SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp, SelectPrevious, ShowTrash,
-    TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, View,
+    Collapse, CollapseAll, DeleteForever, Dismiss, Duplicate, EmptyTrash, Expand, ExpandAll,
+    FocusFilter, FocusTree, LibraryItem, LibraryPanel, LibraryPanelEvent, MoveDown, MoveToFolder,
+    MoveToTrash, MoveUp, NewDocument, NewFolder, OpenSelected, ROW_HEIGHT, Rename, RestoreSelected,
+    RowDetail, SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp, SelectPrevious,
+    ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, View,
 };
 
 impl LibraryPanel {
@@ -323,7 +323,24 @@ impl LibraryPanel {
         self.new_folder(window, cx);
     }
 
+    /// Points a command for one item at the right item. With the keyboard in the panel
+    /// that is the selected row. From anywhere else (a palette command or a menu-bar item
+    /// while the keyboard is in the text) it is the document open in the editor: its row
+    /// is selected first, so the sidebar shows what the command acted on. Without an open
+    /// document the selection stays.
+    pub(super) fn aim_at_open_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view != View::Tree || self.focus_handle.contains_focused(window, cx) {
+            return;
+        }
+        if let Some(id) = self.active_document
+            && self.selected != Some(LibraryItem::Document(id))
+        {
+            self.reveal(LibraryItem::Document(id), cx);
+        }
+    }
+
     pub(super) fn on_rename(&mut self, _: &Rename, window: &mut Window, cx: &mut Context<Self>) {
+        self.aim_at_open_document(window, cx);
         if let Some(item) = self.selected {
             self.begin_rename(item, window, cx);
         }
@@ -332,9 +349,10 @@ impl LibraryPanel {
     pub(super) fn on_duplicate(
         &mut self,
         _: &Duplicate,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.aim_at_open_document(window, cx);
         self.duplicate_selected(cx);
     }
 
@@ -344,28 +362,35 @@ impl LibraryPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.aim_at_open_document(window, cx);
         self.open_move_picker(window, cx);
     }
 
-    pub(super) fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.aim_at_open_document(window, cx);
         self.reorder_selected(-1, cx);
     }
 
     pub(super) fn on_move_down(
         &mut self,
         _: &MoveDown,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.aim_at_open_document(window, cx);
         self.reorder_selected(1, cx);
     }
 
     pub(super) fn on_move_to_trash(
         &mut self,
         _: &MoveToTrash,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.aim_at_open_document(window, cx);
+        // The toast names the key that undoes: say where that key works when the
+        // keyboard is somewhere else.
+        self.keyboard_inside = self.focus_handle.contains_focused(window, cx);
         self.trash_selected(cx);
     }
 
@@ -454,6 +479,13 @@ impl LibraryPanel {
             return;
         }
         if clicks >= 2 {
+            // The first click of the pair opened or closed the folder: put it back, the
+            // double click is about the name.
+            if let Some(folder) = self.click_toggled.take()
+                && row.item == LibraryItem::Folder(folder)
+            {
+                self.set_expanded(folder, !row.expanded, cx);
+            }
             self.begin_rename(row.item, window, cx);
             return;
         }
@@ -462,11 +494,82 @@ impl LibraryPanel {
         }
         window.focus(&self.focus_handle);
         self.set_selected(Some(row.item), cx);
-        if let LibraryItem::Document(id) = row.item {
-            cx.emit(LibraryPanelEvent::OpenDocument {
+        self.click_toggled = None;
+        match row.item {
+            LibraryItem::Document(id) => cx.emit(LibraryPanelEvent::OpenDocument {
                 id,
                 focus_editor: false,
-            });
+            }),
+            // Under a filter every folder is drawn open: there is nothing to toggle.
+            LibraryItem::Folder(id) if self.filter.is_none() => {
+                self.set_expanded(id, !row.expanded, cx);
+                self.click_toggled = Some(id);
+            }
+            LibraryItem::Folder(_) => {}
+        }
+    }
+
+    /// A press of the right button on the "Trash" row under the tree.
+    pub(super) fn click_trash_footer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.renaming.is_some() {
+            self.finish_rename(true, cx);
+        }
+        window.focus(&self.focus_handle);
+        self.select_trash_row(cx);
+    }
+
+    /// Runs `action` for a mouse control of the panel (a button, a menu item) the way its
+    /// key would: the panel takes the keyboard if it does not have it, and the action is
+    /// dispatched there, so it reaches the same handler as the key (and the app's own
+    /// handler where the panel passes an action on).
+    pub(super) fn run_from_mouse(
+        &mut self,
+        action: Box<dyn gpui::Action>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus_handle.contains_focused(window, cx) {
+            window.focus(&self.focus_handle);
+        }
+        let handle = self.focus_handle.clone();
+        // Dispatched at the list itself, not at a text field of the panel that may have
+        // the keyboard (the filter): the keys of the list do not apply there.
+        window.defer(cx, move |window, cx| {
+            if !handle.is_focused(window) {
+                window.focus(&handle);
+            }
+            handle.dispatch_action(action.as_ref(), window, cx);
+        });
+    }
+
+    pub(super) fn on_expand_all(
+        &mut self,
+        _: &ExpandAll,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_expanded_below_selection(true, cx);
+    }
+
+    pub(super) fn on_collapse_all(
+        &mut self,
+        _: &CollapseAll,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_expanded_below_selection(false, cx);
+    }
+
+    /// Expands or collapses the selected folder and every folder inside it; with the
+    /// "Library" row selected, every folder of the library.
+    fn set_expanded_below_selection(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        if self.view != View::Tree || self.filter.is_some() {
+            return;
+        }
+        match self.selected {
+            Some(LibraryItem::Folder(folder)) => self.set_expanded_all(Some(folder), expanded, cx),
+            None if self.on_root_row => self.set_expanded_all(None, expanded, cx),
+            _ => {}
         }
     }
 

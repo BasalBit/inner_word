@@ -3,24 +3,29 @@
 //!
 //! The keys and the mounting recipe are in the docs of [`LibraryPanel`].
 
+mod controls;
+mod drag;
 mod handlers;
+mod menu;
 mod move_picker;
 mod render;
 pub(crate) mod rows;
 mod trash;
 mod undo;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, KeyBinding,
-    Pixels, ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle, Window,
-    actions, prelude::*, px,
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    KeyBinding, Pixels, ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle,
+    Window, actions, prelude::*, px,
 };
 use serde::{Deserialize, Serialize};
 use writer_store::{DocumentContent, DocumentId, FolderId, Result};
+use writer_ui::context_menu::OpenContextMenu;
 use writer_ui::toast::show_toast;
 use writer_ui::{
     CommandDescriptor, ConfirmDialog, FieldAppearance, KeyHint, ModalLayer, Picker, TextField,
@@ -28,6 +33,9 @@ use writer_ui::{
 };
 
 use crate::library::{Library, LibraryEvent};
+use drag::DropTarget;
+pub use menu::LibraryMenuTarget;
+use menu::MenuExtension;
 use move_picker::MoveDelegate;
 use rows::{
     Filter, Row, ancestors, build_rows, count_documents, count_folders, item_name, place_of,
@@ -92,6 +100,12 @@ actions!(
         EmptyTrash,
         /// Switch the detail on document rows between edit time and word count.
         ToggleRowDetail,
+        /// Expand the selected folder and every folder inside it (on the "Library" row:
+        /// every folder).
+        ExpandAll,
+        /// Collapse the selected folder and every folder inside it (on the "Library" row:
+        /// every folder).
+        CollapseAll,
     ]
 );
 
@@ -181,6 +195,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("/", FocusFilter, tree),
         KeyBinding::new("t", ShowTrash, tree),
         KeyBinding::new("i", ToggleRowDetail, tree),
+        KeyBinding::new("alt-right", ExpandAll, tree),
+        KeyBinding::new("alt-left", CollapseAll, tree),
+        // The key macOS itself uses for context menus.
+        KeyBinding::new("ctrl-enter", OpenContextMenu, list),
         KeyBinding::new("cmd-shift-backspace", EmptyTrash, list),
         // After the generic bindings, so these win in the trash view.
         KeyBinding::new("enter", RestoreSelected, trash),
@@ -240,6 +258,18 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["document", "folder", "toggle"]),
         CommandDescriptor::new("Expand folder", CATEGORY, Expand).keywords(["open", "unfold"]),
         CommandDescriptor::new("Collapse folder", CATEGORY, Collapse).keywords(["close", "fold"]),
+        CommandDescriptor::new("Expand all inside", CATEGORY, ExpandAll).keywords([
+            "open",
+            "unfold",
+            "subfolders",
+            "everything",
+        ]),
+        CommandDescriptor::new("Collapse all inside", CATEGORY, CollapseAll).keywords([
+            "close",
+            "fold",
+            "subfolders",
+            "everything",
+        ]),
         CommandDescriptor::new("Select next item", CATEGORY, SelectNext).keywords(["down"]),
         CommandDescriptor::new("Select previous item", CATEGORY, SelectPrevious).keywords(["up"]),
         CommandDescriptor::new("Select first item", CATEGORY, SelectFirst).keywords(["top"]),
@@ -333,6 +363,15 @@ pub enum RowDetail {
 
 /// How the panel asks its host to put it on screen.
 type RevealHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// Where parts of the panel were drawn in the last frame, in window coordinates: a menu
+/// opened from the keyboard appears at the thing it belongs to.
+#[derive(Default)]
+struct Anchors {
+    add_button: Cell<Bounds<Pixels>>,
+    root_row: Cell<Bounds<Pixels>>,
+    trash_row: Cell<Bounds<Pixels>>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View {
@@ -457,12 +496,30 @@ pub struct LibraryPanel {
     /// The changes of this session that `cmd-z` can take back, oldest first.
     undo_stack: Vec<UndoEntry>,
 
+    // Mouse.
+    /// During a drag: where the dragged item would land.
+    drop_target: Option<DropTarget>,
+    /// Opens the collapsed folder a drag rests on, after a moment.
+    drop_expand: Option<Task<()>>,
+    /// The folder that the last single click opened or closed. A second click (a double
+    /// click renames) puts it back as it was.
+    click_toggled: Option<FolderId>,
+    /// Where the parts of the panel that a menu can open from were drawn.
+    anchors: Rc<Anchors>,
+    /// The app's own items for the panel's context menus.
+    menu_extension: Option<MenuExtension>,
+    /// The menu being opened was asked for with the key, not with the mouse.
+    menu_from_keyboard: bool,
+
     new_document_content: Option<String>,
     modal_layer: Entity<ModalLayer>,
     /// The modal layer belongs to the app, which renders it.
     modal_layer_is_shared: bool,
     selection_dirty: bool,
     persist_selection: Option<Task<()>>,
+    /// Whether the keyboard was in the panel when it was last drawn, or when the command
+    /// being handled arrived (the handlers of commands that say a key set it).
+    keyboard_inside: bool,
     /// Tracked on an empty element inside the panel, only to learn whether the panel was
     /// drawn in the last frame.
     probe: FocusHandle,
@@ -534,11 +591,18 @@ impl LibraryPanel {
             trash_selected: None,
             trash_scroll: UniformListScrollHandle::new(),
             undo_stack: Vec::new(),
+            drop_target: None,
+            drop_expand: None,
+            click_toggled: None,
+            anchors: Rc::default(),
+            menu_extension: None,
+            menu_from_keyboard: false,
             new_document_content: None,
             modal_layer,
             modal_layer_is_shared: false,
             selection_dirty: false,
             persist_selection: None,
+            keyboard_inside: true,
             probe: cx.focus_handle(),
             reveal_handler: None,
             off_screen_watch: None,
@@ -793,6 +857,55 @@ impl LibraryPanel {
         self.rebuild_rows(cx);
         if self.selected.is_some() && self.selected_index().is_none() && self.filter.is_none() {
             self.set_selected(Some(LibraryItem::Folder(folder)), cx);
+        }
+        cx.notify();
+    }
+
+    /// Expands or collapses `folder` and every folder inside it, at any depth (`None`:
+    /// every folder of the library). Collapsing what hides the selection moves the
+    /// selection to `folder`.
+    pub fn set_expanded_all(
+        &mut self,
+        folder: Option<FolderId>,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        fn collect(nodes: &[writer_store::FolderNode], out: &mut Vec<FolderId>) {
+            for node in nodes {
+                out.push(node.folder.id);
+                collect(&node.folders, out);
+            }
+        }
+        let tree = self.library.read(cx).tree();
+        let mut folders = Vec::new();
+        match folder {
+            Some(id) => {
+                let Some(node) = tree.find_folder(id) else {
+                    return;
+                };
+                folders.push(id);
+                collect(&node.folders, &mut folders);
+            }
+            None => collect(&tree.folders, &mut folders),
+        }
+        let before = self.expanded.len();
+        if expanded {
+            self.expanded.extend(folders.iter().copied());
+        } else {
+            for id in &folders {
+                self.expanded.remove(id);
+            }
+        }
+        if self.expanded.len() == before {
+            return;
+        }
+        self.persist_expanded(cx);
+        self.rebuild_rows(cx);
+        if self.selected.is_some() && self.selected_index().is_none() && self.filter.is_none() {
+            self.set_selected(folder.map(LibraryItem::Folder), cx);
+            if folder.is_none() {
+                self.on_root_row = true;
+            }
         }
         cx.notify();
     }
@@ -1247,6 +1360,13 @@ impl LibraryPanel {
         if !contents.is_empty() {
             name = short(&name, NAME_IN_MESSAGE - 8);
         }
+        // The key that undoes belongs to the library list. With the keyboard elsewhere
+        // (the command came from the palette while writing) the same key would undo
+        // typing, so the sentence says where it works; it is longer, the name shorter.
+        let in_panel = self.keyboard_inside;
+        if !in_panel {
+            name = short(&name, if contents.is_empty() { 22 } else { 11 });
+        }
         let trashed = self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.trash_folder(id, cx),
             LibraryItem::Document(id) => library.trash_document(id, cx),
@@ -1256,7 +1376,13 @@ impl LibraryPanel {
                 // Repair the selection now; the library's events arrive after this update.
                 self.tree_changed(cx);
                 let undo = KeyHint::for_action(&UndoTrash, cx)
-                    .map(|hint| format!(" Press {} to undo.", hint.text()))
+                    .map(|hint| {
+                        if in_panel {
+                            format!(" Press {} to undo.", hint.text())
+                        } else {
+                            format!(" Undo in the library: {}.", hint.text())
+                        }
+                    })
                     .unwrap_or_default();
                 show_toast(
                     Toast::new(format!("Moved “{name}”{contents} to the trash.{undo}"))

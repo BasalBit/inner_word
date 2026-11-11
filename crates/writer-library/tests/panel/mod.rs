@@ -18,6 +18,8 @@ use writer_ui::{ConfirmDialog, ToastLayer};
 use super::{content, library_from};
 use LibraryItem::{Document, Folder};
 
+mod mouse_paths;
+
 const START: i64 = 1_700_000_000_000;
 
 struct Fixture {
@@ -125,6 +127,22 @@ impl Fixture {
     }
 }
 
+/// The window root of the tests: the panel over the whole window, and the layer that draws
+/// context menus (in the app the toast layer brings it).
+struct Root {
+    panel: Entity<LibraryPanel>,
+}
+
+impl Render for Root {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .size_full()
+            .child(self.panel.clone())
+            .child(writer_ui::ContextMenuLayer)
+    }
+}
+
 fn fixture(cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
     cx.update(|cx| {
         writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
@@ -150,19 +168,20 @@ fn fixture(cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
     let toasts = cx.new(|_| ToastLayer::new());
     cx.update(|cx| ToastLayer::set_global(&toasts, cx));
     let events: Rc<RefCell<Vec<LibraryPanelEvent>>> = Rc::default();
-    let (panel, cx) = cx.add_window_view({
+    let (root, cx) = cx.add_window_view({
         let library = library.clone();
         let events = events.clone();
         move |window, cx| {
-            let panel = LibraryPanel::new(library, cx);
-            cx.subscribe(&cx.entity(), move |_, _, event: &LibraryPanelEvent, _| {
+            let panel = cx.new(|cx| LibraryPanel::new(library, cx));
+            cx.subscribe(&panel, move |_, _, event: &LibraryPanelEvent, _| {
                 events.borrow_mut().push(event.clone())
             })
             .detach();
             window.focus(&panel.focus_handle(cx));
-            panel
+            Root { panel }
         }
     });
+    let panel = root.read_with(cx, |root, _| root.panel.clone());
     cx.run_until_parked();
     (
         Fixture {
@@ -1263,12 +1282,19 @@ fn mouse(cx: &mut TestAppContext) {
     let (f, cx) = fixture(cx);
     let none = Modifiers::default();
 
-    // A click on a folder row selects it; the disclosure triangle toggles it.
+    // A click on a folder row selects it and opens it; a second one closes it again. The
+    // disclosure triangle toggles it too, without selecting.
     cx.simulate_click(Fixture::row_point(0, 120.), none);
     assert_eq!(f.selected(cx), Some(Folder(f.folder)));
-    assert_eq!(f.visible(cx).len(), 2);
+    assert_eq!(f.visible(cx).len(), 4);
     assert!(f.events().is_empty());
+    cx.simulate_click(Fixture::row_point(0, 120.), none);
+    assert_eq!(f.visible(cx).len(), 2);
+    cx.simulate_click(Fixture::row_point(1, 120.), none);
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
+    f.events();
     cx.simulate_click(Fixture::row_point(0, 16.), none);
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
     assert_eq!(
         f.visible(cx),
         vec![
@@ -1573,6 +1599,137 @@ fn commands_reach_the_panel_from_the_editor(cx: &mut TestAppContext) {
     assert!(!panel.read_with(cx, |p, _| p.is_showing_trash()));
     cx.simulate_input("chap");
     assert_eq!(panel.read_with(cx, |p, _| p.filter().to_string()), "chap");
+}
+
+/// Found by a tester: with the keyboard in the text of document A, "Duplicate" from the
+/// palette left the sidebar on the copy, and "Move to trash" then trashed the copy while A
+/// stayed open. A command for one item that arrives while the keyboard is outside the
+/// panel acts on the document open in the editor.
+#[gpui::test]
+fn commands_from_the_text_act_on_the_open_document(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
+        writer_ui::init(cx);
+        writer_library::init(cx);
+    });
+    let (library, _) = library_from(Library::in_memory().unwrap(), cx);
+    let (folder, open, other) = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Book", cx).unwrap().id;
+        let open = l
+            .create_document(Some(folder), &content("Alpha", "x"), cx)
+            .unwrap()
+            .id;
+        let other = l
+            .create_document(None, &content("Elsewhere", "x"), cx)
+            .unwrap()
+            .id;
+        (folder, open, other)
+    });
+    let toasts = cx.new(|_| ToastLayer::new());
+    cx.update(|cx| ToastLayer::set_global(&toasts, cx));
+    let (shell, cx) = cx.add_window_view({
+        let library = library.clone();
+        move |window, cx| {
+            let panel = cx.new(|cx| LibraryPanel::new(library, cx));
+            let editor = cx.focus_handle();
+            window.focus(&editor);
+            Shell { panel, editor }
+        }
+    });
+    let panel = shell.read_with(cx, |shell, _| shell.panel.clone());
+    let editor = shell.read_with(cx, |shell, _| shell.editor.clone());
+    cx.run_until_parked();
+    panel.update(cx, |p, cx| p.set_active_document(Some(open), cx));
+    let messages = |cx: &mut VisualTestContext| -> Vec<String> {
+        let messages = toasts.read_with(cx, |layer, _| {
+            layer
+                .toasts()
+                .map(|toast| toast.message.to_string())
+                .collect()
+        });
+        toasts.update(cx, |layer, cx| layer.clear(cx));
+        messages
+    };
+    let titles = |cx: &mut VisualTestContext| -> Vec<String> {
+        library.read_with(cx, |l, _| {
+            let mut titles: Vec<String> = l
+                .all_documents()
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.meta.title)
+                .collect();
+            titles.sort();
+            titles
+        })
+    };
+
+    // Duplicate from the text: the copy is selected in the sidebar, A stays open.
+    cx.dispatch_action(writer_library::Duplicate);
+    assert_eq!(titles(cx), ["Alpha", "Alpha copy", "Elsewhere"]);
+    let selection = panel.read_with(cx, |p, _| p.selected());
+    assert_ne!(selection, Some(Document(open)));
+    assert_eq!(panel.read_with(cx, |p, _| p.active_document()), Some(open));
+
+    // "Move to trash" from the text now trashes the open document, not the copy the
+    // sidebar happened to be on. The toast does not offer a key that would undo typing.
+    cx.dispatch_action(writer_library::MoveToTrash);
+    assert_eq!(titles(cx), ["Alpha copy", "Elsewhere"]);
+    assert_eq!(
+        messages(cx),
+        vec!["Moved “Alpha” to the trash. Undo in the library: ⌘Z."]
+    );
+    cx.dispatch_action(writer_library::UndoTrash);
+    assert_eq!(titles(cx), ["Alpha", "Alpha copy", "Elsewhere"]);
+    messages(cx);
+    // (The app opens another document when the open one is trashed; here it is A again.)
+    panel.update(cx, |p, cx| p.set_active_document(Some(open), cx));
+
+    // Rename, move up and move to folder follow the same rule.
+    panel.update(cx, |p, cx| p.select(Some(Document(other)), cx));
+    cx.dispatch_action(writer_library::Rename);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.renaming()),
+        Some(Document(open))
+    );
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, _| window.focus(&editor));
+    panel.update(cx, |p, cx| p.select(Some(Document(other)), cx));
+    cx.dispatch_action(writer_library::MoveDown);
+    let in_folder: Vec<DocumentId> = library.read_with(cx, |l, _| {
+        l.documents_in_folder(Some(folder))
+            .unwrap()
+            .into_iter()
+            .map(|meta| meta.id)
+            .collect()
+    });
+    assert_eq!(in_folder.last(), Some(&open));
+
+    // With the keyboard in the panel the selected row is the target, whatever is open,
+    // and the toast names the key, which works there.
+    let panel_focus = panel.read_with(cx, |p, cx| p.focus_handle(cx));
+    cx.update(|window, _| window.focus(&panel_focus));
+    panel.update(cx, |p, cx| p.select(Some(Document(other)), cx));
+    cx.dispatch_action(writer_library::MoveToTrash);
+    assert!(!titles(cx).contains(&"Elsewhere".to_string()));
+    assert_eq!(
+        messages(cx),
+        vec!["Moved “Elsewhere” to the trash. Press ⌘Z to undo."]
+    );
+
+    // A folder trashed from the text: the longer ending still fits a one-line toast.
+    cx.update(|window, _| window.focus(&editor));
+    panel.update(cx, |p, cx| {
+        p.set_active_document(None, cx);
+        p.select(Some(Folder(folder)), cx)
+    });
+    library.update(cx, |l, cx| {
+        l.rename_folder(folder, "The Long Winter of Discontent", cx)
+            .unwrap()
+    });
+    cx.dispatch_action(writer_library::MoveToTrash);
+    let message = messages(cx).pop().unwrap();
+    assert!(message.ends_with("to the trash. Undo in the library: ⌘Z."));
+    assert!(message.chars().count() <= 78, "{message}");
 }
 
 /// A window root that owns the modal layer, as the app does.

@@ -80,13 +80,13 @@ mod panel;
 
 pub use library::{DocumentEntry, Library, LibraryEvent};
 pub use panel::{
-    Collapse, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash, Expand,
-    FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem, LibraryPanel,
-    LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash, MoveUp, NewDocument, NewFolder,
-    OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING, ROW_HEIGHT, Rename, RestoreSelected,
-    RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPageDown,
-    SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash,
-    commands, forward_actions, key_bindings,
+    Collapse, CollapseAll, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash,
+    Expand, ExpandAll, FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
+    LibraryMenuTarget, LibraryPanel, LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash,
+    MoveUp, NewDocument, NewFolder, OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING, ROW_HEIGHT,
+    Rename, RestoreSelected, RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext,
+    SelectPageDown, SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail,
+    UndoTrash, commands, forward_actions, key_bindings,
 };
 
 /// Text helpers of the panel, public only so that the crate's one integration-test binary

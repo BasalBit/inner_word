@@ -431,7 +431,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_narrow_sidebar))
             .on_action(cx.listener(Self::on_toggle_page_view))
             .on_action(cx.listener(Self::on_toggle_vim))
-            .on_action(cx.listener(Self::on_toggle_comments))
             .on_action(cx.listener(Self::on_title_from_text))
             .on_action(cx.listener(Self::on_light_theme))
             .on_action(cx.listener(Self::on_dark_theme))

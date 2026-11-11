@@ -6,6 +6,12 @@
 //! bindings: a binding with no context ties with the deepest context and the
 //! later one wins, so a crate that needs one of these keys inside its own
 //! context can still take it.
+//!
+//! Not here, although they work anywhere in the window: the comment keys
+//! (`cmd-alt-m`, `cmd-alt-]`, `cmd-alt-[`, `cmd-alt-c`, `cmd-2`), which
+//! `writer-comments` binds and handles itself, and the keys of the editor
+//! tools (`cmd-.`, `cmd-k`, `cmd-t`, the find keys), which live in the
+//! context of the editor area.
 
 use gpui::{KeyBinding, actions};
 use writer_ui::CommandDescriptor;
@@ -67,8 +73,6 @@ actions!(
         TogglePageView,
         /// Turn Vim mode on or off.
         ToggleVimMode,
-        /// Show or hide comments.
-        ToggleComments,
         /// Derive the document's title from its text again.
         UseTitleFromText,
         /// Use the Paper (light) theme.
@@ -124,7 +128,6 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-/", ShowShortcuts, None),
         KeyBinding::new("cmd-alt-p", TogglePageView, None),
         KeyBinding::new("cmd-alt-v", ToggleVimMode, None),
-        KeyBinding::new("cmd-alt-c", ToggleComments, None),
     ]
 }
 
@@ -185,8 +188,6 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "modal",
             "normal mode",
         ]),
-        CommandDescriptor::new("Show or hide comments", CATEGORY_VIEW, ToggleComments)
-            .keywords(["notes", "review", "threads", "toggle"]),
         CommandDescriptor::new("Use Paper theme", CATEGORY_VIEW, UseLightTheme).keywords([
             "light",
             "appearance",

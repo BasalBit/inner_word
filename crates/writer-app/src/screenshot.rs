@@ -51,6 +51,59 @@ pub fn window_number(_window: &Window) -> Result<u32> {
     bail!("window capture is only implemented on macOS")
 }
 
+/// The native view behind a GPUI window, for [`force_frame`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeView(usize);
+
+/// The native view of `window`.
+#[cfg(target_os = "macos")]
+pub fn native_view(window: &Window) -> Result<NativeView> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|err| anyhow::anyhow!("no native window handle: {err}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        bail!("not an AppKit window");
+    };
+    Ok(NativeView(appkit.ns_view.as_ptr() as usize))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn native_view(_window: &Window) -> Result<NativeView> {
+    bail!("native views are only known on macOS")
+}
+
+/// Makes the window draw a frame now if anything changed.
+///
+/// GPUI draws from a display link, and macOS stops that link while a window
+/// is completely covered by other windows. A scripted run stays in the
+/// background, where that happens easily: the app keeps working, but no
+/// frame is drawn, so a capture shows an old picture and everything that
+/// is settled by drawing (focus events, the text input handler of the
+/// focused element, layout) lags behind. Sending the view `displayLayer:`
+/// is the path AppKit itself uses for a synchronous frame.
+///
+/// Call this on the main thread and **outside** any GPUI update: the frame
+/// callback updates the app itself. The window must still be open.
+#[cfg(target_os = "macos")]
+// objc 0.2's msg_send! expands to a `cfg(feature = "cargo-clippy")` check.
+#[allow(unexpected_cfgs)]
+pub fn force_frame(view: NativeView) {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+
+    let ns_view = view.0 as *mut Object;
+    // SAFETY: `ns_view` is the NSView of a window that is still open (the
+    // caller's contract), used on the main thread. `layer` is a plain
+    // getter and `displayLayer:` is implemented by GPUI's view class.
+    unsafe {
+        let layer: *mut Object = msg_send![ns_view, layer];
+        let _: () = msg_send![ns_view, displayLayer: layer];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn force_frame(_view: NativeView) {}
+
 /// Captures window `window_number` into `path` (PNG). Blocking: run it on the
 /// background executor.
 pub fn capture_window(window_number: u32, path: &Path) -> Result<PathBuf> {

@@ -56,6 +56,11 @@ pub mod keys {
     pub const WELCOME_CREATED: &str = "app.welcome_created";
     /// `string`: the directory of the last export.
     pub const EXPORT_DIRECTORY: &str = "export.directory";
+    /// `bool`: whether the comments panel lists resolved threads.
+    pub const COMMENTS_SHOW_RESOLVED: &str = "comments.show_resolved";
+    /// Array of strings: the font families chosen most recently in the font
+    /// picker, newest first.
+    pub const RECENT_FONTS: &str = "fonts.recent";
     /// Prefix of the per-document flag "the user chose this title":
     /// `document.custom_title.<id>` holds `true`.
     pub const CUSTOM_TITLE_PREFIX: &str = "document.custom_title.";

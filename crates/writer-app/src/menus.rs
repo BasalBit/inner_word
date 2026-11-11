@@ -63,7 +63,7 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Show or Hide Library", ToggleSidebar),
                 MenuItem::action("Page View", TogglePageView),
-                MenuItem::action("Show or Hide Comments", ToggleComments),
+                MenuItem::action("Show or Hide Comments", writer_comments::ToggleComments),
                 MenuItem::action("Vim Mode", ToggleVimMode),
                 MenuItem::separator(),
                 MenuItem::action("Focus Library", FocusLibrary),

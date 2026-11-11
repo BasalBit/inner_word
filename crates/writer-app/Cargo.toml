@@ -26,8 +26,11 @@ writer-core.workspace = true
 writer-ui.workspace = true
 writer-editor.workspace = true
 writer-export.workspace = true
-# Not in [workspace.dependencies] (the root manifest belongs to the orchestrator).
+# Not in [workspace.dependencies]: only this crate uses them.
 writer-library = { path = "../writer-library" }
+writer-editor-tools = { path = "../writer-editor-tools" }
+writer-comments = { path = "../writer-comments" }
+writer-vim-mode = { path = "../writer-vim-mode" }
 # Window capture for visual QA: the NSWindow number behind a GPUI window.
 raw-window-handle = "0.6"
 

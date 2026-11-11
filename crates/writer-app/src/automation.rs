@@ -254,9 +254,15 @@ pub fn keystroke_for_char(ch: char) -> Keystroke {
 pub fn run(script: Script, window: AnyWindowHandle, cx: &mut App) {
     eprintln!("[automation] running {} steps", script.steps.len());
     cx.spawn(async move |cx| {
+        // The view to draw through while the window is covered (see
+        // `screenshot::force_frame`).
+        let view = window
+            .update(cx, |_, window, _| screenshot::native_view(window).ok())
+            .ok()
+            .flatten();
         for (ix, step) in script.steps.into_iter().enumerate() {
             let label = format!("{step:?}");
-            match execute(step, window, cx).await {
+            match execute(step, window, view, cx).await {
                 Ok(StepOutcome::Continue) => {}
                 Ok(StepOutcome::Quit) => {
                     eprintln!("[automation] step {}: quit", ix + 1);
@@ -276,7 +282,12 @@ enum StepOutcome {
     Quit,
 }
 
-async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Result<StepOutcome> {
+async fn execute(
+    step: Step,
+    window: AnyWindowHandle,
+    view: Option<screenshot::NativeView>,
+    cx: &mut AsyncApp,
+) -> Result<StepOutcome> {
     match step {
         Step::Wait(duration) => cx.background_executor().timer(duration).await,
         Step::Keys(keys) => {
@@ -288,19 +299,21 @@ async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Resu
                     "[automation] keys {text}: {}",
                     if handled { "handled" } else { "not handled" }
                 );
-                frame_pause(cx).await;
+                frame_pause(window, view, cx).await;
             }
         }
         Step::Type(text) => {
             // One update per character, like real typing: effects (notify,
-            // redraw) are flushed between keystrokes.
+            // redraw) are flushed between keystrokes, and a frame is drawn
+            // after each, as it is between the key presses of a person.
             for ch in text.chars() {
                 window.update(cx, |_, window, cx| {
                     window.dispatch_keystroke(keystroke_for_char(ch), cx);
                 })?;
+                draw_frame(window, view, cx);
             }
             eprintln!("[automation] typed {} characters", text.chars().count());
-            frame_pause(cx).await;
+            frame_pause(window, view, cx).await;
         }
         Step::Action(name) => {
             window.update(cx, |_, window, cx| -> Result<()> {
@@ -311,7 +324,7 @@ async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Resu
                 Ok(())
             })??;
             eprintln!("[automation] dispatched {name}");
-            frame_pause(cx).await;
+            frame_pause(window, view, cx).await;
         }
         Step::Resize(width, height) => {
             window.update(cx, |_, window, _| {
@@ -323,14 +336,16 @@ async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Resu
         }
         Step::Theme(mode) => {
             cx.update(|cx| theme::set_theme_mode(mode, cx))?;
-            frame_pause(cx).await;
+            frame_pause(window, view, cx).await;
         }
         Step::Screenshot(path) => {
             // Make sure the latest state is on screen before capturing.
             window.update(cx, |_, window, _| window.refresh())?;
+            frame_pause(window, view, cx).await;
             cx.background_executor()
                 .timer(Duration::from_millis(250))
                 .await;
+            draw_frame(window, view, cx);
             let number = window.update(cx, |_, window, _| screenshot::window_number(window))??;
             let path = absolute(path);
             let task = cx
@@ -408,8 +423,12 @@ pub fn describe_state(
         .contains_focused(window, cx)
     {
         "library"
+    } else if workspace.comments().read(cx).has_focus(window, cx) {
+        "comments"
     } else if workspace.modal_layer().read(cx).has_modal() {
         "modal"
+    } else if workspace.tools().read(cx).active_tool().is_some() {
+        "tool"
     } else if window.focused(cx).is_some() {
         "other"
     } else {
@@ -417,17 +436,57 @@ pub fn describe_state(
     };
     let status = workspace.status_line(cx);
     let settings = workspace.settings();
+    let vim = workspace.vim().read(cx);
+    let vim = if vim.is_attached() {
+        let status = vim.status();
+        let mut text = status.mode_label().to_string();
+        if !status.pending_keys.is_empty() {
+            text.push_str(&format!(" pending={:?}", status.pending_keys));
+        }
+        if let Some(line) = &status.command_line {
+            text.push_str(&format!(" line={:?}", format!("{}{}", line.prefix, line.text)));
+        }
+        if let Some(message) = &status.message {
+            text.push_str(&format!(" message={:?}", message.text));
+        }
+        text
+    } else {
+        "off".to_string()
+    };
+    let tools = workspace.tools().read(cx);
+    let tool = match tools.active_tool() {
+        Some(kind) => {
+            let mut text = format!("{kind:?}");
+            if let Some(label) = tools.selected_menu_label(cx) {
+                text.push_str(&format!(" selected={label:?}"));
+            }
+            let find = tools.find_status();
+            if !find.is_empty() {
+                text.push_str(&format!(" find={find:?}"));
+            }
+            text
+        }
+        None => "none".to_string(),
+    };
+    let comments = workspace.comments().read(cx);
+    let comments = format!(
+        "{} threads={} open={} active={:?} composing={}",
+        if comments.is_visible() { "shown" } else { "hidden" },
+        comments.threads().len(),
+        comments.is_open(),
+        comments.active_thread().map(|id| id.0),
+        comments.is_composing(),
+    );
     format!(
         "document={:?} title={:?} save={:?} focus={focus} modal={} sidebar={} page_view={} \
-         vim={} comments={} words={:?} characters={:?} page={:?} limit={:?}",
+         vim=[{vim}] tool=[{tool}] comments=[{comments}] words={:?} characters={:?} page={:?} \
+         limit={:?}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),
         workspace.save_state(),
         workspace.modal_layer().read(cx).has_modal(),
         settings.sidebar_visible,
         workspace.editor().read(cx).page_view(),
-        settings.vim_mode,
-        settings.comments_visible,
         status.words,
         status.characters,
         status.page,
@@ -435,11 +494,34 @@ pub fn describe_state(
     )
 }
 
-/// Gives the window a chance to render between steps (about two frames).
-async fn frame_pause(cx: &mut AsyncApp) {
+/// Gives the window a chance to render between steps (about two frames),
+/// and makes sure it did.
+async fn frame_pause(
+    window: AnyWindowHandle,
+    view: Option<screenshot::NativeView>,
+    cx: &mut AsyncApp,
+) {
+    draw_frame(window, view, cx);
     cx.background_executor()
         .timer(Duration::from_millis(32))
         .await;
+    draw_frame(window, view, cx);
+}
+
+/// Draws a frame now if the window is dirty, also while it is covered by
+/// other windows (see [`screenshot::force_frame`]). Must not be called
+/// inside an update.
+fn draw_frame(window: AnyWindowHandle, view: Option<screenshot::NativeView>, cx: &mut AsyncApp) {
+    let Some(view) = view else {
+        return;
+    };
+    // The view pointer is only good while the window is open.
+    let open = cx
+        .update(|cx| cx.windows().contains(&window))
+        .unwrap_or(false);
+    if open {
+        screenshot::force_frame(view);
+    }
 }
 
 fn absolute(path: PathBuf) -> PathBuf {

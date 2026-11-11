@@ -50,7 +50,7 @@ pub mod welcome;
 pub mod window;
 pub mod workspace;
 
-use gpui::App;
+use gpui::{Action as _, App};
 
 pub use actions::{CloseWindow, Quit};
 pub use settings::Settings;
@@ -63,14 +63,13 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 /// 2. the app's context-free key bindings ([`actions::key_bindings`]);
 /// 3. the widget, editor, library-panel and settings-modal bindings (later
 ///    bindings win ties, so a focused widget keeps its own keys);
-/// 4. the command registry: this crate's, the editor's and the library
-///    panel's commands;
-/// 5. the app-global actions (quit, hide) and the menu bar;
-/// 6. quit when the last window closes.
-///
-/// Crates mounted later bind their own keys and call
-/// [`commands::register`]; call [`menus::install`] again afterwards if their
-/// bindings should show in the menu bar.
+/// 4. the comments, Vim and editor-tools bindings and global handlers. The
+///    tools come last: inside the find bar `cmd-alt-c` is "case sensitive",
+///    and it must win over the window-wide "show or hide comments";
+/// 5. the command registry: every crate's commands (see
+///    [`register_commands`] for the two that are left out);
+/// 6. the app-global actions (quit, hide) and the menu bar;
+/// 7. quit when the last window closes.
 pub fn init(cx: &mut App) {
     writer_ui::theme::init(writer_ui::ThemeMode::System, cx);
 
@@ -79,10 +78,11 @@ pub fn init(cx: &mut App) {
     writer_editor::init(cx);
     writer_library::init(cx);
     cx.bind_keys(settings_view::key_bindings());
+    writer_comments::init(cx);
+    writer_vim_mode::init(cx);
+    writer_editor_tools::init(cx);
 
-    commands::register(actions::commands(), cx);
-    commands::register(writer_editor::commands(), cx);
-    commands::register(writer_library::commands(), cx);
+    register_commands(cx);
 
     cx.on_action(|_: &actions::Quit, cx| cx.quit());
     cx.on_action(|_: &actions::Hide, cx| cx.hide());
@@ -98,4 +98,25 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// Fills the command registry from every crate, in the order the palette
+/// and the shortcuts overlay list the categories.
+///
+/// One published command is left out: the Vim crate's own "Toggle Vim
+/// mode". The app's [`actions::ToggleVimMode`] is the one bound to
+/// `cmd-alt-v` and the one that stores the setting, and the palette should
+/// not list the same thing twice.
+fn register_commands(cx: &mut App) {
+    commands::register(actions::commands(), cx);
+    commands::register(writer_editor::commands(), cx);
+    commands::register(writer_editor_tools::commands(), cx);
+    commands::register(writer_comments::commands(), cx);
+    commands::register(
+        writer_vim_mode::commands()
+            .into_iter()
+            .filter(|command| command.action_name() != writer_vim_mode::ToggleVimMode.name()),
+        cx,
+    );
+    commands::register(writer_library::commands(), cx);
 }

@@ -5,35 +5,41 @@
 //! document session (open, autosave, title) and handles every app-level
 //! action.
 //!
-//! # Mount points
+//! # What is mounted
 //!
 //! The workspace owns one [`Editor`] entity for the lifetime of the window:
 //! opening another document replaces the editor's document
-//! ([`writer_editor::EditorEvent::DocumentReplaced`]). Crates that extend the
-//! editor attach to that entity once and plug their views in here:
+//! ([`writer_editor::EditorEvent::DocumentReplaced`]). Everything that
+//! extends the editor is attached to that entity once, in
+//! [`Workspace::new`], and follows the document by itself:
 //!
-//! | What | How |
+//! | What | Where it shows | Kept in step by |
+//! |---|---|---|
+//! | [`EditorTools`] (format menu, insert menu, link popover, font picker, find bar) | the editor area: it wraps the editor | itself; recent fonts are stored from the `FontLibrary` global |
+//! | [`CommentsPanel`] | the right panel slot, while it has something to show | `on_comments_event`: the slot, the visibility setting, the "show resolved" setting |
+//! | [`VimMode`] with its status item and command line | status bar (left), a strip under the editor | `apply_vim_setting` (the `editor.vim_mode` setting) and `on_vim_event` (`:w`, `:q`, named commands) |
+//!
+//! The slots themselves are public, so another view can be plugged in the
+//! same way:
+//!
+//! | Slot | How |
 //! |---|---|
-//! | A wrapper around the editor (format menu, insert menu, find) | [`Workspace::set_editor_host`]: the view renders [`Workspace::editor`] itself, with whatever it adds |
-//! | A panel at the right (comments) | [`Workspace::set_right_panel`], [`Workspace::set_right_panel_width`] |
-//! | A strip under the editor (find bar, Vim command line) | [`Workspace::set_editor_strip`], keyed, stacked in insertion order |
-//! | An item in the status bar (Vim mode) | [`Workspace::set_status_item`], keyed, shown at the left |
+//! | A wrapper around the editor | [`Workspace::set_editor_host`]: the view renders [`Workspace::editor`] itself, with whatever it adds |
+//! | A panel at the right | [`Workspace::set_right_panel`], [`Workspace::set_right_panel_width`] |
+//! | A strip under the editor | [`Workspace::set_editor_strip`], keyed, stacked in insertion order |
+//! | An item in the status bar | [`Workspace::set_status_item`], keyed, shown at the left |
 //! | Commands for the palette and the shortcuts overlay | [`crate::commands::register`] |
 //! | Settings | [`Workspace::settings`], [`crate::WorkspaceEvent::SettingsChanged`], [`crate::settings::keys`] |
 //! | Modals and toasts | [`Workspace::modal_layer`], [`Workspace::toast_layer`], [`Workspace::show_toast`] |
 //!
-//! ```ignore
-//! let workspace = window_handle.root(cx)?;
-//! let (editor, library) = workspace.read_with(cx, |w, _| (w.editor().clone(), w.library().clone()));
-//! let tools = cx.new(|cx| EditorTools::new(editor.clone(), window, cx));
-//! workspace.update(cx, |workspace, cx| {
-//!     workspace.set_editor_host(Some(tools.clone().into()), cx);
-//!     workspace.set_status_item("vim", Some(vim_status.into()), cx);
-//!     workspace.set_editor_strip("vim-command-line", Some(command_line.into()), cx);
-//!     workspace.set_right_panel(Some(comments.into()), cx);
-//! });
-//! cx.subscribe(&workspace, |_, event: &WorkspaceEvent, cx| { /* SettingsChanged, DocumentOpened */ });
-//! ```
+//! # Who takes a key
+//!
+//! With focus in the text: an open insert menu first (it intercepts at the
+//! editor's overlay priority), then Vim mode (modal priority; it lets every
+//! `cmd` chord through), then the key bindings from the focused element
+//! outwards (editor, editor tools, workspace), then text input. A tool that
+//! takes focus (format menu, link popover, font picker, find bar) and the
+//! modals get their keys directly.
 
 mod render;
 mod session;
@@ -45,8 +51,10 @@ use gpui::{
     PromptLevel, SharedString, Subscription, Task, Window, WindowBounds, px,
 };
 use serde::Serialize;
+use writer_comments::{CommentsEvent, CommentsPanel};
 use writer_core::Document;
 use writer_editor::{Editor, EditorConfig, EditorEvent};
+use writer_editor_tools::{EditorTools, FontLibrary};
 use writer_library::{
     DocumentId, Library, LibraryEvent, LibraryItem, LibraryPanel, LibraryPanelEvent,
 };
@@ -54,6 +62,7 @@ use writer_ui::{
     CommandDescriptor, ModalLayer, Picker, ThemeMode, Toast, ToastLayer,
     theme::{self},
 };
+use writer_vim_mode::{HostRequest, VimCommandLine, VimEvent, VimMode, VimStatusItem};
 
 use crate::{
     actions::*,
@@ -91,6 +100,11 @@ const BOUNDS_SAVE_DELAY: Duration = Duration::from_millis(600);
 /// How many commands the palette remembers as recently used.
 const MAX_RECENT_COMMANDS: usize = 8;
 
+/// The status-bar slot of the Vim mode indicator.
+pub const VIM_STATUS_KEY: &str = "vim";
+/// The strip slot of the Vim command line.
+pub const VIM_COMMAND_LINE_KEY: &str = "vim-command-line";
+
 /// What the workspace tells its subscribers.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorkspaceEvent {
@@ -108,6 +122,9 @@ pub struct Workspace {
     pub(crate) library: Entity<Library>,
     pub(crate) editor: Entity<Editor>,
     pub(crate) panel: Entity<LibraryPanel>,
+    pub(crate) tools: Entity<EditorTools>,
+    pub(crate) comments: Entity<CommentsPanel>,
+    pub(crate) vim: Entity<VimMode>,
     pub(crate) modal_layer: Entity<ModalLayer>,
     pub(crate) toast_layer: Entity<ToastLayer>,
     pub(crate) focus_handle: FocusHandle,
@@ -182,10 +199,33 @@ impl Workspace {
         let toast_layer = cx.new(|_| ToastLayer::new());
         ToastLayer::set_global(&toast_layer, cx);
 
+        // Everything that extends the editor attaches to the one editor
+        // entity here and follows `DocumentReplaced` by itself.
+        let recent_fonts: Vec<String> = library
+            .read(cx)
+            .setting_or(keys::RECENT_FONTS, Vec::new());
+        writer_editor_tools::set_recent_fonts(recent_fonts.into_iter().map(SharedString::from), cx);
+        let tools = cx.new(|cx| EditorTools::new(editor.clone(), window, cx));
+        let comments = cx.new(|cx| {
+            let mut comments =
+                CommentsPanel::new(editor.clone(), settings.comment_author.clone(), window, cx);
+            let show_resolved = library
+                .read(cx)
+                .setting_or(keys::COMMENTS_SHOW_RESOLVED, false);
+            comments.set_show_resolved(show_resolved, window, cx);
+            comments
+        });
+        let vim = cx.new(|cx| VimMode::new(editor.clone(), cx));
+        let vim_status = cx.new(|cx| VimStatusItem::new(vim.clone(), cx));
+        let vim_command_line = cx.new(|cx| VimCommandLine::new(vim.clone(), cx));
+
         let subscriptions = vec![
             cx.subscribe_in(&editor, window, Self::on_editor_event),
             cx.subscribe_in(&library, window, Self::on_library_event),
             cx.subscribe_in(&panel, window, Self::on_panel_event),
+            cx.subscribe_in(&comments, window, Self::on_comments_event),
+            cx.subscribe_in(&vim, window, Self::on_vim_event),
+            cx.observe_global::<FontLibrary>(Self::store_recent_fonts),
             // A modal that closes gives focus back to where it was. When
             // that place is gone (a popup that closed meanwhile), focus
             // would be nowhere and no key would reach anything.
@@ -228,17 +268,20 @@ impl Workspace {
             library,
             editor,
             panel,
+            editor_host: Some(tools.clone().into()),
+            tools,
+            comments,
+            vim,
             modal_layer,
             toast_layer,
             focus_handle: cx.focus_handle(),
             settings,
             session: None,
             sidebar_dragging: false,
-            editor_host: None,
             right_panel: None,
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
-            strips: Vec::new(),
-            status_items: Vec::new(),
+            strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
+            status_items: vec![(VIM_STATUS_KEY.into(), vim_status.into())],
             character_count: None,
             window_bounds: None,
             window_title: String::new(),
@@ -246,6 +289,8 @@ impl Workspace {
             _subscriptions: subscriptions,
         };
         this.restore_session(window, cx);
+        this.sync_comments_panel(cx);
+        this.apply_vim_setting(cx);
         this.focus_editor(window, cx);
         this
     }
@@ -266,6 +311,25 @@ impl Workspace {
     /// The library sidebar.
     pub fn panel(&self) -> &Entity<LibraryPanel> {
         &self.panel
+    }
+
+    /// The editor's contextual tools: format menu, insert menu, link
+    /// popover, font picker, find and replace. This view wraps the editor
+    /// in the editor area.
+    pub fn tools(&self) -> &Entity<EditorTools> {
+        &self.tools
+    }
+
+    /// The comments panel. It sits in the right panel slot while it has
+    /// something to show.
+    pub fn comments(&self) -> &Entity<CommentsPanel> {
+        &self.comments
+    }
+
+    /// Vim mode for the editor. Attached while the `editor.vim_mode`
+    /// setting is on.
+    pub fn vim(&self) -> &Entity<VimMode> {
+        &self.vim
     }
 
     /// The modal layer of the window (palette, pickers, dialogs).
@@ -507,6 +571,14 @@ impl Workspace {
                 );
             });
         }
+        if old.vim_mode != new.vim_mode {
+            self.apply_vim_setting(cx);
+        }
+        if old.comment_author != new.comment_author {
+            let author = new.comment_author.clone();
+            self.comments
+                .update(cx, |comments, _| comments.set_author(author));
+        }
         if old.character_limit != new.character_limit {
             self.character_count = None;
         }
@@ -674,21 +746,55 @@ impl Workspace {
         self.mark_dirty(cx);
     }
 
-    /// Turns Vim mode on or off (a setting).
+    /// Turns Vim mode on or off (a setting). The mode indicator in the
+    /// status bar shows the result.
     pub fn toggle_vim_mode(&mut self, cx: &mut Context<Self>) {
         let on = !self.settings.vim_mode;
         self.write_setting(keys::VIM_MODE, &on, cx);
-        self.show_toast(
-            Toast::new(if on { "Vim mode on" } else { "Vim mode off" })
-                .duration(Duration::from_secs(2)),
-            cx,
-        );
     }
 
-    /// Shows or hides comments (a setting).
+    /// Attaches or detaches Vim mode as the setting says.
+    fn apply_vim_setting(&mut self, cx: &mut Context<Self>) {
+        let on = self.settings.vim_mode;
+        self.vim.update(cx, |vim, cx| vim.set_attached(on, cx));
+    }
+
+    /// Shows or hides comments: the tints in the text and the panel (a
+    /// setting). `cmd-alt-c` does the same through the comments panel,
+    /// which reports back with [`CommentsEvent::VisibilityChanged`].
     pub fn toggle_comments(&mut self, cx: &mut Context<Self>) {
         let visible = !self.settings.comments_visible;
         self.write_setting(keys::COMMENTS_VISIBLE, &visible, cx);
+    }
+
+    /// Puts the comments panel in the right slot while it has something to
+    /// show, and takes it out otherwise.
+    fn sync_comments_panel(&mut self, cx: &mut Context<Self>) {
+        let open = self.comments.read(cx).is_open();
+        if open != self.right_panel.is_some() {
+            let view = open.then(|| self.comments.clone().into());
+            self.set_right_panel(view, cx);
+        }
+    }
+
+    /// The font picker's recently used families changed (or any other part
+    /// of the font library): keep the stored list in step.
+    fn store_recent_fonts(&mut self, cx: &mut Context<Self>) {
+        let recent: Vec<String> = writer_editor_tools::recent_fonts(cx)
+            .into_iter()
+            .map(|font| font.to_string())
+            .collect();
+        let stored: Vec<String> = self
+            .library
+            .read(cx)
+            .setting_or(keys::RECENT_FONTS, Vec::new());
+        if recent != stored {
+            self.library
+                .update(cx, |library, cx| {
+                    library.set_setting(keys::RECENT_FONTS, &recent, cx)
+                })
+                .ok();
+        }
     }
 
     /// Stores the theme choice and applies it.
@@ -739,6 +845,103 @@ impl Workspace {
             EditorEvent::Edited { .. } | EditorEvent::SettingsChanged => self.mark_dirty(cx),
             _ => cx.notify(),
         }
+    }
+
+    fn on_comments_event(
+        &mut self,
+        _comments: &Entity<CommentsPanel>,
+        event: &CommentsEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            CommentsEvent::OpenChanged(_) => self.sync_comments_panel(cx),
+            // The panel shows or hides comments itself (cmd-alt-c, or "add
+            // comment" while they are hidden): remember what it chose.
+            CommentsEvent::VisibilityChanged(visible) => {
+                if self.settings.comments_visible != *visible {
+                    self.write_setting(keys::COMMENTS_VISIBLE, visible, cx);
+                }
+                self.sync_comments_panel(cx);
+            }
+            CommentsEvent::ShowResolvedChanged(show) => {
+                self.library
+                    .update(cx, |library, cx| {
+                        library.set_setting(keys::COMMENTS_SHOW_RESOLVED, show, cx)
+                    })
+                    .ok();
+            }
+            _ => {}
+        }
+    }
+
+    fn on_vim_event(
+        &mut self,
+        vim: &Entity<VimMode>,
+        event: &VimEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            VimEvent::Request(request) => self.on_vim_request(vim, request, window, cx),
+            // Vim was switched by something other than the setting (the Vim
+            // crate's own toggle action): the setting follows.
+            VimEvent::Attached | VimEvent::Detached => {
+                let attached = vim.read(cx).is_attached();
+                if self.settings.vim_mode != attached {
+                    self.write_setting(keys::VIM_MODE, &attached, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// What the Vim command line asks of the app: `:w` saves now, `:q`
+    /// closes the document (the window stays, with the library), `:wq` does
+    /// both, and any other name is looked up among the commands of the
+    /// palette (`:togglepageview`, `:export`, `:bold`).
+    fn on_vim_request(
+        &mut self,
+        vim: &Entity<VimMode>,
+        request: &HostRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            HostRequest::Save => {
+                self.vim_save(vim, cx);
+            }
+            HostRequest::Close { .. } => {
+                // Nothing can be lost by closing: the document is saved
+                // first, with or without the bang.
+                self.close_document(window, cx);
+            }
+            HostRequest::SaveAndClose => {
+                if self.vim_save(vim, cx) {
+                    self.close_document(window, cx);
+                }
+            }
+            HostRequest::Command { name, .. } => match command_named(name, cx) {
+                Some(command) => self.run_action(command.action(), window, cx),
+                None => {
+                    let error = format!("E492: Not an editor command: {name}");
+                    vim.update(cx, |vim, cx| vim.show_error(error, cx));
+                }
+            },
+        }
+    }
+
+    fn vim_save(&mut self, vim: &Entity<VimMode>, cx: &mut Context<Self>) -> bool {
+        let saved = self.flush(cx);
+        let title = self.display_title();
+        vim.update(cx, |vim, cx| {
+            if saved {
+                vim.show_message(format!("\u{201c}{title}\u{201d} saved"), cx);
+            } else {
+                vim.show_error("E212: Could not save; the save is retried", cx);
+            }
+        });
+        saved
     }
 
     fn on_panel_event(
@@ -931,15 +1134,6 @@ impl Workspace {
         self.toggle_vim_mode(cx);
     }
 
-    pub(crate) fn on_toggle_comments(
-        &mut self,
-        _: &ToggleComments,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.toggle_comments(cx);
-    }
-
     pub(crate) fn on_title_from_text(
         &mut self,
         _: &UseTitleFromText,
@@ -1026,6 +1220,30 @@ fn picker_rows(window: &Window, wanted: usize) -> usize {
     let height = f32::from(window.viewport_size().height);
     let available = height * 0.88 - 48. - 8. - 24.;
     ((available / 32.).floor().max(0.) as usize).clamp(4, wanted.max(4))
+}
+
+/// The registered command an ex command line names: the command's title,
+/// its action name or "category title", compared without case, spaces and
+/// punctuation (`:togglepageview`, `:ToggleBold`, `:export`). The first
+/// registered match wins.
+pub fn command_named(name: &str, cx: &App) -> Option<CommandDescriptor> {
+    fn squeeze(text: &str) -> String {
+        text.chars()
+            .filter(|ch| ch.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    let wanted = squeeze(name);
+    if wanted.is_empty() {
+        return None;
+    }
+    crate::commands::all(cx).into_iter().find(|command| {
+        let action = command.action_name();
+        let action = action.rsplit("::").next().unwrap_or(action);
+        squeeze(&command.title) == wanted
+            || squeeze(action) == wanted
+            || squeeze(&command.label()) == wanted
+    })
 }
 
 fn set_keyed(slots: &mut Vec<(SharedString, AnyView)>, key: SharedString, view: Option<AnyView>) {

@@ -325,3 +325,148 @@ fn cancelled_and_invalid() {
         c("|foo bar", "zq", "|foo bar").bell(true),
     ]);
 }
+
+#[test]
+fn more_motions_after_operators() {
+    run(&[
+        c("a\n|b\nc\nd", "dL", "a\n|d").height(3),
+        c("a\n|b\nc\nd", "dH", "|c\nd").height(3),
+        c("a\n|b\nc\nd", "yM", "a\n|b\nc\nd").height(3).regs(&[('"', "b\n")]),
+        c("a |bc  ", "dg_", "a |  "),
+        c("abcde|fghij", "dg0", "abcde|fghij").width(5),
+        c("abcdef|ghij", "dg0", "abcde|ghij").width(5),
+        c("a|bcdefghij", "dg$", "a|fghij").width(5),
+        c("a\n|b\nc", "d<CR>", "|a"),
+        c("ab\n|cd", "2<BS>", "|ab\ncd"),
+        c("ab\n|cd", "d<BS>", "ab|cd"),
+        c("foo |bar↵baz", "dw", "foo| ↵baz"),
+        c("foo|, bar", "cwX<Esc>", "foo|X bar"),
+        c("foo ba|r", "cwX<Esc>", "foo ba|X"),
+        c("|ab", "xp", "b|a"),
+        c("|foo bar", "dwwP", "bafoo| r"),
+        c("a\n|b", "Yp", "a\nb\n|b"),
+        c("|a\nb\nc", "jyyGp`[", "a\nb\nc\n|b"),
+        c("|a\nb\nc", "yjG'[", "|a\nb\nc"),
+        c("|a b", "ywG`]", "a |b"),
+        c("a|b cd", "ix<Esc>`.", "a|xb cd"),
+        c("|foo bar", "/bar<CR>''", "|foo bar"),
+        // The jump list keeps one entry per block, as Vim keeps one per
+        // line: a jump inside the block is undone with `` instead.
+        c("|foo bar", "/bar<CR><C-o>", "foo |bar").bell(true),
+        c("|foo\nbar", "/bar<CR><C-o>", "|foo\nbar"),
+        c("|a\nb\nc\nd", "jmajjmb:'a,'bs/$/!/<CR>", "a\nb\nc\n|d").message("E486"),
+        c("|a\nb\nc\nd", "jmajmb:'a,'bs/b/B/<CR>", "a\n|B\nc\nd"),
+    ]);
+}
+
+/// Every operator with every motion: nothing breaks, a yank changes
+/// nothing, a change ends in Insert mode, and one undo takes it back.
+#[test]
+fn every_operator_with_every_motion() {
+    use writer_vim::Mode;
+    let buffer = "One two. Three (four) five\nsec|ond \"line\" here. More\n\n  last one";
+    let operators = ["d", "c", "y", ">", "<", "gu", "gU", "g~"];
+    let motions = [
+        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0", "g$", "gg",
+        "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", ";", ",", "%", "H", "M", "L", "*", "#", "n",
+        "N", "+", "-", "_", "<Space>", "<BS>", "gj", "gk", "|", "3|", "2w", "3l", "'a", "`a", "/one<CR>",
+        "?One<CR>", "iw", "aw", "iW", "aW", "is", "as", "ip", "ap", "i\"", "a\"", "i(", "a(", "ib",
+    ];
+    let mut failures = Vec::new();
+    for op in operators {
+        for m in motions {
+            let mut s = Session::new(buffer);
+            // A mark, a find and a search to refer to.
+            s.keys("ggma/four<CR>fe<C-o><C-o>");
+            let before = s.text();
+            let depth = s.ed.undo_depth();
+            s.clear_effects();
+            s.keys(&format!("{op}{m}"));
+            let what = format!("{op}{m}");
+            if let Err(e) = s.check_invariants() {
+                failures.push(format!("{what}: {e}"));
+                continue;
+            }
+            let failed = s.bells() > 0 || s.messages().iter().any(|m| m.starts_with('E'));
+            match op {
+                "y" => {
+                    if s.text() != before || s.mode() != Mode::Normal {
+                        failures.push(format!("{what}: a yank changed the buffer or the mode"));
+                    }
+                }
+                "c" => {
+                    if !failed && s.mode() != Mode::Insert {
+                        failures.push(format!("{what}: not in Insert mode ({:?})", s.mode()));
+                    }
+                }
+                _ => {
+                    if s.mode() != Mode::Normal {
+                        failures.push(format!("{what}: ended in {:?}", s.mode()));
+                    }
+                }
+            }
+            s.keys("<Esc>");
+            if s.ed.undo_depth() > depth + 1 {
+                failures.push(format!("{what}: more than one undo step"));
+            }
+            if s.text() != before {
+                s.keys("u");
+                if s.text() != before {
+                    failures.push(format!("{what}: undo did not restore the buffer"));
+                }
+            }
+            if s.mode() != Mode::Normal {
+                failures.push(format!("{what}: not back in Normal mode"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every motion in Visual and Visual Line mode, then a delete and an undo.
+#[test]
+fn every_motion_in_visual_mode() {
+    use writer_vim::Mode;
+    let buffer = "One two. Three (four) five\nsec|ond \"line\" here. More\n\n  last one";
+    let motions = [
+        "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0", "g$", "gg",
+        "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", "%", "H", "M", "L", "*", "#", "+", "-", "_",
+        "<Space>", "<BS>", "iw", "aw", "is", "as", "ip", "ap", "i\"", "a\"", "i(", "a(", "o", "/one<CR>",
+    ];
+    let mut failures = Vec::new();
+    for start in ["v", "V"] {
+        for m in motions {
+            for op in ["d", "y", "c", ">", "U", "J", "rx", "p"] {
+                let mut s = Session::new(buffer);
+                s.keys("yiw");
+                let before = s.text();
+                let depth = s.ed.undo_depth();
+                let what = format!("{start}{m}{op}");
+                s.keys(&format!("{start}{m}"));
+                if !s.mode().is_visual() {
+                    failures.push(format!("{what}: left Visual mode after the motion"));
+                    continue;
+                }
+                s.keys(op);
+                if let Err(e) = s.check_invariants() {
+                    failures.push(format!("{what}: {e}"));
+                    continue;
+                }
+                s.keys("<Esc>");
+                if s.mode() != Mode::Normal {
+                    failures.push(format!("{what}: not back in Normal mode"));
+                }
+                if s.ed.undo_depth() > depth + 1 {
+                    failures.push(format!("{what}: more than one undo step"));
+                }
+                if s.text() != before {
+                    s.keys("u");
+                    if s.text() != before {
+                        failures.push(format!("{what}: undo did not restore the buffer"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -12,6 +12,9 @@ use crate::register::RegisterContent;
 
 use super::{Base, ChangeRecord, Cx, Resume, Vim};
 
+/// The most often a count repeats typed text or a put.
+pub(crate) const MAX_REPEAT: usize = 10_000;
+
 /// One thing that happened in an Insert session, in a form that can be
 /// done again.
 #[derive(Clone, Debug, PartialEq)]
@@ -482,7 +485,8 @@ impl Vim {
         };
         if s.count > 1 && !s.actions.is_empty() {
             let actions = s.actions.clone();
-            for _ in 1..s.count {
+            // A slip of the finger (`99999ix`) must not freeze the app.
+            for _ in 1..s.count.min(MAX_REPEAT) {
                 if s.open.is_some() {
                     // Every further copy goes below the one before, for
                     // `O` too, so the lines come out in typing order.
@@ -494,11 +498,6 @@ impl Vim {
         let head = cx.ed.selection().head;
         cx.ed.set_caret(head);
         self.set_mark(cx, '^', head);
-        if !s.actions.is_empty() {
-            self.set_mark(cx, '.', head);
-            self.set_mark(cx, ']', head);
-            self.last_inserted = Self::actions_text(&s.actions);
-        }
         // The caret steps back onto the last typed character.
         let doc = cx.ed.document();
         let ls = buf::line_start(doc, head);
@@ -507,6 +506,12 @@ impl Vim {
         } else {
             head
         };
+        if !s.actions.is_empty() {
+            // The last change is the last character typed.
+            self.set_mark(cx, '.', back);
+            self.set_mark(cx, ']', back);
+            self.last_inserted = Self::actions_text(&s.actions);
+        }
         self.base = Base::Normal;
         self.set_normal_caret(cx, back);
         if s.group_open {

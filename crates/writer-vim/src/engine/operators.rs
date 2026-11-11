@@ -8,6 +8,7 @@ use crate::buf::{self, Lines};
 use crate::register::RegisterContent;
 use crate::textobj::Target;
 
+use super::insert::MAX_REPEAT;
 use super::{Cx, Operator, Vim};
 
 /// How a case operator maps text.
@@ -295,6 +296,7 @@ impl Vim {
     /// `>` and `<`: block indent for blocks, leading spaces for the lines
     /// of a code block.
     pub(crate) fn shift_lines(&mut self, cx: &mut Cx, lines: &Lines, right: bool, times: usize) {
+        let times = times.clamp(1, 64);
         let caret;
         match lines {
             Lines::Blocks(range) => {
@@ -644,7 +646,7 @@ impl Vim {
     /// `p`, `P`, `gp`, `gP` in Normal mode.
     pub(crate) fn put(&mut self, cx: &mut Cx, content: &RegisterContent, before: bool, count: usize, caret_after: bool) {
         let origin = cx.ed.selection().head;
-        let count = count.max(1);
+        let count = count.clamp(1, MAX_REPEAT);
         cx.ed.set_caret(origin);
         if content.linewise {
             if Self::puts_code_lines(cx, content, origin) {
@@ -725,7 +727,7 @@ impl Vim {
     /// register. With `keep` (`P`) the registers stay as they are;
     /// otherwise the replaced text goes to the unnamed register.
     pub(crate) fn put_over(&mut self, cx: &mut Cx, target: Target, content: &RegisterContent, count: usize, keep: bool) {
-        let count = count.max(1);
+        let count = count.clamp(1, MAX_REPEAT);
         let replaced = self.target_content(cx, &target);
         match &target {
             Target::Chars(r) => {

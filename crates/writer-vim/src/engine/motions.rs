@@ -90,6 +90,9 @@ pub(crate) struct MotionOut {
     pub jump: bool,
     /// Deletes with this motion always go to register 1.
     pub big: bool,
+    /// The range is taken as it is: no adjustment for an exclusive motion
+    /// that ends at the start of a line (backspace over a line break).
+    pub exact: bool,
 }
 
 fn out(pos: Position, kind: MotionKind) -> MotionOut {
@@ -99,6 +102,7 @@ fn out(pos: Position, kind: MotionKind) -> MotionOut {
         goal: GoalUpdate::Clear,
         jump: false,
         big: false,
+        exact: false,
     }
 }
 
@@ -189,7 +193,10 @@ impl Vim {
                 if p == origin {
                     return None;
                 }
-                out(p, Exclusive)
+                MotionOut {
+                    exact: true,
+                    ..out(p, Exclusive)
+                }
             }
             Motion::WrapRight => {
                 let mut p = origin;
@@ -467,7 +474,7 @@ impl Vim {
             MotionKind::Inclusive => Target::Chars(TextRange::new(s, buf::cell_end(doc, e))),
             MotionKind::Exclusive => {
                 let mut e = e;
-                if e > s && buf::at_line_start(doc, e) && !buf::same_line(doc, s, e) {
+                if !m.exact && e > s && buf::at_line_start(doc, e) && !buf::same_line(doc, s, e) {
                     let prev_end = buf::prev_cell(doc, e).unwrap_or(e);
                     // "If the motion is exclusive, the end of the motion is
                     // in column 1 and the start is at or before the first

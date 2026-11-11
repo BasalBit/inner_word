@@ -551,6 +551,7 @@ impl Vim {
                     goal: GoalUpdate::Clear,
                     jump: false,
                     big: false,
+                    exact: false,
                 });
             } else if buf::class_at(doc, origin, opts) != Class::Blank {
                 let p = motion::word_end(doc, origin, count.unwrap_or(1), opts, true);
@@ -560,6 +561,7 @@ impl Vim {
                     goal: GoalUpdate::Clear,
                     jump: false,
                     big: false,
+                    exact: false,
                 });
             }
         }

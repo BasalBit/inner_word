@@ -40,6 +40,9 @@ pub(crate) struct CmdLineState {
     origin_visual: Option<super::VisualState>,
     /// `ctrl-r` was pressed; the next key names a register.
     await_register: bool,
+    /// Whether search highlights were on when it was opened (an abandoned
+    /// search puts them back as they were).
+    saved_highlight: bool,
 }
 
 impl CmdLineState {
@@ -83,6 +86,7 @@ impl Vim {
             origin,
             origin_visual: self.is_visual().then_some(self.visual),
             await_register: false,
+            saved_highlight: self.search.highlight,
         });
     }
 
@@ -299,6 +303,7 @@ impl Vim {
         if matches!(c.kind, CmdKind::Search { .. }) {
             // The preview replaced the pattern: put the last real one back.
             self.search.pattern = search::parse_pattern(&self.search.raw);
+            self.search.highlight = c.saved_highlight;
         }
         self.push_history(c.kind, &c.text);
         self.cancel_pending();

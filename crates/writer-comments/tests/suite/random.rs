@@ -41,6 +41,7 @@ const KEYS: &[&str] = &[
     "alt-right",
     "cmd-a",
     "tab",
+    "shift-tab",
 ];
 
 /// A small deterministic generator (xorshift), so a failure can be replayed
@@ -125,6 +126,20 @@ fn random_keys_keep_panel_and_editor_consistent(cx: &mut TestAppContext) {
                 if !panel.is_composing() {
                     assert!(panel.composer().read(cx).is_empty(), "{}", context());
                 }
+                // The target of a new comment is a place in the document
+                // as it is now, whatever was typed or deleted meanwhile.
+                if let Some(writer_comments::DraftKind::New { range }) = panel.draft() {
+                    let document = panel.editor().read(cx).document();
+                    assert!(
+                        document.is_valid_position(range.start)
+                            && document.is_valid_position(range.end)
+                            && range.start <= range.end,
+                        "draft target {range:?}: {}",
+                        context()
+                    );
+                    assert_eq!(panel.draft_target_lost(), range.is_empty());
+                }
+                assert!(panel.kept_drafts() <= 16, "{}", context());
                 match focus {
                     Focus::Composer => assert!(panel.is_composing(), "{}", context()),
                     Focus::List => assert!(panel.is_open(), "{}", context()),

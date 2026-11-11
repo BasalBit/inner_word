@@ -1104,7 +1104,7 @@ impl CommentsPanel {
     /// The thread to start from when the list takes focus without an
     /// active thread: the one at the caret, else the next one after it,
     /// else the first.
-    fn thread_near_caret(&self, cx: &App) -> Option<CommentId> {
+    pub(super) fn thread_near_caret(&self, cx: &App) -> Option<CommentId> {
         let head: Position = self.editor.read(cx).selection().head;
         self.listed_threads()
             .find(|entry| entry.contains(head))

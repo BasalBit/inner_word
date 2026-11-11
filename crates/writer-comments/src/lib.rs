@@ -64,7 +64,10 @@
 //! - **Another document.** With one editor entity per window and
 //!   `Editor::set_document`, there is nothing to do: the panel follows
 //!   `EditorEvent::DocumentReplaced`. For another editor entity, call
-//!   [`CommentsPanel::set_editor`].
+//!   [`CommentsPanel::set_editor`]. A comment that was being written is
+//!   not thrown away and not applied to the other document: the panel
+//!   keeps it ([`CommentsPanel::kept_drafts`]), says so in a toast, and
+//!   reopens its composer when the document is open again.
 //! - **Author and time.** The author name is the constructor argument
 //!   ([`CommentsPanel::set_author`] changes it). Timestamps are read from
 //!   the system clock ([`time::now`]).
@@ -87,7 +90,7 @@
 //! | thread list | `x` | [`ToggleResolved`] |
 //! | thread list | `cmd-backspace`, then `enter` / `escape` | [`DeleteComment`], [`ConfirmDelete`] / [`CancelDelete`] |
 //! | thread list | `s` | [`ToggleShowResolved`] |
-//! | thread list | `cmd-z` / `cmd-shift-z` | undo / redo in the document |
+//! | thread list | `cmd-z` / `cmd-shift-z` | undo / redo in the document; the text scrolls to what changed, a changed thread becomes active |
 //! | thread list | `escape` | [`FocusEditor`] |
 //!
 //! # Focus
@@ -98,12 +101,32 @@
 //! gives focus back there when it closes: the editor for a new comment, the
 //! list for a reply or an edit made in the list. When the last thing that
 //! could hold focus disappears (the last thread is deleted, comments are
-//! hidden), focus returns to the editor.
+//! hidden), focus returns to the editor. `tab` moves between an open
+//! composer and the thread list ([`CycleFocus`]).
 //!
 //! While focus is in the editor, the thread the caret is in is the active
 //! one. While focus is in the panel, the panel leads: the active thread is
 //! the one chosen there and the editor scrolls to it without moving the
 //! caret.
+//!
+//! # Drafts
+//!
+//! What is typed into a composer is discarded by its own cancel key, and
+//! with the thread it belongs to (a reply to a thread that is deleted or
+//! resolved out of the list). Nothing else throws it away.
+//!
+//! - The target of a new comment follows its text through edits of the
+//!   document made while the composer is open ([`track::RangeTracker`]).
+//!   If the text is deleted, the composer stays open and says so
+//!   ([`CommentsPanel::draft_target_lost`]); undo brings the target back,
+//!   and [`AddComment`] points the composer at the current selection.
+//! - When comments are hidden, the document is switched, or another
+//!   composer opens over it, a composer with text in it is set aside
+//!   ([`CommentsPanel::kept_drafts`]) and reopens, without taking the
+//!   keyboard, when comments are shown, the document is back (the same
+//!   text at the same place, or the same comment), or the other composer
+//!   closes. Kept drafts live in the panel, not in the document: they do
+//!   not survive closing the window.
 
 #![warn(missing_docs)]
 

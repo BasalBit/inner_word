@@ -183,7 +183,6 @@ impl Render for CommentsPanel {
                     .unwrap_or_else(|_| div().into_any_element())
             })
             .size_full()
-            .px(SPACE_1)
             .py(SPACE_2)
             .into_any_element()
         };
@@ -247,18 +246,21 @@ impl CommentsPanel {
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.rows_built += 1;
         let colors = cx.theme().colors;
+        // The list lays its rows out edge to edge and one under the other,
+        // so the side margin and the space between two cards belong to
+        // the row.
+        let row = div().px(SPACE_1);
         match self.rows.get(ix).copied() {
-            Some(Row::DetachedHeading) => self.render_detached_heading(&colors).into_any_element(),
+            Some(Row::DetachedHeading) => row
+                .child(self.render_detached_heading(&colors))
+                .into_any_element(),
             Some(Row::Thread(id)) => {
                 let Some(entry) = self.thread(id) else {
-                    return div().into_any_element();
+                    return row.into_any_element();
                 };
                 let list_focused = self.focus_handle.is_focused(window);
                 let composer_focused = self.composer.read(cx).is_focused(window);
-                // The space between two cards belongs to the row, so that
-                // the list can measure it.
-                div()
-                    .pb(SPACE_1)
+                row.pb(SPACE_1)
                     .child(self.render_thread(
                         entry,
                         list_focused,
@@ -269,7 +271,7 @@ impl CommentsPanel {
                     ))
                     .into_any_element()
             }
-            None => div().into_any_element(),
+            None => row.into_any_element(),
         }
     }
 
@@ -391,6 +393,39 @@ impl CommentsPanel {
             ))
     }
 
+    /// In place of the quote when the text a new comment was started on
+    /// was deleted meanwhile: what happened, and the two ways out.
+    fn render_target_lost(&self, colors: &ThemeColors, cx: &App) -> Div {
+        div()
+            .debug_selector(|| "comment-target-lost".into())
+            .flex()
+            .gap(SPACE_2)
+            .child(
+                div()
+                    .w(px(2.))
+                    .flex_none()
+                    .rounded(px(1.))
+                    .bg(colors.danger),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_0_5)
+                    .child(div().text_size(UI_TEXT_SM).text_color(colors.ink).child(
+                        "The text for this comment was deleted. Undo that in the \
+                                 text, or point the comment at other text.",
+                    ))
+                    .child(hint_row(colors).child(hint(
+                        "Use the selection",
+                        KeyHint::for_action(&AddComment, cx),
+                        colors,
+                    ))),
+            )
+    }
+
     /// The block under the header while a new comment is being written:
     /// the quoted target, the composer, the keys.
     fn render_new_composer(
@@ -413,12 +448,7 @@ impl CommentsPanel {
                 .border_b_1()
                 .border_color(colors.hairline)
                 .child(if self.draft_target_lost() {
-                    // The text was deleted while the comment was written.
-                    div()
-                        .debug_selector(|| "comment-target-lost".into())
-                        .text_size(UI_TEXT_SM)
-                        .text_color(colors.danger)
-                        .child("The text this comment was for was deleted. Undo, or select other text and add the comment again.")
+                    self.render_target_lost(colors, cx)
                 } else {
                     quote_line(draft.quote.clone().into(), colors)
                 })

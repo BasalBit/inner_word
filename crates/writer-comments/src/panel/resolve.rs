@@ -147,6 +147,14 @@ impl CommentsPanel {
             self.show_change(&before, change, cx);
         }
         self.repair_focus(window, cx);
+        // The active thread was the thing undone: the list keeps a thread
+        // to work on, without moving the text away from what changed.
+        if self.active.is_none() && self.focus_handle.is_focused(window) {
+            let pick = self.thread_near_caret(cx);
+            if pick.is_some() {
+                self.set_active(pick, false, cx);
+            }
+        }
     }
 
     /// Brings what an undo or redo changed into view. `before` is the

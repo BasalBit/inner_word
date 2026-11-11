@@ -1,4 +1,4 @@
-use gpui::{Hsla, Rgba, TestAppContext};
+use gpui::{Hsla, Rgba, TestAppContext, px};
 use writer_core::{
     Alignment, Block, BlockKind, Document, Highlight, InlineAttrs, Position, TextRange,
 };
@@ -589,4 +589,80 @@ fn the_selected_row_stands_out_in_both_themes(cx: &mut TestAppContext) {
     cx.update(|cx| theme::set_theme_mode(ThemeMode::Light, cx));
     let colors = cx.update(|cx| cx.theme().colors);
     assert_eq!(selected_row_fill(&colors), colors.accent_subtle);
+}
+
+#[gpui::test]
+fn the_list_never_ends_on_a_heading(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["Hello brave world"]), cx);
+    select(&editor, TextRange::in_block(0, 6, 11), cx);
+
+    // On a selection the tenth entry is the heading "Highlight": the menu
+    // shows nine rows and ends on "Clear formatting".
+    cx.simulate_keystrokes("cmd-.");
+    let all = rows(&tools, cx);
+    assert!(all[9].header && all[9].label == "Highlight");
+    assert!(!all[8].header);
+    let menu = cx.debug_bounds("tools-menu").unwrap();
+    let last = cx.debug_bounds("menu-row-8").unwrap();
+    assert!(
+        menu.bottom() - last.bottom() < px(8.),
+        "the last row in view is a row: {menu:?} {last:?}"
+    );
+    assert!(menu.size.height > px(34. + 252.) && menu.size.height < px(34. + 252. + 16.));
+    // Everything is still reached with the keyboard.
+    for _ in 0..8 {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Yellow highlight"));
+    cx.simulate_keystrokes("escape");
+
+    // At a caret the tenth entry is a row: ten rows.
+    caret(&editor, 0, 3, cx);
+    cx.simulate_keystrokes("cmd-.");
+    assert!(!rows(&tools, cx)[9].header);
+    let menu = cx.debug_bounds("tools-menu").unwrap();
+    assert!(menu.size.height > px(34. + 280.) && menu.size.height < px(34. + 280. + 16.));
+}
+
+#[gpui::test]
+fn a_filter_keeps_the_rows_that_belong_together_together(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["Hello brave world"]), cx);
+    select(&editor, TextRange::in_block(0, 6, 11), cx);
+
+    // "colo": the row with the word first, then the rows found through
+    // their keyword ("color"), and only then a row that merely has the
+    // letters c, o, l, o somewhere ("Code block").
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("colo");
+    assert_eq!(
+        labels(&tools, cx),
+        [
+            "Default text colour",
+            "Red text",
+            "Orange text",
+            "Green text",
+            "Blue text",
+            "Purple text",
+            "Grey text",
+            "Code block",
+        ]
+    );
+
+    // A word start beats the same letters inside a word, and both beat
+    // scattered letters.
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("li");
+    let found = labels(&tools, cx);
+    let place = |label: &str| {
+        found
+            .iter()
+            .position(|other| other == label)
+            .unwrap_or_else(|| panic!("{label} is not in {found:?}"))
+    };
+    assert_eq!(found[0], "Link");
+    assert!(place("Bullet list") < place("Italic"));
+    assert!(place("Align left") < place("Italic"));
+    assert!(place("Italic") < place("Yellow highlight"));
 }

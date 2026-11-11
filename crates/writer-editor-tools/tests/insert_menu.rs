@@ -23,13 +23,9 @@ fn slash_in_an_empty_block_opens_and_filters(cx: &mut TestAppContext) {
     assert_eq!(
         labels(&tools, cx),
         [
-            "Paragraph",
             "Heading 1",
             "Heading 2",
             "Heading 3",
-            "Heading 4",
-            "Heading 5",
-            "Heading 6",
             "Bullet list",
             "Numbered list",
             "To-do list",
@@ -39,7 +35,12 @@ fn slash_in_an_empty_block_opens_and_filters(cx: &mut TestAppContext) {
             "Page break",
             "Link",
             "Today's date",
-        ]
+            "Paragraph",
+            "Heading 4",
+            "Heading 5",
+            "Heading 6",
+        ],
+        "the blocks asked for most come first; ten rows are in view"
     );
     assert_eq!(
         row(&tools, "Page break", cx).key_hint.as_deref(),

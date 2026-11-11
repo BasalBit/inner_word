@@ -1,7 +1,8 @@
 use gpui::{TestAppContext, VisualTestContext};
 use writer_core::{Block, BlockKind, Document, InlineAttrs, TextRange};
 use writer_editor_tools::{
-    Mark, RECENT_FONT_LIMIT, ToolKind, recent_fonts, set_font_families, set_recent_fonts,
+    Mark, RECENT_FONT_LIMIT, ToolKind, WRITING_FONTS, recent_fonts, set_font_families,
+    set_recent_fonts,
 };
 
 use crate::support::*;
@@ -57,11 +58,24 @@ fn lists_filters_and_applies_to_the_selection(cx: &mut TestAppContext) {
         "the selection has no font of its own"
     );
     assert!(all[0].selected);
-    assert!(
-        all[1].header && all[1].label == "All fonts",
-        "no recent fonts yet"
+    // The installed writing faces lead, in the picker's own order; then
+    // everything. No recent fonts yet.
+    assert!(all[1].header && all[1].label == "Writing fonts");
+    let writing: Vec<&str> = all[2..8].iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        writing,
+        [
+            "Charter",
+            "Georgia",
+            "Baskerville",
+            "Avenir Next",
+            "Helvetica Neue",
+            "Menlo"
+        ]
     );
-    assert_eq!(all.len(), 2 + 606);
+    assert!(writing.iter().all(|name| WRITING_FONTS.contains(name)));
+    assert!(all[8].header && all[8].label == "All fonts");
+    assert_eq!(all.len(), 3 + 6 + 606);
 
     // Fuzzy filter over hundreds of families.
     let started = std::time::Instant::now();
@@ -84,20 +98,25 @@ fn lists_filters_and_applies_to_the_selection(cx: &mut TestAppContext) {
     assert_eq!(font_at(&editor, 3, cx), None);
     assert_eq!(font_at(&editor, 8, cx), None);
 
-    // Next time: recent comes right after the default, the current family
-    // is marked and preselected.
+    // Next time the current family is marked and preselected where it
+    // comes first. A writing font is not repeated under "Recent".
     cx.simulate_keystrokes("cmd-t");
     let all = rows(&tools, cx);
     assert_eq!(all[0].label, "Document default");
     assert_eq!(all[0].mark, Mark::None);
-    assert!(all[1].header && all[1].label == "Recent");
-    assert_eq!(all[2].label, "Helvetica Neue");
-    assert_eq!(all[2].mark, Mark::Check);
-    assert!(all[2].selected);
-    assert!(all[3].header && all[3].label == "All fonts");
+    assert!(all[1].header && all[1].label == "Writing fonts");
+    assert_eq!(all[6].label, "Helvetica Neue");
+    assert_eq!(all[6].mark, Mark::Check);
+    assert!(all[6].selected);
+    assert!(all[8].header && all[8].label == "All fonts");
+    assert_eq!(
+        cx.update(|_, cx| recent_fonts(cx)),
+        ["Helvetica Neue"],
+        "it is remembered all the same"
+    );
 
     // "Document default" takes the family off again.
-    cx.simulate_keystrokes("up enter");
+    cx.simulate_keystrokes("up up up up up enter");
     assert_eq!(font_at(&editor, 4, cx), None);
     // Two undo steps: clearing, then applying.
     cx.simulate_keystrokes("cmd-z");
@@ -164,7 +183,18 @@ fn cmd_enter_sets_the_document_font(cx: &mut TestAppContext) {
 fn recent_fonts_are_kept_short_and_escape_changes_nothing(cx: &mut TestAppContext) {
     setup(cx);
     install_fonts(cx);
-    cx.update(|cx| set_recent_fonts(["Georgia", "Not Installed", "Menlo", "Georgia"], cx));
+    cx.update(|cx| {
+        set_recent_fonts(
+            [
+                "Family 300",
+                "Not Installed",
+                "Georgia",
+                "Family 200",
+                "Family 300",
+            ],
+            cx,
+        )
+    });
     let document = Document::from_blocks(vec![
         Block::new(BlockKind::Paragraph)
             .with_span(
@@ -180,13 +210,16 @@ fn recent_fonts_are_kept_short_and_escape_changes_nothing(cx: &mut TestAppContex
     select(&editor, TextRange::in_block(0, 0, 11), cx);
 
     // Mixed fonts: nothing is marked. Recent families that are not
-    // installed are left out.
+    // installed are left out, and so is one that is already in view among
+    // the writing fonts (Georgia).
     cx.simulate_keystrokes("cmd-t");
     let all = rows(&tools, cx);
     assert_eq!(all[0].mark, Mark::None);
-    assert_eq!(all[2].label, "Georgia");
-    assert_eq!(all[3].label, "Menlo");
-    assert!(all[4].header);
+    assert!(all[1].header && all[1].label == "Writing fonts");
+    assert!(all[8].header && all[8].label == "Recent");
+    assert_eq!(all[9].label, "Family 300");
+    assert_eq!(all[10].label, "Family 200");
+    assert!(all[11].header && all[11].label == "All fonts");
     assert!(all.iter().all(|row| row.mark == Mark::None));
 
     cx.simulate_keystrokes("down down escape");

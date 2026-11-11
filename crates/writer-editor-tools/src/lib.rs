@@ -126,7 +126,7 @@ mod util;
 pub use commands::{CATEGORY_FORMAT, CATEGORY_INSERT, CATEGORY_SEARCH, commands};
 pub use find::{FIND_BUTTONS, FIND_CURRENT_LAYER, FIND_FLASH_DURATION, FIND_LAYER};
 pub use font_picker::{
-    FontLibrary, RECENT_FONT_LIMIT, font_families, recent_fonts, set_font_families,
+    FontLibrary, RECENT_FONT_LIMIT, WRITING_FONTS, font_families, recent_fonts, set_font_families,
     set_recent_fonts,
 };
 pub use format_menu::TEXT_COLORS;

@@ -60,8 +60,8 @@ fn insert_menu_rows_can_be_clicked(cx: &mut TestAppContext) {
     let (tools, editor, cx) = open(Document::new(), cx);
 
     cx.simulate_input("/");
-    // Entries: Paragraph, Heading 1, Heading 2, ...
-    click("menu-row-1", cx);
+    // Entries: Heading 1, Heading 2, ...
+    click("menu-row-0", cx);
     assert_eq!(active(&tools, cx), None);
     assert!(editor_focused(&editor, cx));
     editor.read_with(cx, |editor, _| {

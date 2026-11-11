@@ -334,7 +334,9 @@ impl EditorTools {
                     }
                     TextFieldEvent::Submitted => this.find_next(window, cx),
                     TextFieldEvent::Cancelled => this.close_find(window, cx),
-                    _ => {}
+                    // The frame of the field that has the keyboard is
+                    // drawn in the accent.
+                    TextFieldEvent::Focused | TextFieldEvent::Blurred => cx.notify(),
                 },
             ),
             cx.subscribe_in(
@@ -343,7 +345,8 @@ impl EditorTools {
                 |this, _, event: &TextFieldEvent, window, cx| match event {
                     TextFieldEvent::Submitted => this.replace_current(window, cx),
                     TextFieldEvent::Cancelled => this.close_find(window, cx),
-                    _ => {}
+                    TextFieldEvent::Focused | TextFieldEvent::Blurred => cx.notify(),
+                    TextFieldEvent::Changed => {}
                 },
             ),
         ];
@@ -366,6 +369,12 @@ impl EditorTools {
     /// closed), or hides it again when the keyboard is already in the bar
     /// and the row is showing. From the document it always brings the
     /// keyboard to the bar and never hides anything.
+    ///
+    /// When the key makes the row appear on a bar that already has a
+    /// query, the keyboard goes to the replace field: the user has said
+    /// what to find and is asking to replace it, and what they type next
+    /// must not overwrite the query. With an empty query (and when the bar
+    /// was closed) the keyboard is in the query field, which comes first.
     pub fn toggle_find_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let in_bar_with_row = self.find_bar.as_ref().is_some_and(|bar| {
             bar.show_replace
@@ -374,9 +383,24 @@ impl EditorTools {
         });
         if in_bar_with_row {
             self.set_replace_row(false, window, cx);
-        } else {
-            self.open_find(true, window, cx);
+            return;
         }
+        let row_appears_on_open_bar = self.find_bar.as_ref().is_some_and(|bar| !bar.show_replace);
+        self.open_find(true, window, cx);
+        if row_appears_on_open_bar && !self.find.query.is_empty() {
+            self.focus_replace_field(window, cx);
+        }
+    }
+
+    /// Puts the keyboard in the replace field, with its text selected.
+    fn focus_replace_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = &self.find_bar else {
+            return;
+        };
+        bar.replace.update(cx, |field, cx| {
+            field.select_all(cx);
+            field.focus(window);
+        });
     }
 
     /// Closes the bar without touching focus.
@@ -805,7 +829,7 @@ impl EditorTools {
 
     pub(crate) fn render_find_bar(
         &mut self,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let bar = self.find_bar.as_ref()?;
@@ -827,9 +851,13 @@ impl EditorTools {
         let hint =
             |hint: Option<KeyHint>| hint.filter(|_| !compact).map(|hint| hint.size(UI_TEXT_XS));
 
-        // A field in its frame.
+        // A field in its frame. With two fields stacked, the frame of the
+        // one that has the keyboard is drawn in the accent (as the comment
+        // composer and the rename field do): the thin caret alone does not
+        // say where typing goes.
         let framed =
             |name: &'static str, field: Entity<TextField>, trailing: Option<AnyElement>| {
+                let focused = field.read(cx).is_focused(window);
                 div()
                     .debug_selector(|| name.to_string())
                     .flex_1()
@@ -841,8 +869,22 @@ impl EditorTools {
                     .gap(px(8.))
                     .rounded(RADIUS_MD)
                     .border_1()
-                    .border_color(colors.hairline)
+                    .border_color(if focused {
+                        colors.accent
+                    } else {
+                        colors.hairline
+                    })
                     .bg(colors.canvas)
+                    .when(focused, |el| {
+                        // Nothing to see: where the accent frame is, for
+                        // tests.
+                        el.relative().child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .debug_selector(|| "find-focus-ring".into()),
+                        )
+                    })
                     .child(div().flex_1().min_w_0().child(field))
                     .children(trailing)
             };

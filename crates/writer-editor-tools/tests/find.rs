@@ -804,3 +804,85 @@ fn read_only_documents_can_be_searched_but_not_replaced(cx: &mut TestAppContext)
     cx.simulate_keystrokes("escape");
     assert!(editor_focused(&editor, cx));
 }
+
+#[gpui::test]
+fn escape_in_the_text_closes_the_bar(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(document(), cx);
+
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("cat");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(status(&tools, cx), "2 of 2");
+    // The keyboard goes back to the text (as cmd-1 does in the app); the
+    // bar and its highlights stay.
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+    assert_eq!(layer(&editor, FIND_LAYER, cx).len(), 2);
+
+    // Escape from there closes the bar and takes the highlights away.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(active(&tools, cx), None);
+    assert!(editor_focused(&editor, cx));
+    assert!(layer(&editor, FIND_LAYER, cx).is_empty());
+    assert!(layer(&editor, FIND_CURRENT_LAYER, cx).is_empty());
+    assert_eq!(selection(&editor, cx), TextRange::in_block(1, 15, 18));
+}
+
+#[gpui::test]
+fn the_replace_key_on_an_open_bar_moves_to_the_replace_field(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(document(), cx);
+    // Whether the accent frame is the one of the field `frame`.
+    let ring_on = |frame: &'static str, cx: &mut VisualTestContext| {
+        let ring = cx.debug_bounds("find-focus-ring").unwrap();
+        let frame = cx.debug_bounds(frame).unwrap();
+        frame.contains(&ring.origin) && frame.contains(&ring.bottom_right())
+    };
+
+    // A search is under way; asking for replace must not let the next
+    // typing overwrite the query.
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("cat");
+    assert_eq!(status(&tools, cx), "1 of 2");
+    assert!(ring_on("find-query-frame", cx));
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(tools.read_with(cx, |tools, _| tools.find_replace_visible()));
+    cx.simulate_input("dog");
+    tools.read_with(cx, |tools, cx| {
+        assert_eq!(tools.find_query(), "cat");
+        assert_eq!(tools.find_replacement(cx), "dog");
+    });
+    assert_eq!(status(&tools, cx), "1 of 2");
+    // The frame of the field that has the keyboard carries the accent.
+    assert!(ring_on("find-replace-frame", cx));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        text(&editor, cx).lines().next(),
+        Some("The dog sat on the mat.")
+    );
+    cx.simulate_keystrokes("shift-tab");
+    assert!(ring_on("find-query-frame", cx));
+
+    // The same from the text, with the bar open and the row hidden.
+    cx.simulate_keystrokes("cmd-alt-f");
+    assert!(!tools.read_with(cx, |tools, _| tools.find_replace_visible()));
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-f");
+    cx.simulate_input("fox");
+    tools.read_with(cx, |tools, cx| {
+        assert_eq!(tools.find_query(), "cat");
+        assert_eq!(tools.find_replacement(cx), "fox");
+    });
+
+    // With nothing to find yet, the query comes first.
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-f cmd-a backspace cmd-alt-f");
+    cx.simulate_input("mat");
+    tools.read_with(cx, |tools, cx| {
+        assert_eq!(tools.find_query(), "mat");
+        assert_eq!(tools.find_replacement(cx), "");
+    });
+}

@@ -1,7 +1,8 @@
 //! The font picker (`cmd-t`): every installed font family, fuzzy filtered.
 //!
-//! "Document default" comes first, the recently used families next, then
-//! all families. `enter` applies the family to the selection, or to the
+//! "Document default" comes first, then the installed ones of a short
+//! list of faces made for long text ([`WRITING_FONTS`]), the recently used
+//! families, and all families. `enter` applies the family to the selection, or to the
 //! text typed next when the caret is collapsed; `cmd-enter` makes it the
 //! document's body font.
 //!
@@ -27,6 +28,23 @@ use crate::{
 pub const RECENT_FONT_LIMIT: usize = 6;
 
 const DEFAULT_LABEL: &str = "Document default";
+
+/// Faces a writer is likely to want, in the order the font picker leads
+/// with them: serifs made for long reading, two quiet sans-serifs and a
+/// monospace. Only the ones that are installed are listed. Without this
+/// group the picker opens on whatever sorts first on the machine (symbol
+/// and display fonts), and every useful face has to be typed.
+pub const WRITING_FONTS: [&str; 9] = [
+    "Charter",
+    "Iowan Old Style",
+    "Georgia",
+    "Baskerville",
+    "Palatino",
+    "New York",
+    "Avenir Next",
+    "Helvetica Neue",
+    "Menlo",
+];
 
 /// The installed font families and the recently used ones. A GPUI global:
 /// observe it (`cx.observe_global::<FontLibrary>(..)`) to persist
@@ -168,11 +186,23 @@ impl FontMenu {
 
     fn entries(&self, query: &str) -> Vec<MenuEntry> {
         if query.trim().is_empty() {
-            let mut entries = Vec::with_capacity(self.families.len() + self.recent.len() + 3);
+            let mut entries = Vec::with_capacity(
+                self.families.len() + self.recent.len() + WRITING_FONTS.len() + 4,
+            );
             entries.push(self.item(0, Vec::new()));
+            let writing: Vec<usize> = WRITING_FONTS
+                .iter()
+                .filter_map(|family| self.family_id(family))
+                .collect();
+            if !writing.is_empty() {
+                entries.push(MenuEntry::Header("Writing fonts".into()));
+                entries.extend(writing.into_iter().map(|id| self.item(id, Vec::new())));
+            }
+            // A recent family that is a writing font is already in view.
             let recent: Vec<usize> = self
                 .recent
                 .iter()
+                .filter(|family| !WRITING_FONTS.contains(&family.as_ref()))
                 .filter_map(|family| self.family_id(family))
                 .collect();
             if !recent.is_empty() {

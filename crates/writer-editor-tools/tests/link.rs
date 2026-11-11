@@ -1,4 +1,4 @@
-use gpui::TestAppContext;
+use gpui::{TestAppContext, VisualTestContext, px};
 use writer_core::{Block, BlockKind, Document, InlineAttrs, Position, Selection, TextRange};
 use writer_editor_tools::ToolKind;
 
@@ -276,4 +276,114 @@ fn editing_an_existing_link_from_its_edges_and_from_a_selection(cx: &mut TestApp
     cx.simulate_keystrokes("cmd-shift-k");
     assert!(links(cx).iter().all(Option::is_none));
     assert_eq!(text(&editor, cx), "see the docs now");
+}
+
+#[gpui::test]
+fn the_popover_of_a_link_over_several_rows_hangs_below_its_last_row(cx: &mut TestAppContext) {
+    setup(cx);
+    let words = "a link that goes on for longer than one row of the column ".repeat(5);
+    let link = InlineAttrs {
+        link: Some("https://example.com".into()),
+        ..InlineAttrs::default()
+    };
+    let document = Document::from_blocks(vec![
+        Block::new(BlockKind::Paragraph)
+            .with_span("Before ", InlineAttrs::default())
+            .with_span(words.trim_end(), link)
+            .with_span(" after.", InlineAttrs::default()),
+        Block::paragraph("Next paragraph"),
+    ]);
+    let (tools, editor, cx) = open(document, cx);
+    let link_rows = editor.read_with(cx, |editor, _| {
+        let range = editor
+            .document()
+            .link_at(writer_core::Position::new(0, 10))
+            .unwrap()
+            .range;
+        editor.range_bounds(range).unwrap()
+    });
+    assert!(link_rows.len() >= 3, "the link wraps: {link_rows:?}");
+    let last = *link_rows.last().unwrap();
+
+    // The caret is on the link's first row: under the caret the popover
+    // would cover the rest of the link.
+    caret(&editor, 0, 10, cx);
+    cx.simulate_keystrokes("cmd-k");
+    assert_eq!(field(&tools, cx).as_deref(), Some("https://example.com"));
+    let popover = cx.debug_bounds("link-popover").unwrap();
+    assert!(
+        popover.top() >= last.bottom(),
+        "below the last row of the link: {popover:?} {last:?}"
+    );
+    assert!(popover.top() - last.bottom() < px(12.), "and close to it");
+    assert!(
+        (popover.left() - last.left()).abs() < px(12.),
+        "at the start of that row"
+    );
+    cx.simulate_keystrokes("escape");
+
+    // On the last row the caret is the anchor, as for a link on one row.
+    let end = editor.read_with(cx, |editor, _| {
+        editor
+            .document()
+            .link_at(writer_core::Position::new(0, 10))
+            .unwrap()
+            .range
+            .end
+    });
+    caret(&editor, 0, end.offset - 2, cx);
+    cx.simulate_keystrokes("cmd-k");
+    let caret_bounds = editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap());
+    let popover = cx.debug_bounds("link-popover").unwrap();
+    assert!(popover.top() >= caret_bounds.bottom());
+    assert_eq!(popover.left(), caret_bounds.left());
+}
+
+#[gpui::test]
+fn open_and_apply_wait_for_an_address(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["Some words here"]), cx);
+    select(&editor, TextRange::in_block(0, 5, 10), cx);
+    let enabled = |button: &str, cx: &mut VisualTestContext| {
+        tools.read_with(cx, |tools, cx| tools.link_button_enabled(button, cx))
+    };
+    let click = |button: &'static str, cx: &mut VisualTestContext| {
+        let target = cx.debug_bounds(button).unwrap().center();
+        cx.simulate_click(target, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    assert_eq!(enabled("link-open", cx), None, "closed");
+
+    // An empty field on unlinked text: nothing to open, nothing to apply.
+    cx.simulate_keystrokes("cmd-k");
+    assert_eq!(enabled("link-open", cx), Some(false));
+    assert_eq!(enabled("link-apply", cx), Some(false));
+    assert_eq!(enabled("link-cancel", cx), Some(true));
+    click("link-open", cx);
+    assert_eq!(cx.opened_url(), None);
+    click("link-apply", cx);
+    assert_eq!(
+        active(&tools, cx),
+        Some(ToolKind::Link),
+        "a dimmed button does nothing"
+    );
+
+    // With an address both are offered.
+    cx.simulate_input("example.com");
+    assert_eq!(enabled("link-open", cx), Some(true));
+    assert_eq!(enabled("link-apply", cx), Some(true));
+    click("link-apply", cx);
+    assert_eq!(
+        link_at(&editor, 6, cx).as_deref(),
+        Some("https://example.com")
+    );
+
+    // On a link, an emptied field can still be applied: it takes the link
+    // off. There is still nothing to open.
+    cx.simulate_keystrokes("cmd-k cmd-a backspace");
+    assert_eq!(enabled("link-open", cx), Some(false));
+    assert_eq!(enabled("link-apply", cx), Some(true));
+    click("link-apply", cx);
+    assert_eq!(link_at(&editor, 6, cx), None);
+    assert_eq!(active(&tools, cx), None);
 }

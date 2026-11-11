@@ -5,11 +5,11 @@
 //! outside a link, `enter` inserts the URL as linked text.
 
 use gpui::{
-    Context, Entity, EventEmitter, MouseButton, SharedString, Subscription, Window, div,
-    prelude::*, px,
+    App, Context, Entity, EventEmitter, MouseButton, SharedString, Subscription, Window, div,
+    point, prelude::*, px,
 };
-use writer_core::Choice;
-use writer_editor::PopupAnchor;
+use writer_core::{Choice, Position, TextRange};
+use writer_editor::{Editor, PopupAnchor};
 use writer_ui::{
     Divider, FieldAppearance, KeyHint, TextField, TextFieldEvent,
     theme::{ActiveTheme, RADIUS_LG, RADIUS_SM, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
@@ -17,6 +17,7 @@ use writer_ui::{
 
 use crate::{
     actions::{LINK_CONTEXT, OpenLinkInBrowser, RemoveLink},
+    tip::tip,
     tools::{EditorTools, PopupTool},
     util::normalize_url,
 };
@@ -57,7 +58,10 @@ impl LinkPopover {
             TextFieldEvent::Submitted => cx.emit(LinkEvent::Apply),
             TextFieldEvent::Cancelled => cx.emit(LinkEvent::Cancel),
             TextFieldEvent::Blurred => cx.emit(LinkEvent::Blurred),
-            TextFieldEvent::Changed | TextFieldEvent::Focused => {}
+            // "Apply" and "Open" are offered only while there is something
+            // to apply or open.
+            TextFieldEvent::Changed => cx.notify(),
+            TextFieldEvent::Focused => {}
         });
         Self {
             field,
@@ -66,15 +70,36 @@ impl LinkPopover {
         }
     }
 
+    /// Whether the field holds something that can be a URL.
+    fn has_url(&self, cx: &App) -> bool {
+        normalize_url(self.field.read(cx).text()).is_some()
+    }
+
+    /// Whether `button` (a debug selector of the footer) can be used now:
+    /// "Open" needs a URL in the field; "Apply" needs one too, unless
+    /// there is a link to take off by applying an empty field.
+    pub(crate) fn action_enabled(&self, button: &str, cx: &App) -> bool {
+        match button {
+            "link-open" => self.has_url(cx),
+            "link-apply" => self.has_url(cx) || self.has_link,
+            _ => true,
+        }
+    }
+
+    /// A button of the footer: its key, its name, and a tooltip that says
+    /// what it does. A button that cannot be used now is dimmed and does
+    /// not react.
     fn footer_action(
         &self,
         id: &'static str,
         hint: Option<KeyHint>,
         label: &'static str,
+        tooltip: &'static str,
         event: LinkEvent,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let colors = cx.theme().colors;
+        let enabled = self.action_enabled(id, cx);
         div()
             .id(id)
             .debug_selector(|| id.to_string())
@@ -84,11 +109,18 @@ impl LinkPopover {
             .px(px(4.))
             .h(px(20.))
             .rounded(RADIUS_SM)
-            .cursor_pointer()
-            .hover(|style| style.bg(colors.hover).text_color(colors.ink))
-            .children(hint.map(|hint| hint.size(UI_TEXT_XS)))
+            .children(hint.clone().map(|hint| hint.size(UI_TEXT_XS)))
             .child(SharedString::from(label))
-            .on_click(cx.listener(move |_, _, _, cx| cx.emit(event)))
+            .map(|el| {
+                if enabled {
+                    el.cursor_pointer()
+                        .hover(|style| style.bg(colors.hover).text_color(colors.ink))
+                        .tooltip(tip(tooltip, hint))
+                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(event)))
+                } else {
+                    el.opacity(0.4)
+                }
+            })
     }
 }
 
@@ -102,6 +134,11 @@ impl Render for LinkPopover {
             "link-apply",
             KeyHint::parse("enter"),
             "Apply",
+            if self.has_link && !self.has_url(cx) {
+                "Remove the link"
+            } else {
+                "Link the text to this address"
+            },
             LinkEvent::Apply,
             cx,
         );
@@ -109,6 +146,7 @@ impl Render for LinkPopover {
             "link-open",
             KeyHint::for_action(&OpenLinkInBrowser, cx),
             "Open",
+            "Open the address in the browser",
             LinkEvent::Open,
             cx,
         );
@@ -117,6 +155,7 @@ impl Render for LinkPopover {
                 "link-remove",
                 KeyHint::for_action(&RemoveLink, cx),
                 "Remove",
+                "Remove the link, keep the text",
                 LinkEvent::Remove,
                 cx,
             )
@@ -125,6 +164,7 @@ impl Render for LinkPopover {
             "link-cancel",
             KeyHint::parse("escape"),
             "Cancel",
+            "Close without changing the link",
             LinkEvent::Cancel,
             cx,
         );
@@ -185,6 +225,39 @@ impl Render for LinkPopover {
     }
 }
 
+/// Where the popover of the link at a collapsed caret goes. A link that
+/// runs over several rows would be covered from the caret's row down, so
+/// the popover hangs from the link's last row instead (from the position
+/// that row starts with, or the link starts with on that row). With the
+/// caret on the last row, and for a link on one row, it is the caret.
+fn link_anchor(editor: &Editor, link: TextRange, caret: Position) -> PopupAnchor {
+    let last_row_start = || {
+        let rows = editor.range_bounds(link)?;
+        let last = rows.last().filter(|_| rows.len() > 1)?;
+        let caret_row = editor.position_bounds(caret)?;
+        if caret_row.top() >= last.top() - px(1.) {
+            return None;
+        }
+        let row_of = |position: Position| {
+            editor
+                .position_bounds(position)
+                .is_some_and(|bounds| (bounds.top() - last.top()).abs() < px(1.))
+        };
+        let start = editor.position_at_point(point(last.left() + px(1.), last.center().y))?;
+        // The start of a wrapped row is also the end of the row before
+        // it; when the editor resolves it to that row, one character
+        // further is on the right one.
+        if row_of(start) {
+            return Some(start);
+        }
+        let text = editor.document().block(start.block)?.text();
+        let next = text.get(start.offset..)?.chars().next()?.len_utf8();
+        let after = Position::new(start.block, start.offset + next);
+        (after <= link.end && row_of(after)).then_some(after)
+    };
+    last_row_start().map_or(PopupAnchor::Caret, PopupAnchor::Position)
+}
+
 pub(crate) struct LinkTool {
     pub(crate) popover: Entity<LinkPopover>,
     _subscription: Subscription,
@@ -208,9 +281,17 @@ impl EditorTools {
         let editor = self.editor.read(cx);
         let selection = editor.selection();
         let collapsed = selection.is_collapsed();
+        let mut anchor = if collapsed {
+            PopupAnchor::Caret
+        } else {
+            PopupAnchor::Selection
+        };
         let (url, has_link) = if collapsed {
             match editor.document().link_at(selection.head) {
-                Some(link) => (link.url, true),
+                Some(link) => {
+                    anchor = link_anchor(editor, link.range, selection.head);
+                    (link.url, true)
+                }
                 None => (String::new(), false),
             }
         } else {
@@ -244,11 +325,6 @@ impl EditorTools {
             _subscription: cx.subscribe_in(&popover, window, Self::on_link_event),
         };
         popover.read(cx).field.read(cx).focus(window);
-        let anchor = if collapsed {
-            PopupAnchor::Caret
-        } else {
-            PopupAnchor::Selection
-        };
         self.show_popup(PopupTool::Link(tool), popover.into(), anchor, cx);
     }
 
@@ -258,6 +334,17 @@ impl EditorTools {
             self.close_popup(true, window, cx);
         } else {
             self.open_link(window, cx);
+        }
+    }
+
+    /// Whether a button of the open link popover can be used now
+    /// (`"link-apply"`, `"link-open"`, `"link-remove"`, `"link-cancel"`):
+    /// "Open" and "Apply" are dimmed while the field is empty and there
+    /// is nothing to open or apply. `None` when the popover is closed.
+    pub fn link_button_enabled(&self, button: &str, cx: &App) -> Option<bool> {
+        match &self.popup {
+            Some(PopupTool::Link(tool)) => Some(tool.popover.read(cx).action_enabled(button, cx)),
+            _ => None,
         }
     }
 

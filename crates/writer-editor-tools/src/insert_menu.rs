@@ -85,13 +85,12 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
         effect: Effect::Kind(kind),
     };
     let hint = |action: &dyn gpui::Action| KeyHint::for_action(action, cx);
+    // The blocks a writer reaches for first are in view when the menu
+    // opens (ten rows): the three headings a text usually has, the lists,
+    // quote, code, and the two separators. Link and date follow, then the
+    // kinds that are rarely asked for by menu (a paragraph is what `enter`
+    // gives; headings 4 to 6).
     vec![
-        kind(
-            "Paragraph",
-            "text body plain normal",
-            BlockKind::Paragraph,
-            hint(&editor::SetParagraph),
-        ),
         kind(
             "Heading 1",
             "h1 title",
@@ -109,24 +108,6 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
             "h3 subsection",
             BlockKind::heading(3),
             hint(&editor::SetHeading3),
-        ),
-        kind(
-            "Heading 4",
-            "h4",
-            BlockKind::heading(4),
-            hint(&editor::SetHeading4),
-        ),
-        kind(
-            "Heading 5",
-            "h5",
-            BlockKind::heading(5),
-            hint(&editor::SetHeading5),
-        ),
-        kind(
-            "Heading 6",
-            "h6",
-            BlockKind::heading(6),
-            hint(&editor::SetHeading6),
         ),
         kind(
             "Bullet list",
@@ -186,6 +167,30 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
             key_hint: hint(&InsertDate),
             effect: Effect::Date,
         },
+        kind(
+            "Paragraph",
+            "text body plain normal",
+            BlockKind::Paragraph,
+            hint(&editor::SetParagraph),
+        ),
+        kind(
+            "Heading 4",
+            "h4",
+            BlockKind::heading(4),
+            hint(&editor::SetHeading4),
+        ),
+        kind(
+            "Heading 5",
+            "h5",
+            BlockKind::heading(5),
+            hint(&editor::SetHeading5),
+        ),
+        kind(
+            "Heading 6",
+            "h6",
+            BlockKind::heading(6),
+            hint(&editor::SetHeading6),
+        ),
     ]
 }
 
@@ -266,7 +271,7 @@ impl EditorTools {
                 MenuOptions {
                     placeholder: None,
                     width: px(280.),
-                    max_rows: 8,
+                    max_rows: 10,
                     marks: false,
                     empty_text: "No matching block".into(),
                     footer: Vec::new(),

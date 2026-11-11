@@ -289,6 +289,23 @@ impl Menu {
         }
     }
 
+    /// How many rows the list shows at once: `max_rows` at most, and one
+    /// fewer when the list is longer and the last of them would be a
+    /// section header with none of its rows under it. A menu that ends on
+    /// a heading looks cut off; ending on a row says "there is more"
+    /// just as well.
+    fn visible_rows(&self) -> usize {
+        let count = self.entries.len();
+        if count <= self.max_rows {
+            return count;
+        }
+        let mut rows = self.max_rows;
+        while rows > 1 && matches!(self.entries[rows - 1], MenuEntry::Header(_)) {
+            rows -= 1;
+        }
+        rows
+    }
+
     /// Emits [`MenuEvent::Confirmed`] when a row is selected.
     pub(crate) fn confirm(&mut self, secondary: bool, cx: &mut Context<Self>) {
         if self.selected_item().is_some() {
@@ -361,6 +378,8 @@ impl Menu {
                         // size says (Zapfino), so the sample gets a fixed
                         // slot and is cut off at its edges instead of
                         // running over the row above or out of the panel.
+                        // The samples start at the slot's left edge, so
+                        // they form a column down the list.
                         let sample = item.sample_font.map(|family| {
                             div()
                                 .flex_none()
@@ -369,7 +388,6 @@ impl Menu {
                                 .overflow_hidden()
                                 .flex()
                                 .items_center()
-                                .justify_end()
                                 .child(
                                     div()
                                         .flex_none()
@@ -448,7 +466,7 @@ impl Render for Menu {
         let theme = cx.theme();
         let colors = theme.colors;
         let count = self.entries.len();
-        let list_height = ROW_HEIGHT * count.min(self.max_rows) as f32;
+        let list_height = ROW_HEIGHT * self.visible_rows() as f32;
 
         let query_row = self.query_field.clone().map(|field| {
             div()
@@ -598,11 +616,21 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Ranks `(id, label, keywords)` candidates against `query`. The label is
-/// matched fuzzily; the keywords (synonyms, separated by spaces) only by
-/// prefix, so they do not flood the list. A match in the label beats a
-/// match in the keywords; within the labels the better fuzzy score wins,
-/// then the original order. Returns `(id, matched label
+/// Ranks `(id, label, keywords)` candidates against `query`, best first:
+///
+/// 1. labels in which the query starts a word ("colo" in "Default text
+///    colour", "head" in "Heading 2");
+/// 2. labels that contain the query as it is, inside a word;
+/// 3. candidates whose keywords (synonyms, separated by spaces) have a
+///    word starting with the query ("colo" finds "Red text" through
+///    "color");
+/// 4. labels that only contain the query's letters scattered in order
+///    ("colo" in "Code block").
+///
+/// The scattered matches are what makes a hurried or misspelt query still
+/// find its row, but they come last: put first or in between, they
+/// separate rows that belong together. Within a group the better fuzzy
+/// score wins, then the original order. Returns `(id, matched label
 /// positions)`. An empty query returns everything in order.
 pub(crate) fn rank<'a>(
     query: &str,
@@ -615,14 +643,23 @@ pub(crate) fn rank<'a>(
             .map(|(id, _, _)| (id, Vec::new()))
             .collect();
     }
-    let mut matches: Vec<(bool, i32, usize, usize, Vec<usize>)> = candidates
+    let needle = query.to_lowercase();
+    let mut matches: Vec<(u8, i32, usize, usize, Vec<usize>)> = candidates
         .into_iter()
         .enumerate()
         .filter_map(|(order, (id, label, keywords))| {
-            if let Some(found) = writer_ui::fuzzy::fuzzy_match(query, label) {
-                return Some((false, found.score, order, id, found.positions));
-            }
-            keyword_match(query, keywords).then(|| (true, 0, order, id, Vec::new()))
+            let found = writer_ui::fuzzy::fuzzy_match(query, label);
+            let (score, positions) = found.as_ref().map_or((0, Vec::new()), |found| {
+                (found.score, found.positions.clone())
+            });
+            let group = match (label_match(&needle, label), keyword_match(query, keywords)) {
+                (Some(LabelMatch::WordStart), _) => 0,
+                (Some(LabelMatch::Inside), _) => 1,
+                (None, true) => 2,
+                (None, false) if found.is_some() => 3,
+                (None, false) => return None,
+            };
+            Some((group, score, order, id, positions))
         })
         .collect();
     matches.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
@@ -630,6 +667,31 @@ pub(crate) fn rank<'a>(
         .into_iter()
         .map(|(_, _, _, id, positions)| (id, positions))
         .collect()
+}
+
+enum LabelMatch {
+    /// The query starts the label or one of its words.
+    WordStart,
+    /// The query is somewhere inside a word.
+    Inside,
+}
+
+/// Where the lowercase `needle` occurs in `label` as one piece, ignoring
+/// case.
+fn label_match(needle: &str, label: &str) -> Option<LabelMatch> {
+    let label = label.to_lowercase();
+    let mut inside = false;
+    for (index, _) in label.match_indices(needle) {
+        let at_word_start = label[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !before.is_alphanumeric());
+        if at_word_start {
+            return Some(LabelMatch::WordStart);
+        }
+        inside = true;
+    }
+    inside.then_some(LabelMatch::Inside)
 }
 
 /// Whether `query` is the start of one of the space-separated `keywords`

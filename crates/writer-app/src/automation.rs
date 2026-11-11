@@ -24,10 +24,22 @@
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
+//! | `state`               | prints the workspace state: document, save state, modal, focus, status bar |
+//! | `dump`                | prints the start of the text in the editor                   |
 //! | `quit`                | quits the app (runs the quit hooks)                          |
 //!
 //! `THE_WRITER_AUTOMATION=@/path/to/script.txt` reads the script from a file.
 //! A step that fails is reported and the script continues; `quit` still runs.
+//!
+//! A scripted run stays in the background: the app does not activate
+//! itself, so it never takes the keyboard from the person at the machine
+//! (whose typing would otherwise land in the window under test). The window
+//! is still on screen and is captured as it is, with the traffic lights of
+//! an inactive window. Set `THE_WRITER_AUTOMATION_FOREGROUND=1` for a normal
+//! activation.
+//!
+//! `THE_WRITER_SEED_DEMO=1` (see [`crate::welcome`]) fills an empty library
+//! with a few folders and documents before the window opens.
 //!
 //! There are no mouse steps: `Window::dispatch_event` is public in gpui 0.2.2
 //! but returns a crate-private type, so it cannot be called from outside gpui.
@@ -47,7 +59,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use gpui::{AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, px, size};
 use writer_ui::theme::{self, ActiveTheme, ThemeMode};
 
-use crate::screenshot;
+use crate::{screenshot, workspace::Workspace};
 
 /// Environment variable holding the script (or `@path`).
 pub const AUTOMATION_ENV: &str = "THE_WRITER_AUTOMATION";
@@ -75,6 +87,8 @@ pub enum Step {
     Screenshot(PathBuf),
     Log(String),
     Info,
+    State,
+    Dump,
     Quit,
 }
 
@@ -209,6 +223,8 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         }
         "log" | "echo" => Step::Log(unescape(arg)),
         "info" => Step::Info,
+        "state" => Step::State,
+        "dump" => Step::Dump,
         "quit" | "exit" => Step::Quit,
         other => bail!("unknown step {other:?}"),
     })
@@ -344,9 +360,79 @@ async fn execute(step: Step, window: AnyWindowHandle, cx: &mut AsyncApp) -> Resu
             })?;
             eprintln!("[automation] {info}");
         }
+        Step::State => {
+            let state = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                describe_state(workspace, window, cx)
+            })?;
+            eprintln!("[automation] state: {state}");
+        }
+        Step::Dump => {
+            let text = workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                let text = workspace.editor().read(cx).document().plain_text();
+                let mut shown: String = text.chars().take(TEXT_DUMP_CHARS).collect();
+                if text.chars().count() > TEXT_DUMP_CHARS {
+                    shown.push('…');
+                }
+                shown
+            })?;
+            eprintln!("[automation] text: {text:?}");
+        }
         Step::Quit => return Ok(StepOutcome::Quit),
     }
     Ok(StepOutcome::Continue)
+}
+
+/// How much of the document the `dump` step prints.
+const TEXT_DUMP_CHARS: usize = 400;
+
+fn workspace_handle(
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<gpui::WindowHandle<Workspace>> {
+    cx.update(|_| window.downcast::<Workspace>())?
+        .ok_or_else(|| anyhow!("the window does not show a workspace"))
+}
+
+/// One line about the workspace, for the `state` step.
+pub fn describe_state(
+    workspace: &mut Workspace,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<Workspace>,
+) -> String {
+    use gpui::Focusable as _;
+    let focus = if workspace.editor().read(cx).is_focused(window) {
+        "editor"
+    } else if workspace
+        .panel()
+        .focus_handle(cx)
+        .contains_focused(window, cx)
+    {
+        "library"
+    } else if workspace.modal_layer().read(cx).has_modal() {
+        "modal"
+    } else if window.focused(cx).is_some() {
+        "other"
+    } else {
+        "none"
+    };
+    let status = workspace.status_line(cx);
+    let settings = workspace.settings();
+    format!(
+        "document={:?} title={:?} save={:?} focus={focus} modal={} sidebar={} page_view={} \
+         vim={} comments={} words={:?} characters={:?} page={:?} limit={:?}",
+        workspace.open_document_id().map(|id| id.0),
+        workspace.document_title().unwrap_or_default(),
+        workspace.save_state(),
+        workspace.modal_layer().read(cx).has_modal(),
+        settings.sidebar_visible,
+        workspace.editor().read(cx).page_view(),
+        settings.vim_mode,
+        settings.comments_visible,
+        status.words,
+        status.characters,
+        status.page,
+        status.limit,
+    )
 }
 
 /// Gives the window a chance to render between steps (about two frames).

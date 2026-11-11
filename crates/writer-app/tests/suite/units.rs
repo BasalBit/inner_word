@@ -53,6 +53,10 @@ mod automation {
         assert!(Script::parse("keys:cmd-opt-s").is_err());
         assert!(Script::parse("dance").is_err());
         assert!(Script::parse("theme:blue").is_err());
+        assert_eq!(
+            Script::parse("state; dump; info").unwrap().steps,
+            vec![Step::State, Step::Dump, Step::Info]
+        );
     }
 
     #[test]

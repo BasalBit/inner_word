@@ -208,6 +208,21 @@ fn status_bar_counts_words_selection_and_pages(cx: &mut TestAppContext) {
     assert_eq!(status.page.as_deref(), Some("Page 1 of 1"));
     assert_eq!(status.save, "Edited");
 
+    // The automation hook's `state` step reads the same things.
+    let state = workspace.update_in(vcx, |workspace, window, cx| {
+        writer_app::automation::describe_state(workspace, window, cx)
+    });
+    for part in [
+        "title=\"Count me\"",
+        "save=Some(Edited)",
+        "focus=editor",
+        "modal=false",
+        "page_view=true",
+        "page=Some(\"Page 1 of 1\")",
+    ] {
+        assert!(state.contains(part), "{part} in {state}");
+    }
+
     // No document: an empty status line.
     workspace.update_in(vcx, |workspace, window, cx| {
         workspace.close_document(window, cx)

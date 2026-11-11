@@ -611,6 +611,16 @@ fn commands_work_on_other_keyboard_layouts(cx: &mut TestAppContext) {
     assert_eq!(rig.status(cx).command_line.unwrap().text, "т");
     cx.simulate_keystrokes("enter");
     assert_eq!(rig.head(cx), at(1, 0));
+    // A register named f, t or r is a name, not a command that waits for
+    // a character: the keys after it are still taken by position.
+    press(cx, "\"", "\"", Modifiers::none());
+    press(cx, "f", "а", Modifiers::none());
+    assert_eq!(rig.status(cx).pending_keys, "\"f");
+    press(cx, "y", "н", Modifiers::none());
+    press(cx, "y", "н", Modifiers::none());
+    rig.vim.read_with(cx, |vim, _| {
+        assert_eq!(vim.engine().register('f').unwrap().text(), "три {x} y");
+    });
     press(cx, "i", "ш", Modifiers::none());
     assert_eq!(rig.mode(cx), Mode::Insert);
     press(cx, "j", "о", Modifiers::none());

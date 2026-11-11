@@ -865,7 +865,25 @@ fn key_from_keystroke(keystroke: &Keystroke, literal: bool) -> Option<Key> {
 /// argument of `f`, `F`, `t`, `T` and `r`.
 fn wants_literal_key(vim: &Vim) -> bool {
     matches!(vim.mode(), Mode::Insert | Mode::Replace | Mode::CommandLine)
-        || vim.pending_keys().ends_with(['f', 'F', 't', 'T', 'r'])
+        || awaits_character(vim.pending_keys())
+}
+
+/// Whether the keys of an unfinished command end with `f`, `F`, `t`, `T`
+/// or `r` as a command (whose argument is any character), rather than as
+/// the name of a register (`"f`, `"r`).
+fn awaits_character(pending: &str) -> bool {
+    let mut last = None;
+    let mut keys = pending.chars();
+    while let Some(key) = keys.next() {
+        if key == '"' {
+            // The key after it names a register.
+            keys.next();
+            last = None;
+        } else {
+            last = Some(key);
+        }
+    }
+    matches!(last, Some('f' | 'F' | 't' | 'T' | 'r'))
 }
 
 impl VimMode {

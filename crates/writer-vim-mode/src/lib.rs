@@ -162,11 +162,19 @@
 //!   last block of the document or stands before a divider or page break
 //!   (there is no line break to select); the block caret is on it when the
 //!   cursor is, and the status shows the mode.
-//! - Holding a key repeats it only if macOS's press-and-hold accent menu
-//!   is off for the application (the `ApplePressAndHoldEnabled` default),
-//!   which the application sets at startup.
-//! - Whatever the engine does not support (macros, blockwise Visual mode,
-//!   regular expressions): see the [`writer_vim`] crate docs.
+//! - Held keys. In Normal and Visual mode every key press, repeats
+//!   included, is consumed here before the platform's text input sees it,
+//!   so a held `j` repeats and macOS's accent menu ("press and hold") never
+//!   starts. Where text is typed (Insert mode, a text field) a held letter
+//!   opens the accent menu unless the application has switched it off for
+//!   itself (the `ApplePressAndHoldEnabled` user default, read by macOS
+//!   once per launch); that is the application's choice, not made here.
+//!   Not verified on a real keyboard: a script cannot hold a key.
+//! - The insert menu opened from Normal mode (`:insertmenu`, the palette)
+//!   is filtered by typing, which Normal mode has none of: the first
+//!   character typed while such a popup is open starts Insert mode (as `i`
+//!   does) and is typed. After the menu closes, Insert mode stays until
+//!   `escape`.
 
 mod host;
 mod mode;

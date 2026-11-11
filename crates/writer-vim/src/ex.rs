@@ -183,7 +183,7 @@ fn abbreviates(name: &str, full: &str, min: usize) -> bool {
     name.len() >= min && full.starts_with(name)
 }
 
-fn parse_replacement(raw: &str, delim: char) -> Vec<RepPiece> {
+fn parse_replacement(raw: &str) -> Vec<RepPiece> {
     let mut out: Vec<RepPiece> = Vec::new();
     let mut lit = String::new();
     let mut chars = raw.chars();
@@ -210,7 +210,6 @@ fn parse_replacement(raw: &str, delim: char) -> Vec<RepPiece> {
             c => lit.push(c),
         }
     }
-    let _ = delim;
     if !lit.is_empty() {
         out.push(RepPiece::Text(lit));
     }
@@ -248,7 +247,7 @@ fn parse_substitute(args: &str) -> Result<ExCommand, String> {
     };
     let mut out = SubstArgs {
         pattern: pattern.to_string(),
-        replacement: parse_replacement(replacement, delim),
+        replacement: parse_replacement(replacement),
         global: false,
         case_sensitive: None,
         count_only: false,

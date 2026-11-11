@@ -82,6 +82,10 @@ impl Vim {
         let (s, e) = if a <= c { (a, c) } else { (c, a) };
         if matches!(self.base, Base::Visual { line: true }) {
             Target::Lines(buf::lines_between(doc, s, e))
+        } else if s == e && doc.blocks()[s.block].is_void() {
+            // A divider selected on its own is the whole block (a text
+            // range could not hold it at the end of the document).
+            Target::Lines(Lines::Blocks(s.block..s.block + 1))
         } else {
             Target::Chars(TextRange::new(s, visual_end(doc, e)))
         }
@@ -1438,8 +1442,15 @@ impl Vim {
                 None => GoalColumn::X(cx.host.column_of(cx.ed, cur)),
             };
             let x0 = GoalColumn::X(0.0);
+            // Where the viewport will be: its top moves, its height stays
+            // (so a scroll that stops at the document start changes nothing).
             let top = doc.clamp_position(cx.host.move_by_rows(cx.ed, vp.top, rows, x0));
-            let bottom = doc.clamp_position(cx.host.move_by_rows(cx.ed, vp.bottom, rows, x0));
+            let bottom = doc.clamp_position(cx.host.move_by_rows(
+                cx.ed,
+                top,
+                vp.rows.max(1) as isize - 1,
+                x0,
+            ));
             let top_row = cx.host.visual_row(cx.ed, top);
             let bottom_row = cx.host.visual_row(cx.ed, bottom);
             let above = cur.block < top.block || (cur.block == top.block && cur.offset < top_row.start);

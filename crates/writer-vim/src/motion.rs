@@ -199,7 +199,7 @@ pub(crate) fn find_char(
     let t = text_of(doc, from.block);
     let ls = buf::line_start(doc, from);
     let le = buf::line_end(doc, from);
-    let matches = |o: usize| t[o..].chars().next() == Some(ch);
+    let matches = |o: usize| t[o..].starts_with(ch);
     let mut found = 0;
     if forward {
         let mut o = if from.offset < le { buf::next_boundary(t, from.offset) } else { le };

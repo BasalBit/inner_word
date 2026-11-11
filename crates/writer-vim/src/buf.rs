@@ -354,7 +354,7 @@ pub(crate) enum Lines {
     Blocks(Range<usize>),
     /// Hard lines `start..end` (byte range from the start of the first line
     /// to the end of the last, without its line break) inside one code
-    /// block, never all of it.
+    /// block; possibly all of them.
     Code {
         block: usize,
         start: usize,
@@ -389,15 +389,11 @@ pub(crate) fn lines_between(doc: &Document, a: Position, b: Position) -> Lines {
     let a = doc.clamp_position(a);
     let b = doc.clamp_position(b);
     if a.block == b.block && is_code(doc, a.block) {
-        let s = line_start(doc, a);
-        let e = line_end(doc, b);
-        if s > 0 || e < len_of(doc, a.block) {
-            return Lines::Code {
-                block: a.block,
-                start: s,
-                end: e,
-            };
-        }
+        return Lines::Code {
+            block: a.block,
+            start: line_start(doc, a),
+            end: line_end(doc, b),
+        };
     }
     Lines::Blocks(a.block..b.block + 1)
 }

@@ -163,7 +163,7 @@ impl Vim {
             Motion::Right => {
                 // The caret stops on the last character; an operator may
                 // reach the end of the line to include that character.
-                let limit = if op_pending || self.is_visual() {
+                let limit = if op_pending {
                     le
                 } else {
                     buf::last_char(doc, b, ls, le)
@@ -280,10 +280,7 @@ impl Vim {
                 let mut p = origin;
                 for _ in 1..n {
                     let e = buf::line_end(doc, p);
-                    match buf::next_cell(doc, Position::new(p.block, e)) {
-                        Some(q) => p = q,
-                        None => return None,
-                    }
+                    p = buf::next_cell(doc, Position::new(p.block, e))?;
                 }
                 let e = buf::line_end(doc, p);
                 let s = buf::line_start(doc, p);
@@ -304,10 +301,7 @@ impl Vim {
                 let mut p = origin;
                 for _ in 1..n {
                     let e = buf::line_end(doc, p);
-                    match buf::next_cell(doc, Position::new(p.block, e)) {
-                        Some(q) => p = q,
-                        None => return None,
-                    }
+                    p = buf::next_cell(doc, Position::new(p.block, e))?;
                 }
                 let e = buf::line_end(doc, p);
                 let s = buf::line_start(doc, p);
@@ -353,16 +347,13 @@ impl Vim {
                 jump(buf::unit_first_non_blank(doc, u), Linewise)
             }
             Motion::ParagraphForward => {
+                // At the end of the document the result is the end of the
+                // last block, so the last character counts for an operator.
                 let (p, hit_end) = motion::paragraph_forward(doc, origin, n);
-                if hit_end {
-                    if buf::clamp_normal(doc, p) == origin && !op_pending {
-                        return None;
-                    }
-                    // The end of the document: the last character counts.
-                    jump(p, Exclusive)
-                } else {
-                    jump(p, Exclusive)
+                if hit_end && buf::clamp_normal(doc, p) == origin && !op_pending {
+                    return None;
                 }
+                jump(p, Exclusive)
             }
             Motion::ParagraphBackward => {
                 let p = motion::paragraph_backward(doc, origin, n);
@@ -524,9 +515,8 @@ impl Vim {
         }
     }
 
-    /// The linewise range of `count` line units starting at the caret's
-    /// (`dd`, `yy`, `>>`, …). `None` when fewer units exist... never: the
-    /// range is clamped to the end of the document.
+    /// The linewise range of `count` line units starting with the caret's
+    /// (`dd`, `yy`, `>>`, …), clamped to the end of the document.
     pub(crate) fn lines_from_cursor(&self, cx: &Cx, origin: Position, count: usize) -> Lines {
         let doc = cx.ed.document();
         let u = buf::unit_at(doc, origin);

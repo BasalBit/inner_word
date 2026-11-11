@@ -619,8 +619,8 @@ impl Vim {
         }
     }
 
-    /// The pattern highlighted by the host for `pat` (helper for callers
-    /// that set a pattern outside the command line).
+    /// Makes `pat` the search pattern, as if it had been typed after `/`
+    /// or `?` (used by `*` and `#`).
     pub(crate) fn set_search(&mut self, pat: SearchPattern, raw: String, forward: bool) {
         self.search.pattern = Some(pat);
         self.search.raw = raw.clone();

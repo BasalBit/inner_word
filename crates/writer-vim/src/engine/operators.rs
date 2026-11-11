@@ -220,6 +220,11 @@ impl Vim {
             Target::Lines(Lines::Code { block, start, end }) => {
                 self.registers.delete(info.register, content, false, false, cx.host);
                 let len = buf::len_of(cx.ed.document(), *block);
+                if *start == 0 && *end >= len {
+                    // Every line: the code block itself goes.
+                    delete_blocks(cx, &(*block..*block + 1));
+                    return cx.ed.selection().head;
+                }
                 let (rs, re) = if *end < len {
                     (*start, *end + 1)
                 } else {
@@ -696,7 +701,6 @@ impl Vim {
         }
         let doc = cx.ed.document();
         let at = if before { origin } else { buf::cell_end(doc, origin) };
-        cx.ed.set_caret(origin);
         cx.ed.set_caret(at);
         for _ in 0..count {
             cx.ed.paste(&content.fragment);
@@ -714,15 +718,7 @@ impl Vim {
         };
         self.set_mark(cx, '[', at);
         self.set_mark(cx, ']', end);
-        if caret_after {
-            // `gp` may leave the caret after the last character.
-            let p = cx.ed.document().clamp_position(caret);
-            cx.ed.set_caret(p);
-            let c = buf::clamp_normal(cx.ed.document(), p);
-            cx.ed.set_caret(c);
-        } else {
-            self.set_normal_caret(cx, caret);
-        }
+        self.set_normal_caret(cx, caret);
     }
 
     /// `p` / `P` over a Visual selection: the selection is replaced by the
@@ -753,25 +749,23 @@ impl Vim {
                     for _ in 0..count {
                         lines.extend(content.fragment.blocks().iter().cloned());
                     }
-                    if head_empty && tail_empty {
-                        let n = lines.len();
-                        cx.ed.insert_blocks_at(p.block, &Fragment::new(lines));
-                        cx.ed.select_blocks(p.block + n..p.block + n + 1);
-                        cx.ed.delete_blocks();
-                        self.set_normal_caret(cx, Position::new(p.block, 0));
+                    let n = lines.len();
+                    let first = if head_empty { p.block } else { p.block + 1 };
+                    if head_empty || tail_empty {
+                        // Whole blocks before or after what is left.
+                        cx.ed.insert_blocks_at(first, &Fragment::new(lines));
+                        if head_empty && tail_empty {
+                            // Nothing is left: the emptied block goes.
+                            cx.ed.select_blocks(p.block + n..p.block + n + 1);
+                            cx.ed.delete_blocks();
+                        }
                     } else {
-                        let first = if head_empty { p.block } else { p.block + 1 };
-                        let mut blocks: Vec<Block> = Vec::new();
-                        if !head_empty {
-                            blocks.push(Block::new(BlockKind::Paragraph));
-                        }
+                        let mut blocks: Vec<Block> = vec![Block::new(BlockKind::Paragraph)];
                         blocks.extend(lines);
-                        if !tail_empty {
-                            blocks.push(Block::new(BlockKind::Paragraph));
-                        }
+                        blocks.push(Block::new(BlockKind::Paragraph));
                         cx.ed.paste(&Fragment::new(blocks));
-                        self.set_normal_caret(cx, Position::new(first, 0));
                     }
+                    self.set_normal_caret(cx, Position::new(first, 0));
                     let doc = cx.ed.document();
                     let c = cx.ed.selection().head;
                     let c = buf::unit_first_non_blank(doc, buf::unit_at(doc, c));

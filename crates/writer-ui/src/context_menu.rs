@@ -346,6 +346,12 @@ impl ContextMenuItem {
         self.danger
     }
 
+    /// The key set with [`ContextMenuItem::key_hint`]. (`None` for an action
+    /// item without one: its key is looked up when the menu is drawn.)
+    pub fn explicit_key_hint(&self) -> Option<&KeyHint> {
+        self.key_hint.as_ref()
+    }
+
     /// The colour of the item's chip ([`ContextMenuItem::swatch`]).
     pub fn swatch_color(&self) -> Option<Hsla> {
         self.swatch

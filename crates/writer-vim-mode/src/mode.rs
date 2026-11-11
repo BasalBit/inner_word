@@ -1,6 +1,6 @@
 //! [`VimMode`]: one Vim engine attached to one [`Editor`].
 
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, Task, WeakEntity};
 use writer_core::{EditorState, Position, Selection, TextRange};
@@ -143,8 +143,10 @@ pub struct VimMode {
     /// `input` module). It is in neither the document nor the command
     /// line yet.
     pub(crate) composition: Option<String>,
-    /// The last key was a dead key that arrived as a key (see `on_key`).
-    dead_key: bool,
+    /// Whether the last frame registered this entity as the window's
+    /// text input (see the `input` module): only then can a key be left
+    /// to the text input.
+    pub(crate) input_ready: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -177,7 +179,7 @@ impl VimMode {
             seen: None,
             layout_fallbacks: 0,
             composition: None,
-            dead_key: false,
+            input_ready: Rc::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -304,6 +306,7 @@ impl VimMode {
         self.seen = None;
         self.bell = None;
         self.composition = None;
+        self.input_ready.set(false);
         self.search = SearchMatches::default();
         self.status = VimStatus::default();
         let saved = self.saved.take();
@@ -378,7 +381,6 @@ impl VimMode {
             return KeyDisposition::Pass;
         }
         let modifiers = keystroke.modifiers;
-        let after_dead_key = std::mem::take(&mut self.dead_key);
         if self.composition.is_some() {
             // So do the keys of a composition for the command line or for
             // a character argument. The platform asks the input method
@@ -413,20 +415,19 @@ impl VimMode {
         if modifiers.function {
             return KeyDisposition::Pass;
         }
-        if self.wants_text_input() && !modifiers.control {
-            // A dead key (`option-e`: the option key, no character) that
-            // was not taken as the start of a composition. That happens
-            // where the system composes it without marked text (seen in a
-            // window that is not the active one). It types nothing, and
-            // the key after it has to reach the text input, which is where
-            // the two become one character.
-            if after_dead_key && keystroke.key_char.is_some() {
-                return KeyDisposition::Pass;
-            }
-            if modifiers.alt && keystroke.key_char.is_none() && keystroke.key.chars().count() == 1 {
-                self.dead_key = true;
-                return KeyDisposition::Consumed;
-            }
+        if self.wants_text_input()
+            && self.input_ready.get()
+            && !modifiers.control
+            && types_text(keystroke)
+        {
+            // A character for the command line, or for a command that
+            // waits for one, is typed through the platform's text input,
+            // as in Insert mode: only there does a dead key (`option-e`,
+            // then `e`) become one character, on every keyboard layout.
+            // It arrives in `text_from_platform`. Before the first frame
+            // that registered the text input the engine takes the key
+            // itself, as it does every key that types nothing.
+            return KeyDisposition::Pass;
         }
         // The key of the context menu (the editor's `ctrl-enter`, as in
         // macOS) is no Vim command in any mode; to the engine it would be
@@ -973,6 +974,15 @@ impl VimMode {
             self.apply(outcome, true, cx);
         }
     }
+}
+
+/// Whether the key types text: it has a character that is not a control
+/// character (`enter` and `tab` are keys of the command line, not text).
+fn types_text(keystroke: &Keystroke) -> bool {
+    keystroke
+        .key_char
+        .as_deref()
+        .is_some_and(|typed| !typed.is_empty() && !typed.chars().any(char::is_control))
 }
 
 /// Whether the engine takes the next key as a character rather than as a

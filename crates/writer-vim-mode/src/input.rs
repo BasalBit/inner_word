@@ -2,15 +2,21 @@
 //! a character.
 //!
 //! The keys of the command line arrive through the editor's key
-//! interception, which is all a plain key needs. A dead key is different:
-//! `option-e` types nothing by itself, the platform's input method holds
-//! the accent as marked text and delivers `é` when the letter follows. The
-//! same goes for an input method and for the emoji palette. Outside Insert
-//! mode the editor refuses platform text (it would land in the document),
-//! so while the command line is open, or `f`, `t` or `r` waits for its
-//! character, [`VimMode`] is the window's input handler itself:
-//! [`crate::VimCommandLine`] registers it in its paint, for the editor's
-//! focus handle, and the text that is delivered goes to the engine.
+//! interception. For a key that types a character that is not enough: a
+//! dead key (`option-e`) reaches the key path looking like any option
+//! chord, and only the platform's text input makes `é` of it and the
+//! letter that follows (holding the accent as marked text in between, in
+//! an active window). The same goes for an input method and for the emoji
+//! palette. Outside Insert mode the editor refuses platform text (it
+//! would land in the document), so while the command line is open, or
+//! `f`, `t` or `r` waits for its character, [`VimMode`] is the window's
+//! input handler itself: [`crate::VimCommandLine`] registers it in its
+//! paint, for the editor's focus handle. From the frame that did so, the
+//! keys that type text are left to the text input (as the editor leaves
+//! them in Insert mode), and the text it delivers goes to the engine.
+//! Until that frame, and when no command line view is mounted, the engine
+//! takes the keys itself, as before: nothing typed quickly after `:` is
+//! lost, it just cannot be composed.
 //!
 //! The platform talks in UTF-16 offsets into "the document". Here that is
 //! the text of the command line with the marked text at its cursor, or the

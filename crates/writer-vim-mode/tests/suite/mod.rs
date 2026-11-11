@@ -48,6 +48,8 @@ impl Render for Shell {
             .child(div().flex_1().min_h_0().child(self.editor.clone()))
             .child(self.command_line.clone())
             .child(div().flex_none().child(self.status.clone()))
+            // Draws an open context menu (in the app the toast layer does).
+            .child(writer_ui::ContextMenuLayer)
     }
 }
 
@@ -57,6 +59,7 @@ pub struct Rig {
     pub editor: Entity<Editor>,
     pub vim: Entity<VimMode>,
     pub command_line: Entity<VimCommandLine>,
+    pub status_item: Entity<VimStatusItem>,
     pub events: Rc<RefCell<Vec<VimEvent>>>,
 }
 
@@ -82,6 +85,7 @@ pub fn open_detached(document: Document, cx: &mut TestAppContext) -> (Rig, &mut 
         editor: shell.editor.clone(),
         vim: shell.vim.clone(),
         command_line: shell.command_line.clone(),
+        status_item: shell.status.clone(),
         events: events.clone(),
     });
     cx.update(|_, cx| {

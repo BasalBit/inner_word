@@ -8,8 +8,12 @@ use gpui::{
     VisualTestContext, point, px,
 };
 use writer_core::{Position, Selection};
-use writer_editor::{ContextMenuRequest, EditorEvent};
-use writer_vim_mode::Mode;
+use writer_editor::{
+    ContextMenuRequest, EditorEvent,
+    actions::{Backspace, ToggleBold},
+};
+use writer_ui::{ContextMenu, ContextMenuItem};
+use writer_vim_mode::{Mode, ToggleVimMode};
 
 use super::{Rig, at, doc, open, setup};
 
@@ -428,4 +432,248 @@ fn the_command_line_takes_clicks(cx: &mut TestAppContext) {
     assert_eq!(rig.mode(cx), Mode::Normal);
     assert_eq!(rig.selection(cx), Selection::caret(at(0, 7)));
     assert_eq!(rig.text(cx), "alpha beta gamma");
+}
+
+/// Opens a menu for every context menu request of the editor, as the
+/// tools crate does in the app.
+fn show_text_menus(rig: &Rig, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        let handle = window.window_handle();
+        cx.subscribe(&rig.editor, move |_, event: &EditorEvent, cx| {
+            let EditorEvent::ContextMenuRequested(request) = event else {
+                return;
+            };
+            let position = request.position;
+            cx.defer(move |cx| {
+                handle
+                    .update(cx, |_, window, cx| {
+                        ContextMenu::open(
+                            position,
+                            vec![
+                                ContextMenuItem::action("Bold", ToggleBold),
+                                ContextMenuItem::action("Delete", Backspace),
+                            ],
+                            window,
+                            cx,
+                        );
+                    })
+                    .ok();
+            });
+        })
+        .detach();
+    });
+}
+
+fn menu_open(cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| ContextMenu::is_open(window, cx))
+}
+
+fn choose(title: &str, cx: &mut VisualTestContext) {
+    let chosen = cx.update(|window, cx| ContextMenu::choose(title, window, cx));
+    assert!(chosen, "no item {title:?} to choose");
+    cx.run_until_parked();
+}
+
+fn bold_at(rig: &Rig, offset: usize, cx: &mut VisualTestContext) -> bool {
+    rig.editor.read_with(cx, |editor, _| {
+        editor
+            .document()
+            .block(0)
+            .and_then(|block| block.attrs_at(offset))
+            .is_some_and(|attrs| attrs.bold)
+    })
+}
+
+#[gpui::test]
+fn a_context_menu_over_the_text_leaves_vim_in_a_consistent_mode(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["alpha beta gamma"]), cx);
+    show_text_menus(&rig, cx);
+
+    // Right-click on a word: Visual mode with the word, the menu is open
+    // and has the keys. They are not Vim commands while it is.
+    let target = on(&rig, 0, 7, cx);
+    click_with(cx, target, MouseButton::Right, 1);
+    assert!(menu_open(cx));
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    assert_eq!(rig.selected_text(cx), "beta");
+    cx.simulate_keystrokes("x");
+    assert_eq!(rig.text(cx), "alpha beta gamma");
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    // The first escape closes the menu, the second leaves Visual mode.
+    cx.simulate_keystrokes("escape");
+    assert!(!menu_open(cx));
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    assert_eq!(rig.selected_text(cx), "beta");
+    assert!(editor_focused(&rig, cx));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert!(rig.selection(cx).is_collapsed());
+
+    // An item that keeps the selection: still Visual, and Vim keys work
+    // on the same selection afterwards.
+    click_with(cx, target, MouseButton::Right, 1);
+    choose("Bold", cx);
+    assert!(!menu_open(cx));
+    assert!(bold_at(&rig, 7, cx));
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    assert_eq!(rig.selected_text(cx), "beta");
+    assert!(editor_focused(&rig, cx));
+    cx.simulate_keystrokes("o");
+    assert_eq!(rig.cursor(cx), at(0, 6));
+    cx.simulate_keystrokes("escape");
+
+    // An item that removes it, chosen with a real click on its row.
+    click_with(cx, target, MouseButton::Right, 1);
+    let row = cx.update(|window, cx| {
+        let menu = ContextMenu::current(window, cx).expect("an open menu");
+        let menu = menu.read(cx);
+        let index = menu
+            .labels()
+            .iter()
+            .position(|label| label == "Delete")
+            .expect("the item");
+        menu.item_bounds(index).expect("drawn")
+    });
+    click(cx, row.center());
+    assert!(!menu_open(cx));
+    assert_eq!(rig.text(cx), "alpha  gamma");
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.selection(cx), Selection::caret(at(0, 6)));
+    assert!(!rig.text_input(cx));
+    assert_eq!(rig.context_mode(cx).as_deref(), Some("normal"));
+
+    // A click outside the menu closes it and does nothing else.
+    let word = on(&rig, 0, 2, cx);
+    click_with(cx, word, MouseButton::Right, 1);
+    assert_eq!(rig.selected_text(cx), "alpha");
+    let elsewhere = on(&rig, 0, 9, cx);
+    click(cx, elsewhere);
+    assert!(!menu_open(cx));
+    assert_eq!(rig.mode(cx), Mode::Visual);
+    assert_eq!(rig.selected_text(cx), "alpha");
+    // The next click is an ordinary one.
+    click(cx, elsewhere);
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.selection(cx), Selection::caret(at(0, 9)));
+
+    // From the keyboard, in Normal mode.
+    cx.simulate_keystrokes("ctrl-enter");
+    assert!(menu_open(cx));
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    cx.simulate_keystrokes("escape");
+    assert!(!menu_open(cx));
+    cx.simulate_keystrokes("x");
+    assert_eq!(rig.text(cx), "alpha  gama");
+}
+
+#[gpui::test]
+fn the_mode_chip_opens_a_menu(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["alpha beta gamma"]), cx);
+    let chip = cx.debug_bounds("vim-mode-chip").expect("the chip");
+    let item = |title: &str, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let menu = ContextMenu::current(window, cx).expect("an open menu");
+            menu.read(cx)
+                .items()
+                .iter()
+                .find(|item| item.title().as_ref() == title)
+                .cloned()
+                .expect("the item")
+        })
+    };
+
+    click(cx, chip.center());
+    assert!(menu_open(cx));
+    let labels =
+        cx.update(|window, cx| ContextMenu::current(window, cx).unwrap().read(cx).labels());
+    assert_eq!(
+        labels,
+        [
+            "Normal mode",
+            "Insert mode",
+            "-",
+            "Command line",
+            "Search",
+            "Clear search highlight",
+            "-",
+            "Turn off Vim mode"
+        ]
+    );
+    assert_eq!(item("Normal mode", cx).is_checked(), Some(true));
+    assert_eq!(item("Insert mode", cx).is_checked(), Some(false));
+    assert!(item("Clear search highlight", cx).is_disabled());
+    // The menu drops from the chip (above it here: the bar is at the
+    // bottom of the window) and does not cover it.
+    let menu = cx.update(|window, cx| ContextMenu::current(window, cx).unwrap().read(cx).bounds());
+    let menu = menu.expect("the menu is drawn");
+    assert!(!menu.intersects(&chip), "{menu:?} covers {chip:?}");
+
+    choose("Insert mode", cx);
+    assert_eq!(rig.mode(cx), Mode::Insert);
+    assert!(editor_focused(&rig, cx));
+    cx.simulate_input("X");
+    assert_eq!(rig.text(cx), "Xalpha beta gamma");
+
+    // A right-click opens the same menu.
+    let chip = cx.debug_bounds("vim-mode-chip").expect("the chip");
+    click_with(cx, chip.center(), MouseButton::Right, 1);
+    assert_eq!(item("Insert mode", cx).is_checked(), Some(true));
+    assert_eq!(item("Normal mode", cx).is_checked(), Some(false));
+    choose("Normal mode", cx);
+    assert_eq!(rig.mode(cx), Mode::Normal);
+    assert_eq!(rig.head(cx), at(0, 0));
+
+    // The command line and the search, also from a mode in which their
+    // key would be typed.
+    cx.simulate_keystrokes("i");
+    click(cx, chip.center());
+    choose("Command line", cx);
+    assert_eq!(rig.mode(cx), Mode::CommandLine);
+    assert_eq!(rig.status(cx).command_line.unwrap().prefix, ':');
+    assert_eq!(rig.text(cx), "Xalpha beta gamma");
+    let chip = cx.debug_bounds("vim-mode-chip").expect("the chip");
+    click(cx, chip.center());
+    choose("Search", cx);
+    assert_eq!(rig.status(cx).command_line.unwrap().prefix, '/');
+    cx.simulate_keystrokes("b e t a enter");
+    assert_eq!(rig.head(cx), at(0, 7));
+    assert!(rig.status(cx).search_highlighted);
+    // A Visual selection is the range of the command line.
+    cx.simulate_keystrokes("shift-v");
+    let chip = cx.debug_bounds("vim-mode-chip").expect("the chip");
+    click(cx, chip.center());
+    choose("Command line", cx);
+    assert_eq!(rig.status(cx).command_line.unwrap().text, "'<,'>");
+    cx.simulate_keystrokes("escape");
+
+    let chip = cx.debug_bounds("vim-mode-chip").expect("the chip");
+    click(cx, chip.center());
+    assert!(!item("Clear search highlight", cx).is_disabled());
+    choose("Clear search highlight", cx);
+    assert!(!rig.status(cx).search_highlighted);
+    assert!(rig.layer(writer_vim_mode::SEARCH_LAYER, cx).is_empty());
+
+    // The host's items and its own toggle action.
+    rig.status_item.update(cx, |status, _| {
+        status.extend_menu(|items, _, _| {
+            items.push(ContextMenuItem::separator());
+            items.push(ContextMenuItem::new("Settings", |_, _| {}));
+        });
+        status.set_toggle_action(ToggleVimMode);
+    });
+    click(cx, chip.center());
+    let labels =
+        cx.update(|window, cx| ContextMenu::current(window, cx).unwrap().read(cx).labels());
+    assert_eq!(labels.last().map(String::as_str), Some("Settings"));
+    choose("Turn off Vim mode", cx);
+    assert!(!rig.vim.read_with(cx, |vim, _| vim.is_attached()));
+    assert!(rig.text_input(cx));
+    // No chip, no menu, while Vim mode is off.
+    let items = rig
+        .status_item
+        .clone()
+        .update_in(cx, |status, window, cx| status.menu_items(window, cx).len());
+    assert_eq!(items, 0);
 }

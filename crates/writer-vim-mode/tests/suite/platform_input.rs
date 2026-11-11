@@ -176,36 +176,65 @@ fn the_window_text_input_reaches_vim_only_when_wanted(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_dead_key_that_arrives_as_a_key_types_nothing(cx: &mut TestAppContext) {
+fn characters_are_typed_through_the_text_input_once_it_is_registered(cx: &mut TestAppContext) {
     setup(cx);
     let (rig, cx) = open(doc(&["cafe"]), cx);
-    // Without marked text (a window that is not active): option-e reaches
-    // the key path with no character. It is not an "e", and the key after
-    // it goes to the text input, where the system makes one character of
-    // the two (a test has no system: the plain letter arrives).
-    cx.simulate_keystrokes(": s / c a f alt-e");
-    assert_eq!(line(&rig, cx), ":s/caf");
-    cx.simulate_keystrokes("e");
-    assert_eq!(line(&rig, cx), ":s/cafe");
-    // The key after that is an ordinary command-line key again.
-    cx.simulate_keystrokes("/ x enter");
-    assert_eq!(rig.text(cx), "x");
+    let ready =
+        |cx: &mut gpui::VisualTestContext| rig.vim.read_with(cx, |vim, _| vim.wants_text_input());
+    // The key that opens the command line is a command; the characters
+    // after it are text, whichever way they come.
+    cx.simulate_keystrokes(":");
+    assert!(ready(cx));
+    cx.simulate_keystrokes("s / c a f e / space t e a");
+    assert_eq!(line(&rig, cx), ":s/cafe/ tea");
+    // The keys of the command line itself are not text.
+    cx.simulate_keystrokes("left left backspace enter");
+    assert_eq!(rig.text(cx), " ea");
     assert_eq!(rig.mode(cx), Mode::Normal);
+    assert!(!ready(cx));
 
-    // r is not cancelled by the dead key.
-    cx.simulate_keystrokes("r alt-e");
-    assert_eq!(rig.status(cx).pending_keys, "r");
-    cx.simulate_keystrokes("y");
-    assert_eq!(rig.text(cx), "y");
-    assert_eq!(rig.status(cx).pending_keys, "");
+    // What a key types counts, not its name: a character the system made
+    // of a dead key and a letter (in a window that is not active it
+    // arrives as the character of the second key).
+    cx.simulate_keystrokes("/");
+    cx.update(|window, cx| {
+        window.dispatch_keystroke(
+            gpui::Keystroke {
+                modifiers: gpui::Modifiers::none(),
+                key: "e".into(),
+                key_char: Some("\u{e9}".into()),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(line(&rig, cx), "/\u{e9}");
+    cx.simulate_keystrokes("escape r");
+    cx.update(|window, cx| {
+        window.dispatch_keystroke(
+            gpui::Keystroke {
+                modifiers: gpui::Modifiers::none(),
+                key: "e".into(),
+                key_char: Some("\u{e9}".into()),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(rig.text(cx), " \u{e9}a");
 
-    // A dead key followed by a key that types nothing: forgotten.
-    cx.simulate_keystrokes("/ a alt-u escape");
-    assert_eq!(rig.mode(cx), Mode::Normal);
-    cx.simulate_keystrokes("x");
-    assert_eq!(rig.text(cx), "");
+    // With control held a key is a command of the command line.
+    cx.simulate_keystrokes(": a b ctrl-u c");
+    assert_eq!(line(&rig, cx), ":c");
+    cx.simulate_keystrokes("escape");
 
-    // In plain Normal mode an option chord is left to the editor as
-    // before (alt-down moves the block).
-    assert!(!rig.vim.read_with(cx, |vim, _| vim.wants_text_input()));
+    // Without a frame in between (keys typed faster than the display)
+    // the engine takes the characters itself: nothing is lost.
+    rig.vim.update(cx, |vim, cx| vim.feed_keys(":", cx));
+    for key in ["d", "e", "l"] {
+        cx.update(|window, cx| {
+            window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
+        });
+    }
+    assert_eq!(line(&rig, cx), ":del");
 }

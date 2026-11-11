@@ -138,13 +138,15 @@ impl MockHost {
 }
 
 impl VimHost for MockHost {
-    fn visual_row(&mut self, doc: &Document, pos: Position) -> Range<usize> {
+    fn visual_row(&mut self, state: &EditorState, pos: Position) -> Range<usize> {
+        let doc = state.document();
         let rows = self.rows(doc);
         let r = &rows[self.row_index(doc, pos)];
         r.start..r.end
     }
 
-    fn column_of(&mut self, doc: &Document, pos: Position) -> f32 {
+    fn column_of(&mut self, state: &EditorState, pos: Position) -> f32 {
+        let doc = state.document();
         let rows = self.rows(doc);
         let r = &rows[self.row_index(doc, pos)];
         let t = doc.blocks()[r.block].text();
@@ -152,7 +154,8 @@ impl VimHost for MockHost {
         text::grapheme_count(&t[r.start..upto]) as f32
     }
 
-    fn move_by_rows(&mut self, doc: &Document, from: Position, rows: isize, goal: GoalColumn) -> Position {
+    fn move_by_rows(&mut self, state: &EditorState, from: Position, rows: isize, goal: GoalColumn) -> Position {
+        let doc = state.document();
         let all = self.rows(doc);
         let i = self.row_index(doc, from) as isize;
         let j = (i + rows).clamp(0, all.len() as isize - 1) as usize;
@@ -163,8 +166,8 @@ impl VimHost for MockHost {
         MockHost::at_column(doc, &all[j], col)
     }
 
-    fn viewport(&mut self, doc: &Document) -> Option<Viewport> {
-        let rows = self.rows(doc);
+    fn viewport(&mut self, state: &EditorState) -> Option<Viewport> {
+        let rows = self.rows(state.document());
         let top = self.top.min(rows.len() - 1);
         let bottom = (top + self.height.max(1) - 1).min(rows.len() - 1);
         Some(Viewport {
@@ -174,7 +177,8 @@ impl VimHost for MockHost {
         })
     }
 
-    fn scroll(&mut self, doc: &Document, scroll: Scroll) {
+    fn scroll(&mut self, state: &EditorState, scroll: Scroll) {
+        let doc = state.document();
         self.scrolls.push(scroll);
         let n = self.rows(doc).len() as isize;
         let top = match scroll {
@@ -636,7 +640,7 @@ impl Session {
         self.ed.check_invariants()?;
         let doc = self.ed.document();
         let sel = self.ed.selection();
-        if self.vim.mode() == Mode::Normal {
+        if self.vim.mode() == Mode::Normal && !self.vim.insert_pending() {
             if !sel.is_collapsed() {
                 return Err(format!("Normal mode with a selection: {sel:?}"));
             }

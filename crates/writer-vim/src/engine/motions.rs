@@ -118,14 +118,14 @@ impl Vim {
         let goal = match self.goal {
             Some(g) => g,
             None => {
-                let g = GoalColumn::X(cx.host.column_of(doc, from));
+                let g = GoalColumn::X(cx.host.column_of(cx.ed, from));
                 self.goal = Some(g);
                 g
             }
         };
-        let to = doc.clamp_position(cx.host.move_by_rows(doc, from, rows, goal));
+        let to = doc.clamp_position(cx.host.move_by_rows(cx.ed, from, rows, goal));
         let same_row = to.block == from.block
-            && cx.host.visual_row(doc, to) == cx.host.visual_row(doc, from);
+            && cx.host.visual_row(cx.ed, to) == cx.host.visual_row(cx.ed, from);
         if same_row { None } else { Some(to) }
     }
 
@@ -314,7 +314,7 @@ impl Vim {
                 out(Position::new(p.block, buf::last_non_blank(doc, p.block, s, e)), Inclusive)
             }
             Motion::RowStart | Motion::RowFirstNonBlank | Motion::RowEnd => {
-                let row = cx.host.visual_row(doc, origin);
+                let row = cx.host.visual_row(cx.ed, origin);
                 let rs = row.start.min(t.len());
                 let re = row.end.clamp(rs, t.len());
                 match m {
@@ -397,24 +397,24 @@ impl Vim {
             }
             Motion::MatchPair => jump(motion::match_pair(doc, origin)?, Inclusive),
             Motion::ViewTop | Motion::ViewMiddle | Motion::ViewBottom => {
-                let vp = cx.host.viewport(doc)?;
+                let vp = cx.host.viewport(cx.ed)?;
                 let x = GoalColumn::X(0.0);
                 let row_start = match m {
                     Motion::ViewTop => {
-                        let p = cx.host.move_by_rows(doc, vp.top, n as isize - 1, x);
+                        let p = cx.host.move_by_rows(cx.ed, vp.top, n as isize - 1, x);
                         // Never below the last visible row.
                         if doc.clamp_position(p) > vp.bottom { vp.bottom } else { p }
                     }
                     Motion::ViewBottom => {
-                        let p = cx.host.move_by_rows(doc, vp.bottom, -(n as isize - 1), x);
+                        let p = cx.host.move_by_rows(cx.ed, vp.bottom, -(n as isize - 1), x);
                         if doc.clamp_position(p) < vp.top { vp.top } else { p }
                     }
                     _ => cx
                         .host
-                        .move_by_rows(doc, vp.top, (vp.rows.max(1) as isize - 1) / 2, x),
+                        .move_by_rows(cx.ed, vp.top, (vp.rows.max(1) as isize - 1) / 2, x),
                 };
                 let p = doc.clamp_position(row_start);
-                let row = cx.host.visual_row(doc, p);
+                let row = cx.host.visual_row(cx.ed, p);
                 let rt = buf::text_of(doc, p.block);
                 let rs = row.start.min(rt.len());
                 let re = row.end.clamp(rs, rt.len());

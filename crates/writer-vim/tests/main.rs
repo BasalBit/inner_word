@@ -9,3 +9,7 @@ mod textobjects;
 mod insert;
 mod visual;
 mod registers;
+mod search;
+mod ex;
+mod undo;
+mod repeat;

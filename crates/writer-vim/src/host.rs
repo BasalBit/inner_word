@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use writer_core::{Document, Position};
+use writer_core::{EditorState, Position};
 
 use crate::register::RegisterContent;
 
@@ -60,10 +60,12 @@ pub enum Scroll {
 /// Everything only the user interface knows: wrapped rows, the viewport and
 /// the system clipboard.
 ///
-/// Every layout method receives the document as it is at the time of the
-/// call (the engine may have edited it earlier in the same key press), so an
-/// implementation can lay out the blocks it is asked about on demand and
-/// does not need to hold a reference to the editor state.
+/// Every layout method receives the editor state as it is at the time of
+/// the call, so an implementation does not need to hold a reference to it:
+/// it can bring its layout cache up to date from
+/// [`EditorState::document`] and [`EditorState::revision`] and answer. The
+/// engine asks its layout questions before it edits anything in the same
+/// call, but an implementation should not rely on that.
 ///
 /// **Positions name characters.** In Normal and Visual mode the caret sits
 /// *on* a character, so a [`Position`] passed to or returned from these
@@ -77,11 +79,11 @@ pub trait VimHost {
     /// the block's text: from the first character on the row to the end of
     /// its last character (excluding a trailing `\n`). Empty for an empty
     /// line and for a void block.
-    fn visual_row(&mut self, doc: &Document, pos: Position) -> Range<usize>;
+    fn visual_row(&mut self, state: &EditorState, pos: Position) -> Range<usize>;
 
     /// The horizontal position of the character at `pos`, in any unit the
     /// host likes (pixels, cells). Used as the goal column of `j` and `k`.
-    fn column_of(&mut self, doc: &Document, pos: Position) -> f32;
+    fn column_of(&mut self, state: &EditorState, pos: Position) -> f32;
 
     /// The character `rows` visual rows below (negative: above) the row
     /// holding `from`, at horizontal position `goal`.
@@ -94,7 +96,7 @@ pub trait VimHost {
     /// empty row return its only position.
     fn move_by_rows(
         &mut self,
-        doc: &Document,
+        state: &EditorState,
         from: Position,
         rows: isize,
         goal: GoalColumn,
@@ -102,13 +104,15 @@ pub trait VimHost {
 
     /// The rows on screen, or `None` when nothing is laid out yet. Used by
     /// `H`, `M`, `L` and the scroll commands.
-    fn viewport(&mut self, doc: &Document) -> Option<Viewport>;
+    fn viewport(&mut self, state: &EditorState) -> Option<Viewport>;
 
     /// Scrolls the view. Called for `ctrl-e`, `ctrl-y`, `ctrl-d`, `ctrl-u`,
     /// `ctrl-f`, `ctrl-b`, `zz`, `zt` and `zb`. The engine sets the caret
     /// through the editor state as usual; the host should not let its own
-    /// "keep the caret in view" logic undo an explicit scroll.
-    fn scroll(&mut self, doc: &Document, scroll: Scroll);
+    /// "keep the caret in view" logic undo an explicit scroll. The scroll
+    /// may be applied after the engine returns: the engine does not ask for
+    /// the viewport again in the same call.
+    fn scroll(&mut self, state: &EditorState, scroll: Scroll);
 
     /// Reads the system clipboard for the `+` and `*` registers. Return
     /// `None` when it is empty or holds no text. A host that keeps rich

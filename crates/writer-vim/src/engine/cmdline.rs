@@ -176,7 +176,7 @@ impl Vim {
             c.await_register = false;
             let text = if key.ctrl_char() == Some('w') {
                 let cur = c.origin;
-                self.word_under(cx, cur, false).map(|(w, _)| w)
+                self.word_under(cx, cur, false).map(|(w, _, _)| w)
             } else if let Some(name) = key.plain_char() {
                 self.read_register(cx, Some(name)).map(|r| r.text())
             } else {

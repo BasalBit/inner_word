@@ -116,6 +116,8 @@ impl Vim {
         });
         self.base = if replace { Base::Replace } else { Base::Insert };
         self.goal = None;
+        // Typing is a new change: nothing is left to redo.
+        self.redo_carets.clear();
     }
 
     /// A key in Insert or Replace mode. Returns whether Vim used it.

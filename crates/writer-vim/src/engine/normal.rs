@@ -162,8 +162,14 @@ impl Vim {
     pub(crate) fn finish_command(&mut self, cx: &mut Cx, repeatable: bool) {
         let p = std::mem::take(&mut self.pending);
         let visual = self.visual_repeat.take();
+        let changed = cx.ed.revision() != self.command_revision;
+        if changed && !std::mem::take(&mut self.keep_redo_carets) {
+            // A new change: nothing is left to redo.
+            self.redo_carets.clear();
+        }
+        self.keep_redo_carets = false;
         if let Some(mark) = self.undo_hint.take()
-            && cx.ed.revision() != self.command_revision
+            && changed
         {
             let depth = cx.ed.undo_depth();
             self.undo_hints.retain(|(d, _)| *d < depth);
@@ -462,9 +468,18 @@ impl Vim {
             shift_times,
             widen,
         };
-        if op != Operator::Yank {
+        if op != Operator::Yank
+            && let Target::Lines(lines) = &target
+        {
+            // Undoing a change of whole lines puts the caret back where it
+            // was, if it was on the first of them (as Vim does); undoing a
+            // change of text puts it at the start of that text, which the
+            // editor's own undo record already gives.
             let c = cx.ed.selection().head;
-            self.hint_undo(cx, c);
+            let doc = cx.ed.document();
+            let first = lines.start();
+            let on_first = buf::unit_at(doc, c) == buf::unit_at(doc, first);
+            self.hint_undo(cx, if on_first { c } else { first });
         }
         let ok = self.apply_operator(cx, op, target, info);
         self.goal = None;
@@ -524,7 +539,16 @@ impl Vim {
         {
             let opts = self.class_opts(big);
             let doc = cx.ed.document();
-            if buf::class_at(doc, origin, opts) != Class::Blank {
+            if buf::is_empty_line(doc, origin) {
+                // Nothing to change on an empty line: just start typing.
+                result = Some(MotionOut {
+                    pos: origin,
+                    kind: MotionKind::Exclusive,
+                    goal: GoalUpdate::Clear,
+                    jump: false,
+                    big: false,
+                });
+            } else if buf::class_at(doc, origin, opts) != Class::Blank {
                 let p = motion::word_end(doc, origin, count.unwrap_or(1), opts, true);
                 result = Some(MotionOut {
                     pos: p,
@@ -573,8 +597,8 @@ impl Vim {
 
     /// The word a `*` at `at` searches for: the keyword under or after the
     /// caret on its line, else the run of other non-blank characters.
-    /// Returns the text and whether it is a keyword.
-    pub(crate) fn word_under(&self, cx: &Cx, at: Position, big: bool) -> Option<(String, bool)> {
+    /// Returns the text, whether it is a keyword, and where it starts.
+    pub(crate) fn word_under(&self, cx: &Cx, at: Position, big: bool) -> Option<(String, bool, Position)> {
         let doc = cx.ed.document();
         let opts = self.class_opts(big);
         let t = buf::text_of(doc, at.block);
@@ -610,21 +634,48 @@ impl Vim {
         while e < le && class(e) == c {
             e = buf::next_boundary(t, e);
         }
-        Some((t[s..e].to_string(), keyword))
+        Some((t[s..e].to_string(), keyword, Position::new(at.block, s)))
     }
 
-    /// `*`, `#`, `g*`, `g#`.
+    /// `*`, `#`, `g*`, `g#`: searches for the word under the caret,
+    /// starting from the start of that word.
     fn search_word(&mut self, cx: &mut Cx, forward: bool, whole: bool) {
         let at = self.cursor(cx);
-        let Some((word, keyword)) = self.word_under(cx, at, false) else {
+        let Some((word, keyword, start)) = self.word_under(cx, at, false) else {
             self.error("E348: No string under cursor");
             self.fail();
             return;
         };
         let whole = whole && keyword;
         let raw = search::escape_literal(&word, whole);
-        self.set_search(search::literal_pattern(&word, whole), raw, forward);
-        self.run_motion(cx, Motion::Search { reverse: false });
+        let pattern = search::literal_pattern(&word, whole);
+        self.set_search(pattern.clone(), raw, forward);
+        if self.pending.operator.is_some() {
+            self.run_motion(cx, Motion::Search { reverse: false });
+            return;
+        }
+        let mut p = start;
+        let mut wrapped = false;
+        for _ in 0..self.pending.count1() {
+            let Some(found) = search::find(cx.ed.document(), &pattern, p, forward) else {
+                break;
+            };
+            wrapped |= found.wrapped;
+            p = found.range.start;
+        }
+        if wrapped {
+            self.message(if forward {
+                "search hit BOTTOM, continuing at TOP"
+            } else {
+                "search hit TOP, continuing at BOTTOM"
+            });
+        }
+        if p != at {
+            self.push_jump(cx, at);
+        }
+        self.move_cursor(cx, p);
+        self.goal = None;
+        self.finish_command(cx, false);
     }
 
     // ----- arguments ------------------------------------------------------------------------
@@ -736,7 +787,7 @@ impl Vim {
                         return;
                     }
                 };
-                cx.host.scroll(cx.ed.document(), Scroll::Align { caret: cur, align });
+                cx.host.scroll(cx.ed, Scroll::Align { caret: cur, align });
                 if matches!(t, Tok::Ch('.') | Tok::Ch('-') | Tok::Named(KeyCode::Enter)) {
                     let doc = cx.ed.document();
                     let ls = buf::line_start(doc, cur);
@@ -1244,60 +1295,74 @@ impl Vim {
         self.finish_command(cx, true);
     }
 
-    /// `u`.
+    /// `u`. The caret goes to where the change began: the selection the
+    /// editor recorded before it, or the caret the command asked to be
+    /// remembered when that lies in the restored blocks.
     pub(crate) fn undo(&mut self, cx: &mut Cx, count: usize) {
-        let mut done = 0;
-        let mut hint = None;
+        let mut caret = None;
         for _ in 0..count.max(1) {
             let depth = cx.ed.undo_depth();
             while self.undo_hints.last().is_some_and(|(d, _)| *d > depth) {
                 self.undo_hints.pop();
             }
-            let h = match self.undo_hints.last() {
+            let hint = match self.undo_hints.last() {
                 Some((d, _)) if *d == depth => self.undo_hints.pop().map(|(_, m)| m),
                 _ => None,
             };
             if !cx.ed.undo() {
                 break;
             }
-            hint = h;
-            done += 1;
+            let mut p = cx.ed.selection().start();
+            if let Some(m) = hint
+                && let Some(q) = m.resolve(cx.ed.document())
+                && let Some(splice) = cx.ed.last_change().and_then(|c| c.blocks)
+                && q.block >= splice.start
+                && q.block < splice.start + splice.new_len.max(1)
+            {
+                p = q;
+            }
+            let p = buf::clamp_normal(cx.ed.document(), p);
+            // Redo comes back to the same place, as in Vim.
+            self.redo_carets.push(Mark::at(cx.ed.document(), p));
+            caret = Some(p);
         }
-        if done == 0 {
+        self.keep_redo_carets = true;
+        let Some(p) = caret else {
             self.message("Already at oldest change");
             self.bell();
             return;
-        }
-        // The engine restores the selection from before the change; a
-        // remembered caret is better when it lies in what was restored.
-        let mut p = cx.ed.selection().start();
-        if let Some(m) = hint
-            && let Some(q) = m.resolve(cx.ed.document())
-            && let Some(splice) = cx.ed.last_change().and_then(|c| c.blocks)
-            && q.block >= splice.start
-            && q.block < splice.start + splice.new_len.max(1)
-        {
-            p = q;
-        }
+        };
         self.set_normal_caret(cx, p);
         self.goal = None;
     }
 
     /// `ctrl-r`.
     pub(crate) fn redo(&mut self, cx: &mut Cx, count: usize) {
-        let mut done = 0;
+        let mut caret = None;
         for _ in 0..count.max(1) {
             if !cx.ed.redo() {
                 break;
             }
-            done += 1;
+            let mut p = cx.ed.selection().start();
+            if let Some(m) = self.redo_carets.pop() {
+                // The next undo of this step returns to the same caret.
+                self.undo_hints.push((cx.ed.undo_depth(), m));
+                if let Some(q) = m.resolve(cx.ed.document())
+                    && let Some(splice) = cx.ed.last_change().and_then(|c| c.blocks)
+                    && q.block >= splice.start
+                    && q.block < splice.start + splice.new_len.max(1)
+                {
+                    p = q;
+                }
+            }
+            caret = Some(p);
         }
-        if done == 0 {
+        self.keep_redo_carets = true;
+        let Some(p) = caret else {
             self.message("Already at newest change");
             self.bell();
             return;
-        }
-        let p = cx.ed.selection().start();
+        };
         self.set_normal_caret(cx, p);
         self.goal = None;
     }
@@ -1347,7 +1412,7 @@ impl Vim {
         let counted = self.pending.count_opt();
         let cur = self.cursor(cx);
         let doc = cx.ed.document();
-        let vp = cx.host.viewport(doc);
+        let vp = cx.host.viewport(cx.ed);
         let page = vp.map_or(20, |v| v.rows.max(1));
         let (rows, with_caret): (isize, bool) = match t {
             Tok::Ctrl('e') => (counted.unwrap_or(1) as isize, false),
@@ -1359,7 +1424,7 @@ impl Vim {
             }
             _ => (-((page.saturating_sub(2).max(1) * counted.unwrap_or(1)) as isize), true),
         };
-        cx.host.scroll(doc, Scroll::Rows(rows));
+        cx.host.scroll(cx.ed, Scroll::Rows(rows));
         if with_caret {
             // The caret travels with the text.
             match self.move_rows(cx, cur, rows) {
@@ -1370,13 +1435,13 @@ impl Vim {
             // The caret stays unless it would leave the screen.
             let goal = match self.goal {
                 Some(g) => g,
-                None => GoalColumn::X(cx.host.column_of(doc, cur)),
+                None => GoalColumn::X(cx.host.column_of(cx.ed, cur)),
             };
             let x0 = GoalColumn::X(0.0);
-            let top = doc.clamp_position(cx.host.move_by_rows(doc, vp.top, rows, x0));
-            let bottom = doc.clamp_position(cx.host.move_by_rows(doc, vp.bottom, rows, x0));
-            let top_row = cx.host.visual_row(doc, top);
-            let bottom_row = cx.host.visual_row(doc, bottom);
+            let top = doc.clamp_position(cx.host.move_by_rows(cx.ed, vp.top, rows, x0));
+            let bottom = doc.clamp_position(cx.host.move_by_rows(cx.ed, vp.bottom, rows, x0));
+            let top_row = cx.host.visual_row(cx.ed, top);
+            let bottom_row = cx.host.visual_row(cx.ed, bottom);
             let above = cur.block < top.block || (cur.block == top.block && cur.offset < top_row.start);
             let below = cur.block > bottom.block
                 || (cur.block == bottom.block
@@ -1386,11 +1451,11 @@ impl Vim {
                         cur.offset >= bottom_row.end
                     });
             if above {
-                let p = cx.host.move_by_rows(doc, top, 0, goal);
+                let p = cx.host.move_by_rows(cx.ed, top, 0, goal);
                 self.goal = Some(goal);
                 self.move_cursor(cx, p);
             } else if below {
-                let p = cx.host.move_by_rows(doc, bottom, 0, goal);
+                let p = cx.host.move_by_rows(cx.ed, bottom, 0, goal);
                 self.goal = Some(goal);
                 self.move_cursor(cx, p);
             }

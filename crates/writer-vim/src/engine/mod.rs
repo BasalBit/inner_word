@@ -254,6 +254,10 @@ pub struct Vim {
     pub(crate) undo_hint: Option<Mark>,
     /// Remembered carets for `u`, by the undo depth their change produced.
     pub(crate) undo_hints: Vec<(usize, Mark)>,
+    /// Carets to return to when the steps undone by `u` are redone.
+    pub(crate) redo_carets: Vec<Mark>,
+    /// The command being executed is an undo or redo.
+    pub(crate) keep_redo_carets: bool,
     /// The document revision when the command being typed started.
     pub(crate) command_revision: u64,
     /// What the host was last told; `None` forces a full report.
@@ -304,6 +308,8 @@ impl Vim {
             visual_repeat: None,
             undo_hint: None,
             undo_hints: Vec::new(),
+            redo_carets: Vec::new(),
+            keep_redo_carets: false,
             command_revision: 0,
             shown: Some(Shown {
                 mode: Mode::Normal,
@@ -432,6 +438,21 @@ impl Vim {
         self.registers.set(name, content, host);
     }
 
+    /// The register named with `"x` for the command being typed, if any.
+    /// A host whose clipboard is slow to read can fetch it only when this
+    /// is `'+'` or `'*'` (or [`VimOptions::unnamed_clipboard`] is on).
+    pub fn pending_register(&self) -> Option<char> {
+        self.pending.register
+    }
+
+    /// Whether the engine is waiting for the one Normal-mode command of
+    /// `ctrl-o` and will return to Insert mode after it. [`Vim::mode`]
+    /// reports Normal mode meanwhile, but the caret may still sit after the
+    /// last character of its line.
+    pub fn insert_pending(&self) -> bool {
+        self.resume.is_some()
+    }
+
     /// The text typed in the last Insert session (register `.`).
     pub fn last_inserted_text(&self) -> &str {
         &self.last_inserted
@@ -482,7 +503,11 @@ impl Vim {
 
     pub(crate) fn dispatch(&mut self, key: Key, cx: &mut Cx) -> bool {
         if self.cmdline.is_some() {
-            return self.cmdline_key(key, cx);
+            // What an ex command changes is one undo step.
+            cx.ed.begin_undo_group();
+            let used = self.cmdline_key(key, cx);
+            cx.ed.end_undo_group();
+            return used;
         }
         match self.base {
             Base::Insert | Base::Replace => self.insert_key(key, cx),
@@ -524,10 +549,14 @@ impl Vim {
         }
         self.cmdline = None;
         self.pending = Pending::default();
+        self.command_revision = cx.ed.revision();
+        cx.ed.begin_undo_group();
         self.run_ex(command, &mut cx);
         if matches!(self.base, Base::Visual { .. }) {
             self.exit_visual(&mut cx);
         }
+        self.finish_command(&mut cx, false);
+        cx.ed.end_undo_group();
         self.finish(true)
     }
 
@@ -603,6 +632,7 @@ impl Vim {
         self.visual_repeat = None;
         self.undo_hint = None;
         self.undo_hints.clear();
+        self.redo_carets.clear();
     }
 
     fn sync_inner(&mut self, cx: &mut Cx) {

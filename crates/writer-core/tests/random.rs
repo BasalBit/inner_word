@@ -454,6 +454,28 @@ impl Runner {
                 let _ = d.text_in(TextRange::new(p, d.end()));
                 let s = e.stats();
                 assert_eq!(s, e.document().stats());
+                // Cross-checks between related queries.
+                let d = e.document();
+                let all = d.numbered_ordinals(0..d.block_count());
+                for (i, o) in all.iter().enumerate() {
+                    assert_eq!(*o, d.numbered_ordinal(i));
+                }
+                let flat = d.plain_text();
+                let p = d.clamp_position(random_position(r, d));
+                assert_eq!(d.position_from_flat(d.flat_offset(p)), p);
+                assert_eq!(&flat[d.flat_offset(Position::ZERO)..d.flat_offset(p)], d.text_in(TextRange::new(Position::ZERO, p)));
+                for m in d.find_all("a", SearchOptions::default()) {
+                    assert!(d.is_valid_position(m.start) && d.is_valid_position(m.end));
+                    assert_eq!(d.text_in(m).to_lowercase(), "a");
+                }
+                for (id, range) in d.all_comment_ranges() {
+                    assert!(d.comment(id).is_some());
+                    assert!(!d.is_orphaned(id));
+                    assert!(!range.is_empty());
+                }
+                for t in d.comments() {
+                    assert_eq!(d.is_orphaned(t.id), d.comment_ranges(t.id).is_empty());
+                }
                 "queries".into()
             }
         }

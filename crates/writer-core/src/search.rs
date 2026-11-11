@@ -6,7 +6,9 @@ use crate::document::Document;
 use crate::position::TextRange;
 use crate::text;
 
-/// Options for [`Document::find_all`].
+/// Options for [`Document::find_all`]. Matches always start and end on
+/// grapheme cluster boundaries (a search for `e` does not match the `e` of
+/// `e` + combining accent).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SearchOptions {
     /// Match case exactly. When false, matching uses Unicode lower-casing.
@@ -48,6 +50,14 @@ fn fold_query(q: &str) -> String {
     q.chars().flat_map(char::to_lowercase).collect()
 }
 
+/// Matches must start and end on grapheme boundaries (so they can be
+/// selected and replaced), and satisfy the whole-word option.
+fn acceptable(text: &str, r: &Range<usize>, opts: SearchOptions) -> bool {
+    text::is_grapheme_boundary(text, r.start)
+        && text::is_grapheme_boundary(text, r.end)
+        && (!opts.whole_word || whole_word_ok(text, r))
+}
+
 fn whole_word_ok(text: &str, r: &Range<usize>) -> bool {
     !text::char_before(text, r.start).is_some_and(text::is_word_char)
         && !text::char_after(text, r.end).is_some_and(text::is_word_char)
@@ -63,7 +73,7 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
         let mut from = 0;
         while let Some(i) = text[from..].find(query) {
             let r = from + i..from + i + query.len();
-            if !opts.whole_word || whole_word_ok(text, &r) {
+            if acceptable(text, &r, opts) {
                 from = r.end;
                 out.push(r);
             } else {
@@ -90,7 +100,7 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
         // Both ends must fall on whole original characters.
         let aligned = f.starts[fs] && f.starts[fe];
         let r = f.map[fs]..f.map[fe];
-        if aligned && r.start < r.end && (!opts.whole_word || whole_word_ok(text, &r)) {
+        if aligned && r.start < r.end && acceptable(text, &r, opts) {
             out.push(r);
             from = fe;
         } else {
@@ -170,5 +180,10 @@ mod tests {
         assert_eq!(m, vec![0..2, 2..4]);
         let m = find_in_text("中文中文", "文", SearchOptions { case_sensitive: true, whole_word: false });
         assert_eq!(m, vec![3..6, 9..12]);
+        // Never split a grapheme cluster.
+        let m = find_in_text("a\u{301} a", "a", SearchOptions::default());
+        assert_eq!(m, vec![4..5]);
+        let fam = "\u{1F469}\u{200D}\u{1F467}";
+        assert!(find_in_text(fam, "\u{1F469}", SearchOptions { case_sensitive: true, whole_word: false }).is_empty());
     }
 }

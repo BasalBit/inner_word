@@ -305,8 +305,8 @@ impl EditorState {
     /// Across blocks: the head of the first block and the tail of the last
     /// block merge into the first block (keeping its id and kind). A void
     /// block at the start of the range is removed; a void block at the end
-    /// is not part of the range and stays (an emptied first block before it
-    /// disappears).
+    /// is not part of the range and stays, after the (possibly emptied)
+    /// first block.
     pub(crate) fn delete_range_impl(&mut self, s: Position, e: Position) -> Position {
         if s.block == e.block {
             if s.offset < e.offset {
@@ -324,10 +324,6 @@ impl EditorState {
             return Position::new(s.block, 0);
         }
         if last_void {
-            if s.offset == 0 {
-                self.splice(s.block, e.block - s.block, Vec::new());
-                return Position::new(s.block, 0);
-            }
             let len = self.doc.blocks[s.block].len();
             self.update_block(s.block, |b| b.remove(s.offset..len));
             self.splice(s.block + 1, e.block - s.block - 1, Vec::new());

@@ -561,8 +561,9 @@ fn delete_selection_across_blocks() {
     assert_eq!(kinds(&e)[1], BlockKind::PageBreak);
     let mut e = ed(vec![para("ab"), Block::new(BlockKind::PageBreak)]);
     e.set_selection(Selection::new(p(0, 0), p(1, 0)));
-    e.delete_selection();
-    assert_eq!(kinds(&e), vec![BlockKind::PageBreak]);
+    typ(&mut e, "x");
+    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::PageBreak]);
+    assert_eq!(texts(&e), ["x", ""]);
     check(&e);
     // Select all and delete leaves one empty block.
     let mut e = ed(blocks());

@@ -1816,8 +1816,23 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
             let ps = package.paragraphs();
             let mut ps = ps.iter().peekable();
             let mut expected_text = String::new();
-            for part in source.parts() {
+            let count = source.parts().len();
+            for (index, part) in source.parts().iter().enumerate() {
                 let doc = part.document;
+                // Page breaks at the edge towards another part are dropped.
+                let is_break = |b: &Block| matches!(b.kind(), BlockKind::PageBreak);
+                let blocks = doc.blocks();
+                let from = if index == 0 {
+                    0
+                } else {
+                    blocks.iter().take_while(|b| is_break(b)).count()
+                };
+                let to = if index + 1 == count {
+                    blocks.len()
+                } else {
+                    blocks.len() - blocks.iter().rev().take_while(|b| is_break(b)).count()
+                };
+                let blocks = if from < to { &blocks[from..to] } else { &blocks[..0] };
                 let titled = !single
                     && match options.part_titles {
                         PartTitles::Never => false,
@@ -1833,7 +1848,7 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                     expected_text.push('\n');
                 }
                 let mut pending_break = false;
-                for block in doc.blocks() {
+                for block in blocks {
                     if matches!(block.kind(), BlockKind::PageBreak) {
                         if pending_break {
                             assert!(ps.next().unwrap().runs[0].page_break);
@@ -1856,8 +1871,9 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                 if pending_break {
                     assert!(ps.next().unwrap().runs[0].page_break);
                 }
-                if doc.blocks().is_empty() {
-                    ps.next();
+                if blocks.is_empty() && !titled {
+                    // A part with nothing in it is one empty paragraph.
+                    assert_eq!(ps.next().expect("an empty paragraph").text(), "");
                 }
             }
             if source.parts().is_empty() {
@@ -1880,4 +1896,123 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
             }
         }
     }
+}
+
+// ----- review pass: edge cases ------------------------------------------------------------
+
+#[test]
+fn page_breaks_between_the_parts_of_a_collection_leave_no_empty_page() {
+    let chapter = |name: &str| {
+        Document::from_blocks(vec![
+            Block::new(BlockKind::PageBreak),
+            Block::with_text(BlockKind::heading(1), name),
+            Block::new(BlockKind::PageBreak),
+            Block::paragraph("Body"),
+            Block::new(BlockKind::PageBreak),
+            Block::new(BlockKind::PageBreak),
+        ])
+    };
+    let (a, b, c) = (chapter("A"), chapter("B"), chapter("C"));
+    let only_breaks = Document::from_blocks(vec![Block::new(BlockKind::PageBreak)]);
+    let source = ExportSource::collection("Book", [("A", &a), ("B", &b), ("", &only_breaks), ("C", &c)]);
+    let o = DocxOptions {
+        part_titles: PartTitles::Never,
+        ..Default::default()
+    };
+    let ps = Package::new(&source, &o).paragraphs();
+    let seen: Vec<(String, bool, bool)> = ps
+        .iter()
+        .map(|p| (p.text(), p.runs.first().is_some_and(|r| r.page_break), p.section))
+        .collect();
+    let row = |t: &str, page_break: bool, section: bool| (t.to_string(), page_break, section);
+    assert_eq!(
+        seen,
+        vec![
+            // The first part keeps its leading break, the last its trailing ones.
+            row("A", true, false),
+            row("Body", true, true),
+            row("B", false, false),
+            row("Body", true, true),
+            row("", false, true),
+            row("C", false, false),
+            row("Body", true, false),
+            row("", true, false),
+            row("", true, false),
+        ]
+    );
+    // A single document is exported as it is.
+    let ps = Package::of(&a).paragraphs();
+    assert_eq!(ps.len(), 4);
+    assert!(ps[0].runs[0].page_break && ps[2].runs[0].page_break && ps[3].runs[0].page_break);
+}
+
+#[test]
+fn unusable_values_are_left_out() {
+    // A font name that is empty once cleaned is not written.
+    for name in ["", "  ", "\u{0}\u{1}"] {
+        let ps = paragraphs(vec![Block::new(BlockKind::Paragraph).with_span(
+            "x",
+            InlineAttrs {
+                font: Some(name.to_string()),
+                ..plain()
+            },
+        )]);
+        assert_eq!(ps[0].runs[0].font, None, "{name:?}");
+    }
+    // A comment without a time has no date; a real time is written.
+    let mut ed = EditorState::new(Document::from_blocks(vec![Block::paragraph("one two")]));
+    ed.set_selection(Selection::new(Position::new(0, 0), Position::new(0, 3)));
+    let id = ed.add_comment("no time", "Ada", 0).unwrap();
+    ed.add_reply(id, "negative", "Ben", -5);
+    ed.add_reply(id, "real", "Cy", 1_794_391_505_000);
+    let package = Package::of(&ed.into_document());
+    let comments = roxmltree::Document::parse(package.part(parts::COMMENTS)).unwrap();
+    let dates: Vec<Option<&str>> = comments
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "comment")))
+        .map(|n| n.attribute((W, "date")))
+        .collect();
+    assert_eq!(dates, vec![None, None, Some("2026-11-11T10:05:05Z")]);
+    // Times before 1970 in the options are written as 1970.
+    let doc = Document::new();
+    let package = Package::new(
+        &ExportSource::single("T", &doc),
+        &DocxOptions {
+            created: i64::MIN,
+            modified: -1,
+            ..Default::default()
+        },
+    );
+    assert_eq!(package.part(parts::CORE).matches("1970-01-01T00:00:00Z").count(), 2);
+}
+
+#[test]
+fn pages_larger_than_word_allows_are_cut_to_its_limit() {
+    let settings = DocumentSettings {
+        page: PageSetup {
+            paper: PaperSize::Custom {
+                width: 5000.0,
+                height: 14_000.0,
+            },
+            orientation: Orientation::Portrait,
+            margins: Margins {
+                top: 6000.0,
+                right: 100.0,
+                bottom: 6000.0,
+                left: 3000.0,
+            },
+        },
+        ..Default::default()
+    };
+    let doc = Document::new().with_settings(settings);
+    let s = &Package::of(&doc).sections()[0];
+    // 22 inches is 31680 twips.
+    assert_eq!((s.0, s.1), (31_680, 31_680));
+    let (top, right, bottom, left) = (s.3, s.4, s.5, s.6);
+    assert!(left + right <= 31_680 - 1440, "{left} + {right}");
+    assert!(top + bottom <= 31_680 - 1440, "{top} + {bottom}");
+    assert!(top > 0 && left > right);
+    // An ordinary page is untouched.
+    let s = &Package::of(&Document::new()).sections()[0];
+    assert_eq!((s.0, s.1, s.3, s.4, s.5, s.6), (11_906, 16_838, 1440, 1440, 1440, 1440));
 }

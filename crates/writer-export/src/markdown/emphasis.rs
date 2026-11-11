@@ -162,7 +162,19 @@ fn process(stack: &mut Vec<Entry>, bottom: usize, pairs: &mut Vec<(usize, usize,
 /// Checks the delimiters in `pieces` against the intent: mark `m` is meant
 /// to open at token `ends[m].0` and close at token `ends[m].1`. Returns the
 /// first mark a parser would not pair that way, or `None` when all is well.
+#[cfg(test)]
 pub(crate) fn first_mismatch(pieces: &[Piece], ends: &[Option<(usize, usize)>]) -> Option<usize> {
+    mismatches(pieces, ends, false).first().copied()
+}
+
+/// Like `first_mismatch`, as a list: the first mark a parser would not
+/// pair as intended, or with `all` every such mark (in either reading of
+/// symbols). Empty when all is well.
+pub(crate) fn mismatches(
+    pieces: &[Piece],
+    ends: &[Option<(usize, usize)>],
+    all: bool,
+) -> Vec<usize> {
     // Group the delimiter tokens into runs.
     let mut runs: Vec<Run> = Vec::new();
     let mut run_of: Vec<Option<usize>> = vec![None; pieces.len()];
@@ -205,8 +217,9 @@ pub(crate) fn first_mismatch(pieces: &[Piece], ends: &[Option<(usize, usize)>]) 
         });
     }
     if runs.is_empty() {
-        return None;
+        return Vec::new();
     }
+    let mut bad: Vec<usize> = Vec::new();
 
     let mut intended: Vec<(usize, (usize, usize, usize))> = Vec::new();
     for (mark, e) in ends.iter().enumerate() {
@@ -252,19 +265,44 @@ pub(crate) fn first_mismatch(pieces: &[Piece], ends: &[Option<(usize, usize)>]) 
         }
         process(&mut stack, 0, &mut pairs);
 
-        for (mark, want) in &intended {
-            match pairs.iter().position(|p| p == want) {
-                Some(found) => {
-                    pairs.swap_remove(found);
+        let before = bad.len();
+        if all {
+            // Many marks: look the pairs up instead of searching them.
+            let mut found: std::collections::HashMap<(usize, usize, usize), usize> =
+                std::collections::HashMap::new();
+            for p in &pairs {
+                *found.entry(*p).or_default() += 1;
+            }
+            let mut matched = 0;
+            for (mark, want) in &intended {
+                match found.get_mut(want) {
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        matched += 1;
+                    }
+                    _ => bad.push(*mark),
                 }
-                None => return Some(*mark),
+            }
+            if bad.len() == before && matched < pairs.len() {
+                bad.extend(intended.first().map(|(mark, _)| *mark));
+            }
+        } else {
+            for (mark, want) in &intended {
+                match pairs.iter().position(|p| p == want) {
+                    Some(found) => {
+                        pairs.swap_remove(found);
+                    }
+                    None => return vec![*mark],
+                }
+            }
+            if !pairs.is_empty() {
+                return intended.first().map(|(mark, _)| *mark).into_iter().collect();
             }
         }
-        if !pairs.is_empty() {
-            return intended.first().map(|(mark, _)| *mark);
-        }
     }
-    None
+    bad.sort_unstable();
+    bad.dedup();
+    bad
 }
 
 #[cfg(test)]

@@ -77,3 +77,137 @@ fn a_book_exports_in_linear_time() {
         "export time grows faster than the document: {per_block:?}"
     );
 }
+
+/// A deterministic generator for the stress documents below.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+}
+
+/// A 10,000-block book with every block kind, nested lists, thousands of
+/// separate numbered lists, styled runs, links and 500 comment threads.
+fn varied_book(blocks: usize) -> Document {
+    use writer_core::{EditorState, Position, Selection};
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let words = [
+        "the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog", "—", "*", "_x_", "[1]",
+        "日本語", "שלום", "😀", "a<b", "&amp;", "1.", "`code`", "https://example.com/a_b",
+    ];
+    let mut out = Vec::with_capacity(blocks);
+    for i in 0..blocks {
+        let kind = match rng.below(20) {
+            0 => BlockKind::heading(1 + rng.below(6) as u8),
+            1..=3 => BlockKind::NumberedItem,
+            4..=6 => BlockKind::BulletItem,
+            7 => BlockKind::TodoItem { checked: i % 2 == 0 },
+            8 => BlockKind::Quote,
+            9 => BlockKind::code(),
+            10 if i % 7 == 0 => BlockKind::Divider,
+            11 if i % 50 == 0 => BlockKind::PageBreak,
+            _ => BlockKind::Paragraph,
+        };
+        let mut block = Block::new(kind.clone());
+        if !kind.is_void() {
+            for _ in 0..1 + rng.below(6) {
+                let mut text = String::new();
+                for _ in 0..1 + rng.below(12) {
+                    text.push_str(words[rng.below(words.len())]);
+                    text.push(' ');
+                }
+                let mut attrs = InlineAttrs::default();
+                match rng.below(8) {
+                    0 => attrs.bold = true,
+                    1 => attrs.italic = true,
+                    2 => attrs.strikethrough = true,
+                    3 => attrs.link = Some("https://example.com/x?y=1&z=(2)".into()),
+                    4 => attrs.code = true,
+                    _ => {}
+                }
+                block = block.with_span(&text, attrs);
+            }
+        }
+        if kind.is_list_item() {
+            block = block.with_indent(rng.below(4) as u8);
+        }
+        out.push(block);
+    }
+    let mut ed = EditorState::new(Document::from_blocks(out));
+    for n in 0..500usize {
+        let block = (n * 19) % blocks;
+        let len = ed.document().blocks()[block].len();
+        if len < 4 {
+            continue;
+        }
+        let start = ed.document().clamp_position(Position::new(block, 1));
+        let end = ed.document().clamp_position(Position::new(block, len - 1));
+        ed.set_selection(Selection::new(start, end));
+        if let Some(id) = ed.add_comment("Check this.", "Ada", 1_794_391_505_000) {
+            ed.add_reply(id, "Done.", "Ben", 1_794_391_506_000);
+        }
+    }
+    ed.into_document()
+}
+
+/// One paragraph with thousands of styled runs, many of them in places
+/// where Markdown emphasis needs the HTML fallback.
+fn dense_paragraph(runs: usize) -> Document {
+    let mut block = Block::new(BlockKind::Paragraph);
+    for i in 0..runs {
+        let attrs = match i % 4 {
+            0 => InlineAttrs::default().with(InlineStyle::Bold),
+            2 => InlineAttrs::default().with(InlineStyle::Italic),
+            _ => InlineAttrs::default(),
+        };
+        let text = match i % 8 {
+            0 => "(bold)",
+            1 => "tight",
+            2 => "em.",
+            3 => "next, ",
+            4 => "文字。",
+            5 => "次の ",
+            6 => " spaced ",
+            _ => " plain ",
+        };
+        block = block.with_span(text, attrs);
+    }
+    Document::from_blocks(vec![block])
+}
+
+/// Prints the time of every exporter for a varied 10,000-block book and
+/// for one very dense paragraph, and fails only on gross slowness. With
+/// `WRITER_EXPORT_DUMP_DIR` set, the files are written there.
+#[test]
+fn a_varied_book_and_a_dense_paragraph_export_quickly() {
+    let dump = std::env::var("WRITER_EXPORT_DUMP_DIR").ok();
+    let options = ExportOptions::default();
+    for (name, doc) in [
+        ("book-10000", varied_book(10_000)),
+        ("dense-paragraph-4000", dense_paragraph(4_000)),
+    ] {
+        let source = ExportSource::single(name, &doc);
+        let mut line = format!("{name}:");
+        for format in ExportFormat::ALL {
+            let start = Instant::now();
+            let bytes = export(&source, format, &options);
+            let secs = start.elapsed().as_secs_f64();
+            line.push_str(&format!(
+                " {} {:.0} ms ({} KB)",
+                format.extension(),
+                secs * 1000.0,
+                bytes.len() / 1024
+            ));
+            // Generous even for an unoptimised build on a busy machine.
+            assert!(secs < 20.0, "{name} took {secs:.1} s as {format:?}");
+            if let Some(dir) = &dump {
+                std::fs::write(format!("{dir}/{name}.{}", format.extension()), &bytes).unwrap();
+            }
+        }
+        println!("{line}");
+    }
+}

@@ -69,6 +69,10 @@ impl Mark {
 
 const FAMILIES: usize = 7;
 
+/// How many delimiters are replaced by HTML tags one at a time before the
+/// rest are replaced together.
+const SINGLE_REPLACEMENTS: usize = 8;
+
 /// The marks of one attribute run, one slot per family in rank order.
 fn marks_of(attrs: &InlineAttrs, options: &MarkdownOptions) -> [Option<Mark>; FAMILIES] {
     let link = attrs
@@ -637,12 +641,18 @@ pub(crate) fn render_inline(
         .filter(|iv| iv.mark.delimiter().is_some())
         .count();
     let mut strings = render(&tokens, &ivs, options, heading, ctx);
-    for _ in 0..=delimited {
+    // After a few single replacements (a paragraph rarely needs more),
+    // every mark that fails is replaced in one go: one at a time is
+    // quadratic in a paragraph with thousands of marks.
+    for round in 0..=delimited {
         let view = pieces(&tokens, &ivs, &strings);
-        let Some(bad) = emphasis::first_mismatch(&view, &ends) else {
+        let bad = emphasis::mismatches(&view, &ends, round >= SINGLE_REPLACEMENTS);
+        if bad.is_empty() {
             break;
-        };
-        ivs[bad].html = true;
+        }
+        for mark in bad {
+            ivs[mark].html = true;
+        }
         strings = render(&tokens, &ivs, options, heading, ctx);
     }
     strings.concat()

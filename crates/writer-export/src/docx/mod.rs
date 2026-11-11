@@ -194,7 +194,12 @@ impl Metrics {
 
     /// A text size in points as scaled half-points (`w:sz`).
     pub fn half_points(&self, points: f32) -> u32 {
-        (points * self.scale * 2.0).round().clamp(2.0, 3276.0) as u32
+        let half = (points * self.scale * 2.0).round();
+        if half.is_finite() {
+            half.clamp(2.0, 3276.0) as u32
+        } else {
+            24
+        }
     }
 
     /// A text-related length in points as scaled twips.
@@ -367,8 +372,8 @@ fn core_properties(title: &str, options: &DocxOptions) -> String {
          <dcterms:created xsi:type=\"dcterms:W3CDTF\">{}</dcterms:created>\
          <dcterms:modified xsi:type=\"dcterms:W3CDTF\">{}</dcterms:modified></cp:coreProperties>",
         text(title),
-        iso_datetime(options.created),
-        iso_datetime(options.modified),
+        iso_datetime(options.created.max(0)),
+        iso_datetime(options.modified.max(0)),
     )
 }
 
@@ -429,12 +434,18 @@ fn comments_xml(comments: &[Comment]) -> String {
         "{DECLARATION}<w:comments xmlns:w=\"{W_NS}\" xmlns:w14=\"{W14_NS}\" xmlns:w15=\"{W15_NS}\" xmlns:mc=\"{MC_NS}\" mc:Ignorable=\"w14 w15\">"
     );
     for c in comments {
+        // A comment without a usable time (zero or before 1970) gets no
+        // date at all rather than a wrong one.
+        let date = if c.date > 0 {
+            format!(" w:date=\"{}\"", iso_datetime(c.date))
+        } else {
+            String::new()
+        };
         s.push_str(&format!(
-            "<w:comment w:id=\"{}\" w:author=\"{}\" w:date=\"{}\" w:initials=\"{}\"><w:p w14:paraId=\"{}\" w14:textId=\"77777777\">\
+            "<w:comment w:id=\"{}\" w:author=\"{}\"{date} w:initials=\"{}\"><w:p w14:paraId=\"{}\" w14:textId=\"77777777\">\
              <w:pPr><w:pStyle w:val=\"CommentText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CommentReference\"/></w:rPr><w:annotationRef/></w:r>",
             c.id,
             attr(&c.author),
-            iso_datetime(c.date),
             attr(&initials(&c.author)),
             Comment::para_id(c.id),
         ));

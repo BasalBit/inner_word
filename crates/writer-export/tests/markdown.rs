@@ -1951,3 +1951,38 @@ fn adversarial_documents_round_trip() {
         }
     }
 }
+
+/// One block with a great many short runs, most of them in places where
+/// the delimiters cannot pair: the exporter replaces them in batches, and
+/// the result must still read back exactly.
+#[test]
+fn dense_paragraphs_round_trip() {
+    for seed in 1..=seeds(3000) / 10 {
+        let mut rng = Rng(seed.wrapping_mul(0x8CB9_2BA7_2F3D_8DD7) | 1);
+        let mut block = Block::new(BlockKind::Paragraph);
+        let pieces = [
+            "(b)", "t", "e.", "n, ", "文字。", "次の ", " s ", "x", "*", "_", "~", "€", "😀", "a", "!", "\n",
+        ];
+        let mut attrs = plain();
+        for _ in 0..(30 + rng.below(120)) {
+            match rng.below(6) {
+                0 | 1 => attrs.bold = !attrs.bold,
+                2 | 3 => attrs.italic = !attrs.italic,
+                4 => attrs.strikethrough = !attrs.strikethrough,
+                _ => {
+                    attrs.link = match attrs.link {
+                        Some(_) => None,
+                        None => Some("u:1".to_string()),
+                    }
+                }
+            }
+            block = block.with_span(rng.pick(&pieces), attrs.clone());
+        }
+        let doc = Document::from_blocks(vec![block]);
+        let result = std::panic::catch_unwind(|| round_trip_with(&doc, &MarkdownOptions::default()));
+        if let Err(e) = result {
+            eprintln!("seed {seed} failed");
+            std::panic::resume_unwind(e);
+        }
+    }
+}

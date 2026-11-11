@@ -348,7 +348,12 @@ impl Builder<'_> {
             color: attrs
                 .color
                 .map(|c| c.to_hex().trim_start_matches('#').to_uppercase()),
-            font: attrs.font.clone(),
+            font: attrs
+                .font
+                .as_deref()
+                .map(str::trim)
+                .filter(|f| !super::xml::attr(f).trim().is_empty())
+                .map(str::to_string),
             shade: attrs.highlight.map(|h| {
                 h.reference_rgb()
                     .to_hex()
@@ -437,8 +442,30 @@ impl Builder<'_> {
     }
 
     /// The paragraphs of one document.
-    fn document(&mut self, source: &ExportSource<'_>, part: &ExportPart<'_>) -> Vec<Para> {
+    /// `first` and `last` say where the part sits in the export: page
+    /// breaks at the edge towards another part are dropped, because the
+    /// section break between two parts already starts a new page and the
+    /// two together would leave an empty one.
+    fn document(
+        &mut self,
+        source: &ExportSource<'_>,
+        part: &ExportPart<'_>,
+        first: bool,
+        last: bool,
+    ) -> Vec<Para> {
         let doc = part.document;
+        let is_break = |b: &Block| matches!(b.kind(), BlockKind::PageBreak);
+        let blocks = doc.blocks();
+        let skip_until = if first {
+            0
+        } else {
+            blocks.iter().take_while(|b| is_break(b)).count()
+        };
+        let keep_until = if last {
+            blocks.len()
+        } else {
+            blocks.len() - blocks.iter().rev().take_while(|b| is_break(b)).count()
+        };
         let typography = &doc.settings().typography;
         let ordinals = ordinals(doc);
         let markers = self.comment_markers(doc);
@@ -457,6 +484,9 @@ impl Builder<'_> {
         let mut pending_break = false;
 
         for (index, block) in doc.blocks().iter().enumerate() {
+            if index < skip_until || index >= keep_until {
+                continue;
+            }
             if matches!(block.kind(), BlockKind::PageBreak) {
                 if pending_break {
                     // Two page breaks in a row: an empty page.
@@ -565,11 +595,27 @@ impl Builder<'_> {
     }
 }
 
+/// The longest page side Word accepts, in points (22 inches).
+const MAX_PAGE: f32 = 1584.0;
+
 /// Section properties: page size, orientation, margins and the footer.
 fn section_xml(doc: &Document, page_numbers: bool) -> String {
     let page = doc.settings().page.sanitized();
     let (w, h) = page.page_size();
-    let m = page.margins;
+    // Word's largest page is 22 inches each way; a larger one is cut to
+    // that, and the margins with it so that an inch of text area is left.
+    let (w, h) = (w.min(MAX_PAGE), h.min(MAX_PAGE));
+    let mut m = page.margins;
+    let fit = |a: &mut f32, b: &mut f32, room: f32| {
+        let room = (room - 72.0).max(0.0);
+        if *a + *b > room {
+            let scale = room / (*a + *b);
+            *a *= scale;
+            *b *= scale;
+        }
+    };
+    fit(&mut m.left, &mut m.right, w);
+    fit(&mut m.top, &mut m.bottom, h);
     let orient = match page.orientation {
         Orientation::Landscape => " w:orient=\"landscape\"",
         Orientation::Portrait => "",
@@ -612,7 +658,7 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
     let parts = source.parts();
     let mut last_section = None;
     for (i, part) in parts.iter().enumerate() {
-        let mut paras = builder.document(source, part);
+        let mut paras = builder.document(source, part, i == 0, i + 1 == parts.len());
         let section = section_xml(part.document, options.page_numbers);
         if paras.is_empty() {
             paras.push(Para::default());

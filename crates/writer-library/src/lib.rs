@@ -89,6 +89,13 @@ pub use panel::{
     commands, forward_actions, key_bindings,
 };
 
+/// Text helpers of the panel, public only so that the crate's one integration-test binary
+/// can test them directly. Not part of the API.
+#[doc(hidden)]
+pub mod internals {
+    pub use crate::panel::rows::{label_around_match, short, short_path};
+}
+
 /// The whole storage crate, for anything not re-exported above.
 pub use writer_store as store;
 /// The storage types that appear in this crate's API, re-exported so that consumers do not

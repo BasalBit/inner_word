@@ -5,6 +5,7 @@
 //! cargo run -p writer-library --example library_demo
 //! LIBRARY_DEMO_DOCS=5000 cargo run -p writer-library --example library_demo   # a big library
 //! LIBRARY_DEMO_EMPTY=1 cargo run -p writer-library --example library_demo     # the empty state
+//! LIBRARY_DEMO_LONG=1 cargo run -p writer-library --example library_demo      # long names, deep nesting
 //! LIBRARY_DEMO_BENCH=5000 cargo run --release -p writer-library --example library_demo  # save cost, no window
 //! ```
 //!
@@ -173,6 +174,43 @@ fn seed(library: &mut Library, clock: &Clock, cx: &mut Context<Library>) -> Docu
     clock.advance_ms(1000);
     library.trash_folder(abandoned, cx).expect("trash");
     clock.advance_ms(1000);
+
+    // LIBRARY_DEMO_LONG=1 adds long names and deep nesting, to see how rows, the move
+    // picker and the messages cope.
+    if std::env::var_os("LIBRARY_DEMO_LONG").is_some() {
+        let mut parent = library
+            .create_folder(
+                None,
+                "Essays on the quiet hours between midnight and the first tram",
+                cx,
+            )
+            .expect("create folder")
+            .id;
+        for name in [
+            "Drafts that were abandoned and then picked up again a year later",
+            "Second pass",
+            "Notes from the editor, with my replies in the margins",
+            "Cuts",
+            "Things I could not bring myself to delete",
+            "Level seven",
+            "Level eight",
+        ] {
+            parent = library
+                .create_folder(Some(parent), name, cx)
+                .expect("create folder")
+                .id;
+            document(
+                library,
+                clock,
+                now,
+                Some(parent),
+                "A paragraph about the sound the radiator makes when the heating comes on at five",
+                1234567,
+                3 * DAY,
+                cx,
+            );
+        }
+    }
 
     // LIBRARY_DEMO_DOCS=N adds a big archive to check that a large library stays fast.
     let extra: usize = std::env::var("LIBRARY_DEMO_DOCS")

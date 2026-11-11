@@ -871,7 +871,7 @@ fn trash_with_undo(cx: &mut TestAppContext) {
     assert_eq!(f.visible(cx), vec![Document(f.at_root)]);
     assert_eq!(
         f.toasts(cx),
-        vec!["Moved “Book” (1 document, 1 subfolder) to the trash. Press ⌘Z to undo."]
+        vec!["Moved “Book” and 1 document to the trash. Press ⌘Z to undo."]
     );
 
     // cmd-z brings back the last one, revealed and selected; again for the one before.
@@ -2416,7 +2416,7 @@ fn trashing_the_folder_of_the_open_document(cx: &mut TestAppContext) {
     assert!(f.panel_focused(cx));
     assert_eq!(
         f.toasts(cx),
-        vec!["Moved “Book” (2 documents, 1 subfolder) to the trash. Press ⌘Z to undo."]
+        vec!["Moved “Book” and 2 documents to the trash. Press ⌘Z to undo."]
     );
 
     // The editor's last autosave of the trashed document arrives late: the text is kept,
@@ -2685,7 +2685,8 @@ fn long_names_and_deep_nesting(cx: &mut TestAppContext) {
     assert_eq!(f.selected(cx), Some(Folder(chain[11])));
     cx.simulate_keystrokes("escape");
 
-    // Messages carry the whole name; the move picker lists the whole path.
+    // A toast is one line: it shows the start of a long name and the end of a long path,
+    // and always the end of its sentence.
     f.panel
         .update(cx, |p, cx| p.select(Some(Document(document)), cx));
     cx.simulate_keystrokes("m");
@@ -2693,12 +2694,58 @@ fn long_names_and_deep_nesting(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert_eq!(f.folder_of(document, cx), Some(chain[11]));
     let toast = f.toasts(cx).pop().unwrap();
-    assert!(toast.starts_with("Moved “A very long working title"));
-    assert!(toast.contains(" / "));
+    assert_eq!(
+        toast,
+        "Moved “A very long working title…” to … / A very long working title…."
+    );
     cx.simulate_keystrokes("cmd-backspace");
     cx.run_until_parked();
     let toast = f.toasts(cx).pop().unwrap();
-    assert!(toast.ends_with("and then some” to the trash. Press ⌘Z to undo."));
+    assert_eq!(
+        toast,
+        "Moved “A very long working title…” to the trash. Press ⌘Z to undo."
+    );
+    // A folder's toast also says what went with it, and still ends with the key.
+    f.panel
+        .update(cx, |p, cx| p.trash_item(Folder(chain[10]), cx));
+    cx.run_until_parked();
+    let toast = f.toasts(cx).pop().unwrap();
+    assert_eq!(
+        toast,
+        "Moved “A very long worki…” and 1 document to the trash. Press ⌘Z to undo."
+    );
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    let toast = f.toasts(cx).pop().unwrap();
+    assert!(toast.chars().count() < 80, "{toast}");
+    assert!(toast.starts_with("Restored “A very long") && toast.ends_with('.'));
+    // A path of ordinary names that is too long as a whole keeps its last folders.
+    let scenes = f.library.update(cx, |l, cx| {
+        let road = l.create_folder(None, "The Salt Road", cx).unwrap().id;
+        let part = l.create_folder(Some(road), "Part one", cx).unwrap().id;
+        l.create_folder(Some(part), "Scenes by the harbour", cx)
+            .unwrap()
+            .id
+    });
+    cx.run_until_parked();
+    f.panel
+        .update(cx, |p, cx| p.select(Some(Document(f.at_root)), cx));
+    cx.simulate_keystrokes("m");
+    cx.simulate_input("scenes harbour");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.folder_of(f.at_root, cx), Some(scenes));
+    assert_eq!(
+        f.toasts(cx),
+        vec!["Moved “Untitled” to … / Scenes by the harbour."]
+    );
+    f.panel.update(cx, |p, cx| {
+        p.move_item(Document(f.at_root), None, cx).unwrap();
+    });
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        f.toasts(cx),
+        vec!["Moved “Untitled” back to … / Scenes by the harbour."]
+    );
     // The trash view shows it with the long path it came from.
     cx.simulate_keystrokes("t");
     cx.run_until_parked();

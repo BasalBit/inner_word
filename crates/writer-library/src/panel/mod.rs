@@ -6,7 +6,7 @@
 mod handlers;
 mod move_picker;
 mod render;
-mod rows;
+pub(crate) mod rows;
 mod trash;
 mod undo;
 
@@ -31,7 +31,7 @@ use crate::library::{Library, LibraryEvent};
 use move_picker::MoveDelegate;
 use rows::{
     Filter, Row, ancestors, build_rows, count_documents, count_folders, item_name, place_of,
-    plural, stored_name,
+    plural, short, short_path, stored_name,
 };
 use trash::{ROOT_LABEL, TrashRow, build_trash_rows};
 use undo::UndoEntry;
@@ -126,6 +126,11 @@ const SELECTION_PERSIST_DELAY: Duration = Duration::from_millis(400);
 /// before it gives the keyboard back. Checked twice.
 const OFF_SCREEN_GRACE: Duration = Duration::from_millis(250);
 const NEW_FOLDER_NAME: &str = "New folder";
+/// How much of a name a toast shows. A toast is a single line of about 78 characters; the
+/// longest sentences here have about 50 of their own.
+const NAME_IN_MESSAGE: usize = 26;
+/// How much of a folder path a toast shows (the end of it).
+const PLACE_IN_MESSAGE: usize = 30;
 
 /// The panel's default key bindings, all scoped to [`KEY_CONTEXT`]. Installed by
 /// [`crate::init`].
@@ -1230,14 +1235,18 @@ impl LibraryPanel {
     /// Moves `item` to the trash, with the same toast as
     /// [`trash_selected`](Self::trash_selected).
     pub fn trash_item(&mut self, item: LibraryItem, cx: &mut Context<Self>) -> bool {
-        let name = self.name_of(item, cx);
-        // A folder takes its contents along: say how much went with it.
+        let mut name = self.name_of(item, cx);
+        // A folder takes its contents along: say how much went with it, in few words (the
+        // sentence must fit a toast, with the key that undoes at its end).
         let contents = match item {
-            LibraryItem::Folder(id) => self.folder_contents(id, cx),
+            LibraryItem::Folder(id) => self.folder_contents_brief(id, cx),
             LibraryItem::Document(_) => None,
         }
-        .map(|contents| format!(" ({contents})"))
+        .map(|contents| format!(" and {contents}"))
         .unwrap_or_default();
+        if !contents.is_empty() {
+            name = short(&name, NAME_IN_MESSAGE - 8);
+        }
         let trashed = self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.trash_folder(id, cx),
             LibraryItem::Document(id) => library.trash_document(id, cx),
@@ -1362,21 +1371,23 @@ impl LibraryPanel {
         }
         let message = match &row.contents {
             Some(contents) => {
-                format!(
-                    "The folder and what is in it ({contents}) will be gone. This cannot be undone."
-                )
+                format!("The folder goes with what is in it: {contents}. This cannot be undone.")
             }
             None => "This cannot be undone.".to_string(),
         };
         let panel = cx.weak_entity();
         let item = row.item;
         let dialog = cx.new(|cx| {
-            ConfirmDialog::new(format!("Delete “{}” forever?", row.label), message, cx)
-                .confirm_label("Delete forever")
-                .danger()
-                .on_confirm(move |_, cx| {
-                    panel.update(cx, |panel, cx| panel.purge(item, cx)).ok();
-                })
+            ConfirmDialog::new(
+                format!("Delete “{}” forever?", short(&row.label, 40)),
+                message,
+                cx,
+            )
+            .confirm_label("Delete forever")
+            .danger()
+            .on_confirm(move |_, cx| {
+                panel.update(cx, |panel, cx| panel.purge(item, cx)).ok();
+            })
         });
         ConfirmDialog::show(dialog, &self.modal_layer, window, cx);
         true
@@ -1417,7 +1428,7 @@ impl LibraryPanel {
             .trash_rows
             .iter()
             .find(|row| row.item == item)
-            .map(|row| row.label.to_string())
+            .map(|row| short(&row.label, NAME_IN_MESSAGE))
             .unwrap_or_default();
         let purged = self.library.update(cx, |library, cx| match item {
             LibraryItem::Folder(id) => library.purge_folder(id, cx),
@@ -1686,18 +1697,21 @@ impl LibraryPanel {
         ancestors(&tree, item).map(|path| path.last().copied())
     }
 
+    /// The name of a live item as it appears in a message: cut to [`NAME_IN_MESSAGE`]
+    /// characters, so a long title cannot push the end of a one-line toast out of sight.
     pub(super) fn name_of(&self, item: LibraryItem, cx: &App) -> String {
         let tree = self.library.read(cx).tree();
-        item_name(&tree, item).unwrap_or_default()
+        short(&item_name(&tree, item).unwrap_or_default(), NAME_IN_MESSAGE)
     }
 
-    /// A folder as a place in a sentence: "Novel / Part one", or "the library root".
+    /// A folder as a place in a sentence: "Novel / Part one", or "the library root". A
+    /// long path keeps its end ("… / Part one").
     pub(super) fn place_label(&self, folder: Option<FolderId>, cx: &App) -> String {
         let path = self.library.read(cx).folder_path(folder);
         if path.is_empty() {
             format!("the {}", ROOT_LABEL.to_lowercase())
         } else {
-            path.join(" / ")
+            short_path(&path, PLACE_IN_MESSAGE)
         }
     }
 
@@ -1850,6 +1864,18 @@ impl LibraryPanel {
                 self.set_selected(item, cx);
                 self.scroll_to_selected(ScrollStrategy::Center);
             }
+        }
+    }
+
+    /// What a folder holds, in two words: its documents at any depth ("3 documents"), or its
+    /// subfolders when it has no documents. `None` when it is empty or not in the tree.
+    fn folder_contents_brief(&self, folder: FolderId, cx: &App) -> Option<String> {
+        let tree = self.library.read(cx).tree();
+        let node = tree.find_folder(folder)?;
+        match (count_documents(node), count_folders(node)) {
+            (0, 0) => None,
+            (0, folders) => Some(plural(folders as u64, "subfolder")),
+            (documents, _) => Some(plural(documents as u64, "document")),
         }
     }
 

@@ -352,3 +352,85 @@ pub(super) fn stored_name(tree: &LibraryTree, item: LibraryItem) -> Option<Strin
             .map(|document| document.title.trim().to_string()),
     }
 }
+
+/// `name` as it appears inside a one-line message: cut to `max` characters with an
+/// ellipsis. Toasts are one line and clip what does not fit, so a long title must not push
+/// the end of the sentence (the key that undoes) out of sight.
+pub fn short(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_string();
+    }
+    let cut: String = name.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// A folder path ("Novel / Part one / Scenes") as it appears inside a one-line message: when
+/// it is longer than `max` characters the folders at the end are kept, which say most
+/// about where something is ("… / Part one / Scenes").
+pub fn short_path(names: &[String], max: usize) -> String {
+    let whole = names.join(" / ");
+    if whole.chars().count() <= max {
+        return whole;
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 1;
+    for name in names.iter().rev() {
+        let more = name.chars().count() + 3;
+        if length + more > max && !kept.is_empty() {
+            break;
+        }
+        kept.push(name);
+        length += more;
+    }
+    kept.reverse();
+    match kept.as_slice() {
+        // Even the last folder alone is too long.
+        [only] if length > max => format!("… / {}", short(only, max.saturating_sub(4))),
+        kept => format!("… / {}", kept.join(" / ")),
+    }
+}
+
+/// A row cuts a long name off at its end. When the filter's first match in `label` would
+/// fall outside the first `fit` characters, this returns the label cut at the front
+/// instead ("…the sound the radiator makes") with the match positions moved along, so the
+/// reason the row is in the list can be seen. `None` when the match is in view anyway.
+pub fn label_around_match(
+    label: &str,
+    positions: &[usize],
+    fit: usize,
+) -> Option<(String, Vec<usize>)> {
+    let first = *positions.first()?;
+    let before = label.get(..first)?.chars().count();
+    // The first run of matched characters (one word of the filter).
+    let mut run = 0;
+    let mut expected = first;
+    for (offset, ch) in label[first..].char_indices() {
+        if positions.binary_search(&(first + offset)).is_err() || first + offset != expected {
+            break;
+        }
+        run += 1;
+        expected = first + offset + ch.len_utf8();
+    }
+    // One place is the row's own ellipsis at the end.
+    if before + run < fit {
+        return None;
+    }
+    // Keep some of what comes before the match, starting at a word if there is one.
+    let lead = before.min(fit.saturating_sub(run + 2) / 2);
+    let earliest = before - lead;
+    let chars: Vec<(usize, char)> = label.char_indices().collect();
+    let start = (earliest..=before)
+        .find(|&ix| ix == 0 || chars[ix - 1].1.is_whitespace())
+        .unwrap_or(earliest);
+    if start == 0 {
+        return None;
+    }
+    let cut = chars[start].0;
+    const ELLIPSIS: &str = "…";
+    let moved = positions
+        .iter()
+        .filter(|&&position| position >= cut)
+        .map(|&position| position - cut + ELLIPSIS.len())
+        .collect();
+    Some((format!("{ELLIPSIS}{}", &label[cut..]), moved))
+}

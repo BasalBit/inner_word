@@ -6,7 +6,7 @@ use writer_store::{FolderId, StoreError};
 use writer_ui::Toast;
 use writer_ui::toast::show_toast;
 
-use super::rows::{UNTITLED, place_of};
+use super::rows::{UNTITLED, place_of, short};
 use super::{LibraryItem, LibraryPanel};
 
 /// How many changes the panel remembers.
@@ -135,9 +135,9 @@ impl LibraryPanel {
                     Ok(()) => {
                         self.reveal(item, cx);
                         let name = if name.trim().is_empty() {
-                            UNTITLED
+                            UNTITLED.to_string()
                         } else {
-                            &name
+                            short(&name, 26)
                         };
                         show_toast(
                             Toast::new(format!("Renamed “{current}” back to “{name}”.")),

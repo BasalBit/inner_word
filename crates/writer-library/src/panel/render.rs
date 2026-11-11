@@ -12,7 +12,7 @@ use writer_ui::theme::{
 };
 use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
-use super::rows::{count_documents, grouped};
+use super::rows::{count_documents, grouped, label_around_match};
 use super::{
     DeleteForever, Dismiss, EmptyTrash, FocusFilter, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
     LibraryPanel, NewDocument, NewFolder, ROOT_ROW_HEIGHT, ROW_HEIGHT, RestoreSelected, ShowTrash,
@@ -35,6 +35,18 @@ fn focus_mark(color: gpui::Hsla) -> gpui::Div {
         .w(px(2.))
         .rounded(px(1.))
         .bg(color)
+}
+
+/// About how many characters of a name fit in a tree row that is `width` wide, at `depth`,
+/// beside `detail`. An estimate (the interface font is not monospaced), erring on the
+/// side of fewer.
+fn name_fit(width: gpui::Pixels, depth: usize, detail: Option<&str>) -> usize {
+    // Left of the name: row and cell padding, the disclosure, the icon and their gaps.
+    let left = px(50.) + INDENT * depth as f32;
+    // Right of it: the detail in the small size, its gap, and the padding.
+    let right = px(16.) + px(6.5) * detail.map_or(0, |detail| detail.chars().count()) as f32;
+    let room = width - left - right;
+    (room / px(7.2)).floor().max(0.) as usize
 }
 
 impl Render for LibraryPanel {
@@ -379,6 +391,13 @@ impl LibraryPanel {
         let colors = cx.theme().colors;
         let panel_focused = self.focus_handle.contains_focused(window, cx);
         let now = self.library.read(cx).clock().now_ms();
+        // The width of a row as of the last layout, to judge how much of a name fits.
+        let row_width = self
+            .scroll
+            .0
+            .borrow()
+            .last_item_size
+            .map(|size| size.item.width);
         let mut elements = Vec::with_capacity(range.len());
         for ix in range {
             let Some(row) = self.rows.get(ix) else {
@@ -392,6 +411,15 @@ impl LibraryPanel {
                 .then(|| self.rename_field.clone())
                 .flatten();
             let detail = self.detail_text(row, now);
+            // A match that the row would cut off is brought into view.
+            let (label_text, label_positions) = row_width
+                .filter(|_| !row.positions.is_empty())
+                .and_then(|width| {
+                    let fit = name_fit(width, row.depth, detail.as_deref());
+                    label_around_match(&row.label, &row.positions, fit)
+                })
+                .map(|(label, positions)| (label.into(), positions))
+                .unwrap_or_else(|| (row.label.clone(), row.positions.clone()));
 
             let disclosure = div()
                 .id(("library-disclosure", ix))
@@ -451,17 +479,15 @@ impl LibraryPanel {
                         .left_0()
                         .right_0()
                         .top((ROW_HEIGHT - px(18.)) / 2.)
-                        .child(
-                            HighlightedLabel::new(row.label.clone(), row.positions.clone()).color(
-                                if active {
-                                    colors.accent
-                                } else if row.untitled {
-                                    colors.muted
-                                } else {
-                                    colors.ink
-                                },
-                            ),
-                        ),
+                        .child(HighlightedLabel::new(label_text, label_positions).color(
+                            if active {
+                                colors.accent
+                            } else if row.untitled {
+                                colors.muted
+                            } else {
+                                colors.ink
+                            },
+                        )),
                 });
             // Keyboard focus is visible as a red-pencil mark on the selected row.
             let focus_mark = (selected && panel_focused).then(|| focus_mark(colors.accent));

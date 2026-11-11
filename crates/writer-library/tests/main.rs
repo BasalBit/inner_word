@@ -757,3 +757,91 @@ fn duplicating_a_folder_is_one_change(cx: &mut TestAppContext) {
         LibraryEvent::FolderTrashed { id, documents } if *id == book && documents.len() == 2
     ));
 }
+
+// ----- the panel's text helpers ------------------------------------------------------------
+
+#[test]
+fn names_and_paths_are_shortened_for_one_line_messages() {
+    use writer_library::internals::{short, short_path};
+    assert_eq!(short("Chapter", 26), "Chapter");
+    assert_eq!(short("exactly ten", 11), "exactly ten");
+    assert_eq!(short("A very long working title", 12), "A very long…");
+    // No space is left dangling in front of the ellipsis, and characters are not bytes.
+    assert_eq!(short("A very long working title", 7), "A very…");
+    assert_eq!(short("Grüße aus Köln und Zürich", 10), "Grüße aus…");
+    assert_eq!(short("書きかけの原稿について", 5), "書きかけ…");
+
+    let path = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    let salt = path(&["The Salt Road", "Part one", "Scenes by the harbour"]);
+    assert_eq!(
+        short_path(&salt, 60),
+        "The Salt Road / Part one / Scenes by the harbour"
+    );
+    // Too long as a whole: the end is kept, as many folders as fit.
+    assert_eq!(
+        short_path(&salt, 40),
+        "… / Part one / Scenes by the harbour"
+    );
+    assert_eq!(short_path(&salt, 30), "… / Scenes by the harbour");
+    // Even the last folder is too long: the start of its name.
+    assert_eq!(short_path(&salt, 16), "… / Scenes by t…");
+    assert_eq!(short_path(&path(&["Blog"]), 30), "Blog");
+    assert_eq!(short_path(&[], 30), "");
+    for max in 8..70 {
+        let shown = short_path(&salt, max);
+        assert!(shown.chars().count() <= max, "{shown:?} is over {max}");
+    }
+}
+
+#[test]
+fn a_match_at_the_end_of_a_long_name_is_brought_into_view() {
+    use writer_library::internals::label_around_match;
+    let label = "A paragraph about the sound the radiator makes when the heating comes on";
+    let at = label.find("radiator").unwrap();
+    let positions: Vec<usize> = (at..at + "radiator".len()).collect();
+    // The row shows about 20 characters: "radiator" starts at character 32.
+    let (shown, moved) = label_around_match(label, &positions, 20).unwrap();
+    assert_eq!(shown, "…the radiator makes when the heating comes on");
+    // The positions still mark the same letters.
+    let marked: String = moved
+        .iter()
+        .map(|&p| shown[p..].chars().next().unwrap())
+        .collect();
+    assert_eq!(marked, "radiator");
+    // A wide row shows the match anyway: nothing changes.
+    assert_eq!(label_around_match(label, &positions, 60), None);
+    // So does a match at the start, and a label without a match.
+    assert_eq!(label_around_match(label, &[0, 2, 3], 10), None);
+    assert_eq!(label_around_match(label, &[], 10), None);
+    // Two words of the filter: the first one decides, the second keeps its mark if it is
+    // still in the text.
+    let makes = label.find("makes").unwrap();
+    let mut both = positions.clone();
+    both.extend(makes..makes + 5);
+    let (shown, moved) = label_around_match(label, &both, 20).unwrap();
+    let marked: String = moved
+        .iter()
+        .map(|&p| shown[p..].chars().next().unwrap())
+        .collect();
+    assert_eq!(marked, "radiatormakes");
+    // No word boundary near the match (one long word), and characters of several bytes.
+    let label = "Donaudampfschifffahrtsgesellschaftskapitänsmütze";
+    let at = label.find("mütze").unwrap();
+    let positions: Vec<usize> = label[at..]
+        .char_indices()
+        .map(|(offset, _)| at + offset)
+        .collect();
+    let (shown, moved) = label_around_match(label, &positions, 16).unwrap();
+    assert!(
+        shown.starts_with('…') && shown.ends_with("mütze"),
+        "{shown}"
+    );
+    assert!(shown.chars().count() <= 16, "{shown}");
+    let marked: String = moved
+        .iter()
+        .map(|&p| shown[p..].chars().next().unwrap())
+        .collect();
+    assert_eq!(marked, "mütze");
+    // A row with no room at all does not panic.
+    assert!(label_around_match(label, &positions, 0).is_some());
+}

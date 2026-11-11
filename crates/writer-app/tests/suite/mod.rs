@@ -1,11 +1,13 @@
 //! Shared helpers. Every test runs against an in-memory or temp-dir library,
 //! never the user's data directory.
 
+mod assembly;
 mod commands;
 mod export;
 mod keymap;
 mod session;
 mod settings;
+mod story;
 mod shell;
 mod units;
 

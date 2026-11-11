@@ -140,6 +140,9 @@ pub struct Workspace {
     pub(crate) window_bounds: Option<WindowBounds>,
     pub(crate) window_title: String,
     bounds_task: Option<Task<()>>,
+    /// The focused element that was not part of the last frame (see
+    /// [`Workspace::keep_focus_on_screen`]).
+    off_screen_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -286,6 +289,7 @@ impl Workspace {
             window_bounds: None,
             window_title: String::new(),
             bounds_task: None,
+            off_screen_focus: None,
             _subscriptions: subscriptions,
         };
         this.restore_session(window, cx);
@@ -475,6 +479,62 @@ impl Workspace {
             }
         }
         window.focus(&panel.focus_handle(cx));
+    }
+
+    /// Focus must always be on something that is on screen: with nothing
+    /// focused, or with the focus on an element that is not drawn, keys are
+    /// dispatched at the window root and reach neither the text nor the
+    /// handlers of the workspace. Called from `render`.
+    ///
+    /// The ways to get there: the focused element went away (a popup
+    /// closed, a panel was removed, a modal closed and what it returns the
+    /// keyboard to is gone too, such as a format menu or a rename field
+    /// that closed when the modal took the keyboard). GPUI then reports
+    /// either no focus at all, or a focus that is not part of the window.
+    ///
+    /// The second case shows only in a finished frame, and not in the first
+    /// one: an element that has just been given the focus (a popup's field,
+    /// the rename field in a row of the library's list) is drawn for the
+    /// first time in the frame being built now, or in the one after. So the
+    /// check runs after every frame, and gives up on a focused element only
+    /// when it is missing from two frames in a row.
+    pub(crate) fn keep_focus_on_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.focused(cx).is_none() {
+            self.focus_fallback(window, cx);
+        }
+        cx.defer_in(window, |this, window, cx| {
+            let focused = window.focused(cx);
+            let on_screen = focused
+                .as_ref()
+                .is_some_and(|focused| this.focus_handle.contains(focused, window));
+            if on_screen {
+                this.off_screen_focus = None;
+                return;
+            }
+            match focused {
+                Some(focused) if this.off_screen_focus.as_ref() != Some(&focused) => {
+                    // Look again after one more frame.
+                    this.off_screen_focus = Some(focused);
+                    window.refresh();
+                }
+                _ => {
+                    this.off_screen_focus = None;
+                    this.focus_fallback(window, cx);
+                }
+            }
+        });
+    }
+
+    /// Where the keyboard goes when it would otherwise be nowhere: the
+    /// text, or the workspace itself while no document is open (or when
+    /// the text is the thing that is not on screen).
+    fn focus_fallback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.editor.focus_handle(cx);
+        let target = match self.session {
+            Some(_) if !editor.is_focused(window) => editor,
+            _ => self.focus_handle.clone(),
+        };
+        window.focus(&target);
     }
 
     fn panel_has_focus(&self, window: &Window, cx: &App) -> bool {

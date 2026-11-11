@@ -194,7 +194,16 @@ impl Workspace {
         let view_state: Option<ViewState> = stored
             .view_state
             .as_deref()
-            .and_then(|json| serde_json::from_str(json).ok());
+            .and_then(|json| serde_json::from_str(json).ok())
+            .map(|mut state: ViewState| {
+                // With Vim mode on, a selection would open the document in
+                // Visual mode. Come back to the caret in Normal mode.
+                if self.settings.vim_mode {
+                    state.anchor_block = state.head_block;
+                    state.anchor_offset = state.head_offset;
+                }
+                state
+            });
 
         self.editor.update(cx, |editor, cx| {
             editor.set_document(loaded.document, cx);

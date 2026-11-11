@@ -77,6 +77,7 @@ impl LinkPopover {
         let colors = cx.theme().colors;
         div()
             .id(id)
+            .debug_selector(|| id.to_string())
             .flex()
             .items_center()
             .gap(px(4.))

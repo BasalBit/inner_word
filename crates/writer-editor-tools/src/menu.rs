@@ -300,6 +300,7 @@ impl Menu {
             .map(|ix| {
                 let outer = div()
                     .id(("menu-row", ix))
+                    .debug_selector(|| format!("menu-row-{ix}"))
                     .h(ROW_HEIGHT)
                     .w_full()
                     .px(px(4.))
@@ -531,9 +532,11 @@ impl Render for Menu {
     }
 }
 
-/// Ranks `(id, label, keywords)` candidates against `query`. A match in the
-/// label beats a match in the keywords; within each group the better fuzzy
-/// score wins, then the original order. Returns `(id, matched label
+/// Ranks `(id, label, keywords)` candidates against `query`. The label is
+/// matched fuzzily; the keywords (synonyms, separated by spaces) only by
+/// prefix, so they do not flood the list. A match in the label beats a
+/// match in the keywords; within the labels the better fuzzy score wins,
+/// then the original order. Returns `(id, matched label
 /// positions)`. An empty query returns everything in order.
 pub(crate) fn rank<'a>(
     query: &str,
@@ -553,8 +556,7 @@ pub(crate) fn rank<'a>(
             if let Some(found) = writer_ui::fuzzy::fuzzy_match(query, label) {
                 return Some((false, found.score, order, id, found.positions));
             }
-            writer_ui::fuzzy::fuzzy_match(query, keywords)
-                .map(|found| (true, found.score, order, id, Vec::new()))
+            keyword_match(query, keywords).then(|| (true, 0, order, id, Vec::new()))
         })
         .collect();
     matches.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
@@ -562,4 +564,18 @@ pub(crate) fn rank<'a>(
         .into_iter()
         .map(|(_, _, _, id, positions)| (id, positions))
         .collect()
+}
+
+/// Whether `query` is the start of one of the space-separated `keywords`
+/// (or of the rest of the keyword string, for queries with spaces),
+/// ignoring case.
+fn keyword_match(query: &str, keywords: &str) -> bool {
+    let query = query.to_lowercase();
+    let keywords = keywords.to_lowercase();
+    keywords
+        .char_indices()
+        .filter(|(index, _)| {
+            *index == 0 || keywords[..*index].ends_with(char::is_whitespace)
+        })
+        .any(|(index, _)| keywords[index..].starts_with(&query))
 }

@@ -7,5 +7,6 @@ mod format_menu;
 mod insert_menu;
 mod integration;
 mod link;
+mod mouse;
 mod support;
 mod util;

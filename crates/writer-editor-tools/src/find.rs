@@ -151,8 +151,14 @@ impl EditorTools {
     /// one line becomes the query.
     pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popup(false, window, cx);
-        let seed = self.find_seed(cx);
         let opened = self.find_bar.is_none();
+        // With the bar open, a selection that is the current match is the
+        // result of the search, not a new thing to search for.
+        let seed = if opened || self.find.current.is_none() {
+            self.find_seed(cx)
+        } else {
+            None
+        };
         if opened {
             let bar = self.build_find_bar(window, cx);
             self.find_bar = Some(bar);
@@ -659,6 +665,7 @@ fn bar_button(id: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
     let colors = cx.theme().colors;
     div()
         .id(id)
+        .debug_selector(|| id.to_string())
         .flex_none()
         .h(px(24.))
         .min_w(px(24.))

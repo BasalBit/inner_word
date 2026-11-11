@@ -27,6 +27,9 @@ pub struct Workspace {
     pub events: Vec<CommentsEvent>,
     /// Whether the panel's container is shown (follows `OpenChanged`).
     pub panel_open: bool,
+    /// Show the container whatever the panel reports (an app that does not
+    /// follow `OpenChanged`).
+    pub keep_slot: bool,
 }
 
 impl Render for Workspace {
@@ -36,7 +39,7 @@ impl Render for Workspace {
             .flex()
             .size_full()
             .child(div().flex_1().min_w_0().h_full().child(self.editor.clone()))
-            .when(self.panel_open, |root| {
+            .when(self.panel_open || self.keep_slot, |root| {
                 root.child(
                     div()
                         .debug_selector(|| "panel-slot".into())
@@ -128,6 +131,7 @@ pub fn open_window(
             Workspace {
                 // A document that already has comments.
                 panel_open: panel.read(cx).is_open(),
+                keep_slot: false,
                 editor,
                 panel,
                 events: Vec::new(),

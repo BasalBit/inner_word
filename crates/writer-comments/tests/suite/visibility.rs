@@ -355,3 +355,48 @@ fn each_window_has_its_own_panel(cx: &mut TestAppContext) {
         .panel
         .read_with(cx, |panel, _| assert!(!panel.is_composing()));
 }
+
+#[gpui::test]
+fn actions_reach_the_only_panel_when_no_window_is_active(cx: &mut TestAppContext) {
+    // The app in the background, driven by a script: no window is active,
+    // and the one panel there is still gets the window-wide actions.
+    let (f, cx) = open(sample(), cx);
+    f.select(0, 4, 9, cx);
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| cx.active_window().is_none()));
+
+    cx.simulate_keystrokes("cmd-alt-m");
+    f.panel
+        .read_with(cx, |panel, _| assert!(panel.is_composing()));
+    cx.simulate_input("From the background");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.comment_count(cx), 1);
+    cx.simulate_keystrokes("cmd-alt-c");
+    f.panel
+        .read_with(cx, |panel, _| assert!(!panel.is_visible()));
+}
+
+#[gpui::test]
+fn a_container_that_is_always_shown_says_why_it_is_empty(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    f.workspace.update(cx, |workspace, cx| {
+        workspace.keep_slot = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let slot = cx.debug_bounds("panel-slot").expect("the slot is shown");
+    let note = cx
+        .debug_bounds("comments-none")
+        .expect("the empty state is painted");
+    assert_eq!(note, slot);
+    f.panel.read_with(cx, |panel, _| {
+        assert!(panel.is_visible());
+        assert!(!panel.is_open());
+    });
+
+    // With a comment the list takes its place.
+    let id = f.comment(0, 4, 9, "First", cx);
+    assert!(cx.debug_bounds("comment-threads").is_some());
+    assert_eq!(f.active(cx), Some(id));
+}

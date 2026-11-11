@@ -485,6 +485,11 @@ impl EditorState {
         total.finish()
     }
 
+    /// The selected text, blocks joined by `\n` (empty for a caret).
+    pub fn selected_text(&self) -> String {
+        self.doc.text_in(self.selection.range())
+    }
+
     /// Statistics for the selected text.
     pub fn selection_stats(&self) -> Stats {
         self.doc.stats_in(self.selection.range())

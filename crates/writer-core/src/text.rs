@@ -141,25 +141,42 @@ pub fn word_ranges(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
 /// macOS option-left inside one text: the start of the word that begins
 /// before `offset` (skipping any whitespace and punctuation first).
 /// Returns `None` when no word starts before `offset`.
+///
+/// Only the hard lines from the one containing `offset` back to the one
+/// holding the result are segmented (a `\n` always separates words), so in
+/// a long code block the cost does not depend on the block's length.
 pub fn word_start_before(text: &str, offset: usize) -> Option<usize> {
     let o = floor_char_boundary(text, offset);
-    let mut best = None;
-    for r in word_ranges(text) {
-        if r.start < o {
-            best = Some(r.start);
-        } else {
-            break;
+    let mut line_e = line_end(text, o);
+    loop {
+        let ls = line_start(text, line_e);
+        let best = word_ranges(&text[ls..line_e])
+            .map(|r| ls + r.start)
+            .take_while(|s| *s < o)
+            .last();
+        if best.is_some() || ls == 0 {
+            return best;
         }
+        line_e = ls - 1;
     }
-    best
 }
 
 /// macOS option-right inside one text: the end of the word that ends after
 /// `offset` (skipping any whitespace and punctuation first).
 /// Returns `None` when no word ends after `offset`.
+///
+/// Segments one hard line at a time, like [`word_start_before`].
 pub fn word_end_after(text: &str, offset: usize) -> Option<usize> {
     let o = floor_char_boundary(text, offset);
-    word_ranges(text).find(|r| r.end > o).map(|r| r.end)
+    let mut ls = line_start(text, o);
+    loop {
+        let le = line_end(text, ls);
+        let found = word_ranges(&text[ls..le]).map(|r| ls + r.end).find(|e| *e > o);
+        if found.is_some() || le >= text.len() {
+            return found;
+        }
+        ls = le + 1;
+    }
 }
 
 /// The word-segmentation segment containing the character at `offset`

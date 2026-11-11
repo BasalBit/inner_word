@@ -228,6 +228,19 @@ impl EditorState {
         })
     }
 
+    /// Sets the checked flag of the to-do item at block `index` without
+    /// moving the selection (a click on its checkbox). Returns false when
+    /// that block is not a to-do item or already has that state. Undoable.
+    pub fn set_todo_checked(&mut self, index: usize, checked: bool) -> bool {
+        match self.doc.blocks.get(index).map(|b| &b.kind) {
+            Some(BlockKind::TodoItem { checked: c }) if *c != checked => {}
+            _ => return false,
+        }
+        self.edit(EditKind::Other, |ed| {
+            ed.update_block(index, |b| b.set_kind(BlockKind::TodoItem { checked }));
+        })
+    }
+
     /// Sets the alignment of the touched blocks.
     pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
         let targets = self.touched_text_blocks();

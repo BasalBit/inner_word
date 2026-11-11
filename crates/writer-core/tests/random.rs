@@ -549,6 +549,48 @@ impl Runner {
                 self.e.insert_text(t);
                 "pending then type".into()
             }
+            104..=105 => {
+                // A checkbox click on any block, in or out of range.
+                let i = r.below(e.document().block_count() + 2);
+                let sel = e.selection();
+                e.set_todo_checked(i, r.chance(50));
+                assert_eq!(e.selection(), sel, "checkbox click moved the selection");
+                "todo click".into()
+            }
+            106..=109 => {
+                // Whole-line selections (offset 0 to offset 0 of a later
+                // block), then delete, cut and paste back, or type over.
+                let n = e.document().block_count();
+                let a = r.below(n);
+                let b = (a + 1 + r.below(3)).min(n - 1);
+                let sel = if r.chance(50) {
+                    Selection::new(Position::new(a, 0), Position::new(b, 0))
+                } else {
+                    Selection::new(Position::new(b, 0), Position::new(a, 0))
+                };
+                e.set_selection(sel);
+                match r.below(4) {
+                    0 => {
+                        e.delete_selection();
+                    }
+                    1 => {
+                        let f = e.cut();
+                        let at = random_position(r, e.document());
+                        e.set_caret(at);
+                        e.paste(&f);
+                    }
+                    2 => {
+                        e.insert_text("x");
+                    }
+                    _ => {
+                        let _ = e.selected_text();
+                        let r0 = e.document().block_range(a);
+                        assert_eq!(r0.start, Position::new(a, 0));
+                        e.backspace();
+                    }
+                }
+                return ("whole lines".into(), Undoable::Compound);
+            }
             _ => {
                 self.queries();
                 "queries".into()

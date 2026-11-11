@@ -144,7 +144,9 @@ impl PageSetup {
         };
         let shrink = |a: &mut f32, b: &mut f32, total: f32| {
             let room = (total - POINTS_PER_INCH).max(0.0);
-            if *a + *b > room {
+            // The slack keeps this a fixed point: scaled margins can exceed
+            // `room` by a rounding error and must not be scaled again.
+            if *a + *b > room + room * 1e-5 + 1e-4 {
                 let scale = if *a + *b > 0.0 { room / (*a + *b) } else { 0.0 };
                 *a *= scale;
                 *b *= scale;

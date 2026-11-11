@@ -243,6 +243,13 @@ impl Document {
         out
     }
 
+    /// The whole text of block `index` (clamped) as a range: from its
+    /// offset 0 to its end.
+    pub fn block_range(&self, index: usize) -> TextRange {
+        let i = index.min(self.blocks.len() - 1);
+        TextRange::in_block(i, 0, self.blocks[i].len())
+    }
+
     /// The part of `range` (clamped) inside block `index`, as a byte range
     /// of that block: `None` when the block lies outside the range. Blocks
     /// strictly inside get their whole text (`0..0` for a void block, which

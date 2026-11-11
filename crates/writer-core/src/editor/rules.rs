@@ -9,9 +9,12 @@
 //! `#`–`######` + space (heading), `-`/`*`/`+` + space (bullet), digits +
 //! `.`/`)` + space (numbered), `[]`/`[ ]` + space (to-do), `[x]` + space
 //! (checked to-do), `>` + space (quote), three backticks (code block), three
-//! hyphens in an otherwise empty paragraph (divider).
+//! hyphens in an otherwise empty paragraph (divider). The to-do prefixes
+//! also work at the start of a bullet item, so `- [ ] ` typed as in Markdown
+//! ends up as a to-do.
 //!
 //! Inline rules (when a closing delimiter is typed): `**bold**`, `*italic*`,
+//! `***bold italic***`,
 //! `_italic_`, `` `code` ``, `~~strike~~`, `==highlight==`. The content must
 //! not start or end with whitespace, the opening delimiter must not follow a
 //! letter, digit or the same delimiter character, and for `*` and `_` the
@@ -19,8 +22,9 @@
 //! `2 * 3 * 4`, `snake_case_name`, `__init__` and a lone `word*` stay as typed.
 //!
 //! Smart punctuation: straight quotes become curly (opening after
-//! whitespace, an opening bracket or a dash, or at the start; otherwise
-//! closing / apostrophe), `--` becomes an em dash (at the very start of a
+//! whitespace, an opening bracket, a dash or the other kind of opening
+//! quote, or at the start; otherwise closing / apostrophe, so `""` is an
+//! empty pair), `--` becomes an em dash (at the very start of a
 //! block only once the next character is typed, so `---` can still make a
 //! divider), `...` becomes an ellipsis.
 
@@ -70,22 +74,28 @@ fn find_opener(t: &str, ls: usize, close: usize, d: &str, ch: char) -> Option<us
 #[derive(Clone, Copy)]
 enum Effect {
     Style(InlineStyle),
+    BoldItalic,
     Highlight,
 }
 
 impl Effect {
-    fn apply(self, a: &mut InlineAttrs) {
+    fn set(self, a: &mut InlineAttrs, on: bool) {
         match self {
-            Effect::Style(s) => a.set_style(s, true),
-            Effect::Highlight => a.highlight = Some(Highlight::Yellow),
+            Effect::Style(s) => a.set_style(s, on),
+            Effect::BoldItalic => {
+                a.bold = on;
+                a.italic = on;
+            }
+            Effect::Highlight => a.highlight = on.then_some(Highlight::Yellow),
         }
     }
 
+    fn apply(self, a: &mut InlineAttrs) {
+        self.set(a, true);
+    }
+
     fn unapply(self, a: &mut InlineAttrs) {
-        match self {
-            Effect::Style(s) => a.set_style(s, false),
-            Effect::Highlight => a.highlight = None,
-        }
+        self.set(a, false);
     }
 }
 
@@ -124,10 +134,27 @@ impl EditorState {
 
     fn try_block_rule(&mut self, pos: Position, ch: char) -> bool {
         let b = &self.doc.blocks[pos.block];
+        let prefix = &b.text[..pos.offset];
+        if b.kind == BlockKind::BulletItem && ch == ' ' {
+            // "- [ ] " as Markdown writes a task: the bullet becomes a to-do.
+            let checked = match prefix {
+                "[] " | "[ ] " => false,
+                "[x] " | "[X] " => true,
+                _ => return false,
+            };
+            let i = pos.block;
+            let cut = pos.offset;
+            return self.edit(EditKind::Other, |ed| {
+                ed.update_block(i, |b| {
+                    b.remove(0..cut);
+                    b.set_kind(BlockKind::TodoItem { checked });
+                });
+                ed.caret_to(Position::new(i, 0));
+            });
+        }
         if b.kind != BlockKind::Paragraph {
             return false;
         }
-        let prefix = &b.text[..pos.offset];
         let kind = match ch {
             ' ' => {
                 let p = &prefix[..prefix.len() - 1];
@@ -176,6 +203,7 @@ impl EditorState {
     fn try_inline_rule(&mut self, pos: Position, ch: char) -> bool {
         let delims: &[(&str, Effect)] = match ch {
             '*' => &[
+                ("***", Effect::BoldItalic),
                 ("**", Effect::Style(InlineStyle::Bold)),
                 ("*", Effect::Style(InlineStyle::Italic)),
             ],
@@ -235,8 +263,15 @@ impl EditorState {
         let mut reps: Vec<(std::ops::Range<usize>, &str)> = Vec::new();
         match ch {
             '"' | '\'' => {
-                let opening = char_before(t, start)
-                    .is_none_or(|c| c.is_whitespace() || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c));
+                // Opening after nothing, whitespace, an opening bracket, a
+                // dash or the *other* kind of opening quote (nested quotes).
+                // Right after an opening quote of its own kind it closes, so
+                // typing `""` gives an empty pair of curly quotes.
+                let own_open = if ch == '"' { '\u{201C}' } else { '\u{2018}' };
+                let opening = char_before(t, start).is_none_or(|c| {
+                    c != own_open
+                        && (c.is_whitespace() || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c))
+                });
                 let rep = match (ch, opening) {
                     ('"', true) => "\u{201C}",
                     ('"', false) => "\u{201D}",

@@ -542,11 +542,28 @@ fn delete_selection_across_blocks() {
     e.undo();
     assert_eq!(texts(&e), ["Head", "middle", "quote"]);
     assert_eq!(e.selection(), Selection::new(p(2, 2), p(0, 2)));
-    // Ending at offset 0 of a block merges with it.
+    // Whole blocks (offset 0 to offset 0 of a later text block): exactly
+    // those blocks go, the block the range ends at is untouched.
     let mut e = ed(blocks());
+    let (id2, rev2) = {
+        let b = &e.document().blocks()[2];
+        (b.id(), b.revision())
+    };
     e.set_selection(Selection::new(p(0, 0), p(2, 0)));
     e.delete_selection();
     assert_eq!(texts(&e), ["quote"]);
+    assert_eq!(kinds(&e), vec![BlockKind::Quote]);
+    assert_eq!(e.document().blocks()[0].id(), id2);
+    assert_eq!(e.document().blocks()[0].revision(), rev2);
+    assert_eq!(caret(&e), p(0, 0));
+    e.undo();
+    assert_eq!(texts(&e), ["Head", "middle", "quote"]);
+    assert_eq!(e.selection(), Selection::new(p(0, 0), p(2, 0)));
+    // Starting inside the first block still merges into it.
+    let mut e = ed(blocks());
+    e.set_selection(Selection::new(p(0, 1), p(2, 0)));
+    e.delete_selection();
+    assert_eq!(texts(&e), ["Hquote"]);
     assert_eq!(kinds(&e), vec![BlockKind::heading(1)]);
     // Void blocks at either end of the range are part of it.
     let mut e = ed(vec![Block::new(BlockKind::Divider), para("ab"), Block::new(BlockKind::PageBreak)]);

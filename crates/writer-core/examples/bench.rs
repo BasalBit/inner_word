@@ -168,10 +168,62 @@ fn run(blocks: usize) {
     println!("select all + type over            {:?}", t);
     let (_, t) = time(|| e.undo());
     println!("undo that                         {:?}", t);
+
+    // Large pastes in the middle of the document.
+    let lines = blocks.min(10_000);
+    let plain: String = (0..lines).map(|i| format!("pasted line number {i}\n")).collect();
+    e.set_caret(Position::new(mid, 3));
+    let (_, t) = time(|| e.paste_plain_text(&plain));
+    println!("paste_plain_text {lines} lines mid-document {:?}", t);
+    let (_, t) = time(|| e.undo());
+    println!("undo that                         {:?}", t);
+    let frag = e.document().block_fragment(0..lines);
+    e.set_caret(Position::new(mid, 3));
+    let (_, t) = time(|| e.paste(&frag));
+    println!("paste fragment of {lines} blocks mid-document {:?}", t);
+    let (_, t) = time(|| e.undo());
+    println!("undo that                         {:?}", t);
+    e.select_all();
+    let (_, t) = time(|| e.set_block_kind(BlockKind::Quote));
+    println!("select all + set kind             {:?}", t);
+    e.undo();
+    e.select_all();
+    let (f, t) = time(|| e.copy());
+    println!("copy everything ({} blocks)       {:?}", f.blocks().len(), t);
+}
+
+/// One block holding a megabyte: typing clones the block, so this is the
+/// worst case for per-keystroke cost.
+fn huge_block() {
+    let text = "all work and no play makes jack a dull boy ".repeat(24_000);
+    let mut e = EditorState::new(Document::from_blocks(vec![Block::paragraph(&text)]));
+    println!("\n== one block of {:.2} MB", text.len() as f64 / 1e6);
+    e.set_caret(Position::new(0, text.len() / 2));
+    let (_, t) = time(|| {
+        for c in ["a", "b", " ", "c", "\"", "d", "*", "e", ".", "f"].iter().cycle().take(200) {
+            e.insert_text(c);
+        }
+    });
+    println!("type 200 chars                    {}", per(t, 200));
+    let (_, t) = time(|| {
+        for i in 0..200 {
+            e.move_caret(if i % 2 == 0 { Movement::WordLeft } else { Movement::Right }, false);
+        }
+    });
+    println!("200 caret movements               {}", per(t, 200));
+    let (_, t) = time(|| {
+        for _ in 0..50 {
+            e.backspace();
+        }
+    });
+    println!("50 backspaces                     {}", per(t, 50));
+    let (_, t) = time(|| while e.undo() {});
+    println!("undo everything                   {:?}", t);
 }
 
 fn main() {
     for n in [1_000, 10_000, 100_000] {
         run(n);
     }
+    huge_block();
 }

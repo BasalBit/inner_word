@@ -48,6 +48,52 @@ pub(crate) fn continuation_kind(kind: &BlockKind, at_end: bool) -> BlockKind {
     }
 }
 
+/// Splits the non-void block `b` at `offset` the way Enter does and returns
+/// the two blocks; the caret belongs at the start of the second.
+///
+/// - At offset 0 of a block with text, the first is a new empty block (a
+///   paragraph before a heading, else the continuation kind) and the second
+///   is `b` itself, unchanged.
+/// - At the end, the first is `b` unchanged and the second a new empty block
+///   of the continuation kind.
+/// - Otherwise `b` keeps the head and the second block holds the tail.
+///
+/// New blocks have no id; they copy alignment and indent, and the text size
+/// override when the kind stays the same.
+fn split_pieces(mut b: Block, offset: usize) -> (Block, Block) {
+    let empty_like = |b: &Block, kind: BlockKind| {
+        let mut nb = Block::new(kind);
+        nb.alignment = b.alignment;
+        nb.indent = b.indent;
+        if nb.kind.same_type(&b.kind) {
+            nb.text_size = b.text_size;
+        }
+        nb
+    };
+    if offset == 0 && !b.is_empty() {
+        let kind = match &b.kind {
+            BlockKind::Heading { .. } => BlockKind::Paragraph,
+            k => continuation_kind(k, false),
+        };
+        let nb = empty_like(&b, kind);
+        return (nb, b);
+    }
+    let at_end = offset >= b.len();
+    let kind = continuation_kind(&b.kind, at_end);
+    if at_end {
+        let nb = empty_like(&b, kind);
+        return (b, nb);
+    }
+    let mut second = b.split_off(offset);
+    if second.kind != kind {
+        if !second.kind.same_type(&kind) {
+            second.text_size = None;
+        }
+        second.set_kind(kind);
+    }
+    (b, second)
+}
+
 impl EditorState {
     // ----- insertion ------------------------------------------------------------------
 
@@ -108,14 +154,28 @@ impl EditorState {
         if is_code || !split || !text.contains('\n') {
             pos = self.insert_in_block(pos, text, &attrs);
         } else {
+            // Build every resulting block first and store them with a single
+            // splice, so pasting many lines into a long document does not
+            // shift the block list once per line.
+            let mut cur = self.doc.blocks[pos.block].clone();
+            let mut off = pos.offset;
+            let mut out: Vec<Block> = Vec::new();
             for (i, line) in text.split('\n').enumerate() {
                 if i > 0 {
-                    pos = self.split_block(pos);
+                    let (first, second) = split_pieces(cur, off);
+                    out.push(first);
+                    cur = second;
+                    off = 0;
                 }
                 if !line.is_empty() {
-                    pos = self.insert_in_block(pos, line, &attrs);
+                    cur.insert(off, line, &attrs);
+                    off += line.len();
                 }
             }
+            out.push(cur);
+            let last = pos.block + out.len() - 1;
+            self.splice(pos.block, 1, out);
+            pos = Position::new(last, off);
         }
         let b = &self.doc.blocks[pos.block];
         let o = text::ceil_grapheme_boundary(&b.text, pos.offset);
@@ -265,39 +325,16 @@ impl EditorState {
         if b.is_void() {
             return self.leave_void(pos);
         }
-        if pos.offset == 0 && !b.is_empty() {
-            let kind = match &b.kind {
-                BlockKind::Heading { .. } => BlockKind::Paragraph,
-                k => continuation_kind(k, false),
-            };
-            let mut nb = Block::new(kind);
-            nb.alignment = b.alignment;
-            nb.indent = b.indent;
-            if nb.kind.same_type(&b.kind) {
-                nb.text_size = b.text_size;
-            }
-            self.splice(pos.block, 0, vec![nb]);
-            return Position::new(pos.block + 1, 0);
-        }
+        let at_start = pos.offset == 0 && !b.is_empty();
         let at_end = pos.offset >= b.len();
-        let kind = continuation_kind(&b.kind, at_end);
-        if at_end {
-            let mut nb = Block::new(kind);
-            nb.alignment = b.alignment;
-            nb.indent = b.indent;
-            if nb.kind.same_type(&b.kind) {
-                nb.text_size = b.text_size;
-            }
-            self.splice(pos.block + 1, 0, vec![nb]);
+        let (first, second) = split_pieces(b.clone(), pos.offset);
+        if at_start {
+            // Only the new empty block is stored: the block with the text
+            // keeps its id and its revision stamp.
+            self.splice(pos.block, 0, vec![first]);
+        } else if at_end {
+            self.splice(pos.block + 1, 0, vec![second]);
         } else {
-            let mut first = b.clone();
-            let mut second = first.split_off(pos.offset);
-            if second.kind != kind {
-                if !second.kind.same_type(&kind) {
-                    second.text_size = None;
-                }
-                second.set_kind(kind);
-            }
             self.splice(pos.block, 1, vec![first, second]);
         }
         Position::new(pos.block + 1, 0)
@@ -308,8 +345,12 @@ impl EditorState {
     /// Deletes the selection. Returns false when it is collapsed.
     ///
     /// Across blocks the head of the first block and the tail of the last
-    /// merge into the first block, which keeps its id and kind. A void block
-    /// at either end of the selection is deleted with it (a void block's one
+    /// merge into the first block, which keeps its id and kind. One case is
+    /// different: a selection of whole blocks, from offset 0 of one block to
+    /// offset 0 of a later text block (what shift-down or a linewise Vim
+    /// motion selects), removes exactly those blocks; the block the
+    /// selection ends at keeps its id, kind and content. A void block at
+    /// either end of the selection is deleted with it (a void block's one
     /// position means "before it" at the start of a range and "after it" at
     /// the end), so select-all deletes a trailing divider too.
     pub fn delete_selection(&mut self) -> bool {
@@ -338,11 +379,13 @@ impl EditorState {
     /// Deletes `s..e` (valid, ordered) and returns where the caret goes.
     ///
     /// Across blocks: the head of the first block and the tail of the last
-    /// block merge into the first block (keeping its id and kind). A void
-    /// block at either end of a range is part of it and is removed (its one
-    /// position stands for "before it" as a start and "after it" as an end),
-    /// so a selection made with shift-arrows onto a divider, or select-all
-    /// in a document ending with one, deletes it.
+    /// block merge into the first block (keeping its id and kind). A range
+    /// of whole blocks (from offset 0 to offset 0 of a later text block)
+    /// removes exactly those blocks and leaves the last one untouched. A
+    /// void block at either end of a range is part of it and is removed
+    /// (its one position stands for "before it" as a start and "after it"
+    /// as an end), so a selection made with shift-arrows onto a divider, or
+    /// select-all in a document ending with one, deletes it.
     pub(crate) fn delete_range_impl(&mut self, s: Position, e: Position) -> Position {
         if s.block == e.block {
             if s.offset < e.offset {
@@ -366,7 +409,10 @@ impl EditorState {
                 Position::new(i, self.doc.blocks[i].len())
             };
         }
-        if first_void {
+        if first_void || (s.offset == 0 && e.offset == 0 && !last_void) {
+            // The range starts on a void block, or covers whole blocks only
+            // (it ends at the very start of a text block): the blocks before
+            // the last one go, and the last block keeps its id and kind.
             if e.offset > 0 {
                 self.update_block(e.block, |b| b.remove(0..e.offset));
             }
@@ -424,8 +470,10 @@ impl EditorState {
     /// previous grapheme. On a void block, removes the block. At the start of
     /// a block: an indented list item or paragraph outdents; a list item,
     /// heading or quote becomes a paragraph; a code block becomes paragraphs
-    /// (one per line); a paragraph merges into the previous block, or removes
-    /// it if that is a void block.
+    /// (one per line); a paragraph merges into the previous block (which
+    /// keeps its id and kind), or removes it if that is a void block or an
+    /// empty block above a paragraph with text (so deleting the empty line
+    /// under a heading's empty sibling never restyles the text).
     pub fn backspace(&mut self) -> bool {
         if !self.selection.is_collapsed() {
             return self.delete_selection();
@@ -470,7 +518,10 @@ impl EditorState {
                 if i == 0 {
                     return;
                 }
-                if self.doc.blocks[i - 1].is_void() {
+                let prev = &self.doc.blocks[i - 1];
+                if prev.is_void() || (prev.is_empty() && !b.is_empty()) {
+                    // A void block, or an empty block above text, is simply
+                    // removed: the block with the text keeps its id and kind.
                     self.splice(i - 1, 1, Vec::new());
                     self.caret_to(Position::new(i - 1, 0));
                 } else {
@@ -484,8 +535,10 @@ impl EditorState {
 
     /// Forward delete. With a selection, deletes it. Inside text, deletes the
     /// next grapheme. On a void block, removes the block. At the end of a
-    /// block, merges the next block into this one (or removes it if it is a
-    /// void block).
+    /// block, merges the next block into this one, which keeps its id and
+    /// kind (or removes the next block if it is a void block). In an empty
+    /// block above a block with text, removes the empty block instead, so
+    /// the text below keeps its kind (a heading stays a heading).
     pub fn delete_forward(&mut self) -> bool {
         if !self.selection.is_collapsed() {
             return self.delete_selection();
@@ -508,8 +561,13 @@ impl EditorState {
             return false;
         }
         self.edit(EditKind::Other, |ed| {
-            if ed.doc.blocks[pos.block + 1].is_void() {
+            let next = &ed.doc.blocks[pos.block + 1];
+            if next.is_void() {
                 ed.splice(pos.block + 1, 1, Vec::new());
+            } else if pos.offset == 0 && !next.is_empty() {
+                // An empty block above text is simply removed: the block
+                // with the text keeps its id and kind.
+                ed.splice(pos.block, 1, Vec::new());
             } else {
                 ed.merge_with_next(pos.block);
             }

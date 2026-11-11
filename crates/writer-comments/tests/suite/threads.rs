@@ -455,7 +455,6 @@ fn clicking_a_thread_makes_it_active(cx: &mut TestAppContext) {
     let panel_bounds = cx
         .debug_bounds("comments-panel")
         .expect("panel is rendered");
-    assert_eq!(panel_bounds.size.width, writer_comments::PANEL_WIDTH);
     let card = cx
         .debug_bounds(Box::leak(
             format!("comment-thread-{}", first.0).into_boxed_str(),

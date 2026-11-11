@@ -1,11 +1,14 @@
 //! Shared fixture: a window with an editor and the comments panel side by
-//! side, mounted the way the crate docs tell the app to.
+//! side, mounted the way the crate docs tell the app to: the panel in a
+//! container of a fixed width that is shown while the panel is open. No
+//! comment action has a listener here; they reach the panel through the
+//! global listeners that `writer_comments::init` installs.
 
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext, Window, div,
-    prelude::*,
+    Context, Entity, IntoElement, Pixels, Render, TestAppContext, VisualTestContext, Window, div,
+    prelude::*, px,
 };
 use writer_comments::{CommentsEvent, CommentsPanel};
 use writer_core::{Block, CommentId, Document, Position, Selection, TextRange};
@@ -15,21 +18,34 @@ use writer_ui::theme::{self, ThemeMode};
 /// The fixed "now" of the test clock (14 November 2023, in milliseconds).
 pub const NOW: i64 = 1_700_000_000_000;
 pub const AUTHOR: &str = "Ada";
+/// Width of the container the workspace gives the panel.
+pub const SLOT_WIDTH: Pixels = px(320.);
 
 pub struct Workspace {
     pub editor: Entity<Editor>,
     pub panel: Entity<CommentsPanel>,
     pub events: Vec<CommentsEvent>,
+    /// Whether the panel's container is shown (follows `OpenChanged`).
+    pub panel_open: bool,
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        writer_comments::workspace_actions(
-            div().key_context("Workspace").flex().size_full(),
-            &self.panel,
-        )
-        .child(div().flex_1().min_w_0().h_full().child(self.editor.clone()))
-        .child(self.panel.clone())
+        div()
+            .key_context("Workspace")
+            .flex()
+            .size_full()
+            .child(div().flex_1().min_w_0().h_full().child(self.editor.clone()))
+            .when(self.panel_open, |root| {
+                root.child(
+                    div()
+                        .debug_selector(|| "panel-slot".into())
+                        .w(SLOT_WIDTH)
+                        .h_full()
+                        .flex_none()
+                        .child(self.panel.clone()),
+                )
+            })
     }
 }
 
@@ -76,11 +92,22 @@ pub fn sample() -> Document {
 /// panel beside it.
 pub fn open(document: Document, cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
     setup(cx);
+    open_window(document, EditorConfig::full(), cx)
+}
+
+/// [`open`] without the one-time setup and with a choice of editor
+/// configuration (a second window, an editor that starts with comments
+/// hidden).
+pub fn open_window(
+    document: Document,
+    config: EditorConfig,
+    cx: &mut TestAppContext,
+) -> (Fixture, &mut VisualTestContext) {
     let clock = Rc::new(Cell::new(NOW));
     let (workspace, cx) = cx.add_window_view({
         let clock = clock.clone();
         move |window, cx| {
-            let editor = cx.new(|cx| Editor::new(document, EditorConfig::full(), window, cx));
+            let editor = cx.new(|cx| Editor::new(document, config, window, cx));
             let panel = cx.new(|cx| {
                 let mut panel = CommentsPanel::new(editor.clone(), AUTHOR, window, cx);
                 panel.set_clock(move || clock.get(), cx);
@@ -88,13 +115,19 @@ pub fn open(document: Document, cx: &mut TestAppContext) -> (Fixture, &mut Visua
             });
             cx.subscribe(
                 &panel,
-                |this: &mut Workspace, _, event: &CommentsEvent, _| {
+                |this: &mut Workspace, _, event: &CommentsEvent, cx| {
+                    if let CommentsEvent::OpenChanged(open) = event {
+                        this.panel_open = *open;
+                        cx.notify();
+                    }
                     this.events.push(event.clone());
                 },
             )
             .detach();
             editor.read(cx).focus(window);
             Workspace {
+                // A document that already has comments.
+                panel_open: panel.read(cx).is_open(),
                 editor,
                 panel,
                 events: Vec::new(),
@@ -215,6 +248,28 @@ impl Fixture {
     pub fn events(&self, cx: &mut VisualTestContext) -> Vec<CommentsEvent> {
         self.workspace
             .read_with(cx, |workspace, _| workspace.events.clone())
+    }
+
+    /// The values of every `VisibilityChanged` so far.
+    pub fn visibility_events(&self, cx: &mut VisualTestContext) -> Vec<bool> {
+        self.events(cx)
+            .into_iter()
+            .filter_map(|event| match event {
+                CommentsEvent::VisibilityChanged(visible) => Some(visible),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The values of every `OpenChanged` so far.
+    pub fn open_events(&self, cx: &mut VisualTestContext) -> Vec<bool> {
+        self.events(cx)
+            .into_iter()
+            .filter_map(|event| match event {
+                CommentsEvent::OpenChanged(open) => Some(open),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The text in the composer.

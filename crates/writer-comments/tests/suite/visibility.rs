@@ -2,11 +2,11 @@
 //! document.
 
 use gpui::{AppContext, TestAppContext};
-use writer_comments::{CommentsEvent, PANEL_WIDTH};
+use writer_comments::CommentsEvent;
 use writer_core::{Block, Document, EditorState, TextRange};
 use writer_editor::{Editor, EditorConfig};
 
-use super::support::{Focus, NOW, open, sample};
+use super::support::{Focus, NOW, open, open_window, sample, setup};
 
 /// A document that already has one comment thread, on "other".
 fn other_document() -> Document {
@@ -30,10 +30,8 @@ fn toggle_hides_the_panel_and_the_tints(cx: &mut TestAppContext) {
         assert!(panel.is_visible());
         assert!(panel.is_open());
     });
-    let shown = cx
-        .debug_bounds("comments-panel")
-        .expect("panel is rendered");
-    assert_eq!(shown.size.width, PANEL_WIDTH);
+    assert!(cx.debug_bounds("comments-panel").is_some());
+    assert_eq!(f.open_events(cx), vec![true]);
 
     cx.simulate_keystrokes("cmd-alt-c");
     f.panel.read_with(cx, |panel, _| {
@@ -45,10 +43,8 @@ fn toggle_hides_the_panel_and_the_tints(cx: &mut TestAppContext) {
     f.editor
         .read_with(cx, |editor, _| assert!(!editor.config().comments_visible));
     assert_eq!(f.active(cx), None);
-    assert_eq!(
-        f.events(cx).last(),
-        Some(&CommentsEvent::VisibilityChanged(false))
-    );
+    assert_eq!(f.visibility_events(cx), vec![false]);
+    assert_eq!(f.open_events(cx), vec![true, false]);
     // Hidden comments mark nothing when the caret moves through them.
     f.caret(0, 6, cx);
     assert_eq!(f.active(cx), None);
@@ -60,10 +56,8 @@ fn toggle_hides_the_panel_and_the_tints(cx: &mut TestAppContext) {
     });
     f.editor
         .read_with(cx, |editor, _| assert!(editor.config().comments_visible));
-    assert_eq!(
-        f.events(cx).last(),
-        Some(&CommentsEvent::VisibilityChanged(true))
-    );
+    assert_eq!(f.visibility_events(cx), vec![false, true]);
+    assert_eq!(f.open_events(cx), vec![true, false, true]);
     assert_eq!(f.focus(cx), Focus::Editor);
     f.caret(0, 5, cx);
     assert_eq!(f.active(cx), Some(id));
@@ -250,4 +244,114 @@ fn relative_times_follow_the_clock(cx: &mut TestAppContext) {
         assert!(panel.is_open());
         assert_eq!(panel.threads().len(), 1);
     });
+}
+
+#[gpui::test]
+fn the_editor_flag_and_the_panel_stay_in_step(cx: &mut TestAppContext) {
+    // An editor that starts with comments hidden (the app restored its
+    // setting before the panel existed).
+    setup(cx);
+    let (f, cx) = open_window(
+        other_document(),
+        EditorConfig::full().comments_visible(false),
+        cx,
+    );
+    f.panel.read_with(cx, |panel, _| {
+        assert!(!panel.is_visible());
+        assert!(!panel.is_open());
+        assert_eq!(panel.threads().len(), 1);
+    });
+    f.editor
+        .read_with(cx, |editor, _| assert!(!editor.config().comments_visible));
+    assert!(f.events(cx).is_empty());
+
+    // The app's own settings code flips the editor flag: the panel follows
+    // and reports it.
+    f.editor
+        .update(cx, |editor, cx| editor.set_comments_visible(true, cx));
+    cx.run_until_parked();
+    f.panel.read_with(cx, |panel, _| {
+        assert!(panel.is_visible());
+        assert!(panel.is_open());
+    });
+    assert_eq!(f.visibility_events(cx), vec![true]);
+    assert_eq!(f.open_events(cx), vec![true]);
+    assert!(cx.debug_bounds("comments-panel").is_some());
+
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::List);
+    f.editor
+        .update(cx, |editor, cx| editor.set_comments_visible(false, cx));
+    cx.run_until_parked();
+    f.panel
+        .read_with(cx, |panel, _| assert!(!panel.is_visible()));
+    assert_eq!(f.focus(cx), Focus::Editor);
+    assert_eq!(f.visibility_events(cx), vec![true, false]);
+    assert_eq!(f.open_events(cx), vec![true, false]);
+}
+
+#[gpui::test]
+fn open_follows_the_threads(cx: &mut TestAppContext) {
+    let (f, cx) = open(sample(), cx);
+    assert!(f.open_events(cx).is_empty());
+
+    // A composer opens the panel, cancelling closes it again.
+    f.select(0, 4, 9, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    assert_eq!(f.open_events(cx), vec![true]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(f.open_events(cx), vec![true, false]);
+
+    // A saved comment keeps it open; undo closes it, redo opens it.
+    cx.simulate_keystrokes("cmd-alt-m");
+    cx.simulate_input("Stay");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(f.open_events(cx), vec![true, false, true]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(f.open_events(cx), vec![true, false, true, false]);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(f.open_events(cx), vec![true, false, true, false, true]);
+    assert_eq!(f.visibility_events(cx), Vec::<bool>::new());
+}
+
+#[gpui::test]
+fn each_window_has_its_own_panel(cx: &mut TestAppContext) {
+    setup(cx);
+    let (first, first_cx) = open_window(sample(), EditorConfig::full(), cx);
+    let first_window = first_cx.update(|window, _| window.window_handle());
+    let (second, cx) = open_window(other_document(), EditorConfig::full(), cx);
+
+    // The second window is the active one: its panel gets the action.
+    second.select(0, 0, 4, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    second
+        .panel
+        .read_with(cx, |panel, _| assert!(panel.is_composing()));
+    first
+        .panel
+        .read_with(cx, |panel, _| assert!(!panel.is_composing()));
+    cx.simulate_input("In the second window");
+    cx.simulate_keystrokes("enter");
+    second.editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().comment_count(), 2);
+    });
+    first.editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().comment_count(), 0);
+    });
+
+    // Back in the first window.
+    cx.update_window(first_window, |_, window, _| window.activate_window())
+        .unwrap();
+    cx.run_until_parked();
+    first.editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.select_range(TextRange::in_block(0, 4, 9)), cx);
+    });
+    TestAppContext::dispatch_action(cx, first_window, writer_comments::AddComment);
+    cx.run_until_parked();
+    first
+        .panel
+        .read_with(cx, |panel, _| assert!(panel.is_composing()));
+    second
+        .panel
+        .read_with(cx, |panel, _| assert!(!panel.is_composing()));
 }

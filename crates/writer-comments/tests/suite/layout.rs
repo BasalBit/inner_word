@@ -2,10 +2,9 @@
 //! 0.6 × font size wide, so the numbers are deterministic, not real).
 
 use gpui::{Bounds, Pixels, TestAppContext, VisualTestContext};
-use writer_comments::PANEL_WIDTH;
 use writer_core::{Block, CommentId, Document, TextRange};
 
-use super::support::{AUTHOR, Fixture, Focus, NOW, open, sample};
+use super::support::{AUTHOR, Fixture, Focus, NOW, SLOT_WIDTH, open, sample};
 
 fn bounds(selector: String, cx: &mut VisualTestContext) -> Bounds<Pixels> {
     // `debug_bounds` wants a `&'static str`; a test may leak a few names.
@@ -34,7 +33,9 @@ fn the_panel_sits_right_of_the_editor(cx: &mut TestAppContext) {
     f.select(0, 4, 9, cx);
     cx.simulate_keystrokes("cmd-alt-m");
     let panel = bounds("comments-panel".into(), cx);
-    assert_eq!(panel.size.width, PANEL_WIDTH);
+    // The panel fills the container the workspace gives it.
+    assert_eq!(panel, bounds("panel-slot".into(), cx));
+    assert_eq!(panel.size.width, SLOT_WIDTH);
     assert_eq!(panel.right(), viewport.width);
     assert_eq!(panel.top(), gpui::px(0.));
     assert_eq!(panel.size.height, viewport.height);

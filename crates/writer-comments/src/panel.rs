@@ -10,8 +10,8 @@
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, ScrollHandle,
-    SharedString, Subscription, Task, Window, px,
+    AnyWindowHandle, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    Global, ScrollHandle, SharedString, Subscription, Task, WeakEntity, Window, px,
 };
 use writer_core::{CommentId, Document, EditorState, ReplyId, TextRange, Timestamp};
 use writer_editor::{
@@ -29,9 +29,6 @@ mod compose;
 mod navigation;
 mod resolve;
 
-/// Default width of the panel.
-pub const PANEL_WIDTH: Pixels = px(300.);
-
 /// The editor highlight layer that marks the text a new comment will be
 /// anchored to while its composer is open.
 pub const DRAFT_HIGHLIGHT_LAYER: &str = "comment-draft";
@@ -43,10 +40,14 @@ const TIME_REFRESH: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum CommentsEvent {
-    /// Comments were shown or hidden (the panel and the tints in the text).
-    /// The app saves this flag and passes it back with
-    /// [`CommentsPanel::set_visible`] on the next launch.
+    /// Comments were shown or hidden (the panel and the tints in the text),
+    /// by the panel or by a change of `EditorConfig::comments_visible`. The
+    /// app saves this flag.
     VisibilityChanged(bool),
+    /// [`CommentsPanel::is_open`] changed: the panel now has something to
+    /// show, or nothing any more. The app shows and hides the panel's
+    /// container on it.
+    OpenChanged(bool),
     /// Resolved threads were shown or hidden in the panel.
     ShowResolvedChanged(bool),
     /// Another thread became the active one, or none is active any more.
@@ -143,8 +144,10 @@ pub struct CommentsPanel {
     pub(crate) editor: Entity<Editor>,
     author: SharedString,
     visible: bool,
+    /// [`CommentsPanel::is_open`] as last reported with
+    /// [`CommentsEvent::OpenChanged`].
+    reported_open: bool,
     pub(crate) show_resolved: bool,
-    pub(crate) width: Pixels,
     /// Every thread of the document: anchored ones in document order, then
     /// detached ones.
     pub(crate) threads: Vec<ThreadEntry>,
@@ -158,7 +161,7 @@ pub struct CommentsPanel {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) scroll: ScrollHandle,
     clock: Rc<dyn Fn() -> Timestamp>,
-    _editor_subscription: Subscription,
+    _editor_subscriptions: [Subscription; 2],
     _subscriptions: Vec<Subscription>,
     _refresh_times: Task<()>,
 }
@@ -184,8 +187,12 @@ impl Focusable for CommentsPanel {
 
 impl CommentsPanel {
     /// A panel for the document in `editor`. New comments and replies are
-    /// signed with `author`. Comments start visible; restore a saved choice
-    /// with [`CommentsPanel::set_visible`].
+    /// signed with `author`. Whether comments start visible is read from
+    /// the editor (`EditorConfig::comments_visible`).
+    ///
+    /// The panel registers itself as the comments panel of `window`: the
+    /// comment actions that work from anywhere in a window reach the panel
+    /// that was created last for it.
     pub fn new(
         editor: Entity<Editor>,
         author: impl Into<SharedString>,
@@ -202,7 +209,7 @@ impl CommentsPanel {
             )
         });
         let panel = cx.weak_entity();
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             // `enter` in the composer (submit-on-enter).
             cx.subscribe_in(
                 &composer,
@@ -256,13 +263,16 @@ impl CommentsPanel {
             }
         });
 
+        subscriptions.push(cx.observe_self(Self::report_open));
+        register_panel(window.window_handle(), cx.weak_entity(), cx);
+
         let mut this = Self {
-            _editor_subscription: Self::subscribe_to_editor(&editor, window, cx),
+            _editor_subscriptions: Self::subscribe_to_editor(&editor, window, cx),
+            visible: editor.read(cx).config().comments_visible,
+            reported_open: false,
             editor,
             author: author.into(),
-            visible: true,
             show_resolved: false,
-            width: PANEL_WIDTH,
             threads: Vec::new(),
             active: None,
             selected_reply: None,
@@ -283,8 +293,26 @@ impl CommentsPanel {
         editor: &Entity<Editor>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Subscription {
-        cx.subscribe_in(editor, window, Self::on_editor_event)
+    ) -> [Subscription; 2] {
+        [
+            cx.subscribe_in(editor, window, Self::on_editor_event),
+            // `EditorConfig::comments_visible` is the flag the app's own
+            // settings code may flip; the panel goes along with it.
+            cx.observe_in(editor, window, |this, editor, window, cx| {
+                let visible = editor.read(cx).config().comments_visible;
+                this.set_visible(visible, window, cx);
+            }),
+        ]
+    }
+
+    /// Emits [`CommentsEvent::OpenChanged`] when [`CommentsPanel::is_open`]
+    /// differs from what was last reported. Runs after every notify.
+    fn report_open(&mut self, cx: &mut Context<Self>) {
+        let open = self.is_open();
+        if open != self.reported_open {
+            self.reported_open = open;
+            cx.emit(CommentsEvent::OpenChanged(open));
+        }
     }
 
     /// Brings a (new) editor in line with the panel and reads its threads.
@@ -323,7 +351,7 @@ impl CommentsPanel {
         let had_focus = self.has_focus(window, cx);
         self.reset_for_new_document(cx);
         self.editor = editor;
-        self._editor_subscription = Self::subscribe_to_editor(&self.editor, window, cx);
+        self._editor_subscriptions = Self::subscribe_to_editor(&self.editor, window, cx);
         self.attach_editor(cx);
         if had_focus {
             self.editor.read(cx).focus(window);
@@ -340,19 +368,6 @@ impl CommentsPanel {
     /// Existing comments keep the name they were written under.
     pub fn set_author(&mut self, author: impl Into<SharedString>) {
         self.author = author.into();
-    }
-
-    /// The panel's width when it is open.
-    pub fn width(&self) -> Pixels {
-        self.width
-    }
-
-    /// Sets the panel's width.
-    pub fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        if self.width != width {
-            self.width = width;
-            cx.notify();
-        }
     }
 
     /// Replaces the clock that stamps new comments and that relative times
@@ -380,9 +395,11 @@ impl CommentsPanel {
         self.visible
     }
 
-    /// Whether the panel takes up space right now: comments are visible and
-    /// there is something to show (at least one thread, or an open
-    /// composer). A document without comments has no panel beside it.
+    /// Whether the panel has something to show: comments are visible and
+    /// the document has at least one thread, or a composer is open. The app
+    /// shows the panel's container only while this is true, so that a
+    /// document without comments has no panel beside it; see
+    /// [`CommentsEvent::OpenChanged`].
     pub fn is_open(&self) -> bool {
         self.visible && (!self.threads.is_empty() || self.draft.is_some())
     }
@@ -800,4 +817,45 @@ impl CommentsPanel {
         }
         self.editor.read(cx).focus(window);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The panel of a window
+// ---------------------------------------------------------------------------
+
+/// Which panel serves which window, newest last. The actions that work
+/// from anywhere in a window are handled by global listeners (see
+/// [`crate::init`]); they look the panel up here.
+#[derive(Default)]
+struct WindowPanels(Vec<(AnyWindowHandle, WeakEntity<CommentsPanel>)>);
+
+impl Global for WindowPanels {}
+
+fn register_panel(window: AnyWindowHandle, panel: WeakEntity<CommentsPanel>, cx: &mut App) {
+    let panels = &mut cx.default_global::<WindowPanels>().0;
+    panels.retain(|(_, panel)| panel.upgrade().is_some());
+    panels.push((window, panel));
+}
+
+/// The panel that window-wide comment actions go to: the one of the active
+/// window, or, when no window is active (the app is in the background),
+/// the only one there is.
+pub(crate) fn panel_for_actions(cx: &App) -> Option<(AnyWindowHandle, Entity<CommentsPanel>)> {
+    let panels = cx.try_global::<WindowPanels>()?;
+    let live = || {
+        panels
+            .0
+            .iter()
+            .rev()
+            .filter_map(|(window, panel)| Some((*window, panel.upgrade()?)))
+    };
+    if let Some(active) = cx.active_window()
+        && let Some(found) = live().find(|(window, _)| *window == active)
+    {
+        return Some(found);
+    }
+    let (window, panel) = live().next()?;
+    live()
+        .all(|(other, _)| other == window)
+        .then_some((window, panel))
 }

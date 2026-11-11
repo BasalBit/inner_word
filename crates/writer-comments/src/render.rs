@@ -34,7 +34,7 @@ use crate::{
         SelectPreviousReply, SelectPreviousThread, SubmitComment, THREADS_CONTEXT, ToggleComments,
         ToggleResolved, ToggleShowResolved,
     },
-    panel::{CommentsPanel, DeleteTarget, DraftKind},
+    panel::{CommentsPanel, DeleteTarget, DraftKind, panel_for_actions},
     threads::ThreadEntry,
     time::relative_time,
 };
@@ -59,10 +59,9 @@ macro_rules! forward {
 
 /// The actions that work from anywhere in the window: starting a comment,
 /// comment navigation, visibility, and the commands on the active thread.
-pub(crate) fn window_actions<E: InteractiveElement>(
-    element: E,
-    panel: &WeakEntity<CommentsPanel>,
-) -> E {
+/// With focus inside the panel these listeners handle them; from anywhere
+/// else the global listeners in `global_actions` do.
+fn window_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<CommentsPanel>) -> E {
     forward!(element, panel,
         AddComment => add_comment,
         NextComment => next_comment,
@@ -96,14 +95,59 @@ fn panel_actions<E: InteractiveElement>(element: E, panel: &WeakEntity<CommentsP
     )
 }
 
+/// Registers the global listeners for the window-wide comment actions:
+/// whatever has focus in a window, an action that no element handled
+/// reaches that window's panel. The panel is updated after the current
+/// dispatch has finished, because the window is busy until then.
+pub(crate) fn global_actions(cx: &mut App) {
+    macro_rules! global {
+        ($($action:ty => $method:ident),+ $(,)?) => {
+            $(
+                cx.on_action(|_: &$action, cx: &mut App| {
+                    let Some((window, panel)) = panel_for_actions(cx) else {
+                        return;
+                    };
+                    cx.defer(move |cx| {
+                        window
+                            .update(cx, |_, window, cx| {
+                                panel.update(cx, |panel, cx| panel.$method(window, cx));
+                            })
+                            .ok();
+                    });
+                });
+            )+
+        };
+    }
+    global!(
+        AddComment => add_comment,
+        NextComment => next_comment,
+        PreviousComment => previous_comment,
+        ToggleComments => toggle_visible,
+        FocusComments => focus_panel,
+        ToggleShowResolved => toggle_show_resolved,
+        ReplyToThread => reply,
+        EditComment => edit,
+        ToggleResolved => toggle_resolved,
+        DeleteComment => request_delete,
+    );
+}
+
 impl Render for CommentsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.is_open() {
-            // Hidden, or nothing to show: the panel takes no space.
+        if !self.is_visible() {
+            // Comments are hidden: nothing to draw.
             return div().into_any_element();
         }
         let colors = cx.theme().colors;
         let ui_font = cx.theme().fonts.ui.clone();
+        if !self.is_open() {
+            // The app normally hides the panel's container in this state
+            // (see `CommentsEvent::OpenChanged`); if it does not, say what
+            // the empty column is for.
+            return self
+                .render_no_comments(&colors, ui_font, cx)
+                .into_any_element();
+        }
         let panel = cx.weak_entity();
         let list_focused = self.focus_handle.is_focused(window);
         let composer_focused = self.composer.read(cx).is_focused(window);
@@ -127,20 +171,30 @@ impl Render for CommentsPanel {
             .iter()
             .filter(|entry| !entry.is_resolved())
             .count();
-        let nothing_listed = rows.is_empty();
+        if rows.is_empty() && self.draft.is_none() {
+            // Every thread is resolved and hidden. The list still holds the
+            // focus; the footer below leads back to the resolved threads.
+            rows.push(
+                div()
+                    .debug_selector(|| "comments-empty".into())
+                    .flex_none()
+                    .px(SPACE_1)
+                    .py(SPACE_1)
+                    .text_color(colors.muted)
+                    .child("No open comments.")
+                    .into_any_element(),
+            );
+        }
 
         let root = div()
             .id("comments-panel")
             .debug_selector(|| "comments-panel".into())
             .key_context(PANEL_CONTEXT)
-            .h_full()
-            .w(self.width)
-            .flex_none()
+            // The container gives the width and the border beside the text.
+            .size_full()
             .flex()
             .flex_col()
             .bg(colors.sidebar)
-            .border_l_1()
-            .border_color(colors.hairline)
             .font_family(ui_font)
             .text_size(UI_TEXT_BASE)
             .line_height(UI_LINE_HEIGHT)
@@ -185,16 +239,6 @@ impl Render for CommentsPanel {
                 .track_scroll(&self.scroll)
                 .children(rows),
         )
-        .when(nothing_listed && self.draft.is_none(), |root| {
-            root.child(
-                div()
-                    .flex_none()
-                    .px(SPACE_3)
-                    .pb(SPACE_3)
-                    .text_color(colors.muted)
-                    .child("No open comments."),
-            )
-        })
         .when_some(self.render_footer(&colors, cx), |root, footer| {
             root.child(footer)
         })
@@ -220,6 +264,29 @@ impl CommentsPanel {
             context.add("composing");
         }
         context
+    }
+
+    /// What the panel shows in a document without comments.
+    fn render_no_comments(&self, colors: &ThemeColors, ui_font: SharedString, cx: &App) -> Div {
+        div()
+            .debug_selector(|| "comments-none".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(SPACE_2)
+            .p(SPACE_3)
+            .bg(colors.sidebar)
+            .font_family(ui_font)
+            .text_size(UI_TEXT_BASE)
+            .line_height(UI_LINE_HEIGHT)
+            .text_color(colors.muted)
+            .child(SectionLabel::new("Comments"))
+            .child("No comments in this document.")
+            .child(hint_row(colors).child(hint(
+                "Add one on the selected text",
+                KeyHint::for_action(&AddComment, cx),
+                colors,
+            )))
     }
 
     fn render_detached_heading(&self, colors: &ThemeColors) -> Div {

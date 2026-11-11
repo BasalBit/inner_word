@@ -17,37 +17,57 @@
 //! // Once at startup, after writer_ui::init and writer_editor::init.
 //! writer_comments::init(cx);
 //!
-//! // Per window, next to the editor.
+//! // Per window, for the editor of that window.
 //! let comments = cx.new(|cx| CommentsPanel::new(editor.clone(), author_name, window, cx));
-//! comments.update(cx, |comments, cx| comments.set_visible(saved_flag, window, cx));
-//! cx.subscribe(&comments, |this: &mut Workspace, _, event: &CommentsEvent, cx| match event {
-//!     CommentsEvent::VisibilityChanged(visible) => this.save_setting("comments.visible", visible, cx),
-//!     CommentsEvent::ShowResolvedChanged(show) => this.save_setting("comments.show_resolved", show, cx),
-//!     _ => {}
-//! }).detach();
-//!
-//! // In the workspace's render. The panel sizes itself: it is
-//! // `CommentsPanel::width` wide while it has something to show and takes
-//! // no space otherwise, so it is always a child.
-//! writer_comments::workspace_actions(div().key_context("Workspace").flex().size_full(), &comments)
-//!     .child(library_sidebar)
-//!     .child(div().flex_1().min_w_0().child(editor.clone()))
-//!     .child(comments.clone())
-//!
-//! // Another document in the same editor entity (Editor::set_document):
-//! // nothing to do, the panel follows `EditorEvent::DocumentReplaced`.
-//! // Another editor entity:
-//! comments.update(cx, |comments, cx| comments.set_editor(new_editor, window, cx));
+//! cx.subscribe(&comments, |workspace: &mut Workspace, comments, event: &CommentsEvent, cx| {
+//!     match event {
+//!         // Show the panel's container only while there is something in it.
+//!         CommentsEvent::OpenChanged(open) => {
+//!             workspace.set_right_panel(open.then(|| comments.clone().into()), cx)
+//!         }
+//!         // The flag the app persists.
+//!         CommentsEvent::VisibilityChanged(visible) => workspace.save_comments_visible(*visible, cx),
+//!         CommentsEvent::ShowResolvedChanged(show) => workspace.save_show_resolved(*show, cx),
+//!         _ => {}
+//!     }
+//! })
+//! .detach();
+//! // The document that was open before the subscription existed:
+//! if comments.read(cx).is_open() {
+//!     workspace.set_right_panel(Some(comments.clone().into()), cx);
+//! }
 //!
 //! // Palette and shortcuts overlay.
 //! let commands = writer_comments::commands();
 //! ```
 //!
-//! [`workspace_actions`] is what makes `cmd-alt-m`, `cmd-alt-]`,
-//! `cmd-alt-[`, `cmd-alt-c` and `cmd-2` work while focus is in the editor
-//! (or anywhere else under that element): it attaches the listeners for the
-//! window-wide actions to an ancestor of both the editor and the panel.
-//! Inside the panel, the panel handles its actions itself.
+//! - **Layout.** The panel fills its container (`size_full`) and draws no
+//!   outer border. The container gives it a width (about 300 to 320 px)
+//!   and the hairline beside the text, and is shown only while
+//!   [`CommentsPanel::is_open`]: comments are visible and there is a thread
+//!   or an open composer. A document without comments has no panel beside
+//!   it. (If the container is shown anyway, the panel says "No comments in
+//!   this document" there.)
+//! - **Actions.** [`init`] installs global listeners for the actions that
+//!   work from anywhere in a window. Whatever has focus (the editor, the
+//!   library, nothing), an action that no element handled reaches the
+//!   panel that was created for the active window. No listener is needed
+//!   on an ancestor of the editor.
+//! - **Visibility.** `EditorConfig::comments_visible` of the editor and
+//!   [`CommentsPanel::is_visible`] are one flag. The panel starts with the
+//!   editor's value, writes it when it shows or hides comments
+//!   ([`ToggleComments`], [`AddComment`] while hidden), and follows it when
+//!   someone else changes the editor's configuration. Either way it emits
+//!   [`CommentsEvent::VisibilityChanged`]; the app saves the flag on that
+//!   event and restores it through the editor configuration or
+//!   [`CommentsPanel::set_visible`].
+//! - **Another document.** With one editor entity per window and
+//!   `Editor::set_document`, there is nothing to do: the panel follows
+//!   `EditorEvent::DocumentReplaced`. For another editor entity, call
+//!   [`CommentsPanel::set_editor`].
+//! - **Author and time.** The author name is the constructor argument
+//!   ([`CommentsPanel::set_author`] changes it). Timestamps are read from
+//!   the system clock ([`time::now`]).
 //!
 //! # Keys
 //!
@@ -99,32 +119,22 @@ pub use actions::{
     SelectNextThread, SelectPreviousReply, SelectPreviousThread, SubmitComment, THREADS_CONTEXT,
     ToggleComments, ToggleResolved, ToggleShowResolved, commands, key_bindings,
 };
-pub use panel::{
-    CommentsEvent, CommentsPanel, DRAFT_HIGHLIGHT_LAYER, DeleteTarget, DraftKind, PANEL_WIDTH,
-};
+pub use panel::{CommentsEvent, CommentsPanel, DRAFT_HIGHLIGHT_LAYER, DeleteTarget, DraftKind};
 pub use threads::ThreadEntry;
 
-use gpui::{App, Entity, InteractiveElement};
+use gpui::App;
 
-/// Installs the comment key bindings. Call once at startup, after
-/// `writer_ui::init` and `writer_editor::init`.
+/// Installs the comment key bindings and the global listeners for the
+/// actions that work from anywhere in a window ([`AddComment`],
+/// [`NextComment`], [`PreviousComment`], [`ToggleComments`],
+/// [`FocusComments`], [`ToggleShowResolved`], and the commands on the active
+/// thread: [`ReplyToThread`], [`EditComment`], [`ToggleResolved`],
+/// [`DeleteComment`]). They reach the [`CommentsPanel`] of the active window
+/// whenever no element on the focus path handled them, so the panel needs
+/// no listener on any ancestor of the editor.
+///
+/// Call once at startup, after `writer_ui::init` and `writer_editor::init`.
 pub fn init(cx: &mut App) {
     cx.bind_keys(actions::key_bindings());
-}
-
-/// Attaches the listeners for the comment actions that work from anywhere
-/// in the window to `element`, which must be an ancestor of the editor (the
-/// workspace root is the natural place): [`AddComment`], [`NextComment`],
-/// [`PreviousComment`], [`ToggleComments`], [`FocusComments`],
-/// [`ToggleShowResolved`], and the commands on the active thread
-/// ([`ReplyToThread`], [`EditComment`], [`ToggleResolved`],
-/// [`DeleteComment`]) so that the command palette can run them.
-///
-/// ```ignore
-/// writer_comments::workspace_actions(div().key_context("Workspace").size_full(), &self.comments)
-///     .child(self.editor.clone())
-///     .child(self.comments.clone())
-/// ```
-pub fn workspace_actions<E: InteractiveElement>(element: E, panel: &Entity<CommentsPanel>) -> E {
-    render::window_actions(element, &panel.downgrade())
+    render::global_actions(cx);
 }

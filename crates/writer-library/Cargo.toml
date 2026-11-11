@@ -14,3 +14,14 @@ writer-ui.workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+anyhow.workspace = true
+# The library_demo example captures its own window for visual QA (same approach as
+# writer-app's screenshot module): the NSWindow number behind a GPUI window.
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc = "0.2"
+
+[[example]]
+name = "library_demo"
+path = "examples/library_demo/main.rs"

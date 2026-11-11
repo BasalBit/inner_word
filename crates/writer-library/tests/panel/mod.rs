@@ -247,6 +247,15 @@ fn navigation_expand_collapse_and_open(cx: &mut TestAppContext) {
     assert_eq!(f.selected(cx), Some(Folder(f.folder)));
     cx.simulate_keystrokes("cmd-down");
     assert_eq!(f.selected(cx), Some(Document(f.at_root)));
+    // Vim's g g and G, and a page at a time (the whole list fits on one page here).
+    cx.simulate_keystrokes("g g");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("shift-g");
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
+    cx.simulate_keystrokes("pageup");
+    assert_eq!(f.selected(cx), Some(Folder(f.folder)));
+    cx.simulate_keystrokes("pagedown");
+    assert_eq!(f.selected(cx), Some(Document(f.at_root)));
 
     // Collapsing a folder never hides the selection: it moves to the folder.
     f.panel
@@ -1353,6 +1362,19 @@ fn a_large_library_stays_fast(cx: &mut TestAppContext) {
         "navigation took {navigation:?}"
     );
 
+    // A page is a screenful: far more than one row, far less than the list.
+    cx.simulate_keystrokes("home pagedown");
+    let page = f.panel.read_with(cx, |p, _| {
+        let selected = p.selected().unwrap();
+        p.visible_items()
+            .iter()
+            .position(|item| *item == selected)
+            .unwrap()
+    });
+    assert!((10..200).contains(&page), "a page moved {page} rows");
+    cx.simulate_keystrokes("pagedown pageup pageup");
+    assert_eq!(f.selected(cx), f.visible(cx).first().copied());
+
     // Filtering runs over every name on each keystroke.
     let started = Instant::now();
     cx.simulate_keystrokes("/");
@@ -1473,4 +1495,75 @@ fn commands_reach_the_panel_from_the_editor(cx: &mut TestAppContext) {
     assert!(!panel.read_with(cx, |p, _| p.is_showing_trash()));
     cx.simulate_input("chap");
     assert_eq!(panel.read_with(cx, |p, _| p.filter().to_string()), "chap");
+}
+
+/// A window root that owns the modal layer, as the app does.
+struct SharedModalShell {
+    panel: Entity<LibraryPanel>,
+    modal_layer: Entity<writer_ui::ModalLayer>,
+}
+
+impl Render for SharedModalShell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .size_full()
+            .child(self.panel.clone())
+            .child(self.modal_layer.clone())
+    }
+}
+
+#[gpui::test]
+fn the_panel_can_use_the_window_modal_layer(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        writer_ui::theme::init(writer_ui::ThemeMode::Light, cx);
+        writer_ui::init(cx);
+        writer_library::init(cx);
+    });
+    let (library, _) = library_from(Library::in_memory().unwrap(), cx);
+    let (folder, document) = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Book", cx).unwrap().id;
+        let document = l
+            .create_document(None, &content("Chapter", "x"), cx)
+            .unwrap()
+            .id;
+        (folder, document)
+    });
+    let (shell, cx) = cx.add_window_view({
+        let library = library.clone();
+        move |window, cx| {
+            let modal_layer = cx.new(|_| writer_ui::ModalLayer::new());
+            let panel = cx.new(|cx| {
+                let mut panel = LibraryPanel::new(library, cx);
+                panel.set_modal_layer(modal_layer.clone(), cx);
+                panel
+            });
+            window.focus(&panel.focus_handle(cx));
+            SharedModalShell { panel, modal_layer }
+        }
+    });
+    let panel = shell.read_with(cx, |shell, _| shell.panel.clone());
+    let modal_layer = shell.read_with(cx, |shell, _| shell.modal_layer.clone());
+    cx.run_until_parked();
+
+    // The move picker opens in the window's layer and moves the document.
+    panel.update(cx, |p, cx| p.select(Some(Document(document)), cx));
+    cx.simulate_keystrokes("m");
+    assert!(modal_layer.read_with(cx, |layer, _| layer.has_modal()));
+    cx.simulate_input("book");
+    cx.simulate_keystrokes("enter");
+    assert!(!modal_layer.read_with(cx, |layer, _| layer.has_modal()));
+    assert_eq!(
+        library.read_with(cx, |l, _| l.document_meta(document).unwrap().folder_id),
+        Some(folder)
+    );
+    assert!(cx.update(|window, cx| panel.focus_handle(cx).is_focused(window)));
+
+    // So do the confirmations.
+    cx.simulate_keystrokes("cmd-backspace t cmd-backspace");
+    assert!(modal_layer.read_with(cx, |layer, _| layer.is_open::<ConfirmDialog>()));
+    cx.simulate_keystrokes("enter");
+    assert!(!modal_layer.read_with(cx, |layer, _| layer.has_modal()));
+    assert!(library.read_with(cx, |l, _| l.trash().unwrap().is_empty()));
+    assert!(library.read_with(cx, |l, _| l.document_meta(document).is_err()));
 }

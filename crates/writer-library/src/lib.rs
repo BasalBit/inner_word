@@ -47,9 +47,25 @@
 //!
 //! # LibraryPanel
 //!
-//! [`LibraryPanel`] is the sidebar view over a `Entity<Library>`. It emits
-//! [`LibraryPanelEvent`]s (open this document, dismissed) and exposes the selection so the
-//! app knows where `cmd-n` should create ([`LibraryPanel::selected_folder`]).
+//! [`LibraryPanel`] is the sidebar view over an `Entity<Library>`: the tree of folders and
+//! documents, a name filter and the trash, all driven from the keyboard (the keys are listed
+//! in its docs). It emits [`LibraryPanelEvent`]s (open this document, dismissed) and exposes
+//! the selection so the app knows where `cmd-n` should create
+//! ([`LibraryPanel::selected_folder`]).
+//!
+//! ```ignore
+//! writer_library::init(cx);                                  // the panel's key bindings
+//! let panel = cx.new(|cx| LibraryPanel::new(library.clone(), cx));
+//! panel.update(cx, |panel, cx| {
+//!     panel.set_modal_layer(modal_layer.clone(), cx);        // the window's own modal layer
+//!     panel.set_new_document_content(empty_document_json);   // what `n` puts in a new document
+//! });
+//! // Toasts ("Moved “Chapter 3” to the trash. Press ⌘Z to undo.") go through
+//! // writer_ui::toast::show_toast, so install a global ToastLayer.
+//! // In the window root's render, so the panel's commands also work from the editor:
+//! writer_library::forward_actions(div().size_full(), &panel)
+//! // The palette lists writer_library::commands().
+//! ```
 
 #![warn(missing_docs)]
 
@@ -62,8 +78,9 @@ pub use panel::{
     FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem, LibraryPanel,
     LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash, MoveUp, NewDocument, NewFolder,
     OpenSelected, ROW_DETAIL_SETTING, ROW_HEIGHT, Rename, RestoreSelected, RowDetail,
-    SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPrevious, ShowTrash,
-    TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, commands, forward_actions, key_bindings,
+    SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp,
+    SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, commands,
+    forward_actions, key_bindings,
 };
 
 /// The whole storage crate, for anything not re-exported above.

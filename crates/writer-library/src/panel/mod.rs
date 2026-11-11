@@ -1,55 +1,9 @@
 //! [`LibraryPanel`]: the library sidebar, where the user organises their writing into
 //! folders. Everything in it works from the keyboard.
 //!
-//! # What it shows
-//!
-//! - A filter field (`/`), which narrows the tree by name as you type.
-//! - The tree: nested folders first, then documents, in the user's own order. Folders
-//!   expand and collapse. The document open in the editor is marked. Each document row has
-//!   a muted detail: how long ago it was edited, or its word count
-//!   ([`RowDetail`], switched with `i`).
-//! - A "Trash" row at the bottom. It opens the trash view: the trashed items with the place
-//!   they came from, where they can be restored or deleted for good.
-//!
-//! # Keys
-//!
-//! All bindings live in the [`KEY_CONTEXT`] key context ([`key_bindings`]); the plain-letter
-//! ones are switched off while a text field in the panel has focus.
-//!
-//! | Keys | Tree | Trash view |
-//! |---|---|---|
-//! | `up` / `down`, `k` / `j`, `ctrl-p` / `ctrl-n` | move the selection | same |
-//! | `home` / `end`, `cmd-up` / `cmd-down` | first / last row | same |
-//! | `left` / `h` | collapse the folder, or go to the parent | back to the tree |
-//! | `right` / `l` | expand the folder, or go to its first child | |
-//! | `enter` | open the document (focus goes to the editor), or toggle the folder | restore |
-//! | `n` / `shift-n` | new document / new folder in the selected folder, then rename it | |
-//! | `r` / `f2` | rename in place (`enter` commits, `escape` cancels) | `r` restores |
-//! | `cmd-d` | duplicate the document | |
-//! | `m` | move to another folder (a picker, with "Library root") | |
-//! | `alt-up` / `alt-down` | reorder among siblings | |
-//! | `cmd-backspace` | move to the trash (a toast offers undo) | delete forever (asks first) |
-//! | `cmd-z` | undo the last move to the trash | same |
-//! | `/` / `cmd-f` | focus the filter (`escape` clears it, `tab` keeps it and returns to the tree) | |
-//! | `t` | show the trash | |
-//! | `cmd-shift-backspace` | empty the trash (asks first) | same |
-//! | `i` | switch the row detail between edit time and word count | |
-//! | `escape` | clear the filter, else leave the panel ([`LibraryPanelEvent::Dismissed`]) | back to the tree |
-//!
-//! # Mounting
-//!
-//! ```ignore
-//! writer_library::init(cx);                               // key bindings, after the app's own
-//! let panel = cx.new(|cx| LibraryPanel::new(library.clone(), cx));
-//! panel.update(cx, |panel, _| {
-//!     panel.set_modal_layer(modal_layer.clone());         // share the window's modal layer
-//!     panel.set_new_document_content(empty_document_json); // what `n` creates
-//! });
-//! // Toasts go through writer_ui::toast::show_toast: install a global ToastLayer.
-//! // In the window root, so palette commands reach the panel from anywhere:
-//! writer_library::forward_actions(div().size_full(), &panel)
-//! ```
+//! The keys and the mounting recipe are in the docs of [`LibraryPanel`].
 
+mod handlers;
 mod move_picker;
 mod render;
 mod rows;
@@ -87,6 +41,10 @@ actions!(
         SelectFirst,
         /// Select the last visible row.
         SelectLast,
+        /// Move the selection up by about a screenful of rows.
+        SelectPageUp,
+        /// Move the selection down by about a screenful of rows.
+        SelectPageDown,
         /// Expand the selected folder, or step into it when it is already expanded.
         Expand,
         /// Collapse the selected folder, or step out to the parent folder.
@@ -177,10 +135,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-p", SelectPrevious, panel),
         KeyBinding::new("k", SelectPrevious, list),
         KeyBinding::new("up", SelectPrevious, panel),
+        KeyBinding::new("g g", SelectFirst, list),
         KeyBinding::new("cmd-up", SelectFirst, panel),
         KeyBinding::new("home", SelectFirst, panel),
+        KeyBinding::new("shift-g", SelectLast, list),
         KeyBinding::new("cmd-down", SelectLast, panel),
         KeyBinding::new("end", SelectLast, panel),
+        KeyBinding::new("pageup", SelectPageUp, panel),
+        KeyBinding::new("pagedown", SelectPageDown, panel),
         KeyBinding::new("l", Expand, list),
         KeyBinding::new("right", Expand, panel),
         KeyBinding::new("h", Collapse, list),
@@ -353,10 +315,61 @@ enum View {
 }
 
 /// The library sidebar: the tree of folders and documents, the name filter and the trash.
-/// See the [module docs](self) for the keys and for how to mount it.
+/// Everything in it works from the keyboard.
+///
+/// # What it shows
+///
+/// - A filter field (`/`), which narrows the tree by name as you type.
+/// - The tree: nested folders first, then documents, in the user's own order. Folders
+///   expand and collapse. The document open in the editor is marked. Each document row has
+///   a muted detail: how long ago it was edited, or its word count
+///   ([`RowDetail`], switched with `i`).
+/// - A "Trash" row at the bottom. It opens the trash view: the trashed items with the place
+///   they came from, where they can be restored or deleted for good.
+///
+/// # Keys
+///
+/// All bindings live in the [`KEY_CONTEXT`] key context ([`key_bindings`]); the plain-letter
+/// ones are switched off while a text field in the panel has focus.
+///
+/// | Keys | Tree | Trash view |
+/// |---|---|---|
+/// | `up` / `down`, `k` / `j`, `ctrl-p` / `ctrl-n` | move the selection | same |
+/// | `home` / `end`, `cmd-up` / `cmd-down`, `g g` / `shift-g` | first / last row | same |
+/// | `pageup` / `pagedown` | move by a screenful | same |
+/// | `left` / `h` | collapse the folder, or go to the parent | back to the tree |
+/// | `right` / `l` | expand the folder, or go to its first child | |
+/// | `enter` | open the document (focus goes to the editor), or toggle the folder | restore |
+/// | `n` / `shift-n` | new document / new folder in the selected folder, then rename it | |
+/// | `r` / `f2` | rename in place (`enter` commits, `escape` cancels) | `r` restores |
+/// | `cmd-d` | duplicate the document | |
+/// | `m` | move to another folder (a picker, with "Library root") | |
+/// | `alt-up` / `alt-down` | reorder among siblings | |
+/// | `cmd-backspace` | move to the trash (a toast offers undo) | delete forever (asks first) |
+/// | `cmd-z` | undo the last move to the trash | same |
+/// | `/` / `cmd-f` | focus the filter (`escape` clears it, `tab` keeps it and returns to the tree) | |
+/// | `t` | show the trash | |
+/// | `cmd-shift-backspace` | empty the trash (asks first) | same |
+/// | `i` | switch the row detail between edit time and word count | |
+/// | `escape` | clear the filter, else leave the panel ([`LibraryPanelEvent::Dismissed`]) | back to the tree |
+///
+/// # Mounting
 ///
 /// ```ignore
+/// writer_library::init(cx);                               // key bindings, after the app's own
 /// let panel = cx.new(|cx| LibraryPanel::new(library.clone(), cx));
+/// panel.update(cx, |panel, _| {
+///     panel.set_modal_layer(modal_layer.clone());         // share the window's modal layer
+///     panel.set_new_document_content(empty_document_json); // what `n` creates
+/// });
+/// // Toasts go through writer_ui::toast::show_toast: install a global ToastLayer.
+/// // In the window root, so palette commands reach the panel from anywhere:
+/// writer_library::forward_actions(div().size_full(), &panel)
+/// ```
+///
+/// # Wiring to the app
+///
+/// ```ignore
 /// cx.subscribe_in(&panel, window, |this: &mut Workspace, _panel, event, window, cx| match event {
 ///     LibraryPanelEvent::OpenDocument { id, focus_editor } => this.open(*id, *focus_editor, window, cx),
 ///     LibraryPanelEvent::Dismissed => this.focus_editor(window, cx),
@@ -1634,313 +1647,6 @@ impl LibraryPanel {
                 self.set_selected(item, cx);
                 self.scroll_to_selected(ScrollStrategy::Center);
             }
-        }
-    }
-
-    // ----- action handlers ------------------------------------------------------------
-
-    fn on_select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
-        match self.view {
-            View::Trash => {
-                let next = self.selected_trash_index().map_or(0, |ix| ix + 1);
-                self.select_trash_index(next, ScrollStrategy::Bottom, cx);
-            }
-            View::Tree if self.on_trash_row => {}
-            View::Tree => match self.selected_index() {
-                Some(ix) if ix + 1 < self.rows.len() => {
-                    self.select_index(ix + 1, ScrollStrategy::Bottom, cx)
-                }
-                // Past the last row comes the trash row, unless the user is typing a filter.
-                Some(_) => {
-                    if self.focus_handle.is_focused(window) {
-                        self.select_trash_row(cx);
-                    }
-                }
-                None if self.rows.is_empty() => {
-                    if self.focus_handle.is_focused(window) {
-                        self.select_trash_row(cx);
-                    }
-                }
-                None => self.select_index(0, ScrollStrategy::Top, cx),
-            },
-        }
-    }
-
-    fn on_select_previous(
-        &mut self,
-        _: &SelectPrevious,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match self.view {
-            View::Trash => {
-                let previous = match self.selected_trash_index() {
-                    Some(ix) => ix.saturating_sub(1),
-                    None => self.trash_rows.len().saturating_sub(1),
-                };
-                self.select_trash_index(previous, ScrollStrategy::Top, cx);
-            }
-            View::Tree => {
-                let previous = match self.selected_index() {
-                    Some(ix) => ix.saturating_sub(1),
-                    None => self.rows.len().saturating_sub(1),
-                };
-                self.select_index(previous, ScrollStrategy::Top, cx);
-            }
-        }
-    }
-
-    fn on_select_first(&mut self, _: &SelectFirst, _window: &mut Window, cx: &mut Context<Self>) {
-        match self.view {
-            View::Trash => self.select_trash_index(0, ScrollStrategy::Top, cx),
-            View::Tree => self.select_index(0, ScrollStrategy::Top, cx),
-        }
-    }
-
-    fn on_select_last(&mut self, _: &SelectLast, _window: &mut Window, cx: &mut Context<Self>) {
-        match self.view {
-            View::Trash => self.select_trash_index(
-                self.trash_rows.len().saturating_sub(1),
-                ScrollStrategy::Bottom,
-                cx,
-            ),
-            View::Tree => self.select_index(
-                self.rows.len().saturating_sub(1),
-                ScrollStrategy::Bottom,
-                cx,
-            ),
-        }
-    }
-
-    fn on_expand(&mut self, _: &Expand, window: &mut Window, cx: &mut Context<Self>) {
-        if self.view != View::Tree {
-            return;
-        }
-        if self.on_trash_row {
-            self.show_trash(window, cx);
-            return;
-        }
-        let Some(ix) = self.selected_index() else {
-            return;
-        };
-        if let LibraryItem::Folder(id) = self.rows[ix].item {
-            if !self.rows[ix].expanded {
-                self.set_expanded(id, true, cx);
-            } else if self
-                .rows
-                .get(ix + 1)
-                .is_some_and(|row| row.parent == Some(id))
-            {
-                self.select_index(ix + 1, ScrollStrategy::Bottom, cx);
-            }
-        }
-    }
-
-    fn on_collapse(&mut self, _: &Collapse, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.view == View::Trash {
-            self.show_tree(cx);
-            return;
-        }
-        let Some(row) = self.selected_row().cloned() else {
-            return;
-        };
-        match row.item {
-            // Under a filter every folder is drawn open, so there is nothing to collapse.
-            LibraryItem::Folder(id) if row.expanded && self.filter.is_none() => {
-                self.set_expanded(id, false, cx)
-            }
-            _ => {
-                if let Some(parent) = row.parent {
-                    self.set_selected(Some(LibraryItem::Folder(parent)), cx);
-                    self.scroll_to_selected(ScrollStrategy::Top);
-                }
-            }
-        }
-    }
-
-    fn on_open_selected(&mut self, _: &OpenSelected, window: &mut Window, cx: &mut Context<Self>) {
-        if self.view == View::Trash {
-            self.restore_selected(cx);
-            return;
-        }
-        if self.on_trash_row {
-            self.show_trash(window, cx);
-            return;
-        }
-        match self.selected_row().map(|row| (row.item, row.expanded)) {
-            Some((LibraryItem::Document(id), _)) => cx.emit(LibraryPanelEvent::OpenDocument {
-                id,
-                focus_editor: true,
-            }),
-            Some((LibraryItem::Folder(id), expanded)) if self.filter.is_none() => {
-                self.set_expanded(id, !expanded, cx)
-            }
-            _ => {}
-        }
-    }
-
-    fn on_dismiss(&mut self, _: &Dismiss, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.renaming.is_some() {
-            self.cancel_rename(cx);
-        } else if self.view == View::Trash {
-            self.show_tree(cx);
-        } else if !self.filter_text.is_empty() {
-            self.clear_filter(cx);
-        } else {
-            cx.emit(LibraryPanelEvent::Dismissed);
-        }
-    }
-
-    fn on_focus_tree(&mut self, _: &FocusTree, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus_handle.is_focused(window) {
-            cx.propagate();
-            return;
-        }
-        if self.renaming.is_some() {
-            self.finish_rename(true, cx);
-        }
-        window.focus(&self.focus_handle);
-    }
-
-    fn on_new_document(&mut self, _: &NewDocument, window: &mut Window, cx: &mut Context<Self>) {
-        if self.new_document_content.is_none() {
-            // The app creates documents itself: let its own handler have the action.
-            cx.propagate();
-            return;
-        }
-        self.new_document(window, cx);
-    }
-
-    fn on_new_folder(&mut self, _: &NewFolder, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_folder(window, cx);
-    }
-
-    fn on_rename(&mut self, _: &Rename, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(item) = self.selected {
-            self.begin_rename(item, window, cx);
-        }
-    }
-
-    fn on_duplicate(&mut self, _: &Duplicate, _window: &mut Window, cx: &mut Context<Self>) {
-        self.duplicate_selected(cx);
-    }
-
-    fn on_move_to_folder(&mut self, _: &MoveToFolder, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_move_picker(window, cx);
-    }
-
-    fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.reorder_selected(-1, cx);
-    }
-
-    fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
-        self.reorder_selected(1, cx);
-    }
-
-    fn on_move_to_trash(&mut self, _: &MoveToTrash, _window: &mut Window, cx: &mut Context<Self>) {
-        self.trash_selected(cx);
-    }
-
-    fn on_undo_trash(&mut self, _: &UndoTrash, _window: &mut Window, cx: &mut Context<Self>) {
-        self.undo_trash(cx);
-    }
-
-    fn on_focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_filter(window, cx);
-    }
-
-    fn on_show_trash(&mut self, _: &ShowTrash, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_trash(window, cx);
-    }
-
-    fn on_restore_selected(
-        &mut self,
-        _: &RestoreSelected,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.restore_selected(cx);
-    }
-
-    fn on_delete_forever(
-        &mut self,
-        _: &DeleteForever,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.delete_selected_forever(window, cx);
-    }
-
-    fn on_empty_trash(&mut self, _: &EmptyTrash, window: &mut Window, cx: &mut Context<Self>) {
-        self.empty_trash(window, cx);
-    }
-
-    fn on_toggle_row_detail(
-        &mut self,
-        _: &ToggleRowDetail,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_row_detail(
-            match self.detail {
-                RowDetail::Edited => RowDetail::Words,
-                RowDetail::Words => RowDetail::Edited,
-            },
-            cx,
-        );
-    }
-
-    // ----- mouse ----------------------------------------------------------------------
-
-    fn click_row(&mut self, ix: usize, clicks: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get(ix).cloned() else {
-            return;
-        };
-        if self.renaming == Some(row.item) {
-            return;
-        }
-        if clicks >= 2 {
-            self.begin_rename(row.item, window, cx);
-            return;
-        }
-        if self.renaming.is_some() {
-            self.finish_rename(true, cx);
-        }
-        window.focus(&self.focus_handle);
-        self.set_selected(Some(row.item), cx);
-        if let LibraryItem::Document(id) = row.item {
-            cx.emit(LibraryPanelEvent::OpenDocument {
-                id,
-                focus_editor: false,
-            });
-        }
-    }
-
-    fn click_disclosure(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if self.filter.is_some() {
-            return;
-        }
-        if let Some(Row {
-            item: LibraryItem::Folder(id),
-            expanded,
-            ..
-        }) = self.rows.get(ix)
-        {
-            self.set_expanded(*id, !*expanded, cx);
-        }
-    }
-
-    fn click_trash_row(
-        &mut self,
-        ix: usize,
-        clicks: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.focus_handle);
-        self.select_trash_index(ix, ScrollStrategy::Center, cx);
-        if clicks >= 2 {
-            self.restore_selected(cx);
         }
     }
 

@@ -25,6 +25,18 @@ const FOOTER_HEIGHT: gpui::Pixels = px(32.);
 /// How far each level of the tree is indented.
 const INDENT: gpui::Pixels = px(14.);
 
+/// The mark at the left edge of the selected row while the panel has the keyboard.
+fn focus_mark(color: gpui::Hsla) -> gpui::Div {
+    div()
+        .absolute()
+        .left_0()
+        .top(px(5.))
+        .bottom(px(5.))
+        .w(px(2.))
+        .rounded(px(1.))
+        .bg(color)
+}
+
 impl Render for LibraryPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.focus_subscription.is_none() {
@@ -81,6 +93,8 @@ impl Render for LibraryPanel {
             .on_action(cx.listener(Self::on_select_previous))
             .on_action(cx.listener(Self::on_select_first))
             .on_action(cx.listener(Self::on_select_last))
+            .on_action(cx.listener(Self::on_select_page_up))
+            .on_action(cx.listener(Self::on_select_page_down))
             .on_action(cx.listener(Self::on_expand))
             .on_action(cx.listener(Self::on_collapse))
             .on_action(cx.listener(Self::on_open_selected))
@@ -306,20 +320,42 @@ impl LibraryPanel {
             } else {
                 colors.muted
             });
-            let label = match rename_field {
-                Some(field) => div().flex_1().min_w_0().child(field),
-                None => div().flex_1().min_w_0().child(
-                    HighlightedLabel::new(row.label.clone(), row.positions.clone()).color(
-                        if active {
-                            colors.accent
-                        } else if row.untitled {
-                            colors.muted
-                        } else {
-                            colors.ink
-                        },
-                    ),
-                ),
-            };
+            // The name sits in an absolutely placed box: GPUI only truncates text with an
+            // ellipsis when its first measurement has a definite width, and a flex item is
+            // first measured at its minimum content width.
+            let label = div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .ml(px(2.))
+                .child(match rename_field {
+                    // Shifted left by the field's padding and border, so the text stays put.
+                    Some(field) => div()
+                        .absolute()
+                        .left(px(-5.))
+                        .right_0()
+                        .top((ROW_HEIGHT - px(22.)) / 2.)
+                        .child(field),
+                    None => div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top((ROW_HEIGHT - px(18.)) / 2.)
+                        .child(
+                            HighlightedLabel::new(row.label.clone(), row.positions.clone()).color(
+                                if active {
+                                    colors.accent
+                                } else if row.untitled {
+                                    colors.muted
+                                } else {
+                                    colors.ink
+                                },
+                            ),
+                        ),
+                });
+            // Keyboard focus is visible as a red-pencil mark on the selected row.
+            let focus_mark = (selected && panel_focused).then(|| focus_mark(colors.accent));
 
             elements.push(
                 div()
@@ -336,6 +372,7 @@ impl LibraryPanel {
                             .flex()
                             .items_center()
                             .gap(SPACE_1)
+                            .relative()
                             .h_full()
                             .pl(SPACE_1 + INDENT * row.depth as f32)
                             .pr(SPACE_2)
@@ -345,9 +382,10 @@ impl LibraryPanel {
                                 (true, false) => el.bg(colors.hover),
                                 (false, _) => el.hover(|style| style.bg(colors.hover)),
                             })
+                            .children(focus_mark)
                             .child(disclosure)
                             .child(icon)
-                            .child(label.ml(px(2.)))
+                            .child(label)
                             .when_some(detail, |el, detail| {
                                 el.child(
                                     div()
@@ -384,6 +422,7 @@ impl LibraryPanel {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_trash(window, cx)))
             .child(
                 div()
+                    .relative()
                     .flex()
                     .items_center()
                     .gap(SPACE_2)
@@ -395,6 +434,7 @@ impl LibraryPanel {
                         (true, false) => el.bg(colors.hover),
                         (false, _) => el.hover(|style| style.bg(colors.hover)),
                     })
+                    .children((selected && panel_focused).then(|| focus_mark(colors.accent)))
                     .child(Icon::new(IconName::Trash).size(px(14.)).color(if selected {
                         colors.ink
                     } else {
@@ -402,20 +442,21 @@ impl LibraryPanel {
                     }))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .flex_none()
                             .text_color(if selected { colors.ink } else { colors.muted })
                             .child("Trash"),
                     )
+                    // How many items are in it, right after the name.
                     .when(count > 0, |el| {
                         el.child(
                             div()
                                 .flex_none()
                                 .text_size(UI_TEXT_XS)
-                                .text_color(colors.muted)
+                                .text_color(colors.faint)
                                 .child(count.to_string()),
                         )
                     })
+                    .child(div().flex_1())
                     .children(KeyHint::for_action(&ShowTrash, cx)),
             )
             .into_any_element()
@@ -517,6 +558,7 @@ impl LibraryPanel {
                     }))
                     .child(
                         div()
+                            .relative()
                             .flex()
                             .items_center()
                             .gap(SPACE_2)
@@ -528,6 +570,9 @@ impl LibraryPanel {
                                 (true, false) => el.bg(colors.hover),
                                 (false, _) => el.hover(|style| style.bg(colors.hover)),
                             })
+                            .children(
+                                (selected && panel_focused).then(|| focus_mark(colors.accent)),
+                            )
                             .child(
                                 Icon::new(match row.item {
                                     LibraryItem::Folder(_) => IconName::Folder,
@@ -540,14 +585,28 @@ impl LibraryPanel {
                                 }),
                             )
                             .child(
+                                // Absolutely placed lines, so both truncate with an
+                                // ellipsis (see the tree rows).
                                 div()
+                                    .relative()
                                     .flex_1()
                                     .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().truncate().child(row.label.clone()))
+                                    .h_full()
                                     .child(
                                         div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .top(px(5.))
+                                            .truncate()
+                                            .child(row.label.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .top(px(24.))
                                             .truncate()
                                             .text_size(UI_TEXT_XS)
                                             .line_height(px(15.))

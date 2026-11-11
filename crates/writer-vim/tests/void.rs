@@ -29,7 +29,7 @@ fn moving_over_them() {
 #[test]
 fn changing_them() {
     run(&[
-        c("a\n|---\nb", "x", "a\n|---\nb").bell(true),
+        c("a\n|---\nb", "x", "a\n|---\nb").bell(false),
         c("a\n|---\nb", "dd", "a\n|b").regs(&[('"', "---\n")]),
         c("a\n|---\nb", "yyp", "a\n---\n|---\nb"),
         c("a\n|===\nb", "ddp", "a\nb\n|==="),
@@ -75,7 +75,7 @@ fn putting_around_them() {
         c("|a\n---", "yyjP", "a\n|a\n---"),
         c("a\n|---\nb", "yyjVp", "a\n---\n|---"),
         c("|a b\n---", "yiwjvp", "a b\n|a"),
-        c("|---\nab", "yyjlvp", "---\na\n|---"),
+        c("|---\nab", "yyjlvp", "---\na\n|---\n"),
     ]);
 }
 
@@ -83,7 +83,7 @@ fn putting_around_them() {
 fn nearly_empty_documents() {
     run(&[
         c("|", "dd", "|"),
-        c("|", "x", "|").bell(true),
+        c("|", "x", "|").bell(false),
         c("|", "dw", "|"),
         c("|", "J", "|").bell(true),
         c("|", "yyp", "\n|"),

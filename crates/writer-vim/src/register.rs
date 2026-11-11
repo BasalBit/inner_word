@@ -208,10 +208,16 @@ impl Registers {
         self.set_unnamed(name.filter(|c| *c != '"'), &content, host);
     }
 
-    /// A delete or change into `name` (or the unnamed register). `small`
-    /// means the text lies within one line; `numbered` forces register 1
-    /// even then (deletes with `%`, `(`, `)`, `` ` ``, `/`, `?`, `n`, `N`,
-    /// `{`, `}`).
+    /// A delete or change into `name` (or the unnamed register), by Vim's
+    /// rules:
+    ///
+    /// - a named register gets the text, and so does register 1 (the
+    ///   numbered registers shift), whatever the size of the text;
+    /// - without a name, text of a line or more goes to register 1 and text
+    ///   within one line (`small`) to the small-delete register `-`;
+    ///   `numbered` forces register 1 as well for small text (deletes with
+    ///   `%`, `(`, `)`, `` ` ``, `/`, `?`, `n`, `N`, `{`, `}`);
+    /// - the black hole takes it and nothing else changes.
     pub fn delete(
         &mut self,
         name: Option<char>,
@@ -221,22 +227,27 @@ impl Registers {
         host: &mut dyn VimHost,
     ) {
         match name {
-            Some(c) if c != '"' => {
-                if !self.store_named(c, &content, host) {
-                    return;
-                }
+            Some('_') => return,
+            // `""` names the register plain yanks go to.
+            Some('"') => self.yank = Some(content.clone()),
+            Some(c) => {
+                self.store_named(c, &content, host);
             }
-            _ => {
-                if !small || numbered {
-                    self.numbered.push_front(content.clone());
-                    self.numbered.truncate(9);
-                }
-                if small {
-                    self.small = Some(content.clone());
-                }
-            }
+            None => {}
         }
-        self.set_unnamed(name.filter(|c| *c != '"'), &content, host);
+        if name.is_some() || !small || numbered {
+            self.numbered.push_front(content.clone());
+            self.numbered.truncate(9);
+        }
+        if name.is_none() && small {
+            self.small = Some(content.clone());
+        }
+        // The unnamed register shows register 1 or `-`: what was deleted,
+        // not the whole of an appended register.
+        if self.unnamed_clipboard && name.is_none() {
+            host.clipboard_write(&content);
+        }
+        self.unnamed = Some(content);
     }
 
     /// Reads a register that holds document content.

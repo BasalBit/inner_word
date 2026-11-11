@@ -79,7 +79,8 @@ fn quotes() {
         c("it 'w|as' so", "di'", "it '|' so"),
         c("a `c|ode` b", "di`", "a `|` b"),
         c("a `c|ode` b", "da`", "a |b"),
-        c("say \"hi\" a|nd \"yo\"", "di\"", "say \"hi\" and \"|\""),
+        // Vim takes the nearest quote before the cursor as the start.
+        c("say \"hi\" a|nd \"yo\"", "di\"", "say \"hi\"|\"yo\""),
         c("say |\"hi\" now", "di\"", "say \"|\" now"),
         c("say \"hi|\" now", "di\"", "say \"|\" now"),
         c("|foo", "di\"", "|foo").bell(true),
@@ -127,10 +128,11 @@ fn brackets() {
         c("(a (b|) c)", "2di(", "(|)"),
         c("f|(a)", "di(", "f(|)"),
         c("f(a|)", "di(", "f(|)"),
-        c("|f(a)", "di(", "|f(a)").bell(true),
+        // Outside any pair: the next one (Vim 9.1).
+        c("|f(a)", "di(", "f(|)"),
         c("(a|", "di(", "(|a").bell(true),
         c("f(a, |b)", "yi(", "f(|a, b)").regs(&[('"', "a, b")]),
-        c("~ fn x() {↵  bo|dy↵}", "di{", "~ fn x() {|}"),
+        c("~ fn x() {↵  bo|dy↵}", "di{", "~ fn x() {↵|}"),
         c("f(a, |b)", "gUi(", "f(|A, B)"),
     ]);
 }

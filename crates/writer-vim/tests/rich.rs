@@ -40,8 +40,8 @@ fn inline_formatting() {
         c("**|ab**cd", "Rwx<Esc>l.", "**wx**w|x"),
         // Mixed formatting inside one yank.
         c("|a**b**__c__", "y$$p", "a**b**__c__a**b**__|c__"),
-        c("**stra|ße** x", "gUiw", "**|STRASSE** x"),
-        c("a**ß**|b", "gUiw", "|A**SS**B"),
+        c("**stra|ße** x", "gUiw", "**|STRAẞE** x"),
+        c("a**ß**|b", "gUiw", "|A**ẞ**B"),
     ]);
 }
 
@@ -88,7 +88,9 @@ fn indent_levels() {
         c("{1}- |a", "<<", "- |a"),
         c("- |a\n- b\n- c", "Vj>", "{1}- |a\n{1}- b\n- c"),
         c("- |a\n- b\n- c", "Vj2>", "{2}- |a\n{2}- b\n- c"),
-        c("{3}|a", "3<<", "{2}|a"),
+        // A count that reaches past the last line is refused on the last line.
+        c("{3}|a", "3<<", "{3}|a").bell(true),
+        c("{3}|a\nb", "3<<", "{2}|a\nb"),
         c("{3}|a\n{3}b", "V<.", "{1}|a\n{3}b"),
         c("- |a\n\n- b", ">2j", "{1}- |a\n{1}\n{1}- b"),
         c("|a\n\nb\n", ":%><CR>", "{1}|a\n{1}\n{1}b\n{1}"),

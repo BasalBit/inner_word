@@ -11,8 +11,9 @@ fn delete_characters() {
         c("a|bc", "9x", "|a"),
         c("ab|c", "X", "a|c"),
         c("ab|c", "5X", "|c"),
-        c("|abc", "X", "|abc").bell(true),
-        c("|", "x", "|").bell(true),
+        // Nothing to delete is not an error in Vim.
+        c("|abc", "X", "|abc").bell(false),
+        c("|", "x", "|").bell(false),
         // x never joins lines.
         c("a|b\ncd", "3x", "|a\ncd"),
         c("a|ñb", "x", "a|b"),
@@ -50,7 +51,8 @@ fn delete_words() {
         // Across a block boundary the blocks merge.
         c("foo ba|r\nbaz qux", "d2w", "foo ba|qux"),
         // A lone word and its trailing blanks: the line goes.
-        c("|foo  \nbar", "dw", "|bar"),
+        // The last word ends with its line, trailing blanks included.
+        c("|foo  \nbar", "dw", "|\nbar"),
         c("|\nbar", "dw", "|bar"),
         c("|naïve café", "dw", "|café"),
         c("|don't stop", "dw", "|stop"),
@@ -233,18 +235,19 @@ fn change_case() {
         c("|foo bar", "gUw", "|FOO bar"),
         c("|FOO bar", "guw", "|foo bar"),
         c("fo|o bar", "gUiw", "|FOO bar"),
-        c("fo|o Bar", "g~~", "FO|O bAR"),
-        c("fo|o bar", "gUU", "FO|O BAR"),
-        c("FO|O", "guu", "fo|o"),
-        c("fo|o Bar", "g~g~", "FO|O bAR"),
-        c("fo|o", "gUgU", "FO|O"),
-        c("FO|O", "gugu", "fo|o"),
+        // The cursor goes to the first non-blank, as after `dd`.
+        c("fo|o Bar", "g~~", "|FOO bAR"),
+        c("fo|o bar", "gUU", "|FOO BAR"),
+        c("FO|O", "guu", "|foo"),
+        c("fo|o Bar", "g~g~", "|FOO bAR"),
+        c("fo|o", "gUgU", "|FOO"),
+        c("FO|O", "gugu", "|foo"),
         c("|a\nb\nc", "gUj", "|A\nB\nc"),
         c("a\n|b\nc", "gUk", "|A\nB\nc"),
         c("|a\nb\nc", "2gUU", "|A\nB\nc"),
         c("fo|o bar", "gU$", "fo|O BAR"),
         // Characters that change length.
-        c("|straße", "gUU", "|STRASSE"),
+        c("|straße", "gUU", "|STRAẞE"),
         c("|ǆ", "~", "|Ǆ"),
         c("|élan", "gUiw", "|ÉLAN"),
         c("|ÉLAN", "4~", "éla|n"),
@@ -353,12 +356,12 @@ fn more_motions_after_operators() {
         c("a\n|b", "Yp", "a\nb\n|b"),
         c("|a\nb\nc", "jyyGp`[", "a\nb\nc\n|b"),
         c("|a\nb\nc", "yjG'[", "|a\nb\nc"),
-        c("|a b", "ywG`]", "a |b"),
+        c("|a b", "ywG`]", "a| b"),
         c("a|b cd", "ix<Esc>`.", "a|xb cd"),
         c("|foo bar", "/bar<CR>''", "|foo bar"),
         // The jump list keeps one entry per block, as Vim keeps one per
         // line: a jump inside the block is undone with `` instead.
-        c("|foo bar", "/bar<CR><C-o>", "foo |bar").bell(true),
+        c("|foo bar", "/bar<CR><C-o>", "|foo bar"),
         c("|foo\nbar", "/bar<CR><C-o>", "|foo\nbar"),
         c("|a\nb\nc\nd", "jmajjmb:'a,'bs/$/!/<CR>", "a\nb\nc\n|d").message("E486"),
         c("|a\nb\nc\nd", "jmajmb:'a,'bs/b/B/<CR>", "a\n|B\nc\nd"),
@@ -438,7 +441,7 @@ fn every_motion_in_visual_mode() {
     let motions = [
         "h", "l", "j", "k", "w", "W", "b", "B", "e", "E", "ge", "gE", "0", "^", "$", "g_", "g0",
         "g$", "gg", "G", "2G", "{", "}", "(", ")", "fe", "Fe", "te", "Te", "%", "H", "M", "L", "*",
-        "#", "+", "-", "_", "<Space>", "<BS>", "iw", "aw", "is", "as", "ip", "ap", "i\"", "a\"",
+        "#", "+", "-", "_", "<Space>", "<C-h>", "iw", "aw", "is", "as", "ip", "ap", "i\"", "a\"",
         "i(", "a(", "o", "/one<CR>",
     ];
     let mut failures = Vec::new();

@@ -98,6 +98,11 @@ pub(crate) enum ExCommand {
 pub(crate) struct Parsed {
     pub range: RangeSpec,
     pub command: ExCommand,
+    /// The count after `:d`, `:y`, `:j`, `:>` and `:<`: that many lines,
+    /// starting with the last line of the range.
+    pub count: Option<usize>,
+    /// `!` after the command name.
+    pub bang: bool,
 }
 
 fn parse_addr(s: &str) -> (Option<Addr>, &str) {
@@ -287,6 +292,8 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
         return Ok(Parsed {
             range,
             command: ExCommand::Goto,
+            count: None,
+            bang: false,
         });
     }
     let first = rest.chars().next().expect("non-empty");
@@ -301,13 +308,20 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
         } else {
             ExCommand::ShiftLeft(n)
         };
-        return Ok(Parsed { range, command });
+        return Ok(Parsed {
+            range,
+            command,
+            count: tail.parse().ok(),
+            bang: false,
+        });
     }
     if first == '&' {
         let keep_flags = rest.starts_with("&&");
         return Ok(Parsed {
             range,
             command: ExCommand::RepeatSubstitute { keep_flags },
+            count: None,
+            bang: false,
         });
     }
     if !first.is_alphabetic() {
@@ -325,6 +339,26 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
         None => (false, after),
     };
     let args = args_raw.trim();
+    // `:d 3`, `:y a 2`, `:j 4`: a trailing number is a count.
+    let mut count = None;
+    let takes_count = abbreviates(name, "delete", 1)
+        || abbreviates(name, "yank", 1)
+        || abbreviates(name, "join", 1);
+    let args = if takes_count {
+        match args.rsplit_once(char::is_whitespace) {
+            Some((head, tail)) if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) => {
+                count = tail.parse().ok();
+                head.trim()
+            }
+            None if !args.is_empty() && args.bytes().all(|b| b.is_ascii_digit()) => {
+                count = args.parse().ok();
+                ""
+            }
+            _ => args,
+        }
+    } else {
+        args
+    };
     let command = if abbreviates(name, "substitute", 1) {
         parse_substitute(args_raw)?
     } else if abbreviates(name, "write", 1)
@@ -381,7 +415,12 @@ pub(crate) fn parse(line: &str) -> Result<Parsed, String> {
             bang,
         }
     };
-    Ok(Parsed { range, command })
+    Ok(Parsed {
+        range,
+        command,
+        count,
+        bang,
+    })
 }
 
 #[cfg(test)]

@@ -52,6 +52,12 @@ pub(crate) fn word_forward(
                 return p;
             };
             p = n;
+            // For an operator the last word ends with its line, also when
+            // white space follows it (`dw` on `word  ` at the end of a line
+            // does not join the next line).
+            if op_pending && last && is_newline(doc, p) && !is_empty_line(doc, p) {
+                return p;
+            }
         }
     }
     p
@@ -253,11 +259,17 @@ fn is_boundary(doc: &Document, b: usize) -> bool {
 /// `}`: the next paragraph boundary (an empty block or a void block) after
 /// the paragraph the caret is in or before. Returns the position and
 /// whether the end of the document was hit instead (then the position is
-/// the end of the last block and the motion is inclusive).
-pub(crate) fn paragraph_forward(doc: &Document, from: Position, count: usize) -> (Position, bool) {
+/// the end of the last block and the motion is inclusive). `None` when the
+/// document ends before the last of `count` paragraphs (Vim then does not
+/// move at all).
+pub(crate) fn paragraph_forward(
+    doc: &Document,
+    from: Position,
+    count: usize,
+) -> Option<(Position, bool)> {
     let n = doc.block_count();
     let mut i = from.block;
-    for _ in 0..count {
+    for step in 0..count {
         while i < n && is_boundary(doc, i) {
             i += 1;
         }
@@ -265,16 +277,17 @@ pub(crate) fn paragraph_forward(doc: &Document, from: Position, count: usize) ->
             i += 1;
         }
         if i >= n {
-            return (doc.end(), true);
+            return (step + 1 == count).then(|| (doc.end(), true));
         }
     }
-    (Position::new(i, 0), false)
+    Some((Position::new(i, 0), false))
 }
 
 /// `{`: the previous paragraph boundary, or the start of the document.
-pub(crate) fn paragraph_backward(doc: &Document, from: Position, count: usize) -> Position {
+/// `None` when the document starts before the last of `count` paragraphs.
+pub(crate) fn paragraph_backward(doc: &Document, from: Position, count: usize) -> Option<Position> {
     let mut i = from.block as isize;
-    for _ in 0..count {
+    for step in 0..count {
         while i >= 0 && is_boundary(doc, i as usize) {
             i -= 1;
         }
@@ -282,10 +295,10 @@ pub(crate) fn paragraph_backward(doc: &Document, from: Position, count: usize) -
             i -= 1;
         }
         if i < 0 {
-            return Position::ZERO;
+            return (step + 1 == count).then_some(Position::ZERO);
         }
     }
-    Position::new(i as usize, 0)
+    Some(Position::new(i as usize, 0))
 }
 
 // ----- sentences -----------------------------------------------------------------------------
@@ -385,35 +398,75 @@ fn first_sentence_start(doc: &Document, b: usize) -> usize {
     sentences(text_of(doc, b)).first().map_or(0, |s| s.start)
 }
 
-/// `)`: the start of the `count`th next sentence. A block start, an empty
-/// block and a void block are sentence starts.
-pub(crate) fn sentence_forward(doc: &Document, from: Position, count: usize) -> Position {
+/// Whether block `b` is an empty line for the sentence commands: no text,
+/// or a divider or page break.
+fn is_empty_block(doc: &Document, b: usize) -> bool {
+    block_class(doc, b) != BlockClass::Text
+}
+
+/// `)`: the start of the `count`th next sentence. A block start is a
+/// sentence start, and so is an empty block (or a divider), but a run of
+/// empty blocks counts once: from an empty block the motion goes to the
+/// text after the run, as in Vim. At the end of the document the last
+/// count goes to its end; `None` when counts are left over then.
+pub(crate) fn sentence_forward(doc: &Document, from: Position, count: usize) -> Option<Position> {
     let n = doc.block_count();
     let mut p = from;
-    for _ in 0..count {
-        let next_in_block = sentences(text_of(doc, p.block))
+    for step in 0..count {
+        if is_empty_block(doc, p.block) {
+            let mut b = p.block;
+            while b < n && is_empty_block(doc, b) {
+                b += 1;
+            }
+            if b >= n {
+                return (step + 1 == count).then(|| doc.end());
+            }
+            p = Position::new(b, first_sentence_start(doc, b));
+            continue;
+        }
+        // White space before the first sentence of a block belongs to that
+        // sentence.
+        let ss = sentences(text_of(doc, p.block));
+        let skip = usize::from(ss.first().is_some_and(|f| p.offset < f.start));
+        let next_in_block = ss
             .into_iter()
+            .skip(skip)
             .map(|s| s.start)
             .find(|s| *s > p.offset);
         match next_in_block {
             Some(o) => p = Position::new(p.block, o),
             None => {
                 if p.block + 1 >= n {
-                    return doc.end();
+                    return (step + 1 == count).then(|| doc.end());
                 }
                 let b = p.block + 1;
                 p = Position::new(b, first_sentence_start(doc, b));
             }
         }
     }
-    p
+    Some(p)
 }
 
 /// `(`: the start of the current sentence, or of the previous one when the
-/// caret is already there.
-pub(crate) fn sentence_backward(doc: &Document, from: Position, count: usize) -> Position {
+/// caret is already there. From an empty block it goes to the last sentence
+/// of the text before the run of empty blocks. `None` when the document
+/// starts before the last of `count` sentences.
+pub(crate) fn sentence_backward(doc: &Document, from: Position, count: usize) -> Option<Position> {
     let mut p = from;
-    for _ in 0..count {
+    for step in 0..count {
+        if is_empty_block(doc, p.block) {
+            let mut b = p.block;
+            while b > 0 && is_empty_block(doc, b) {
+                b -= 1;
+            }
+            if is_empty_block(doc, b) {
+                // Only empty blocks up to the start of the document.
+                return (step + 1 == count).then_some(Position::ZERO);
+            }
+            let o = sentences(text_of(doc, b)).last().map_or(0, |s| s.start);
+            p = Position::new(b, o);
+            continue;
+        }
         let prev_in_block = sentences(text_of(doc, p.block))
             .into_iter()
             .map(|s| s.start)
@@ -423,7 +476,11 @@ pub(crate) fn sentence_backward(doc: &Document, from: Position, count: usize) ->
             Some(o) => p = Position::new(p.block, o),
             None => {
                 if p.block == 0 {
-                    return Position::new(0, first_sentence_start(doc, 0).min(p.offset));
+                    let start = Position::new(0, first_sentence_start(doc, 0).min(p.offset));
+                    if step + 1 == count {
+                        return Some(start);
+                    }
+                    return None;
                 }
                 let b = p.block - 1;
                 let o = sentences(text_of(doc, b)).last().map_or(0, |s| s.start);
@@ -431,7 +488,7 @@ pub(crate) fn sentence_backward(doc: &Document, from: Position, count: usize) ->
             }
         }
     }
-    p
+    Some(p)
 }
 
 // ----- matching brackets --------------------------------------------------------------------

@@ -152,9 +152,10 @@ fn substitute_again() {
 #[test]
 fn other_commands() {
     run(&[
-        c("|a\nb\nc", ":%j<CR>", "a b| c"),
-        c("|a\nb", ":j<CR>", "a| b"),
-        c("|a\nb\nc", ":1,2j<CR>", "a| b\nc"),
+        // The cursor goes to the first non-blank of the joined line.
+        c("|a\nb\nc", ":%j<CR>", "|a b c"),
+        c("|a\nb", ":j<CR>", "|a b"),
+        c("|a\nb\nc", ":1,2j<CR>", "|a b\nc"),
         c("|a\nb", ":%><CR>", "{1}|a\n{1}b"),
         c("{2}|a", ":<<<CR>", "|a"),
         c("|a\nb\nc", ":2><CR>", "a\n{1}|b\nc"),

@@ -161,17 +161,20 @@ fn put_over_selection() {
         c("|foo bar", "yiwwviwP", "foo fo|o").regs(&[('"', "foo")]),
         c("|foo bar", "yiwwviw2p", "foo foofo|o"),
         // Lines over characters: they go on lines of their own.
-        c("|ab\ncd", "yyjvp", "ab\n|ab\nd"),
+        // Lines over characters: the line is split where the selection was
+        // and both halves stay, also when one is empty (as in Vim).
+        c("|ab\ncd", "yyjvp", "ab\n\n|ab\nd"),
         c("|ab\ncxd", "yyjlvp", "ab\nc\n|ab\nd"),
-        c("|ab\ncd", "yyj$vp", "ab\nc\n|ab"),
-        c("|ab\nc", "yyjvp", "ab\n|ab"),
+        c("|ab\ncd", "yyj$vp", "ab\nc\n|ab\n"),
+        c("|ab\nc", "yyjvp", "ab\n\n|ab\n"),
         // Characters over lines: they become a line.
         c("|x\nfoo bar", "yljVp", "x\n|x"),
         c("|a\nb\nc", "yyjVp", "a\n|a\nc").regs(&[('"', "b\n")]),
         c("|a\nb\nc", "yyjVjp", "a\n|a"),
         c("# |H\nb\nc", "yyjVp", "# H\n# |H\nc"),
-        c("|x", "vp", "«|x").message("E353").visual(),
-        c("|ab", "yl$v\"_p", "a«|b").message("E353").visual(),
+        // An empty register puts nothing: the selection is deleted.
+        c("|x", "vp", "|"),
+        c("|ab", "yl$v\"_p", "|a"),
     ]);
 }
 

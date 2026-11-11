@@ -16,92 +16,323 @@ pub(crate) enum Target {
     Lines(Lines),
 }
 
-/// The runs of equal character class on the hard line of `at`.
-fn class_runs(doc: &Document, at: Position, opts: ClassOpts) -> Vec<(Range<usize>, Class)> {
-    let t = text_of(doc, at.block);
-    let ls = buf::line_start(doc, at);
-    let le = buf::line_end(doc, at);
-    let mut runs: Vec<(Range<usize>, Class)> = Vec::new();
-    let mut o = ls;
-    while o < le {
-        let next = buf::next_boundary(t, o);
-        let c = class_at(doc, Position::new(at.block, o), opts);
-        match runs.last_mut() {
-            Some((r, rc)) if *rc == c => r.end = next,
-            _ => runs.push((o..next, c)),
-        }
-        o = next;
-    }
-    runs
+/// A text object found by one of Vim's own algorithms: the range runs from
+/// `start` to `end`, whose cell is part of it when `inclusive` is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Object {
+    /// `None` when an existing Visual selection is only extended.
+    pub start: Option<Position>,
+    pub end: Position,
+    pub inclusive: bool,
 }
 
-/// `iw` / `aw` / `iW` / `aW` on the hard line of `at`.
+impl Object {
+    /// The text range for an operator at `cursor`.
+    pub fn range(&self, doc: &Document, cursor: Position) -> TextRange {
+        let start = self.start.unwrap_or(cursor);
+        let end = if self.inclusive {
+            buf::cell_end(doc, self.end)
+        } else {
+            self.end
+        };
+        TextRange::new(start, end.max(start))
+    }
+}
+
+// Vim's cursor steps, on the cell model of `buf`: a newline cell stands for
+// the NUL that ends a line.
+
+/// How a step ended: within the line, on the end of the line, or on the
+/// next (previous) line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Char,
+    LineEnd,
+    Line,
+}
+
+/// Vim's `inc()`.
+fn inc(doc: &Document, p: &mut Position) -> Option<Step> {
+    let from_newline = buf::is_newline(doc, *p);
+    *p = buf::next_cell(doc, *p)?;
+    Some(if from_newline {
+        Step::Line
+    } else if buf::is_newline(doc, *p) {
+        Step::LineEnd
+    } else {
+        Step::Char
+    })
+}
+
+/// Vim's `dec()`.
+fn dec(doc: &Document, p: &mut Position) -> Option<Step> {
+    let at_start = buf::at_line_start(doc, *p);
+    *p = buf::prev_cell(doc, *p)?;
+    Some(if at_start { Step::Line } else { Step::Char })
+}
+
+/// Vim's `incl()`: like `inc`, but steps over the end of a line that has
+/// text.
+fn incl(doc: &Document, p: &mut Position) -> Option<Step> {
+    let mut r = inc(doc, p)?;
+    if r != Step::Char && !buf::at_line_start(doc, *p) {
+        r = inc(doc, p)?;
+    }
+    Some(r)
+}
+
+/// Vim's `decl()`.
+fn decl(doc: &Document, p: &mut Position) -> Option<Step> {
+    let mut r = dec(doc, p)?;
+    if r == Step::Line && !buf::at_line_start(doc, *p) {
+        r = dec(doc, p)?;
+    }
+    Some(r)
+}
+
+/// Vim's `oneleft()`: one cell left inside the line.
+fn oneleft(doc: &Document, p: &mut Position) -> bool {
+    if buf::at_line_start(doc, *p) {
+        return false;
+    }
+    *p = buf::prev_cell(doc, *p).unwrap_or(*p);
+    true
+}
+
+/// Vim's `fwd_word()` for one word with `eol` set. False is its `FAIL`.
+fn fwd_word(doc: &Document, p: &mut Position, opts: ClassOpts) -> bool {
+    let cls = |p: Position| class_at(doc, p, opts);
+    let last_line =
+        |p: Position| buf::next_cell(doc, Position::new(p.block, buf::line_end(doc, p))).is_none();
+    let sclass = cls(*p);
+    let on_last = last_line(*p);
+    let Some(i) = inc(doc, p) else {
+        return false;
+    };
+    if i != Step::Char && on_last {
+        return false;
+    }
+    if i != Step::Char {
+        return true;
+    }
+    if sclass != Class::Blank {
+        while cls(*p) == sclass {
+            match inc(doc, p) {
+                None => return true,
+                Some(Step::Char) => {}
+                Some(_) => return true,
+            }
+        }
+    }
+    while cls(*p) == Class::Blank {
+        if buf::is_empty_line(doc, *p) {
+            break;
+        }
+        match inc(doc, p) {
+            None => return true,
+            Some(Step::Char) => {}
+            Some(_) if on_last => return true,
+            Some(_) => {}
+        }
+    }
+    true
+}
+
+/// Vim's `end_word()` for one word with `stop` and `empty` set.
+fn end_word(doc: &Document, p: &mut Position, opts: ClassOpts) -> bool {
+    let cls = |p: Position| class_at(doc, p, opts);
+    let sclass = cls(*p);
+    if inc(doc, p).is_none() {
+        return false;
+    }
+    if cls(*p) == sclass && sclass != Class::Blank {
+        while cls(*p) == sclass {
+            if inc(doc, p).is_none() {
+                return false;
+            }
+        }
+    } else if sclass == Class::Blank {
+        while cls(*p) == Class::Blank {
+            if buf::is_empty_line(doc, *p) {
+                return true;
+            }
+            if inc(doc, p).is_none() {
+                return false;
+            }
+        }
+        let c = cls(*p);
+        while cls(*p) == c {
+            if inc(doc, p).is_none() {
+                return false;
+            }
+        }
+    }
+    dec(doc, p);
+    true
+}
+
+/// Vim's `bck_word()` for one word with `stop` set.
+fn bck_word(doc: &Document, p: &mut Position, opts: ClassOpts) -> bool {
+    let cls = |p: Position| class_at(doc, p, opts);
+    let sclass = cls(*p);
+    if dec(doc, p).is_none() {
+        return false;
+    }
+    if sclass == cls(*p) || sclass == Class::Blank {
+        while cls(*p) == Class::Blank {
+            if buf::is_empty_line(doc, *p) {
+                return true;
+            }
+            if dec(doc, p).is_none() {
+                return true;
+            }
+        }
+        let c = cls(*p);
+        while cls(*p) == c {
+            if dec(doc, p).is_none() {
+                return true;
+            }
+        }
+    }
+    inc(doc, p);
+    true
+}
+
+/// Vim's `bckend_word()` for one word with `eol` set.
+fn bckend_word(doc: &Document, p: &mut Position, opts: ClassOpts) -> bool {
+    let cls = |p: Position| class_at(doc, p, opts);
+    let sclass = cls(*p);
+    match dec(doc, p) {
+        None => return false,
+        Some(Step::Line) => return true,
+        Some(_) => {}
+    }
+    if sclass != Class::Blank {
+        while cls(*p) == sclass {
+            match dec(doc, p) {
+                None | Some(Step::Line) => return true,
+                Some(_) => {}
+            }
+        }
+    }
+    while cls(*p) == Class::Blank {
+        if buf::is_empty_line(doc, *p) {
+            break;
+        }
+        match dec(doc, p) {
+            None | Some(Step::Line) => return true,
+            Some(_) => {}
+        }
+    }
+    true
+}
+
+/// To the start of the word or white space under `p`, inside its line
+/// (Vim's `back_in_line()`).
+fn back_in_line(doc: &Document, p: &mut Position, opts: ClassOpts) {
+    let sclass = class_at(doc, *p, opts);
+    while !buf::at_line_start(doc, *p) {
+        let q = buf::prev_cell(doc, *p).unwrap_or(*p);
+        if class_at(doc, q, opts) != sclass {
+            break;
+        }
+        *p = q;
+    }
+}
+
+/// `iw` / `aw` / `iW` / `aW`, following Vim's `current_word()`: a word, or
+/// the white space between words, `count` times; `aw` takes the white
+/// space after the word, or the white space before it when none follows.
+/// The object runs on into the next line, as in Vim.
+///
+/// `anchor` is the other end of a Visual selection that is more than one
+/// character: the selection is then extended at the cursor's end.
 pub(crate) fn word(
     doc: &Document,
-    at: Position,
+    cursor: Position,
+    anchor: Option<Position>,
     around: bool,
     count: usize,
     opts: ClassOpts,
-) -> Option<TextRange> {
-    let runs = class_runs(doc, at, opts);
-    if runs.is_empty() {
-        // An empty line: nothing to select.
-        return if around {
-            None
+) -> Result<Object, Position> {
+    let cls = |p: Position| class_at(doc, p, opts);
+    let mut cur = cursor;
+    let mut count = count.max(1);
+    let mut inclusive = true;
+    let mut include_white = false;
+    let mut start = None;
+    if anchor.is_none() {
+        back_in_line(doc, &mut cur, opts);
+        start = Some(cur);
+        if (cls(cur) == Class::Blank) == around {
+            if !end_word(doc, &mut cur, opts) {
+                return Err(cur);
+            }
         } else {
-            Some(TextRange::empty(at))
-        };
-    }
-    let le = runs.last().map(|(r, _)| r.end).unwrap_or(at.offset);
-    let o = if at.offset >= le {
-        runs.last().map(|(r, _)| r.start).unwrap_or(at.offset)
-    } else {
-        at.offset
-    };
-    let idx = runs.iter().position(|(r, _)| r.start <= o && o < r.end)?;
-    let last = runs.len() - 1;
-    let ls = runs[0].0.start;
-    let mut start = runs[idx].0.start;
-    let end;
-    if !around {
-        end = runs[(idx + count.max(1) - 1).min(last)].0.end;
-    } else {
-        // Each count takes a word and the white space on one side of it.
-        let mut i = idx;
-        let mut trailing_white = false;
-        for n in 0..count.max(1) {
-            if n > 0 {
-                if i >= last {
-                    break;
-                }
-                i += 1;
-            }
-            if runs[i].1 == Class::Blank {
-                // White space first, then the word after it.
-                if i < last {
-                    i += 1;
-                }
-                trailing_white = false;
-            } else if i < last && runs[i + 1].1 == Class::Blank {
-                i += 1;
-                trailing_white = true;
+            fwd_word(doc, &mut cur, opts);
+            if buf::at_line_start(doc, cur) {
+                decl(doc, &mut cur);
             } else {
-                trailing_white = false;
+                oneleft(doc, &mut cur);
+            }
+            include_white = around;
+        }
+        count -= 1;
+    }
+    while count > 0 {
+        inclusive = true;
+        if anchor.is_some_and(|a| cur < a) {
+            // The cursor is at the start of the selection: extend backward.
+            if decl(doc, &mut cur).is_none() {
+                return Err(cur);
+            }
+            if around != (cls(cur) != Class::Blank) {
+                if !bck_word(doc, &mut cur, opts) {
+                    return Err(cur);
+                }
+            } else {
+                if !bckend_word(doc, &mut cur, opts) {
+                    return Err(cur);
+                }
+                incl(doc, &mut cur);
+            }
+        } else {
+            if incl(doc, &mut cur).is_none() {
+                return Err(cur);
+            }
+            if around != (cls(cur) == Class::Blank) {
+                if !fwd_word(doc, &mut cur, opts) && count > 1 {
+                    return Err(cur);
+                }
+                // Not the line break after the word.
+                if !oneleft(doc, &mut cur) {
+                    inclusive = false;
+                }
+            } else if !end_word(doc, &mut cur, opts) {
+                return Err(cur);
             }
         }
-        end = runs[i].0.end;
-        if !trailing_white
-            && runs[idx].1 != Class::Blank
-            && idx > 0
-            && runs[idx - 1].1 == Class::Blank
-            && runs[idx - 1].0.start > ls
-        {
-            // No white space after: take the white space before, unless it
-            // is the indent of the line.
-            start = runs[idx - 1].0.start;
+        count -= 1;
+    }
+    if include_white
+        && (cls(cur) != Class::Blank || (buf::at_line_start(doc, cur) && !inclusive))
+        && let Some(s) = start
+    {
+        // No white space after the word: take the white space before it,
+        // unless that is the indent of the line.
+        let mut p = s;
+        if oneleft(doc, &mut p) {
+            back_in_line(doc, &mut p, opts);
+            if cls(p) == Class::Blank && !buf::at_line_start(doc, p) {
+                start = Some(p);
+            }
         }
     }
-    Some(TextRange::in_block(at.block, start, end))
+    Ok(Object {
+        start,
+        end: cur,
+        inclusive,
+    })
 }
 
 /// `is` / `as` in the block of `at`.
@@ -163,66 +394,131 @@ pub(crate) fn sentence(
     Some(TextRange::in_block(at.block, start, end))
 }
 
-/// `ip` / `ap`: runs of text blocks, of empty blocks, or of void blocks.
-pub(crate) fn paragraph(doc: &Document, at: Position, around: bool, count: usize) -> Option<Lines> {
+/// Whether block `b` is a white line for the paragraph objects: an empty
+/// block or one that holds only white space (Vim's `linewhite()`).
+fn white(doc: &Document, b: usize) -> bool {
+    let blk = &doc.blocks()[b];
+    !blk.is_void() && blk.text().chars().all(char::is_whitespace)
+}
+
+/// Whether a paragraph starts at block `b` although the block before it is
+/// not white: dividers and page breaks are paragraphs of their own.
+fn starts_paragraph(doc: &Document, b: usize) -> bool {
+    b > 0
+        && !white(doc, b)
+        && !white(doc, b - 1)
+        && (block_class(doc, b) == BlockClass::Void)
+            != (block_class(doc, b - 1) == BlockClass::Void)
+}
+
+/// `ip` / `ap`, following Vim's `current_par()`: a paragraph is a run of
+/// blocks with text, the white lines between paragraphs are runs of empty
+/// (or blank) blocks, and a run of dividers or page breaks is a paragraph
+/// too. `ap` takes the white lines after the paragraph, or those before it
+/// when none follow. `None` when the document ends before `count` objects.
+///
+/// `anchor_block` is the block of the other end of a Visual selection that
+/// spans several blocks: the selection is then extended, and the result is
+/// the block the cursor moves to (as a one-block range).
+pub(crate) fn paragraph(
+    doc: &Document,
+    at: Position,
+    anchor_block: Option<usize>,
+    around: bool,
+    count: usize,
+) -> Option<Range<usize>> {
     let n = doc.block_count();
-    let run_end = |from: usize| {
-        let c = block_class(doc, from);
-        let mut e = from + 1;
-        while e < n && block_class(doc, e) == c {
-            e += 1;
+    let last = n - 1;
+    let count = count.max(1);
+    if let Some(a) = anchor_block
+        && a != at.block
+    {
+        // Extend the selection by whole objects in its direction.
+        let forward = at.block > a;
+        let edge = if forward { last } else { 0 };
+        let step = |b: usize| if forward { b + 1 } else { b - 1 };
+        let mut b = at.block;
+        for _ in 0..count {
+            if b == edge {
+                return None;
+            }
+            let mut prev_white = None;
+            for _ in 0..2 {
+                b = step(b);
+                let is_white = white(doc, b);
+                if prev_white == Some(is_white) {
+                    b = if forward { b - 1 } else { b + 1 };
+                    break;
+                }
+                while b != edge {
+                    let next = step(b);
+                    let boundary = if forward { next } else { b };
+                    if is_white != white(doc, next)
+                        || (!is_white && starts_paragraph(doc, boundary))
+                    {
+                        break;
+                    }
+                    b = next;
+                }
+                if !around || b == edge {
+                    break;
+                }
+                prev_white = Some(is_white);
+            }
         }
-        e
-    };
-    let class = block_class(doc, at.block);
+        return Some(b..b + 1);
+    }
+    let white_in_front = white(doc, at.block);
     let mut start = at.block;
-    while start > 0 && block_class(doc, start - 1) == class {
+    while start > 0 {
+        if white_in_front {
+            if !white(doc, start - 1) {
+                break;
+            }
+        } else if white(doc, start - 1) || starts_paragraph(doc, start) {
+            break;
+        }
         start -= 1;
     }
-    let mut end = run_end(at.block);
-    let count = count.max(1);
-    if !around {
-        for _ in 1..count {
-            if end >= n {
-                break;
-            }
-            end = run_end(end);
-        }
-        return Some(Lines::Blocks(start..end));
+    // `end` is one past the last block taken.
+    let mut end = start;
+    while end < n && white(doc, end) {
+        end += 1;
     }
-    let mut trailing_white = false;
-    for i in 0..count {
-        if i > 0 {
-            if end >= n {
-                break;
-            }
-            end = run_end(end);
+    let mut i = count;
+    if !around && white_in_front {
+        i -= 1;
+    }
+    while i > 0 {
+        i -= 1;
+        if end == n {
+            return None;
         }
-        let last_class = block_class(doc, end - 1);
-        trailing_white = false;
-        if end < n {
-            match (last_class, block_class(doc, end)) {
-                // A paragraph takes the empty blocks after it.
-                (BlockClass::Text, BlockClass::Empty) => {
-                    end = run_end(end);
-                    trailing_white = true;
-                }
-                // Empty blocks take the paragraph after them.
-                (BlockClass::Empty, BlockClass::Text) => end = run_end(end),
-                _ => {}
+        let do_white = !around && white(doc, end);
+        if around || !do_white {
+            end += 1;
+            while end < n && !white(doc, end) && !starts_paragraph(doc, end) {
+                end += 1;
+            }
+        }
+        if i == 0 && white_in_front && around {
+            break;
+        }
+        if around || do_white {
+            while end < n && white(doc, end) {
+                end += 1;
             }
         }
     }
-    if class == BlockClass::Text
-        && !trailing_white
-        && start > 0
-        && block_class(doc, start - 1) == BlockClass::Empty
-    {
-        while start > 0 && block_class(doc, start - 1) == BlockClass::Empty {
+    if end == start {
+        return None;
+    }
+    if !white_in_front && !white(doc, end - 1) && around {
+        while start > 0 && white(doc, start - 1) {
             start -= 1;
         }
     }
-    Some(Lines::Blocks(start..end))
+    Some(start..end)
 }
 
 // ----- quotes ---------------------------------------------------------------------------------
@@ -237,33 +533,75 @@ struct Quoted {
     close_len: usize,
 }
 
-fn straight_quotes(t: &str, ls: usize, le: usize, o: usize, q: char) -> Option<Quoted> {
-    let mut marks: Vec<usize> = Vec::new();
-    let mut escaped = false;
-    for (i, c) in t[ls..le].char_indices() {
-        if escaped {
-            escaped = false;
+/// The next `q` at or after `col`; with `escape`, a backslash hides the
+/// character after it (Vim's `find_next_quote()`).
+fn find_next_quote(t: &str, mut col: usize, le: usize, q: char, escape: bool) -> Option<usize> {
+    while col < le {
+        let c = t[col..].chars().next()?;
+        if escape && c == '\\' {
+            col += 1;
+            if col >= le {
+                return None;
+            }
+            let c2 = t[col..].chars().next()?;
+            col += c2.len_utf8();
             continue;
         }
-        if c == '\\' {
-            escaped = true;
-        } else if c == q {
-            marks.push(ls + i);
+        if c == q {
+            return Some(col);
+        }
+        col += c.len_utf8();
+    }
+    None
+}
+
+/// The last `q` before `col` that is not escaped, or `ls` when there is
+/// none (Vim's `find_prev_quote()`).
+fn find_prev_quote(t: &str, ls: usize, mut col: usize, q: char) -> usize {
+    while col > ls {
+        col = buf::prev_boundary(t, col).max(ls);
+        while !t.is_char_boundary(col) {
+            col -= 1;
+        }
+        let backslashes = t[ls..col].chars().rev().take_while(|c| *c == '\\').count();
+        if backslashes % 2 == 1 {
+            col -= backslashes;
+        } else if t[col..].starts_with(q) {
+            break;
         }
     }
-    let before = marks.iter().filter(|m| **m < o).count();
-    let on_quote = marks.contains(&o);
-    let open_idx = if on_quote {
-        // An even number of quotes before it: it opens; odd: it closes.
-        if before % 2 == 0 { before } else { before - 1 }
-    } else if before % 2 == 1 {
-        before - 1
+    col
+}
+
+/// Vim's rule for the straight quote `q` around offset `o` of the line
+/// `ls..le`. On a quote character the pairs are counted from the start of
+/// the line; anywhere else the string starts at the nearest quote before
+/// the caret, or at the first one after it when none comes before.
+fn straight_quotes(t: &str, ls: usize, le: usize, o: usize, q: char) -> Option<Quoted> {
+    let (open, close);
+    if o < le && t[o..].starts_with(q) {
+        let mut start = ls;
+        loop {
+            let s = find_next_quote(t, start, le, q, false)?;
+            if s > o {
+                return None;
+            }
+            let e = find_next_quote(t, s + q.len_utf8(), le, q, true)?;
+            if s <= o && o <= e {
+                open = s;
+                close = e;
+                break;
+            }
+            start = e + q.len_utf8();
+        }
     } else {
-        // Not inside a string: the next one on the line.
-        before
-    };
-    let open = *marks.get(open_idx)?;
-    let close = *marks.get(open_idx + 1)?;
+        let mut s = find_prev_quote(t, ls, o, q);
+        if !t[s..].starts_with(q) {
+            s = find_next_quote(t, s, le, q, false)?;
+        }
+        open = s;
+        close = find_next_quote(t, s + q.len_utf8(), le, q, true)?;
+    }
     Some(Quoted {
         open,
         open_len: q.len_utf8(),
@@ -419,171 +757,192 @@ pub(crate) fn quote(doc: &Document, at: Position, q: char, around: bool) -> Opti
 
 // ----- brackets -------------------------------------------------------------------------------
 
-/// The `count`th pair of `open` / `close` around offset `o` in `t`: the
-/// offsets of both brackets.
-fn enclosing(t: &str, o: usize, open: char, close: char, count: usize) -> Option<(usize, usize)> {
-    let o = o.min(t.len());
-    let under = t[o..].chars().next();
-    // Scan back for the opening bracket; a caret on the closing bracket is
-    // inside its pair.
-    let mut scan_end = match under {
-        Some(c) if c == open => o + c.len_utf8(),
-        _ => o,
-    };
-    let mut open_at = None;
-    for _ in 0..count.max(1) {
-        let mut depth = 0usize;
-        let mut found = None;
-        for (i, c) in t[..scan_end].char_indices().rev() {
+fn char_at(doc: &Document, p: Position) -> Option<char> {
+    text_of(doc, p.block).get(p.offset..)?.chars().next()
+}
+
+/// The unmatched `open` before `from` (not looking at `from` itself),
+/// anywhere in the document.
+fn unmatched_open(doc: &Document, from: Position, open: char, close: char) -> Option<Position> {
+    let mut depth = 0usize;
+    let mut b = from.block;
+    let mut upto = from.offset.min(buf::len_of(doc, b));
+    loop {
+        for (i, c) in text_of(doc, b)[..upto].char_indices().rev() {
             if c == close {
                 depth += 1;
             } else if c == open {
                 if depth == 0 {
-                    found = Some(i);
-                    break;
+                    return Some(Position::new(b, i));
                 }
                 depth -= 1;
             }
         }
-        let at = found?;
-        open_at = Some(at);
-        scan_end = at;
-    }
-    let open_at = open_at?;
-    let mut depth = 0usize;
-    for (i, c) in t[open_at..].char_indices() {
-        if c == open {
-            depth += 1;
-        } else if c == close {
-            depth -= 1;
-            if depth == 0 {
-                return Some((open_at, open_at + i));
-            }
+        if b == 0 {
+            return None;
         }
+        b -= 1;
+        upto = buf::len_of(doc, b);
     }
-    None
 }
 
-/// `i(` / `a(` and the same for `[ ]`, `{ }` and `< >`, in the block of
-/// `at`. With `around` the brackets are included.
+/// The unmatched `close` after `from` (not looking at `from` itself).
+fn unmatched_close(doc: &Document, from: Position, open: char, close: char) -> Option<Position> {
+    let mut depth = 0usize;
+    let mut b = from.block;
+    let mut start = match char_at(doc, from) {
+        Some(c) => from.offset + c.len_utf8(),
+        None => buf::len_of(doc, b),
+    };
+    loop {
+        for (i, c) in text_of(doc, b)[start..].char_indices() {
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                if depth == 0 {
+                    return Some(Position::new(b, start + i));
+                }
+                depth -= 1;
+            }
+        }
+        b += 1;
+        if b >= doc.block_count() {
+            return None;
+        }
+        start = 0;
+    }
+}
+
+/// The next `open` after `from` that starts a block of its own: a `close`
+/// on the way hides the `open` after it, as in Vim's forward search.
+fn next_open(doc: &Document, from: Position, open: char, close: char) -> Option<Position> {
+    let mut depth = 0usize;
+    let mut b = from.block;
+    let mut start = match char_at(doc, from) {
+        Some(c) => from.offset + c.len_utf8(),
+        None => buf::len_of(doc, b),
+    };
+    loop {
+        for (i, c) in text_of(doc, b)[start..].char_indices() {
+            if c == close {
+                depth += 1;
+            } else if c == open {
+                if depth == 0 {
+                    return Some(Position::new(b, start + i));
+                }
+                depth -= 1;
+            }
+        }
+        b += 1;
+        if b >= doc.block_count() {
+            return None;
+        }
+        start = 0;
+    }
+}
+
+/// Whether `p` is on the white space that starts its line.
+fn in_indent(doc: &Document, p: Position) -> bool {
+    let ls = buf::line_start(doc, p);
+    !buf::is_newline(doc, p) && p.offset < buf::first_non_blank(doc, p.block, ls)
+}
+
+/// `i(` / `a(` and the same for `[ ]`, `{ }` and `< >`, following Vim's
+/// `current_block()`: the `count`th pair around the cursor, anywhere in the
+/// document; when the cursor is in no pair, the next one after it. With
+/// `around` the brackets are included.
+///
+/// `anchor` is the other end of a Visual selection of more than one
+/// character; a selection that already covers the pair grows to the next
+/// pair out.
 pub(crate) fn bracket(
     doc: &Document,
-    at: Position,
+    cursor: Position,
+    anchor: Option<Position>,
     open: char,
     close: char,
     around: bool,
     count: usize,
-) -> Option<TextRange> {
-    let t = text_of(doc, at.block);
-    let (o, c) = enclosing(t, at.offset, open, close, count)?;
-    Some(if around {
-        TextRange::in_block(at.block, o, c + close.len_utf8())
-    } else {
-        TextRange::in_block(at.block, o + open.len_utf8(), c)
-    })
-}
-
-/// Like [`bracket`], but for a pair strictly larger than `current` (used to
-/// grow a Visual selection that already covers a pair).
-pub(crate) fn bracket_growing(
-    doc: &Document,
-    current: TextRange,
-    open: char,
-    close: char,
-    around: bool,
-) -> Option<TextRange> {
-    let at = current.start;
-    for count in 1..=64 {
-        let r = bracket(doc, at, open, close, around, count)?;
-        if r.start <= current.start && r.end >= current.end && r != current {
-            return Some(r);
+) -> Option<Object> {
+    let mut old_start = cursor;
+    let mut old_end = cursor;
+    let mut cur = cursor;
+    match anchor {
+        None => {
+            if char_at(doc, cur) == Some(open) {
+                // On the opening bracket: inside its pair.
+                cur = buf::next_cell(doc, cur)?;
+            }
+        }
+        Some(a) if a < cursor => {
+            old_start = a;
+            cur = a;
+        }
+        Some(a) => old_end = a,
+    }
+    let around_cursor = unmatched_open(doc, cur, open, close).is_some();
+    let mut start_pos = None;
+    for _ in 0..count.max(1) {
+        let found = if around_cursor {
+            unmatched_open(doc, cur, open, close)
+        } else {
+            next_open(doc, cur, open, close)
+        };
+        start_pos = found;
+        match found {
+            Some(p) => cur = p,
+            None => break,
         }
     }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use writer_core::Block;
-
-    fn doc(s: &str) -> Document {
-        Document::from_blocks(vec![Block::paragraph(s)])
+    let mut start_pos = start_pos?;
+    cur = unmatched_close(doc, start_pos, open, close)?;
+    let mut sol = false;
+    loop {
+        if around {
+            break;
+        }
+        incl(doc, &mut start_pos);
+        sol = buf::at_line_start(doc, cur);
+        decl(doc, &mut cur);
+        while in_indent(doc, cur) {
+            sol = true;
+            if decl(doc, &mut cur) != Some(Step::Char) {
+                break;
+            }
+        }
+        if anchor.is_some() && start_pos >= old_start && old_end >= cur && start_pos != cur {
+            // Not bigger than what was selected: take the next pair out.
+            let mut p = old_start;
+            decl(doc, &mut p);
+            let s = unmatched_open(doc, p, open, close)?;
+            start_pos = s;
+            cur = unmatched_close(doc, s, open, close)?;
+        } else {
+            break;
+        }
     }
-
-    const OPTS: ClassOpts = ClassOpts {
-        big: false,
-        apostrophe: true,
-    };
-
-    fn r(d: &Document, x: Option<TextRange>) -> String {
-        x.map(|x| d.text_in(x)).unwrap_or_else(|| "<none>".into())
+    if !around && sol {
+        // The closing bracket starts a line: up to and with the line break.
+        let mut end = cur;
+        incl(doc, &mut end);
+        return Some(Object {
+            start: Some(start_pos),
+            end,
+            inclusive: false,
+        });
     }
-
-    #[test]
-    fn words() {
-        let d = doc("  foo bar.baz  qux");
-        let at = |o| Position::new(0, o);
-        assert_eq!(r(&d, word(&d, at(3), false, 1, OPTS)), "foo");
-        assert_eq!(r(&d, word(&d, at(3), true, 1, OPTS)), "foo ");
-        assert_eq!(r(&d, word(&d, at(5), false, 1, OPTS)), " ");
-        assert_eq!(r(&d, word(&d, at(5), true, 1, OPTS)), " bar");
-        assert_eq!(r(&d, word(&d, at(9), false, 1, OPTS)), ".");
-        assert_eq!(r(&d, word(&d, at(15), true, 1, OPTS)), "  qux");
-        assert_eq!(r(&d, word(&d, at(3), false, 3, OPTS)), "foo bar");
-        assert_eq!(r(&d, word(&d, at(3), true, 2, OPTS)), "foo bar");
-        let big = ClassOpts { big: true, ..OPTS };
-        assert_eq!(r(&d, word(&d, at(7), false, 1, big)), "bar.baz");
-        // The indent is not taken as leading white space.
-        let d = doc("  foo");
-        assert_eq!(r(&d, word(&d, at(3), true, 1, OPTS)), "foo");
-        let d = doc("don\u{2019}t stop");
-        assert_eq!(r(&d, word(&d, at(1), false, 1, OPTS)), "don\u{2019}t");
-    }
-
-    #[test]
-    fn quotes_and_brackets() {
-        let d = doc("say \"hi there\" and \u{201C}curly one\u{201D} end");
-        let at = |o| Position::new(0, o);
-        assert_eq!(r(&d, quote(&d, at(6), '"', false)), "hi there");
-        assert_eq!(r(&d, quote(&d, at(6), '"', true)), "\"hi there\" ");
-        assert_eq!(r(&d, quote(&d, at(0), '"', false)), "hi there");
-        assert_eq!(r(&d, quote(&d, at(25), '"', false)), "curly one");
-        assert_eq!(
-            r(&d, quote(&d, at(25), '"', true)),
-            "\u{201C}curly one\u{201D} "
-        );
-        let d = doc("f(a, (b + c), d) [x]");
-        assert_eq!(r(&d, bracket(&d, at(7), '(', ')', false, 1)), "b + c");
-        assert_eq!(r(&d, bracket(&d, at(7), '(', ')', true, 1)), "(b + c)");
-        assert_eq!(
-            r(&d, bracket(&d, at(7), '(', ')', false, 2)),
-            "a, (b + c), d"
-        );
-        assert_eq!(
-            r(&d, bracket(&d, at(1), '(', ')', false, 1)),
-            "a, (b + c), d"
-        );
-        assert_eq!(
-            r(&d, bracket(&d, at(15), '(', ')', false, 1)),
-            "a, (b + c), d"
-        );
-        assert_eq!(r(&d, bracket(&d, at(18), '[', ']', false, 1)), "x");
-        assert_eq!(r(&d, bracket(&d, at(0), '(', ')', false, 1)), "<none>");
-        let d = doc("it\u{2019}s \u{2018}a don\u{2019}t b\u{2019} x");
-        let o = d.blocks()[0].text().find("don").unwrap();
-        assert_eq!(r(&d, quote(&d, at(o), '\'', false)), "a don\u{2019}t b");
-    }
-
-    #[test]
-    fn sentence_objects() {
-        let d = doc("One. Two two.  Three");
-        let at = |o| Position::new(0, o);
-        assert_eq!(r(&d, sentence(&d, at(6), false, 1)), "Two two.");
-        assert_eq!(r(&d, sentence(&d, at(6), true, 1)), "Two two.  ");
-        assert_eq!(r(&d, sentence(&d, at(16), true, 1)), "  Three");
-        assert_eq!(r(&d, sentence(&d, at(4), false, 1)), " ");
-        assert_eq!(r(&d, sentence(&d, at(4), true, 1)), " Two two.");
-        assert_eq!(r(&d, sentence(&d, at(0), true, 2)), "One. Two two.  ");
+    if start_pos <= cur {
+        Some(Object {
+            start: Some(start_pos),
+            end: cur,
+            inclusive: true,
+        })
+    } else {
+        // Nothing between the brackets.
+        Some(Object {
+            start: Some(start_pos),
+            end: start_pos,
+            inclusive: false,
+        })
     }
 }

@@ -341,8 +341,8 @@ fn the_ctrl_o_state_is_visible() {
     s.keys("A<C-o>");
     assert_eq!(s.mode(), Mode::Normal);
     assert!(s.vim.insert_pending());
-    // The caret may still sit after the last character.
-    assert_eq!(s.ed.selection().head, Position::new(0, 3));
+    // The caret steps onto the last character, as in Vim.
+    assert_eq!(s.ed.selection().head, Position::new(0, 2));
     s.keys("0");
     assert_eq!(s.mode(), Mode::Insert);
     assert!(!s.vim.insert_pending());
@@ -381,7 +381,7 @@ fn sync_can_be_called_on_every_change_report() {
     let s = run_with_sync("|a\nb\nc", ":2,3d<CR>");
     assert_eq!(s.buffer(), "|a");
     let s = run_with_sync("|abc", "A<C-o>hX<Esc>");
-    assert_eq!(s.buffer(), "ab|Xc");
+    assert_eq!(s.buffer(), "a|Xbc");
     let s = run_with_sync("|abc", "RXY<BS>Z<Esc>");
     assert_eq!(s.buffer(), "X|Zc");
 }

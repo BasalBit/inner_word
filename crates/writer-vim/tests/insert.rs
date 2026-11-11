@@ -100,7 +100,8 @@ fn one_normal_command() {
         c("ab|c", "i<C-o>0X<Esc>", "|Xabc"),
         c("|foo bar", "i<C-o>dwX<Esc>", "|Xbar"),
         // After the last character the caret keeps its place.
-        c("|abc", "A<C-o>hX<Esc>", "ab|Xc"),
+        // ctrl-o at the end of a line steps onto the last character first.
+        c("|abc", "A<C-o>hX<Esc>", "a|Xbc"),
         c("|abc", "A<C-o>zzX<Esc>", "abc|X"),
         c("|abc", "A<C-o>0", "|abc").insert(),
         c("|abc def", "i<C-o>2lX<Esc>", "ab|Xc def"),

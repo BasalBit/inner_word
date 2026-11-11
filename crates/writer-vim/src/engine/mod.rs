@@ -20,7 +20,7 @@ use crate::register::{RegisterContent, Registers};
 
 use cmdline::CmdLineState;
 use insert::{InsertAction, InsertSession};
-use marks::{JumpList, Mark};
+use marks::{JumpList, Mark, PlaceMark};
 
 /// Switches for the few places where the engine can deviate from Vim.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +168,9 @@ pub(crate) struct VisualRepeat {
     /// Graphemes selected in a one-block characterwise selection; for more
     /// blocks, the grapheme column of the last selected character.
     pub cols: usize,
+    /// The selection ran to the end of its last line, line break included
+    /// (`v$`).
+    pub to_eol: bool,
 }
 
 /// The last repeatable change.
@@ -184,8 +187,8 @@ pub(crate) struct ChangeRecord {
 /// A remembered Visual selection (`gv`, `'<`, `'>`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SavedVisual {
-    pub anchor: Mark,
-    pub cursor: Mark,
+    pub anchor: PlaceMark,
+    pub cursor: PlaceMark,
     pub line: bool,
 }
 
@@ -215,6 +218,10 @@ pub(crate) struct SearchState {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Resume {
     pub replace: bool,
+    /// The start of the line the caret was at the end of when `ctrl-o` was
+    /// pressed: if the command leaves the caret on the last character of
+    /// that line, typing goes on after it.
+    pub eol_line: Option<Mark>,
 }
 
 /// What the host was last told, to report only changes.
@@ -240,6 +247,8 @@ pub struct Vim {
     pub(crate) registers: Registers,
     pub(crate) marks: HashMap<char, Mark>,
     pub(crate) jumps: JumpList,
+    /// The `''` mark before the last command that set it.
+    pub(crate) prev_context: Option<Mark>,
     pub(crate) goal: Option<GoalColumn>,
     pub(crate) last_find: Option<FindSpec>,
     pub(crate) search: SearchState,
@@ -256,13 +265,20 @@ pub struct Vim {
     pub(crate) visual_repeat: Option<VisualRepeat>,
     /// Where `u` should put the caret after undoing the command being
     /// executed.
-    pub(crate) undo_hint: Option<Mark>,
+    pub(crate) undo_hint: Option<Position>,
     /// Remembered carets for `u`, by the undo depth their change produced.
-    pub(crate) undo_hints: Vec<(usize, Mark)>,
+    pub(crate) undo_hints: Vec<(usize, Position)>,
     /// Carets to return to when the steps undone by `u` are redone.
-    pub(crate) redo_carets: Vec<Mark>,
+    /// The flag says whether the caret was remembered by the command (and
+    /// so lies in the text it touched) rather than taken from the editor.
+    pub(crate) redo_carets: Vec<(Position, bool)>,
     /// The command being executed is an undo or redo.
     pub(crate) keep_redo_carets: bool,
+    /// The Visual-mode delete being executed fills register 1 whatever its
+    /// size (backspace).
+    pub(crate) visual_big: bool,
+    /// The operator being executed got its range from `$`.
+    pub(crate) op_to_eol: bool,
     /// The document revision when the command being typed started.
     pub(crate) command_revision: u64,
     /// The document revision and selection the engine last left or saw:
@@ -301,6 +317,7 @@ impl Vim {
             registers,
             marks: HashMap::new(),
             jumps: JumpList::default(),
+            prev_context: None,
             goal: None,
             last_find: None,
             search: SearchState {
@@ -321,6 +338,8 @@ impl Vim {
             undo_hints: Vec::new(),
             redo_carets: Vec::new(),
             keep_redo_carets: false,
+            visual_big: false,
+            op_to_eol: false,
             command_revision: 0,
             seen: None,
             expect_host: false,
@@ -459,8 +478,7 @@ impl Vim {
 
     /// Whether the engine is waiting for the one Normal-mode command of
     /// `ctrl-o` and will return to Insert mode after it. [`Vim::mode`]
-    /// reports Normal mode meanwhile, but the caret may still sit after the
-    /// last character of its line.
+    /// reports Normal mode meanwhile.
     pub fn insert_pending(&self) -> bool {
         self.resume.is_some()
     }
@@ -493,6 +511,9 @@ impl Vim {
         let consumed = self.dispatch(key, &mut cx);
         if one_shot {
             self.maybe_resume_insert(&mut cx);
+        }
+        if !self.pending.active() && self.cmdline.is_none() {
+            self.check_context_mark(&cx);
         }
         // A key left to the host will change the editor behind the engine.
         self.expect_host = !consumed;
@@ -656,7 +677,9 @@ impl Vim {
         if self.changed_outside(&cx) {
             let typing = matches!(self.base, Base::Insert | Base::Replace);
             if typing && std::mem::take(&mut self.expect_host) {
-                // The host carrying out the key the engine let through.
+                // The host carrying out the key the engine let through; a
+                // cursor key that moved the caret ends what `.` repeats.
+                self.settle_cursor_key(&mut cx, false);
             } else {
                 self.sync_inner(&mut cx);
             }
@@ -690,6 +713,10 @@ impl Vim {
         } else {
             self.sync_inner(&mut cx);
         }
+        // The context mark starts at the top of the document, as in a file
+        // Vim has just opened, so `''` works before the first jump.
+        self.set_mark(&cx, '\'', Position::ZERO);
+        self.prev_context = self.marks.get(&'\'').copied();
         // Report everything, not only what changed.
         self.shown = None;
         self.expect_host = false;
@@ -740,8 +767,17 @@ impl Vim {
         let sel = cx.ed.selection();
         match self.base {
             Base::Insert | Base::Replace => {
+                // The caret was moved (a click): what was typed before is
+                // an undo step of its own and no longer repeats.
+                let head = cx.ed.selection().head;
                 if let Some(s) = self.insert.as_mut() {
                     s.interrupted();
+                    s.moved_check = None;
+                    s.start = head;
+                    if s.group_open {
+                        cx.ed.end_undo_group();
+                        cx.ed.begin_undo_group();
+                    }
                 }
             }
             Base::Normal | Base::Visual { .. } => {

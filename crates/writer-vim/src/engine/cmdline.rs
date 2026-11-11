@@ -419,6 +419,15 @@ impl Vim {
         let cur = self.cursor(cx).block;
         let here = cur..cur + 1;
         let origin = self.cursor(cx);
+        // A count takes that many lines, starting with the last of the
+        // range.
+        let counted = |r: Range<usize>, blocks: usize| match parsed.count {
+            Some(n) => {
+                let first = r.end - 1;
+                first..(first + n.max(1)).min(blocks)
+            }
+            None => r,
+        };
         let info = |register: Option<char>| OpInfo {
             register,
             big: false,
@@ -471,8 +480,13 @@ impl Vim {
                 } else {
                     Operator::Yank
                 };
+                let r = counted(r, cx.ed.document().block_count());
                 self.leave_visual_quietly(cx);
-                self.hint_undo(cx, origin);
+                // Vim goes to the first line of the range before deleting.
+                let doc = cx.ed.document();
+                let first =
+                    buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(r.start, 0)));
+                self.hint_undo(cx, first);
                 self.apply_operator(cx, op, Target::Lines(Lines::Blocks(r)), info(register));
             }
             ExCommand::ShiftRight(n) | ExCommand::ShiftLeft(n) => {
@@ -480,6 +494,7 @@ impl Vim {
                     return;
                 };
                 let right = matches!(parsed.command, ExCommand::ShiftRight(_));
+                let r = counted(r, cx.ed.document().block_count());
                 self.leave_visual_quietly(cx);
                 self.hint_undo(cx, origin);
                 self.shift_lines(cx, &Lines::Blocks(r), right, n.max(1));
@@ -489,8 +504,21 @@ impl Vim {
                     return;
                 };
                 self.leave_visual_quietly(cx);
-                let count = if r.len() < 2 { 2 } else { r.len() };
-                if !self.join_lines(cx, Position::new(r.start, 0), count, true) {
+                // `:j N` joins N lines starting with the last of the range.
+                let (first, count) = match parsed.count {
+                    Some(n) => (r.end - 1, n.max(2)),
+                    None => (r.start, r.len().max(2)),
+                };
+                let at = Position::new(first, 0);
+                self.hint_undo(cx, at);
+                // `:j!` adds and removes no spaces.
+                if self.join_lines(cx, at, count, !parsed.bang) {
+                    // The cursor goes to the first non-blank of the line.
+                    let doc = cx.ed.document();
+                    let p = buf::unit_first_non_blank(doc, buf::unit_at(doc, at));
+                    self.set_normal_caret(cx, p);
+                } else {
+                    self.set_normal_caret(cx, origin);
                     self.bell();
                 }
             }
@@ -586,6 +614,11 @@ impl Vim {
             }
             total += matches.len();
             lines += 1;
+            if last_block.is_none() && !args.count_only {
+                // Vim has the cursor at the start of the first changed line
+                // when it makes the change: undo returns there.
+                self.hint_undo(cx, Position::new(b, 0));
+            }
             last_block = Some(b);
             if args.count_only {
                 continue;

@@ -50,6 +50,29 @@ pub struct MockHost {
     pub height: usize,
     pub clipboard: Option<RegisterContent>,
     pub scrolls: Vec<Scroll>,
+    /// Measure columns in terminal cells (wide characters take two, a tab
+    /// runs to the next multiple of eight) instead of characters, as Vim
+    /// does; for the comparison with a real Vim.
+    pub cells: bool,
+}
+
+/// The terminal width of a grapheme that starts at cell `col`.
+fn cell_width(g: &str, col: usize) -> usize {
+    let c = g.chars().next().unwrap_or(' ') as u32;
+    if c == 0x09 {
+        return 8 - col % 8;
+    }
+    let wide = matches!(c,
+        0x1100..=0x115F
+        | 0x2E80..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x1F300..=0x1FAFF
+        | 0x20000..=0x3FFFD);
+    if wide { 2 } else { 1 }
 }
 
 impl MockHost {
@@ -60,6 +83,7 @@ impl MockHost {
             height,
             clipboard: None,
             scrolls: Vec::new(),
+            cells: false,
         }
     }
 
@@ -123,10 +147,23 @@ impl MockHost {
         best
     }
 
-    fn at_column(doc: &Document, row: &Row, col: usize) -> Position {
+    fn at_column(&self, doc: &Document, row: &Row, col: usize) -> Position {
         let t = doc.blocks()[row.block].text();
         if row.start == row.end {
             return Position::new(row.block, row.start);
+        }
+        if self.cells {
+            // The character whose cells cover the column, else the last.
+            let mut o = row.start;
+            let mut x = 0;
+            loop {
+                let n = text::next_grapheme_boundary(t, o);
+                x += cell_width(&t[o..n], x);
+                if x > col || n >= row.end {
+                    return Position::new(row.block, o);
+                }
+                o = n;
+            }
         }
         let mut o = row.start;
         for _ in 0..col {
@@ -154,6 +191,20 @@ impl VimHost for MockHost {
         let r = &rows[self.row_index(doc, pos)];
         let t = doc.blocks()[r.block].text();
         let upto = pos.offset.clamp(r.start, r.end);
+        if self.cells {
+            let mut o = r.start;
+            let mut x = 0;
+            while o < upto {
+                let n = text::next_grapheme_boundary(t, o);
+                x += cell_width(&t[o..n], x);
+                o = n;
+            }
+            // Vim's cursor sits on the last cell of a tab.
+            if t[o..].starts_with('\t') {
+                x += cell_width("\t", x) - 1;
+            }
+            return x as f32;
+        }
         text::grapheme_count(&t[r.start..upto]) as f32
     }
 
@@ -172,7 +223,7 @@ impl VimHost for MockHost {
             GoalColumn::X(x) => x.max(0.0) as usize,
             GoalColumn::EndOfRow => usize::MAX,
         };
-        MockHost::at_column(doc, &all[j], col)
+        self.at_column(doc, &all[j], col)
     }
 
     fn viewport(&mut self, state: &EditorState) -> Option<Viewport> {
@@ -440,6 +491,10 @@ pub struct Session {
     /// Keys nobody handled (not consumed in Normal mode, unknown to the
     /// stand-in editor).
     pub unhandled: Vec<Key>,
+    /// The stand-in editor's left and right arrows stay on their line in
+    /// Insert mode, as Vim's do (the real editor's wrap to the next
+    /// paragraph); for the comparison with a real Vim.
+    pub vim_arrows: bool,
 }
 
 impl Session {
@@ -476,6 +531,32 @@ impl Session {
             vim,
             effects,
             unhandled: Vec::new(),
+            vim_arrows: false,
+        }
+    }
+
+    /// A session over plain paragraphs, one per line, with the caret at
+    /// `caret` and a host that never wraps: the setting in which the engine
+    /// can be compared with a real Vim.
+    pub fn plain(lines: &[&str], caret: Position, options: VimOptions) -> Session {
+        let blocks: Vec<Block> = lines.iter().map(|l| Block::paragraph(l)).collect();
+        let mut ed = EditorState::new(Document::from_blocks(blocks));
+        ed.set_options(EditorOptions {
+            input_rules: false,
+            smart_punctuation: false,
+        });
+        let mut host = MockHost::new(usize::MAX, 40);
+        host.cells = true;
+        let mut vim = Vim::with_options(options);
+        ed.set_caret(caret);
+        let effects = vim.attach(&mut ed, &mut host).effects;
+        Session {
+            ed,
+            host,
+            vim,
+            effects,
+            unhandled: Vec::new(),
+            vim_arrows: false,
         }
     }
 
@@ -541,6 +622,17 @@ impl Session {
                 self.ed.insert_text("\t");
                 let o = self.vim.text_inserted("\t", &mut self.ed, &mut self.host);
                 self.absorb(o);
+            }
+            KeyCode::Left | KeyCode::Right if self.vim_arrows => {
+                let p = self.ed.selection().head;
+                let t = self.ed.document().blocks()[p.block].text();
+                let ls = text::line_start(t, p.offset);
+                let le = text::line_end(t, p.offset);
+                if k.code == KeyCode::Left && p.offset > ls {
+                    self.ed.move_caret(Movement::Left, false);
+                } else if k.code == KeyCode::Right && p.offset < le {
+                    self.ed.move_caret(Movement::Right, false);
+                }
             }
             KeyCode::Left => self.ed.move_caret(Movement::Left, k.shift),
             KeyCode::Right => self.ed.move_caret(Movement::Right, k.shift),

@@ -7,12 +7,12 @@ use crate::effect::{Effect, HostRequest};
 use crate::host::{GoalColumn, Scroll, ScrollAlign};
 use crate::key::{Key, KeyCode};
 use crate::motion;
-use crate::register;
+use crate::register::{self, RegisterContent};
 use crate::search;
 use crate::textobj::{self, Target};
 
 use super::cmdline::CmdKind;
-use super::marks::Mark;
+use super::marks::{Mark, PlaceMark};
 use super::motions::{GoalUpdate, Motion, MotionKind, MotionOut};
 use super::operators::OpInfo;
 use super::{
@@ -106,7 +106,9 @@ impl Vim {
         self.sync_visual_selection(cx);
     }
 
-    /// Remembers the Visual selection for `gv` and the `<` `>` marks.
+    /// Remembers the Visual selection for `gv` and the `<` `>` marks. For a
+    /// linewise selection the marks are the start of the first line and the
+    /// end of the last, as in Vim.
     pub(crate) fn save_visual(&mut self, cx: &Cx) {
         let Base::Visual { line } = self.base else {
             return;
@@ -115,12 +117,17 @@ impl Vim {
         let a = doc.clamp_position(self.visual.anchor);
         let c = doc.clamp_position(self.visual.cursor);
         self.last_visual = Some(SavedVisual {
-            anchor: Mark::at(doc, a),
-            cursor: Mark::at(doc, c),
+            anchor: PlaceMark::at(doc, a),
+            cursor: PlaceMark::at(doc, c),
             line,
         });
-        self.marks.insert('<', Mark::at(doc, a.min(c)));
-        self.marks.insert('>', Mark::at(doc, a.max(c)));
+        let (mut lo, mut hi) = (a.min(c), a.max(c));
+        if line {
+            lo = Position::new(lo.block, buf::line_start(doc, lo));
+            hi = Position::new(hi.block, buf::line_end(doc, hi));
+        }
+        self.marks.insert('<', Mark::at(doc, lo));
+        self.marks.insert('>', Mark::at(doc, hi));
     }
 
     /// Leaves Visual mode; the caret stays where the cursor was.
@@ -207,8 +214,11 @@ impl Vim {
 
     /// Asks that `u` put the caret back at `p` (the caret as it is now)
     /// after undoing the command being executed.
-    pub(crate) fn hint_undo(&mut self, cx: &Cx, p: Position) {
-        self.undo_hint = Some(Mark::at(cx.ed.document(), p));
+    pub(crate) fn hint_undo(&mut self, _cx: &Cx, p: Position) {
+        // A plain position, as in Vim: undo brings the document back to
+        // the state the position was taken in, and redo applies it to the
+        // changed document as it is.
+        self.undo_hint = Some(p);
     }
 
     // ----- key entry -------------------------------------------------------------------------
@@ -309,6 +319,8 @@ impl Vim {
         Some(match t {
             Tok::Ch('h') | Tok::Named(KeyCode::Left) => Motion::Left,
             Tok::Ch('l') | Tok::Named(KeyCode::Right) => Motion::Right,
+            // In Visual mode backspace deletes the selection.
+            Tok::Named(KeyCode::Backspace) if self.is_visual() => return None,
             Tok::Named(KeyCode::Backspace) | Tok::Ctrl('h') => Motion::WrapLeft,
             Tok::Ch(' ') => Motion::WrapRight,
             Tok::Ch('j') | Tok::Named(KeyCode::Down) | Tok::Ctrl('n') | Tok::Ctrl('j') => {
@@ -453,14 +465,34 @@ impl Vim {
             }
             Some(cur) if cur == op => {
                 let origin = self.cursor(cx);
-                let lines = self.lines_from_cursor(cx, origin, self.pending.count1());
-                self.run_operator(cx, op, Target::Lines(lines), origin, false, true);
+                let n = self.pending.count1();
+                let Some(lines) = self.lines_from_cursor(cx, origin, n) else {
+                    self.fail();
+                    return;
+                };
+                let caret = self.line_op_caret(cx, op, origin, n);
+                self.run_operator(cx, op, Target::Lines(lines), caret, false, true);
             }
             Some(_) => self.fail(),
         }
     }
 
-    /// Applies an operator and completes the command.
+    /// Where Vim has the cursor when `dd`, `cc`, `yy`, `gUU` and friends
+    /// run with `count` from `origin`: the motion behind them goes to the
+    /// first non-blank of the last line (a yank does not move at all), and
+    /// the operator starts at whichever comes first. This is where a yank
+    /// or a case change leaves the caret, and where `u` puts it back.
+    fn line_op_caret(&self, cx: &Cx, op: Operator, origin: Position, count: usize) -> Position {
+        if op == Operator::Yank || count > 1 {
+            return origin;
+        }
+        let doc = cx.ed.document();
+        origin.min(buf::unit_first_non_blank(doc, buf::unit_at(doc, origin)))
+    }
+
+    /// Applies an operator and completes the command. `op_caret` is where
+    /// Vim has the cursor when the operator runs (the start of the text;
+    /// for whole lines the earlier of the caret and where the motion went).
     fn run_operator(
         &mut self,
         cx: &mut Cx,
@@ -489,25 +521,55 @@ impl Vim {
             shift_times,
             widen,
         };
-        if op != Operator::Yank
-            && let Target::Lines(lines) = &target
-        {
-            // Undoing a change of whole lines puts the caret back where it
-            // was, if it was on the first of them (as Vim does); undoing a
-            // change of text puts it at the start of that text, which the
-            // editor's own undo record already gives.
-            let c = cx.ed.selection().head;
-            let doc = cx.ed.document();
-            let first = lines.start();
-            let on_first = buf::unit_at(doc, c) == buf::unit_at(doc, first);
-            self.hint_undo(cx, if on_first { c } else { first });
+        if op != Operator::Yank {
+            // Undoing the change puts the caret back where the operator
+            // started, as Vim does.
+            let mut at = yank_caret;
+            if op == Operator::Change
+                && let Target::Lines(l) = &target
+                && l.count(cx.ed.document()) > 1
+                && let Lines::Blocks(_) = l
+            {
+                // Vim removes all but one of the lines with the cursor on
+                // the second: undoing a change of several lines lands
+                // there.
+                at.block += 1;
+            }
+            self.hint_undo(cx, at);
         }
         let ok = self.apply_operator(cx, op, target, info);
-        self.goal = None;
+        // After `d$` / `D` Vim still aims for the ends of lines.
+        self.goal = if std::mem::take(&mut self.op_to_eol) && op == Operator::Delete {
+            Some(GoalColumn::EndOfRow)
+        } else {
+            None
+        };
         if ok {
             self.finish_command(cx, op != Operator::Yank);
         } else {
             self.fail();
+        }
+    }
+
+    /// Vim's cursor when an operator runs on a Visual selection from
+    /// `anchor` to `cursor`: the start of a characterwise selection; for a
+    /// linewise one column one of the first line, unless the cursor is on a
+    /// line above the one the selection was started on, where it stays.
+    fn visual_op_caret(
+        doc: &writer_core::Document,
+        anchor: Position,
+        cursor: Position,
+        target: &Target,
+    ) -> Position {
+        match target {
+            Target::Lines(l) => {
+                if buf::unit_at(doc, cursor).start_pos() < buf::unit_at(doc, anchor).start_pos() {
+                    cursor
+                } else {
+                    l.start()
+                }
+            }
+            Target::Chars(r) => r.start,
         }
     }
 
@@ -534,16 +596,46 @@ impl Vim {
             line,
             blocks: e.block - s.block,
             cols,
+            to_eol: !line && buf::is_newline(doc, e) && !buf::is_empty_line(doc, e),
         });
+        // Repeated with `.`, the selection is rebuilt from the caret, which
+        // is where Vim leaves the cursor.
+        let start = match &target {
+            Target::Lines(_) if self.replaying => a,
+            _ => Self::visual_op_caret(doc, a, c, &target),
+        };
         self.save_visual(cx);
         self.base = Base::Normal;
         cx.ed.set_caret(s);
-        // A linewise selection starts in column one, as in Vim.
-        let start = match &target {
-            Target::Lines(l) => l.start(),
-            Target::Chars(_) => s,
-        };
-        self.run_operator(cx, op, target, start, false, false);
+        let big = self.visual_big;
+        let lines = matches!(target, Target::Lines(_));
+        self.run_operator(cx, op, target, start, big, false);
+        if matches!(op, Operator::Delete | Operator::Change) {
+            // The text is gone: `gv`, `'<` and `'>` are where it was (Vim
+            // moves the marks of deleted lines to the line that takes
+            // their place, keeping the columns).
+            let doc = cx.ed.document();
+            let (pa, pc) = if lines {
+                (
+                    Position::new(s.block, a.offset),
+                    Position::new(s.block, c.offset),
+                )
+            } else {
+                (s, s)
+            };
+            if let Some(v) = self.last_visual.as_mut() {
+                v.anchor = PlaceMark::placed(pa);
+                v.cursor = PlaceMark::placed(pc);
+            }
+            let (lo, hi) = (pa.min(pc), pa.max(pc));
+            if s.block < doc.block_count() {
+                self.marks.insert('<', Mark::at(doc, lo));
+                self.marks.insert('>', Mark::at(doc, hi));
+            } else {
+                self.marks.remove(&'<');
+                self.marks.remove(&'>');
+            }
+        }
     }
 
     /// Runs a motion: moves the cursor, or hands the range to the pending
@@ -560,8 +652,28 @@ impl Vim {
         {
             let opts = self.class_opts(big);
             let doc = cx.ed.document();
-            if buf::is_empty_line(doc, origin) {
-                // Nothing to change on an empty line: just start typing.
+            let unit = buf::unit_at(doc, origin);
+            if count.unwrap_or(1) > 1 && buf::is_empty_line(doc, origin) {
+                // With a count the words after the empty line are changed:
+                // the plain motion.
+            } else if buf::is_empty_line(doc, origin)
+                && unit.start == unit.end
+                && !doc.blocks()[origin.block].is_void()
+            {
+                // An empty line: Vim's `cw` takes the line, as `cc` does
+                // (the registers get an empty line).
+                let caret = origin;
+                self.run_operator(
+                    cx,
+                    Operator::Change,
+                    Target::Lines(buf::lines_between(doc, origin, origin)),
+                    caret,
+                    false,
+                    false,
+                );
+                return;
+            } else if buf::is_empty_line(doc, origin) {
+                // An empty line inside a block: just start typing.
                 result = Some(MotionOut {
                     pos: origin,
                     kind: MotionKind::Exclusive,
@@ -594,19 +706,27 @@ impl Vim {
         };
         if let Some(op) = op {
             let target = self.motion_target(cx, origin, &out);
-            // A yank leaves the caret at the start of what was yanked.
+            // The operator starts at the start of the text; for whole
+            // lines at the caret or where the motion went, whichever comes
+            // first (`yj` leaves the caret alone, `yk` moves it up). `y_`
+            // does not move at all.
             let yank_caret = match &target {
                 Target::Chars(r) => r.start,
+                Target::Lines(_) if op == Operator::Yank && m == Motion::LineHere => origin,
                 Target::Lines(_) => origin.min(out.pos),
             };
+            self.op_to_eol = m == Motion::LineEnd;
             self.run_operator(cx, op, target, yank_caret, out.big, true);
             return;
         }
-        if out.jump && out.pos != origin {
+        if out.jump {
+            // Also when the jump ends where it started: Vim adds the place
+            // to the jump list all the same (the `''` mark is put right
+            // after the command).
             self.push_jump(cx, origin);
         }
         let before = self.cursor(cx);
-        self.move_cursor_eol(cx, out.pos, m == Motion::LineEnd);
+        self.move_cursor_eol(cx, out.pos, matches!(m, Motion::LineEnd | Motion::Right));
         match out.goal {
             GoalUpdate::Keep => {}
             GoalUpdate::Clear => self.goal = None,
@@ -714,9 +834,7 @@ impl Vim {
                 "search hit TOP, continuing at BOTTOM"
             });
         }
-        if p != at {
-            self.push_jump(cx, at);
-        }
+        self.push_jump(cx, at);
         self.move_cursor(cx, p);
         self.goal = None;
         self.finish_command(cx, false);
@@ -908,27 +1026,14 @@ impl Vim {
     /// `iw`, `a"`, `ip`, … after an operator or in Visual mode.
     fn text_object(&mut self, cx: &mut Cx, c: char, around: bool) {
         let visual = self.is_visual();
-        let mut at = self.cursor(cx);
+        let cursor = self.cursor(cx);
         let count = self.pending.count1();
         let doc = cx.ed.document();
-        // With something already selected, a word, sentence or paragraph
-        // object adds the next one.
-        let extending =
-            visual && self.visual.anchor < self.visual.cursor && matches!(c, 'w' | 'W' | 's' | 'p');
-        if extending {
-            let next = if c == 'p' {
-                (at.block + 1 < doc.block_count()).then(|| Position::new(at.block + 1, 0))
-            } else {
-                buf::next_cell(doc, at).filter(|n| n.block == at.block && !buf::is_newline(doc, *n))
-            };
-            match next {
-                Some(n) => at = n,
-                None => {
-                    self.fail();
-                    return;
-                }
-            }
-        }
+        // The other end of a Visual selection of more than one character:
+        // word, sentence, paragraph and bracket objects then extend it.
+        let anchor = visual
+            .then(|| doc.clamp_position(self.visual.anchor))
+            .filter(|a| *a != cursor);
         let brackets = |c: char| match c {
             '(' | ')' | 'b' => Some(('(', ')')),
             '[' | ']' => Some(('[', ']')),
@@ -936,67 +1041,137 @@ impl Vim {
             '<' | '>' => Some(('<', '>')),
             _ => None,
         };
-        let mut target = match c {
-            'w' => textobj::word(doc, at, around, count, self.class_opts(false)).map(Target::Chars),
-            'W' => textobj::word(doc, at, around, count, self.class_opts(true)).map(Target::Chars),
-            's' => textobj::sentence(doc, at, around, count).map(Target::Chars),
-            'p' => textobj::paragraph(doc, at, around, count).map(Target::Lines),
-            '"' | '\'' | '`' => textobj::quote(doc, at, c, around).map(Target::Chars),
+        // What was found: text (with the new anchor, if it moves), or lines.
+        enum Found {
+            Text(textobj::Object),
+            Range(TextRange),
+            Blocks(std::ops::Range<usize>),
+        }
+        let found = match c {
+            'w' | 'W' => {
+                match textobj::word(
+                    doc,
+                    cursor,
+                    anchor,
+                    around,
+                    count,
+                    self.class_opts(c == 'W'),
+                ) {
+                    Ok(o) => Some(Found::Text(o)),
+                    Err(stopped) => {
+                        // Vim leaves the cursor where the search ended.
+                        self.move_cursor(cx, stopped);
+                        self.goal = None;
+                        self.fail();
+                        return;
+                    }
+                }
+            }
+            's' if anchor.is_none()
+                && buf::block_class(doc, cursor.block) != buf::BlockClass::Text =>
+            {
+                // On an empty line Vim takes the empty lines from here to
+                // the next text, as lines.
+                let mut end = cursor.block + 1;
+                while end < doc.block_count() && buf::block_class(doc, end) != buf::BlockClass::Text
+                {
+                    end += 1;
+                }
+                // (No text after them: no sentence to go by, as in Vim.)
+                (end < doc.block_count()).then_some(Found::Blocks(cursor.block..end))
+            }
+            's' => {
+                // With something selected, the next sentence is added.
+                let extending = anchor.is_some_and(|a| a < cursor);
+                let at = if extending {
+                    buf::next_cell(doc, cursor)
+                        .filter(|n| n.block == cursor.block && !buf::is_newline(doc, *n))
+                } else {
+                    Some(cursor)
+                };
+                at.and_then(|at| textobj::sentence(doc, at, around, count))
+                    .map(|r| {
+                        if extending {
+                            let last = buf::prev_cell(doc, r.end).unwrap_or(r.start).max(r.start);
+                            Found::Text(textobj::Object {
+                                start: None,
+                                end: last,
+                                inclusive: true,
+                            })
+                        } else {
+                            Found::Range(r)
+                        }
+                    })
+            }
+            'p' => {
+                let anchor_block = anchor.map(|a| a.block).filter(|b| *b != cursor.block);
+                textobj::paragraph(doc, cursor, anchor_block, around, count).map(|r| {
+                    if anchor_block.is_some() {
+                        // Only the cursor's end moves.
+                        Found::Text(textobj::Object {
+                            start: None,
+                            end: Position::new(r.start, 0),
+                            inclusive: true,
+                        })
+                    } else {
+                        Found::Blocks(r)
+                    }
+                })
+            }
+            '"' | '\'' | '`' => textobj::quote(doc, cursor, c, around).map(Found::Range),
             _ => match brackets(c) {
-                Some((o, cl)) => textobj::bracket(doc, at, o, cl, around, count).map(Target::Chars),
+                Some((o, cl)) => {
+                    textobj::bracket(doc, cursor, anchor, o, cl, around, count).map(Found::Text)
+                }
                 None => None,
             },
         };
-        if visual
-            && let Some((o, cl)) = brackets(c)
-            && let Target::Chars(current) = self.visual_target(cx)
-            && self.visual.anchor != self.visual.cursor
-            && let Some(Target::Chars(found)) = &target
-            && found.start >= current.start
-            && found.end <= current.end
-        {
-            // The selection already covers that pair: take the next one out.
-            target = textobj::bracket_growing(doc, current, o, cl, around).map(Target::Chars);
-        }
-        let Some(target) = target else {
+        let Some(found) = found else {
             self.fail();
             return;
         };
         if let Some(op) = self.pending.operator {
+            let target = match found {
+                Found::Text(o) => Target::Chars(o.range(doc, cursor)),
+                Found::Range(r) => Target::Chars(r),
+                Found::Blocks(r) => Target::Lines(Lines::Blocks(r)),
+            };
             let start = match &target {
                 Target::Chars(r) => r.start,
                 Target::Lines(l) => l.start(),
             };
-            self.run_operator(cx, op, target, start, false, false);
+            // (A delete over several lines with only blanks around it
+            // takes the lines, as with a motion.)
+            self.run_operator(cx, op, target, start, false, true);
             return;
         }
         // Visual mode: select the object.
-        match target {
-            Target::Chars(r) => {
+        match found {
+            Found::Text(o) => {
+                if let Some(s) = o.start {
+                    self.visual.anchor = s;
+                }
+                self.visual.cursor = o.end;
+                // Extending by paragraphs keeps the mode; the other
+                // objects make the selection characterwise.
+                if c != 'p' && matches!(self.base, Base::Visual { line: true }) {
+                    self.base = Base::Visual { line: false };
+                }
+            }
+            Found::Range(r) => {
                 if r.is_empty() {
                     self.fail();
                     return;
                 }
-                let last = buf::prev_cell(doc, r.end).unwrap_or(r.start).max(r.start);
-                if !extending {
-                    self.visual.anchor = r.start;
-                }
-                self.visual.cursor = last;
+                self.visual.anchor = r.start;
+                self.visual.cursor = buf::prev_cell(doc, r.end).unwrap_or(r.start).max(r.start);
                 if matches!(self.base, Base::Visual { line: true }) {
                     self.base = Base::Visual { line: false };
                 }
             }
-            Target::Lines(l) => {
-                let (s, e) = match l {
-                    Lines::Blocks(r) => (Position::new(r.start, 0), Position::new(r.end - 1, 0)),
-                    Lines::Code { block, start, end } => {
-                        (Position::new(block, start), Position::new(block, end))
-                    }
-                };
-                if !extending {
-                    self.visual.anchor = s;
-                }
-                self.visual.cursor = e;
+            Found::Blocks(r) => {
+                self.visual.anchor = Position::new(r.start, 0);
+                self.visual.cursor = Position::new(r.end - 1, 0);
                 self.base = Base::Visual { line: true };
             }
         }
@@ -1012,9 +1187,18 @@ impl Vim {
             return;
         };
         let doc = cx.ed.document();
-        let (Some(a), Some(c)) = (saved.anchor.resolve(doc), saved.cursor.resolve(doc)) else {
+        // A start below the last line is no selection any more (the lines
+        // were deleted at the end of the document).
+        let Some(a) = saved.anchor.resolve(doc) else {
             self.bell();
             return;
+        };
+        let c = saved.cursor.resolve(doc).unwrap_or(doc.end());
+        // On characters, unless the selection ran over a line break.
+        let (a, c) = if saved.line {
+            (a, c)
+        } else {
+            (buf::clamp_normal(doc, a), c)
         };
         if self.is_visual() {
             self.save_visual(cx);
@@ -1045,6 +1229,7 @@ impl Vim {
             line,
             blocks: e.block - s.block,
             cols,
+            to_eol: !line && buf::is_newline(doc, e) && !buf::is_empty_line(doc, e),
         });
         self.save_visual(cx);
         self.base = Base::Normal;
@@ -1058,6 +1243,14 @@ impl Vim {
         let last_block = (start.block + v.blocks).min(doc.block_count() - 1);
         let cursor = if v.line {
             Position::new(last_block, 0)
+        } else if v.to_eol {
+            // To the end of the last line, line break included.
+            let at = if last_block == start.block {
+                start
+            } else {
+                Position::new(last_block, 0)
+            };
+            Position::new(last_block, buf::line_end(doc, at))
         } else if last_block == start.block {
             let t = buf::text_of(doc, start.block);
             let le = buf::line_end(doc, start);
@@ -1088,6 +1281,13 @@ impl Vim {
             Tok::Ch('x') | Tok::Named(KeyCode::Delete) => {
                 self.visual_operator(cx, Operator::Delete, false)
             }
+            // Backspace deletes the selection in Vim (`ctrl-h` moves left),
+            // and the text goes to register 1 whatever its size.
+            Tok::Named(KeyCode::Backspace) => {
+                self.visual_big = true;
+                self.visual_operator(cx, Operator::Delete, false);
+                self.visual_big = false;
+            }
             Tok::Ch('X') | Tok::Ch('D') => self.visual_operator(cx, Operator::Delete, true),
             Tok::Ch('s') => self.visual_operator(cx, Operator::Change, false),
             Tok::Ch('C') | Tok::Ch('S') | Tok::Ch('R') => {
@@ -1100,9 +1300,10 @@ impl Vim {
             Tok::Ch('J') => self.join_command(cx, true),
             Tok::Ch('p') | Tok::Ch('P') => {
                 let reg = self.pending.register;
-                let Some(content) = self.read_register(cx, reg) else {
-                    self.fail();
-                    return true;
+                // An empty register puts nothing: the selection is deleted.
+                let content = match self.registers_content(cx, reg) {
+                    Some(c) => c,
+                    None => RegisterContent::charwise(writer_core::Fragment::default()),
                 };
                 let target = self.visual_target(cx);
                 let n = self.pending.count1();
@@ -1196,10 +1397,8 @@ impl Vim {
                     let o = buf::advance_graphemes(text, cur.offset, n, le);
                     TextRange::in_block(cur.block, cur.offset, o)
                 };
-                if range.is_empty() {
-                    self.fail();
-                    return true;
-                }
+                // Nothing to delete (an empty line) is not an error in
+                // Vim: the command does nothing and `.` repeats it.
                 self.run_operator(
                     cx,
                     Operator::Delete,
@@ -1224,12 +1423,16 @@ impl Vim {
                 );
             }
             Tok::Ch('S') => {
-                let lines = self.lines_from_cursor(cx, cur, n);
+                let Some(lines) = self.lines_from_cursor(cx, cur, n) else {
+                    self.fail();
+                    return true;
+                };
+                let caret = self.line_op_caret(cx, Operator::Change, cur, n);
                 self.run_operator(
                     cx,
                     Operator::Change,
                     Target::Lines(lines),
-                    cur,
+                    caret,
                     false,
                     false,
                 );
@@ -1246,10 +1449,15 @@ impl Vim {
                 } else {
                     Operator::Change
                 };
-                self.run_operator(cx, op, target, cur, false, false);
+                // `D` is `d$`, with its rule for whole lines.
+                self.op_to_eol = true;
+                self.run_operator(cx, op, target, cur, false, true);
             }
             Tok::Ch('Y') => {
-                let lines = self.lines_from_cursor(cx, cur, n);
+                let Some(lines) = self.lines_from_cursor(cx, cur, n) else {
+                    self.fail();
+                    return true;
+                };
                 self.run_operator(cx, Operator::Yank, Target::Lines(lines), cur, false, false);
             }
             Tok::Ch('r') => self.pending.awaiting = Some(Await::Replace),
@@ -1344,6 +1552,10 @@ impl Vim {
             Tok::Ch('z') => self.pending.awaiting = Some(Await::Z),
             Tok::Ch('Z') => self.pending.awaiting = Some(Await::BigZ),
             Tok::Ctrl('o') => {
+                if self.jumps.at_newest() {
+                    // Going back from here: `''` returns to this place.
+                    self.set_context_mark(cx, cur);
+                }
                 let doc = cx.ed.document();
                 match self.jumps.back(doc, cur, n) {
                     Some(p) => {
@@ -1400,18 +1612,30 @@ impl Vim {
             let a = doc.clamp_position(self.visual.anchor);
             let c = doc.clamp_position(self.visual.cursor);
             let (s, e) = if a <= c { (a, c) } else { (c, a) };
-            let lines = buf::lines_between(doc, s, e).count(doc);
+            let range = buf::lines_between(doc, s, e);
+            let lines = range.count(doc);
+            let line_mode = matches!(self.base, Base::Visual { line: true });
+            let hint = if line_mode {
+                Self::visual_op_caret(doc, a, c, &Target::Lines(range))
+            } else {
+                s
+            };
             self.visual_operator_prepare(cx);
             cx.ed.set_caret(s);
+            self.hint_undo(cx, hint);
             (s, lines.max(2))
         } else {
-            (self.cursor(cx), self.pending.count1())
+            let c = self.cursor(cx);
+            self.hint_undo(cx, c);
+            (c, self.pending.count1())
         };
-        self.hint_undo(cx, origin);
         if self.join_lines(cx, origin, count, spaces) {
             self.finish_command(cx, true);
         } else {
-            self.set_normal_caret(cx, origin);
+            // (From Visual mode Vim leaves the cursor where the operator
+            // would have started.)
+            let back = self.undo_hint.unwrap_or(origin);
+            self.set_normal_caret(cx, back);
             self.fail();
         }
     }
@@ -1431,9 +1655,45 @@ impl Vim {
         self.finish_command(cx, true);
     }
 
-    /// `u`. The caret goes to where the change began: the selection the
-    /// editor recorded before it, or the caret the command asked to be
-    /// remembered when that lies in the restored blocks.
+    /// Where Vim puts the cursor after an undo or redo that changed the
+    /// blocks of the editor's last change: at `saved` (where the cursor was
+    /// when the change was made) if that lies in or next to the changed
+    /// blocks, otherwise on the first non-blank of the first changed block.
+    ///
+    /// A caret the command itself remembered (`trusted`) lies in the text
+    /// the command touched, which may start before the first block that
+    /// really changed (`gu` over lines that were lower case already), so it
+    /// is taken as it is.
+    fn undo_caret(cx: &Cx, saved: Position, trusted: bool) -> Position {
+        let doc = cx.ed.document();
+        let n = doc.block_count();
+        let first_non_blank = |b: usize| {
+            buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(b.min(n - 1), 0)))
+        };
+        let p = if saved.block >= n {
+            // The line the cursor was on is gone (lines removed at the end
+            // of the document).
+            first_non_blank(n - 1)
+        } else {
+            match cx.ed.last_change().and_then(|c| c.blocks) {
+                Some(_) if trusted => doc.clamp_position(saved),
+                Some(splice) => {
+                    let first = splice.start.min(n - 1);
+                    if saved.block + 1 >= first && saved.block <= first + splice.new_len {
+                        doc.clamp_position(saved)
+                    } else {
+                        first_non_blank(first)
+                    }
+                }
+                None => doc.clamp_position(saved),
+            }
+        };
+        buf::clamp_normal(doc, p)
+    }
+
+    /// `u`. The caret goes to where the cursor was when the change was
+    /// made (the caret the command asked to be remembered, else the
+    /// selection the editor recorded), as in Vim.
     pub(crate) fn undo(&mut self, cx: &mut Cx, count: usize) {
         let mut caret = None;
         for _ in 0..count.max(1) {
@@ -1448,18 +1708,11 @@ impl Vim {
             if !cx.ed.undo() {
                 break;
             }
-            let mut p = cx.ed.selection().start();
-            if let Some(m) = hint
-                && let Some(q) = m.resolve(cx.ed.document())
-                && let Some(splice) = cx.ed.last_change().and_then(|c| c.blocks)
-                && q.block >= splice.start
-                && q.block < splice.start + splice.new_len.max(1)
-            {
-                p = q;
-            }
-            let p = buf::clamp_normal(cx.ed.document(), p);
+            let trusted = hint.is_some();
+            let saved = hint.unwrap_or(cx.ed.selection().start());
+            let p = Self::undo_caret(cx, saved, trusted);
             // Redo comes back to the same place, as in Vim.
-            self.redo_carets.push(Mark::at(cx.ed.document(), p));
+            self.redo_carets.push((saved, trusted));
             caret = Some(p);
         }
         self.keep_redo_carets = true;
@@ -1479,19 +1732,17 @@ impl Vim {
             if !cx.ed.redo() {
                 break;
             }
-            let mut p = cx.ed.selection().start();
-            if let Some(m) = self.redo_carets.pop() {
+            let mut saved = cx.ed.selection().start();
+            let mut trusted = false;
+            if let Some((p, t)) = self.redo_carets.pop() {
                 // The next undo of this step returns to the same caret.
-                self.undo_hints.push((cx.ed.undo_depth(), m));
-                if let Some(q) = m.resolve(cx.ed.document())
-                    && let Some(splice) = cx.ed.last_change().and_then(|c| c.blocks)
-                    && q.block >= splice.start
-                    && q.block < splice.start + splice.new_len.max(1)
-                {
-                    p = q;
+                if t {
+                    self.undo_hints.push((cx.ed.undo_depth(), p));
                 }
+                saved = p;
+                trusted = t;
             }
-            caret = Some(p);
+            caret = Some(Self::undo_caret(cx, saved, trusted));
         }
         self.keep_redo_carets = true;
         let Some(p) = caret else {

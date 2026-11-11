@@ -9,6 +9,7 @@ use crate::register::RegisterContent;
 use crate::textobj::Target;
 
 use super::insert::MAX_REPEAT;
+use super::marks::PlaceMark;
 use super::{Cx, Operator, Vim};
 
 /// How a case operator maps text.
@@ -19,24 +20,45 @@ pub(crate) enum CaseMode {
     Toggle,
 }
 
+/// The upper-case form of one character. Vim maps character to character:
+/// `ß` becomes the capital sharp s, and a character whose upper case is
+/// several characters stays as it is. That also keeps every character's
+/// formatting and comment anchors in place.
+fn upper_char(c: char) -> char {
+    if c == 'ß' {
+        return 'ẞ';
+    }
+    let mut it = c.to_uppercase();
+    match (it.next(), it.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
+
+fn lower_char(c: char) -> char {
+    let mut it = c.to_lowercase();
+    match (it.next(), it.next()) {
+        (Some(l), None) => l,
+        _ => c,
+    }
+}
+
 fn map_case(s: &str, mode: CaseMode) -> String {
-    match mode {
-        CaseMode::Lower => s.to_lowercase(),
-        CaseMode::Upper => s.to_uppercase(),
-        CaseMode::Toggle => {
-            let mut out = String::with_capacity(s.len());
-            for c in s.chars() {
+    s.chars()
+        .map(|c| match mode {
+            CaseMode::Lower => lower_char(c),
+            CaseMode::Upper => upper_char(c),
+            CaseMode::Toggle => {
                 if c.is_lowercase() {
-                    out.extend(c.to_uppercase());
+                    upper_char(c)
                 } else if c.is_uppercase() {
-                    out.extend(c.to_lowercase());
+                    lower_char(c)
                 } else {
-                    out.push(c);
+                    c
                 }
             }
-            out
-        }
-    }
+        })
+        .collect()
 }
 
 /// A fragment holding the hard lines `range` of code block `block`.
@@ -90,6 +112,18 @@ pub(crate) struct OpInfo {
     pub widen: bool,
 }
 
+/// Whether `target` is the only line of a document that holds nothing but
+/// one empty paragraph. Vim does not delete (or put in a register) the
+/// single empty line of an empty buffer.
+fn is_empty_document(cx: &Cx, target: &Target) -> bool {
+    let doc = cx.ed.document();
+    matches!(target, Target::Lines(Lines::Blocks(_)))
+        && doc.block_count() == 1
+        && doc.blocks()[0].is_empty()
+        && !doc.blocks()[0].is_void()
+        && *doc.blocks()[0].kind() == BlockKind::Paragraph
+}
+
 impl Vim {
     /// The register content of `target`.
     fn target_content(&self, cx: &Cx, target: &Target) -> RegisterContent {
@@ -126,10 +160,7 @@ impl Vim {
                     Target::Lines(l) => l.count(cx.ed.document()),
                     Target::Chars(_) => 0,
                 };
-                let (s, e) = match &target {
-                    Target::Chars(r) => (r.start, r.end),
-                    Target::Lines(l) => (l.start(), l.start()),
-                };
+                let (s, e) = self.target_ends(cx, &target);
                 self.registers.yank(info.register, content, cx.host);
                 self.set_mark(cx, '[', s);
                 self.set_mark(cx, ']', e);
@@ -140,6 +171,9 @@ impl Vim {
                 true
             }
             Operator::Delete => {
+                if is_empty_document(cx, &target) {
+                    return true;
+                }
                 let target = if info.widen {
                     self.widen_delete(cx, target)
                 } else {
@@ -195,10 +229,7 @@ impl Vim {
                     Operator::Upper => CaseMode::Upper,
                     _ => CaseMode::Toggle,
                 };
-                let start = match &target {
-                    Target::Chars(r) => r.start,
-                    Target::Lines(l) => l.start(),
-                };
+                let (start, last) = self.target_ends(cx, &target);
                 self.case_target(cx, &target, mode);
                 // A linewise case change leaves the caret where the motion
                 // started; a characterwise one at the start of the text.
@@ -207,8 +238,30 @@ impl Vim {
                     Target::Lines(_) => info.yank_caret,
                 };
                 self.set_normal_caret(cx, caret);
-                self.set_change_marks(cx, start, start);
+                self.set_change_marks(cx, start, last);
                 true
+            }
+        }
+    }
+
+    /// The first and the last position of `target`, for the `[` and `]`
+    /// marks: the last character of a run of text, the last line of a
+    /// linewise range.
+    fn target_ends(&self, cx: &Cx, target: &Target) -> (Position, Position) {
+        let doc = cx.ed.document();
+        match target {
+            Target::Chars(r) => {
+                let last = buf::prev_cell(doc, r.end)
+                    .filter(|p| *p >= r.start)
+                    .unwrap_or(r.start);
+                (r.start, last)
+            }
+            Target::Lines(Lines::Blocks(r)) => (
+                Position::new(r.start, 0),
+                Position::new(r.end - 1, buf::len_of(doc, r.end - 1)),
+            ),
+            Target::Lines(Lines::Code { block, start, end }) => {
+                (Position::new(*block, *start), Position::new(*block, *end))
             }
         }
     }
@@ -220,12 +273,14 @@ impl Vim {
         match target {
             Target::Chars(r) => {
                 if r.is_empty() {
+                    // Nothing to delete: the registers stay as they are.
                     return r.start;
                 }
                 let doc = cx.ed.document();
-                let small = r.start.block == r.end.block
-                    && !buf::text_of(doc, r.start.block)[r.start.offset..r.end.offset]
-                        .contains('\n');
+                let small = self.visual_big
+                    || (r.start.block == r.end.block
+                        && !buf::text_of(doc, r.start.block)[r.start.offset..r.end.offset]
+                            .contains('\n'));
                 self.registers
                     .delete(info.register, content, small, info.big, cx.host);
                 cx.ed.set_caret(r.start);
@@ -233,8 +288,14 @@ impl Vim {
                 cx.ed.selection().head
             }
             Target::Lines(Lines::Blocks(range)) => {
-                self.registers
-                    .delete(info.register, content, false, false, cx.host);
+                // (Visual backspace fills `-` as well as register 1.)
+                self.registers.delete(
+                    info.register,
+                    content,
+                    self.visual_big,
+                    self.visual_big,
+                    cx.host,
+                );
                 delete_blocks(cx, range);
                 cx.ed.selection().head
             }
@@ -286,9 +347,11 @@ impl Vim {
                 cx.ed.set_caret(p);
             }
             Target::Lines(Lines::Blocks(range)) => {
-                let content = self.target_content(cx, target);
-                self.registers
-                    .delete(info.register, content, false, false, cx.host);
+                if !is_empty_document(cx, target) {
+                    let content = self.target_content(cx, target);
+                    self.registers
+                        .delete(info.register, content, false, false, cx.host);
+                }
                 let first = range.start;
                 let first_void = cx.ed.document().blocks()[first].is_void();
                 if first_void {
@@ -640,6 +703,16 @@ impl Vim {
         let mut caret = origin;
         let mut done = 0;
         cx.ed.set_caret(origin);
+        // The last character of the line joined before (of the first line
+        // to begin with), `None` for an empty line: Vim adds no space after
+        // a line that ends in white space, but an empty line in between
+        // makes it forget that.
+        let mut prev_last: Option<char> = {
+            let doc = cx.ed.document();
+            let ls = buf::line_start(doc, origin);
+            let le = buf::line_end(doc, origin);
+            buf::text_of(doc, origin.block)[ls..le].chars().next_back()
+        };
         for _ in 0..joins {
             let step = {
                 let doc = cx.ed.document();
@@ -657,8 +730,10 @@ impl Vim {
                 };
                 let next = &doc.blocks()[next_block];
                 if next_block != b && next.is_void() {
+                    prev_last = None;
                     Step::DropBlock(next_block, brk)
                 } else if next_block != b && blk.is_void() {
+                    prev_last = next.text().chars().next_back();
                     Step::DropBlock(b, Position::new(b, 0))
                 } else {
                     let nt = next.text();
@@ -673,15 +748,17 @@ impl Vim {
                     let rest_empty = next_start + ws >= next_le;
                     let ls = buf::line_start(doc, brk);
                     let head_empty = brk.offset == ls;
-                    let ends_white = t[ls..brk.offset]
-                        .chars()
-                        .next_back()
-                        .is_some_and(char::is_whitespace);
+                    let ends_white = prev_last.is_some_and(char::is_whitespace);
                     let before_paren = nt[next_start + ws..].starts_with(')');
                     let sep = if !spaces || head_empty || rest_empty || ends_white || before_paren {
                         ""
                     } else {
                         " "
+                    };
+                    prev_last = if spaces {
+                        nt[next_start + ws..next_le].chars().next_back()
+                    } else {
+                        nt[next_start..next_le].chars().next_back()
                     };
                     let end = if spaces {
                         Position::new(next_block, next_start + ws)
@@ -706,6 +783,13 @@ impl Vim {
             caret = cx.ed.document().clamp_position(caret);
         }
         if done == 0 {
+            if count > 2 {
+                // Vim's `3J` on the last line: nothing to join, no error,
+                // and the cursor goes to the start of the line.
+                let ls = buf::line_start(cx.ed.document(), origin);
+                self.set_normal_caret(cx, Position::new(origin.block, ls));
+                return true;
+            }
             return false;
         }
         self.set_normal_caret(cx, caret);
@@ -743,6 +827,21 @@ impl Vim {
                 None
             }
         }
+    }
+
+    /// Register `name` for a Visual-mode put, where an empty register is
+    /// not an error.
+    pub(crate) fn registers_content(
+        &mut self,
+        cx: &mut Cx,
+        name: Option<char>,
+    ) -> Option<RegisterContent> {
+        let before = self.effects.len();
+        let content = self.read_register(cx, name);
+        if content.is_none() {
+            self.effects.truncate(before);
+        }
+        content
     }
 
     /// Whether `content` should be put as lines inside the code block the
@@ -811,17 +910,15 @@ impl Vim {
             let doc = cx.ed.document();
             let total = n * count;
             let caret = if caret_after {
-                let next = index + total;
-                if next < doc.block_count() {
-                    Position::new(next, 0)
-                } else {
-                    doc.end()
-                }
+                // The line after the new ones; at the end of the document
+                // the last line, as in Vim.
+                Position::new((index + total).min(doc.block_count() - 1), 0)
             } else {
                 buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(index, 0)))
             };
             self.set_mark(cx, '[', Position::new(index, 0));
             self.set_mark(cx, ']', Position::new(index + total - 1, 0));
+            self.set_mark(cx, '.', Position::new(index, 0));
             if total > 2 {
                 self.message(format!("{total} more lines"));
             }
@@ -851,8 +948,11 @@ impl Vim {
                 .filter(|p| p.block == end.block)
                 .unwrap_or(end)
         };
+        // `[` and `]` are the first and the last character put.
+        let last = buf::prev_cell(doc, end).filter(|p| *p >= at).unwrap_or(at);
         self.set_mark(cx, '[', at);
-        self.set_mark(cx, ']', end);
+        self.set_mark(cx, ']', last);
+        self.set_mark(cx, '.', at);
         self.set_normal_caret(cx, caret);
     }
 
@@ -869,50 +969,51 @@ impl Vim {
     ) {
         let count = count.clamp(1, MAX_REPEAT);
         let replaced = self.target_content(cx, &target);
+        // The first and last position of what was put, for `[`, `]`, `gv`.
+        let mut put_range: Option<(Position, Position)> = None;
         match &target {
             Target::Chars(r) => {
                 cx.ed.set_caret(r.start);
                 cx.ed.delete_range(*r);
                 let p = cx.ed.selection().head;
-                if !content.linewise {
+                if content.is_empty() {
+                    // Nothing to put: the selection is just deleted.
+                    self.set_normal_caret(cx, p);
+                } else if !content.linewise {
                     for _ in 0..count {
                         cx.ed.paste(&content.fragment);
                     }
                     let end = cx.ed.selection().head;
                     let doc = cx.ed.document();
-                    let caret = buf::prev_cell(doc, end)
-                        .filter(|q| q.block == end.block)
-                        .unwrap_or(end);
+                    let last = buf::prev_cell(doc, end).filter(|q| *q >= p).unwrap_or(p);
+                    put_range = Some((p, last));
+                    let caret = if content.fragment.blocks().len() > 1 {
+                        // Vim leaves the caret at the start of a multi-line
+                        // put.
+                        p
+                    } else {
+                        buf::prev_cell(doc, end)
+                            .filter(|q| q.block == end.block)
+                            .unwrap_or(end)
+                    };
                     self.set_normal_caret(cx, caret);
                 } else {
-                    // Lines go between the two halves of the block.
-                    let doc = cx.ed.document();
-                    let head_empty = p.offset == 0;
-                    let tail_empty = p.offset >= buf::len_of(doc, p.block);
-                    let mut lines: Vec<Block> = Vec::new();
+                    // Lines go between the two halves of the line, which is
+                    // split where the selection was, as in Vim: an empty
+                    // half stays as an empty line.
+                    let mut blocks: Vec<Block> = vec![Block::new(BlockKind::Paragraph)];
+                    let mut n = 0;
                     for _ in 0..count {
-                        lines.extend(content.fragment.blocks().iter().cloned());
+                        blocks.extend(content.fragment.blocks().iter().cloned());
+                        n += content.fragment.blocks().len();
                     }
-                    let n = lines.len();
-                    let first = if head_empty { p.block } else { p.block + 1 };
-                    if head_empty || tail_empty {
-                        // Whole blocks before or after what is left.
-                        cx.ed.insert_blocks_at(first, &Fragment::new(lines));
-                        if head_empty && tail_empty {
-                            // Nothing is left: the emptied block goes.
-                            cx.ed.select_blocks(p.block + n..p.block + n + 1);
-                            cx.ed.delete_blocks();
-                        }
-                    } else {
-                        let mut blocks: Vec<Block> = vec![Block::new(BlockKind::Paragraph)];
-                        blocks.extend(lines);
-                        blocks.push(Block::new(BlockKind::Paragraph));
-                        cx.ed.paste(&Fragment::new(blocks));
-                    }
-                    self.set_normal_caret(cx, Position::new(first, 0));
+                    blocks.push(Block::new(BlockKind::Paragraph));
+                    cx.ed.paste(&Fragment::new(blocks));
+                    let first = p.block + 1;
+                    put_range = Some((Position::new(first, 0), Position::new(first + n - 1, 0)));
                     let doc = cx.ed.document();
-                    let c = cx.ed.selection().head;
-                    let c = buf::unit_first_non_blank(doc, buf::unit_at(doc, c));
+                    let c =
+                        buf::unit_first_non_blank(doc, buf::unit_at(doc, Position::new(first, 0)));
                     self.set_normal_caret(cx, c);
                 }
             }
@@ -925,7 +1026,13 @@ impl Vim {
                 // Insert first, then remove the old blocks, so the document
                 // never runs empty in between.
                 cx.ed.set_caret(Position::new(range.start, 0));
-                cx.ed.insert_blocks_at(range.start, &Fragment::new(lines));
+                if n > 0 {
+                    cx.ed.insert_blocks_at(range.start, &Fragment::new(lines));
+                    put_range = Some((
+                        Position::new(range.start, 0),
+                        Position::new(range.start + n - 1, 0),
+                    ));
+                }
                 delete_blocks(cx, &(range.start + n..range.end + n));
                 let doc = cx.ed.document();
                 let c = buf::unit_first_non_blank(
@@ -953,6 +1060,17 @@ impl Vim {
             self.registers.delete(None, replaced, small, false, cx.host);
         }
         let c = cx.ed.selection().head;
-        self.set_change_marks(cx, c, c);
+        let (first, last) = put_range.unwrap_or((c, c));
+        self.set_mark(cx, '[', first);
+        self.set_mark(cx, ']', last);
+        self.set_mark(cx, '.', first);
+        // `gv` selects what was put, in the mode the selection had.
+        if let Some(v) = self.last_visual.as_mut() {
+            let doc = cx.ed.document();
+            v.anchor = PlaceMark::at(doc, first);
+            v.cursor = PlaceMark::at(doc, last);
+        }
+        self.set_mark(cx, '<', first);
+        self.set_mark(cx, '>', last);
     }
 }

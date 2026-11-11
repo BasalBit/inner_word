@@ -19,5 +19,6 @@ mod scroll;
 mod search;
 mod textobjects;
 mod undo;
+mod vimdiff;
 mod visual;
 mod void;

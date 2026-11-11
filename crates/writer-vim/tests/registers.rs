@@ -13,7 +13,7 @@ fn named_registers() {
         // Appending lines to characters makes the register linewise.
         c("|foo\nbar", "\"ayiwj\"Ayy", "foo\n|bar").regs(&[('a', "foo\nbar\n")]),
         c("|foo\nbar", "\"ayyj\"Ayiw", "foo\n|bar").regs(&[('a', "foo\nbar\n")]),
-        c("|foo\nbar", "\"zdd\"zp", "bar\n|foo").regs(&[('z', "foo\n"), ('1', "<unset>")]),
+        c("|foo\nbar", "\"zdd\"zp", "bar\n|foo").regs(&[('z', "foo\n"), ('1', "foo\n")]),
         c("|foo bar", "\"adw\"bdw\"aP\"bp", "foo ba|r"),
         c("|foo", "\"Ayiw", "|foo").regs(&[('a', "foo")]),
         c("|foo", "\"!x", "|oo").bell(true),

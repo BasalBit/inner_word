@@ -60,7 +60,8 @@ fn one_command_is_one_step() {
 #[test]
 fn the_caret_returns_to_the_change() {
     run(&[
-        c("a\nb|c\nd", "ddu", "a\nb|c\nd"),
+        // `dd` starts at the first non-blank, and undo returns there.
+        c("a\nb|c\nd", "ddu", "a\n|bc\nd"),
         c("a|bc", "ylpu", "a|bc"),
         c("foo |bar baz", "dwu", "foo |bar baz"),
         c("foo |bar", "dbu", "|foo bar"),
@@ -68,7 +69,7 @@ fn the_caret_returns_to_the_change() {
         c("ab|c", "IX<Esc>u", "|abc"),
         c("|a\nb", "oX<Esc>u", "|a\nb"),
         c("a\n|b", "OX<Esc>u", "a\n|b"),
-        c("a|b", ">>u", "a|b"),
+        c("a|b", ">>u", "|ab"),
         c("a|b\ncd", "Ju", "a|b\ncd"),
         c("a|bcd", "vldu", "a|bcd"),
         c("a\n|b\nc", "Vdu", "a\n|b\nc"),
@@ -76,14 +77,14 @@ fn the_caret_returns_to_the_change() {
         c("a\nb\n|c", "ggdGu", "|a\nb\nc"),
         c("a b |c", "yiw0Pu", "|a b c"),
         c("|a\nb\nc", "yyjpu", "a\n|b\nc"),
-        c("a\nb|c\nd", "ccX<Esc>u", "a\nb|c\nd"),
+        c("a\nb|c\nd", "ccX<Esc>u", "a\n|bc\nd"),
         c("a\nb|c\nd", "dku", "|a\nbc\nd"),
         c("a|b\ncd\ne", "dju", "a|b\ncd\ne"),
         // Redo comes back to the same place.
         c("|x", "iab<Esc>u<C-r>", "|abx"),
         c("a|bc", "xu<C-r>", "a|c"),
         c("a\n|b\nc", "ddu<C-r>", "a\n|c"),
-        c("a\nb|c\nd", "ddu<C-r>u", "a\nb|c\nd"),
+        c("a\nb|c\nd", "ddu<C-r>u", "a\n|bc\nd"),
     ]);
 }
 

@@ -10,7 +10,9 @@ use crate::buf;
 use crate::key::{Key, KeyCode};
 use crate::register::RegisterContent;
 
+use super::marks::Mark;
 use super::{Base, ChangeRecord, Cx, Resume, Vim};
+use crate::host::GoalColumn;
 
 /// The most often a count repeats typed text or a put.
 pub(crate) const MAX_REPEAT: usize = 10_000;
@@ -59,6 +61,20 @@ pub(crate) struct InsertSession {
     pub await_register: bool,
     /// The session holds an undo group open.
     pub group_open: bool,
+    /// Where typing started. `ctrl-w` and `ctrl-u` stop here first, as in
+    /// Vim, and go further only when pressed again.
+    pub start: Position,
+    /// A cursor key was left to the host with the caret here. If the caret
+    /// has moved by the next event, the session was interrupted: what was
+    /// typed before no longer repeats and is an undo step of its own.
+    pub moved_check: Option<Position>,
+    /// A deleting key was left to the host at this document revision, and
+    /// recorded. If the revision is the same at the next event, the key
+    /// deleted nothing (backspace at the start of the document) and the
+    /// record drops it.
+    pub unverified: Option<u64>,
+    /// The session continues one that `ctrl-o` interrupted.
+    pub resumed: bool,
 }
 
 impl InsertSession {
@@ -116,6 +132,10 @@ impl Vim {
             record: None,
             await_register: false,
             group_open: true,
+            start: cx.ed.selection().head,
+            moved_check: None,
+            unverified: None,
+            resumed: false,
         });
         self.base = if replace { Base::Replace } else { Base::Insert };
         self.goal = None;
@@ -123,8 +143,50 @@ impl Vim {
         self.redo_carets.clear();
     }
 
+    /// Settles a cursor key that was left to the host: if it moved the
+    /// caret, the session starts afresh there (Vim: a cursor key in Insert
+    /// mode ends the undoable insert and what `.` repeats). `assume_moved`
+    /// is for callers that cannot compare (text already inserted).
+    pub(crate) fn settle_cursor_key(&mut self, cx: &mut Cx, assume_moved: bool) {
+        let Some(s) = self.insert.as_mut() else {
+            return;
+        };
+        if let Some(revision) = s.unverified.take()
+            && revision == cx.ed.revision()
+            && matches!(
+                s.actions.last(),
+                Some(
+                    InsertAction::Backspace
+                        | InsertAction::DeleteForward
+                        | InsertAction::HostDeleteWord
+                        | InsertAction::DeleteToLineEnd
+                )
+            )
+        {
+            // The key the host got deleted nothing.
+            s.actions.pop();
+        }
+        let Some(before) = s.moved_check.take() else {
+            return;
+        };
+        let head = cx.ed.selection().head;
+        if !assume_moved && head == before {
+            return;
+        }
+        s.interrupted();
+        if !assume_moved {
+            s.start = head;
+        }
+        if s.group_open {
+            // What was typed so far is one undo step, the rest another.
+            cx.ed.end_undo_group();
+            cx.ed.begin_undo_group();
+        }
+    }
+
     /// A key in Insert or Replace mode. Returns whether Vim used it.
     pub(crate) fn insert_key(&mut self, key: Key, cx: &mut Cx) -> bool {
+        self.settle_cursor_key(cx, false);
         let Some(session) = self.insert.as_mut() else {
             // No session (should not happen): fall back to Normal mode.
             self.base = Base::Normal;
@@ -151,6 +213,27 @@ impl Vim {
         let replace = session.replace;
         if let Some(c) = key.ctrl_char() {
             return match c {
+                'w' | 'u' if replace => {
+                    // Replace mode: back over the word (the line), putting
+                    // back what was overwritten; nothing else is deleted.
+                    let p = cx.ed.selection().head;
+                    let to = if c == 'w' {
+                        self.word_start_before(cx, p)
+                    } else {
+                        self.insert_delete_limit(cx, p)
+                    };
+                    loop {
+                        let h = cx.ed.selection().head;
+                        if h.block != p.block || h.offset <= to {
+                            break;
+                        }
+                        self.replace_backspace(cx);
+                        if cx.ed.selection().head == h {
+                            break;
+                        }
+                    }
+                    true
+                }
                 'w' => {
                     self.insert_delete_word(cx);
                     self.record_insert(InsertAction::DeleteWord);
@@ -167,6 +250,7 @@ impl Vim {
                     } else {
                         cx.ed.backspace();
                         self.record_insert(InsertAction::Backspace);
+                        self.insert_start_follows(cx);
                     }
                     true
                 }
@@ -182,16 +266,17 @@ impl Vim {
                 }
                 // The host's Emacs keys: remember what they do.
                 'd' => {
-                    self.record_insert(InsertAction::DeleteForward);
+                    self.record_host_delete(cx, InsertAction::DeleteForward);
                     false
                 }
                 'k' => {
-                    self.record_insert(InsertAction::DeleteToLineEnd);
+                    self.record_host_delete(cx, InsertAction::DeleteToLineEnd);
                     false
                 }
                 'a' | 'e' | 'f' | 'b' | 'n' | 'p' => {
+                    let head = cx.ed.selection().head;
                     if let Some(s) = self.insert.as_mut() {
-                        s.interrupted();
+                        s.moved_check = Some(head);
                     }
                     false
                 }
@@ -212,15 +297,18 @@ impl Vim {
                     self.replace_backspace(cx);
                     return true;
                 }
-                self.record_insert(if key.alt {
-                    InsertAction::HostDeleteWord
-                } else {
-                    InsertAction::Backspace
-                });
+                self.record_host_delete(
+                    cx,
+                    if key.alt {
+                        InsertAction::HostDeleteWord
+                    } else {
+                        InsertAction::Backspace
+                    },
+                );
                 false
             }
             KeyCode::Delete if !key.ctrl && !key.alt => {
-                self.record_insert(InsertAction::DeleteForward);
+                self.record_host_delete(cx, InsertAction::DeleteForward);
                 false
             }
             KeyCode::Left
@@ -231,12 +319,25 @@ impl Vim {
             | KeyCode::End
             | KeyCode::PageUp
             | KeyCode::PageDown => {
+                let head = cx.ed.selection().head;
                 if let Some(s) = self.insert.as_mut() {
-                    s.interrupted();
+                    s.moved_check = Some(head);
                 }
                 false
             }
             _ => false,
+        }
+    }
+
+    /// Records a deleting key that is left to the host, to be checked
+    /// against the document at the next event.
+    fn record_host_delete(&mut self, cx: &Cx, action: InsertAction) {
+        let before = self.insert.as_ref().map_or(0, |s| s.actions.len());
+        self.record_insert(action);
+        if let Some(s) = self.insert.as_mut()
+            && s.actions.len() > before
+        {
+            s.unverified = Some(cx.ed.revision());
         }
     }
 
@@ -260,6 +361,9 @@ impl Vim {
 
     /// The host inserted `text` (see [`Vim::text_inserted`]).
     pub(crate) fn note_inserted(&mut self, typed: &str, cx: &mut Cx) {
+        // Text right after a cursor key, with no key in between to compare
+        // carets at: take the cursor key as having moved.
+        self.settle_cursor_key(cx, true);
         let Some(s) = self.insert.as_mut() else {
             return;
         };
@@ -359,14 +463,50 @@ impl Vim {
 
     /// `ctrl-w`: deletes back to the start of the word before the caret;
     /// at the start of a line it joins like backspace.
+    /// How far back `ctrl-w` and `ctrl-u` may delete from `p`: to where
+    /// typing started when that lies before the caret on the same line,
+    /// else to the start of the line.
+    fn insert_delete_limit(&self, cx: &Cx, p: Position) -> usize {
+        let ls = buf::line_start(cx.ed.document(), p);
+        match self.insert.as_ref().map(|s| s.start) {
+            Some(start)
+                if start.block == p.block && start.offset > ls && start.offset < p.offset =>
+            {
+                start.offset
+            }
+            _ => ls,
+        }
+    }
+
+    /// After a deletion in the session: typing now starts no later than
+    /// the caret.
+    fn insert_start_follows(&mut self, cx: &Cx) {
+        let head = cx.ed.selection().head;
+        if let Some(s) = self.insert.as_mut()
+            && (head.block != s.start.block || head.offset < s.start.offset)
+        {
+            s.start = head;
+        }
+    }
+
     fn insert_delete_word(&mut self, cx: &mut Cx) {
         let p = cx.ed.selection().head;
-        let doc = cx.ed.document();
-        let ls = buf::line_start(doc, p);
-        if p.offset <= ls {
+        if p.offset <= buf::line_start(cx.ed.document(), p) {
             cx.ed.backspace();
+            self.insert_start_follows(cx);
             return;
         }
+        let o = self.word_start_before(cx, p);
+        cx.ed
+            .delete_range(TextRange::in_block(p.block, o, p.offset));
+        self.insert_start_follows(cx);
+    }
+
+    /// Where `ctrl-w` at `p` deletes back to: over white space and then
+    /// one word, not past where typing started.
+    fn word_start_before(&self, cx: &Cx, p: Position) -> usize {
+        let doc = cx.ed.document();
+        let ls = self.insert_delete_limit(cx, p);
         let opts = self.class_opts(false);
         let t = buf::text_of(doc, p.block);
         let mut o = p.offset;
@@ -388,20 +528,21 @@ impl Vim {
                 o = q;
             }
         }
-        cx.ed
-            .delete_range(TextRange::in_block(p.block, o, p.offset));
+        o
     }
 
-    /// `ctrl-u`: deletes back to the start of the line.
+    /// `ctrl-u`: deletes what was typed on the line; pressed again (or with
+    /// nothing typed), back to the start of the line.
     fn insert_delete_to_line_start(&mut self, cx: &mut Cx) {
         let p = cx.ed.selection().head;
-        let ls = buf::line_start(cx.ed.document(), p);
-        if p.offset <= ls {
+        if p.offset <= buf::line_start(cx.ed.document(), p) {
             cx.ed.backspace();
         } else {
+            let from = self.insert_delete_limit(cx, p);
             cx.ed
-                .delete_range(TextRange::in_block(p.block, ls, p.offset));
+                .delete_range(TextRange::in_block(p.block, from, p.offset));
         }
+        self.insert_start_follows(cx);
     }
 
     /// `ctrl-r {register}`: inserts the register at the caret. A linewise
@@ -516,11 +657,14 @@ impl Vim {
     /// closes the undo group, steps the caret back onto a character and
     /// stores the session for `.`.
     pub(crate) fn leave_insert(&mut self, cx: &mut Cx) {
+        self.settle_cursor_key(cx, false);
         let Some(mut s) = self.insert.take() else {
             self.base = Base::Normal;
             return;
         };
-        if s.count > 1 && !s.actions.is_empty() {
+        // A count repeats what was typed; `3o<Esc>` opens three lines even
+        // with nothing typed.
+        if s.count > 1 && (!s.actions.is_empty() || s.open.is_some()) {
             let actions = s.actions.clone();
             // A slip of the finger (`99999ix`) must not freeze the app.
             for _ in 1..s.count.min(MAX_REPEAT) {
@@ -549,6 +693,7 @@ impl Vim {
         if !s.actions.is_empty() {
             // The last change is the last character typed.
             self.set_mark(cx, '.', back);
+            self.set_mark(cx, '[', s.start.min(back));
             self.set_mark(cx, ']', back);
             self.last_inserted = Self::actions_text(&s.actions);
         }
@@ -559,8 +704,11 @@ impl Vim {
         }
         self.goal = None;
         if let Some(mut rec) = s.record.take() {
+            // A session resumed after `ctrl-o` repeats only if something
+            // was typed in it; otherwise the change before stays.
+            let keep_previous = s.resumed && s.actions.is_empty();
             rec.insert = std::mem::take(&mut s.actions);
-            if !self.replaying {
+            if !self.replaying && !keep_previous {
                 self.last_change = Some(rec);
             }
         }
@@ -568,7 +716,8 @@ impl Vim {
 
     /// `ctrl-o`: one Normal-mode command, then back to Insert mode.
     fn insert_one_shot(&mut self, cx: &mut Cx) {
-        let Some(s) = self.insert.take() else {
+        self.settle_cursor_key(cx, false);
+        let Some(mut s) = self.insert.take() else {
             return;
         };
         let head = cx.ed.selection().head;
@@ -578,12 +727,30 @@ impl Vim {
         if !s.actions.is_empty() {
             self.last_inserted = Self::actions_text(&s.actions);
         }
+        // What was typed so far is what `.` repeats, unless more is typed
+        // after the command.
+        if let Some(mut rec) = s.record.take() {
+            let keep_previous = s.resumed && s.actions.is_empty();
+            rec.insert = std::mem::take(&mut s.actions);
+            if !self.replaying && !keep_previous {
+                self.last_change = Some(rec);
+            }
+        }
         self.set_mark(cx, '^', head);
-        // The caret stays where it is, even after the last character of a
-        // line: `A<C-o>h` then lands on that character, as in Vim.
-        cx.ed.set_caret(head);
+        // After the last character of a line the caret steps onto that
+        // character, as in Vim (`A<C-o>h` lands on the one before it); the
+        // session resumes after it if the command leaves the caret there.
+        let doc = cx.ed.document();
+        let on = buf::clamp_normal(doc, head);
+        let eol_line = (on != head)
+            .then(|| Mark::at(doc, Position::new(head.block, buf::line_start(doc, head))));
+        cx.ed.set_caret(on);
         self.base = Base::Normal;
-        self.resume = Some(Resume { replace: s.replace });
+        self.goal = None;
+        self.resume = Some(Resume {
+            replace: s.replace,
+            eol_line,
+        });
     }
 
     /// After the one command of `ctrl-o`: back to Insert mode, unless the
@@ -604,6 +771,36 @@ impl Vim {
         let Some(r) = self.resume.take() else {
             return;
         };
+        // On the last character of the line the caret was at the end of,
+        // or after `$`: go on typing after that character.
+        let head = cx.ed.selection().head;
+        let doc = cx.ed.document();
+        let ls = buf::line_start(doc, head);
+        let le = buf::line_end(doc, head);
+        let on_last = head.offset < le && buf::cell_end(doc, head).offset == le;
+        let same_line = r
+            .eol_line
+            .and_then(|m| m.resolve(doc))
+            .is_some_and(|p| p == Position::new(head.block, ls));
+        if on_last && (same_line || self.goal == Some(GoalColumn::EndOfRow)) {
+            cx.ed.set_caret(Position::new(head.block, le));
+        }
         self.begin_insert(cx, r.replace, 1, None, false);
+        // What `.` repeats from here on is a plain insert of what gets
+        // typed now, as in Vim; a count given to the first command is spent.
+        if let Some(s) = self.insert.as_mut() {
+            s.resumed = true;
+        }
+        if !self.replaying
+            && let Some(s) = self.insert.as_mut()
+        {
+            s.record = Some(ChangeRecord {
+                register: None,
+                count: None,
+                keys: vec![Key::char(if r.replace { 'R' } else { 'i' })],
+                visual: None,
+                insert: Vec::new(),
+            });
+        }
     }
 }

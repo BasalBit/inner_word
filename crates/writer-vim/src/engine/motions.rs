@@ -126,6 +126,22 @@ fn jump(pos: Position, kind: MotionKind) -> MotionOut {
     }
 }
 
+/// A position on the hard line `n` lines below the line of `from`, stopping
+/// at the last line. `None` when `n` is not zero and `from` is already on
+/// the last line (Vim's rule for a count that reaches past the end).
+fn lines_down(doc: &writer_core::Document, from: Position, n: usize) -> Option<Position> {
+    let mut p = from;
+    for i in 0..n {
+        let e = buf::line_end(doc, p);
+        match buf::next_cell(doc, Position::new(p.block, e)) {
+            Some(q) => p = q,
+            None if i == 0 => return None,
+            None => break,
+        }
+    }
+    Some(p)
+}
+
 impl Vim {
     /// Moves `rows` visual rows from `from`, keeping the goal column.
     /// `None` when the caret cannot move (first or last row).
@@ -176,7 +192,9 @@ impl Vim {
                     }
                     o = buf::prev_boundary(t, o);
                 }
-                if o == origin.offset {
+                // With an operator `h` in the first column is an empty
+                // motion, not an error (Vim repeats `X` there with `.`).
+                if o == origin.offset && !op_pending {
                     return None;
                 }
                 out(at(o), Exclusive)
@@ -184,25 +202,35 @@ impl Vim {
             Motion::Right => {
                 // The caret stops on the last character; an operator may
                 // reach the end of the line to include that character.
-                let limit = if op_pending {
+                // In Visual mode `l` can step onto the line break after the
+                // last character, as in Vim.
+                let limit = if op_pending || self.is_visual() {
                     le
                 } else {
                     buf::last_char(doc, b, ls, le)
                 };
                 let o = buf::advance_graphemes(t, origin.offset, n, limit);
-                if o == origin.offset {
+                if o == origin.offset && !op_pending {
                     return None;
                 }
                 out(at(o), Exclusive)
             }
             Motion::WrapLeft => {
+                // Only `d` and `c` take the line break itself (`d<BS>` in
+                // column one joins the lines); for a caret movement and for
+                // the other operators the step goes to the last character
+                // of the line before.
+                let takes_break = matches!(
+                    self.pending.operator,
+                    Some(super::Operator::Delete | super::Operator::Change)
+                );
                 let mut p = origin;
                 for _ in 0..n {
                     let Some(mut q) = buf::prev_cell(doc, p) else {
                         break;
                     };
                     // Skip the newline cell of a non-empty line.
-                    if !op_pending && buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
+                    if !takes_break && buf::is_newline(doc, q) && !buf::is_empty_line(doc, q) {
                         q = buf::prev_cell(doc, q).unwrap_or(q);
                     }
                     p = q;
@@ -211,7 +239,10 @@ impl Vim {
                     return None;
                 }
                 MotionOut {
-                    exact: true,
+                    // On the line break of a line with text the range is
+                    // taken as it is; from an empty line the usual rules
+                    // for a motion ending in column one apply.
+                    exact: takes_break && buf::is_newline(doc, p) && !buf::is_empty_line(doc, p),
                     ..out(p, Exclusive)
                 }
             }
@@ -243,9 +274,20 @@ impl Vim {
                     if target == u {
                         return None;
                     }
+                    // Where the caret would land: the same column of the
+                    // target line (it matters for `yk` and for undo).
+                    let col = buf::graphemes_between(t, ls, origin.offset);
+                    let tle = buf::line_end(doc, target.start_pos());
+                    let o = buf::advance_graphemes(
+                        buf::text_of(doc, target.block),
+                        target.start,
+                        col,
+                        tle,
+                    );
+                    let landing = buf::clamp_normal(doc, Position::new(target.block, o));
                     MotionOut {
                         goal: GoalUpdate::Keep,
-                        ..out(Position::new(target.block, target.start), Linewise)
+                        ..out(landing, Linewise)
                     }
                 } else {
                     let rows = if down { n as isize } else { -(n as isize) };
@@ -264,14 +306,16 @@ impl Vim {
                     _ => n as isize - 1,
                 };
                 let target = buf::unit_offset(doc, u, step);
-                if target == u && m != Motion::LineHere {
+                if target == u && step != 0 {
                     return None;
                 }
                 out(buf::unit_first_non_blank(doc, target), Linewise)
             }
             Motion::WordForward { big } => {
                 let p = motion::word_forward(doc, origin, n, self.class_opts(big), op_pending);
-                if p == origin {
+                // (With an operator the end of the document is an empty
+                // motion, not an error, as in Vim.)
+                if p == origin && !op_pending {
                     return None;
                 }
                 out(p, Exclusive)
@@ -285,7 +329,7 @@ impl Vim {
             }
             Motion::WordEnd { big } => {
                 let p = motion::word_end(doc, origin, n, self.class_opts(big), false);
-                if p == origin {
+                if p == origin && !op_pending {
                     return None;
                 }
                 out(p, Inclusive)
@@ -298,14 +342,11 @@ impl Vim {
                 out(p, Inclusive)
             }
             Motion::LineStart => out(at(ls), Exclusive),
-            Motion::FirstNonBlank => out(at(buf::first_non_blank(doc, b, ls).min(le)), Exclusive),
+            Motion::FirstNonBlank => out(at(buf::first_non_blank_cell(doc, b, ls)), Exclusive),
             Motion::LineEnd => {
-                // `count - 1` hard lines further down.
-                let mut p = origin;
-                for _ in 1..n {
-                    let e = buf::line_end(doc, p);
-                    p = buf::next_cell(doc, Position::new(p.block, e))?;
-                }
+                // `count - 1` hard lines further down: as far as there are
+                // lines, but not from the last one.
+                let p = lines_down(doc, origin, n - 1)?;
                 let e = buf::line_end(doc, p);
                 let s = buf::line_start(doc, p);
                 // The caret rests on the last character; an operator and
@@ -317,16 +358,16 @@ impl Vim {
                 };
                 MotionOut {
                     goal: GoalUpdate::End,
-                    // The newline cell itself is the exclusive end.
+                    // The newline cell itself is the exclusive end, and the
+                    // range is taken as it is: `$` is inclusive in Vim, so
+                    // the rules for a motion that ends in column one do not
+                    // apply when the last line is empty.
+                    exact: true,
                     ..out(Position::new(p.block, o), Exclusive)
                 }
             }
             Motion::LastNonBlank => {
-                let mut p = origin;
-                for _ in 1..n {
-                    let e = buf::line_end(doc, p);
-                    p = buf::next_cell(doc, Position::new(p.block, e))?;
-                }
+                let p = lines_down(doc, origin, n - 1)?;
                 let e = buf::line_end(doc, p);
                 let s = buf::line_start(doc, p);
                 out(
@@ -357,7 +398,8 @@ impl Vim {
                 }
             }
             Motion::Column => {
-                let o = buf::advance_graphemes(t, ls, n - 1, le);
+                // Never past the last character, also for an operator.
+                let o = buf::advance_graphemes(t, ls, n - 1, buf::last_char(doc, b, ls, le));
                 out(at(o), Exclusive)
             }
             Motion::FirstLine | Motion::LastLine => {
@@ -382,29 +424,31 @@ impl Vim {
             Motion::ParagraphForward => {
                 // At the end of the document the result is the end of the
                 // last block, so the last character counts for an operator.
-                let (p, hit_end) = motion::paragraph_forward(doc, origin, n);
+                let (p, hit_end) = motion::paragraph_forward(doc, origin, n)?;
                 if hit_end && buf::clamp_normal(doc, p) == origin && !op_pending {
                     return None;
                 }
                 jump(p, Exclusive)
             }
             Motion::ParagraphBackward => {
-                let p = motion::paragraph_backward(doc, origin, n);
+                let p = motion::paragraph_backward(doc, origin, n)?;
                 if p == origin {
                     return None;
                 }
                 jump(p, Exclusive)
             }
             Motion::SentenceForward => {
-                let p = motion::sentence_forward(doc, origin, n);
+                let p = motion::sentence_forward(doc, origin, n)?;
                 if buf::clamp_normal(doc, p) == origin && !op_pending {
                     return None;
                 }
                 jump(p, Exclusive)
             }
             Motion::SentenceBackward => {
-                let p = motion::sentence_backward(doc, origin, n);
-                if p == origin {
+                // At the start of the document the motion is empty for an
+                // operator, not an error.
+                let p = motion::sentence_backward(doc, origin, n)?;
+                if p == origin && !op_pending {
                     return None;
                 }
                 jump(p, Exclusive)
@@ -565,14 +609,26 @@ impl Vim {
 
     /// The linewise range of `count` line units starting with the caret's
     /// (`dd`, `yy`, `>>`, …), clamped to the end of the document.
-    pub(crate) fn lines_from_cursor(&self, cx: &Cx, origin: Position, count: usize) -> Lines {
+    ///
+    /// `None` when a count asks for more lines while the caret is on the
+    /// last one: Vim refuses that, although it takes what is there from any
+    /// other line.
+    pub(crate) fn lines_from_cursor(
+        &self,
+        cx: &Cx,
+        origin: Position,
+        count: usize,
+    ) -> Option<Lines> {
         let doc = cx.ed.document();
         let u = buf::unit_at(doc, origin);
         let last = buf::unit_offset(doc, u, count.max(1) as isize - 1);
-        buf::lines_between(
+        if count > 1 && last == u {
+            return None;
+        }
+        Some(buf::lines_between(
             doc,
             Position::new(u.block, u.start),
             Position::new(last.block, last.start),
-        )
+        ))
     }
 }

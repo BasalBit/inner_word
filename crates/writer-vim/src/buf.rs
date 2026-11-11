@@ -283,6 +283,13 @@ pub(crate) struct Unit {
     pub end: usize,
 }
 
+impl Unit {
+    /// The first position of the unit.
+    pub fn start_pos(&self) -> Position {
+        Position::new(self.block, self.start)
+    }
+}
+
 fn is_code(doc: &Document, b: usize) -> bool {
     doc.blocks()[b].kind().is_code()
 }
@@ -347,10 +354,23 @@ pub(crate) fn unit_offset(doc: &Document, u: Unit, n: isize) -> Unit {
 }
 
 /// The first non-blank position of a unit (of its first hard line).
+///
+/// On a line of nothing but blanks this is its last character, as in Vim.
 pub(crate) fn unit_first_non_blank(doc: &Document, u: Unit) -> Position {
-    let le = line_end(doc, Position::new(u.block, u.start));
-    let o = first_non_blank(doc, u.block, u.start).min(le);
-    Position::new(u.block, o)
+    Position::new(u.block, first_non_blank_cell(doc, u.block, u.start))
+}
+
+/// The offset of the first non-blank character of the hard line starting
+/// at `ls`; the last character when the line holds only blanks (the cursor
+/// never rests after the end of a line), `ls` when it is empty.
+pub(crate) fn first_non_blank_cell(doc: &Document, block: usize, ls: usize) -> usize {
+    let le = line_end(doc, Position::new(block, ls));
+    let o = first_non_blank(doc, block, ls);
+    if o >= le {
+        last_char(doc, block, ls, le)
+    } else {
+        o
+    }
 }
 
 /// A linewise range.

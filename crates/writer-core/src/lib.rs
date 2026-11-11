@@ -182,7 +182,7 @@ pub use block::{
     TEXT_SIZE_SCALE, sanitize_text_size,
 };
 pub use comments::{CommentThread, Reply, ReplyId, Timestamp};
-pub use document::{Document, TITLE_MAX_CHARS};
+pub use document::{Document, TITLE_MAX_CHARS, TITLE_SENTENCE_CHARS, TITLE_TEXT_CHARS};
 pub use editor::{
     BlockSplice, Change, Choice, EditorOptions, EditorState, FormatState, LinkInfo, Toggle,
 };

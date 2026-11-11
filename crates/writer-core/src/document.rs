@@ -12,6 +12,86 @@ use crate::text;
 
 /// Maximum length of [`Document::title`] in characters.
 pub const TITLE_MAX_CHARS: usize = 80;
+/// Longest first sentence [`Document::title`] takes whole as the title of a
+/// document without a heading.
+pub const TITLE_SENTENCE_CHARS: usize = 50;
+/// Longest title [`Document::title`] cuts out of text that is not a heading
+/// (the ellipsis included).
+pub const TITLE_TEXT_CHARS: usize = 48;
+
+/// `text` when it has at most `max` characters, else its start: cut at the
+/// last space where that keeps more than half, never inside a grapheme,
+/// without dangling punctuation, and ending with an ellipsis (which counts
+/// towards `max`).
+fn shortened_title(text: &str, max: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut cut = 0;
+    let mut chars = 0;
+    for (i, g) in text.grapheme_indices(true) {
+        let n = g.chars().count();
+        // One character is kept for the ellipsis.
+        if chars + n > max.saturating_sub(1) {
+            break;
+        }
+        chars += n;
+        cut = i + g.len();
+    }
+    let head = &text[..cut];
+    // A cut that falls right after a whole word keeps it.
+    let whole_word = text[cut..].starts_with(' ');
+    let head = match head.rfind(' ') {
+        Some(space) if !whole_word && space > cut / 2 => &head[..space],
+        _ => head,
+    };
+    let head = head.trim_end_matches(|c: char| {
+        c.is_whitespace() || matches!(c, ',' | ';' | ':' | '.' | '-' | '\u{2013}' | '\u{2014}' | '(' | '\u{201c}' | '"')
+    });
+    format!("{head}\u{2026}")
+}
+
+/// The byte offset just after the first sentence of `text` (after its
+/// closing mark and any quote or bracket that closes with it), or `None`
+/// when the text has no sentence end.
+///
+/// A sentence ends at `.`, `!`, `?` or an ellipsis that is followed by a
+/// space or by nothing. A full stop after an initial or a short capitalised word ("J.",
+/// "Dr.", "St.") or after a word with a stop inside ("e.g.") is taken for
+/// an abbreviation.
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if !matches!(c, '.' | '!' | '?' | '\u{2026}') {
+            continue;
+        }
+        // Marks that come together ("?!", "...") and what closes with them.
+        let mut end = i + c.len_utf8();
+        while let Some(&(j, next)) = chars.peek() {
+            if matches!(next, '.' | '!' | '?' | '\u{2026}' | '"' | '\'' | ')' | ']' | '\u{201d}' | '\u{2019}' | '\u{00bb}') {
+                end = j + next.len_utf8();
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if end < text.len() && !text[end..].starts_with(' ') {
+            // Inside a number or a name ("3.50", "example.com").
+            continue;
+        }
+        if c == '.' && end == i + 1 {
+            let word = text[..i].rsplit(' ').next().unwrap_or("");
+            let letters = word.chars().filter(|c| c.is_alphabetic()).count();
+            let capitalised = word.chars().next().is_some_and(char::is_uppercase);
+            if word.contains('.') || letters <= 1 || (capitalised && letters <= 3) {
+                continue;
+            }
+        }
+        return Some(end);
+    }
+    None
+}
 
 /// Ids at or above this value in loaded data are treated as invalid and
 /// replaced, so id counters can never overflow.
@@ -312,38 +392,42 @@ impl Document {
         out
     }
 
-    /// A title for the document: the first heading's text, else the first
-    /// non-empty block's text; the first line only, whitespace collapsed,
-    /// truncated to [`TITLE_MAX_CHARS`] characters on a grapheme boundary
-    /// (preferring a word boundary). `None` when the document has no text.
+    /// A title for the document: the first heading's text, else one taken
+    /// from the first non-empty block; the first line only, whitespace
+    /// collapsed. `None` when the document has no text.
+    ///
+    /// A heading is a title someone wrote: it is kept whole up to
+    /// [`TITLE_MAX_CHARS`] characters. Text that merely starts a document
+    /// (a social post, a note) is not, so the title made from it stays
+    /// short: its first sentence when that ends within
+    /// [`TITLE_SENTENCE_CHARS`] characters (without the full stop), else
+    /// its first [`TITLE_TEXT_CHARS`] characters. Whatever is cut is cut
+    /// at a word boundary where there is one, never inside a character,
+    /// and ends with an ellipsis.
     pub fn title(&self) -> Option<String> {
-        let pick = self
+        let heading = self
             .blocks
             .iter()
-            .find(|b| b.kind.heading_level().is_some() && !b.text.trim().is_empty())
-            .or_else(|| self.blocks.iter().find(|b| !b.text.trim().is_empty()))?;
+            .find(|b| b.kind.heading_level().is_some() && !b.text.trim().is_empty());
+        let pick = heading.or_else(|| self.blocks.iter().find(|b| !b.text.trim().is_empty()))?;
         let line = pick.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
         let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
-        if collapsed.chars().count() <= TITLE_MAX_CHARS {
-            return Some(collapsed);
+        if heading.is_some() {
+            return Some(shortened_title(&collapsed, TITLE_MAX_CHARS));
         }
-        use unicode_segmentation::UnicodeSegmentation;
-        let mut cut = 0;
-        let mut chars = 0;
-        for (i, g) in collapsed.grapheme_indices(true) {
-            let n = g.chars().count();
-            if chars + n > TITLE_MAX_CHARS {
-                break;
-            }
-            chars += n;
-            cut = i + g.len();
+        if let Some(end) = first_sentence_end(&collapsed)
+            && collapsed[..end].chars().count() <= TITLE_SENTENCE_CHARS
+        {
+            let sentence = &collapsed[..end];
+            // A title does not end with a full stop (an ellipsis, a
+            // question or an exclamation mark belong to it).
+            let sentence = match sentence.strip_suffix('.') {
+                Some(rest) if !rest.ends_with('.') => rest,
+                _ => sentence,
+            };
+            return Some(sentence.to_string());
         }
-        let head = &collapsed[..cut];
-        let trimmed = match head.rfind(' ') {
-            Some(sp) if sp > cut / 2 => &head[..sp],
-            _ => head,
-        };
-        Some(trimmed.trim_end().to_string())
+        Some(shortened_title(&collapsed, TITLE_TEXT_CHARS))
     }
 
     // ----- numbering ----------------------------------------------------------------
@@ -752,8 +836,74 @@ mod tests {
         let long = "word ".repeat(40);
         let d = Document::from_blocks(vec![Block::paragraph(&long)]);
         let t = d.title().unwrap();
+        assert!(t.chars().count() <= TITLE_TEXT_CHARS);
+        assert!(t.ends_with("word\u{2026}"), "{t}");
+    }
+
+    #[test]
+    fn title_of_a_document_without_a_heading_is_short_and_whole() {
+        let title = |text: &str| {
+            Document::from_blocks(vec![Block::paragraph(text)])
+                .title()
+                .unwrap()
+        };
+        // The first sentence, without its full stop.
+        assert_eq!(
+            title(
+                "The Salt Road is out next month. It is a small book about a harbour town, a \
+                 letter and a debt. I would love for you to read it."
+            ),
+            "The Salt Road is out next month"
+        );
+        assert_eq!(title("Why not? Because."), "Why not?");
+        assert_eq!(title("Stop! Nobody moves."), "Stop!");
+        assert_eq!(title("\u{201c}Go on.\u{201d} She did not."), "\u{201c}Go on.\u{201d}");
+        assert_eq!(title("Wait\u{2026} what was that? Nothing."), "Wait\u{2026}");
+        // Short text is the title as it is; a lone sentence loses its
+        // stop too, so the title does not change when a second one is
+        // written after it.
+        assert_eq!(title("Shopping list"), "Shopping list");
+        assert_eq!(title("A note to self."), "A note to self");
+        assert_eq!(title("Really?"), "Really?");
+        assert_eq!(title("And then..."), "And then...");
+        assert_eq!(title("Dr."), "Dr.");
+        // Abbreviations, initials, numbers and addresses do not end it.
+        assert_eq!(title("Dr. Moreau came at nine. He left at ten."), "Dr. Moreau came at nine");
+        assert_eq!(title("J. R. R. Tolkien wrote it. So?"), "J. R. R. Tolkien wrote it");
+        assert_eq!(title("It costs 3.50 at example.com today. Buy."), "It costs 3.50 at example.com today");
+        assert_eq!(title("See e.g. the notes. Then go."), "See e.g. the notes");
+        // No sentence end in reach: a cut at a word, with an ellipsis and
+        // without the comma or the dash it would end on.
+        let t = title(
+            "A small book about a harbour town, a letter, and a debt nobody ever paid back in full",
+        );
+        assert_eq!(t, "A small book about a harbour town, a letter\u{2026}");
+        assert!(t.chars().count() <= TITLE_TEXT_CHARS);
+        let t = title(
+            "One sentence that goes on for much longer than a title should. Then a second one.",
+        );
+        assert_eq!(t, "One sentence that goes on for much longer than\u{2026}");
+        // A single unbroken word is cut inside, never inside a character.
+        let t = title(&"\u{00e9}".repeat(200));
+        assert_eq!(t.chars().count(), TITLE_TEXT_CHARS);
+        assert!(t.ends_with('\u{2026}'));
+        let family = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}".repeat(40);
+        let t = title(&family);
+        assert!(t.chars().count() <= TITLE_TEXT_CHARS);
+        assert!(t.trim_end_matches('\u{2026}').chars().count() % 5 == 0, "{t:?}");
+
+        // A heading is kept whole up to the longer limit, then cut the
+        // same way.
+        let heading = |text: &str| {
+            Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), text)])
+                .title()
+                .unwrap()
+        };
+        let sixty = "A heading that is itself a sentence. It stays as written here.";
+        assert_eq!(heading(sixty), sixty);
+        let t = heading(&"heading ".repeat(30));
         assert!(t.chars().count() <= TITLE_MAX_CHARS);
-        assert!(t.ends_with("word"));
+        assert!(t.ends_with("heading\u{2026}"), "{t}");
     }
 
     #[test]

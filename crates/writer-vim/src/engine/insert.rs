@@ -143,6 +143,45 @@ impl Vim {
         self.redo_carets.clear();
     }
 
+    /// The input method replaced `range` (which lay before `caret`, both
+    /// in positions from before the replacement) with `text`. Corrects the
+    /// typed text of the session when the replaced text is part of the end
+    /// of it; returns whether it could.
+    pub(crate) fn amend_typed(&mut self, range: TextRange, caret: Position, text: &str) -> bool {
+        let Some(s) = self.insert.as_mut() else {
+            return false;
+        };
+        // Not with a cursor key or a delete still to be accounted for.
+        if s.replace || s.moved_check.is_some() || s.unverified.is_some() {
+            return false;
+        }
+        let (start, end) = (range.start, range.end);
+        if start.block != caret.block
+            || end.block != caret.block
+            || start.offset > end.offset
+            || end.offset > caret.offset
+        {
+            return false;
+        }
+        let Some(InsertAction::Text(typed)) = s.actions.last_mut() else {
+            return false;
+        };
+        // The replaced text as bytes from the end of what was typed. This
+        // takes the typed text to be what stands in the document, which
+        // holds unless a rule rewrote it (smart quotes): then the lengths
+        // may not fit and the caller falls back.
+        let from_end = caret.offset - start.offset;
+        let Some(from) = typed.len().checked_sub(from_end) else {
+            return false;
+        };
+        let to = from + (end.offset - start.offset);
+        if !typed.is_char_boundary(from) || !typed.is_char_boundary(to) {
+            return false;
+        }
+        typed.replace_range(from..to, text);
+        true
+    }
+
     /// Settles a cursor key that was left to the host: if it moved the
     /// caret, the session starts afresh there (Vim: a cursor key in Insert
     /// mode ends the undoable insert and what `.` repeats). `assume_moved`

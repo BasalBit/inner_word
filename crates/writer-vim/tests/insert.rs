@@ -167,3 +167,53 @@ fn text_inserted_outside_insert_mode_is_ignored() {
     assert_eq!(s.buffer(), "|x");
     assert_eq!(s.mode(), Mode::Normal);
 }
+
+#[test]
+fn a_replacement_by_the_input_method_corrects_what_was_typed() {
+    use writer_core::{Position, TextRange};
+    let p = Position::new;
+    /// The host replacing `range` with `text` and putting the caret at
+    /// `caret`, then telling the engine.
+    fn replace(s: &mut Session, range: TextRange, text: &str, caret: Position) {
+        s.ed.replace_range(range, text);
+        s.ed.set_caret(caret);
+        let o = s.vim.text_replaced(range, text, &mut s.ed, &mut s.host);
+        assert!(o.consumed);
+    }
+
+    // The accent picked for the letter just typed.
+    let mut s = session("|", "icafe");
+    assert_eq!(s.buffer(), "cafe|");
+    replace(&mut s, TextRange::in_block(0, 3, 4), "\u{e9}", p(0, 5));
+    s.keys("!<Esc>");
+    assert_eq!(s.buffer(), "caf\u{e9}|!");
+    assert_eq!(s.vim.last_inserted_text(), "caf\u{e9}!");
+    s.keys(".");
+    assert_eq!(s.ed.document().blocks()[0].text(), "caf\u{e9}caf\u{e9}!!");
+
+    // A text replacement of a word typed a moment ago, before the space.
+    let mut s = session("|", "isee omw ");
+    replace(&mut s, TextRange::in_block(0, 4, 7), "On my way!", p(0, 15));
+    assert_eq!(s.ed.document().blocks()[0].text(), "see On my way! ");
+    s.keys("<Esc>");
+    assert_eq!(s.vim.last_inserted_text(), "see On my way! ");
+    // One undo step for the whole session.
+    s.keys("u");
+    assert_eq!(s.ed.document().blocks()[0].text(), "");
+
+    // Text that was not typed in this session: an outside change, so what
+    // was typed before it no longer repeats.
+    let mut s = session("old| ", "anew");
+    replace(&mut s, TextRange::in_block(0, 0, 3), "OLD", p(0, 7));
+    s.keys("!<Esc>");
+    assert_eq!(s.ed.document().blocks()[0].text(), "OLD new!");
+    assert_eq!(s.vim.last_inserted_text(), "!");
+    assert_eq!(s.mode(), Mode::Normal);
+
+    // Outside Insert mode it is an outside change like any other.
+    let mut s = session("|cafe", "");
+    replace(&mut s, TextRange::in_block(0, 3, 4), "\u{e9}", p(0, 0));
+    assert_eq!(s.mode(), Mode::Normal);
+    s.keys("x");
+    assert_eq!(s.ed.document().blocks()[0].text().chars().count(), 3);
+}

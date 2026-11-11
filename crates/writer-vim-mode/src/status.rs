@@ -62,6 +62,10 @@ pub struct VimStatus {
     pub caret: CaretShape,
     /// Whether search matches are highlighted.
     pub search_highlighted: bool,
+    /// A command just failed or meant nothing (Vim's bell): on for about a
+    /// third of a second, or until the next command. The status item
+    /// flashes its mode chip; a status bar of its own can do the same.
+    pub bell: bool,
 }
 
 impl Default for VimStatus {
@@ -75,6 +79,7 @@ impl Default for VimStatus {
             message: None,
             caret: CaretShape::Block,
             search_highlighted: false,
+            bell: false,
         }
     }
 }
@@ -113,7 +118,8 @@ pub enum VimEvent {
     /// and block range). Report an unknown command name with
     /// [`crate::VimMode::show_error`].
     Request(HostRequest),
-    /// A command failed or meant nothing. A host may flash; the status
-    /// carries the error text when there is one.
+    /// A command failed or meant nothing. [`VimStatus::bell`] is on for a
+    /// moment (the status item flashes its mode chip) and the status
+    /// carries the error text when there is one; a host may do more.
     Bell,
 }

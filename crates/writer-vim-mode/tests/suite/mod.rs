@@ -1,8 +1,10 @@
 //! Shared helpers: a window with an editor, its Vim mode and the two views.
 
 mod integration;
+mod measure;
 mod modes;
 mod rows;
+mod seams;
 mod search;
 mod typing;
 
@@ -123,6 +125,19 @@ impl Rig {
         let editor = self.editor.clone();
         self.vim
             .read_with(cx, |vim, cx| vim.engine().caret(editor.read(cx).state()))
+    }
+
+    /// Where the editor was told to draw its caret instead of at the head
+    /// of the selection.
+    pub fn caret_override(&self, cx: &mut VisualTestContext) -> Option<Position> {
+        self.editor
+            .read_with(cx, |editor, _| editor.caret_override())
+    }
+
+    /// Where the editor draws its caret.
+    pub fn drawn_caret(&self, cx: &mut VisualTestContext) -> Position {
+        self.editor
+            .read_with(cx, |editor, _| editor.caret_position())
     }
 
     pub fn selected_text(&self, cx: &mut VisualTestContext) -> String {

@@ -4,7 +4,7 @@ use writer_core::{Position, Selection, TextRange};
 
 use crate::buf::{self, Class, Lines};
 use crate::effect::{Effect, HostRequest};
-use crate::host::{GoalColumn, Scroll, ScrollAlign};
+use crate::host::{GoalColumn, Scroll, ScrollAlign, Viewport};
 use crate::key::{Key, KeyCode};
 use crate::motion;
 use crate::register::{self, RegisterContent};
@@ -60,11 +60,27 @@ impl Vim {
         let (s, e) = if a <= c { (a, c) } else { (c, a) };
         let (start, end) = if line {
             match buf::lines_between(doc, s, e) {
-                Lines::Blocks(r) => (
-                    Position::new(r.start, 0),
-                    Position::new(r.end - 1, buf::len_of(doc, r.end - 1)),
-                ),
+                Lines::Blocks(r) => {
+                    let last = r.end - 1;
+                    // An empty last line has no text for the host to show
+                    // as selected: take its line break too, where there is
+                    // one that selects nothing else (a divider after it
+                    // would count as selected).
+                    let takes_break = buf::len_of(doc, last) == 0
+                        && !doc.blocks()[last].is_void()
+                        && doc.blocks().get(r.end).is_some_and(|b| !b.is_void());
+                    let end = if takes_break {
+                        Position::new(r.end, 0)
+                    } else {
+                        Position::new(last, buf::len_of(doc, last))
+                    };
+                    (Position::new(r.start, 0), end)
+                }
                 Lines::Code { block, start, end } => {
+                    // The same for an empty last line inside a code block.
+                    let text = buf::text_of(doc, block);
+                    let empty_last = end < text.len() && (end == 0 || text[..end].ends_with('\n'));
+                    let end = if empty_last { end + 1 } else { end };
                     (Position::new(block, start), Position::new(block, end))
                 }
             }
@@ -1906,6 +1922,11 @@ impl Vim {
                 vp.rows.max(1) as isize - 1,
                 x0,
             ));
+            // The caret keeps `scrolloff` rows from the new edges.
+            let moved = Viewport { top, bottom, ..vp };
+            let (off_top, off_bottom) = self.scroll_margins(cx.ed, cx.host, &moved);
+            let top = doc.clamp_position(cx.host.move_by_rows(cx.ed, top, off_top, x0));
+            let bottom = doc.clamp_position(cx.host.move_by_rows(cx.ed, bottom, -off_bottom, x0));
             let top_row = cx.host.visual_row(cx.ed, top);
             let bottom_row = cx.host.visual_row(cx.ed, bottom);
             let above =

@@ -4,7 +4,7 @@ use gpui::{AppContext, ClipboardItem, TestAppContext, px, size};
 use writer_core::{Block, BlockKind, Document, Fragment};
 use writer_ui::theme::{self, ThemeMode};
 use writer_vim_mode::{
-    CURSOR_LAYER, ClearSearchHighlight, Mode, SEARCH_LAYER, ToggleVimMode, VimEvent, VimOptions,
+    ClearSearchHighlight, Mode, SEARCH_LAYER, ToggleVimMode, VimEvent, VimOptions,
 };
 
 use super::{at, doc, open, open_detached, setup};
@@ -207,12 +207,13 @@ fn highlight_colours_follow_the_theme(cx: &mut TestAppContext) {
     let (rig, cx) = open(doc(&["alpha beta", "beta"]), cx);
     cx.simulate_keystrokes("/ b e t a enter v l");
     assert_eq!(rig.layer(SEARCH_LAYER, cx).len(), 2);
-    assert_eq!(rig.layer(CURSOR_LAYER, cx).len(), 1);
-    // Switching the theme sets the layers again (they keep the colours
-    // they were set with) and loses neither.
+    assert_eq!(rig.caret_override(cx), Some(at(0, 7)));
+    // Switching the theme sets the layer again (it keeps the colours it
+    // was set with); the cursor cell is the editor's caret and follows the
+    // theme by itself.
     cx.update(|_, cx| theme::set_theme_mode(ThemeMode::Dark, cx));
     cx.run_until_parked();
     assert_eq!(rig.layer(SEARCH_LAYER, cx).len(), 2);
-    assert_eq!(rig.layer(CURSOR_LAYER, cx).len(), 1);
+    assert_eq!(rig.caret_override(cx), Some(at(0, 7)));
     assert_eq!(rig.mode(cx), Mode::Visual);
 }

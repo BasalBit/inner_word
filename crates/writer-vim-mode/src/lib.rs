@@ -76,9 +76,12 @@
 //!    typing takes the editor's normal path, so the platform input method,
 //!    the Markdown input rules and smart punctuation all work.
 //! 4. What the editor then inserts is reported back to the engine, which is
-//!    what makes counts (`3ihello`), dot-repeat and Replace mode work: the
-//!    typed character once the editor's `Edited` event confirms the
-//!    insertion, and the text of an IME composition when it is committed.
+//!    what makes counts (`3ihello`), dot-repeat and Replace mode work. The
+//!    editor announces every insertion of its platform input handler with
+//!    `EditorEvent::TextInput` (a typed character, the commit of an IME
+//!    composition or a dead key, the emoji palette), with the text as it
+//!    was delivered, and that is what the engine is told. A key that ends
+//!    up inserting nothing announces nothing.
 //!
 //! Outside Insert and Replace mode the editor's platform text input is
 //! switched off (`Editor::set_text_input_enabled(false)`), so nothing
@@ -96,26 +99,43 @@
 //!   underline in Replace mode and while an operator or `r` waits.
 //! - **Visual selections** are ordinary editor selections covering the
 //!   selected characters (so `cmd-b`, comments and copy work on them). The
-//!   Vim cursor inside one is marked through the highlight layer
-//!   [`CURSOR_LAYER`], because the editor's own caret sits at the far end
-//!   of the selection.
+//!   head of such a selection lies after the character the Vim cursor is
+//!   on (in Visual Line mode at the far end of the line), so the editor is
+//!   told where to draw its caret (`Editor::set_caret_override`): the same
+//!   blinking block as in Normal mode, on top of the selection tint. The
+//!   view follows that cursor, not the selection head. In Visual Line mode
+//!   an empty last line is selected together with its line break, which is
+//!   what the editor tints there.
 //! - **Search matches**: highlight layer [`SEARCH_LAYER`], kept current
 //!   across edits, cleared by `:noh`.
 //! - **Key context**: the editor's context carries [`KEY_CONTEXT_MODE`]
 //!   (`vim_mode=normal`, …) while attached.
-//! - **Scrolling**: `ctrl-e/y/d/u/f/b`, `zz`, `zt`, `zb` scroll the editor.
-//!   The viewport the engine sees leaves one row of context at the top and
-//!   bottom (Vim's `scrolloff=1`), which is the margin the editor itself
-//!   keeps around the caret.
+//! - **Scrolling**: `ctrl-e/y/d/u/f/b`, `zz`, `zt`, `zb` scroll the editor
+//!   by rows of the text that is on screen, whatever their height: the row
+//!   so many rows below the first visible one goes to the top. Half a page
+//!   (`ctrl-d`) is half the rows that are completely visible, a page
+//!   (`ctrl-f`) all of them but two. The engine runs with
+//!   `scroll_off = 1`, the row of context the editor itself keeps around
+//!   the caret, so `H`, `L`, `zt`, `zb` and `ctrl-e` leave the caret where
+//!   the next movement does not shift the view.
+//! - **Status**: [`VimStatus`] has the mode, the keys of an unfinished
+//!   command, the command line, the last message and the bell. A command
+//!   that fails (Vim's bell) sets [`VimStatus::bell`] for about a third of
+//!   a second; [`VimStatusItem`] fills its mode chip for that time.
+//!
+//! When the editor loses the keyboard focus, a half-typed command (a
+//! count, a register name, an operator waiting for its motion, a key
+//! waiting for its argument) is dropped. Insert and Visual mode stay, and
+//! an open command line keeps its text and goes on when the focus returns.
 //!
 //! # Rows and the editor seam
 //!
 //! `j`, `k`, `gj`, `gk`, `g0`, `g$`, `H`, `M`, `L` and the scroll commands
-//! depend on how text wraps, which only the editor's layout knows. See the
-//! `host` module source for how those calls run (on a copy of the editor
-//! state, because the editor cannot lend its state and answer layout
-//! questions at the same time) and for the request that would remove the
-//! copy.
+//! depend on how text wraps, which only the editor's layout knows. Every
+//! call into the engine runs inside `Editor::edit_with_rows`, which lends
+//! the editor's own state together with a row oracle that answers for it
+//! (see the `host` module); nothing is copied, so the cost of a key does
+//! not depend on the size of the document or of its undo history.
 //!
 //! # Keyboard layouts
 //!
@@ -132,13 +152,19 @@
 //! - The command line takes keys only: no IME composition and no dictation
 //!   into `:` or `/` (the engine's `command_line_input` is used for
 //!   `cmd-v`).
-//! - Text that reaches the document in Insert mode without a key and
-//!   without a composition (the emoji palette, a system text replacement)
-//!   is inserted, but the engine sees it as an outside change: it is not
-//!   part of what `.` repeats, and what was typed before it in the same
-//!   session is not either.
-//! - In Visual Line mode an empty line at the end of the selection shows no
-//!   tint (there is no text to tint); the status shows the mode.
+//! - A replacement the platform makes in text that is already there (a
+//!   system text replacement such as "omw", the accent menu of a held
+//!   key) is taken as typed where the replaced text is the end of what was
+//!   just typed, and otherwise as an outside change: then it is not part
+//!   of what `.` repeats, and what was typed before it in the same session
+//!   is not either.
+//! - In Visual Line mode an empty last line shows no tint when it is the
+//!   last block of the document or stands before a divider or page break
+//!   (there is no line break to select); the block caret is on it when the
+//!   cursor is, and the status shows the mode.
+//! - Holding a key repeats it only if macOS's press-and-hold accent menu
+//!   is off for the application (the `ApplePressAndHoldEnabled` default),
+//!   which the application sets at startup.
 //! - Whatever the engine does not support (macros, blockwise Visual mode,
 //!   regular expressions): see the [`writer_vim`] crate docs.
 
@@ -151,7 +177,7 @@ mod views;
 use gpui::{App, actions};
 use writer_ui::CommandDescriptor;
 
-pub use mode::{CURSOR_LAYER, KEY_CONTEXT_MODE, SEARCH_LAYER, VimMode};
+pub use mode::{KEY_CONTEXT_MODE, SEARCH_LAYER, VimMode};
 pub use status::{VimEvent, VimMessage, VimStatus};
 pub use views::{VimCommandLine, VimStatusItem};
 /// The engine types that appear in this crate's API.

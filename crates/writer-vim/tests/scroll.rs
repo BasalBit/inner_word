@@ -168,3 +168,78 @@ fn wrapped_rows_count_as_rows() {
     s.keys("<C-d>");
     assert_eq!(s.buffer(), "abcdefghijklmnopqrstuvwxyz1234\n|x\ny");
 }
+
+/// As `tall`, with one row of `scrolloff`.
+fn tall_with_margin(line: usize) -> Session {
+    let mut s = tall(line);
+    let mut options = s.vim.options().clone();
+    options.scroll_off = 1;
+    s.vim.set_options(options);
+    s
+}
+
+#[test]
+fn scroll_off_keeps_a_row_at_the_edges() {
+    // In the middle of the document H and L stay one row inside.
+    let mut s = tall_with_margin(10);
+    s.host.top = 8;
+    s.keys("H");
+    assert_eq!(line(&s), 9);
+    s.keys("L");
+    assert_eq!(line(&s), 11);
+    s.keys("M");
+    assert_eq!(line(&s), 10);
+    // A count that reaches further than the margin counts from the edge.
+    s.keys("3H");
+    assert_eq!(line(&s), 10);
+    s.keys("1H");
+    assert_eq!(line(&s), 9);
+    s.keys("4L");
+    assert_eq!(line(&s), 9);
+    // Never past the other margin.
+    s.keys("9H");
+    assert_eq!(line(&s), 11);
+    s.keys("9L");
+    assert_eq!(line(&s), 9);
+
+    // The first and the last row of the document have nothing to keep.
+    let mut s = tall_with_margin(2);
+    s.keys("H");
+    assert_eq!(line(&s), 0);
+    s.keys("L");
+    assert_eq!(line(&s), 3);
+    let mut s = tall_with_margin(17);
+    s.host.top = 15;
+    s.keys("L");
+    assert_eq!(line(&s), 19);
+    s.keys("H");
+    assert_eq!(line(&s), 16);
+}
+
+#[test]
+fn scroll_off_drags_the_caret_a_row_early() {
+    // The caret is on the second visible row: one row down and it would
+    // be on the first, so it moves along.
+    let mut s = tall_with_margin(1);
+    s.keys("<C-e>");
+    assert_eq!((line(&s), s.host.top), (2, 1));
+    // From the middle it stays.
+    s.keys("j<C-e>");
+    assert_eq!((line(&s), s.host.top), (3, 2));
+    // Scrolling up pulls it up from the last row but one.
+    let mut s = tall_with_margin(8);
+    s.host.top = 5;
+    s.keys("<C-y>");
+    assert_eq!((line(&s), s.host.top), (7, 4));
+    // Back at the top of the document the first row is allowed again.
+    let mut s = tall_with_margin(0);
+    s.host.top = 1;
+    s.keys("j<C-y>");
+    assert_eq!((line(&s), s.host.top), (1, 0));
+    // The pages are counted from the viewport as the host reports it.
+    let mut s = tall_with_margin(0);
+    s.keys("<C-d>");
+    assert_eq!(s.host.scrolls, vec![Scroll::Rows(2)]);
+    s.keys("<C-f>");
+    assert_eq!(s.host.scrolls.last(), Some(&Scroll::Rows(3)));
+}

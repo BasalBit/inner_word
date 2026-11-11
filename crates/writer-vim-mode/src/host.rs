@@ -1,29 +1,15 @@
 //! The engine's host: wrapped rows, the viewport, scrolling and the system
-//! clipboard, answered from an [`Editor`].
-//!
-//! # Why there are two ways to run the engine
+//! clipboard, answered from an [`Editor`](writer_editor::Editor).
 //!
 //! The engine works on `&mut EditorState` and asks its layout questions
-//! through [`VimHost`] during the same call. The editor hands out
-//! `&mut EditorState` only inside [`Editor::edit_with`], where the editor
-//! itself is mutably borrowed, and its row oracle (`visual_row`, `column_x`,
-//! `move_by_visual_rows`, `visible_rows`) needs `&Editor`. Both at once is
-//! not possible with the editor's API as it is (a request for a seam is
-//! filed, see the crate docs). Until then:
+//! through [`VimHost`] during the same call. Every call into the engine
+//! runs inside `Editor::edit_with_rows`, which lends the editor's state
+//! together with a [`RowOracle`]: the oracle answers for that state as it
+//! is when asked, also after the engine has edited it. Nothing is copied.
 //!
-//! - **Direct**: the engine runs inside `Editor::edit_with` on the editor's
-//!   own state, and the host has no layout. Used for everything that asks
-//!   no layout question: Insert, Replace and command-line keys, and most
-//!   Normal-mode commands.
-//! - **With layout**: the engine runs on a *copy* of the editor state while
-//!   the host answers from `&Editor`, and the copy is then moved into the
-//!   editor through `Editor::edit_with`. Used for the keys that move by
-//!   visual rows or look at the viewport ([`may_ask_layout`]).
-//!
-//! A layout question that arrives without a layout (a key that was not
-//! expected to ask, or an editor that has not been drawn yet) is answered
-//! from hard lines, one row per line, and counted in
-//! [`EditorHost::fallbacks`].
+//! A layout question that cannot be answered from the layout (the editor
+//! has not been drawn yet) is answered from hard lines, one row per line,
+//! and counted in [`EditorHost::fallbacks`].
 //!
 //! Scroll requests and clipboard writes are collected and carried out by
 //! the caller after the engine returns, as the host trait allows.
@@ -32,8 +18,8 @@ use std::ops::Range;
 
 use gpui::{App, ClipboardItem, px};
 use writer_core::{Document, EditorState, Fragment, Position, text};
-use writer_editor::Editor;
-use writer_vim::{GoalColumn, Key, KeyCode, Mode, RegisterContent, Scroll, Viewport, Vim, VimHost};
+use writer_editor::RowOracle;
+use writer_vim::{GoalColumn, RegisterContent, Scroll, Viewport, VimHost};
 
 /// A goal x far to the right of any row: the end of the row.
 const END_OF_ROW_X: f32 = 1.0e7;
@@ -44,9 +30,8 @@ const FALLBACK_CELL: f32 = 8.0;
 
 /// The host for one call into the engine.
 pub(crate) struct EditorHost<'a> {
-    /// The editor whose layout answers, and the document revision that
-    /// layout is for.
-    layout: Option<(&'a Editor, u64)>,
+    /// The editor's row oracle for the state the engine is working on.
+    rows: Option<&'a RowOracle<'a>>,
     clipboard: Option<RegisterContent>,
     /// The last clipboard write of the call.
     pub(crate) clipboard_write: Option<RegisterContent>,
@@ -57,11 +42,12 @@ pub(crate) struct EditorHost<'a> {
 }
 
 impl<'a> EditorHost<'a> {
-    /// A host without layout. `clipboard` is what the system clipboard
-    /// holds, read before the call.
+    /// A host without layout (for calls that never reach the editor
+    /// state). `clipboard` is what the system clipboard holds, read before
+    /// the call.
     pub(crate) fn new(clipboard: Option<RegisterContent>) -> Self {
         Self {
-            layout: None,
+            rows: None,
             clipboard,
             clipboard_write: None,
             scrolls: Vec::new(),
@@ -69,26 +55,16 @@ impl<'a> EditorHost<'a> {
         }
     }
 
-    /// Lets the host answer layout questions from `editor`, as long as the
-    /// state it is asked about still has the editor's document.
-    pub(crate) fn with_layout(mut self, editor: &'a Editor) -> Self {
-        self.layout = Some((editor, editor.state().revision()));
+    /// Lets the host answer layout questions from the editor's layout.
+    pub(crate) fn with_rows(mut self, rows: &'a RowOracle<'a>) -> Self {
+        self.rows = Some(rows);
         self
-    }
-
-    /// The editor, when its layout describes `state`.
-    fn editor_for(&self, state: &EditorState) -> Option<&'a Editor> {
-        self.layout
-            .filter(|(_, revision)| *revision == state.revision())
-            .map(|(editor, _)| editor)
     }
 }
 
 impl VimHost for EditorHost<'_> {
     fn visual_row(&mut self, state: &EditorState, pos: Position) -> Range<usize> {
-        if let Some(editor) = self.editor_for(state)
-            && let Some(row) = editor.visual_row(pos)
-        {
+        if let Some(row) = self.rows.and_then(|rows| rows.visual_row(state, pos)) {
             return row.start.offset..row.end.offset;
         }
         self.fallbacks += 1;
@@ -96,9 +72,7 @@ impl VimHost for EditorHost<'_> {
     }
 
     fn column_of(&mut self, state: &EditorState, pos: Position) -> f32 {
-        if let Some(editor) = self.editor_for(state)
-            && let Some(x) = editor.column_x(pos)
-        {
+        if let Some(x) = self.rows.and_then(|rows| rows.column_x(state, pos)) {
             return f32::from(x);
         }
         self.fallbacks += 1;
@@ -117,13 +91,13 @@ impl VimHost for EditorHost<'_> {
         rows: isize,
         goal: GoalColumn,
     ) -> Position {
-        if let Some(editor) = self.editor_for(state) {
+        if let Some(oracle) = self.rows {
             let goal_x = match goal {
                 GoalColumn::X(x) => x.max(0.),
                 GoalColumn::EndOfRow => END_OF_ROW_X,
             };
-            if let Some(step) = editor.move_by_visual_rows(from, rows, Some(px(goal_x))) {
-                return character_on_row(editor, state.document(), step.position);
+            if let Some(step) = oracle.move_by_visual_rows(state, from, rows, Some(px(goal_x))) {
+                return character_on_row(oracle, state, step.position);
             }
         }
         self.fallbacks += 1;
@@ -131,35 +105,16 @@ impl VimHost for EditorHost<'_> {
     }
 
     fn viewport(&mut self, state: &EditorState) -> Option<Viewport> {
-        let editor = self.editor_for(state)?;
-        let rows = editor.visible_rows()?;
-        let document = state.document();
-        // The editor keeps a row of context around the caret whenever it
-        // scrolls for a movement. The engine gets the viewport without its
-        // first and last row (Vim's `scrolloff=1`), so `H`, `L` and the
-        // caret the scroll commands drag along stay inside that margin and
-        // the next movement does not shift the view. The ends of the
-        // document have no context to keep, but the page size stays the
-        // same there: `ctrl-f` then `ctrl-b` must come back to where it
-        // started.
-        let mut inner = rows.as_slice();
-        let mut page = rows.len();
-        if rows.len() >= 3 {
-            page = rows.len() - 2;
-            if inner[0].start != Position::ZERO {
-                inner = &inner[1..];
-            }
-            let last = inner[inner.len() - 1].end;
-            let document_end = last.block + 1 == document.block_count()
-                && last.offset >= document.blocks()[last.block].len();
-            if !document_end {
-                inner = &inner[..inner.len() - 1];
-            }
-        }
+        // The rows that are completely on screen, as they are. The row of
+        // context the editor keeps around the caret when it scrolls is the
+        // engine's `scroll_off` option (see `VimMode::sync_options`), so
+        // `H`, `L` and the caret that `ctrl-e` drags along stay inside
+        // that margin while a page is counted in real rows.
+        let rows = self.rows?.visible_rows(state)?;
         Some(Viewport {
-            top: inner.first()?.start,
-            bottom: inner.last()?.start,
-            rows: page.max(1),
+            top: rows.first()?.start,
+            bottom: rows.last()?.start,
+            rows: rows.len().max(1),
         })
     }
 
@@ -181,14 +136,14 @@ impl VimHost for EditorHost<'_> {
 /// The editor's vertical movement lands on a caret position, which at the
 /// end of a hard line is the offset after its last character. The engine
 /// wants the character itself.
-fn character_on_row(editor: &Editor, document: &Document, position: Position) -> Position {
-    let Some(row) = editor.visual_row(position) else {
+fn character_on_row(rows: &RowOracle<'_>, state: &EditorState, position: Position) -> Position {
+    let Some(row) = rows.visual_row(state, position) else {
         return position;
     };
     if row.start == row.end || position.offset < row.end.offset {
         return position;
     }
-    let text = document.blocks()[position.block].text();
+    let text = state.document().blocks()[position.block].text();
     let last = text::prev_grapheme_boundary(text, row.end.offset).max(row.start.offset);
     Position::new(position.block, last)
 }
@@ -249,39 +204,6 @@ fn move_by_hard_lines(
         offset = text::next_grapheme_boundary(text, offset);
     }
     Position::new(block, offset.min(last))
-}
-
-// ---------------------------------------------------------------------------
-// Which keys ask layout questions
-// ---------------------------------------------------------------------------
-
-/// Whether `key` can make the engine ask about visual rows or the viewport
-/// in its current state, so the call has to run with a layout.
-///
-/// The engine asks for `j` / `k` and the arrow keys (as movements; after an
-/// operator they count blocks, which is harmless to over-approximate), the
-/// `g` commands (`gj`, `gk`, `g0`, `g^`, `g$`), `H` / `M` / `L`, the scroll
-/// commands and `.` (which may repeat any of them with an operator). It
-/// never asks in Insert, Replace or command-line mode.
-pub(crate) fn may_ask_layout(vim: &Vim, key: &Key) -> bool {
-    if matches!(vim.mode(), Mode::Insert | Mode::Replace | Mode::CommandLine) {
-        return false;
-    }
-    if key.alt {
-        return false;
-    }
-    // The key after `g` decides; `z` only scrolls.
-    if vim.pending_keys().ends_with('g') {
-        return true;
-    }
-    match key.code {
-        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => true,
-        KeyCode::Char(c) if key.ctrl => {
-            matches!(c, 'd' | 'u' | 'f' | 'b' | 'e' | 'y' | 'n' | 'p' | 'j')
-        }
-        KeyCode::Char(c) => matches!(c, 'j' | 'k' | 'H' | 'M' | 'L' | '.'),
-        _ => false,
-    }
 }
 
 // ---------------------------------------------------------------------------

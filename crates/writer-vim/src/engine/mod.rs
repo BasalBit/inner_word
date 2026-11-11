@@ -9,7 +9,7 @@ mod operators;
 
 use std::collections::HashMap;
 
-use writer_core::{EditorState, Position, Selection};
+use writer_core::{EditorState, Position, Selection, TextRange};
 
 use crate::buf::{self, ClassOpts};
 use crate::effect::{CaretShape, CommandLine, Effect, Mode, Outcome, SearchPattern};
@@ -45,6 +45,14 @@ pub struct VimOptions {
     /// message): moving, searching, selecting and yanking still work. For
     /// documents the editor shows read-only. Default: off.
     pub read_only: bool,
+    /// Rows of context kept above and below the caret where the engine
+    /// decides (Vim's `scrolloff`): `H` and `L` land this many rows inside
+    /// the viewport, and `ctrl-e` / `ctrl-y` drag the caret along when it
+    /// comes closer than this to the edge. Not applied at the first and
+    /// last row of the document. Set it to the margin the host itself keeps
+    /// when it scrolls the caret into view, so the next movement after one
+    /// of these commands does not shift the view. Default: 0.
+    pub scroll_off: usize,
 }
 
 impl Default for VimOptions {
@@ -56,6 +64,7 @@ impl Default for VimOptions {
             highlight_search: true,
             shift_width: 4,
             read_only: false,
+            scroll_off: 0,
         }
     }
 }
@@ -611,6 +620,41 @@ impl Vim {
         self.finish(true)
     }
 
+    /// Tells the engine that the host's input method replaced `range` of
+    /// the document with `text`: a system text replacement, or the accent
+    /// picked for a letter that was just typed. `range` is in positions of
+    /// the document before the replacement. Call it right after the
+    /// document changed, instead of [`Vim::text_inserted`].
+    ///
+    /// In Insert mode, where the replaced text is the end of what was just
+    /// typed (it lies right before the caret, in the text typed last), the
+    /// record of the session is corrected: dot-repeat and counts type the
+    /// replacement. Anything else is taken as a change from outside, as
+    /// [`Vim::sync`] takes it: what was typed before no longer repeats.
+    pub fn text_replaced(
+        &mut self,
+        range: TextRange,
+        text: &str,
+        ed: &mut EditorState,
+        host: &mut dyn VimHost,
+    ) -> Outcome {
+        let mut cx = Cx { ed, host };
+        // The caret before the replacement: where the engine last saw it.
+        let caret = self
+            .seen
+            .map(|(_, selection)| selection)
+            .filter(Selection::is_collapsed)
+            .map(|selection| selection.head);
+        let amended = self.base == Base::Insert
+            && caret.is_some_and(|caret| self.amend_typed(range, caret, text));
+        self.expect_host = false;
+        if !amended && self.changed_outside(&cx) {
+            self.sync_inner(&mut cx);
+        }
+        self.observe(&cx);
+        self.finish(true)
+    }
+
     /// Types `text` into the command line (for text that does not arrive as
     /// keys, such as committed IME input while `:` or `/` is open). Does
     /// nothing when the command line is closed.
@@ -692,6 +736,27 @@ impl Vim {
             }
         }
         self.observe(&cx);
+        self.finish(true)
+    }
+
+    /// Drops a half-typed command: a count, a register name, an operator
+    /// waiting for its motion, a key waiting for its argument (`f`, `r`,
+    /// `m`, `g`, `z`, …), and the register name `ctrl-r` waits for in
+    /// Insert mode. Modes, an open command line and the one command of
+    /// `ctrl-o` are left as they are.
+    ///
+    /// For a host to call when the editor loses the keyboard focus: a `d`
+    /// typed before looking something up in another panel must not delete
+    /// with the first key pressed after coming back.
+    pub fn cancel_pending_command(&mut self) -> Outcome {
+        if self.cmdline.is_none() {
+            self.cancel_pending();
+        }
+        if let Some(session) = self.insert.as_mut() {
+            session.await_register = false;
+        }
+        // The editor was not touched: what the engine last saw of it stays
+        // what it compares with.
         self.finish(true)
     }
 

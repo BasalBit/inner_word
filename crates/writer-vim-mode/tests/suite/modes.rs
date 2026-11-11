@@ -7,7 +7,7 @@ use gpui::{
 };
 use writer_core::Selection;
 use writer_editor::{CaretStyle, InterceptPriority, KeyDisposition};
-use writer_vim_mode::{CURSOR_LAYER, CaretShape, Mode, VimEvent};
+use writer_vim_mode::{CaretShape, Mode, VimEvent};
 
 use super::{at, doc, open, open_detached, setup};
 
@@ -133,12 +133,13 @@ fn visual_mode_selects_characters_and_marks_the_cursor(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("e");
     assert_eq!(rig.selected_text(cx), "hello");
     assert_eq!(rig.selection(cx), Selection::new(at(0, 0), at(0, 5)));
-    // The Vim cursor is on the "o"; the editor's caret would be after it,
-    // so the cursor is drawn through the highlight layer and the editor's
-    // own caret is hidden (a bar caret is not drawn over a selection).
+    // The Vim cursor is on the "o"; the head of the editor's selection is
+    // after it, so the editor is told to draw its block caret on the "o".
     assert_eq!(rig.cursor(cx), at(0, 4));
-    assert_eq!(rig.layer(CURSOR_LAYER, cx), vec![(0, 4, 5)]);
-    assert_eq!(rig.caret_style(cx), CaretStyle::Bar);
+    assert_eq!(rig.head(cx), at(0, 5));
+    assert_eq!(rig.caret_override(cx), Some(at(0, 4)));
+    assert_eq!(rig.drawn_caret(cx), at(0, 4));
+    assert_eq!(rig.caret_style(cx), CaretStyle::Block);
     assert_eq!(rig.status(cx).caret, CaretShape::Block);
 
     // The editor's own commands work on the Visual selection.
@@ -155,7 +156,7 @@ fn visual_mode_selects_characters_and_marks_the_cursor(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("d");
     assert_eq!(rig.text(cx), " world");
     assert_eq!(rig.mode(cx), Mode::Normal);
-    assert!(rig.layer(CURSOR_LAYER, cx).is_empty());
+    assert_eq!(rig.caret_override(cx), None);
     assert_eq!(rig.caret_style(cx), CaretStyle::Block);
     assert!(rig.selection(cx).is_collapsed());
 }
@@ -171,17 +172,17 @@ fn backward_visual_selection_keeps_the_block_caret(cx: &mut TestAppContext) {
     assert_eq!(rig.cursor(cx), at(0, 2));
     assert_eq!(rig.head(cx), at(0, 2));
     assert_eq!(rig.caret_style(cx), CaretStyle::Block);
-    assert!(rig.layer(CURSOR_LAYER, cx).is_empty());
+    assert_eq!(rig.caret_override(cx), None);
 
     // `o` swaps the ends: now the cursor is the last selected character.
     cx.simulate_keystrokes("o");
     assert_eq!(rig.cursor(cx), at(0, 4));
-    assert_eq!(rig.layer(CURSOR_LAYER, cx), vec![(0, 4, 5)]);
+    assert_eq!(rig.caret_override(cx), Some(at(0, 4)));
 
     cx.simulate_keystrokes("escape");
     assert_eq!(rig.mode(cx), Mode::Normal);
     assert!(rig.selection(cx).is_collapsed());
-    assert!(rig.layer(CURSOR_LAYER, cx).is_empty());
+    assert_eq!(rig.caret_override(cx), None);
 }
 
 #[gpui::test]
@@ -195,12 +196,12 @@ fn visual_line_mode_selects_whole_blocks(cx: &mut TestAppContext) {
     assert_eq!(rig.selected_text(cx), "one");
     // The cursor stays where it was inside the line.
     assert_eq!(rig.cursor(cx), at(0, 1));
-    assert_eq!(rig.layer(CURSOR_LAYER, cx), vec![(0, 1, 2)]);
+    assert_eq!(rig.caret_override(cx), Some(at(0, 1)));
 
     cx.simulate_keystrokes("j");
     assert_eq!(rig.selection(cx), Selection::new(at(0, 0), at(1, 3)));
     assert_eq!(rig.cursor(cx), at(1, 1));
-    assert_eq!(rig.layer(CURSOR_LAYER, cx), vec![(1, 1, 2)]);
+    assert_eq!(rig.caret_override(cx), Some(at(1, 1)));
 
     cx.simulate_keystrokes("d");
     assert_eq!(rig.text(cx), "three");
@@ -310,7 +311,7 @@ fn detaching_restores_plain_editing(cx: &mut TestAppContext) {
     assert_eq!(rig.caret_style(cx), CaretStyle::Bar);
     assert!(rig.text_input(cx));
     assert_eq!(rig.context_mode(cx), None);
-    assert!(rig.layer(CURSOR_LAYER, cx).is_empty());
+    assert_eq!(rig.caret_override(cx), None);
     assert!(rig.selection(cx).is_collapsed());
     assert!(rig.take_events().contains(&VimEvent::Detached));
 
@@ -405,7 +406,7 @@ fn changes_from_outside_are_synced(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(rig.mode(cx), Mode::Visual);
     assert_eq!(rig.cursor(cx), at(0, 4));
-    assert_eq!(rig.layer(CURSOR_LAYER, cx), vec![(0, 4, 5)]);
+    assert_eq!(rig.caret_override(cx), Some(at(0, 4)));
     cx.simulate_keystrokes("y");
     assert_eq!(rig.mode(cx), Mode::Normal);
     rig.vim.read_with(cx, |vim, _| {

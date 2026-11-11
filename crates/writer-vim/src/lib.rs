@@ -108,6 +108,11 @@
 //! key outside Insert mode, but the caret and the mode indicator are wrong
 //! until then.
 //!
+//! When the editor loses the keyboard focus, call
+//! [`Vim::cancel_pending_command`]: a count, a register name or an operator
+//! typed before the focus went elsewhere must not apply to the first key
+//! pressed after it comes back. Modes and an open command line stay.
+//!
 //! ## Typing in Insert mode
 //!
 //! In Insert and Replace mode the engine does not insert text. Typed
@@ -122,6 +127,12 @@
 //! - the `.` register;
 //! - Replace mode, where the engine then removes the characters the new
 //!   text overwrites.
+//!
+//! When the input method replaces text that is already in the document (a
+//! system text replacement, the accent picked for a held key), call
+//! [`Vim::text_replaced`] instead: where the replaced text is the end of
+//! what was just typed, the record is corrected, and otherwise the change
+//! counts as one from outside.
 //!
 //! Keys that are not text need no notification: the engine sees them pass
 //! through `handle_key` and remembers enter, shift-enter, backspace,
@@ -182,9 +193,13 @@
 //! editor's selection. In Visual mode the editor's selection covers the
 //! selected characters (so the editor's own formatting commands, comments
 //! and copy work on a Visual selection), which puts its head *after* the
-//! character the Vim cursor is on. In Visual Line mode
-//! [`Vim::visual_line_blocks`] gives the selected blocks, for tinting
-//! lines that have no text to show a selection on.
+//! character the Vim cursor is on. In Visual Line mode the selection runs
+//! from the start of the first line to the end of the last; when the last
+//! line is empty it also takes that line's break (it ends at the start of
+//! the next block), so a host that tints selected line breaks shows the
+//! empty line as selected. At the end of the document and before a divider
+//! there is no such break; [`Vim::visual_line_blocks`] gives the selected
+//! blocks for a host that tints whole lines itself.
 //!
 //! Text for the command line that does not arrive as keys (committed input
 //! method text while `:` or `/` is open) goes to
@@ -198,9 +213,14 @@
 //! - wrapped rows: [`VimHost::visual_row`], [`VimHost::column_of`],
 //!   [`VimHost::move_by_rows`] (for `j`, `k`, `g0`, `g$`, and the caret
 //!   movement of the scroll commands);
-//! - the viewport: [`VimHost::viewport`] (for `H`, `M`, `L`);
+//! - the viewport: [`VimHost::viewport`] (for `H`, `M`, `L` and the size
+//!   of a page: `ctrl-d` and `ctrl-u` move by half the visible rows,
+//!   `ctrl-f` and `ctrl-b` by all of them but two). Report the rows as
+//!   they are; a margin the host keeps around the caret when it scrolls
+//!   is [`VimOptions::scroll_off`];
 //! - scrolling: [`VimHost::scroll`] (for `ctrl-e/y/d/u/f/b`, `zz`, `zt`,
-//!   `zb`);
+//!   `zb`). A [`Scroll::Rows`] request counts visual rows, of whatever
+//!   height: the caret moves by the same number of rows;
 //! - the system clipboard: [`VimHost::clipboard_read`],
 //!   [`VimHost::clipboard_write`] (registers `+` and `*`).
 //!

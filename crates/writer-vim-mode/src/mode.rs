@@ -1,18 +1,20 @@
 //! [`VimMode`]: one Vim engine attached to one [`Editor`].
 
-use gpui::{App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, WeakEntity};
-use writer_core::{EditorState, Position, Selection, TextRange, text};
+use std::time::Duration;
+
+use gpui::{App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, Task, WeakEntity};
+use writer_core::{EditorState, Position, Selection, TextRange};
 use writer_editor::{
     Autoscroll, CaretStyle, Editor, EditorEvent, HighlightStyle, InterceptPriority, KeyDisposition,
 };
 use writer_ui::theme::{ActiveTheme, GlobalTheme};
 use writer_vim::{
-    CaretShape, Effect, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, Vim,
-    VimHost, VimOptions,
+    CaretShape, Effect, Key, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, Vim, VimHost,
+    VimOptions,
 };
 
 use crate::{
-    host::{EditorHost, may_ask_layout, read_clipboard, write_clipboard},
+    host::{EditorHost, read_clipboard, write_clipboard},
     search::SearchMatches,
     status::{VimEvent, VimMessage, VimStatus},
 };
@@ -26,9 +28,15 @@ pub const KEY_CONTEXT_MODE: &str = "vim_mode";
 
 /// The editor highlight layer that marks the search matches.
 pub const SEARCH_LAYER: &str = "vim-search";
-/// The editor highlight layer that marks the Vim cursor while the editor's
-/// own caret is somewhere else (the far end of a Visual selection).
-pub const CURSOR_LAYER: &str = "vim-cursor";
+
+/// The rows the editor keeps around the caret when it scrolls it into view
+/// (`Autoscroll::Fit`): the engine's `scroll_off`, so `H`, `L` and
+/// `ctrl-e` leave the caret where the next movement does not shift the
+/// view.
+const SCROLL_OFF: usize = 1;
+
+/// How long [`VimStatus::bell`] stays on after a command failed.
+const BELL_FLASH: Duration = Duration::from_millis(350);
 
 /// What the editor looked like before Vim mode took it over.
 #[derive(Clone, Copy)]
@@ -41,6 +49,7 @@ struct SavedEditor {
 enum Call<'a> {
     Key(Key),
     TextInserted(&'a str),
+    TextReplaced(TextRange, &'a str),
     CommandLineInput(&'a str),
     Execute(&'a str),
     Sync,
@@ -53,6 +62,7 @@ impl Call<'_> {
         match self {
             Call::Key(key) => vim.handle_key(*key, state, host),
             Call::TextInserted(text) => vim.text_inserted(text, state, host),
+            Call::TextReplaced(range, text) => vim.text_replaced(*range, text, state, host),
             Call::CommandLineInput(text) => vim.command_line_input(text, state, host),
             Call::Execute(command) => vim.execute(command, state, host),
             Call::Sync => vim.sync(state, host),
@@ -61,26 +71,13 @@ impl Call<'_> {
         }
     }
 
-    /// Whether the caret should be scrolled into view after the call. Not
-    /// for the calls that only bring the engine in line with the editor:
-    /// they may nudge the caret onto a character, which must not undo a
-    /// scroll position somebody just restored.
-    fn autoscroll(&self) -> Autoscroll {
-        match self {
-            Call::Sync | Call::Attach | Call::Detach => Autoscroll::None,
-            _ => Autoscroll::Fit,
-        }
+    /// Whether the Vim cursor should be scrolled into view after the call.
+    /// Not for the calls that only bring the engine in line with the
+    /// editor: they may nudge the caret onto a character, which must not
+    /// undo a scroll position somebody just restored.
+    fn follows_caret(&self) -> bool {
+        !matches!(self, Call::Sync | Call::Attach | Call::Detach)
     }
-}
-
-/// What an IME composition is doing, as far as the engine cares.
-enum Composition {
-    /// No composition.
-    None,
-    /// Marked text exists: its updates are neither keys nor typed text.
-    Active,
-    /// The composition just ended with this text in the document.
-    Committed(String),
 }
 
 /// The Vim modes that exist, for finding the one a global action is for.
@@ -134,14 +131,9 @@ pub struct VimMode {
     /// The key interceptor on the editor, while attached.
     keys: Option<Subscription>,
     saved: Option<SavedEditor>,
-    /// Text of a key the engine left to the editor in Insert mode: reported
-    /// to the engine once the editor has inserted it.
-    typed: Option<String>,
-    /// Where the IME composition in progress started.
-    composing: Option<Position>,
     search: SearchMatches,
-    /// What the cursor layer shows.
-    cursor_cell: Option<TextRange>,
+    /// Takes [`VimStatus::bell`] back after a moment.
+    bell: Option<Task<()>>,
     /// The editor's document revision and selection after the engine last
     /// looked: a change report that finds them unchanged needs no sync.
     seen: Option<(u64, Selection)>,
@@ -173,10 +165,8 @@ impl VimMode {
             status: VimStatus::default(),
             keys: None,
             saved: None,
-            typed: None,
-            composing: None,
             search: SearchMatches::default(),
-            cursor_cell: None,
+            bell: None,
             seen: None,
             layout_fallbacks: 0,
             _subscriptions: subscriptions,
@@ -223,8 +213,8 @@ impl VimMode {
     }
 
     /// Layout questions of the engine that were answered without the
-    /// editor's layout (see the `host` module). Stays 0 unless a key asks
-    /// about rows that was not expected to; tests watch it.
+    /// editor's layout (see the `host` module). Stays 0 once the editor has
+    /// been drawn; tests watch it.
     #[doc(hidden)]
     pub fn layout_fallbacks(&self) -> usize {
         self.layout_fallbacks
@@ -253,8 +243,6 @@ impl VimMode {
             },
         ));
         self.attached = true;
-        self.typed = None;
-        self.composing = None;
         self.status = VimStatus {
             attached: true,
             ..VimStatus::default()
@@ -304,16 +292,14 @@ impl VimMode {
         self.engine_call(Call::Detach, cx);
         self.attached = false;
         self.keys = None;
-        self.typed = None;
-        self.composing = None;
         self.seen = None;
-        self.cursor_cell = None;
+        self.bell = None;
         self.search = SearchMatches::default();
         self.status = VimStatus::default();
         let saved = self.saved.take();
         self.editor.update(cx, |editor, cx| {
             editor.clear_highlights(SEARCH_LAYER, cx);
-            editor.clear_highlights(CURSOR_LAYER, cx);
+            editor.set_caret_override(None, cx);
             editor.remove_key_context_entry(KEY_CONTEXT_MODE, cx);
             if let Some(saved) = saved {
                 editor.set_caret_style(saved.caret_style, cx);
@@ -377,7 +363,6 @@ impl VimMode {
         if !self.attached {
             return KeyDisposition::Pass;
         }
-        self.typed = None;
         // The keys of an IME composition belong to the input method.
         if self.editor.read(cx).marked_range().is_some() {
             return KeyDisposition::Pass;
@@ -410,14 +395,12 @@ impl VimMode {
         let consumed = outcome.consumed;
         self.apply(outcome, consumed, cx);
         if consumed {
-            return KeyDisposition::Consumed;
+            KeyDisposition::Consumed
+        } else {
+            // The editor handles the key as without Vim. If it types text,
+            // the editor reports it (`EditorEvent::TextInput`).
+            KeyDisposition::Pass
         }
-        // The editor handles the key as without Vim. If it types text, the
-        // engine learns it once the editor reports the insertion.
-        if self.vim.mode().is_insert() && !self.editor.read(cx).is_read_only() {
-            self.typed = typed_text(keystroke, &key);
-        }
-        KeyDisposition::Pass
     }
 
     // ----- editor events ---------------------------------------------------------------
@@ -431,68 +414,51 @@ impl VimMode {
             return;
         }
         match event {
+            // Text arrived through the platform input handler: a typed
+            // character, the commit of an IME composition or a dead key,
+            // the emoji palette. It is in the document already, and the
+            // `Edited` and `SelectionChanged` of the same insertion follow.
+            EditorEvent::TextInput { text, replaced } => {
+                let call = match replaced {
+                    None if self.vim.mode().is_insert() => Call::TextInserted(text),
+                    // The platform replaced text that was already there
+                    // (the accent for a held key, a system text
+                    // replacement): the engine corrects what it recorded
+                    // as typed, where that is what was replaced.
+                    Some(range) if self.vim.mode().is_insert() => Call::TextReplaced(*range, text),
+                    _ => Call::Sync,
+                };
+                let outcome = self.engine_call(call, cx);
+                self.apply(outcome, false, cx);
+            }
             EditorEvent::Edited { change } => {
-                let typed = self.typed.take();
                 self.refresh_search(change, cx);
-                match self.composition(cx) {
-                    Composition::Active => {}
-                    Composition::Committed(text) => self.text_inserted(&text, cx),
-                    Composition::None => match typed {
-                        Some(text) if change.blocks.is_some() && self.vim.mode().is_insert() => {
-                            self.text_inserted(&text, cx)
-                        }
-                        _ => self.sync(cx),
-                    },
-                }
+                self.sync(cx);
             }
-            EditorEvent::SelectionChanged => {
-                self.typed = None;
-                match self.composition(cx) {
-                    Composition::Active => {}
-                    Composition::Committed(text) => self.text_inserted(&text, cx),
-                    Composition::None => self.sync(cx),
-                }
-            }
+            EditorEvent::SelectionChanged => self.sync(cx),
             EditorEvent::DocumentReplaced => self.document_replaced(cx),
+            // The keyboard went elsewhere: a half-typed command must not
+            // wait there for the first key after coming back.
+            EditorEvent::Blurred => {
+                let outcome = self.vim.cancel_pending_command();
+                self.apply(outcome, false, cx);
+                self.present_caret(cx);
+            }
             _ => {}
         }
     }
 
-    /// Follows the editor's IME composition: while it has marked text
-    /// nothing is reported to the engine, and when it ends the committed
-    /// text is.
-    fn composition(&mut self, cx: &mut Context<Self>) -> Composition {
-        let editor = self.editor.read(cx);
-        if let Some(marked) = editor.marked_range() {
-            self.composing.get_or_insert(marked.start);
-            self.typed = None;
-            return Composition::Active;
-        }
-        let Some(start) = self.composing.take() else {
-            return Composition::None;
-        };
-        let head = editor.selection().head;
-        let committed = (head.block == start.block && head.offset > start.offset)
-            .then(|| editor.document().block(start.block))
-            .flatten()
-            .and_then(|block| block.text().get(start.offset..head.offset))
-            .map(str::to_string);
-        match committed {
-            Some(text) if self.vim.mode().is_insert() => Composition::Committed(text),
-            _ => Composition::None,
-        }
-    }
-
-    /// The editor inserted `text` through its typing path.
-    fn text_inserted(&mut self, text: &str, cx: &mut Context<Self>) {
-        let outcome = self.engine_call(Call::TextInserted(text), cx);
-        self.apply(outcome, false, cx);
-    }
-
     /// Something changed the editor: let the engine catch up, unless the
-    /// editor is exactly as the engine left it.
+    /// editor is exactly as the engine left it (which it is for the
+    /// `Edited` and `SelectionChanged` that follow a reported `TextInput`,
+    /// and for the engine's own changes). The updates of an IME
+    /// composition in progress are neither keys nor typed text: the engine
+    /// hears of the composition when it is committed.
     fn sync(&mut self, cx: &mut Context<Self>) {
         let editor = self.editor.read(cx);
+        if editor.marked_range().is_some() {
+            return;
+        }
         let now = (editor.state().revision(), editor.selection());
         if self.seen == Some(now) {
             return;
@@ -504,11 +470,9 @@ impl VimMode {
     /// Another document was loaded into the editor: start over in Normal
     /// mode. Registers and history stay; marks and the jump list go.
     fn document_replaced(&mut self, cx: &mut Context<Self>) {
-        self.typed = None;
-        self.composing = None;
         self.status.message = None;
-        // The editor dropped its highlight layers with the old document.
-        self.cursor_cell = None;
+        // The editor dropped its highlight layers and the caret override
+        // with the old document.
         self.search = SearchMatches::default();
         let outcome = self.engine_call(Call::Attach, cx);
         self.apply(outcome, false, cx);
@@ -516,10 +480,12 @@ impl VimMode {
 
     // ----- the engine ------------------------------------------------------------------
 
-    /// The engine follows the editor's read-only state.
+    /// The engine follows the editor's read-only state, and keeps the row
+    /// of context around the caret that the editor keeps.
     fn sync_options(&mut self, cx: &App) {
         let mut options = self.options.clone();
         options.read_only |= self.editor.read(cx).is_read_only();
+        options.scroll_off = SCROLL_OFF;
         if *self.vim.options() != options {
             self.vim.set_options(options);
         }
@@ -541,52 +507,70 @@ impl VimMode {
         }
     }
 
-    /// Runs one call into the engine against the editor (see the `host`
-    /// module for the two ways), then carries out what the host collected:
-    /// the clipboard write and the scroll requests.
+    /// Runs one call into the engine on the editor's own state, with the
+    /// editor's row oracle answering the layout questions (see the `host`
+    /// module), then carries out what the call left to do: the caret goes
+    /// to the Vim cursor, the view follows it or the explicit scroll
+    /// requests, and the clipboard is written.
     fn engine_call(&mut self, call: Call, cx: &mut App) -> Outcome {
         self.sync_options(cx);
         let clipboard = self
             .wants_clipboard(&call)
             .then(|| read_clipboard(cx))
             .flatten();
-        let with_layout = matches!(&call, Call::Key(key) if may_ask_layout(&self.vim, key));
+        let detaching = matches!(call, Call::Detach);
+        let follows_caret = call.follows_caret();
         let vim = &mut self.vim;
-        let (outcome, scrolls, clipboard_write, fallbacks) = if with_layout {
-            let editor = self.editor.read(cx);
-            let mut scratch = editor.state().clone();
-            let mut host = EditorHost::new(clipboard).with_layout(editor);
-            let outcome = call.run(vim, &mut scratch, &mut host);
-            let (scrolls, write, fallbacks) = (host.scrolls, host.clipboard_write, host.fallbacks);
-            // An explicit scroll decides where the view goes.
-            let autoscroll = if scrolls.is_empty() {
-                call.autoscroll()
+        let (outcome, clipboard_write, fallbacks) = self.editor.update(cx, |editor, cx| {
+            let before = (
+                editor.state().revision(),
+                editor.selection(),
+                editor.caret_position(),
+            );
+            // No autoscroll by the edit itself: it would aim at the
+            // selection head, and the Vim cursor is known only afterwards.
+            let (outcome, scrolls, clipboard_write, fallbacks) = editor.edit_with_rows(
+                Autoscroll::None,
+                |state, rows| {
+                    let mut host = EditorHost::new(clipboard).with_rows(rows);
+                    let outcome = call.run(vim, state, &mut host);
+                    (outcome, host.scrolls, host.clipboard_write, host.fallbacks)
+                },
+                cx,
+            );
+            if detaching {
+                editor.set_caret_override(None, cx);
             } else {
-                Autoscroll::None
-            };
-            self.editor.update(cx, |editor, cx| {
-                editor.edit_with(autoscroll, |state| *state = scratch, cx)
-            });
-            (outcome, scrolls, write, fallbacks)
-        } else {
-            let mut host = EditorHost::new(clipboard);
-            let autoscroll = call.autoscroll();
-            let outcome = self.editor.update(cx, |editor, cx| {
-                editor.edit_with(autoscroll, |state| call.run(vim, state, &mut host), cx)
-            });
-            (outcome, host.scrolls, host.clipboard_write, host.fallbacks)
-        };
+                present_caret(vim, editor, cx);
+            }
+            let after = (
+                editor.state().revision(),
+                editor.selection(),
+                editor.caret_position(),
+            );
+            if !scrolls.is_empty() {
+                // An explicit scroll decides where the view goes.
+                apply_scrolls(editor, &scrolls, cx);
+            } else if follows_caret && (outcome.consumed || before != after) {
+                editor.scroll_to_caret(Autoscroll::Fit, cx);
+            }
+            (outcome, clipboard_write, fallbacks)
+        });
         self.layout_fallbacks += fallbacks;
         if let Some(content) = clipboard_write {
             write_clipboard(&content, cx);
         }
-        if !scrolls.is_empty() {
-            self.editor
-                .update(cx, |editor, cx| apply_scrolls(editor, &scrolls, cx));
-        }
         let editor = self.editor.read(cx);
         self.seen = Some((editor.state().revision(), editor.selection()));
         outcome
+    }
+
+    /// Puts the editor's caret where the Vim cursor is, in the engine's
+    /// shape, after something other than an engine call changed either.
+    fn present_caret(&mut self, cx: &mut App) {
+        let vim = &self.vim;
+        self.editor
+            .update(cx, |editor, cx| present_caret(vim, editor, cx));
     }
 
     /// Takes over what a call reported.
@@ -594,6 +578,9 @@ impl VimMode {
         let before = self.status.clone();
         if clear_message {
             self.status.message = None;
+            // The next command ends the flash of the one that failed.
+            self.status.bell = false;
+            self.bell = None;
         }
         for effect in outcome.effects {
             match effect {
@@ -613,21 +600,41 @@ impl VimMode {
                     self.paint_search(cx);
                 }
                 Effect::Request(request) => cx.emit(VimEvent::Request(request)),
-                Effect::Bell => cx.emit(VimEvent::Bell),
+                Effect::Bell => {
+                    cx.emit(VimEvent::Bell);
+                    self.ring(cx);
+                }
             }
         }
         self.status.insert_pending = self.vim.insert_pending();
         self.status.caret = self.vim.caret_shape();
         self.status.search_highlighted = self.search.pattern().is_some();
-        self.paint_caret(cx);
         if self.status != before {
             cx.emit(VimEvent::StatusChanged);
             cx.notify();
         }
     }
 
+    /// A command failed: [`VimStatus::bell`] is on for a moment, which the
+    /// status item shows as a flash of the mode chip.
+    fn ring(&mut self, cx: &mut Context<Self>) {
+        self.status.bell = true;
+        self.bell = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(BELL_FLASH).await;
+            this.update(cx, |this, cx| {
+                this.bell = None;
+                if this.status.bell {
+                    this.status.bell = false;
+                    cx.emit(VimEvent::StatusChanged);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
     /// The parts of the editor that follow the mode: text input and the
-    /// key context. (The caret follows every call, see `paint_caret`.)
+    /// key context. (The caret follows every call, see `present_caret`.)
     fn apply_mode(&mut self, cx: &mut Context<Self>) {
         let mode = self.status.mode;
         self.editor.update(cx, |editor, cx| {
@@ -639,47 +646,6 @@ impl VimMode {
     }
 
     // ----- caret and highlights --------------------------------------------------------
-
-    /// Draws the Vim cursor. The editor draws its caret at the head of its
-    /// selection, which is where the Vim cursor is except in Visual mode:
-    /// there the selection covers the selected characters, and its head is
-    /// the far end of the last one (or of the last line, in Visual Line
-    /// mode). Then the editor's caret is hidden (a bar caret is not drawn
-    /// over a selection) and the cursor's character is marked through a
-    /// highlight layer instead.
-    fn paint_caret(&mut self, cx: &mut Context<Self>) {
-        let editor = self.editor.read(cx);
-        let state = editor.state();
-        let cursor = self.vim.caret(state);
-        let head = state.selection().head;
-        let (style, cell) = if cursor == head {
-            (caret_style(self.vim.caret_shape()), None)
-        } else {
-            let text = state
-                .document()
-                .block(cursor.block)
-                .map_or("", |block| block.text());
-            let end = text::next_grapheme_boundary(text, cursor.offset);
-            let cell = (end > cursor.offset)
-                .then(|| TextRange::in_block(cursor.block, cursor.offset, end));
-            (CaretStyle::Bar, cell)
-        };
-        let cell_changed = cell != self.cursor_cell;
-        if !cell_changed && editor.config().caret_style == style {
-            return;
-        }
-        self.cursor_cell = cell;
-        let fill = cursor_fill(cx);
-        self.editor.update(cx, |editor, cx| {
-            editor.set_caret_style(style, cx);
-            if cell_changed {
-                match cell {
-                    Some(cell) => editor.set_highlights(CURSOR_LAYER, vec![cell], fill, cx),
-                    None => editor.clear_highlights(CURSOR_LAYER, cx),
-                }
-            }
-        });
-    }
 
     /// Hands the search matches to the editor's highlight layer.
     fn paint_search(&mut self, cx: &mut Context<Self>) {
@@ -715,20 +681,25 @@ impl VimMode {
         if self.search.pattern().is_some() {
             self.paint_search(cx);
         }
-        if let Some(cell) = self.cursor_cell {
-            let fill = cursor_fill(cx);
-            self.editor.update(cx, |editor, cx| {
-                editor.set_highlights(CURSOR_LAYER, vec![cell], fill, cx);
-            });
-        }
         cx.notify();
     }
 }
 
-/// The colour of the cursor layer: what the editor paints a block caret
-/// with.
-fn cursor_fill(cx: &App) -> HighlightStyle {
-    HighlightStyle::background(cx.theme().colors.caret.alpha(0.45))
+/// Draws the Vim cursor. The editor draws its caret at the head of its
+/// selection, which is where the Vim cursor is except in Visual mode: there
+/// the selection covers the selected characters, and its head is the far
+/// end of the last one (or of the last line, in Visual Line mode). Then
+/// the caret is drawn at the cursor through the editor's caret override:
+/// the same blinking block, on top of the selection tint.
+fn present_caret(vim: &Vim, editor: &mut Editor, cx: &mut Context<Editor>) {
+    let style = caret_style(vim.caret_shape());
+    if editor.config().caret_style != style {
+        editor.set_caret_style(style, cx);
+    }
+    let state = editor.state();
+    let cursor = vim.caret(state);
+    let head = state.selection().head;
+    editor.set_caret_override((cursor != head).then_some(cursor), cx);
 }
 
 fn caret_style(shape: CaretShape) -> CaretStyle {
@@ -754,12 +725,14 @@ fn mode_context_name(mode: Mode) -> &'static str {
 
 /// Carries out the scroll requests of one engine call.
 fn apply_scrolls(editor: &mut Editor, scrolls: &[Scroll], cx: &mut Context<Editor>) {
-    let mut by_rows = false;
     for scroll in scrolls {
         match *scroll {
             Scroll::Rows(rows) => {
-                by_rows = true;
-                editor.scroll_by_rows(rows, cx);
+                scroll_by_visual_rows(editor, rows, cx);
+                // The engine moved the caret by the same rows, so it is
+                // where it was on screen; at the ends of the document,
+                // where the view cannot follow, it is brought back in.
+                editor.scroll_to_caret(Autoscroll::Fit, cx);
             }
             Scroll::Align { caret, align } => {
                 // The editor keeps a row of context around the caret when
@@ -774,17 +747,30 @@ fn apply_scrolls(editor: &mut Editor, scrolls: &[Scroll], cx: &mut Context<Edito
             }
         }
     }
-    // The engine keeps the caret on screen when it scrolls by rows, counting
-    // rows; the editor scrolls by pixels. Rows of different heights can
-    // leave the caret outside: bring it back.
-    if by_rows {
-        let head = editor.selection().head;
-        let visible = editor
-            .visible_range()
-            .is_some_and(|range| range.start <= head && head <= range.end);
-        if !visible {
-            editor.scroll_to_caret(Autoscroll::Fit, cx);
-        }
+}
+
+/// Scrolls the view by `rows` rows of the text that is actually there: the
+/// row that many rows below (negative: above) the first visible one goes
+/// to the top of the viewport. Counting real rows rather than pixels of
+/// body text keeps the view in step with the caret, which the engine moves
+/// by rows, also where headings and the gaps between paragraphs make the
+/// rows unequal.
+fn scroll_by_visual_rows(editor: &mut Editor, rows: isize, cx: &mut Context<Editor>) {
+    let Some(top) = editor.first_visible_row() else {
+        return;
+    };
+    let Some(step) = editor.move_by_visual_rows(top.start, rows, None) else {
+        return;
+    };
+    let target = editor
+        .visual_row(step.position)
+        .map_or(step.position, |row| row.start);
+    if target == Position::ZERO {
+        // The first row of the document: show what is above it too.
+        let offset = editor.scroll_offset();
+        editor.scroll_by_pixels(-offset, cx);
+    } else {
+        editor.scroll_to_position(target, Autoscroll::Top, cx);
     }
 }
 
@@ -842,19 +828,6 @@ fn key_from_keystroke(keystroke: &Keystroke, literal: bool) -> Option<Key> {
 fn wants_literal_key(vim: &Vim) -> bool {
     matches!(vim.mode(), Mode::Insert | Mode::Replace | Mode::CommandLine)
         || vim.pending_keys().ends_with(['f', 'F', 't', 'T', 'r'])
-}
-
-/// The text the editor will insert for a key the engine left to it, if the
-/// key types text at all.
-fn typed_text(keystroke: &Keystroke, key: &Key) -> Option<String> {
-    if key.ctrl || !matches!(key.code, KeyCode::Char(_)) {
-        return None;
-    }
-    keystroke
-        .key_char
-        .as_ref()
-        .filter(|typed| !typed.is_empty())
-        .cloned()
 }
 
 impl VimMode {

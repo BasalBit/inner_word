@@ -1,9 +1,9 @@
 //! Computing where a motion goes.
 
-use writer_core::{Position, TextRange};
+use writer_core::{EditorState, Position, TextRange};
 
 use crate::buf::{self, Lines};
-use crate::host::GoalColumn;
+use crate::host::{GoalColumn, Viewport, VimHost};
 use crate::motion;
 use crate::search;
 use crate::textobj::Target;
@@ -143,6 +143,36 @@ fn lines_down(doc: &writer_core::Document, from: Position, n: usize) -> Option<P
 }
 
 impl Vim {
+    /// The rows [`VimOptions::scroll_off`](super::VimOptions::scroll_off)
+    /// keeps free at the top and at the bottom of `vp`: none at the first
+    /// and the last row of the document, and never so many that no row is
+    /// left between them.
+    pub(crate) fn scroll_margins(
+        &self,
+        ed: &EditorState,
+        host: &mut dyn VimHost,
+        vp: &Viewport,
+    ) -> (isize, isize) {
+        let off = self
+            .options
+            .scroll_off
+            .min(vp.rows.max(1).saturating_sub(1) / 2) as isize;
+        if off == 0 {
+            return (0, 0);
+        }
+        let doc = ed.document();
+        let top = if doc.clamp_position(vp.top) == Position::ZERO {
+            0
+        } else {
+            off
+        };
+        let bottom = doc.clamp_position(vp.bottom);
+        let last = doc.block_count() - 1;
+        let at_end =
+            bottom.block == last && host.visual_row(ed, bottom).end >= buf::len_of(doc, last);
+        (top, if at_end { 0 } else { off })
+    }
+
     /// Moves `rows` visual rows from `from`, keeping the goal column.
     /// `None` when the caret cannot move (first or last row).
     pub(crate) fn move_rows(
@@ -474,20 +504,26 @@ impl Vim {
             Motion::ViewTop | Motion::ViewMiddle | Motion::ViewBottom => {
                 let vp = cx.host.viewport(cx.ed)?;
                 let x = GoalColumn::X(0.0);
+                // The rows `scrolloff` keeps free at each edge.
+                let (off_top, off_bottom) = self.scroll_margins(cx.ed, cx.host, &vp);
                 let row_start = match m {
                     Motion::ViewTop => {
-                        let p = cx.host.move_by_rows(cx.ed, vp.top, n as isize - 1, x);
-                        // Never below the last visible row.
-                        if doc.clamp_position(p) > vp.bottom {
-                            vp.bottom
+                        let down = (n as isize - 1).max(off_top);
+                        let p = cx.host.move_by_rows(cx.ed, vp.top, down, x);
+                        // Never below the last row `L` would go to.
+                        let limit = cx.host.move_by_rows(cx.ed, vp.bottom, -off_bottom, x);
+                        if doc.clamp_position(p) > limit {
+                            limit
                         } else {
                             p
                         }
                     }
                     Motion::ViewBottom => {
-                        let p = cx.host.move_by_rows(cx.ed, vp.bottom, -(n as isize - 1), x);
-                        if doc.clamp_position(p) < vp.top {
-                            vp.top
+                        let up = (n as isize - 1).max(off_bottom);
+                        let p = cx.host.move_by_rows(cx.ed, vp.bottom, -up, x);
+                        let limit = cx.host.move_by_rows(cx.ed, vp.top, off_top, x);
+                        if doc.clamp_position(p) < limit {
+                            limit
                         } else {
                             p
                         }

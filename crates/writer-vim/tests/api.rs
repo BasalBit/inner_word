@@ -530,3 +530,56 @@ fn a_read_only_document_cannot_be_changed() {
     s.keys(":w<CR>");
     assert_eq!(s.requests().len(), 1);
 }
+
+#[test]
+fn a_pending_command_can_be_cancelled_from_outside() {
+    // An operator with a count and a register.
+    let mut s = session("|one two three", "\"a2d");
+    assert_eq!(s.mode(), Mode::OperatorPending);
+    assert_eq!(s.vim.pending_keys(), "\"a2d");
+    let outcome = s.vim.cancel_pending_command();
+    assert!(outcome.effects.contains(&Effect::ModeChanged(Mode::Normal)));
+    assert!(
+        outcome
+            .effects
+            .contains(&Effect::PendingKeys(String::new()))
+    );
+    assert!(!outcome.rang_bell());
+    assert_eq!(s.vim.pending_keys(), "");
+    assert_eq!(s.vim.pending_register(), None);
+    // The next key is a command of its own.
+    s.keys("w");
+    assert_eq!(s.buffer(), "one |two three");
+
+    // A key waiting for its argument.
+    for keys in ["f", "r", "g", "z", "m", "'", "3", "di"] {
+        let mut s = session("|one two three", keys);
+        assert_ne!(s.vim.pending_keys(), "", "{keys}");
+        s.vim.cancel_pending_command();
+        assert_eq!(s.vim.pending_keys(), "", "{keys}");
+        s.keys("x");
+        assert_eq!(s.buffer(), "|ne two three", "{keys}");
+    }
+
+    // Visual and Insert mode stay; so does an open command line.
+    let mut s = session("|one two", "v\"a");
+    s.vim.cancel_pending_command();
+    assert_eq!(s.mode(), Mode::Visual);
+    s.keys("d");
+    assert_eq!(s.vim.register('a'), None);
+    let mut s = session("|one two", "i<C-r>");
+    s.vim.cancel_pending_command();
+    assert_eq!(s.mode(), Mode::Insert);
+    s.keys("a<Esc>");
+    assert_eq!(s.buffer(), "|aone two");
+    let mut s = session("|one two", ":s/one");
+    let outcome = s.vim.cancel_pending_command();
+    assert!(outcome.effects.is_empty());
+    assert_eq!(s.mode(), Mode::CommandLine);
+    s.keys("/1<CR>");
+    assert_eq!(s.buffer(), "|1 two");
+
+    // Nothing pending: nothing reported.
+    let mut s = session("|one", "");
+    assert!(s.vim.cancel_pending_command().effects.is_empty());
+}

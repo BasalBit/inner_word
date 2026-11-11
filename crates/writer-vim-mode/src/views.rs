@@ -57,6 +57,8 @@ impl Render for VimStatusItem {
         // Normal mode is the resting state and stays quiet; the modes in
         // which keys do something else are marked.
         let (chip_background, chip_text) = match status.mode {
+            // The bell: the chip is filled for a moment.
+            _ if status.bell => (colors.accent, colors.canvas),
             Mode::Normal | Mode::OperatorPending | Mode::CommandLine => (colors.hover, colors.ink),
             Mode::Insert | Mode::Visual | Mode::VisualLine => (colors.accent_subtle, colors.accent),
             Mode::Replace => (colors.danger_subtle, colors.danger),

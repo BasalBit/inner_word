@@ -228,3 +228,65 @@ fn registers_counts_and_the_command_line() {
         c("|(abc) x", "v%d", "| x"),
     ]);
 }
+
+#[test]
+fn an_empty_last_line_of_a_linewise_selection_takes_its_line_break() {
+    let p = Position::new;
+    // So the host has something to show as selected on that line.
+    let s = session("ab\n|\ncd", "V");
+    assert_eq!(s.selection(), Selection::new(p(1, 0), p(2, 0)));
+    assert_eq!(s.vim.visual_line_blocks(&s.ed), Some(1..2));
+    assert_eq!(s.vim.caret(&s.ed), p(1, 0));
+    let s = session("a|b\n\ncd", "Vj");
+    assert_eq!(s.selection(), Selection::new(p(0, 0), p(2, 0)));
+    assert_eq!(s.vim.caret(&s.ed), p(1, 0));
+    // Backwards from the empty line: the anchor end takes the break.
+    let s = session("ab\n|\ncd", "Vk");
+    assert_eq!(s.selection(), Selection::new(p(2, 0), p(0, 0)));
+    assert_eq!(s.vim.visual_line_blocks(&s.ed), Some(0..2));
+    // Not where the break would select something else: before a divider,
+    // and at the end of the document there is none.
+    let s = session("ab\n|\n---\ncd", "V");
+    assert_eq!(s.selection(), Selection::caret(p(1, 0)));
+    let s = session("ab\n|", "V");
+    assert_eq!(s.selection(), Selection::caret(p(1, 0)));
+    // A line with text is selected as before.
+    let s = session("a|b\ncd", "V");
+    assert_eq!(s.selection(), Selection::new(p(0, 0), p(0, 2)));
+
+    // The commands see the lines, not the extra break.
+    run(&[
+        c("ab\n|\ncd", "Vd", "ab\n|cd"),
+        c("ab\n|\ncd", "Vy", "ab\n|\ncd").regs(&[('"', "\n")]),
+        c("a|b\n\ncd", "Vjd", "|cd"),
+        c("ab\n|\ncd", "Vkd", "|cd"),
+        c("ab\n|\ncd", "Vj", "ab\n«\n|cd").vline(),
+        c("ab\n|\ncd", "V<Esc>", "ab\n|\ncd"),
+        c("ab\n|\ncd", "Vcx<Esc>", "ab\n|x\ncd"),
+    ]);
+
+    // The host reporting that same selection back changes nothing.
+    let mut s = session("a|b\n\ncd", "Vj");
+    let before = s.selection();
+    let outcome = s.vim.sync(&mut s.ed, &mut s.host);
+    assert!(outcome.effects.is_empty(), "{:?}", outcome.effects);
+    assert_eq!(s.selection(), before);
+    assert_eq!(s.mode(), Mode::VisualLine);
+    assert_eq!(s.vim.visual_line_blocks(&s.ed), Some(0..2));
+}
+
+#[test]
+fn an_empty_last_line_of_code_takes_its_line_break() {
+    let p = Position::new;
+    let mut s = session("x", "");
+    s.ed.set_block_kind(writer_core::BlockKind::code());
+    s.ed.set_selection(Selection::caret(p(0, 1)));
+    s.ed.insert_text("\n\nz");
+    s.ed.set_caret(p(0, 2));
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.ed.document().blocks()[0].text(), "x\n\nz");
+    s.keys("V");
+    assert_eq!(s.selection(), Selection::new(p(0, 2), p(0, 3)));
+    s.keys("d");
+    assert_eq!(s.ed.document().blocks()[0].text(), "x\nz");
+}

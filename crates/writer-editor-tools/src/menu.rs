@@ -17,8 +17,8 @@ use gpui::{
     UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use writer_ui::{
-    ContextMenu, Divider, FieldAppearance, HighlightedLabel, Icon, IconName, KeyHint, TextField,
-    TextFieldEvent, picker,
+    ContextMenu, Divider, FieldAppearance, HighlightedLabel, Icon, IconName, KeyHint, KeyLabel,
+    TextField, TextFieldEvent, picker,
     theme::{ActiveTheme, RADIUS_LG, RADIUS_MD, ThemeColors, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
 };
 
@@ -541,14 +541,13 @@ impl Render for Menu {
                 .px(px(12.))
                 .text_size(UI_TEXT_XS)
                 .text_color(colors.muted)
-                .children(self.footer.iter().map(|(hint, label)| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .child(hint.clone().size(UI_TEXT_XS))
-                        .child(label.clone())
-                }))
+                // The kit's one way to show a key: what it does, then the
+                // key.
+                .children(
+                    self.footer
+                        .iter()
+                        .map(|(hint, label)| KeyLabel::new(label.clone(), hint.clone())),
+                )
         });
 
         div()

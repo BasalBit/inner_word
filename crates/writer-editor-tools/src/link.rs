@@ -11,7 +11,7 @@ use gpui::{
 use writer_core::{Choice, Position, TextRange};
 use writer_editor::{Editor, PopupAnchor};
 use writer_ui::{
-    ContextMenu, Divider, FieldAppearance, KeyHint, TextField, TextFieldEvent,
+    ContextMenu, Divider, FieldAppearance, KeyHint, KeyLabel, TextField, TextFieldEvent,
     theme::{ActiveTheme, RADIUS_LG, RADIUS_SM, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS},
 };
 
@@ -111,12 +111,12 @@ impl LinkPopover {
             .px(px(4.))
             .h(px(20.))
             .rounded(RADIUS_SM)
-            .children(hint.clone().map(|hint| hint.size(UI_TEXT_XS)))
-            .child(SharedString::from(label))
+            // The kit's one way to show a key: what it does, then the key.
+            .child(KeyLabel::new(SharedString::from(label), hint.clone()))
             .map(|el| {
                 if enabled {
                     el.cursor_pointer()
-                        .hover(|style| style.bg(colors.hover).text_color(colors.ink))
+                        .hover(|style| style.bg(colors.hover))
                         .tooltip(tip(tooltip, hint))
                         .on_click(cx.listener(move |_, _, _, cx| cx.emit(event)))
                 } else {

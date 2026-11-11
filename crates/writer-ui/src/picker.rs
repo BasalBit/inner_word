@@ -629,7 +629,21 @@ impl<D: PickerDelegate> Picker<D> {
                                     .items_center()
                                     .gap(px(8.))
                                     .rounded(RADIUS_MD)
-                                    .when(selected, |el| el.bg(colors.accent_subtle))
+                                    .relative()
+                                    .when(selected, |el| {
+                                        // a tint and a bar: the selection
+                                        // does not depend on the tint alone
+                                        el.bg(colors.accent_subtle).child(
+                                            div()
+                                                .absolute()
+                                                .left_0()
+                                                .top(px(5.))
+                                                .bottom(px(5.))
+                                                .w(px(2.))
+                                                .rounded(px(1.))
+                                                .bg(colors.accent),
+                                        )
+                                    })
                                     .when_some(item.icon, |el, icon| {
                                         el.child(Icon::new(icon).color(if selected {
                                             colors.ink

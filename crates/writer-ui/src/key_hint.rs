@@ -21,11 +21,30 @@
 //! writer_ui::key_hint::format_keystroke(&Keystroke::parse("cmd-alt-s")?);  // "⌥⌘S"
 //! ```
 //!
+//! # One way to show a key
+//!
+//! Wherever a key is shown next to what it does (footers of popups, buttons
+//! of a panel, empty states), the label comes first and the key second, the
+//! key in the plain muted style: "Apply ↩", "Cancel Esc". [`KeyLabel`] draws
+//! exactly that; [`crate::Button::key_hint`] and the rows of
+//! [`crate::Picker`] and [`crate::ContextMenu`] follow the same order. The
+//! boxed style is for the shortcuts overlay and for a key that stands alone
+//! in running text.
+//!
+//! ```ignore
+//! footer.child(KeyLabel::new("Apply", KeyHint::parse("enter")))
+//!       .child(KeyLabel::new("Cancel", KeyHint::parse("escape")))
+//! ```
+//!
+//! Escape is written "Esc": its glyph (U+238B) reads as an undo or refresh
+//! arrow at interface sizes.
+//!
 //! Modifier order is the macOS menu order: ⌃ ⌥ ⇧ ⌘. This differs from GPUI's
 //! own `Keystroke` display ("^⌥⌘⇧"), which does not match the system menus.
 
 use gpui::{
-    Action, App, FocusHandle, Hsla, KeyBinding, Keystroke, Pixels, Window, div, prelude::*, px,
+    Action, App, FocusHandle, Hsla, KeyBinding, Keystroke, Pixels, SharedString, Window, div,
+    prelude::*, px,
 };
 
 use crate::theme::{ActiveTheme, RADIUS_SM, UI_TEXT_SM};
@@ -36,7 +55,8 @@ pub fn key_glyph(key: &str) -> String {
         "enter" => "↩",
         "backspace" => "⌫",
         "delete" => "⌦",
-        "escape" => "⎋",
+        // not the glyph ⎋: at 12px it reads as an undo or refresh arrow
+        "escape" => "Esc",
         "tab" => "⇥",
         "space" => "Space",
         "up" => "↑",
@@ -246,6 +266,58 @@ impl RenderOnce for KeyHint {
     }
 }
 
+/// A label followed by its key: "Apply ↩". The one way to show what a key
+/// does in footers, hint rows and empty states (see the [module docs](self)).
+/// Without a key (an unbound action) only the label is drawn.
+#[derive(IntoElement, Clone, Debug, PartialEq)]
+pub struct KeyLabel {
+    label: SharedString,
+    hint: Option<KeyHint>,
+    color: Option<Hsla>,
+}
+
+impl KeyLabel {
+    /// Accepts an `Option` so `KeyHint::for_action(..)` can be passed directly.
+    pub fn new(label: impl Into<SharedString>, hint: impl Into<Option<KeyHint>>) -> Self {
+        Self {
+            label: label.into(),
+            hint: hint.into(),
+            color: None,
+        }
+    }
+
+    /// Overrides the label colour (default: the theme's muted colour).
+    pub fn color(mut self, color: Hsla) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// "Apply ↩", for tests and tooltips.
+    pub fn text(&self) -> String {
+        match &self.hint {
+            Some(hint) => format!("{} {}", self.label, hint.text()),
+            None => self.label.to_string(),
+        }
+    }
+}
+
+impl RenderOnce for KeyLabel {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let colors = cx.theme().colors;
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(5.))
+            .text_size(UI_TEXT_SM)
+            .line_height(UI_TEXT_SM + px(4.))
+            .text_color(self.color.unwrap_or(colors.muted))
+            .whitespace_nowrap()
+            .child(self.label)
+            .children(self.hint)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,7 +333,12 @@ mod tests {
         assert_eq!(fmt("ctrl-alt-shift-cmd-k"), "⌃⌥⇧⌘K");
         assert_eq!(fmt("cmd-enter"), "⌘↩");
         assert_eq!(fmt("alt-backspace"), "⌥⌫");
-        assert_eq!(fmt("escape"), "⎋");
+        assert_eq!(fmt("escape"), "Esc");
+        assert_eq!(
+            KeyLabel::new("Cancel", KeyHint::parse("escape")).text(),
+            "Cancel Esc"
+        );
+        assert_eq!(KeyLabel::new("Apply", None).text(), "Apply");
         assert_eq!(fmt("shift-tab"), "⇧⇥");
         assert_eq!(fmt("cmd-up"), "⌘↑");
         assert_eq!(fmt("cmd-,"), "⌘,");

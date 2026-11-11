@@ -4,8 +4,12 @@
 //! light theme; warm charcoal with off-white ink in the dark theme. One
 //! accent, a red-pencil terracotta, used sparingly for focus, the caret and
 //! active items. Contrast targets (checked by the tests in `theme::tests`):
-//! ink on canvas and page above 12:1, muted text above 4.5:1, ink on every
-//! highlight colour above 7:1, the accent above 3:1 against the canvas.
+//! ink on canvas and page above 12:1, muted text above 4.5:1, faint text
+//! (placeholders, counts, page numbers: still information) about 4:1 and
+//! always quieter than muted, ink on every highlight colour above 7:1, the
+//! accent above 3:1 against the canvas, and the fill of a selected row
+//! (`accent_subtle`, `danger_subtle`) at least 1.3:1 against the overlay
+//! panels it is drawn on, so a selection can be found at a glance.
 
 use gpui::{Hsla, hsla, rgb};
 
@@ -29,7 +33,7 @@ pub fn paper() -> ThemeColors {
 
         ink: c(0x1F1C18),
         muted: c(0x6B645B),
-        faint: c(0xA0988D),
+        faint: c(0x7E766B),
         on_accent: c(0xFFFFFF),
 
         hairline: c(0xE4DFD6),
@@ -37,7 +41,7 @@ pub fn paper() -> ThemeColors {
 
         accent: c(0xB0503A),
         accent_hover: c(0x96412E),
-        accent_subtle: c(0xF4E5DF),
+        accent_subtle: c(0xF0DCD4),
 
         selection: hsla(214. / 360., 0.55, 0.52, 0.22),
         selection_inactive: hsla(30. / 360., 0.10, 0.45, 0.14),
@@ -56,11 +60,13 @@ pub fn paper() -> ThemeColors {
         comment_active: c(0xEBC5B6),
         comment_underline: c(0xC9795F),
 
-        find_match: hsla(45. / 360., 0.90, 0.55, 0.32),
+        // The orange of the current match, paler: a yellow wash could not be
+        // told from the default (yellow) highlight of the document.
+        find_match: hsla(28. / 360., 0.95, 0.55, 0.24),
         find_match_current: hsla(28. / 360., 0.95, 0.55, 0.58),
 
         danger: c(0xB3261E),
-        danger_subtle: c(0xF7E0DD),
+        danger_subtle: c(0xF4D9D5),
         success: c(0x2E7D4F),
         success_subtle: c(0xDDEFE3),
 
@@ -83,7 +89,7 @@ pub fn night() -> ThemeColors {
 
         ink: c(0xEBE5DB),
         muted: c(0xA49B8E),
-        faint: c(0x6F685F),
+        faint: c(0x8C8478),
         on_accent: c(0x1A1512),
 
         hairline: c(0x2F2B26),
@@ -91,7 +97,7 @@ pub fn night() -> ThemeColors {
 
         accent: c(0xDB7D62),
         accent_hover: c(0xE8937A),
-        accent_subtle: c(0x3A2620),
+        accent_subtle: c(0x55342A),
 
         selection: hsla(214. / 360., 0.50, 0.60, 0.30),
         selection_inactive: hsla(30. / 360., 0.08, 0.60, 0.16),
@@ -110,11 +116,11 @@ pub fn night() -> ThemeColors {
         comment_active: c(0x66392A),
         comment_underline: c(0xC46F55),
 
-        find_match: hsla(45. / 360., 0.80, 0.50, 0.30),
+        find_match: hsla(28. / 360., 0.90, 0.55, 0.24),
         find_match_current: hsla(28. / 360., 0.90, 0.55, 0.52),
 
         danger: c(0xF2786D),
-        danger_subtle: c(0x41211E),
+        danger_subtle: c(0x5A2A25),
         success: c(0x6CC08B),
         success_subtle: c(0x1F3527),
 

@@ -841,13 +841,78 @@ fn confirm_dialog_keys(cx: &mut TestAppContext) {
     let layer = root.read_with(cx, |root, _| root.layer.clone());
     let log: Rc<RefCell<Vec<String>>> = Rc::default();
 
-    let open = |cx: &mut VisualTestContext, log: Rc<RefCell<Vec<String>>>| {
+    let open = |cx: &mut VisualTestContext, log: Rc<RefCell<Vec<String>>>, danger: bool| {
         let layer = layer.clone();
         cx.update(move |window, cx| {
             let confirmed = log.clone();
             let dialog = cx.new(|cx| {
-                ConfirmDialog::new("Delete “Outline”?", "It moves to the trash.", cx)
-                    .confirm_label("Delete")
+                let dialog = if danger {
+                    ConfirmDialog::new("Delete “Outline” forever?", "This cannot be undone.", cx)
+                        .confirm_label("Delete forever")
+                        .danger()
+                } else {
+                    ConfirmDialog::new("Restore this version?", "The current text is kept.", cx)
+                        .confirm_label("Restore")
+                };
+                dialog.on_confirm(move |_, _| confirmed.borrow_mut().push("confirm".into()))
+            });
+            let events = log.clone();
+            cx.subscribe(&dialog, move |_, event: &ConfirmDialogEvent, _| {
+                events.borrow_mut().push(format!("{event:?}"))
+            })
+            .detach();
+            ConfirmDialog::show(dialog, &layer, window, cx);
+        });
+        cx.run_until_parked();
+    };
+
+    // enter confirms (focus starts on the confirm button)
+    open(cx, log.clone(), false);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
+    assert!(editor_focused(&root, cx));
+    layer.read_with(cx, |layer, _| assert!(!layer.has_modal()));
+
+    // tab to cancel, then enter cancels
+    log.borrow_mut().clear();
+    open(cx, log.clone(), false);
+    cx.simulate_keystrokes("tab enter");
+    assert_eq!(*log.borrow(), vec!["Cancelled"]);
+    assert!(editor_focused(&root, cx));
+
+    // tab twice comes back to confirm; space presses it
+    log.borrow_mut().clear();
+    open(cx, log.clone(), false);
+    cx.simulate_keystrokes("tab shift-tab space");
+    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
+
+    // escape cancels
+    log.borrow_mut().clear();
+    open(cx, log.clone(), false);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(*log.borrow(), vec!["Cancelled"]);
+    assert!(editor_focused(&root, cx));
+
+    // cmd-enter confirms from either button
+    log.borrow_mut().clear();
+    open(cx, log.clone(), false);
+    cx.simulate_keystrokes("tab cmd-enter");
+    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
+}
+
+#[gpui::test]
+fn a_destructive_dialog_starts_on_cancel(cx: &mut TestAppContext) {
+    let (root, cx) = root_window(cx);
+    let layer = root.read_with(cx, |root, _| root.layer.clone());
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let open = |cx: &mut VisualTestContext| {
+        let layer = layer.clone();
+        let log = log.clone();
+        cx.update(move |window, cx| {
+            let confirmed = log.clone();
+            let dialog = cx.new(|cx| {
+                ConfirmDialog::new("Delete “Outline” forever?", "This cannot be undone.", cx)
+                    .confirm_label("Delete forever")
                     .danger()
                     .on_confirm(move |_, _| confirmed.borrow_mut().push("confirm".into()))
             });
@@ -861,32 +926,38 @@ fn confirm_dialog_keys(cx: &mut TestAppContext) {
         cx.run_until_parked();
     };
 
-    // enter confirms (focus starts on the confirm button)
-    open(cx, log.clone());
+    // enter does the safe thing
+    open(cx);
     cx.simulate_keystrokes("enter");
-    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
-    assert!(editor_focused(&root, cx));
-    layer.read_with(cx, |layer, _| assert!(!layer.has_modal()));
-
-    // tab to cancel, then enter cancels
-    log.borrow_mut().clear();
-    open(cx, log.clone());
-    cx.simulate_keystrokes("tab enter");
     assert_eq!(*log.borrow(), vec!["Cancelled"]);
     assert!(editor_focused(&root, cx));
 
-    // tab twice comes back to confirm; space presses it
+    // the destructive button has its own key
     log.borrow_mut().clear();
-    open(cx, log.clone());
-    cx.simulate_keystrokes("tab shift-tab space");
+    open(cx);
+    cx.simulate_keystrokes("cmd-enter");
+    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
+    cx.update(|_, cx| {
+        assert_eq!(
+            KeyHint::for_action(&writer_ui::confirm::ConfirmAnyway, cx).map(|hint| hint.text()),
+            Some("⌘↩".to_string())
+        );
+    });
+
+    // moving to it and pressing it works as in any dialog
+    log.borrow_mut().clear();
+    open(cx);
+    cx.simulate_keystrokes("tab enter");
+    assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
+    log.borrow_mut().clear();
+    open(cx);
+    cx.simulate_keystrokes("right space");
     assert_eq!(*log.borrow(), vec!["Confirmed", "confirm"]);
 
-    // escape cancels
     log.borrow_mut().clear();
-    open(cx, log.clone());
+    open(cx);
     cx.simulate_keystrokes("escape");
     assert_eq!(*log.borrow(), vec!["Cancelled"]);
-    assert!(editor_focused(&root, cx));
 }
 
 // ---------------------------------------------------------------------------

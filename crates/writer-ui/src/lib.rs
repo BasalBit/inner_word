@@ -58,7 +58,7 @@ pub use command::CommandDescriptor;
 pub use confirm::{ConfirmDialog, ConfirmDialogEvent};
 pub use context_menu::{ContextMenu, ContextMenuItem, ContextMenuLayer, MenuAnchor};
 pub use icon::{Icon, IconName};
-pub use key_hint::KeyHint;
+pub use key_hint::{KeyHint, KeyLabel};
 pub use label::{Divider, HighlightedLabel, SectionLabel};
 pub use modal::{ModalLayer, ModalPlacement};
 pub use picker::{Picker, PickerDelegate, PickerEntry, PickerItem};

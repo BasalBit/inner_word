@@ -204,7 +204,8 @@ pub struct ThemeColors {
     pub ink: Hsla,
     /// Secondary labels, metadata, key hints.
     pub muted: Hsla,
-    /// Placeholders, disabled text, page numbers.
+    /// Placeholders, disabled text, counts, page numbers: quieter than
+    /// `muted`, still readable (about 4:1).
     pub faint: Hsla,
     /// Text drawn on an `accent` background.
     pub on_accent: Hsla,
@@ -236,7 +237,8 @@ pub struct ThemeColors {
     pub comment_active: Hsla,
     /// Underline colour for commented text.
     pub comment_underline: Hsla,
-    /// Find match background (translucent).
+    /// Find match background (translucent): the hue of the current match,
+    /// paler, so it is not taken for a highlight of the document.
     pub find_match: Hsla,
     /// Current find match background (translucent).
     pub find_match_current: Hsla,
@@ -569,15 +571,59 @@ mod tests {
                 4.5,
             );
         }
+        // A selected row has to be found at a glance (it was 1.09:1 on the
+        // Night panels); its secondary text gives up a little for that.
         at_least(
             "muted on accent_subtle",
             theme.muted,
             theme.accent_subtle,
-            4.5,
+            4.0,
         );
-        at_least("ink on accent_subtle", theme.ink, theme.accent_subtle, 10.0);
+        at_least("ink on accent_subtle", theme.ink, theme.accent_subtle, 8.0);
+        at_least(
+            "accent_subtle on elevated",
+            theme.accent_subtle,
+            theme.elevated,
+            1.3,
+        );
+        at_least(
+            "danger_subtle on elevated",
+            theme.danger_subtle,
+            theme.elevated,
+            1.3,
+        );
+        at_least(
+            "danger on danger_subtle",
+            theme.danger,
+            theme.danger_subtle,
+            4.0,
+        );
         at_least("ink on hover", theme.ink, theme.hover, 10.0);
-        at_least("faint on canvas", theme.faint, theme.canvas, 2.3);
+        // Faint text carries information (counts, placeholders, page
+        // numbers): readable, and still quieter than muted.
+        for (surface_name, surface) in [
+            ("canvas", theme.canvas),
+            ("page", theme.page),
+            ("sidebar", theme.sidebar),
+            ("elevated", theme.elevated),
+        ] {
+            at_least(
+                &format!("faint on {surface_name}"),
+                theme.faint,
+                surface,
+                3.9,
+            );
+            assert!(
+                contrast(theme.faint, surface) + 0.8 < contrast(theme.muted, surface),
+                "{name}: faint is not quieter than muted on {surface_name}"
+            );
+        }
+        // A find match is not the yellow of the default highlight.
+        let hue_gap = (theme.find_match.h - theme.highlight.yellow.h).abs() * 360.;
+        assert!(
+            hue_gap > 15.,
+            "{name}: find match hue is {hue_gap:.0} degrees from yellow"
+        );
         at_least("on_accent on accent", theme.on_accent, theme.accent, 4.5);
         at_least("accent on canvas", theme.accent, theme.canvas, 3.0);
         at_least("caret on page", theme.caret, theme.page, 3.0);

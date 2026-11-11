@@ -29,15 +29,30 @@
 //!     .tooltip("Close")
 //!     .key_hint(KeyHint::for_action(&Close, cx))
 //! ```
+//!
+//! A button can open a menu instead of doing one thing ([`Button::menu`]):
+//! the visible control for what is otherwise behind a right-click. The
+//! [`crate::ContextMenu`] drops down below the button; from the keyboard
+//! (`enter` / `space`) it opens with its first item marked.
+//!
+//! ```ignore
+//! Button::icon_only("row-more", IconName::More)
+//!     .tooltip("More actions")
+//!     .menu(move |_window, _cx| vec![
+//!         ContextMenuItem::action("Rename", Rename),
+//!         ContextMenuItem::action("Delete", Delete).danger(),
+//!     ])
+//! ```
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, ClickEvent, ElementId, FocusHandle, KeyBinding, KeyboardClickEvent, SharedString, Window,
-    actions, div, prelude::*, px,
+    App, Bounds, ClickEvent, ElementId, FocusHandle, KeyBinding, KeyboardClickEvent, Pixels,
+    SharedString, Window, actions, canvas, div, prelude::*, px,
 };
 
 use crate::{
+    context_menu::{ContextMenu, ContextMenuItem, MenuAnchor},
     icon::{Icon, IconName},
     key_hint::KeyHint,
     theme::{ActiveTheme, RADIUS_MD, UI_TEXT_BASE, UI_TEXT_SM, focus_ring},
@@ -84,6 +99,7 @@ pub enum ButtonSize {
 }
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type MenuBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<ContextMenuItem>>;
 
 /// See the [module docs](self).
 #[derive(IntoElement)]
@@ -101,6 +117,7 @@ pub struct Button {
     on_click: Option<ClickHandler>,
     full_width: bool,
     tooltip: Option<SharedString>,
+    menu: Option<MenuBuilder>,
 }
 
 impl Button {
@@ -119,6 +136,7 @@ impl Button {
             on_click: None,
             full_width: false,
             tooltip: None,
+            menu: None,
         }
     }
 
@@ -204,6 +222,17 @@ impl Button {
         self.on_click = Some(Rc::new(handler));
         self
     }
+
+    /// Makes this a menu button: a click (or `enter` / `space`) opens a
+    /// [`ContextMenu`] with the items `build` returns, below the button.
+    /// Replaces [`Button::on_click`].
+    pub fn menu(
+        mut self,
+        build: impl Fn(&mut Window, &mut App) -> Vec<ContextMenuItem> + 'static,
+    ) -> Self {
+        self.menu = Some(Rc::new(build));
+        self
+    }
 }
 
 impl RenderOnce for Button {
@@ -263,8 +292,26 @@ impl RenderOnce for Button {
             colors.ink
         };
         let disabled = self.disabled;
-        let on_click = self.on_click.clone();
-        let on_press = self.on_click;
+        // Where the button is, for the menu that drops down below it.
+        let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+        let handler = match self.menu {
+            Some(build) => {
+                let bounds = bounds.clone();
+                Some(Rc::new(
+                    move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        let items = build(window, cx);
+                        let menu =
+                            ContextMenu::open(MenuAnchor::Below(bounds.get()), items, window, cx);
+                        if matches!(event, ClickEvent::Keyboard(_)) {
+                            menu.update(cx, |menu, cx| menu.select_first(cx));
+                        }
+                    },
+                ) as ClickHandler)
+            }
+            None => self.on_click,
+        };
+        let on_click = handler.clone();
+        let on_press = handler;
 
         div()
             .id(self.id)
@@ -337,6 +384,13 @@ impl RenderOnce for Button {
                     }
                 })
             })
+            .child(
+                canvas(move |at, _, _| bounds.set(at), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
             .when_some(self.icon, |el, icon| {
                 el.child(Icon::new(icon).color(icon_color))
             })

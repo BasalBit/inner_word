@@ -93,6 +93,7 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             let handled = window
                                 .update(cx, |_, window, cx| window.dispatch_keystroke(key, cx))?;
                             eprintln!("[automation] keys {text}: handled={handled}");
+                            force_frame(window, cx);
                             cx.background_executor()
                                 .timer(Duration::from_millis(60))
                                 .await;
@@ -116,9 +117,11 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                     }
                     Step::Screenshot(path) => {
                         window.update(cx, |_, window, _| window.refresh())?;
+                        force_frame(window, cx);
                         cx.background_executor()
                             .timer(Duration::from_millis(300))
                             .await;
+                        force_frame(window, cx);
                         let number = window.update(cx, |_, window, _| window_number(window))??;
                         cx.background_executor()
                             .spawn(async move { capture(number, &path) })
@@ -142,6 +145,37 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
     })
     .detach();
 }
+
+/// Draws a frame now. A scripted run stays in the background, where macOS
+/// stops the display link of a covered window and nothing would be drawn
+/// (same approach as writer-app's `screenshot::force_frame`). Called outside
+/// any GPUI update: the frame callback updates the app itself.
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn force_frame(window: AnyWindowHandle, cx: &mut gpui::AsyncApp) {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let view = window.update(cx, |_, window, _| {
+        let handle = HasWindowHandle::window_handle(window).ok()?;
+        match handle.as_raw() {
+            RawWindowHandle::AppKit(appkit) => Some(appkit.ns_view.as_ptr() as usize),
+            _ => None,
+        }
+    });
+    let Ok(Some(view)) = view else {
+        return;
+    };
+    let ns_view = view as *mut Object;
+    // SAFETY: the NSView of a window that is still open, on the main thread;
+    // `displayLayer:` is implemented by GPUI's view class.
+    unsafe {
+        let layer: *mut Object = msg_send![ns_view, layer];
+        let _: () = msg_send![ns_view, displayLayer: layer];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn force_frame(_: AnyWindowHandle, _: &mut gpui::AsyncApp) {}
 
 #[cfg(target_os = "macos")]
 #[allow(unexpected_cfgs)]

@@ -6,8 +6,10 @@
 //!
 //! Keys: `cmd-t` toggles Paper / Night, `cmd-k` command palette, `cmd-p`
 //! quick open (3000 documents), `cmd-shift-f` font picker (installed fonts),
-//! `cmd-d` delete confirmation, `cmd-e` toast, `tab` / `shift-tab` move
-//! between controls, `cmd-q` quits. The insert-menu demo filters a popup
+//! `cmd-d` delete confirmation, `cmd-e` toast, `cmd-m` a context menu,
+//! `ctrl-enter` the menu of the focused text field, `tab` / `shift-tab` move
+//! between controls, `cmd-q` quits. Right-click the rows of the "Context
+//! menus" card and any text field. The insert-menu demo filters a popup
 //! picker from a separate field (external query).
 //!
 //! Visual QA: set `THE_WRITER_AUTOMATION` (see `automation.rs`), e.g.
@@ -17,13 +19,14 @@ mod automation;
 
 use gpui::{
     Action, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding,
-    SharedString, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, actions, div,
-    prelude::*, px, size,
+    MouseButton, MouseDownEvent, SharedString, Subscription, WeakEntity, Window, WindowBounds,
+    WindowOptions, actions, div, point, prelude::*, px, size,
 };
 use writer_ui::{
-    Button, ButtonSize, ButtonVariant, Checkbox, ConfirmDialog, Divider, FieldAppearance, Icon,
-    IconName, KeyHint, ModalLayer, Picker, PickerDelegate, PickerEntry, PickerItem, SectionLabel,
-    SegmentedControl, Switch, TextField, TextFieldEvent, Toast, ToastLayer,
+    Button, ButtonSize, ButtonVariant, Checkbox, ConfirmDialog, ContextMenu, ContextMenuItem,
+    Divider, FieldAppearance, Icon, IconName, KeyHint, ModalLayer, Picker, PickerDelegate,
+    PickerEntry, PickerItem, SectionLabel, SegmentedControl, Switch, TextField, TextFieldEvent,
+    Toast, ToastLayer,
     focus::tab_navigation,
     fuzzy::{StringMatch, match_strings},
     key_hint::KeyHintStyle,
@@ -46,6 +49,22 @@ actions!(
         ConfirmDelete,
         /// Show a toast.
         ShowToast,
+        /// Open the demo context menu.
+        OpenMenu,
+        /// Rename the selected row.
+        Rename,
+        /// Duplicate the selected row.
+        Duplicate,
+        /// Move the selected row to a folder.
+        MoveToDrafts,
+        /// Move the selected row to a folder.
+        MoveToArchive,
+        /// Pin the selected row.
+        TogglePinned,
+        /// Delete the selected row.
+        DeleteRow,
+        /// Take back the last change.
+        UndoChange,
         /// Quit the gallery.
         Quit,
     ]
@@ -350,6 +369,8 @@ struct Gallery {
     toasts: Entity<ToastLayer>,
     last_action: SharedString,
     exports: usize,
+    menu_row: usize,
+    pinned: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -438,6 +459,8 @@ impl Gallery {
             toasts,
             last_action: "Nothing yet".into(),
             exports: 0,
+            menu_row: 0,
+            pinned: true,
             _subscriptions: subscriptions,
         }
     }
@@ -553,10 +576,50 @@ impl Gallery {
         ConfirmDialog::show(dialog, &self.modal_layer, window, cx);
     }
 
+    /// The menu of a row of the "Context menus" card.
+    fn row_menu(&self) -> Vec<ContextMenuItem> {
+        vec![
+            ContextMenuItem::action("Rename", Rename).icon(IconName::Document),
+            ContextMenuItem::action("Duplicate", Duplicate),
+            ContextMenuItem::submenu(
+                "Move to",
+                vec![
+                    ContextMenuItem::section("Folders"),
+                    ContextMenuItem::action("Drafts", MoveToDrafts).icon(IconName::Folder),
+                    ContextMenuItem::action("Archive", MoveToArchive).icon(IconName::Folder),
+                ],
+            )
+            .icon(IconName::Folder),
+            ContextMenuItem::action("Pinned", TogglePinned).checked(self.pinned),
+            ContextMenuItem::action("Export", ShowToast)
+                .icon(IconName::Export)
+                .disabled(self.menu_row == 2),
+            ContextMenuItem::separator(),
+            ContextMenuItem::action("Delete", DeleteRow)
+                .icon(IconName::Trash)
+                .danger(),
+        ]
+    }
+
+    fn open_menu(&mut self, _: &OpenMenu, window: &mut Window, cx: &mut Context<Self>) {
+        let at = point(
+            window.viewport_size().width - px(420.),
+            window.viewport_size().height - px(330.),
+        );
+        ContextMenu::open(at, self.row_menu(), window, cx)
+            .update(cx, |menu, cx| menu.select_first(cx));
+    }
+
     fn show_toast(&mut self, _: &ShowToast, _: &mut Window, cx: &mut Context<Self>) {
         self.exports += 1;
         let toast = if self.exports.is_multiple_of(3) {
             Toast::new("Export failed: the folder is read-only").error()
+        } else if self.exports.is_multiple_of(2) {
+            Toast::new(
+                "Moved “The Salt Road is out next month. It is a small book about a harbour \
+                 town, and the people who stayed” to the trash.",
+            )
+            .action("Undo", UndoChange)
         } else {
             Toast::new(format!("Exported to ~/Documents/Essay {}.md", self.exports)).success()
         };
@@ -699,8 +762,12 @@ impl Render for Gallery {
                             .selected(true)
                             .size(ButtonSize::Compact),
                     )
-                    .child(Button::icon_only("add", IconName::Plus))
-                    .child(Button::icon_only("more", IconName::More))
+                    .child(
+                        Button::icon_only("add", IconName::Plus)
+                            .tooltip("New document")
+                            .key_hint(KeyHint::parse("cmd-n")),
+                    )
+                    .child(Button::icon_only("more", IconName::More).tooltip("More"))
                     .child(Button::new("ghost", "Ghost").variant(ButtonVariant::Ghost)),
             );
 
@@ -848,6 +915,62 @@ impl Render for Gallery {
             )
             .child(self.insert_menu.clone());
 
+        let menu_rows = [
+            "Chapter 1: The harbour",
+            "Chapter 2: Salt",
+            "Notes (read only)",
+        ];
+        let menus = Self::card("Context menus", cx)
+            .child(caption(
+                "Right-click a row, or use its button; ctrl-enter in a text field",
+            ))
+            .children(menu_rows.iter().enumerate().map(|(ix, name)| {
+                let selected = self.menu_row == ix;
+                div()
+                    .id(("menu-row", ix))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(28.))
+                    .pl(px(8.))
+                    .pr(px(4.))
+                    .rounded(px(6.))
+                    .when(selected, |el| el.bg(colors.accent_subtle))
+                    .when(!selected, |el| el.hover(|style| style.bg(colors.hover)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.menu_row = ix;
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.menu_row = ix;
+                            cx.notify();
+                            ContextMenu::open(event.position, this.row_menu(), window, cx);
+                        }),
+                    )
+                    .child(Icon::new(IconName::Document))
+                    .child(div().flex_1().child(*name))
+                    .child({
+                        let gallery = cx.weak_entity();
+                        Button::icon_only(("row-more", ix), IconName::More)
+                            .size(ButtonSize::Compact)
+                            .tooltip("More actions")
+                            .menu(move |_, cx| {
+                                gallery
+                                    .update(cx, |this, cx| {
+                                        this.menu_row = ix;
+                                        cx.notify();
+                                        this.row_menu()
+                                    })
+                                    .unwrap_or_default()
+                            })
+                    })
+            }));
+
         let overlays = Self::card("Overlays", cx)
             .child(caption(
                 "Each opens in the modal layer; escape returns focus here",
@@ -906,6 +1029,21 @@ impl Render for Gallery {
             .on_action(cx.listener(Self::pick_font))
             .on_action(cx.listener(Self::confirm_delete))
             .on_action(cx.listener(Self::show_toast))
+            .on_action(cx.listener(Self::open_menu))
+            .on_action(cx.listener(|this, _: &Rename, _, cx| this.note("Rename", cx)))
+            .on_action(cx.listener(|this, _: &Duplicate, _, cx| this.note("Duplicate", cx)))
+            .on_action(
+                cx.listener(|this, _: &MoveToDrafts, _, cx| this.note("Moved to Drafts", cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MoveToArchive, _, cx| this.note("Moved to Archive", cx)),
+            )
+            .on_action(cx.listener(|this, _: &TogglePinned, _, cx| {
+                this.pinned = !this.pinned;
+                this.note("Pinned toggled", cx)
+            }))
+            .on_action(cx.listener(|this, _: &DeleteRow, _, cx| this.note("Delete", cx)))
+            .on_action(cx.listener(|this, _: &UndoChange, _, cx| this.note("Undone", cx)))
             .on_action(cx.listener(Self::quit))
             .relative()
             .size_full()
@@ -966,6 +1104,7 @@ impl Render for Gallery {
                             .child(buttons)
                             .child(toggles)
                             .child(insert)
+                            .child(menus)
                             .child(hints)
                             .child(overlays)
                             .child(icons),
@@ -995,6 +1134,11 @@ fn main() {
                 KeyBinding::new("cmd-shift-f", PickFont, c),
                 KeyBinding::new("cmd-d", ConfirmDelete, c),
                 KeyBinding::new("cmd-e", ShowToast, c),
+                KeyBinding::new("cmd-m", OpenMenu, c),
+                KeyBinding::new("f2", Rename, c),
+                KeyBinding::new("cmd-shift-d", Duplicate, c),
+                KeyBinding::new("cmd-backspace", DeleteRow, c),
+                KeyBinding::new("cmd-shift-z", UndoChange, c),
                 KeyBinding::new("cmd-q", Quit, None),
             ]);
             writer_ui::init(cx);
@@ -1006,6 +1150,9 @@ fn main() {
             })
             .detach();
 
+            // A scripted run stays in the background: it does not take the
+            // keyboard from whoever is at the machine.
+            let scripted = std::env::var_os(automation::ENV).is_some();
             let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
             let window = cx
                 .open_window(
@@ -1019,6 +1166,7 @@ fn main() {
                                 theme::TRAFFIC_LIGHT_Y,
                             )),
                         }),
+                        focus: !scripted,
                         ..Default::default()
                     },
                     |window, cx| {
@@ -1030,7 +1178,9 @@ fn main() {
                     },
                 )
                 .expect("open gallery window");
-            cx.activate(true);
+            if !scripted {
+                cx.activate(true);
+            }
             automation::run_from_env(window.into(), cx);
         });
 }

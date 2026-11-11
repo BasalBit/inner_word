@@ -18,6 +18,12 @@
 //! the focused button, `tab` / `shift-tab` / `left` / `right` move between
 //! the two buttons, `escape` cancels. The dialog dismisses itself after
 //! either choice.
+//!
+//! A destructive dialog ([`ConfirmDialog::danger`]: "Delete forever", "Empty
+//! trash") is different on purpose: focus starts on **Cancel**, so `enter`
+//! does the safe thing, and the destructive button has a key of its own,
+//! `cmd-enter`, shown on the button. What cannot be undone is never one
+//! reflexive `enter` away. `tab` then `enter` still presses it.
 
 use gpui::{
     App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
@@ -37,6 +43,8 @@ actions!(
     [
         /// Confirm the dialog.
         Confirm,
+        /// Confirm the dialog, also a destructive one (`cmd-enter`).
+        ConfirmAnyway,
         /// Cancel the dialog.
         Cancel,
         /// Move focus to the other button.
@@ -55,6 +63,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // Only reached when neither button has focus (buttons bind enter in
         // their own deeper "Button" context).
         KeyBinding::new("enter", Confirm, c),
+        KeyBinding::new("cmd-enter", ConfirmAnyway, c),
     ]
 }
 
@@ -86,9 +95,14 @@ impl EventEmitter<DismissEvent> for ConfirmDialog {}
 impl EventEmitter<ConfirmDialogEvent> for ConfirmDialog {}
 
 impl Focusable for ConfirmDialog {
-    /// The confirm button, so a modal layer focuses it on open.
+    /// The button a modal layer focuses on open: confirm, or cancel in a
+    /// destructive dialog.
     fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.confirm_focus.clone()
+        if self.danger {
+            self.cancel_focus.clone()
+        } else {
+            self.confirm_focus.clone()
+        }
     }
 }
 
@@ -123,7 +137,9 @@ impl ConfirmDialog {
         self
     }
 
-    /// Destructive action: the confirm button is drawn in the danger colour.
+    /// Destructive action: the confirm button is drawn in the danger colour,
+    /// focus starts on cancel, and `cmd-enter` confirms (the button shows
+    /// the key).
     pub fn danger(mut self) -> Self {
         self.danger = true;
         self
@@ -184,7 +200,20 @@ impl ConfirmDialog {
         }
     }
 
+    /// `enter` with neither button focused: confirms, except what cannot be
+    /// undone.
     fn on_confirm_action(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.danger {
+            self.confirm(window, cx);
+        }
+    }
+
+    fn on_confirm_anyway(
+        &mut self,
+        _: &ConfirmAnyway,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.confirm(window, cx);
     }
 
@@ -212,6 +241,11 @@ impl Render for ConfirmDialog {
                 crate::ButtonVariant::Primary
             })
             .track_focus(&self.confirm_focus)
+            .key_hint(
+                self.danger
+                    .then(|| crate::KeyHint::for_action(&ConfirmAnyway, cx))
+                    .flatten(),
+            )
             .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx)));
         let cancel = Button::new("cancel", self.cancel_label.clone())
             .track_focus(&self.cancel_focus)
@@ -221,6 +255,7 @@ impl Render for ConfirmDialog {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.root_focus)
             .on_action(cx.listener(Self::on_confirm_action))
+            .on_action(cx.listener(Self::on_confirm_anyway))
             .on_action(cx.listener(Self::on_cancel_action))
             .on_action(cx.listener(Self::on_switch))
             .w(px(380.))

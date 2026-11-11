@@ -29,8 +29,11 @@
 //! |---|---|
 //! | Read the document and selection | [`Editor::state`], [`Editor::document`], [`Editor::selection`] |
 //! | Change anything | [`Editor::edit`], [`Editor::edit_with`] (the only mutation path) |
+//! | Change anything while asking about wrapped rows | [`Editor::edit_with_rows`] with a [`RowOracle`] |
 //! | React to changes | `cx.subscribe(&editor, ..)` with [`EditorEvent`] |
+//! | Learn what was typed | [`EditorEvent::TextInput`] |
 //! | Configure | [`EditorConfig`], [`Editor::set_config`], [`Editor::update_config`], [`Editor::set_caret_style`], [`Editor::set_document`], [`Editor::toggle_page_view`], [`Editor::set_draw_as_active`] |
+//! | Draw the caret away from the selection head | [`Editor::set_caret_override`], [`Editor::caret_override`], [`Editor::caret_position`] |
 //! | See keys first | [`Editor::intercept_keys`] with an [`InterceptPriority`], returning a [`KeyDisposition`] |
 //! | Refuse typed text | [`Editor::set_text_input_enabled`] |
 //! | Join key dispatch with own bindings | [`Editor::set_key_context_value`], [`Editor::add_key_context_flag`], [`Editor::remove_key_context_entry`] |
@@ -159,7 +162,7 @@ pub use editor::FramePerf;
 pub use events::EditorEvent;
 pub use highlights::HighlightStyle;
 pub use intercept::{InterceptPriority, KeyDisposition};
-pub use movement::{RowMove, VisualRow};
+pub use movement::{RowMove, RowOracle, VisualRow};
 pub use popup::{PopupAnchor, PopupPlacement};
 pub use scroll::Autoscroll;
 pub use view_state::ViewState;

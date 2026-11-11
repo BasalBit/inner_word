@@ -19,7 +19,7 @@ use std::{ops::Range, time::Duration};
 use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window};
 use writer_core::{Position, Selection, TextRange};
 
-use crate::{editor::Editor, scroll::Autoscroll};
+use crate::{editor::Editor, events::EditorEvent, scroll::Autoscroll};
 
 /// A pause in typing this long ends the undo step: `cmd-z` after it takes
 /// back what was typed since, not the whole paragraph.
@@ -157,6 +157,16 @@ impl EntityInputHandler for Editor {
         let selection_before = self.state.selection();
         self.in_ime_edit = true;
         let composing = explicit.is_some();
+        // A range that is not the composition's own marked text: the
+        // platform replaces text that was committed earlier.
+        let replaced = explicit
+            .as_ref()
+            .filter(|range| {
+                self.marked
+                    .as_ref()
+                    .is_none_or(|marked| marked.block != index || marked.range != **range)
+            })
+            .map(|range| TextRange::in_block(index, range.start, range.end));
         match explicit {
             // Plain typing: the engine replaces the selection and runs the
             // input rules and smart punctuation.
@@ -185,7 +195,13 @@ impl EntityInputHandler for Editor {
         } else {
             self.marked = None;
         }
-        self.finish_edit(selection_before, Autoscroll::Fit, cx);
+        // Reported when the document changed, ahead of `Edited`. An empty
+        // text that only removed a composition typed nothing.
+        let input = (!text.is_empty() || replaced.is_some()).then(|| EditorEvent::TextInput {
+            text: text.to_string(),
+            replaced,
+        });
+        self.finish_edit_announced(selection_before, Autoscroll::Fit, input, cx);
         self.in_ime_edit = false;
         self.break_undo_after_pause(cx);
     }

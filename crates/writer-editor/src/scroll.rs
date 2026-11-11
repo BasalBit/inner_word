@@ -41,7 +41,8 @@ pub enum Autoscroll {
 /// A scroll request waiting for a layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PendingScroll {
-    /// Bring a position (`None`: the selection head) into view.
+    /// Bring a position (`None`: the caret, see `Editor::caret_position`)
+    /// into view.
     Position(Option<Position>, Autoscroll),
     /// Put the caret's row `viewport_y` pixels below the top of the
     /// viewport (page-wise movement, switching between flow and page
@@ -94,8 +95,8 @@ impl Editor {
         self.with_layout(|lay| lay.scroll_y()).unwrap_or(px(0.))
     }
 
-    /// Scrolls so the caret (the selection head) is where `autoscroll`
-    /// says: [`Autoscroll::Top`], [`Autoscroll::Center`] and
+    /// Scrolls so the caret (the selection head, or the position set with
+    /// [`Editor::set_caret_override`]) is where `autoscroll` says: [`Autoscroll::Top`], [`Autoscroll::Center`] and
     /// [`Autoscroll::Bottom`] are Vim's `zt`, `zz`, `zb`.
     pub fn scroll_to_caret(&mut self, autoscroll: Autoscroll, cx: &mut Context<Self>) {
         self.request_scroll(PendingScroll::Position(None, autoscroll));
@@ -204,7 +205,7 @@ impl Editor {
     /// is on screen.
     pub(crate) fn caret_viewport_y(&self) -> Option<Pixels> {
         let viewport = self.viewport_bounds()?;
-        let caret = self.position_bounds(self.state.selection().head)?;
+        let caret = self.position_bounds(self.caret_position())?;
         (caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom())
             .then(|| caret.top() - viewport.top())
     }
@@ -212,7 +213,7 @@ impl Editor {
     /// Applies a scroll request to the current layout. Returns whether the
     /// scroll position changed; `None` without a layout.
     fn apply_scroll(&mut self, request: PendingScroll) -> Option<bool> {
-        let head = self.state.selection().head;
+        let head = self.caret_position();
         let document = self.state.document();
         let compact = self.config.mode.is_compact();
         self.with_layout(|lay| {

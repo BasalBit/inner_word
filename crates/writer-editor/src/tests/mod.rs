@@ -12,6 +12,8 @@
 //! - `mouse`: clicks, drags, checkboxes, links, wheel, scroll bar.
 //! - `pages`: pagination invariants and page view.
 //! - `layout`: the lazy layout on a book-length document, with timings.
+//! - `vim_seams`: layout answers inside a mutation, the typed-text report,
+//!   the caret override.
 
 mod editing;
 mod ime;
@@ -21,3 +23,4 @@ mod movement;
 mod pages;
 mod seams;
 mod slice;
+mod vim_seams;

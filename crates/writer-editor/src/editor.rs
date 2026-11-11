@@ -16,7 +16,9 @@ use gpui::{
     ModifiersChangedEvent, Pixels, Point, Render, SharedString, Subscription, Task, Window, div,
     prelude::*,
 };
-use writer_core::{CommentId, Document, EditorOptions, EditorState, Selection, Stats, TextRange};
+use writer_core::{
+    CommentId, Document, EditorOptions, EditorState, Position, Selection, Stats, TextRange,
+};
 use writer_ui::theme::GlobalTheme;
 
 use crate::{
@@ -31,6 +33,7 @@ use crate::{
     intercept::{self, InterceptPriority, Interceptors, KeyDisposition},
     layout::{DocumentLayout, ScrollPosition},
     mouse::Drag,
+    movement::RowOracle,
     popup::{Popup, PopupElement},
     scroll::{Autoscroll, PendingScroll, Scrollbar},
 };
@@ -90,6 +93,8 @@ pub struct Editor {
     pub(crate) pending_scroll: Option<PendingScroll>,
     /// Column-local x that vertical caret movement tries to keep.
     pub(crate) goal_x: Option<Pixels>,
+    /// Where the caret is drawn instead of the selection head.
+    pub(crate) caret_override: Option<Position>,
     /// IME composition in progress.
     pub(crate) marked: Option<MarkedText>,
     /// Set while the platform input handler mutates the state, so the
@@ -238,6 +243,7 @@ impl Editor {
             layout: RefCell::new(layout),
             pending_scroll: None,
             goal_x: None,
+            caret_override: None,
             marked: None,
             in_ime_edit: false,
             interceptors,
@@ -308,6 +314,61 @@ impl Editor {
         self.update_config(|config| config.caret_style = style, cx);
     }
 
+    /// Draws the caret at `position` instead of at the selection head, in
+    /// the current [`CaretStyle`] and with the usual blink, also while the
+    /// selection is not collapsed (a bar caret is otherwise hidden then).
+    /// `None` puts it back on the head. Vim's Visual mode uses this: the
+    /// editor selection ends one character past the Vim cursor, and the
+    /// cursor cell belongs on the last selected character.
+    ///
+    /// The caret is painted over the selection and the text, so the
+    /// selection tint does not cover it. Everything that means "the caret"
+    /// follows the override: [`Editor::caret_bounds`],
+    /// [`Editor::caret_position`], popups anchored to the caret,
+    /// [`Editor::scroll_to_caret`] and the autoscroll of
+    /// [`Editor::edit`]. The selection, typing and the platform input
+    /// handler do not: they keep working on the selection.
+    ///
+    /// The override stays until it is cleared or the document is replaced
+    /// ([`Editor::set_document`]). It does not follow edits or selection
+    /// changes (set it again after each of your own changes and on
+    /// [`EditorEvent::SelectionChanged`]); a position that no longer
+    /// exists is clamped to the document.
+    ///
+    /// ```ignore
+    /// // Visual mode, cursor on the last selected character:
+    /// editor.edit_with(Autoscroll::None, |state| state.set_selection(selection), cx);
+    /// editor.set_caret_style(CaretStyle::Block, cx);
+    /// editor.set_caret_override(Some(cursor), cx);
+    /// editor.scroll_to_caret(Autoscroll::Fit, cx);
+    /// // Leaving Visual mode:
+    /// editor.set_caret_override(None, cx);
+    /// ```
+    pub fn set_caret_override(&mut self, position: Option<Position>, cx: &mut Context<Self>) {
+        if self.caret_override == position {
+            return;
+        }
+        self.caret_override = position;
+        // A caret that moved is shown at once.
+        self.restart_blink(cx);
+        cx.notify();
+    }
+
+    /// The position set with [`Editor::set_caret_override`], as it was
+    /// given.
+    pub fn caret_override(&self) -> Option<Position> {
+        self.caret_override
+    }
+
+    /// Where the caret is drawn: the caret override (clamped to the
+    /// document) when one is set, the selection head otherwise.
+    pub fn caret_position(&self) -> Position {
+        match self.caret_override {
+            Some(position) => self.state.document().clamp_position(position),
+            None => self.state.selection().head,
+        }
+    }
+
     /// Shows or hides the comment tints.
     pub fn set_comments_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.update_config(|config| config.comments_visible = visible, cx);
@@ -338,8 +399,8 @@ impl Editor {
     }
 
     /// Replaces the whole document: new undo history, caret at the start,
-    /// scrolled to the top, highlight layers and the active comment cleared,
-    /// the popup hidden. Emits [`EditorEvent::DocumentReplaced`] and nothing
+    /// scrolled to the top, highlight layers, the caret override and the
+    /// active comment cleared, the popup hidden. Emits [`EditorEvent::DocumentReplaced`] and nothing
     /// else. Restore a saved view afterwards with
     /// [`Editor::restore_view_state`].
     pub fn set_document(&mut self, document: Document, cx: &mut Context<Self>) {
@@ -352,6 +413,7 @@ impl Editor {
             .reset(self.state.document(), self.state.revision());
         self.pending_scroll = None;
         self.goal_x = None;
+        self.caret_override = None;
         self.drag = None;
         self.drag_scroll = None;
         self.drag_scrolling = false;
@@ -467,6 +529,53 @@ impl Editor {
         result
     }
 
+    /// [`Editor::edit_with`] for callers that need layout answers while
+    /// they hold the state: `f` also gets a [`RowOracle`], which answers
+    /// the visual-row questions ([`Editor::visual_row`],
+    /// [`Editor::column_x`], [`Editor::move_by_visual_rows`],
+    /// [`Editor::visible_rows`], [`Editor::rows_per_page`]) for the state
+    /// it is handed. The Vim engine runs inside this: it mutates the state
+    /// and asks about rows during the same call.
+    ///
+    /// Everything [`Editor::edit`] guarantees holds: one batch of events
+    /// for the whole call, layout and statistics brought up to date, the
+    /// caret scrolled as `autoscroll` says. The oracle sees the scroll
+    /// position from before the call (scrolling is applied after `f`
+    /// returns) and answers for the document as it is when asked, also
+    /// after `f` has changed it; asking first and editing afterwards is
+    /// the cheap order (a question after a change costs a pass over the
+    /// blocks). Before the first layout the oracle answers `None`.
+    ///
+    /// ```ignore
+    /// let consumed = editor.update(cx, |editor, cx| {
+    ///     editor.edit_with_rows(
+    ///         Autoscroll::Fit,
+    ///         |state, rows| {
+    ///             // rows.visual_row(state, pos), rows.column_x(state, pos),
+    ///             // rows.move_by_visual_rows(state, pos, 3, goal_x),
+    ///             // rows.visible_rows(state), rows.rows_per_page()
+    ///             let mut host = MyHost { rows };
+    ///             vim.handle_key(key, state, &mut host)
+    ///         },
+    ///         cx,
+    ///     )
+    /// });
+    /// ```
+    pub fn edit_with_rows<R>(
+        &mut self,
+        autoscroll: Autoscroll,
+        f: impl FnOnce(&mut EditorState, &RowOracle<'_>) -> R,
+        cx: &mut Context<Self>,
+    ) -> R {
+        let selection_before = self.state.selection();
+        // The oracle borrows the layout and knows the state by address
+        // only, so the state itself can be lent out mutably next to it.
+        let rows = RowOracle::new(&self.layout, std::ptr::addr_of!(self.state));
+        let result = f(&mut self.state, &rows);
+        self.finish_edit(selection_before, autoscroll, cx);
+        result
+    }
+
     /// The second half of the mutation seam, shared by every path that
     /// touches `self.state` (outside edits, actions, text input, the mouse).
     pub(crate) fn finish_edit(
@@ -475,12 +584,30 @@ impl Editor {
         autoscroll: Autoscroll,
         cx: &mut Context<Self>,
     ) {
+        self.finish_edit_announced(selection_before, autoscroll, None, cx);
+    }
+
+    /// [`Editor::finish_edit`] for the platform input handler: `input` (an
+    /// [`EditorEvent::TextInput`]) is emitted ahead of `Edited` when the
+    /// document changed, and dropped when it did not.
+    pub(crate) fn finish_edit_announced(
+        &mut self,
+        selection_before: Selection,
+        autoscroll: Autoscroll,
+        input: Option<EditorEvent>,
+        cx: &mut Context<Self>,
+    ) {
         let change = self.state.take_changes();
         let selection_changed = self.state.selection() != selection_before;
         if change.is_none() && !selection_changed {
             return;
         }
         if let Some(change) = change {
+            if change.blocks.is_some()
+                && let Some(input) = input
+            {
+                cx.emit(input);
+            }
             // The layout replaces the slots of the changed blocks (their
             // measures, word counts and placement); everything else stays.
             self.layout.borrow_mut().apply_change(

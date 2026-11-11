@@ -19,10 +19,12 @@
 //! row; vertical movement and clicks never land on such an end, they stop
 //! one character before it.
 
-use gpui::Pixels;
-use writer_core::Position;
+use std::cell::RefCell;
 
-use crate::editor::Editor;
+use gpui::Pixels;
+use writer_core::{EditorState, Position};
+
+use crate::{editor::Editor, geometry::with_layout_of, layout::DocumentLayout};
 
 /// One visual row of the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -49,11 +51,44 @@ pub struct RowMove {
     pub rows_moved: isize,
 }
 
-impl Editor {
-    /// The visual row containing `position`.
-    pub fn visual_row(&self, position: Position) -> Option<VisualRow> {
-        let position = self.state.document().clamp_position(position);
-        self.with_layout(|lay| {
+/// The visual-row oracle for an [`EditorState`] that is mutably borrowed:
+/// what [`Editor::edit_with_rows`] hands to its closure next to the state.
+///
+/// It answers the same questions as [`Editor::visual_row`],
+/// [`Editor::column_x`], [`Editor::move_by_visual_rows`],
+/// [`Editor::visible_rows`] and [`Editor::rows_per_page`], for the state as
+/// it is at the moment of the call: also after the closure has already
+/// changed the document (the layout is then brought in line with it first,
+/// which costs a pass over the blocks; asking before editing costs
+/// nothing extra).
+///
+/// Every method takes the state it is asked about. That must be the state
+/// the closure was given; for any other `EditorState` (a clone, another
+/// editor's) the answer is `None`, as it is before the first layout.
+pub struct RowOracle<'a> {
+    layout: &'a RefCell<DocumentLayout>,
+    /// The editor's own state, by address only: never dereferenced, only
+    /// compared with the state a question is asked about.
+    owner: *const EditorState,
+}
+
+impl<'a> RowOracle<'a> {
+    pub(crate) fn new(layout: &'a RefCell<DocumentLayout>, owner: *const EditorState) -> Self {
+        Self { layout, owner }
+    }
+
+    /// Whether `state` is the state this oracle's layout describes.
+    fn owns(&self, state: &EditorState) -> bool {
+        std::ptr::eq(state, self.owner)
+    }
+
+    /// The visual row containing `position` (see [`Editor::visual_row`]).
+    pub fn visual_row(&self, state: &EditorState, position: Position) -> Option<VisualRow> {
+        if !self.owns(state) {
+            return None;
+        }
+        let position = state.document().clamp_position(position);
+        with_layout_of(self.layout, state, |lay| {
             let block = lay.placed(position.block)?.layout;
             let row = &block.rows[block.row_for_offset(position.offset)];
             Some(VisualRow {
@@ -64,40 +99,35 @@ impl Editor {
         .flatten()
     }
 
-    /// The x of `position` from the left edge of the text column: the goal
-    /// x a vertical move starting there would use.
-    pub fn column_x(&self, position: Position) -> Option<Pixels> {
-        let position = self.state.document().clamp_position(position);
-        self.with_layout(|lay| {
+    /// The x of `position` from the left edge of the text column (see
+    /// [`Editor::column_x`]).
+    pub fn column_x(&self, state: &EditorState, position: Position) -> Option<Pixels> {
+        if !self.owns(state) {
+            return None;
+        }
+        let position = state.document().clamp_position(position);
+        with_layout_of(self.layout, state, |lay| {
             let block = lay.placed(position.block)?.layout;
             Some(block.caret_bounds(position.offset).1.origin.x)
         })
         .flatten()
     }
 
-    /// Moves `position` by `rows` visual rows (negative: up), landing on the
-    /// character boundary closest to `goal_x` (or to the x of `position`
-    /// when `goal_x` is `None`). Stops at the first or last row of the
-    /// document; [`RowMove::rows_moved`] tells how far it got. Does not
-    /// touch the selection: apply the result through [`Editor::edit`].
-    ///
-    /// ```ignore
-    /// // Vim `3j`, keeping the column across calls:
-    /// let head = editor.selection().head;
-    /// if let Some(step) = editor.move_by_visual_rows(head, 3, self.goal_x) {
-    ///     self.goal_x = Some(step.goal_x);
-    ///     editor.edit(|state| state.set_caret(step.position), cx);
-    /// }
-    /// ```
+    /// Moves `position` by `rows` visual rows (see
+    /// [`Editor::move_by_visual_rows`]). Does not touch the selection.
     pub fn move_by_visual_rows(
         &self,
+        state: &EditorState,
         position: Position,
         rows: isize,
         goal_x: Option<Pixels>,
     ) -> Option<RowMove> {
-        let document = self.state.document();
+        if !self.owns(state) {
+            return None;
+        }
+        let document = state.document();
         let position = document.clamp_position(position);
-        self.with_layout(|lay| {
+        with_layout_of(self.layout, state, |lay| {
             let count = lay.count();
             let start = lay.placed(position.block)?.layout;
             let mut block_ix = position.block;
@@ -146,8 +176,8 @@ impl Editor {
         .flatten()
     }
 
-    /// How many rows of body text fit in the viewport (at least 1): the
-    /// size of a page for page-wise movement and scrolling.
+    /// How many rows of body text fit in the viewport (see
+    /// [`Editor::rows_per_page`]).
     pub fn rows_per_page(&self) -> Option<usize> {
         let layout = self.layout.borrow();
         let env = layout.env()?;
@@ -156,13 +186,16 @@ impl Editor {
     }
 
     /// The rows that are completely inside the viewport, top to bottom
-    /// (Vim `H`, `M`, `L` and their counts index into this). Never empty:
-    /// when no row fits completely, it holds the row at the top edge.
-    pub fn visible_rows(&self) -> Option<Vec<VisualRow>> {
+    /// (see [`Editor::visible_rows`]). The scroll position is the one from
+    /// before the closure ran: scroll requests take effect after it.
+    pub fn visible_rows(&self, state: &EditorState) -> Option<Vec<VisualRow>> {
+        if !self.owns(state) {
+            return None;
+        }
         // Half a pixel of tolerance: a row scrolled exactly to an edge
         // counts as visible despite float rounding.
         let slack = gpui::px(0.5);
-        self.with_layout(|lay| {
+        with_layout_of(self.layout, state, |lay| {
             let top = lay.scroll_y();
             let bottom = top + lay.env().viewport.size.height;
             let count = lay.count();
@@ -197,6 +230,61 @@ impl Editor {
             Some(rows)
         })
         .flatten()
+    }
+}
+
+impl Editor {
+    /// The oracle over the editor's own state and layout.
+    fn rows(&self) -> RowOracle<'_> {
+        RowOracle::new(&self.layout, &self.state)
+    }
+
+    /// The visual row containing `position`.
+    pub fn visual_row(&self, position: Position) -> Option<VisualRow> {
+        self.rows().visual_row(&self.state, position)
+    }
+
+    /// The x of `position` from the left edge of the text column: the goal
+    /// x a vertical move starting there would use.
+    pub fn column_x(&self, position: Position) -> Option<Pixels> {
+        self.rows().column_x(&self.state, position)
+    }
+
+    /// Moves `position` by `rows` visual rows (negative: up), landing on the
+    /// character boundary closest to `goal_x` (or to the x of `position`
+    /// when `goal_x` is `None`). Stops at the first or last row of the
+    /// document; [`RowMove::rows_moved`] tells how far it got. Does not
+    /// touch the selection: apply the result through [`Editor::edit`].
+    ///
+    /// ```ignore
+    /// // Vim `3j`, keeping the column across calls:
+    /// let head = editor.selection().head;
+    /// if let Some(step) = editor.move_by_visual_rows(head, 3, self.goal_x) {
+    ///     self.goal_x = Some(step.goal_x);
+    ///     editor.edit(|state| state.set_caret(step.position), cx);
+    /// }
+    /// ```
+    pub fn move_by_visual_rows(
+        &self,
+        position: Position,
+        rows: isize,
+        goal_x: Option<Pixels>,
+    ) -> Option<RowMove> {
+        self.rows()
+            .move_by_visual_rows(&self.state, position, rows, goal_x)
+    }
+
+    /// How many rows of body text fit in the viewport (at least 1): the
+    /// size of a page for page-wise movement and scrolling.
+    pub fn rows_per_page(&self) -> Option<usize> {
+        self.rows().rows_per_page()
+    }
+
+    /// The rows that are completely inside the viewport, top to bottom
+    /// (Vim `H`, `M`, `L` and their counts index into this). Never empty:
+    /// when no row fits completely, it holds the row at the top edge.
+    pub fn visible_rows(&self) -> Option<Vec<VisualRow>> {
+        self.rows().visible_rows(&self.state)
     }
 
     /// The first row that is completely inside the viewport (Vim `H`): the

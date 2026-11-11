@@ -13,13 +13,15 @@
 //! from the viewport can still move a little. Positions on screen are
 //! exact.
 
+use std::cell::RefCell;
+
 use gpui::{Bounds, Pixels, Point, point, px, size};
-use writer_core::{Position, TextRange, text};
+use writer_core::{EditorState, Position, TextRange, text};
 
 use crate::{
     config::CaretStyle,
     editor::Editor,
-    layout::{BlockLayout, Lay, Placed},
+    layout::{BlockLayout, DocumentLayout, Lay, Placed},
 };
 
 /// Width of the bar caret.
@@ -30,21 +32,33 @@ const WIDE_RANGE_BLOCKS: usize = 256;
 /// How many blocks around the viewport a wide range still resolves.
 const WIDE_RANGE_MARGIN: usize = 64;
 
+/// Runs `f` on `layout`, brought up to date with `state` first. `None`
+/// before the first layout. `state` must be the state the layout belongs
+/// to (the editor's own); it is a parameter so that this also works while
+/// the editor lends the state out mutably (see `Editor::edit_with_rows`).
+pub(crate) fn with_layout_of<R>(
+    layout: &RefCell<DocumentLayout>,
+    state: &EditorState,
+    f: impl FnOnce(&mut Lay) -> R,
+) -> Option<R> {
+    let mut layout = layout.borrow_mut();
+    layout.env()?;
+    let document = state.document();
+    if layout.revision() != state.revision() || layout.count() != document.block_count() {
+        // A change that has not come through the mutation seam (yet).
+        layout.rebuild(document, state.revision());
+    }
+    let mut lay = Lay {
+        layout: &mut layout,
+        document,
+    };
+    Some(f(&mut lay))
+}
+
 impl Editor {
     /// Runs `f` on the up-to-date layout. `None` before the first layout.
     pub(crate) fn with_layout<R>(&self, f: impl FnOnce(&mut Lay) -> R) -> Option<R> {
-        let mut layout = self.layout.borrow_mut();
-        layout.env()?;
-        let document = self.state.document();
-        if layout.revision() != self.state.revision() || layout.count() != document.block_count() {
-            // A change that did not come through the mutation seam.
-            layout.rebuild(document, self.state.revision());
-        }
-        let mut lay = Lay {
-            layout: &mut layout,
-            document,
-        };
-        Some(f(&mut lay))
+        with_layout_of(&self.layout, &self.state, f)
     }
 
     /// The line box at a position: zero width, one row high.
@@ -57,12 +71,14 @@ impl Editor {
         .flatten()
     }
 
-    /// The caret (the selection head) in the configured [`CaretStyle`]: a
-    /// thin bar, a block over the character, or an underline, one row
-    /// high. Anchor popups and IME windows to this. (The caret that is
-    /// painted is a little shorter than the row: as tall as the text.)
+    /// The caret in the configured [`CaretStyle`]: a thin bar, a block
+    /// over the character, or an underline, one row high. It is at
+    /// [`Editor::caret_position`]: the selection head, or the position set
+    /// with [`Editor::set_caret_override`]. Anchor popups and IME windows
+    /// to this. (The caret that is painted is a little shorter than the
+    /// row: as tall as the text.)
     pub fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
-        let head = self.state.selection().head;
+        let head = self.caret_position();
         let document = self.state.document();
         let block_text = document.block(head.block).map_or("", |block| block.text());
         self.with_layout(|lay| {

@@ -1,14 +1,14 @@
 //! Events emitted by the [`crate::Editor`] entity.
 
-use writer_core::Change;
+use writer_core::{Change, TextRange};
 
 /// What an [`crate::Editor`] tells its subscribers
 /// (`cx.subscribe(&editor, |this, editor, event: &EditorEvent, cx| ..)`).
 ///
 /// Events are emitted once per mutation, after the mutation is complete (see
 /// [`crate::Editor::edit`]), in this order: `Edited`, `SettingsChanged`,
-/// `SelectionChanged`. The enum is `#[non_exhaustive]`: match with a
-/// wildcard arm.
+/// `SelectionChanged`; a `TextInput` comes before the `Edited` it belongs
+/// to. The enum is `#[non_exhaustive]`: match with a wildcard arm.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum EditorEvent {
@@ -47,4 +47,33 @@ pub enum EditorEvent {
     /// very large part of it). Ordinary edits update the counts before
     /// `Edited` is emitted and do not emit this.
     StatsChanged,
+    /// Text reached the document through the platform input handler: a
+    /// typed character, the committed text of an IME composition or a dead
+    /// key, the emoji palette, a system text replacement. Emitted once per
+    /// insertion that changed the document, **before** the `Edited` (and
+    /// `SelectionChanged`) of the same insertion, which always follow it:
+    /// an `Edited` that was not announced by a `TextInput` did not come
+    /// from text input. By the time a subscriber sees it the text is in
+    /// the document and the caret is after it.
+    ///
+    /// Not emitted for updates of marked text during a composition (only
+    /// for its commit), for input that was refused (read-only,
+    /// [`crate::Editor::set_text_input_enabled`] off) or changed nothing,
+    /// nor for text that arrives any other way (paste, `enter`, `tab`,
+    /// [`crate::Editor::edit`]).
+    TextInput {
+        /// The text as the platform delivered it: before input rules and
+        /// smart punctuation (the document may hold `“` where this says
+        /// `"`), and before line-ending normalisation.
+        text: String,
+        /// `None` for plain typing (the text replaced the selection, if
+        /// there was one) and for the commit of a composition (the text
+        /// replaced the composition's own marked text, which was never
+        /// reported). `Some(range)` when the platform named another range
+        /// to replace: the accent menu replacing the letter that was just
+        /// typed, a system text replacement. The range is in positions of
+        /// the document before the insertion; the text went in at
+        /// `range.start`.
+        replaced: Option<TextRange>,
+    },
 }

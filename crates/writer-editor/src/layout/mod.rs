@@ -336,7 +336,15 @@ impl DocumentLayout {
             || new_range.end > document.block_count()
         {
             // The splice does not describe our slots: start from the ids.
+            // (The row oracle of `Editor::edit_with_rows` can have brought
+            // the slots in line with a state in the middle of a mutation.
+            // Rebuilding does not move the scroll anchor, so the splice
+            // still describes how the anchor's block moved.)
             self.rebuild(document, revision);
+            self.shift_scroll_anchor(splice);
+            if let ScrollPosition::Block { block, .. } = &mut self.scroll {
+                *block = (*block).min(self.slots.len().saturating_sub(1));
+            }
             return;
         }
         let removed: Vec<Slot> = self.slots.drain(old_range).collect();
@@ -359,6 +367,13 @@ impl DocumentLayout {
         self.refine_cursor = self.refine_cursor.min(splice.start);
         self.count_cursor = self.count_cursor.min(splice.start);
         self.measure_changes += 1;
+        self.shift_scroll_anchor(splice);
+        self.settle_stats();
+    }
+
+    /// Keeps the scroll position on its block when blocks before it were
+    /// added or removed.
+    fn shift_scroll_anchor(&mut self, splice: BlockSplice) {
         if let ScrollPosition::Block { block, .. } = &mut self.scroll {
             if *block >= splice.start + splice.old_len {
                 *block = *block + splice.new_len - splice.old_len;
@@ -367,7 +382,6 @@ impl DocumentLayout {
                 *block = splice.start + within;
             }
         }
-        self.settle_stats();
     }
 
     /// Installs the environment of a new frame. Measures are dropped when

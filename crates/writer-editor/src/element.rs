@@ -210,6 +210,7 @@ impl Editor {
         let mut caret_painted = false;
         let document = self.state.document();
         let selection = self.state.selection();
+        let caret_position = self.caret_position();
 
         {
             let mut guard = self.layout.borrow_mut();
@@ -444,17 +445,21 @@ impl Editor {
                     }
                 }
 
-                // Caret: shown for a collapsed selection, and always for the
+                // Caret: shown for a collapsed selection, always for the
                 // block and underline styles (Vim keeps its cursor in visual
-                // mode). Hidden in the off phase of its blink and while the
-                // window is in the background.
-                let head = selection.head;
+                // mode), and always where a caret override puts it. Hidden
+                // in the off phase of its blink and while the window is in
+                // the background. It is painted after the selection and the
+                // text, so a selection tint never covers it.
+                let head = caret_position;
                 let style = self.config.caret_style;
                 if focused
                     && active
                     && self.blink_on
                     && head.block == index
-                    && (selection.is_collapsed() || style != CaretStyle::Bar)
+                    && (selection.is_collapsed()
+                        || style != CaretStyle::Bar
+                        || self.caret_override.is_some())
                 {
                     caret_painted = true;
                     let rect = caret_rect(&placed, block.text(), head.offset, style);

@@ -51,6 +51,20 @@
 //! - A void block (divider, page break) has one position, offset 0. A range
 //!   with a void block at either end includes that block: deleting or
 //!   copying it takes the divider along, and block commands touch it.
+//! - A range that ends at offset 0 of a later text block does not include
+//!   that block: block commands do not touch it
+//!   ([`EditorState::touched_blocks`]), and when the range also starts at
+//!   offset 0 (whole lines, as shift-down selects them) deleting it removes
+//!   exactly those blocks and leaves the following block as it is. Any
+//!   other range across blocks merges into its first block, which keeps
+//!   its id and kind.
+//! - Merging with an empty block removes the empty block: Backspace at the
+//!   start of a paragraph below an empty block, or forward delete in an
+//!   empty block above text, never changes the kind of the text.
+//! - Typed text takes the pending attributes, else the formatting of the
+//!   character before the caret, or of the first replaced character when
+//!   it replaces a selection. Links and comment anchors continue only when
+//!   typing strictly inside them.
 //! - Pending attributes (from a toggle on a collapsed caret, Enter, or an
 //!   input rule) apply to the next insertion and are dropped when the caret
 //!   moves. Toggling one also ends the typing undo group.
@@ -74,14 +88,16 @@
 //!   word and line variants, [`EditorState::move_caret`] with a
 //!   [`Movement`], [`EditorState::set_selection`] for mouse and vertical
 //!   moves, [`EditorState::select_word_at`] / [`EditorState::select_block`]
-//!   for double and triple clicks. IME: keep the marked range in the UI,
+//!   for double and triple clicks, [`EditorState::set_todo_checked`] for a
+//!   click on a to-do checkbox. IME: keep the marked range in the UI,
 //!   update it with [`EditorState::replace_range`] inside
 //!   [`EditorState::begin_undo_group`] / [`EditorState::end_undo_group`],
 //!   and convert offsets with [`Block::utf16_to_offset`] /
 //!   [`Block::offset_to_utf16`] (block-local). Call
 //!   [`EditorState::break_undo_group`] on a typing pause.
-//! - **Vim**: positions, [`Document::moved`] and the [`text`] helpers for
-//!   motions; [`EditorState::delete_range`], [`EditorState::replace_range`]
+//! - **Vim**: positions, [`Document::moved`], [`Document::block_range`] and
+//!   the [`text`] helpers for motions and text objects;
+//!   [`EditorState::delete_range`], [`EditorState::replace_range`]
 //!   (keeps per-character formatting when the length in characters is the
 //!   same), [`Document::fragment`] (charwise yank),
 //!   [`Document::block_fragment`] (linewise yank),

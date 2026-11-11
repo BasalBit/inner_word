@@ -609,3 +609,78 @@ fn ime_composition_is_one_undo_step_and_keeps_utf16_in_sync() {
     assert_eq!(e.undo_depth(), 1);
     undo_redo_round_trip(&mut e, &original);
 }
+
+// ----- typing over a selection ----------------------------------------------------------
+
+#[test]
+fn typing_over_a_selection_continues_the_replaced_formatting() {
+    let bold = InlineAttrs { bold: true, ..Default::default() };
+    let link = InlineAttrs { link: Some("https://example.com".into()), italic: true, ..Default::default() };
+    let build = || {
+        ed(vec![
+            para("plain ")
+                .with_span("bold", bold.clone())
+                .with_span(" mid ", InlineAttrs::default())
+                .with_span("linked", link.clone())
+                .with_span(" end", InlineAttrs::default()),
+        ])
+    };
+    let spans = |e: &EditorState| -> Vec<(String, bool, bool, bool)> {
+        e.document().blocks()[0]
+            .text_spans()
+            .map(|(_, t, a)| (t.to_string(), a.bold, a.italic, a.link.is_some()))
+            .collect()
+    };
+    // Retyping the bold word keeps it bold.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 6, 10));
+    typ(&mut e, "new");
+    assert_eq!(spans(&e)[1], ("new".to_string(), true, false, false));
+    assert_eq!(e.document().blocks()[0].text(), "plain new mid linked end");
+    // A selection that starts in plain text gives plain text.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 3, 8));
+    typ(&mut e, "x");
+    assert!(!e.document().blocks()[0].attrs_at(3).unwrap().bold);
+    // Pending attributes win over the replaced formatting.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 6, 10));
+    e.delete_selection();
+    e.clear_formatting();
+    typ(&mut e, "new");
+    assert!(!e.document().blocks()[0].attrs_at(6).unwrap().bold);
+    // Replacing the whole link keeps its italic but not the link ...
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 15, 21));
+    typ(&mut e, "text");
+    assert!(spans(&e).contains(&("text".to_string(), false, true, false)), "{:?}", spans(&e));
+    // ... replacing part of it stays inside the link.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 16, 20));
+    typ(&mut e, "oo");
+    assert!(spans(&e).contains(&("lood".to_string(), false, true, true)), "{:?}", spans(&e));
+    // The same for comment anchors: only strictly inside.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 6, 10));
+    let id = e.add_comment("note", "me", 1).unwrap();
+    e.select_range(TextRange::in_block(0, 7, 9));
+    typ(&mut e, "x");
+    assert_eq!(e.document().comment_ranges(id), [TextRange::in_block(0, 6, 9)]);
+    e.select_range(TextRange::in_block(0, 6, 9));
+    typ(&mut e, "y");
+    assert!(e.document().is_orphaned(id));
+    assert!(e.document().blocks()[0].attrs_at(6).unwrap().bold, "formatting still continues");
+    e.undo();
+    assert!(!e.document().is_orphaned(id));
+    // Whole block selected: the first character's formatting carries on.
+    let mut e = ed(vec![para("").with_span("Title", bold.clone())]);
+    e.select_all();
+    typ(&mut e, "New");
+    assert!(e.document().blocks()[0].runs().iter().all(|r| r.attrs.bold));
+    // Plain-text paste over a selection follows the same rule.
+    let mut e = build();
+    e.select_range(TextRange::in_block(0, 6, 10));
+    e.paste_plain_text("pasted");
+    assert!(e.document().blocks()[0].attrs_at(8).unwrap().bold);
+    e.check_invariants().unwrap();
+}

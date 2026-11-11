@@ -101,8 +101,10 @@ impl EditorState {
     ///
     /// Control characters are normalised (`\r\n` and `\r` become `\n`). The
     /// new text takes the pending attributes, else the attributes of the
-    /// preceding character; a link or comment anchor is only continued when
-    /// typing strictly inside it. A `\n` splits the block like Enter (inside
+    /// preceding character (at the start of a block, of the following one);
+    /// when it replaces a selection, the formatting of the first replaced
+    /// character. A link or comment anchor is only continued when typing
+    /// strictly inside it. A `\n` splits the block like Enter (inside
     /// a code block it is a new line). Typing on a void block inserts a new
     /// paragraph after it. Consecutive typing coalesces into one undo step
     /// (broken at word starts). When a single character is typed, input
@@ -145,11 +147,29 @@ impl EditorState {
     /// Inserts text at the selection; `\n` splits blocks when `split` and the
     /// block is not a code block.
     pub(crate) fn insert_text_impl(&mut self, text: &str, split: bool) {
+        // Typing over a selection continues the formatting of the first
+        // replaced character (retyping a bold word keeps it bold), unless
+        // pending attributes say otherwise.
+        let replaced = if !self.selection.is_collapsed() && self.pending.is_none() {
+            let s = self.selection.start();
+            self.doc.blocks[s.block].attrs_at(s.offset).cloned()
+        } else {
+            None
+        };
         if !self.selection.is_collapsed() {
             self.delete_selection_impl();
         }
         let mut pos = self.leave_void(self.selection.head);
-        let attrs = self.insertion_attrs(pos);
+        let mut attrs = self.insertion_attrs(pos);
+        if let Some(r) = replaced {
+            // The link and comment anchors still follow the neighbours: they
+            // continue only when the typing is strictly inside them.
+            attrs = InlineAttrs {
+                link: attrs.link,
+                comments: attrs.comments,
+                ..r
+            };
+        }
         let is_code = self.doc.blocks[pos.block].kind.is_code();
         if is_code || !split || !text.contains('\n') {
             pos = self.insert_in_block(pos, text, &attrs);

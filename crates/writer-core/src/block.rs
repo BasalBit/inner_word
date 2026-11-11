@@ -315,6 +315,11 @@ impl Block {
     /// one document session, so the UI can cache layout on it. Undo restores
     /// the stamp of the restored version. The stamp is not serialised: a
     /// freshly loaded document numbers its blocks from 1 again.
+    ///
+    /// Moving a block keeps its stamp. Things that depend on neighbours, such
+    /// as a numbered item's ordinal, are not covered by it: take them from
+    /// [`Document::numbered_ordinals`](crate::Document::numbered_ordinals)
+    /// for the visible range instead of caching them with the layout.
     pub fn revision(&self) -> u64 {
         self.revision
     }

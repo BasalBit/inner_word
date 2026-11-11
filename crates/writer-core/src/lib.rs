@@ -39,35 +39,71 @@
 //! ([`BlockSplice`]), and every block carries a [`Block::revision`] stamp
 //! that changes whenever its content does. Cache layout per block on
 //! `(id, revision)`; no diffing is needed. Typing, moving and undoing one
-//! step cost in proportion to the blocks touched, never to the document.
+//! step cost in proportion to the blocks touched, never to the document
+//! (inserting or removing a block also shifts the `Vec` of blocks, a
+//! memmove of about 16 µs at 10,000 blocks).
+//!
+//! # Rules worth knowing
+//!
+//! - Positions are block indices plus byte offsets; re-read
+//!   [`EditorState::selection`] after every command instead of keeping old
+//!   positions. [`BlockId`]s are the stable handle.
+//! - A void block (divider, page break) has one position, offset 0. A range
+//!   with a void block at either end includes that block: deleting or
+//!   copying it takes the divider along, and block commands touch it.
+//! - Pending attributes (from a toggle on a collapsed caret, Enter, or an
+//!   input rule) apply to the next insertion and are dropped when the caret
+//!   moves. Toggling one also ends the typing undo group.
+//! - Comment anchors never travel through [`Fragment`]s; links do.
+//! - Settings changes ([`EditorState::set_settings`]) are not undoable.
 //!
 //! # Where to start
 //!
 //! - **Rendering** (editor, exporters): iterate [`Document::blocks`]; per
 //!   block use [`Block::kind`], [`Block::alignment`], [`Block::indent`],
-//!   [`Block::text_size`] (else [`Typography::size_for`] from
-//!   [`Document::settings`]), and [`Block::text_spans`] for the styled runs.
-//!   Numbered items get their number from [`Document::numbered_ordinals`].
-//!   Comment highlights come from [`Document::all_comment_ranges`].
-//! - **Input** (editor): [`EditorState::insert_text`] for typed and IME text,
+//!   [`Typography::size_of`] (the override or the kind's default size, from
+//!   [`Document::settings`]) and [`Block::text_spans`] for the styled runs.
+//!   Numbered items get their number from [`Document::numbered_ordinals`]
+//!   (one pass over the visible range). Comment highlights come from the
+//!   runs' [`InlineAttrs::comments`]; [`Document::range_in_block`] clips
+//!   the selection or a search match to one block for drawing.
+//! - **Input** (editor): [`EditorState::insert_text`] for typed text,
 //!   [`EditorState::insert_paragraph_break`] (Enter),
 //!   [`EditorState::insert_soft_break`] (shift-enter),
 //!   [`EditorState::backspace`] / [`EditorState::delete_forward`] and the
 //!   word and line variants, [`EditorState::move_caret`] with a
 //!   [`Movement`], [`EditorState::set_selection`] for mouse and vertical
-//!   moves, [`Block::utf16_to_offset`] / [`Block::offset_to_utf16`] for IME
-//!   ranges. Call [`EditorState::break_undo_group`] on a typing pause.
+//!   moves, [`EditorState::select_word_at`] / [`EditorState::select_block`]
+//!   for double and triple clicks. IME: keep the marked range in the UI,
+//!   update it with [`EditorState::replace_range`] inside
+//!   [`EditorState::begin_undo_group`] / [`EditorState::end_undo_group`],
+//!   and convert offsets with [`Block::utf16_to_offset`] /
+//!   [`Block::offset_to_utf16`] (block-local). Call
+//!   [`EditorState::break_undo_group`] on a typing pause.
 //! - **Vim**: positions, [`Document::moved`] and the [`text`] helpers for
-//!   motions; [`EditorState::delete_range`], [`EditorState::replace_range`],
-//!   [`EditorState::insert_blocks_at`], [`Document::fragment`] and
-//!   [`EditorState::paste`] for operators and registers;
+//!   motions; [`EditorState::delete_range`], [`EditorState::replace_range`]
+//!   (keeps per-character formatting when the length in characters is the
+//!   same), [`Document::fragment`] (charwise yank),
+//!   [`Document::block_fragment`] (linewise yank),
+//!   [`EditorState::paste`] (charwise put) and
+//!   [`EditorState::insert_blocks_at`] (linewise put);
+//!   [`EditorState::select_blocks`] before a block command for linewise
+//!   operators; [`EditorState::grouped`] or
 //!   [`EditorState::begin_undo_group`] / [`EditorState::end_undo_group`] to
 //!   make an operator, an insert session or a repeat one undo step;
-//!   [`Document::flat_offset`] / [`Document::position_from_flat`] for
-//!   searches across blocks.
+//!   [`Document::find_all`] and [`Document::flat_offset`] /
+//!   [`Document::position_from_flat`] for searches.
 //! - **Formatting UI**: [`EditorState::format_state`], the `toggle_*`,
 //!   `set_*` and block commands; [`EditorState::touched_blocks`] tells which
 //!   blocks a block command acts on.
+//! - **Comments panel**: [`Document::all_comment_ranges`] once per refresh
+//!   (it walks every block's runs), [`Document::comment`] for the thread,
+//!   [`Document::is_orphaned`], [`Document::next_comment`] /
+//!   [`Document::prev_comment`] for navigation.
+//! - **Exporters**: blocks and runs as for rendering,
+//!   [`Document::numbered_ordinals`] over the whole document,
+//!   [`Document::all_comment_ranges`] and [`Document::comments`],
+//!   [`Document::settings`], [`Highlight::reference_rgb`].
 //! - **Persistence**: [`Document::to_json`] / [`Document::from_json`];
 //!   [`Document::plain_text`] and [`Document::title`] for the library index.
 //!

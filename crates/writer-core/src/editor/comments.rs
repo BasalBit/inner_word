@@ -119,13 +119,17 @@ impl EditorState {
         } else {
             Vec::new()
         };
-        self.edit(EditKind::Other, |ed| {
+        let changed = self.edit(EditKind::Other, |ed| {
             for i in blocks {
                 ed.update_block(i, |b| {
                     b.remove_comment(id);
                 });
             }
             ed.set_thread(id, None);
-        })
+        });
+        if let Some(p) = &mut self.pending {
+            p.comments.remove(&id);
+        }
+        changed
     }
 }

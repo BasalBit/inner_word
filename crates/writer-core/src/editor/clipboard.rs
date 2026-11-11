@@ -1,6 +1,6 @@
 //! Copy, cut and paste.
 
-use crate::block::Block;
+use crate::block::{Block, BlockId};
 use crate::fragment::Fragment;
 use crate::history::EditKind;
 use crate::position::Position;
@@ -117,6 +117,17 @@ impl EditorState {
             m.append(&right);
             out.push(m);
             caret_rel = (out.len() - 1, l);
+        }
+        // The pasted-into block's id survives: when its head gave way to a
+        // void block, the block holding its tail takes the id.
+        let target_id = self.doc.blocks[pos.block].id;
+        if !out.iter().any(|b| b.id == target_id)
+            && let Some(b) = out
+                .iter_mut()
+                .rev()
+                .find(|b| !b.is_void() && b.id == BlockId::UNASSIGNED)
+        {
+            b.id = target_id;
         }
         self.splice(pos.block, 1, out);
         self.caret_to(Position::new(pos.block + caret_rel.0, caret_rel.1));

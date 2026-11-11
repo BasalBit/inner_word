@@ -548,23 +548,42 @@ fn delete_selection_across_blocks() {
     e.delete_selection();
     assert_eq!(texts(&e), ["quote"]);
     assert_eq!(kinds(&e), vec![BlockKind::heading(1)]);
-    // Void blocks at the start are deleted, at the end kept.
+    // Void blocks at either end of the range are part of it.
     let mut e = ed(vec![Block::new(BlockKind::Divider), para("ab"), Block::new(BlockKind::PageBreak)]);
     e.set_selection(Selection::new(p(0, 0), p(1, 1)));
     e.delete_selection();
     assert_eq!(texts(&e), ["b", ""]);
     assert_eq!(kinds(&e)[0], BlockKind::Paragraph);
-    let mut e = ed(vec![para("ab"), para("cd"), Block::new(BlockKind::PageBreak)]);
+    let mut e = ed(vec![para("ab"), para("cd"), Block::new(BlockKind::PageBreak), para("z")]);
     e.set_selection(Selection::new(p(0, 1), p(2, 0)));
     e.delete_selection();
-    assert_eq!(texts(&e), ["a", ""]);
-    assert_eq!(kinds(&e)[1], BlockKind::PageBreak);
+    assert_eq!(texts(&e), ["a", "z"]);
+    assert_eq!(kinds(&e), vec![BlockKind::Paragraph; 2]);
     let mut e = ed(vec![para("ab"), Block::new(BlockKind::PageBreak)]);
+    let id0 = e.document().blocks()[0].id();
     e.set_selection(Selection::new(p(0, 0), p(1, 0)));
     typ(&mut e, "x");
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::PageBreak]);
-    assert_eq!(texts(&e), ["x", ""]);
+    assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
+    assert_eq!(texts(&e), ["x"]);
+    assert_eq!(e.document().blocks()[0].id(), id0);
     check(&e);
+    // Only void blocks selected: the document keeps one empty paragraph.
+    let mut e = ed(vec![Block::new(BlockKind::Divider), para("ab"), Block::new(BlockKind::PageBreak)]);
+    e.select_all();
+    e.delete_selection();
+    assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
+    assert_eq!(texts(&e), [""]);
+    check(&e);
+    let mut e = ed(vec![para("a"), Block::new(BlockKind::Divider), para("b"), Block::new(BlockKind::PageBreak), para("c")]);
+    e.set_selection(Selection::new(p(1, 0), p(3, 0)));
+    e.delete_selection();
+    assert_eq!(texts(&e), ["a", "c"]);
+    assert_eq!(caret(&e), p(1, 0));
+    let mut e = ed(vec![para("a"), Block::new(BlockKind::Divider), Block::new(BlockKind::PageBreak)]);
+    e.set_selection(Selection::new(p(1, 0), p(2, 0)));
+    e.delete_selection();
+    assert_eq!(texts(&e), ["a"]);
+    assert_eq!(caret(&e), p(0, 1));
     // Select all and delete leaves one empty block.
     let mut e = ed(blocks());
     e.select_all();

@@ -15,6 +15,27 @@ enum Dir {
     Forward,
 }
 
+/// Where Enter at `offset` of code text `t` cuts the text to leave the
+/// block: `Some(cut)` when the caret is at the end, the last line is blank
+/// and the line before it is blank too (blank = only spaces and tabs). The
+/// text from `cut` on (those two lines and the line break before them) is
+/// removed.
+fn code_exit_cut(t: &str, offset: usize) -> Option<usize> {
+    if offset != t.len() {
+        return None;
+    }
+    let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
+    let last_start = text::line_start(t, offset);
+    if last_start == 0 || !blank(&t[last_start..]) {
+        return None;
+    }
+    let prev_start = text::line_start(t, last_start - 1);
+    if !blank(&t[prev_start..last_start - 1]) {
+        return None;
+    }
+    Some(prev_start.saturating_sub(1))
+}
+
 /// The kind of the block created after `kind` when a block is split (Enter):
 /// list items continue (a to-do starts unchecked), a heading split at its end
 /// continues as a paragraph, everything else keeps its kind.
@@ -82,10 +103,7 @@ impl EditorState {
             self.delete_selection_impl();
         }
         let mut pos = self.leave_void(self.selection.head);
-        let attrs = self
-            .pending
-            .take()
-            .unwrap_or_else(|| inherited_attrs(&self.doc.blocks[pos.block], pos.offset));
+        let attrs = self.insertion_attrs(pos);
         let is_code = self.doc.blocks[pos.block].kind.is_code();
         if is_code || !split || !text.contains('\n') {
             pos = self.insert_in_block(pos, text, &attrs);
@@ -139,8 +157,11 @@ impl EditorState {
     /// Enter. Deletes the selection, then:
     /// - on a void block: inserts a paragraph after it;
     /// - in a code block: inserts a new line keeping the current line's
-    ///   leading whitespace; on an empty last line that follows an empty
-    ///   line it removes those two lines and exits into a new paragraph;
+    ///   leading whitespace; at the end of the block, when the last line and
+    ///   the line before it are blank (empty or only spaces and tabs, as
+    ///   auto-indent leaves them), it removes those two lines and exits into
+    ///   a new paragraph after the block (a code block left empty by this
+    ///   becomes that paragraph itself);
     /// - on an empty list item: outdents it one level, or turns it into a
     ///   paragraph at indent 0; on an empty quote: turns it into a paragraph;
     /// - at the start of a non-empty block: inserts an empty block before it
@@ -201,13 +222,21 @@ impl EditorState {
         let b = &self.doc.blocks[pos.block];
         let t = &b.text;
         let o = pos.offset;
-        let exit = o == t.len() && (t.ends_with("\n\n") || t == "\n");
-        if exit {
-            let k = if t == "\n" { 1 } else { 2 };
+        if let Some(cut) = code_exit_cut(t, o) {
             let len = t.len();
-            self.update_block(pos.block, |b| b.remove(len - k..len));
-            self.splice(pos.block + 1, 0, vec![Block::new(BlockKind::Paragraph)]);
-            self.caret_to(Position::new(pos.block + 1, 0));
+            let i = pos.block;
+            if cut == 0 {
+                // Nothing but blank lines: the block itself becomes the paragraph.
+                self.update_block(i, |b| {
+                    b.remove(0..len);
+                    b.set_kind(BlockKind::Paragraph);
+                });
+                self.caret_to(Position::new(i, 0));
+            } else {
+                self.update_block(i, |b| b.remove(cut..len));
+                self.splice(i + 1, 0, vec![Block::new(BlockKind::Paragraph)]);
+                self.caret_to(Position::new(i + 1, 0));
+            }
             return;
         }
         let ls = text::line_start(t, o);
@@ -277,6 +306,12 @@ impl EditorState {
     // ----- deletion -------------------------------------------------------------------
 
     /// Deletes the selection. Returns false when it is collapsed.
+    ///
+    /// Across blocks the head of the first block and the tail of the last
+    /// merge into the first block, which keeps its id and kind. A void block
+    /// at either end of the selection is deleted with it (a void block's one
+    /// position means "before it" at the start of a range and "after it" at
+    /// the end), so select-all deletes a trailing divider too.
     pub fn delete_selection(&mut self) -> bool {
         self.edit(EditKind::Other, |ed| ed.delete_selection_impl())
     }
@@ -304,9 +339,10 @@ impl EditorState {
     ///
     /// Across blocks: the head of the first block and the tail of the last
     /// block merge into the first block (keeping its id and kind). A void
-    /// block at the start of the range is removed; a void block at the end
-    /// is not part of the range and stays, after the (possibly emptied)
-    /// first block.
+    /// block at either end of a range is part of it and is removed (its one
+    /// position stands for "before it" as a start and "after it" as an end),
+    /// so a selection made with shift-arrows onto a divider, or select-all
+    /// in a document ending with one, deletes it.
     pub(crate) fn delete_range_impl(&mut self, s: Position, e: Position) -> Position {
         if s.block == e.block {
             if s.offset < e.offset {
@@ -316,8 +352,22 @@ impl EditorState {
         }
         let first_void = self.doc.blocks[s.block].is_void();
         let last_void = self.doc.blocks[e.block].is_void();
+        if first_void && last_void {
+            let n = e.block - s.block + 1;
+            if n == self.doc.blocks.len() {
+                self.splice(0, n, vec![Block::new(BlockKind::Paragraph)]);
+                return Position::ZERO;
+            }
+            self.splice(s.block, n, Vec::new());
+            return if s.block < self.doc.blocks.len() {
+                Position::new(s.block, 0)
+            } else {
+                let i = s.block - 1;
+                Position::new(i, self.doc.blocks[i].len())
+            };
+        }
         if first_void {
-            if !last_void && e.offset > 0 {
+            if e.offset > 0 {
                 self.update_block(e.block, |b| b.remove(0..e.offset));
             }
             self.splice(s.block, e.block - s.block, Vec::new());
@@ -325,8 +375,10 @@ impl EditorState {
         }
         if last_void {
             let len = self.doc.blocks[s.block].len();
-            self.update_block(s.block, |b| b.remove(s.offset..len));
-            self.splice(s.block + 1, e.block - s.block - 1, Vec::new());
+            if s.offset < len {
+                self.update_block(s.block, |b| b.remove(s.offset..len));
+            }
+            self.splice(s.block + 1, e.block - s.block, Vec::new());
             return s;
         }
         let mut merged = self.doc.blocks[s.block].clone();

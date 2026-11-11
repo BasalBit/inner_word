@@ -1,6 +1,6 @@
 //! Clipboard fragments.
 
-use crate::block::{Block, BlockId, BlockKind};
+use crate::block::{Block, BlockId};
 use crate::document::Document;
 use crate::position::TextRange;
 use crate::text;
@@ -12,7 +12,11 @@ use crate::text;
 ///   inlines the text into the current block, which keeps its kind.
 /// - A fragment spanning blocks has the tail of the first block, the whole
 ///   blocks in between, and the head of the last block (an empty block when
-///   the copied range ended at offset 0 of a block).
+///   the copied range ended at offset 0 of a text block; a void block at
+///   either end is included whole).
+/// - [`Document::block_fragment`] copies whole blocks (Vim linewise yank);
+///   [`EditorState::insert_blocks_at`](crate::EditorState::insert_blocks_at)
+///   inserts them as whole blocks.
 ///
 /// **Comment anchors never travel in fragments**: copying drops them and
 /// pasting strips any that are present, so a thread is never duplicated.
@@ -97,7 +101,24 @@ impl Document {
 }
 
 impl Document {
-    /// Copies `range` (clamped) as a [`Fragment`]. Comment anchors are dropped.
+    /// Copies the whole blocks `range` (clamped) as a [`Fragment`], void
+    /// blocks included: a linewise yank. Comment anchors are dropped. An
+    /// empty range gives an empty fragment.
+    pub fn block_fragment(&self, range: std::ops::Range<usize>) -> Fragment {
+        let end = range.end.min(self.blocks.len());
+        let start = range.start.min(end);
+        let mut blocks: Vec<Block> = self.blocks[start..end].to_vec();
+        for b in &mut blocks {
+            b.id = BlockId::UNASSIGNED;
+            b.strip_comments();
+            b.revision = 0;
+        }
+        Fragment { blocks }
+    }
+
+    /// Copies `range` (clamped) as a [`Fragment`]. Comment anchors are
+    /// dropped. Like deletion, a void block at either end of a multi-block
+    /// range is included.
     pub fn fragment(&self, range: TextRange) -> Fragment {
         let s = self.clamp_position(range.start);
         let e = self.clamp_position(range.end);
@@ -115,12 +136,7 @@ impl Document {
                 blocks.push(b.slice(0..b.len()));
             }
             let last = &self.blocks[e.block];
-            if last.is_void() {
-                // A range ending at a void block does not include it.
-                blocks.push(Block::new(BlockKind::Paragraph));
-            } else {
-                blocks.push(last.slice(0..e.offset));
-            }
+            blocks.push(last.slice(0..e.offset));
         }
         for b in &mut blocks {
             b.strip_comments();
@@ -134,6 +150,7 @@ impl Document {
 mod tests {
     use super::*;
     use crate::attrs::{CommentId, InlineAttrs};
+    use crate::block::BlockKind;
     use crate::position::Position;
 
     #[test]
@@ -169,7 +186,12 @@ mod tests {
         assert_eq!(f.to_plain_text(), "tle\nbo");
         let f = d.fragment(TextRange::new(Position::new(1, 0), Position::new(2, 0)));
         assert_eq!(f.to_plain_text(), "body\n");
-        assert!(!f.blocks()[1].is_void());
+        assert!(f.blocks()[1].is_void(), "a range ending on a void block includes it");
+        let lines = d.block_fragment(2..3);
+        assert_eq!(lines.blocks().len(), 1);
+        assert!(lines.blocks()[0].is_void());
+        assert_eq!(d.block_fragment(0..2).to_plain_text(), "Title\nbody");
+        assert!(d.block_fragment(5..9).blocks().is_empty());
         let f = d.fragment(TextRange::new(Position::new(1, 4), Position::new(1, 1)));
         assert_eq!(f.to_plain_text(), "ody");
         let whole = d.to_fragment();

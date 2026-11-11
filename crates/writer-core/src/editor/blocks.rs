@@ -372,8 +372,10 @@ impl EditorState {
             ed.splice(r.end, 0, copies);
             let s = ed.selection;
             let n = r.len();
+            // A selection end at offset 0 of the block after the range (not
+            // touched) moves along so it stays right after the copies.
             let shift = |p: Position| {
-                if r.contains(&p.block) {
+                if r.contains(&p.block) || p.block == r.end {
                     Position::new(p.block + n, p.offset)
                 } else {
                     p

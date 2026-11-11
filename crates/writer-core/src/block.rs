@@ -502,6 +502,37 @@ impl Block {
         self.mark_dirty();
     }
 
+    /// Replaces `range` (char boundaries) with already-normalised `rep`.
+    /// When `rep` has as many chars as the replaced text, each new char
+    /// takes the attributes of the old char at the same index, so a case
+    /// change or a same-length correction keeps per-character formatting;
+    /// otherwise the whole replacement takes `fallback`.
+    pub(crate) fn replace_text(&mut self, range: Range<usize>, rep: &str, fallback: &InlineAttrs) {
+        let s = text::floor_char_boundary(&self.text, range.start);
+        let e = text::floor_char_boundary(&self.text, range.end).max(s);
+        let old = &self.text[s..e];
+        if !old.is_empty() && old.chars().count() == rep.chars().count() {
+            let mut piece = Block::new(BlockKind::Paragraph);
+            piece.text = rep.to_string();
+            for ((i, _), c) in old.char_indices().zip(rep.chars()) {
+                let attrs = runs::attrs_at(&self.runs, s + i).cloned().unwrap_or_default();
+                match piece.runs.last_mut() {
+                    Some(last) if last.attrs == attrs => last.len += c.len_utf8(),
+                    _ => piece.runs.push(Run {
+                        len: c.len_utf8(),
+                        attrs,
+                    }),
+                }
+            }
+            self.remove(s..e);
+            self.insert_content(s, &piece);
+        } else {
+            self.remove(s..e);
+            self.insert(s, rep, fallback);
+        }
+        self.mark_dirty();
+    }
+
     /// Splits at `offset`: `self` keeps the head (and its id), the returned
     /// block holds the tail with the same kind and properties and no id.
     pub(crate) fn split_off(&mut self, offset: usize) -> Block {

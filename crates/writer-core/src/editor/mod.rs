@@ -220,10 +220,28 @@ impl EditorState {
     /// pending attributes, else those inherited from the neighbouring text.
     pub fn current_attrs(&self) -> InlineAttrs {
         if let Some(p) = &self.pending {
-            return p.clone();
+            let mut p = p.clone();
+            p.comments.retain(|id| self.doc.comments.contains_key(id));
+            return p;
         }
         let h = self.selection.head;
         inherited_attrs(&self.doc.blocks[h.block], h.offset)
+    }
+
+    /// Takes the pending attributes for an insertion, dropping anchors of
+    /// threads that no longer exist (a thread can be deleted while the
+    /// caret, and so the pending attributes, stay put).
+    pub(crate) fn take_pending(&mut self) -> Option<InlineAttrs> {
+        let mut p = self.pending.take()?;
+        p.comments.retain(|id| self.doc.comments.contains_key(id));
+        Some(p)
+    }
+
+    /// The attributes text inserted at `pos` gets: the pending attributes
+    /// (consumed), else those inherited from the neighbours.
+    pub(crate) fn insertion_attrs(&mut self, pos: Position) -> InlineAttrs {
+        self.take_pending()
+            .unwrap_or_else(|| inherited_attrs(&self.doc.blocks[pos.block], pos.offset))
     }
 
     /// The document revision: increases by one with every transaction that
@@ -314,6 +332,21 @@ impl EditorState {
     /// Selects `range` (clamped), head at the end.
     pub fn select_range(&mut self, range: TextRange) {
         self.set_selection(Selection::from_range(range));
+    }
+
+    /// Selects the whole blocks `range` (clamped; an empty range selects
+    /// the block at `range.start`): from the start of the first to the end
+    /// of the last, so [`EditorState::touched_blocks`] is exactly `range`.
+    /// Linewise Vim operators use this before a block command.
+    pub fn select_blocks(&mut self, range: Range<usize>) {
+        let n = self.doc.blocks.len();
+        let start = range.start.min(n - 1);
+        let last = range.end.saturating_sub(1).clamp(start, n - 1);
+        let len = self.doc.blocks[last].len();
+        self.set_selection(Selection::new(
+            Position::new(start, 0),
+            Position::new(last, len),
+        ));
     }
 
     // ----- undo -------------------------------------------------------------------
@@ -669,12 +702,14 @@ impl EditorState {
     }
 
     /// The block range commands that act "on every block the selection
-    /// touches" use. A selection that ends at offset 0 of a later block does
-    /// not touch that block.
+    /// touches" use. A selection that ends at offset 0 of a later text
+    /// block does not touch that block; a selection that ends on a void
+    /// block does (its only position is offset 0, and a range ending there
+    /// includes it, see [`EditorState::delete_selection`]).
     pub fn touched_blocks(&self) -> Range<usize> {
         let r = self.selection.range();
         let mut end = r.end.block;
-        if r.end.block > r.start.block && r.end.offset == 0 {
+        if r.end.block > r.start.block && r.end.offset == 0 && !self.doc.blocks[end].is_void() {
             end -= 1;
         }
         r.start.block..end + 1

@@ -397,14 +397,27 @@ impl Document {
     }
 
     /// Every anchor range of every thread, sorted by start position (then
-    /// id). A thread may have several ranges; a range that runs from the end
-    /// of one block into the start of the next is reported as one range.
+    /// id). A thread may have several ranges. A range that runs from the end
+    /// of one block into the start of a later one is reported as one range
+    /// when only blocks without text (empty paragraphs, dividers) lie in
+    /// between, as happens when a comment is added on a selection across
+    /// them.
+    ///
+    /// This walks the runs of every block (not the text), so it is cheap
+    /// enough for the comments panel and for comment navigation, but the
+    /// editor should draw comment highlights from the runs of the visible
+    /// blocks ([`InlineAttrs::comments`](crate::InlineAttrs::comments)).
     pub fn all_comment_ranges(&self) -> Vec<(CommentId, TextRange)> {
         let mut out: Vec<(CommentId, TextRange)> = Vec::new();
         // id -> index in `out` of its last range.
         let mut last: BTreeMap<CommentId, usize> = BTreeMap::new();
+        // The last block with text before the current one.
+        let mut prev_text: Option<usize> = None;
         for (bi, b) in self.blocks.iter().enumerate() {
             if b.runs.iter().all(|r| r.attrs.comments.is_empty()) {
+                if !b.text.is_empty() {
+                    prev_text = Some(bi);
+                }
                 continue;
             }
             for (r, a) in b.spans() {
@@ -414,7 +427,7 @@ impl Document {
                         let contiguous_in_block =
                             range.end.block == bi && range.end.offset == r.start;
                         let contiguous_across = r.start == 0
-                            && range.end.block + 1 == bi
+                            && prev_text == Some(range.end.block)
                             && range.end.offset == self.blocks[range.end.block].len();
                         if contiguous_in_block || contiguous_across {
                             range.end = Position::new(bi, r.end);
@@ -425,6 +438,7 @@ impl Document {
                     last.insert(id, out.len() - 1);
                 }
             }
+            prev_text = Some(bi);
         }
         out.sort_by_key(|a| (a.1.start, a.0));
         out

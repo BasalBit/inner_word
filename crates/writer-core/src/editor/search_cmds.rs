@@ -11,10 +11,17 @@ use crate::text;
 use super::{EditorState, inherited_attrs};
 
 impl EditorState {
-    /// Replaces `range` (clamped) with `replacement`, which takes the
-    /// attributes of the first replaced character (comment anchors and link
-    /// included). A `\n` in the replacement is a soft line break. The caret
-    /// goes to the end of the replacement. One undo step.
+    /// Replaces `range` (clamped) with `replacement` and puts the caret at
+    /// its end; one undo step (wrap several in an undo group for IME
+    /// composition). A `\n` in the replacement is a soft line break.
+    ///
+    /// Attributes: inside one block, when the replacement has as many
+    /// characters as the replaced text, each character keeps the attributes
+    /// of the one it replaces (Vim `~`, `r`, case changes); otherwise the
+    /// replacement takes the attributes of the first replaced character
+    /// (comment anchors and link included). An empty `range` inserts with
+    /// the pending attributes when the caret is there, else the inherited
+    /// ones, exactly like typing (IME marked text uses this).
     pub fn replace_range(&mut self, range: TextRange, replacement: &str) -> bool {
         let s = self.doc.clamp_position(range.start);
         let e = self.doc.clamp_position(range.end);
@@ -28,22 +35,33 @@ impl EditorState {
             sb.attrs_at(s.offset)
                 .cloned()
                 .unwrap_or_else(|| inherited_attrs(sb, s.offset))
+        } else if self.selection == Selection::caret(s) && self.pending.is_some() {
+            self.current_attrs()
         } else {
             inherited_attrs(sb, s.offset)
         };
         self.edit(EditKind::Other, |ed| {
-            let p = if s < e { ed.delete_range_impl(s, e) } else { s };
-            let p = ed.leave_void(p);
-            let end = ed.insert_in_block(p, &rep, &attrs);
-            ed.caret_to(end);
+            let end = if s < e && s.block == e.block {
+                ed.update_block(s.block, |b| b.replace_text(s.offset..e.offset, &rep, &attrs));
+                Position::new(s.block, s.offset + rep.len())
+            } else {
+                let p = if s < e { ed.delete_range_impl(s, e) } else { s };
+                let p = ed.leave_void(p);
+                ed.insert_in_block(p, &rep, &attrs)
+            };
+            let o = text::ceil_grapheme_boundary(&ed.doc.blocks[end.block].text, end.offset);
+            ed.caret_to(Position::new(end.block, o));
             ed.pending = None;
         })
     }
 
     /// Replaces every match of `query` with `replacement` as one undo step;
-    /// returns the number of replacements. Each replacement takes the
-    /// attributes of the first character it replaces. The selection is kept
-    /// in place (moved to the start of a match it was inside).
+    /// returns the number of replacements. Attributes follow
+    /// [`EditorState::replace_range`]: per character when the lengths in
+    /// characters match, else those of the first replaced character
+    /// (comment anchors included, so replacing commented text keeps the
+    /// thread anchored). The selection is kept in place (moved to the start
+    /// of a match it was inside).
     pub fn replace_all(&mut self, query: &str, opts: SearchOptions, replacement: &str) -> usize {
         let matches = self.doc.find_all(query, opts);
         if matches.is_empty() {
@@ -78,8 +96,7 @@ impl EditorState {
                 ed.update_block(*i, |b| {
                     for r in rs.iter().rev() {
                         let attrs = b.attrs_at(r.start).cloned().unwrap_or_default();
-                        b.remove(r.clone());
-                        b.insert(r.start, &rep, &attrs);
+                        b.replace_text(r.clone(), &rep, &attrs);
                     }
                 });
             }

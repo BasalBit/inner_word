@@ -436,7 +436,12 @@ fn main() {
                     },
                 )
                 .expect("open demo window");
-            cx.activate(true);
+            // A scripted run stays in the background: it must not take the keyboard away
+            // from whoever is using the machine (their typing would land in this window).
+            // The script's keystrokes are dispatched inside the app either way.
+            if std::env::var_os(automation::ENV).is_none() {
+                cx.activate(true);
+            }
             automation::run_from_env(window.into(), cx);
         });
 }

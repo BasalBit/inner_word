@@ -56,6 +56,20 @@ impl Render for LibraryPanel {
         {
             window.focus(&self.focus_handle);
         }
+        // The other way round: the keyboard left the rename field (another pane took the
+        // focus, a modal opened), so the rename is over and the typed name is kept. Focus
+        // events say the same, but only reach an active window.
+        if self.renaming.is_some() && !rename_focused {
+            cx.defer_in(window, |this, window, cx| {
+                let still_away = this
+                    .rename_field
+                    .as_ref()
+                    .is_none_or(|field| !field.focus_handle(cx).is_focused(window));
+                if still_away {
+                    this.finish_rename(true, cx);
+                }
+            });
+        }
 
         let theme = cx.theme();
         let colors = theme.colors;

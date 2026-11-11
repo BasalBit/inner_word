@@ -1,5 +1,11 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use gpui::TestAppContext;
-use writer_core::{Block, BlockKind, Document, Position, Selection};
+use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Position, Selection};
+use writer_editor::{InterceptPriority, KeyDisposition};
 use writer_editor_tools::{ToolKind, actions::OpenInsertMenu, today_string};
 
 use crate::support::*;
@@ -324,4 +330,258 @@ fn the_command_opens_it_without_a_slash(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("backspace");
     assert_eq!(active(&tools, cx), None);
     assert_eq!(text(&editor, cx), "Not");
+}
+
+#[gpui::test]
+fn slash_in_every_kind_of_text_block(cx: &mut TestAppContext) {
+    setup(cx);
+    let kinds = [
+        BlockKind::Paragraph,
+        BlockKind::heading(2),
+        BlockKind::BulletItem,
+        BlockKind::NumberedItem,
+        BlockKind::todo(),
+        BlockKind::Quote,
+    ];
+    for kind in kinds {
+        let document = Document::from_blocks(vec![
+            Block::new(kind.clone()).with_span("some text", InlineAttrs::default()),
+        ]);
+        let (tools, editor, cx) = open(document, cx);
+        let kind_of = |block: usize, cx: &mut gpui::VisualTestContext| {
+            editor.read_with(cx, |editor, _| {
+                editor.document().blocks()[block].kind().clone()
+            })
+        };
+
+        // At the very start of a block that already has text.
+        caret(&editor, 0, 0, cx);
+        cx.simulate_input("/");
+        assert_eq!(
+            active(&tools, cx),
+            Some(ToolKind::Insert),
+            "{kind:?}: start"
+        );
+        cx.simulate_keystrokes("escape");
+        assert_eq!(text(&editor, cx), "/some text");
+        cx.simulate_keystrokes("backspace");
+
+        // Inside a word and right after one: ordinary text.
+        for offset in [2, 9] {
+            caret(&editor, 0, offset, cx);
+            cx.simulate_input("/");
+            assert_eq!(active(&tools, cx), None, "{kind:?}: offset {offset}");
+            cx.simulate_keystrokes("backspace");
+        }
+
+        // After a space: the menu, and an item that adds a block leaves
+        // this one as it is.
+        caret(&editor, 0, 9, cx);
+        cx.simulate_input(" /");
+        assert_eq!(
+            active(&tools, cx),
+            Some(ToolKind::Insert),
+            "{kind:?}: space"
+        );
+        cx.simulate_input("div");
+        assert_eq!(selected(&tools, cx).as_deref(), Some("Divider"));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(active(&tools, cx), None);
+        assert!(kind_of(0, cx).same_type(&kind), "{kind:?} is kept");
+        assert_eq!(kind_of(1, cx), BlockKind::Divider);
+        assert_eq!(text(&editor, cx).lines().next(), Some("some text "));
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(text(&editor, cx), "some text /div", "one undo step");
+        // (What was typed takes one more undo per word.)
+        for _ in 0..3 {
+            if text(&editor, cx) != "some text" {
+                cx.simulate_keystrokes("cmd-z");
+            }
+        }
+        assert_eq!(text(&editor, cx), "some text");
+
+        // An item that turns the block into something else does that to
+        // this block only, whatever it was.
+        caret(&editor, 0, 0, cx);
+        cx.simulate_input("/code");
+        assert_eq!(selected(&tools, cx).as_deref(), Some("Code block"));
+        cx.simulate_keystrokes("tab");
+        assert!(kind_of(0, cx).is_code(), "{kind:?} becomes a code block");
+        assert_eq!(text(&editor, cx), "some text");
+        // And in the code block the slash is a slash.
+        cx.simulate_input(" /");
+        assert_eq!(active(&tools, cx), None);
+    }
+}
+
+#[gpui::test]
+fn no_menu_inside_inline_code(cx: &mut TestAppContext) {
+    setup(cx);
+    let code = InlineAttrs {
+        code: true,
+        ..InlineAttrs::default()
+    };
+    let document = Document::from_blocks(vec![
+        Block::new(BlockKind::Paragraph)
+            .with_span("run ", InlineAttrs::default())
+            .with_span("ls -la ", code)
+            .with_span(" then", InlineAttrs::default()),
+    ]);
+    let (tools, editor, cx) = open(document, cx);
+    // After the space inside the code: a path is being typed.
+    caret(&editor, 0, 11, cx);
+    cx.simulate_input("/");
+    assert_eq!(text(&editor, cx), "run ls -la / then");
+    assert_eq!(active(&tools, cx), None);
+    // After the space outside it: the menu.
+    caret(&editor, 0, 13, cx);
+    cx.simulate_input("/");
+    assert_eq!(text(&editor, cx), "run ls -la / /then");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Insert));
+}
+
+/// What Vim mode does to the editor, without Vim: a key interceptor at the
+/// modal priority that takes every key in "normal mode" (with text input
+/// switched off) and only `escape` in "insert mode".
+#[gpui::test]
+fn under_a_modal_layer_the_menu_opens_only_when_the_slash_is_typed(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["text", ""]), cx);
+    caret(&editor, 1, 0, cx);
+    let normal = Rc::new(Cell::new(true));
+    let seen = Rc::new(RefCell::new(Vec::<String>::new()));
+    let _layer = editor.read_with(cx, |editor, _| {
+        let normal = normal.clone();
+        let seen = seen.clone();
+        editor.intercept_keys(InterceptPriority::MODAL, move |key, _, _| {
+            if key.modifiers.platform || key.key.is_empty() {
+                return KeyDisposition::Pass;
+            }
+            seen.borrow_mut().push(key.key.clone());
+            if normal.get() {
+                KeyDisposition::Consumed
+            } else if key.key == "escape" {
+                normal.set(true);
+                KeyDisposition::Consumed
+            } else {
+                KeyDisposition::Pass
+            }
+        })
+    });
+    let set_normal = |on: bool, cx: &mut gpui::VisualTestContext| {
+        normal.set(on);
+        editor.update(cx, |editor, cx| editor.set_text_input_enabled(!on, cx));
+        cx.run_until_parked();
+    };
+
+    // Normal mode: the slash is a command of the layer, nothing is typed,
+    // no menu.
+    set_normal(true, cx);
+    cx.simulate_input("/");
+    assert_eq!(*seen.borrow(), ["/"]);
+    assert_eq!(text(&editor, cx), "text\n");
+    assert_eq!(active(&tools, cx), None);
+
+    // Insert mode: the slash is typed and opens the menu.
+    set_normal(false, cx);
+    cx.simulate_input("/");
+    assert_eq!(text(&editor, cx), "text\n/");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Insert));
+    // Letters reach the layer (which lets them through) and filter.
+    cx.simulate_input("he");
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Heading 1"));
+
+    // The menu's keys go to the menu first: the layer never sees them,
+    // and escape closes the menu without leaving insert mode.
+    seen.borrow_mut().clear();
+    cx.simulate_keystrokes("down");
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Heading 2"));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(active(&tools, cx), None);
+    assert!(seen.borrow().is_empty(), "{:?}", seen.borrow());
+    assert!(!normal.get());
+    assert_eq!(text(&editor, cx), "text\n/he");
+    // The next escape is the layer's.
+    cx.simulate_keystrokes("escape");
+    assert!(normal.get());
+
+    // Applying an item in insert mode stays in insert mode.
+    set_normal(false, cx);
+    cx.simulate_keystrokes("backspace backspace backspace");
+    cx.simulate_input("/quo");
+    seen.borrow_mut().clear();
+    cx.simulate_keystrokes("enter");
+    assert!(seen.borrow().is_empty());
+    assert!(!normal.get());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[1].kind(), &BlockKind::Quote);
+    });
+    cx.simulate_input("said");
+    assert_eq!(text(&editor, cx), "text\nsaid");
+
+    // The find bar's escape from the text also waits its turn: the layer
+    // takes the key in both modes.
+    cx.simulate_keystrokes("cmd-f");
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    cx.simulate_keystrokes("escape");
+    assert!(normal.get());
+    assert_eq!(active(&tools, cx), Some(ToolKind::Find));
+}
+
+#[gpui::test]
+fn only_a_typed_slash_opens_the_menu(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["a", "/", ""]), cx);
+    let edit = |cx: &mut gpui::VisualTestContext, f: &dyn Fn(&mut writer_core::EditorState)| {
+        editor.update(cx, |editor, cx| editor.edit(|state| f(state), cx));
+        cx.run_until_parked();
+    };
+
+    // A slash key that types nothing, and then an edit that has nothing to
+    // do with it while the caret happens to sit after an old slash: the
+    // key press is forgotten.
+    caret(&editor, 1, 1, cx);
+    editor.update(cx, |editor, cx| editor.set_read_only(true, cx));
+    cx.simulate_input("/");
+    assert_eq!(text(&editor, cx), "a\n/\n");
+    editor.update(cx, |editor, cx| editor.set_read_only(false, cx));
+    edit(cx, &|state| {
+        state.set_block_kind(BlockKind::heading(1));
+    });
+    assert_eq!(active(&tools, cx), None);
+
+    editor.update(cx, |editor, cx| editor.set_text_input_enabled(false, cx));
+    cx.simulate_input("/");
+    editor.update(cx, |editor, cx| editor.set_text_input_enabled(true, cx));
+    edit(cx, &|state| {
+        state.set_alignment(Alignment::Center);
+    });
+    assert_eq!(text(&editor, cx), "a\n/\n");
+    assert_eq!(active(&tools, cx), None);
+
+    // A slash that arrives without being typed: inserted by a command,
+    // brought back by undo and redo.
+    edit(cx, &|state| {
+        state.set_caret(Position::new(2, 0));
+        state.insert_text("/");
+    });
+    assert_eq!(text(&editor, cx), "a\n/\n/");
+    assert_eq!(active(&tools, cx), None);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(active(&tools, cx), None);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(text(&editor, cx), "a\n/\n/");
+    assert_eq!(active(&tools, cx), None);
+    cx.simulate_keystrokes("cmd-z");
+
+    // Typed, in the same place: the menu.
+    cx.simulate_input("/");
+    assert_eq!(text(&editor, cx), "a\n/\n/");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Insert));
+    // A typed character that is not a slash, landing after an old one,
+    // does not reopen it once it was dismissed.
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("x");
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(active(&tools, cx), None);
 }

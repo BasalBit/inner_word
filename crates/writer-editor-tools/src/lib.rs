@@ -36,11 +36,28 @@
 //! | Insert menu | `/` at the start of a block or after whitespace | Focus stays in the document; the text after the slash filters. `enter` or `tab` applies (slash and query are removed in the same undo step), `escape` closes and keeps the text. Also [`actions::OpenInsertMenu`] for the palette. |
 //! | Link popover | `cmd-k` | `enter` applies (inserts the URL as linked text at a collapsed caret outside a link), `cmd-enter` opens the URL in the browser, `cmd-shift-k` removes the link, `escape` cancels. |
 //! | Font picker | `cmd-t` | Document default, recent, all families. `enter` applies to the selection or to the text typed next, `cmd-enter` sets the document's body font. |
-//! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `escape` closes and leaves the current match selected. |
+//! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `cmd-alt-f` in the bar shows or hides the replace row, `escape` (in the bar or in the document) closes and leaves the current match selected. |
 //!
-//! Opening a tool closes the one that is open (typing `/` leaves the find
-//! bar alone, because it is part of typing). `escape` returns focus to the
-//! editor.
+//! The editor hosts one popup, so opening a popup tool closes the popup
+//! tool that is open. The find bar is not a popup: it stays open, with its
+//! query, matches and highlights, while a format menu, link popover, font
+//! picker or insert menu is used, and `escape` then closes one thing at a
+//! time (the popup first). Opening the find bar closes an open popup tool,
+//! because the bar takes the keyboard.
+//!
+//! With the find bar closed, `cmd-g` / `cmd-shift-g` search for the last
+//! query without opening it. For [`FIND_FLASH_DURATION`] after each step
+//! the matches are highlighted and a small label over the top right corner
+//! of the editor shows the query and "3 of 17" (or "No matches"); then
+//! both go away by themselves, or at once with `escape`.
+//!
+//! While find results are showing, an edit updates the match list from the
+//! blocks it changed (`writer_core`'s change report and
+//! `Document::find_in_block`); the whole document is searched only when the
+//! query or an option changes. At 10,000 blocks and 40,000 matches a typed
+//! character costs about a quarter of what it did with a search per edit
+//! (debug build: 13 ms before, 3.3 ms after, 0.7 ms with the bar closed);
+//! what is left is handing the editor the highlight ranges.
 //!
 //! # Notes for the host
 //!
@@ -55,14 +72,27 @@
 //!   view), `"FindBar"` and `"LinkPopover"`. Inside the find bar
 //!   `cmd-alt-c` toggles case sensitivity; a context-free binding for the
 //!   same key (the app's "show comments") must be registered before
-//!   [`init`] so that the find bar's binding wins there.
+//!   [`init`] so that the find bar's binding wins there. `escape` is bound
+//!   in `"EditorTools"` to [`actions::CloseTool`], which passes the key on
+//!   when nothing is open; it only gets there from the document (text
+//!   fields, an open insert menu and Vim mode take `escape` first).
+//! - **The insert menu's trigger** is `EditorEvent::TextInput` with the
+//!   text `/`: the menu opens for a slash that was typed (on any keyboard
+//!   layout, also in Vim's insert mode), never for one that was pasted,
+//!   inserted by a command or brought back by undo, and not when the key
+//!   typed nothing (Vim's normal mode, a read-only document).
+//! - **Text colours.** [`TEXT_COLORS`] are stored in the document as plain
+//!   RGB and painted as stored in both themes, so they are balanced
+//!   between the two (about 4:1 on each); see the constant.
 //! - **Fonts.** The family list and the recently used families are in the
 //!   [`FontLibrary`] global: restore them with [`set_recent_fonts`] at
 //!   startup and persist [`recent_fonts`] from
 //!   `cx.observe_global::<FontLibrary>(..)`.
 //! - **State for a status line or automation:**
 //!   [`EditorTools::active_tool`], [`EditorTools::menu_rows`],
-//!   [`EditorTools::find_status`], and [`ToolsEvent`] on open and close.
+//!   [`EditorTools::find_status`], [`EditorTools::find_flash_visible`],
+//!   [`EditorTools::find_button_tooltip`], and [`ToolsEvent`] on open and
+//!   close.
 //! - **Highlight layers.** Find uses the editor layers [`FIND_LAYER`] and
 //!   [`FIND_CURRENT_LAYER`]; other crates should pick other names.
 //!
@@ -74,6 +104,7 @@
 //! | `menu` | the popup list shared by the format menu, the insert menu and the font picker |
 //! | `format_menu`, `insert_menu`, `link`, `font_picker`, `find` | one tool each, as `impl EditorTools` blocks |
 //! | [`actions`] | actions and key bindings |
+//! | `tip` | the tooltip of a button: its name and key |
 //! | `util` | today's date, URL clean-up |
 
 pub mod actions;

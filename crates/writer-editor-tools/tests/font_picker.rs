@@ -208,3 +208,66 @@ fn recent_fonts_are_kept_short_and_escape_changes_nothing(cx: &mut TestAppContex
         format!("Family 0{:02}", RECENT_FONT_LIMIT + 1)
     );
 }
+
+#[gpui::test]
+fn typing_after_a_font_was_applied_to_a_selection(cx: &mut TestAppContext) {
+    setup(cx);
+    install_fonts(cx);
+    let (_tools, editor, cx) = open(paragraphs(&["Set this in another face"]), cx);
+    select(&editor, TextRange::in_block(0, 4, 8), cx);
+
+    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_input("menlo");
+    cx.simulate_keystrokes("enter");
+    // The selection is still on the word, now in Menlo.
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection().range(), TextRange::in_block(0, 4, 8));
+    });
+    let fonts = |cx: &mut VisualTestContext| -> String {
+        // One letter per character: M for Menlo, a dot for the default.
+        let len = editor.read_with(cx, |editor, _| editor.document().blocks()[0].len());
+        (0..len)
+            .map(|offset| match font_at(&editor, offset, cx).as_deref() {
+                Some("Menlo") => 'M',
+                Some(_) => '?',
+                None => '.',
+            })
+            .collect()
+    };
+    assert_eq!(fonts(cx), "....MMMM................");
+
+    // Typing over the selection keeps the font that was just chosen.
+    cx.simulate_input("that");
+    assert_eq!(text(&editor, cx), "Set that in another face");
+    assert_eq!(fonts(cx), "....MMMM................");
+    // Typing on at its end stays in the font.
+    cx.simulate_input("s");
+    assert_eq!(text(&editor, cx), "Set thats in another face");
+    assert_eq!(fonts(cx), "....MMMMM................");
+    // Coming back to the end of the run from the right, too (text takes
+    // the font of the character before the caret)...
+    cx.simulate_keystrokes("right left");
+    cx.simulate_input("x");
+    assert_eq!(fonts(cx), "....MMMMMM................");
+    // ...and text typed elsewhere does not.
+    cx.simulate_keystrokes("cmd-left");
+    cx.simulate_input("y");
+    assert_eq!(text(&editor, cx), "ySet thatsx in another face");
+    assert_eq!(fonts(cx), ".....MMMMMM................");
+    cx.simulate_keystrokes("cmd-right");
+    cx.simulate_input("!");
+    assert_eq!(fonts(cx), ".....MMMMMM.................");
+
+    // Applying the font and typing over it are two undo steps.
+    let (_, editor, cx) = open(paragraphs(&["Set this in another face"]), cx);
+    select(&editor, TextRange::in_block(0, 4, 8), cx);
+    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_input("menlo");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("that");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(text(&editor, cx), "Set this in another face");
+    assert_eq!(font_at(&editor, 4, cx).as_deref(), Some("Menlo"));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(font_at(&editor, 4, cx), None);
+}

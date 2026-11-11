@@ -1,8 +1,8 @@
 //! Where things end up on screen (with the test platform's metrics).
 
-use gpui::{TestAppContext, px};
+use gpui::{TestAppContext, px, size};
 use writer_core::TextRange;
-use writer_editor_tools::FindBarPlacement;
+use writer_editor_tools::{FIND_BUTTONS, FindBarPlacement};
 
 use crate::support::*;
 
@@ -104,4 +104,84 @@ fn popups_sit_under_their_anchor_inside_the_editor(cx: &mut TestAppContext) {
         narrowed.size.height < menu.size.height,
         "six rows instead of eight"
     );
+}
+
+#[gpui::test]
+fn the_find_bar_fits_a_narrow_editor_and_its_fields_line_up(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, _editor, cx) = open(paragraphs(&["Hello there", "and there"]), cx);
+    cx.simulate_keystrokes("cmd-alt-f");
+    cx.simulate_input("there");
+    let window = cx.update(|window, _| window.viewport_size());
+
+    let mut widths = Vec::new();
+    for width in [window.width, px(700.), px(560.), px(440.), px(380.)] {
+        cx.simulate_resize(size(width, px(500.)));
+        // The bar decides on its key hints from the editor's last layout:
+        // one frame to lay out at the new width, one to follow it.
+        for _ in 0..2 {
+            cx.run_until_parked();
+            cx.update(|window, _| window.refresh());
+        }
+        cx.run_until_parked();
+        let bounds = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} is not drawn"))
+        };
+        let bar = bounds("find-bar", cx);
+        assert_eq!(bar.size.width, width);
+        // Every button is on screen, inside the bar.
+        for button in FIND_BUTTONS {
+            let button_bounds = bounds(button, cx);
+            assert!(
+                button_bounds.left() >= bar.left() && button_bounds.right() <= bar.right(),
+                "{button} at {button_bounds:?} leaves the {width:?} bar"
+            );
+            assert!(button_bounds.size.height == px(24.));
+        }
+        // The two fields share their left and right edges and keep a
+        // width one can type in.
+        let query = bounds("find-query-frame", cx);
+        let replace = bounds("find-replace-frame", cx);
+        assert_eq!(query.left(), replace.left(), "at {width:?}");
+        assert_eq!(query.right(), replace.right(), "at {width:?}");
+        assert!(query.size.width >= px(96.), "{:?} at {width:?}", query.size);
+        widths.push((width, bounds("find-next", cx).size.width));
+    }
+    // In the narrow bar the buttons lose the key hints beside them (the
+    // tooltips keep them).
+    let wide = widths[0].1;
+    let narrow = widths.last().unwrap().1;
+    assert!(narrow < wide, "{widths:?}");
+    assert_eq!(narrow, px(24.));
+    assert_eq!(
+        tools
+            .read_with(cx, |tools, cx| tools.find_button_tooltip("find-next", cx))
+            .as_deref(),
+        Some("Next match ⌘G")
+    );
+}
+
+#[gpui::test]
+fn the_find_label_floats_inside_the_editor_without_moving_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_tools, editor, cx) = open(paragraphs(&["Hello there", "and there"]), cx);
+    let viewport = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap())
+    };
+    let full = viewport(cx);
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("there");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(viewport(cx), full);
+
+    // cmd-g with the bar closed: the label is in the top right corner of
+    // the editor, and the text does not move (no bar is put in).
+    cx.simulate_keystrokes("cmd-g");
+    let label = cx.debug_bounds("find-flash").expect("the label is drawn");
+    assert_eq!(viewport(cx), full);
+    assert!(label.top() > full.top() && label.bottom() < full.top() + px(48.));
+    assert!(label.right() < full.right() && label.right() > full.right() - px(32.));
+    assert!(label.size.width <= px(320.));
 }

@@ -477,8 +477,19 @@ impl EditorTools {
                 })
                 .collect();
             let tail = low + fresh.len();
+            let moved = splice.new_len != splice.old_len && high < matches.len();
+            if low == high && fresh.is_empty() && !moved {
+                // Nothing to find in what changed and nothing after it
+                // moved (typing in a paragraph without a match, the usual
+                // case): the highlights stand as they are.
+                self.find.revision = now;
+                self.expire_find_notice(cx);
+                self.sync_find_current(cx);
+                cx.notify();
+                return;
+            }
             matches.splice(low..high, fresh);
-            if splice.new_len != splice.old_len {
+            if moved {
                 for found in &mut matches[tail..] {
                     let block = found.start.block + splice.new_len - splice.old_len;
                     *found = TextRange::in_block(block, found.start.offset, found.end.offset);
@@ -487,6 +498,15 @@ impl EditorTools {
             self.find.revision = now;
         }
         self.show_find_results(false, cx);
+    }
+
+    /// "Replaced 12" stands until the document changes again.
+    fn expire_find_notice(&mut self, cx: &App) {
+        if self.find.notice.is_some()
+            && self.find.notice_revision != self.editor.read(cx).state().revision()
+        {
+            self.find.notice = None;
+        }
     }
 
     /// Searches again. With `reveal` (the query or an option changed) the
@@ -502,12 +522,7 @@ impl EditorTools {
     /// the highlights. With `reveal`, goes to the first match at or after
     /// the selection first.
     fn show_find_results(&mut self, reveal: bool, cx: &mut Context<Self>) {
-        // "Replaced 12" stands until the document changes again.
-        if self.find.notice.is_some()
-            && self.find.notice_revision != self.editor.read(cx).state().revision()
-        {
-            self.find.notice = None;
-        }
+        self.expire_find_notice(cx);
         if reveal {
             let from = self.editor.read(cx).selection().start();
             if let Some(index) = match_at_or_after(&self.find.matches, from) {
@@ -615,11 +630,14 @@ impl EditorTools {
             // Bar closed: the results show for a moment. While they do,
             // the match list is kept current, so stepping on does not
             // search again.
-            if self.find.flash.is_none() {
+            let fresh = self.find.flash.is_none();
+            if fresh {
                 self.search(cx);
             }
             self.start_find_flash(cx);
-            self.apply_find_highlights(cx);
+            if fresh {
+                self.apply_find_highlights(cx);
+            }
         }
         let selection = self.editor.read(cx).selection().range();
         let target = if forward {
@@ -810,33 +828,28 @@ impl EditorTools {
             |hint: Option<KeyHint>| hint.filter(|_| !compact).map(|hint| hint.size(UI_TEXT_XS));
 
         // A field in its frame.
-        let framed = |field: Entity<TextField>, trailing: Option<AnyElement>| {
-            div()
-                .flex_1()
-                .min_w(px(96.))
-                .h(px(26.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .rounded(RADIUS_MD)
-                .border_1()
-                .border_color(colors.hairline)
-                .bg(colors.canvas)
-                .child(div().flex_1().min_w_0().child(field))
-                .children(trailing)
-        };
-        // The buttons after a field. Both rows give them the same width,
-        // so the two fields line up.
-        let trailing_width = px(if compact { 168. } else { 296. });
-        let buttons = || {
-            div()
-                .flex_none()
-                .min_w(trailing_width)
-                .flex()
-                .items_center()
-                .gap(px(6.))
-        };
+        let framed =
+            |name: &'static str, field: Entity<TextField>, trailing: Option<AnyElement>| {
+                div()
+                    .debug_selector(|| name.to_string())
+                    .flex_1()
+                    .min_w(px(96.))
+                    .h(px(26.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .rounded(RADIUS_MD)
+                    .border_1()
+                    .border_color(colors.hairline)
+                    .bg(colors.canvas)
+                    .child(div().flex_1().min_w_0().child(field))
+                    .children(trailing)
+            };
+        // The bar is laid out in three columns (the disclosure, the fields,
+        // the buttons) of one or two cells each, so that the two fields
+        // have the same edges whatever the buttons beside them measure.
+        let cell = || div().h(px(36.)).flex().items_center().gap(px(6.));
 
         let disclosure = self
             .bar_button("find-disclosure", cx)
@@ -906,24 +919,7 @@ impl EditorTools {
             .child(Icon::new(IconName::Close))
             .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx)));
 
-        let find_row = div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .h(px(36.))
-            .child(disclosure)
-            .child(framed(bar.query.clone(), Some(count.into_any_element())))
-            .child(
-                buttons()
-                    .child(case)
-                    .child(word)
-                    .child(previous)
-                    .child(next)
-                    .child(div().flex_1())
-                    .child(close),
-            );
-
-        let replace_row = show_replace.then(|| {
+        let replace_buttons = show_replace.then(|| {
             let text_button = |button: gpui::Stateful<gpui::Div>, label: &'static str| {
                 button
                     .px(px(8.))
@@ -941,16 +937,39 @@ impl EditorTools {
             )
             .children(hint(KeyHint::for_action(&ReplaceAll, cx)))
             .on_click(cx.listener(|this, _, _, cx| this.replace_all(cx)));
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .h(px(36.))
-                // Line the field up with the query field.
-                .child(div().flex_none().w(px(24.)))
-                .child(framed(bar.replace.clone(), None))
-                .child(buttons().child(replace).child(replace_all))
+            cell().child(replace).child(replace_all)
         });
+
+        let lead = div().flex_none().child(cell().child(disclosure));
+        let fields = div()
+            .flex_1()
+            .min_w(px(96.))
+            .flex()
+            .flex_col()
+            .child(cell().child(framed(
+                "find-query-frame",
+                bar.query.clone(),
+                Some(count.into_any_element()),
+            )))
+            .when(show_replace, |el| {
+                el.child(cell().child(framed("find-replace-frame", bar.replace.clone(), None)))
+            });
+        let buttons = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .child(
+                cell()
+                    .child(case)
+                    .child(word)
+                    .child(previous)
+                    .child(next)
+                    // The close button keeps to the right edge when the
+                    // replace buttons below are the wider row.
+                    .child(div().flex_1())
+                    .child(close),
+            )
+            .children(replace_buttons);
 
         Some(
             div()
@@ -978,9 +997,11 @@ impl EditorTools {
                         .max_w(px(760.))
                         .px(px(12.))
                         .flex()
-                        .flex_col()
-                        .child(find_row)
-                        .children(replace_row),
+                        .items_start()
+                        .gap(px(6.))
+                        .child(lead)
+                        .child(fields)
+                        .child(buttons),
                 )
                 .into_any_element(),
         )

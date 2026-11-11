@@ -1,6 +1,9 @@
-use gpui::TestAppContext;
-use writer_core::{Alignment, Block, BlockKind, Document, Highlight, InlineAttrs, TextRange};
+use gpui::{Hsla, Rgba, TestAppContext};
+use writer_core::{
+    Alignment, Block, BlockKind, Document, Highlight, InlineAttrs, Position, TextRange,
+};
 use writer_editor_tools::{Mark, TEXT_COLORS, ToolKind};
+use writer_ui::theme::{self, ActiveTheme, ThemeMode};
 
 use crate::support::*;
 
@@ -347,5 +350,220 @@ fn rows_show_current_values(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.document().blocks()[0].text_size(), None);
+    });
+}
+
+#[gpui::test]
+fn a_selection_across_blocks_of_several_kinds(cx: &mut TestAppContext) {
+    setup(cx);
+    let plain = InlineAttrs::default;
+    let document = Document::from_blocks(vec![
+        Block::new(BlockKind::heading(1)).with_span("Title", plain()),
+        Block::paragraph("First paragraph"),
+        Block::new(BlockKind::BulletItem).with_span("a bullet", plain()),
+        Block::new(BlockKind::todo()).with_span("a task", plain()),
+        Block::new(BlockKind::Quote).with_span("a quote", plain()),
+        Block::paragraph("Last paragraph"),
+    ]);
+    let (tools, editor, cx) = open(document, cx);
+    // From inside the title to inside the quote; the last paragraph is not
+    // touched.
+    let range = TextRange::new(Position::new(0, 2), Position::new(4, 3));
+    select(&editor, range, cx);
+    let kinds = |cx: &mut gpui::VisualTestContext| -> Vec<BlockKind> {
+        editor.read_with(cx, |editor, _| {
+            editor
+                .document()
+                .blocks()
+                .iter()
+                .map(|block| block.kind().clone())
+                .collect()
+        })
+    };
+    let bold = |block: usize, offset: usize, cx: &mut gpui::VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            editor.document().blocks()[block]
+                .attrs_at(offset)
+                .unwrap()
+                .bold
+        })
+    };
+    let before = kinds(cx);
+
+    // The menu says what the selection is made of: every kind in it is
+    // there in part, the others not at all.
+    cx.simulate_keystrokes("cmd-.");
+    for label in [
+        "Heading 1",
+        "Paragraph",
+        "Bullet list",
+        "To-do list",
+        "Quote",
+    ] {
+        assert_eq!(row(&tools, label, cx).mark, Mark::Mixed, "{label}");
+    }
+    for label in ["Heading 2", "Numbered list", "Code block", "Bold"] {
+        assert_eq!(row(&tools, label, cx).mark, Mark::None, "{label}");
+    }
+    assert_eq!(row(&tools, "Align left", cx).mark, Mark::Check);
+
+    // Inline formatting goes on exactly the selected text, in every block.
+    cx.simulate_input("bold");
+    cx.simulate_keystrokes("enter");
+    assert!(!bold(0, 1, cx) && bold(0, 2, cx) && bold(0, 4, cx));
+    assert!(bold(1, 0, cx) && bold(1, 14, cx));
+    assert!(bold(2, 0, cx) && bold(3, 5, cx));
+    assert!(bold(4, 2, cx) && !bold(4, 3, cx));
+    assert!(!bold(5, 0, cx));
+    assert_eq!(kinds(cx), before, "bold changes no block");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection().range(), range)
+    });
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(row(&tools, "Bold", cx).mark, Mark::Check);
+
+    // "Turn into" changes every block the selection touches, as one step.
+    cx.simulate_input("heading 2");
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Heading 2"));
+    cx.simulate_keystrokes("enter");
+    let mut expected = vec![BlockKind::heading(2); 5];
+    expected.push(BlockKind::Paragraph);
+    assert_eq!(kinds(cx), expected);
+    assert_eq!(text(&editor, cx).lines().count(), 6, "no text was lost");
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(row(&tools, "Heading 2", cx).mark, Mark::Check);
+    assert_eq!(row(&tools, "Heading 1", cx).mark, Mark::None);
+    assert_eq!(row(&tools, "Quote", cx).mark, Mark::None);
+    cx.simulate_keystrokes("escape cmd-z");
+    assert_eq!(kinds(cx), before, "one undo step brings every kind back");
+    assert!(bold(1, 0, cx), "and leaves the bold");
+
+    // A list from all of them, and alignment on all of them.
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("bullet");
+    cx.simulate_keystrokes("enter");
+    let mut expected = vec![BlockKind::BulletItem; 5];
+    expected.push(BlockKind::Paragraph);
+    assert_eq!(kinds(cx), expected);
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("centre");
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        let alignments: Vec<Alignment> = editor
+            .document()
+            .blocks()
+            .iter()
+            .map(|block| block.alignment())
+            .collect();
+        assert_eq!(alignments[..5], [Alignment::Center; 5]);
+        assert_eq!(alignments[5], Alignment::Left);
+        assert_eq!(editor.selection().range(), range, "the selection is kept");
+    });
+    // A colour and a highlight across the blocks, then "Clear formatting"
+    // takes the inline formatting off again and keeps the kinds.
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("blue text");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("pink");
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        for (block, offset) in [(0, 2), (1, 3), (2, 0), (3, 1), (4, 2)] {
+            let attrs = editor.document().blocks()[block].attrs_at(offset).unwrap();
+            assert_eq!(attrs.color, Some(TEXT_COLORS[3].1), "block {block}");
+            assert_eq!(attrs.highlight, Some(Highlight::Pink), "block {block}");
+        }
+    });
+    cx.simulate_keystrokes("cmd-.");
+    assert_eq!(row(&tools, "Blue text", cx).mark, Mark::Check);
+    assert_eq!(row(&tools, "Pink highlight", cx).mark, Mark::Check);
+    cx.simulate_input("clear");
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        for (block, offset) in [(0, 2), (1, 3), (2, 0), (3, 1), (4, 2)] {
+            let attrs = editor.document().blocks()[block].attrs_at(offset).unwrap();
+            assert_eq!(attrs, &InlineAttrs::default(), "block {block}");
+        }
+    });
+    assert_eq!(kinds(cx), expected);
+}
+
+/// WCAG contrast ratio of two opaque colours.
+fn contrast(a: Hsla, b: Hsla) -> f32 {
+    fn luminance(color: Hsla) -> f32 {
+        let rgba = Rgba::from(color);
+        let channel = |value: f32| {
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(rgba.r) + 0.7152 * channel(rgba.g) + 0.0722 * channel(rgba.b)
+    }
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+#[gpui::test]
+fn text_colours_read_on_paper_and_on_night(cx: &mut TestAppContext) {
+    setup(cx);
+    // The document stores one RGB value per colour and the editor paints
+    // it as stored, so each colour must work on every surface text is
+    // drawn on: the canvas and the page sheet of both themes.
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        cx.update(|cx| theme::set_theme_mode(mode, cx));
+        let surfaces = cx.update(|cx| {
+            let colors = cx.theme().colors;
+            [("canvas", colors.canvas), ("page", colors.page)]
+        });
+        for (name, rgb) in TEXT_COLORS {
+            let color: Hsla = Rgba {
+                r: f32::from(rgb.r) / 255.,
+                g: f32::from(rgb.g) / 255.,
+                b: f32::from(rgb.b) / 255.,
+                a: 1.,
+            }
+            .into();
+            for (surface, background) in surfaces {
+                let ratio = contrast(color, background);
+                assert!(
+                    ratio >= 3.8,
+                    "{name} on the {mode:?} {surface}: contrast {ratio:.2}"
+                );
+            }
+        }
+    }
+    // The names are distinct colours.
+    for (index, (_, a)) in TEXT_COLORS.iter().enumerate() {
+        for (_, b) in &TEXT_COLORS[index + 1..] {
+            assert_ne!(a, b);
+        }
+    }
+}
+
+#[gpui::test]
+fn an_open_menu_follows_a_theme_change(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open(paragraphs(&["Hello brave world"]), cx);
+    select(&editor, TextRange::in_block(0, 6, 11), cx);
+    cx.simulate_keystrokes("cmd-.");
+    cx.simulate_input("highl");
+    cx.simulate_keystrokes("down down");
+    let before = rows(&tools, cx);
+    assert_eq!(selected(&tools, cx).as_deref(), Some("Blue highlight"));
+
+    cx.update(|_, cx| theme::set_theme_mode(ThemeMode::Dark, cx));
+    cx.run_until_parked();
+    // Still open, same rows, same row selected, the filter kept; and the
+    // row applies as before.
+    assert_eq!(active(&tools, cx), Some(ToolKind::Format));
+    assert_eq!(rows(&tools, cx), before);
+    cx.simulate_keystrokes("enter");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.document().blocks()[0].attrs_at(7).unwrap().highlight,
+            Some(Highlight::Blue)
+        );
     });
 }

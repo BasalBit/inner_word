@@ -30,9 +30,11 @@
 //! | [`confirm`] | [`ConfirmDialog`] |
 //! | [`toast`] | [`ToastLayer`] / [`Toast`] |
 //! | [`focus`] | tab navigation helper |
+//! | [`command`] | [`CommandDescriptor`]: how crates publish commands to the palette and shortcuts overlay |
 
 pub mod assets;
 pub mod button;
+pub mod command;
 pub mod confirm;
 pub mod focus;
 pub mod fuzzy;
@@ -48,6 +50,7 @@ pub mod toast;
 pub mod toggle;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use command::CommandDescriptor;
 pub use confirm::{ConfirmDialog, ConfirmDialogEvent};
 pub use icon::{Icon, IconName};
 pub use key_hint::KeyHint;

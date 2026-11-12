@@ -23,6 +23,7 @@
 //! | [`modal`] | [`ModalLayer`]: one modal at a time, backdrop, focus restore |
 //! | [`context_menu`] | [`ContextMenu`]: right-click and drop-down menus, drawn by the toast layer (nothing to mount) |
 //! | [`key_hint`] | [`KeyHint`]: key bindings as macOS glyphs, looked up from the keymap |
+//! | [`keymap`] | asking the keymap what a key does, for code that sees a key before the bindings do |
 //! | [`icon`] | [`Icon`] / [`IconName`]: embedded 16px line icons |
 //! | [`button`] | [`Button`]: primary / subtle / danger, focusable |
 //! | [`toggle`] | [`Switch`] and [`Checkbox`] rows |
@@ -43,6 +44,7 @@ pub mod focus;
 pub mod fuzzy;
 pub mod icon;
 pub mod key_hint;
+pub mod keymap;
 pub mod label;
 pub mod modal;
 pub mod picker;

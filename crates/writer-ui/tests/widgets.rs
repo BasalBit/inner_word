@@ -19,6 +19,8 @@ use writer_ui::{
 mod context_menu;
 #[path = "widgets/mouse.rs"]
 mod mouse;
+#[path = "widgets/rebinding.rs"]
+mod rebinding;
 
 fn init(cx: &mut TestAppContext) {
     cx.update(|cx| {

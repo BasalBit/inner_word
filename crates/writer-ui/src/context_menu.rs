@@ -106,6 +106,12 @@
 //! typed. A `cmd` chord closes the menu and then does what it always does.
 //! Every other key is swallowed.
 //!
+//! Those keys are the menu's own and are not bindings: the menu has no key
+//! context (it never has the keyboard), it must see every key to swallow
+//! it, and the way out of an open menu must not depend on what the keymap
+//! holds. One key is asked of the keymap, because it belongs to a binding:
+//! the key that opens menus closes the open one ([`opens_a_context_menu`]).
+//!
 //! The mouse: moving over an item marks it, a click chooses it, a submenu
 //! opens after a short rest on its row (or at once on a click). A click
 //! outside closes the menu and does nothing else (as native menus do); a
@@ -783,6 +789,19 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+/// Whether `keystroke` is a key that opens context menus: one the keymap
+/// binds, in any key context, to an action named `OpenContextMenu` (this
+/// crate's [`OpenContextMenu`], and the one of a crate that defines its
+/// own under that name, as the editor does). An open menu closes on it. The
+/// menu has no place in the element tree, so it cannot ask what the key
+/// does where the keyboard is; and the key is not written here, because the
+/// keymap can be rebuilt with another one.
+pub fn opens_a_context_menu(keystroke: &Keystroke, cx: &App) -> bool {
+    crate::keymap::keystroke_is_bound_to(keystroke, cx, |action| {
+        action.name().rsplit("::").next() == Some("OpenContextMenu")
+    })
+}
+
 fn is_modifier_only(keystroke: &Keystroke) -> bool {
     matches!(
         keystroke.key.as_str(),
@@ -1193,6 +1212,7 @@ impl ContextMenu {
         let in_submenu = self.submenu.is_some();
         let plain = !modifiers.control && !modifiers.alt && !modifiers.function;
         let key = keystroke.key.as_str();
+        let menu_key = opens_a_context_menu(keystroke, cx);
         match key {
             "down" | "up" if plain => self.move_selection(in_submenu, key == "down", cx),
             "n" | "p" if modifiers.control && !modifiers.alt => {
@@ -1206,12 +1226,10 @@ impl ContextMenu {
                 let last = last_selectable(self.level_items(in_submenu));
                 self.set_selected(in_submenu, last, cx);
             }
-            // ctrl-enter (or shift-f10) opened the menu from the keyboard; pressed
-            // again it closes it
-            "enter" if modifiers.control => self.close(window, cx),
-            "f10" if modifiers.shift && !modifiers.control && !modifiers.alt => {
-                self.close(window, cx)
-            }
+            // The key that opens menus from the keyboard (ctrl-enter or
+            // shift-f10, unless the keymap says otherwise); pressed again
+            // it closes the open one.
+            _ if menu_key => self.close(window, cx),
             "enter" | "space" if plain && self.type_ahead_running(key) => {
                 self.type_ahead(' ', in_submenu, cx)
             }

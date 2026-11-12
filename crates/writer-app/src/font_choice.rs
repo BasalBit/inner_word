@@ -13,8 +13,9 @@
 //! It works like the list of spelling languages
 //! ([`crate::spelling::LanguagePicker`]): it takes the place of the
 //! settings, opens on the font in use, and goes back to its row in the
-//! settings after a choice (`enter`, a click) and after `escape` or a
-//! click outside, which change nothing.
+//! settings after a choice (`enter`, a click) and after `escape`, which
+//! changes nothing. A click outside the list changes nothing either and
+//! closes all of it: the keyboard is back in the text.
 //!
 //! A font that is set but not installed on this Mac (a library that came
 //! from another one) is the first row, marked [`MISSING_LABEL`]: it stays

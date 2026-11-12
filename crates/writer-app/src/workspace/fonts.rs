@@ -85,8 +85,8 @@ impl Workspace {
         self.write_setting(keys::NEW_DOCUMENT_FONT, font, cx);
     }
 
-    /// Sets the body font of the open document. A change of the document
-    /// like any other: saved with the text, one step of undo.
+    /// Sets the body font of the open document. A change of the document's
+    /// settings like any other: saved with the text, not a step of undo.
     pub fn set_document_font(&mut self, font: &str, cx: &mut Context<Self>) {
         if self.session.is_none() || font.trim().is_empty() {
             return;

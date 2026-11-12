@@ -426,10 +426,20 @@ fn not_found_message(kind: ItemKind, reference: &str, hint: Option<&str>) -> Str
 }
 
 fn ambiguous_message(kind: ItemKind, reference: &str, candidates: &[Candidate]) -> String {
-    let mut message = format!(
-        "{reference} fits {} {kind}s; name one by its id or by a longer path:",
-        candidates.len()
-    );
+    // A heading has no id and no path: it is chosen by its number among the headings
+    // with that text.
+    let mut message = if kind == ItemKind::Heading {
+        format!(
+            "the document has {} headings {reference}; say which one by its number (the \
+             occurrence of the heading, from 1):",
+            candidates.len()
+        )
+    } else {
+        format!(
+            "{reference} fits {} {kind}s; name one by its id or by a longer path:",
+            candidates.len()
+        )
+    };
     for candidate in candidates {
         message.push_str(&format!("\n  {}  {}", candidate.id, candidate.path));
         if candidate.trashed {

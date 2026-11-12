@@ -26,6 +26,11 @@ const PAIRING_CELLS: usize = 10_000;
 /// edited: the share of the longer one.
 const SAME_PARAGRAPH: f64 = 0.5;
 
+/// Or: this share of the shorter one's words are in the longer one, and they make up at
+/// least this share of the longer one.
+const CONTAINED: f64 = 0.75;
+const CONTAINED_SHARE: f64 = 0.25;
+
 const STYLES: [InlineStyle; 5] = [
     InlineStyle::Bold,
     InlineStyle::Italic,
@@ -213,8 +218,8 @@ fn edited_pairs(old: &[Block], new: &[Block]) -> Vec<(usize, usize)> {
     if old.is_empty() || new.is_empty() {
         return Vec::new();
     }
-    let old_words: Vec<HashMap<&str, usize>> = old.iter().map(bag).collect();
-    let new_words: Vec<HashMap<&str, usize>> = new.iter().map(bag).collect();
+    let old_words: Vec<HashMap<String, usize>> = old.iter().map(bag).collect();
+    let new_words: Vec<HashMap<String, usize>> = new.iter().map(bag).collect();
     let likeness = |i: usize, j: usize| -> f64 {
         let (a, b) = (&old[i], &new[j]);
         let same_kind = a.kind() == b.kind()
@@ -226,9 +231,12 @@ fn edited_pairs(old: &[Block], new: &[Block]) -> Vec<(usize, usize)> {
         if !same_kind || a.is_void() || a.indent() != b.indent() || !extras_agree(a, b) {
             return 0.0;
         }
-        let total = |words: &HashMap<&str, usize>| words.values().sum::<usize>();
-        let longer = total(&old_words[i]).max(total(&new_words[j]));
-        if longer == 0 {
+        let total = |words: &HashMap<String, usize>| words.values().sum::<usize>();
+        let (longer, shorter) = {
+            let (a, b) = (total(&old_words[i]), total(&new_words[j]));
+            (a.max(b), a.min(b))
+        };
+        if shorter == 0 {
             return 0.0;
         }
         let shared: usize = old_words[i]
@@ -236,7 +244,14 @@ fn edited_pairs(old: &[Block], new: &[Block]) -> Vec<(usize, usize)> {
             .map(|(word, count)| (*count).min(new_words[j].get(word).copied().unwrap_or(0)))
             .sum();
         let share = shared as f64 / longer as f64;
-        if share >= SAME_PARAGRAPH { share } else { 0.0 }
+        let contained = shared as f64 / shorter as f64;
+        // The same words for the most part, or one of them nearly all inside the other
+        // (a line that grew, a heading that got a word more).
+        if share >= SAME_PARAGRAPH || (contained >= CONTAINED && share >= CONTAINED_SHARE) {
+            share
+        } else {
+            0.0
+        }
     };
     if old.len().saturating_mul(new.len()) > PAIRING_CELLS {
         // Too many to compare each with each: block for block when the numbers agree.
@@ -281,11 +296,11 @@ fn edited_pairs(old: &[Block], new: &[Block]) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// The words of a block, counted.
-fn bag(block: &Block) -> HashMap<&str, usize> {
+/// The words of a block, counted, without regard to case.
+fn bag(block: &Block) -> HashMap<String, usize> {
     let mut words = HashMap::new();
     for word in block.text().unicode_words() {
-        *words.entry(word).or_insert(0) += 1;
+        *words.entry(word.to_lowercase()).or_insert(0) += 1;
     }
     words
 }
@@ -388,13 +403,17 @@ fn edit_block(ed: &mut EditorState, index: usize, new: &Block) {
                 .all(|piece| Some(&piece.marks) == marks.as_ref());
         if uniform {
             ed.replace_range(target, &new.text()[to]);
-        } else {
-            if from.is_empty() {
-                ed.set_caret(target.start);
-            } else {
-                ed.select_range(target);
-            }
+        } else if from.is_empty() {
+            // New words between old ones: they come with the formatting they have.
+            ed.set_caret(target.start);
             ed.paste(&Fragment::new(vec![slice(new, to)]));
+        } else {
+            // Other words, or the same words in another formatting: the text first (it
+            // takes what the replaced text carried, a comment among it), then exactly
+            // the formatting the new text has.
+            let piece = slice(new, to.clone());
+            ed.replace_range(target, &new.text()[to]);
+            apply_marks(ed, index, from.start, &piece, true);
         }
     }
     match (old.kind(), new.kind()) {
@@ -445,17 +464,45 @@ pub(crate) fn replace_text(
         }
         return Vec::new();
     }
-    if literal {
-        if normalized.contains('\n') {
-            ed.select_range(range);
-            ed.paste(&Fragment::from_plain_text(&normalized));
+    let single = range.start.block == range.end.block;
+    // A line break at an end of the new text ends the block there: the text before the
+    // match stays a block of its own, or the text after it does.
+    let break_before = normalized.starts_with('\n') && !whole_blocks;
+    let break_after = normalized.ends_with('\n') && !whole_blocks;
+    let paste = |ed: &mut EditorState, blocks: &[Block]| {
+        let mut all: Vec<Block> = Vec::with_capacity(blocks.len() + 2);
+        if break_before {
+            all.push(Block::new(BlockKind::Paragraph));
+        }
+        all.extend(blocks.iter().cloned());
+        if break_after {
+            all.push(Block::new(BlockKind::Paragraph));
+        }
+        ed.select_range(range);
+        ed.paste(&Fragment::new(all));
+    };
+    let inline = |ed: &mut EditorState, piece: &Block, lead: &str, trail: &str, exact: bool| {
+        if break_before || break_after {
+            paste(ed, std::slice::from_ref(piece));
+        } else if single {
+            splice_block(ed, range, piece, lead, trail, exact);
         } else {
-            ed.replace_range(range, &normalized);
+            replace_across(ed, range, piece, lead, trail, exact);
+        }
+    };
+
+    if literal {
+        let lines = normalized.trim_matches('\n');
+        if lines.contains('\n') || break_before || break_after {
+            let blocks: Vec<Block> = lines.split('\n').map(Block::paragraph).collect();
+            paste(ed, &blocks);
+        } else {
+            inline(ed, &Block::paragraph(lines), "", "", false);
         }
         return Vec::new();
     }
     if !exact && is_plain_text(&normalized) {
-        ed.replace_range(range, &normalized);
+        inline(ed, &Block::paragraph(&normalized), "", "", false);
         return Vec::new();
     }
 
@@ -470,7 +517,7 @@ pub(crate) fn replace_text(
         // White space only, or markup that leaves nothing (an HTML comment).
         let spaces: String = normalized.chars().filter(|&c| space(c)).collect();
         if trimmed.is_empty() && !spaces.is_empty() {
-            ed.replace_range(range, &spaces);
+            inline(ed, &Block::paragraph(&spaces), "", "", false);
         } else if whole_blocks {
             ed.select_blocks(blocks);
             ed.delete_blocks();
@@ -481,7 +528,7 @@ pub(crate) fn replace_text(
     }
     let one_paragraph = read.len() == 1 && *read[0].kind() == BlockKind::Paragraph;
     if one_paragraph {
-        replace_inline(ed, range, &read[0], lead, trail, exact);
+        inline(ed, &read[0], lead, trail, exact);
         return warnings;
     }
     if whole_blocks {
@@ -500,13 +547,12 @@ pub(crate) fn replace_text(
             && again[0].text().starts_with(GUARD)
         {
             let piece = slice(&again[0], GUARD.len()..again[0].len());
-            replace_inline(ed, range, &piece, lead, trail, exact);
+            inline(ed, &piece, lead, trail, exact);
             return warnings;
         }
     }
     // Several blocks into the middle of one: the block is split around them.
-    ed.select_range(range);
-    ed.paste(&Fragment::new(read.to_vec()));
+    paste(ed, read);
     warnings
 }
 
@@ -527,11 +573,82 @@ fn is_plain_text(text: &str) -> bool {
     !(digits > 0 && start[digits..].starts_with(['.', ')']))
 }
 
-/// Replaces `range` with the text of the paragraph `piece` (between `lead` and `trail`
-/// spaces) and gives it the formatting `piece` has: on top of what the replaced text had,
-/// or with `exact` in place of it. A comment anchored on the replaced text stays on the
+/// The formatting a piece of new text gets where it replaces text formatted as `base`:
+/// its own markup on top of the formatting of what it replaces, or with `exact` its own
+/// markup only. A colour and a font, which Markdown does not say, are kept either way.
+fn merged(attrs: &InlineAttrs, base: &InlineAttrs, exact: bool) -> InlineAttrs {
+    let mut out = attrs.clone();
+    out.comments.clear();
+    if !exact {
+        for style in STYLES {
+            if base.has_style(style) {
+                out.set_style(style, true);
+            }
+        }
+        if out.link.is_none() {
+            out.link = base.link.clone();
+        }
+        if out.highlight.is_none() {
+            out.highlight = base.highlight;
+        }
+    }
+    if out.color.is_none() {
+        out.color = base.color;
+    }
+    if out.font.is_none() {
+        out.font = base.font.clone();
+    }
+    out
+}
+
+/// Replaces `range`, which lies in one block, with the text of the paragraph `piece`
+/// (between `lead` and `trail` spaces): the block is edited word by word into what it
+/// reads with the new text in place, so words that the old and the new text share are
+/// not touched, and a comment on a replaced word stays on its replacement.
+fn splice_block(
+    ed: &mut EditorState,
+    range: TextRange,
+    piece: &Block,
+    lead: &str,
+    trail: &str,
+    exact: bool,
+) {
+    let index = range.start.block;
+    let old = ed.document().blocks()[index].clone();
+    let (from, to) = (range.start.offset, range.end.offset);
+    let base = old.attrs_at(from).cloned().unwrap_or_default();
+    let mut new = Block::new(old.kind().clone());
+    for (span, text, attrs) in old.text_spans() {
+        if span.start < from {
+            let end = span.end.min(from);
+            new = new.with_span(&text[..end - span.start], attrs.clone());
+        }
+    }
+    let around = merged(&InlineAttrs::default(), &base, exact);
+    if !lead.is_empty() {
+        new = new.with_span(lead, around.clone());
+    }
+    for (_, text, attrs) in piece.text_spans() {
+        new = new.with_span(text, merged(attrs, &base, exact));
+    }
+    if !trail.is_empty() {
+        new = new.with_span(trail, around);
+    }
+    for (span, text, attrs) in old.text_spans() {
+        if span.end > to {
+            let start = span.start.max(to);
+            new = new.with_span(&text[start - span.start..], attrs.clone());
+        }
+    }
+    edit_block(ed, index, &new);
+}
+
+/// Replaces `range`, which runs across blocks, with the text of the paragraph `piece`
+/// (between `lead` and `trail` spaces) and gives it the formatting `piece` has: on top of
+/// what the replaced text had, or with `exact` in place of it. The blocks are joined
+/// into the first, and a comment anchored at the start of the replaced text stays on the
 /// replacement.
-fn replace_inline(
+fn replace_across(
     ed: &mut EditorState,
     range: TextRange,
     piece: &Block,
@@ -546,11 +663,19 @@ fn replace_inline(
         return;
     }
     ed.replace_range(range, &text);
-    let block = start.block;
+    let base = start.offset + lead.len();
+    apply_marks(ed, start.block, base, piece, exact);
+    let end = Position::new(start.block, base + piece.len() + trail.len());
+    ed.set_caret(ed.document().clamp_position(end));
+}
+
+/// Gives the text at `base` in block `block` the formatting of `piece`, whose text it
+/// is: the styles, link and highlight `piece` has are set; with `exact` those it has not
+/// are removed. A colour and a font are only ever set.
+fn apply_marks(ed: &mut EditorState, block: usize, base: usize, piece: &Block, exact: bool) {
     if ed.document().blocks()[block].kind().is_code() {
         return;
     }
-    let base = start.offset + lead.len();
     for (span, attrs) in piece.spans() {
         if !exact && attrs.is_plain() {
             continue;
@@ -600,8 +725,6 @@ fn replace_inline(
             ed.set_font_family(attrs.font.as_deref());
         }
     }
-    let end = Position::new(block, base + piece.len() + trail.len());
-    ed.set_caret(ed.document().clamp_position(end));
 }
 
 /// What this module asks of the selection beyond the engine's own queries.

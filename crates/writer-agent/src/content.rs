@@ -350,10 +350,8 @@ impl Delta {
                     same
                 }
             };
-            if !same {
-                if let Some(heading) = heading_above(after, index) {
-                    touched.insert(heading);
-                }
+            if !same && let Some(heading) = heading_above(after, index) {
+                touched.insert(heading);
             }
         }
         for (index, block) in before.blocks().iter().enumerate() {

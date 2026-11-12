@@ -224,3 +224,78 @@ fn json_output_is_one_document_and_nothing_else() {
     assert!(value.is_object());
     assert!(run.stdout.ends_with("}\n"));
 }
+
+#[test]
+fn a_failure_names_the_option_to_type_next() {
+    // The messages of the command layer name fields ("occurrence", "permanently"); at the
+    // command line the next step is an option, and the message has to say which.
+    let sandbox = Sandbox::new();
+    let doc = sandbox.create(
+        "Chapter",
+        None,
+        "# Chapter\n\nThe letter came. The letter stayed.\n\n## Notes\n\none\n\n## Notes\n\ntwo\n",
+    );
+    let several = sandbox.fail(&["edit", &doc, "--old", "letter", "--new", "note"], 7);
+    assert!(several.contains("--occurrence <n>"), "{several}");
+    assert!(several.contains("--all"), "{several}");
+    let none = sandbox.fail(&["edit", &doc, "--old", "telegram", "--new", "note"], 6);
+    assert!(none.contains("writer find <document> <text>"), "{none}");
+    assert!(none.contains("--format text"), "{none}");
+    let headings = sandbox.fail(&["get", &doc, "--section", "Notes"], 4);
+    assert!(headings.contains("2 headings"), "{headings}");
+    assert!(headings.contains("--occurrence <n>"), "{headings}");
+    assert!(
+        !headings.contains("longer path"),
+        "a heading has no path: {headings}"
+    );
+    let second = sandbox.ok(&["get", &doc, "--section", "Notes", "--occurrence", "2"]);
+    assert!(
+        second.contains("two") && !second.contains("one"),
+        "{second}"
+    );
+    let target = sandbox.work().join("chapter.md");
+    let target = target.to_str().unwrap();
+    sandbox.ok(&["export", &doc, "--to", target]);
+    let exists = sandbox.fail(&["export", &doc, "--to", target], 12);
+    assert!(exists.contains("--overwrite"), "{exists}");
+    sandbox.ok(&["export", &doc, "--to", target, "--overwrite"]);
+    let unconfirmed = sandbox.fail(&["empty-trash"], 8);
+    assert!(unconfirmed.contains("--permanently"), "{unconfirmed}");
+    // With --json the hint is a field of its own beside the message.
+    let run = sandbox.run(&["edit", &doc, "--old", "letter", "--new", "note", "--json"]);
+    assert_eq!(run.code, 7);
+    assert!(
+        run.error()["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("--occurrence")),
+        "{}",
+        run.stderr
+    );
+    // An ambiguous name is told apart by id: no option is named for it.
+    sandbox.create("Twin", None, "a");
+    sandbox.create("Twin", Some("Folder"), "b");
+    let twins = sandbox.fail(&["get", "Twin"], 4);
+    assert!(
+        twins.contains("doc:") && !twins.contains("--occurrence"),
+        "{twins}"
+    );
+}
+
+#[test]
+fn the_dry_run_of_a_request_with_nothing_to_do_says_so() {
+    // A dry run reports what the real run would: also that it would change nothing.
+    let sandbox = Sandbox::new();
+    let text = "# Chapter\n\nThe letter came.\n";
+    let doc = sandbox.create("Draft", None, text);
+    let dry = sandbox.ok(&["set", &doc, "--content", text, "--dry-run"]);
+    assert!(dry.contains("would change nothing"), "{dry}");
+    assert!(!dry.contains("Replaced"), "{dry}");
+    let real = sandbox.ok(&["set", &doc, "--content", text]);
+    assert!(real.starts_with("Nothing changed"), "{real}");
+    let dry = sandbox.ok(&["rename", &doc, "Draft", "--dry-run"]);
+    assert!(dry.contains("would change nothing"), "{dry}");
+    // And one with something to do still reports it.
+    let dry = sandbox.ok(&["rename", &doc, "Chapter one", "--dry-run"]);
+    assert!(dry.starts_with("Dry run: nothing was changed."), "{dry}");
+    assert!(dry.contains("Chapter one"), "{dry}");
+}

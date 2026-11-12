@@ -145,18 +145,45 @@ fn print(text: &str) -> ExitCode {
     }
 }
 
+/// What the command line adds to a message of the command layer: the layer serves the
+/// MCP server too and names its fields ("occurrence", "permanently"), and somebody at a
+/// command line has to know the option to type next.
+fn hint(kind: ErrorKind) -> Option<&'static str> {
+    match kind {
+        ErrorKind::LibraryNotFound => Some("Here that option is --library <dir>."),
+        ErrorKind::NoMatch => Some(
+            "\"writer find <document> <text>\" shows where a text stands; \"writer get \
+             <document> --format text\" prints the text as it is matched.",
+        ),
+        ErrorKind::NotUnique => Some(
+            "Here: --occurrence <n> takes the one with that number; \"writer edit\" also has \
+             --all for every one of them.",
+        ),
+        ErrorKind::ConfirmationRequired => Some("Here that option is --permanently."),
+        ErrorKind::FileExists => Some("Here: --overwrite replaces the file."),
+        _ => None,
+    }
+}
+
 /// Writes a failure to standard error and gives its exit code.
 fn fail(as_json: bool, failure: &Failure) -> ExitCode {
     let mut stderr = std::io::stderr().lock();
+    // Several headings with one text are told apart by number, items by id.
+    let headings = failure.kind == ErrorKind::Ambiguous
+        && failure.data["candidates"][0]["kind"] == json!("heading");
+    let hint = if headings {
+        Some("Here: --occurrence <n> takes the heading with that number.")
+    } else {
+        hint(failure.kind)
+    };
     let _ = if as_json {
-        writeln!(stderr, "{}", json!({ "error": failure.data }))
-    } else if failure.kind == ErrorKind::LibraryNotFound {
-        // The message of the command layer speaks of "the data directory option".
-        writeln!(
-            stderr,
-            "writer: {}\nHere that option is --library <dir>.",
-            failure.message
-        )
+        let mut data = failure.data.clone();
+        if let (Some(hint), Some(fields)) = (hint, data.as_object_mut()) {
+            fields.insert("hint".into(), json!(hint));
+        }
+        writeln!(stderr, "{}", json!({ "error": data }))
+    } else if let Some(hint) = hint {
+        writeln!(stderr, "writer: {}\n{hint}", failure.message)
     } else {
         writeln!(stderr, "writer: {}", failure.message)
     };

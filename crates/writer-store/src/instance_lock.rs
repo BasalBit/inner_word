@@ -320,6 +320,25 @@ pub fn app_channel(data_dir: &Path) -> io::Result<Option<AppChannel>> {
     Ok(parse_channel(&text).map(|path| AppChannel { pid, path }))
 }
 
+/// When the holder of the lock of `data_dir` last wrote into the lock file: the moment
+/// it took the lock, or the moment it last said where it listens ([`announce_channel`]).
+/// `None` when nobody holds the lock.
+///
+/// A tool uses it to tell an app that has only just started, and will open its channel in
+/// a moment, from one that never will.
+pub fn held_since(data_dir: &Path) -> io::Result<Option<std::time::SystemTime>> {
+    let path = data_dir.join(LOCK_FILE_NAME);
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !is_locked_by_another(&file)? {
+        return Ok(None);
+    }
+    Ok(Some(file.metadata()?.modified()?))
+}
+
 /// The channel a lock file's content names.
 fn parse_channel(text: &str) -> Option<PathBuf> {
     text.lines()
@@ -477,6 +496,28 @@ mod tests {
             None,
             "the first line is the holder"
         );
+    }
+
+    #[test]
+    fn the_lock_file_says_since_when_it_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(held_since(dir.path()).unwrap(), None, "no lock file");
+        let held = lock(acquire(dir.path()).unwrap());
+        let since = held_since(dir.path()).unwrap().expect("held");
+        let age = since.elapsed().unwrap_or_default();
+        assert!(age < Duration::from_secs(5), "{age:?}");
+        // The file is a plain file: whoever holds the lock may be older than a moment.
+        let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        File::options()
+            .write(true)
+            .open(held.path())
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+        let since = held_since(dir.path()).unwrap().expect("held");
+        assert!(since.elapsed().unwrap() >= Duration::from_secs(3599));
+        drop(held);
+        assert_eq!(held_since(dir.path()).unwrap(), None, "nobody holds it");
     }
 
     #[test]

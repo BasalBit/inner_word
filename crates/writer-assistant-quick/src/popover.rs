@@ -37,6 +37,10 @@ use crate::{
 /// sent; it grows from there with what is said.
 const FIRST_LIST_HEIGHT: Pixels = px(56.);
 
+/// How often the conversation is measured in one frame before the popover
+/// is drawn (each time it turns out to want more room than it was given).
+const MEASURING_PASSES: usize = 3;
+
 /// What the composer says while it is empty, once a question was asked.
 const FOLLOW_UP_PLACEHOLDER: &str = "Ask a follow-up";
 
@@ -181,6 +185,15 @@ struct Open {
     /// The height the conversation is given (before the popover's own
     /// limit).
     list_height: Pixels,
+    /// The most that height can usefully be where the popover is now.
+    list_limit: Pixels,
+    /// The conversation may have grown since it was last measured (a
+    /// message, a piece of an answer, other room): it is measured before
+    /// the next frame draws it.
+    measure: bool,
+    /// The room (width and greatest height) the conversation was last
+    /// measured in.
+    measured_in: Option<(Pixels, Pixels)>,
     /// What the answer buttons were last set for.
     replace: Option<(ReplaceState, bool)>,
     /// Whether the agent's program was started ahead of the first message.
@@ -208,6 +221,9 @@ pub struct QuickChat {
     /// it is in here.
     focus_handle: FocusHandle,
     drawn: Rc<Cell<Option<Drawn>>>,
+    /// How often a frame was drawn with a conversation that wanted more
+    /// room than it had (it is given the room in the frame after).
+    late_growths: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -267,6 +283,7 @@ impl QuickChat {
             open: None,
             focus_handle,
             drawn: Rc::new(Cell::new(None)),
+            late_growths: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -573,6 +590,9 @@ impl QuickChat {
             model_bounds: ControlBounds::new(),
             effort_bounds: ControlBounds::new(),
             list_height: px(0.),
+            list_limit: FULL_HEIGHT,
+            measure: true,
+            measured_in: None,
             replace: None,
             prepared: false,
             waiting_to_send: None,
@@ -832,9 +852,10 @@ impl QuickChat {
 
     /// Shows the conversation as it is now.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = &self.open else {
+        let Some(open) = &mut self.open else {
             return;
         };
+        open.measure = true;
         let messages = open.session.transcript().messages.clone();
         open.messages
             .update(cx, |list, cx| list.set_messages(&messages, window, cx));
@@ -1119,6 +1140,15 @@ impl QuickChat {
     /// The popover's part of a frame's prepaint: places it against the
     /// editor's geometry of this frame and hands it to the window to be
     /// drawn on top.
+    ///
+    /// The conversation is a list that fills the height it is given, so
+    /// how tall it wants to be is only known once it has been laid out.
+    /// After the conversation changed, the popover is therefore laid out
+    /// here first without being drawn, to see how much of the
+    /// conversation is hidden, and given that much more room (up to its
+    /// limit) before the frame draws it: an answer that grows by a line
+    /// makes the popover a line taller in the same frame, instead of
+    /// scrolling for one frame and growing in the next.
     pub(crate) fn prepaint_popover(chat: &Entity<Self>, window: &mut Window, cx: &mut App) {
         let this = chat.read(cx);
         let drawn = this.drawn.clone();
@@ -1130,6 +1160,22 @@ impl QuickChat {
             return drawn.set(None);
         };
         let plan = place::plan(anchor, viewport);
+        for _ in 0..MEASURING_PASSES {
+            if !chat.update(cx, |chat, _| chat.wants_measuring(plan)) {
+                break;
+            }
+            let mut probe = chat.update(cx, |chat, cx| chat.render_popover(plan, window, cx));
+            let size = probe.layout_as_root(AvailableSpace::min_size(), window, cx);
+            // Where it would be drawn: what a prepaint leaves behind in
+            // the frame (hitboxes) then lies under the popover itself.
+            probe.prepaint_at(place::origin(anchor, plan.side, size, viewport), window, cx);
+            drop(probe);
+            // At its greatest height the popover has no more room to give.
+            let full = size.height >= plan.max_height - px(0.5);
+            if !chat.update(cx, |chat, cx| chat.grow_to_fit(full, cx)) {
+                break;
+            }
+        }
         let mut popover = chat.update(cx, |chat, cx| chat.render_popover(plan, window, cx));
         let size = popover.layout_as_root(AvailableSpace::min_size(), window, cx);
         let origin = place::origin(anchor, plan.side, size, viewport);
@@ -1143,15 +1189,54 @@ impl QuickChat {
         window.defer_draw(popover, origin, DRAW_PRIORITY);
     }
 
-    /// After the popover's own prepaint: the conversation has been
-    /// measured. When more of it is hidden than has to be, the popover
-    /// grows in the next frame.
+    /// Whether the conversation is to be measured before this frame draws
+    /// it: it may have changed, and it could be given more room.
+    fn wants_measuring(&mut self, plan: Plan) -> bool {
+        let Some(open) = &mut self.open else {
+            return false;
+        };
+        let room = (plan.width, plan.max_height);
+        if open.measured_in != Some(room) {
+            open.measured_in = Some(room);
+            open.measure = true;
+        }
+        open.list_limit = plan.max_height.min(FULL_HEIGHT);
+        open.measure && !open.session.transcript().is_empty() && open.list_height < open.list_limit
+    }
+
+    /// After a layout of the popover: gives the conversation the room it
+    /// was short of, up to its limit. `full`: the popover is as tall as it
+    /// may be, so there is no room to give. Returns whether the
+    /// conversation was given any.
+    fn grow_to_fit(&mut self, full: bool, cx: &App) -> bool {
+        let Some(open) = &mut self.open else {
+            return false;
+        };
+        let (_, hidden) = open.messages.read(cx).scroll_position();
+        if !full && hidden > px(0.5) && open.list_height < open.list_limit {
+            open.list_height = (open.list_height + hidden).min(open.list_limit);
+            true
+        } else {
+            // It has what it needs.
+            open.measure = false;
+            false
+        }
+    }
+
+    /// After the popover's own prepaint: the conversation that is drawn
+    /// has been measured. When more of it is hidden than has to be (a
+    /// change the measuring before the frame did not see, or more growth
+    /// than its passes covered), the popover grows in the next frame.
     pub(crate) fn after_prepaint(chat: &Entity<Self>, window: &mut Window, cx: &mut App) {
         let this = chat.read(cx);
         let Some(open) = &this.open else {
             return;
         };
-        if open.session.transcript().is_empty() || open.list_height >= FULL_HEIGHT {
+        let full = this
+            .drawn
+            .get()
+            .is_none_or(|drawn| drawn.bounds.size.height >= drawn.max_height - px(0.5));
+        if full || open.session.transcript().is_empty() || open.list_height >= open.list_limit {
             return;
         }
         let (_, hidden) = open.messages.read(cx).scroll_position();
@@ -1160,14 +1245,22 @@ impl QuickChat {
             // State changes wait for the end of the frame.
             window.defer(cx, move |_, cx| {
                 chat.update(cx, |chat, cx| {
-                    if let Some(open) = &mut chat.open {
-                        open.list_height = (open.list_height + hidden).min(FULL_HEIGHT);
+                    if chat.grow_to_fit(false, cx) {
+                        chat.late_growths += 1;
                         cx.notify();
                     }
                 })
                 .ok();
             });
         }
+    }
+
+    /// How often a frame was drawn with a conversation that wanted more
+    /// room than it had and got it one frame late. For tests: the
+    /// measuring before a frame is there to keep this at zero.
+    #[doc(hidden)]
+    pub fn late_growths(&self) -> usize {
+        self.late_growths
     }
 
     /// The popover as an element, for the room `plan` gives it.

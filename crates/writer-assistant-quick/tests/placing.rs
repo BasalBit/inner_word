@@ -310,3 +310,41 @@ fn a_narrow_window_gets_a_narrow_popover(cx: &mut TestAppContext) {
         assert!(control.left() >= popover.left() && control.right() <= popover.right());
     }
 }
+
+#[gpui::test]
+fn an_answer_that_grows_makes_the_popover_taller_in_the_same_frame(cx: &mut TestAppContext) {
+    let (fx, cx) = open_quick(long_document(), cx);
+    select(&fx.editor, TextRange::in_block(1, 0, 9), cx);
+    fx.toggle(cx);
+
+    // An answer that arrives a paragraph at a time.
+    let pieces: Vec<String> = (0..12)
+        .map(|index| format!("Paragraph {index} of the answer, a few words long.\n\n"))
+        .collect();
+    fx.fake.hold();
+    fx.fake.push(writer_assistant::FakeReply::pieces(pieces));
+    fx.send("At length?", cx);
+
+    let mut heights = vec![fx.popover(cx).size.height];
+    while fx.fake.advance(1) == 1 {
+        cx.run_until_parked();
+        let popover = fx.popover(cx);
+        if popover.size.height < FULL_HEIGHT {
+            // Below its limit nothing of the conversation is hidden.
+            let (offset, hidden) = fx.quick.read_with(cx, |quick, cx| {
+                quick.messages().unwrap().read(cx).scroll_position()
+            });
+            assert_eq!((offset, hidden), (px(0.), px(0.)));
+        }
+        heights.push(popover.size.height);
+    }
+    assert!(
+        heights.windows(2).all(|pair| pair[1] >= pair[0]),
+        "{heights:?}"
+    );
+    assert!(heights.len() > 10);
+    assert_eq!(*heights.last().unwrap(), FULL_HEIGHT);
+    // No frame was drawn with the conversation scrolled for want of room
+    // it was given a frame later.
+    assert_eq!(fx.quick.read_with(cx, |quick, _| quick.late_growths()), 0);
+}

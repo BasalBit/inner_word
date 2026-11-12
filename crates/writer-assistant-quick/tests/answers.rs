@@ -375,3 +375,42 @@ fn a_read_only_document_can_be_asked_about_but_not_changed(cx: &mut TestAppConte
     assert_eq!(text(&fx.editor, cx), "The quick brown fox\nNext.");
     assert!(fx.is_open(cx));
 }
+
+#[gpui::test]
+fn a_press_right_after_an_answer_arrived_lands_on_its_button(cx: &mut TestAppContext) {
+    // The frame that shows a new answer measures the conversation before
+    // it draws it. What that leaves in the frame must not be in the way
+    // of the pointer: no move first, the press comes straight down.
+    let (fx, cx) = asked("swift", cx);
+    let button = bounds(action_button(QuickAction::Replace, &fx, cx), cx);
+    cx.simulate_click(button.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(text(&fx.editor, cx), "The swift brown fox\nNext.");
+    assert!(!fx.is_open(cx));
+}
+
+#[gpui::test]
+fn the_keys_work_in_the_frame_that_measured(cx: &mut TestAppContext) {
+    let (fx, cx) = open_quick(paragraphs(&["The quick brown fox", "Next."]), cx);
+    select(&fx.editor, TextRange::in_block(0, 4, 9), cx);
+    fx.toggle(cx);
+    fx.fake.hold();
+    fx.fake
+        .push(writer_assistant::FakeReply::pieces(["swi", "ft"]));
+    fx.send("Another word?", cx);
+    fx.first_piece(cx);
+    // Typing goes on in the composer while the answer grows, frame after
+    // frame.
+    cx.simulate_input("and ");
+    fx.fake.advance(1);
+    cx.run_until_parked();
+    cx.simulate_input("then?");
+    cx.run_until_parked();
+    assert_eq!(fx.draft(cx), "and then?");
+    assert!(fx.composer_focused(cx));
+    fx.fake.release();
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-a backspace cmd-shift-enter");
+    cx.run_until_parked();
+    assert_eq!(text(&fx.editor, cx), "The swift brown fox\nNext.");
+}

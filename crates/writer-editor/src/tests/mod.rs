@@ -14,6 +14,8 @@
 //! - `layout`: the lazy layout on a book-length document, with timings.
 //! - `vim_seams`: layout answers inside a mutation, the typed-text report,
 //!   the caret override.
+//! - `spelling`: the spelling marks a checker sets: following edits,
+//!   queries, drawing, the context menu request, the cost in a book.
 
 mod editing;
 mod ime;
@@ -23,4 +25,5 @@ mod movement;
 mod pages;
 mod seams;
 mod slice;
+mod spelling;
 mod vim_seams;

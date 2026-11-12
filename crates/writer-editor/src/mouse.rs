@@ -246,6 +246,11 @@ impl Editor {
             comments,
             on_checkbox: checkbox.is_some(),
             from_keyboard: false,
+            // The pointer has to be on a character of the word.
+            spelling_mark: under.filter(|_| checkbox.is_none()).and_then(|under| {
+                self.drawn_spelling_mark_at(under)
+                    .filter(|mark| under < mark.end)
+            }),
         };
         cx.emit(EditorEvent::ContextMenuRequested(request));
         cx.notify();
@@ -283,6 +288,7 @@ impl Editor {
             comments,
             on_checkbox: false,
             from_keyboard: true,
+            spelling_mark: self.drawn_spelling_mark_at(position),
         };
         cx.emit(EditorEvent::ContextMenuRequested(request));
         cx.notify();

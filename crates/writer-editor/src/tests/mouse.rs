@@ -21,7 +21,7 @@ fn paragraphs(count: usize) -> Document {
 }
 
 /// The middle of the caret line box of a position.
-fn point_of(editor: &Editor, block: usize, offset: usize) -> Point<Pixels> {
+pub(super) fn point_of(editor: &Editor, block: usize, offset: usize) -> Point<Pixels> {
     editor
         .position_bounds(Position::new(block, offset))
         .unwrap()
@@ -510,13 +510,13 @@ fn a_click_past_the_end_of_a_wrapped_row_stays_on_it(cx: &mut TestAppContext) {
 
 // --- The context menu request -----------------------------------------------
 
-fn right_click(cx: &mut VisualTestContext, at: Point<Pixels>) {
+pub(super) fn right_click(cx: &mut VisualTestContext, at: Point<Pixels>) {
     cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
 }
 
 /// Collects the editor's events; the returned closure takes what arrived.
-fn record_events(
+pub(super) fn record_events(
     editor: &gpui::Entity<Editor>,
     cx: &mut VisualTestContext,
 ) -> impl Fn(&mut VisualTestContext) -> Vec<EditorEvent> + use<> {
@@ -535,7 +535,7 @@ fn record_events(
 }
 
 /// The one context menu request among `events`.
-fn request_in(events: &[EditorEvent]) -> ContextMenuRequest {
+pub(super) fn request_in(events: &[EditorEvent]) -> ContextMenuRequest {
     let mut requests = events.iter().filter_map(|event| match event {
         EditorEvent::ContextMenuRequested(request) => Some(request.clone()),
         _ => None,

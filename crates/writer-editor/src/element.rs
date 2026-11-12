@@ -20,7 +20,7 @@ use gpui::{
     DispatchPhase, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
     HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, Path, Pixels, Point, ScrollWheelEvent, ShapedLine,
-    Style, Window, fill, point, px, relative, size,
+    Style, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 use writer_core::BlockKind;
 use writer_ui::theme::{self, ActiveTheme};
@@ -33,6 +33,7 @@ use crate::{
     layout::{Lay, LayoutEnv, LayoutStyle, PageGeometry, pages::DESK_PADDING},
     paint::{PlannedRow, snap},
     scroll::ScrollbarGeometry,
+    spelling::{self, PlannedWave},
 };
 
 /// Narrowest text column of a full editor.
@@ -82,6 +83,9 @@ pub(crate) struct FramePlan {
     /// Selection rectangles: over the run backgrounds, under the glyphs.
     pub(crate) selection: Vec<PaintQuad>,
     pub(crate) markers: Vec<PlannedMarker>,
+    /// The wavy underlines of misspelled words, in the text's layer.
+    pub(crate) spelling: Vec<PlannedWave>,
+    pub(crate) spelling_color: Hsla,
     /// Stroked shapes over the decorations (checkbox ticks).
     pub(crate) paths: Vec<(Path<Pixels>, Hsla)>,
     /// The caret and anything else over the text.
@@ -112,6 +116,8 @@ impl FramePlan {
             rows: Vec::new(),
             selection: Vec::new(),
             markers: Vec::new(),
+            spelling: Vec::new(),
+            spelling_color: gpui::transparent_black(),
             paths: Vec::new(),
             front: Vec::new(),
             sheet_hitboxes: Vec::new(),
@@ -310,6 +316,8 @@ impl Editor {
                 colors.selection_inactive
             };
             let ordinals = document.numbered_ordinals(visible.clone());
+            self.spelling.on_screen = visible.clone();
+            plan.spelling_color = colors.spelling;
             let view_top = scroll_y;
             let view_bottom = scroll_y + viewport.size.height;
 
@@ -399,6 +407,26 @@ impl Editor {
                                     ),
                                     underline,
                                 ));
+                            }
+                        }
+                    }
+                }
+
+                // Spelling marks: a wave under each marked word, row by row.
+                if self.spelling.visible && !block_layout.void {
+                    let marks = self.spelling.ranges_at(document, index);
+                    if !marks.is_empty() {
+                        let thickness = spelling::wave_thickness(block_layout.font_size);
+                        let top = block_layout.baseline
+                            + spelling::wave_offset(block_layout.font_size, block_layout.descent);
+                        for range in marks {
+                            for rect in placed.rects(range.clone(), rows.clone()) {
+                                let rect = shifted(rect, origin);
+                                plan.spelling.push(PlannedWave {
+                                    origin: point(rect.left(), snap(rect.top() + top)),
+                                    width: rect.size.width,
+                                    thickness,
+                                });
                             }
                         }
                     }
@@ -624,6 +652,11 @@ impl Editor {
                     Bounds::new(marker.origin, size(marker.line.width, marker.line_height))
                 })
                 .collect();
+            self.painted_spelling = plan
+                .spelling
+                .iter()
+                .map(|wave| Bounds::new(wave.origin, size(wave.width, wave.thickness * 3.)))
+                .collect();
         }
         self.checkbox_hits = checkboxes;
         self.scrollbar.geometry = scrollbar;
@@ -806,6 +839,16 @@ impl Element for EditorElement {
             // before glyphs, which puts underlines and strikethroughs
             // behind the letters they have the colour of.)
             window.paint_layer(bounds, |window| {
+                // Under the glyphs, like the other underlines.
+                let mut wave = UnderlineStyle {
+                    color: Some(plan.spelling_color),
+                    thickness: px(1.),
+                    wavy: true,
+                };
+                for mark in &plan.spelling {
+                    wave.thickness = mark.thickness;
+                    window.paint_underline(mark.origin, mark.width, &wave);
+                }
                 for row in &plan.rows {
                     row.paint_text(window, cx);
                 }

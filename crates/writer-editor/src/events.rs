@@ -68,6 +68,17 @@ pub struct ContextMenuRequest {
     /// The request came from the keyboard (`ctrl-enter`), not from the
     /// pointer.
     pub from_keyboard: bool,
+    /// The misspelled word the request is about: the spelling mark (see
+    /// [`crate::Editor::set_spelling_marks`]) that
+    /// [`ContextMenuRequest::document_position`] is in or at an end of, so
+    /// for a right-click the marked word under the pointer and for the
+    /// keyboard the marked word the caret is in, right before or right
+    /// after. `None` when there is none there, when the pointer is on a
+    /// to-do checkbox, and while spelling marks are not drawn
+    /// ([`crate::Editor::set_spelling_marks_visible`]). A right-click on
+    /// the word has selected it, as it selects any word; for the keyboard
+    /// the selection is whatever it was.
+    pub spelling_mark: Option<TextRange>,
 }
 
 /// What an [`crate::Editor`] tells its subscribers

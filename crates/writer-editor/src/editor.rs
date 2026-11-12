@@ -37,6 +37,7 @@ use crate::{
     movement::RowOracle,
     popup::{Popup, PopupElement},
     scroll::{Autoscroll, PendingScroll, Scrollbar},
+    spelling::SpellingMarks,
 };
 
 /// Half a caret blink: how long the caret is shown, then hidden.
@@ -114,6 +115,8 @@ pub struct Editor {
     /// `key=value`, `(name, None)` is a bare identifier.
     pub(crate) context_entries: Vec<(SharedString, Option<SharedString>)>,
     pub(crate) highlights: Highlights,
+    /// The misspelled ranges a spell checker has set, see `spelling`.
+    pub(crate) spelling: SpellingMarks,
     pub(crate) active_comment: Option<CommentId>,
     /// Threads whose anchors are not tinted.
     pub(crate) hidden_comments: BTreeSet<CommentId>,
@@ -165,6 +168,10 @@ pub struct Editor {
     /// The labels of the last frame (list numbers, page numbers, ...).
     #[cfg(test)]
     pub(crate) painted_markers: Vec<gpui::Bounds<Pixels>>,
+    /// The bands of the spelling waves of the last frame, in window
+    /// coordinates.
+    #[cfg(test)]
+    pub(crate) painted_spelling: Vec<gpui::Bounds<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -206,6 +213,7 @@ impl Editor {
         let mut state = EditorState::new(document);
         state.set_options(options_of(&config));
         let layout = DocumentLayout::new(state.document(), state.revision());
+        let spelling = SpellingMarks::new(state.document());
 
         let popup_scope = cx.focus_handle();
         // `Focused` and `Blurred` are about the editor as a whole: its
@@ -310,6 +318,7 @@ impl Editor {
             text_input_enabled: true,
             context_entries: Vec::new(),
             highlights: Highlights::default(),
+            spelling,
             active_comment: None,
             hidden_comments: BTreeSet::new(),
             popup: None,
@@ -342,6 +351,8 @@ impl Editor {
             painted_selection: Vec::new(),
             #[cfg(test)]
             painted_markers: Vec::new(),
+            #[cfg(test)]
+            painted_spelling: Vec::new(),
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.
@@ -465,8 +476,8 @@ impl Editor {
     }
 
     /// Replaces the whole document: new undo history, caret at the start,
-    /// scrolled to the top, highlight layers, the caret override and the
-    /// active comment cleared, the popup hidden. Emits [`EditorEvent::DocumentReplaced`] and nothing
+    /// scrolled to the top, highlight layers, spelling marks, the caret
+    /// override and the active comment cleared, the popup hidden. Emits [`EditorEvent::DocumentReplaced`] and nothing
     /// else. Restore a saved view afterwards with
     /// [`Editor::restore_view_state`].
     pub fn set_document(&mut self, document: Document, cx: &mut Context<Self>) {
@@ -486,6 +497,7 @@ impl Editor {
         self.drag_scrolling = false;
         self.checkbox_hits.clear();
         self.highlights.clear_all();
+        self.spelling.reset(self.state.document());
         self.active_comment = None;
         self.hidden_comments.clear();
         self.popup = None;
@@ -692,6 +704,10 @@ impl Editor {
                 self.state.revision(),
                 change.blocks,
             );
+            // Spelling marks move with the text of the changed blocks.
+            if let Some(splice) = change.blocks {
+                self.spelling.apply_change(self.state.document(), splice);
+            }
             if change.blocks.is_some() && !self.in_ime_edit {
                 // An edit from elsewhere during a composition: the marked
                 // range no longer means anything.

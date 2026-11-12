@@ -44,6 +44,7 @@
 //! | Show a context menu for the text | [`EditorEvent::ContextMenuRequested`] with a [`ContextMenuRequest`] (right-click, `ctrl`-click, `ctrl-enter`) |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
 //! | Comments | [`EditorConfig::comments_visible`], [`Editor::set_active_comment`], [`Editor::set_hidden_comments`] |
+//! | Mark misspelled words (a spell checker) | [`Editor::set_spelling_marks`] per block and block revision with a [`SpellingMarksOutcome`], [`Editor::spelling_checked`], [`Editor::first_unchecked_spelling_block`], [`Editor::spelling_marks`], [`Editor::spelling_mark_at`], [`Editor::next_spelling_mark`], [`Editor::previous_spelling_mark`], [`Editor::spelling_mark_count`], [`Editor::invalidate_spelling_marks`], [`Editor::clear_spelling_marks`], [`Editor::set_spelling_marks_visible`], [`ContextMenuRequest::spelling_mark`] |
 //! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`], [`EditorEvent::StatsChanged`], [`EditorEvent::LayoutSettled`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
@@ -178,6 +179,7 @@ mod movement;
 mod paint;
 mod popup;
 mod scroll;
+pub mod spelling;
 mod stats;
 mod view_state;
 
@@ -197,6 +199,7 @@ pub use intercept::{InterceptPriority, KeyDisposition};
 pub use movement::{RowMove, RowOracle, VisualRow};
 pub use popup::{PopupAnchor, PopupPlacement};
 pub use scroll::Autoscroll;
+pub use spelling::SpellingMarksOutcome;
 pub use view_state::ViewState;
 
 /// Installs the editor's key bindings (in the `"Editor"` key context). Call

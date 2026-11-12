@@ -2453,3 +2453,39 @@ fn every_failure_is_said_in_both_chats_and_the_next_message_goes_through(cx: &mu
         "warden"
     );
 }
+
+#[gpui::test]
+fn the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment(cx: &mut TestAppContext) {
+    // Seen in a capture of the real app: while the conversation was empty
+    // the composer was 290 points wide in a panel of 380, and a notice with
+    // a short text as wide as its text.
+    for signed_in in [true, false] {
+        let fake = if signed_in {
+            FakeBackend::new()
+        } else {
+            FakeBackend::signed_out()
+        };
+        let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+        vcx.simulate_keystrokes("cmd-3");
+        vcx.run_until_parked();
+        assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+        let panel = vcx.debug_bounds("assistant-panel").expect("the panel");
+        let example = vcx.debug_bounds("assistant-example-0").expect("an example");
+        let composer = vcx
+            .debug_bounds("assistant-composer")
+            .expect("the composer");
+        let notice = vcx
+            .debug_bounds(if signed_in {
+                "assistant-notice-privacy"
+            } else {
+                "assistant-notice-availability"
+            })
+            .expect("a notice");
+        assert!(example.size.width > panel.size.width - gpui::px(40.));
+        assert_eq!(composer.size.width, example.size.width, "the composer");
+        assert_eq!(notice.size.width, example.size.width, "the notice");
+        assert_eq!(composer.left(), example.left());
+        // And the notice is as tall as its lines, not more.
+        assert!(notice.size.height < gpui::px(220.), "{:?}", notice.size);
+    }
+}

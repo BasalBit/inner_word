@@ -105,13 +105,25 @@ fn token(raw: String, options_ended: bool) -> Token {
     if options_ended || raw == "-" {
         return Token::Word(raw);
     }
+    // An option is `--name`, `--name=value` or `-x`, the name in lower case letters and
+    // dashes. Anything else that begins with a dash ("- a list item", "-5", "--- a rule")
+    // is text, not a misspelt option.
     if let Some(long) = raw.strip_prefix("--") {
-        return match long.split_once('=') {
-            Some((name, value)) => Token::Long(name.to_string(), Some(value.to_string())),
-            None => Token::Long(long.to_string(), None),
+        let (name, value) = match long.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (long, None),
         };
+        let is_name = name.starts_with(|c: char| c.is_ascii_lowercase())
+            && name.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+        if is_name {
+            return Token::Long(name.to_string(), value.map(str::to_string));
+        }
+        return Token::Word(raw);
     }
-    if raw.starts_with('-') {
+    if let Some(short) = raw.strip_prefix('-')
+        && !short.is_empty()
+        && short.chars().all(|c| c.is_ascii_alphabetic())
+    {
         return Token::Short(raw);
     }
     Token::Word(raw)
@@ -463,6 +475,17 @@ mod tests {
         let (_, _, parsed) = command(&["edit", "Draft", "--old", "--dash", "--new", "-x"]);
         assert_eq!(parsed.value("old"), Some("--dash"));
         assert_eq!(parsed.value("new"), Some("-x"));
+
+        // Text that begins with a dash but is no option: a list item, a rule, a number.
+        let (_, name, parsed) =
+            command(&["create", "- a title", "--content", "--- \n- one\n- two"]);
+        assert_eq!(name, "create");
+        assert_eq!(parsed.arg(0), Some("- a title"));
+        assert_eq!(parsed.value("content"), Some("--- \n- one\n- two"));
+        let (_, _, parsed) = command(&["search", "-5"]);
+        assert_eq!(parsed.arg(0), Some("-5"));
+        let (_, _, parsed) = command(&["append", "D", "--content", "--Not an option=really"]);
+        assert_eq!(parsed.value("content"), Some("--Not an option=really"));
     }
 
     #[test]

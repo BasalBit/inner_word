@@ -339,6 +339,13 @@ fn a_hint_is_asked_in_the_place_it_applies(cx: &mut TestAppContext) {
         "the keymap-wide answer is the other place's key"
     );
 
+    // GPUI's own "from the focused element" is not that here: the editor
+    // has the keyboard and the binding in its context is not found (the
+    // layers of the window were painted after it).
+    cx.update(|window, _| {
+        assert_eq!(KeyHint::for_action_focused(&OpenContextMenu, window), None);
+    });
+
     // A place without a binding of the action falls back to the keymap.
     cx.update(|_, cx| keymap::replace_key(&OpenContextMenu, "ctrl-enter", None, cx));
     cx.run_until_parked();

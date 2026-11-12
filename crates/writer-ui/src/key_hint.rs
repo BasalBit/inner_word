@@ -200,11 +200,14 @@ impl KeyHint {
     /// GPUI's own answer for "the binding of `action` from the currently
     /// focused element" (`Window::highest_precedence_binding_for_action`).
     ///
-    /// In gpui 0.2.2 that answer is only right while a frame is being
-    /// built, for the element being built: it is taken from the key context
-    /// stack the frame's dispatch tree was built with, which is empty once
-    /// the frame is finished. Asked from an event handler or a tooltip it
-    /// finds bindings without a key context and no others. Use
+    /// In gpui 0.2.2 that answer is not about the focused element: it is
+    /// taken from the key context stack the last frame's dispatch tree was
+    /// left with when the frame was finished, which is the place of the
+    /// element that was painted last. It is right where that happens to be
+    /// the focused one (a window with one focusable element) and wrong
+    /// elsewhere: a binding in the focused element's context is not found
+    /// when a layer drawn over it was painted after it (tested in
+    /// `a_hint_is_asked_in_the_place_it_applies`). Use
     /// [`KeyHint::for_action_here`] for where the keyboard is, or
     /// [`KeyHint::for_action_in`] for a focus handle.
     pub fn for_action_focused(action: &dyn Action, window: &Window) -> Option<Self> {

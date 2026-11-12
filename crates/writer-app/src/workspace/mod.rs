@@ -107,7 +107,9 @@ use crate::{
 };
 
 pub use assistant::{library_attachments, library_tool_server};
-pub use live::{AgentChanges, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence};
+pub use live::{
+    AgentChanges, ChangeCost, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence,
+};
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub use page_probe::{PageFit, characters_per_row};
 pub use render::{

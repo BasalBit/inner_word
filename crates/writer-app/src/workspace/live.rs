@@ -37,7 +37,10 @@
 //! nothing is written a second time. The first edit of the writer's own
 //! (an undo of the agent's change is one) is saved like every other.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::{Duration, Instant},
+};
 
 use gpui::{App, Context, Window};
 use writer_agent::live::{self as channel, Answer, Change, Refusal, Request};
@@ -130,6 +133,22 @@ pub struct AgentChanges {
     pub place: Option<(DocumentId, BlockId)>,
 }
 
+/// What carrying out one request of an agent cost on the main thread,
+/// where it delays typing and frames. Kept for the last request that
+/// changed something, for measuring (the `state` step of a scripted run
+/// prints it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChangeCost {
+    /// Saving what was not saved in the open document.
+    pub save: Duration,
+    /// The change itself, in the library (`writer_agent::live::execute`),
+    /// and the library's tree read again.
+    pub change: Duration,
+    /// Bringing the window up to date: the open document read back and
+    /// taken over by the editor, the note.
+    pub window: Duration,
+}
+
 /// What the workspace keeps about the changes of agents.
 #[derive(Default)]
 pub(crate) struct LiveState {
@@ -142,6 +161,8 @@ pub(crate) struct LiveState {
     toast: Option<ToastId>,
     /// How many requests of agents changed something in this window.
     total: usize,
+    /// What the last of them cost.
+    cost: Option<ChangeCost>,
 }
 
 /// The names of the things one request changed, for the note.
@@ -417,6 +438,7 @@ impl Workspace {
         if self.must_wait(request, cx) {
             return Answer::refused(Refusal::Composing);
         }
+        let started = Instant::now();
         if !self.flush(cx) {
             let message = self
                 .session
@@ -426,6 +448,7 @@ impl Workspace {
             return Answer::refused(Refusal::CouldNotSave { message });
         }
 
+        let saved = Instant::now();
         let before = {
             let library = self.library.read(cx);
             Before {
@@ -457,8 +480,14 @@ impl Workspace {
         if executed.changes.is_empty() {
             return executed.answer;
         }
+        let changed = Instant::now();
         let adopted = self.take_over_open_document(&executed.changes, window, cx);
         self.note_agent_change(request, &executed.changes, &before, adopted, cx);
+        self.live.cost = Some(ChangeCost {
+            save: saved - started,
+            change: changed - saved,
+            window: changed.elapsed(),
+        });
         cx.notify();
         executed.answer
     }
@@ -757,6 +786,12 @@ impl Workspace {
         self.live.total
     }
 
+    /// What the last request of an agent that changed something cost on
+    /// the main thread.
+    pub fn last_agent_change_cost(&self) -> Option<ChangeCost> {
+        self.live.cost
+    }
+
     // ----- undo and "go to" -----------------------------------------------------------
 
     /// Takes the last changes of an agent back, where one step does it:
@@ -916,11 +951,22 @@ impl Workspace {
     /// One line about the channel and what came in on it, for the `state`
     /// step of a scripted run: whether the channel is open, the switch,
     /// how many requests wait, how many changed something, and the last
-    /// of them (who and what, how many the note counts, what it offers).
+    /// of them (who and what, how many the note counts, what it offers,
+    /// what it cost on the main thread).
     pub fn describe_live(&self, cx: &App) -> String {
+        let millis = |duration: Duration| format!("{:.1} ms", duration.as_secs_f64() * 1000.);
+        let cost = match self.live.cost {
+            Some(cost) => format!(
+                " cost=[save {}, change {}, window {}]",
+                millis(cost.save),
+                millis(cost.change),
+                millis(cost.window)
+            ),
+            None => String::new(),
+        };
         let last = match &self.live.last {
             Some(last) => format!(
-                " last={:?} run={} offers={}",
+                " last={:?} run={} offers={}{cost}",
                 last.message,
                 last.count,
                 self.offer_for(last, cx)

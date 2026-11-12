@@ -1795,10 +1795,22 @@ fn the_state_line_says_what_came_in(cx: &mut TestAppContext) {
         tool.edit(&edit(id, "the last", "not the last"))
     })
     .unwrap();
-    assert_eq!(
-        live_of(&desk, cx),
-        "live=[channel=open switch=on waiting=0 changes=2 last=\"Claude made 2 changes to \
-         \u{201c}Notes\u{201d}\" run=2 offers=Undo]"
+    let line = live_of(&desk, cx);
+    assert!(
+        line.starts_with(
+            "live=[channel=open switch=on waiting=0 changes=2 last=\"Claude made 2 changes to \
+             \u{201c}Notes\u{201d}\" run=2 offers=Undo cost=[save "
+        ),
+        "{line}"
+    );
+    // What the last change cost on the main thread, part by part.
+    let cost = desk
+        .workspace
+        .read_with(cx, |workspace, _| workspace.last_agent_change_cost())
+        .expect("a change was made");
+    assert!(
+        cost.change > Duration::ZERO && cost.window > Duration::ZERO,
+        "{cost:?}"
     );
     desk.workspace.update(cx, |workspace, cx| {
         workspace.set_agents_may_change(false, cx)

@@ -339,8 +339,26 @@ if [[ $SMOKE -eq 1 ]]; then
     grep -qF -- "tools=[$RESOLVED_TOOL --library $RESOLVED_DATA mcp]" "$ASSISTANT_LOG" \
         || grep -qF -- "tools=[$RESOLVED_TOOL --library $TOOL_DATA mcp]" "$ASSISTANT_LOG" \
         || die "the side chat's tools are not the MCP server of the bundled tool on this library"
-    unset THE_WRITER_DATA_DIR
     echo "smoke test passed: the assistant answers in the side chat, with the bundled tool as its tools"
+
+    # The keyboard shortcuts: a key recorded in the list of the bundled app is in force,
+    # is stored with the library, and is there at the next launch.
+    step "Smoke test: a keyboard shortcut changed in the bundled app"
+    KEYS_LOG="$WORK/keys-app.log"
+    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-/; wait:300; type:bold; wait:200; keys:enter; keys:cmd-alt-b; keys:enter; wait:300; state; quit" \
+        "$APP/Contents/MacOS/$BIN_NAME" >"$KEYS_LOG" 2>&1 &
+    APP_PID=$!
+    wait_for_app "$KEYS_LOG"
+    grep -qF -- 'selected="Bold" keys=[cmd-alt-b] default=[cmd-b] (changed)' "$KEYS_LOG" \
+        || die "the list of keyboard shortcuts did not give Bold the key that was pressed"
+    THE_WRITER_AUTOMATION="wait:1500; state; quit" \
+        "$APP/Contents/MacOS/$BIN_NAME" >"$KEYS_LOG" 2>&1 &
+    APP_PID=$!
+    wait_for_app "$KEYS_LOG"
+    grep -qF -- 'keys=[changed=1]' "$KEYS_LOG" \
+        || die "the changed keyboard shortcut was not there at the next launch"
+    unset THE_WRITER_DATA_DIR
+    echo "smoke test passed: a key changed in the list is stored with the library and kept"
 else
     step "Smoke test skipped (--no-smoke-test)"
 fi

@@ -389,10 +389,27 @@ impl Workspace {
             Request::Import { plan, mode } => self.carry_out_import(plan, *mode, window, cx),
             Request::ResetAll => self.reset_all_shortcuts_now(window, cx),
             change => {
-                // The same change in every key context of the row.
+                // The same change in every key context of the row. And a
+                // key taken from a command is taken from its whole row:
+                // to the user that command had one key there.
                 let rest = for_the_rest_of_the_row(change, cx);
+                let taken: Vec<(Target, writer_keymap::KeySequence)> = match change {
+                    Request::ReplaceKey { take, .. } | Request::AddKey { take, .. } => take
+                        .iter()
+                        .flat_map(|holder| {
+                            row_targets(&holder.target, cx)
+                                .into_iter()
+                                .filter(|other| *other != holder.target)
+                                .map(|other| (other, holder.keys.clone()))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 self.change_keys(window, cx, |model| {
                     change.apply_to(model);
+                    for (target, key) in &taken {
+                        model.remove_key(target, key);
+                    }
                     for request in &rest {
                         request.apply_to(model);
                     }
@@ -417,6 +434,11 @@ impl Workspace {
             return;
         }
         let detail = match changed {
+            // Only what this version cannot use is stored (a change for a
+            // command it does not have).
+            0 => "No command has another key than its default. Changes this version cannot use \
+                  are stored, and are removed."
+                .to_string(),
             1 => "One command has another key than its default.".to_string(),
             count => format!("{count} commands have other keys than their defaults."),
         };

@@ -1731,6 +1731,79 @@ fn a_row_of_several_key_contexts_is_changed_as_one(cx: &mut TestAppContext) {
             );
         }
     });
+
+    // A key taken from a command is taken from its whole row: "whole word"
+    // gets the key of "case sensitive", which the bar binds twice as well.
+    press(vcx, "cmd-d");
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    press(vcx, "enter");
+    press(vcx, "cmd-alt-c");
+    let (title, says, _) = question(&view, vcx);
+    assert_eq!(title, "⌥⌘C is taken", "{says}");
+    choose(&view, Choice::TakeKey, vcx);
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        let keys = |action: &str, context: &str| -> Vec<String> {
+            effective
+                .target(&Target::new(action, Some(context)))
+                .unwrap_or_else(|| panic!("{action} in {context}"))
+                .keys
+                .iter()
+                .map(|key| key.keys.to_string())
+                .collect()
+        };
+        for context in ["FindBar", "FindBar > TextField"] {
+            assert_eq!(
+                keys("editor_tools::ToggleWholeWord", context),
+                ["cmd-alt-c"],
+                "{context}"
+            );
+            assert!(
+                keys("editor_tools::ToggleCaseSensitive", context).is_empty(),
+                "{context}"
+            );
+        }
+        // The window keeps its own `cmd-alt-c`, which the bar's beats.
+        assert_eq!(
+            effective
+                .target(&Target::new("comments::ToggleComments", None))
+                .unwrap()
+                .keys
+                .len(),
+            1
+        );
+    });
+    // One row each in the list, as before.
+    let rows: Vec<String> = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .into_iter()
+            .filter(|shortcut| {
+                [
+                    "editor_tools::ToggleCaseSensitive",
+                    "editor_tools::ToggleWholeWord",
+                ]
+                .contains(&shortcut.action_name())
+            })
+            .map(|shortcut| {
+                format!(
+                    "{} {:?}",
+                    shortcut.action_name(),
+                    shortcut
+                        .all_keys
+                        .iter()
+                        .map(|key| key.keys.to_string())
+                        .collect::<Vec<_>>()
+                )
+            })
+            .collect()
+    });
+    assert_eq!(
+        rows,
+        [
+            "editor_tools::ToggleCaseSensitive []",
+            "editor_tools::ToggleWholeWord [\"cmd-alt-c\"]"
+        ]
+    );
 }
 
 // ----- the ways in, and what names a key --------------------------------------------

@@ -792,6 +792,8 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `menu:<name>` | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 | `choose:<label>` | chooses that item of the open context menu, as a click on it would |
 | `bar[:<button>]` | shows the format bar over the selection, as a mouse selection does; `bar:bold`, `bar:extra-0`, `bar:more` press a button of it |
+| `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list of keyboard shortcuts: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys with a bar between them, `none`, `default`; `@In the find bar` for a command that is listed in several places |
+| `shortcuts:import:<path>`, `shortcuts:press:<label>`, `shortcuts:reset`, `shortcuts:undo` | the keyboard shortcuts: read a shortcuts file and show the preview in the list (the open panel cannot be driven), press a control of the open list or a choice of its question by its label, put every key back without asking, undo the last import or reset |
 | `fake:hold`, `fake:advance:<n>`, `fake:release` | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`): hold its events back, let the next `n` through (an answer half written, with its Stop control), let everything through again |
 | `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), the open context menu, Vim mode and command line, open tool and find count, the format bar, comment threads, spelling (`on language=<id\|auto> (app\|document) [detected=<id>] marks=N pending=N`), status bar |
 | `book:<blocks>` | creates and opens a generated document; prints what opening cost and how long it took until the text on screen was checked for spelling |
@@ -835,6 +837,23 @@ directions of the stream; `system/init` in what comes back names the tools, MCP 
 skills and commands the process has. Start such a run from a shell and it inherits that
 shell's environment: the engine takes the markers of an enclosing Claude Code session out
 (`claude/args.rs`, `REMOVED_ENV`).
+
+Changing a key in a scripted run: `keys:cmd-/` opens the list, `type:bold` filters it,
+`keys:enter` makes it wait for a key, the next `keys:` step is the key (it reaches the list
+through `App::intercept_keystrokes`, which `window.dispatch_keystroke` runs like a real key
+press does; no binding runs and nothing is typed), `keys:enter` takes the marked choice.
+The `state` line has `keys=[changed=N]` and, while the list is open, `list=[mode=... rows=N
+changed=N selected="..." keys=[...] default=[...] question="..." says="..." choices=[*Use
+⌥⌘B | Press Another Key | Cancel]]`. A key a script presses is never released
+(`dispatch_keystroke` sends no key-up), and the list takes the same key pressed again for a
+held one: the `keys:` step tells the open list that the key was let go
+(`KeymapView::key_released`); a headless test sends a `KeyUpEvent` after each key.
+`action:workspace::ExportShortcuts` writes "The Writer Shortcuts.json" into
+`THE_WRITER_EXPORT_DIR`. What neither a script nor a test can drive: the open panel
+(`cx.prompt_for_paths` is `unimplemented!()` on the test platform, so a test that reaches
+it panics; the app names the file beforehand, `workspace::choose_import_file_beforehand`),
+and the system dialog of "Reset All Keyboard Shortcuts…" in a scripted run (a test answers
+it with `simulate_prompt_answer`).
 
 A library the `writer` tool made is a library like any other: build one with the tool
 (`THE_WRITER_DATA_DIR=$QA/data target/debug/writer create ...`), then start the app on the

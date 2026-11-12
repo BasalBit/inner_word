@@ -12,6 +12,9 @@
 //! (Automatic, the user's first language, then a few fixed ones),
 //! `cmd-alt-s` checking on and off, `cmd-alt-t` the theme, `cmd-q` quit.
 //!
+//! `SPELL_DEMO_TEXT=<file>` opens a text of your own instead (a paragraph
+//! per line, `# ` for a heading).
+//!
 //! A scripted run (`THE_WRITER_AUTOMATION`, see `automation.rs`) stays in
 //! the background and never learns a word: the menu's "Learn Spelling" is
 //! not chosen by any script in this repository.
@@ -36,6 +39,27 @@ use writer_ui::theme::{self, ActiveTheme as _, ThemeMode};
 use writer_ui::toast::ToastLayer;
 
 actions!(spell_demo, [ToggleTheme, NextLanguage, Quit]);
+
+/// The document of `SPELL_DEMO_TEXT=<file>`: a paragraph per line (a
+/// line that starts with `# ` is a heading).
+fn document_from_env() -> Option<Document> {
+    let path = std::env::var_os("SPELL_DEMO_TEXT")?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!("[spell_demo] reading {path:?}: {error}");
+            return None;
+        }
+    };
+    let blocks: Vec<Block> = text
+        .lines()
+        .map(|line| match line.strip_prefix("# ") {
+            Some(heading) => Block::with_text(BlockKind::heading(2), heading),
+            None => Block::paragraph(line),
+        })
+        .collect();
+    (!blocks.is_empty()).then(|| Document::from_blocks(blocks))
+}
 
 /// The demo document: a few languages, code, a short line.
 fn document() -> Document {
@@ -121,7 +145,8 @@ impl Demo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let toasts = cx.new(|_| ToastLayer::new());
         ToastLayer::set_global(&toasts, cx);
-        let editor = cx.new(|cx| Editor::new(document(), EditorConfig::full(), window, cx));
+        let document = document_from_env().unwrap_or_else(document);
+        let editor = cx.new(|cx| Editor::new(document, EditorConfig::full(), window, cx));
         let tools = cx.new(|cx| EditorTools::new(editor.clone(), window, cx));
 
         let service = Rc::new(SystemSpellService::new());
@@ -210,9 +235,22 @@ impl Demo {
             .take(40)
             .collect();
         let (slices, longest) = checker.slice_stats();
+        let languages: Vec<String> = (0..editor.document().block_count().min(12))
+            .map(|block| {
+                checker
+                    .detected_language(block, cx)
+                    .unwrap_or_else(|| "-".to_string())
+            })
+            .collect();
+        let words: Vec<String> = if checker.misspelling_count(cx) <= 40 {
+            checker.misspelled_words(cx)
+        } else {
+            Vec::new()
+        };
         format!(
             "language {} enabled {} marks {} pending {} settled {} slices {slices} longest {longest:?} \
-             selection {}:{}-{}:{} selected {selected:?} blocks {} menu {menu:?} notice {:?}",
+             selection {}:{}-{}:{} selected {selected:?} blocks {} menu {menu:?} notice {:?} \
+             languages {languages:?} words {words:?}",
             self.language_label(cx),
             checker.is_enabled(),
             checker.misspelling_count(cx),

@@ -167,6 +167,7 @@ impl SpellChecker {
         if active {
             self.forget_results();
             self.start_worker(cx);
+            self.schedule_warm_up(cx);
         } else {
             self.stop_work();
             let had_marks = marks::count(self.editor.read(cx)) > 0;

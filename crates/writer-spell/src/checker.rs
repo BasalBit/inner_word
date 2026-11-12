@@ -163,8 +163,9 @@ pub struct SpellChecker {
     /// Whether the worker task is running.
     pub(crate) working: bool,
     pub(crate) worker: Option<Task<()>>,
-    /// Warms the service up a moment after the checker was made.
+    /// Warms the service up a moment after the checker began to work.
     pub(crate) warm_up: Option<Task<()>>,
+    pub(crate) warmed_up: bool,
     /// Every block before this index is checked, or waits in `waiting` or
     /// `recheck`: where the background pass goes on.
     pub(crate) scan: usize,
@@ -254,6 +255,7 @@ impl SpellChecker {
             working: false,
             worker: None,
             warm_up: None,
+            warmed_up: false,
             scan: 0,
             waiting: HashSet::new(),
             recheck: VecDeque::new(),
@@ -281,21 +283,31 @@ impl SpellChecker {
         };
         this.was_active = this.is_active(cx);
         this.start_worker(cx);
-        // What is slow the first time (starting the system checker for
-        // suggestions, loading the dictionaries it consults for a text it
-        // cannot place) happens once, a moment after the first marks are
-        // on screen, and not under a keystroke or a right-click later.
-        this.warm_up = Some(cx.spawn(async move |this, cx| {
+        this.schedule_warm_up(cx);
+        this
+    }
+
+    /// What is slow the first time (starting the system checker for
+    /// suggestions, loading the dictionaries it consults for a text it
+    /// cannot place) happens once, a moment after the first marks are on
+    /// screen, and not under a keystroke or a right-click later. Nothing
+    /// is warmed up for a checker that is off or attached to an editor it
+    /// leaves alone; it is asked again when that changes.
+    pub(crate) fn schedule_warm_up(&mut self, cx: &mut Context<Self>) {
+        if self.warmed_up || self.warm_up.is_some() || !self.was_active {
+            return;
+        }
+        self.warm_up = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(WARM_UP_DELAY).await;
             this.update(cx, |this, _| {
                 this.warm_up = None;
                 if this.was_active {
+                    this.warmed_up = true;
                     this.service.warm_up();
                 }
             })
             .ok();
         }));
-        this
     }
 
     /// The editor this checker is attached to.

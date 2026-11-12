@@ -449,10 +449,16 @@ fn read_only_and_compact_editors_are_left_alone(cx: &mut TestAppContext) {
     assert_eq!(service.check_count(), 0);
     assert!(!checker.read_with(cx, |checker, cx| checker.is_active(cx)));
 
-    // Writable: checked.
+    // Nothing was warmed up for an editor that is left alone.
+    wait(writer_spell::WARM_UP_DELAY, cx);
+    assert_eq!(service.warm_up_count(), 0);
+
+    // Writable: checked, and the service is warmed up a moment later.
     editor.update(cx, |editor, cx| editor.set_read_only(false, cx));
     cx.run_until_parked();
     assert_eq!(marked(&checker, cx), ["wrod"]);
+    wait(writer_spell::WARM_UP_DELAY, cx);
+    assert_eq!(service.warm_up_count(), 1);
     // Read-only again: the marks go.
     editor.update(cx, |editor, cx| editor.set_read_only(true, cx));
     cx.run_until_parked();

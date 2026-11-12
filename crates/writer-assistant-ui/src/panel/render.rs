@@ -183,6 +183,12 @@ impl Render for AssistantPanel {
             .child(
                 div()
                     .flex_none()
+                    // A flex column, so that the composer fills the width
+                    // (as a block in a block it came out at the width of
+                    // an editor that was never given one, while the
+                    // conversation was empty).
+                    .flex()
+                    .flex_col()
                     .px(SPACE_3)
                     .pt(SPACE_1)
                     .pb(SPACE_3)
@@ -501,7 +507,10 @@ impl AssistantPanel {
         if notices.is_empty() {
             return None;
         }
-        let mut column = div().flex_none().px(SPACE_3).pt(SPACE_1);
+        // Flex columns all the way down: a notice fills the width of the
+        // panel however short its text is (as a block in a block it came
+        // out as wide as its text).
+        let mut column = div().flex_none().flex().flex_col().px(SPACE_3).pt(SPACE_1);
         for (kind, mut notice) in notices {
             let name = match kind {
                 PanelNotice::Availability => "assistant-notice-availability",
@@ -511,7 +520,7 @@ impl AssistantPanel {
             if kind == PanelNotice::Availability && self.checking {
                 notice.action = Some("Checking".into());
             }
-            column = column.child(div().pb(SPACE_2).child(
+            column = column.child(div().flex().flex_col().pb(SPACE_2).child(
                 notice_row(name, &notice, false, colors).on_action_click(cx.listener(
                     move |this, _: &ClickEvent, window, cx| {
                         this.press_notice(kind, window, cx);

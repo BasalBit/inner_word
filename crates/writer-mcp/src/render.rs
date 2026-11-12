@@ -7,10 +7,10 @@
 
 use writer_agent::{
     CommentChanged, CommentList, CommentThreadInfo, ContentChanged, DocumentChanged,
-    DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, Exported,
-    FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, LibraryStatus, MatchedAs,
-    SearchResults, Time, TrashEmptied, TrashItem, TrashList, Tree, TreeFolder, VersionInfo,
-    VersionList, VersionRestored, VersionText, Written,
+    DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, ExportFormat,
+    Exported, FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, LibraryStatus,
+    MatchedAs, SearchResults, Time, TrashEmptied, TrashItem, TrashList, Tree, TreeFolder,
+    VersionInfo, VersionList, VersionRestored, VersionText, Written,
 };
 
 /// A number with thin grouping: `12,345`.
@@ -40,14 +40,22 @@ pub fn time(time: Time) -> String {
     }
 }
 
-/// How a document is named in a sentence: `doc:12 "Book/Chapter 1"`.
+/// How a document is named in a sentence: `doc:12 "Book/Chapter 1"`. One that does not
+/// exist yet (a dry run reports it with the id 0) is `a new document "Book/Chapter 1"`.
 pub fn document_name(document: &DocumentSummary) -> String {
-    format!("doc:{} \"{}\"", document.id.0, document.path)
+    match document.id.0 {
+        0 => format!("a new document \"{}\"", document.path),
+        id => format!("doc:{id} \"{}\"", document.path),
+    }
 }
 
-/// How a folder is named in a sentence: `folder:3 "Book/Part one"`.
+/// How a folder is named in a sentence: `folder:3 "Book/Part one"`, or for one that does
+/// not exist yet `a new folder "Book/Part one"`.
 pub fn folder_name(folder: &FolderSummary) -> String {
-    format!("folder:{} \"{}\"", folder.id.0, folder.path)
+    match folder.id.0 {
+        0 => format!("a new folder \"{}\"", folder.path),
+        id => format!("folder:{id} \"{}\"", folder.path),
+    }
 }
 
 /// One line for a document in a list: id, path, size, last change.
@@ -61,13 +69,12 @@ pub fn document_line(document: &DocumentSummary) -> String {
     )
 }
 
-/// What a write says about itself, in front of the sentence that says what it did.
+/// What a dry run says before the report of what the real run would do.
+const DRY_RUN: &str = "Dry run: nothing was changed. The real run would report:\n";
+
+/// What a write says about itself, in front of its report.
 fn dry_run_prefix(written: &Written) -> &'static str {
-    if written.dry_run {
-        "Dry run, nothing was changed. This would happen: "
-    } else {
-        ""
-    }
+    if written.dry_run { DRY_RUN } else { "" }
 }
 
 /// What a write says about itself, after everything else.
@@ -411,13 +418,9 @@ pub fn found(results: &FindResults) -> String {
 pub fn created(created: &DocumentCreated) -> String {
     let mut out = String::from(dry_run_prefix(&created.written));
     let document = &created.document;
-    if created.written.dry_run {
-        out.push_str(&format!("a document \"{}\" is created", document.path));
-    } else {
-        out.push_str(&format!("Created {}", document_name(document)));
-    }
     out.push_str(&format!(
-        " ({}).\n",
+        "Created {} ({}).\n",
+        document_name(document),
         plural(document.words, "word", "words")
     ));
     for folder in &created.created_folders {
@@ -520,7 +523,7 @@ pub fn content_changed(did: &str, changed: &ContentChanged) -> String {
 }
 
 /// A change to a document's name, place or state. `did` is the start of the sentence:
-/// "Renamed", "Moved", "Moved to the trash".
+/// "Renamed", "Moved", "Moved to the trash:".
 pub fn document_changed(did: &str, changed: &DocumentChanged) -> String {
     let written = &changed.written;
     let mut out = String::new();
@@ -537,6 +540,10 @@ pub fn document_changed(did: &str, changed: &DocumentChanged) -> String {
             "{did} doc:{} \"{}\" -> \"{}\".\n",
             changed.document.id.0, before.path, changed.document.path
         )),
+        Some(_) if did == "Moved" => out.push_str(&format!(
+            "Moved {} to another place among the documents of its folder.\n",
+            document_name(&changed.document)
+        )),
         _ => out.push_str(&format!("{did} {}.\n", document_name(&changed.document))),
     }
     for folder in &changed.created_folders {
@@ -550,16 +557,14 @@ pub fn document_changed(did: &str, changed: &DocumentChanged) -> String {
 pub fn document_copied(changed: &DocumentChanged) -> String {
     let written = &changed.written;
     let mut out = String::from(dry_run_prefix(written));
-    let copy = &changed.document;
-    if written.dry_run {
-        out.push_str(&format!("a copy \"{}\" is made", copy.path));
-    } else {
-        out.push_str(&format!("Copied to {}", document_name(copy)));
-    }
+    out.push_str(&format!("Copied to {}", document_name(&changed.document)));
     if let Some(original) = &changed.before {
         out.push_str(&format!(" from {}", document_name(original)));
     }
-    out.push_str(&format!(" ({}).\n", plural(copy.words, "word", "words")));
+    out.push_str(&format!(
+        " ({}).\n",
+        plural(changed.document.words, "word", "words")
+    ));
     written_suffix(written, &mut out);
     finish(out)
 }
@@ -567,43 +572,18 @@ pub fn document_copied(changed: &DocumentChanged) -> String {
 /// `writer mkdir`.
 pub fn folder_created(created: &FolderCreated) -> String {
     let written = &created.written;
-    let mut out = String::new();
-    if created.created.is_empty() && !written.dry_run {
+    let mut out = String::from(dry_run_prefix(written));
+    if created.created.is_empty() {
         out.push_str(&format!(
             "The folder is there already: {}.\n",
             folder_name(&created.folder)
         ));
-        return out;
-    }
-    out.push_str(dry_run_prefix(written));
-    if written.dry_run {
-        if created.created.is_empty() {
-            out.push_str(&format!(
-                "nothing, the folder is there already: {}.\n",
-                folder_name(&created.folder)
-            ));
-        } else {
-            let paths: Vec<String> = created
-                .created
-                .iter()
-                .map(|folder| format!("\"{}\"", folder.path))
-                .collect();
-            out.push_str(&format!(
-                "{} created: {}.\n",
-                if paths.len() == 1 {
-                    "a folder is"
-                } else {
-                    "folders are"
-                },
-                paths.join(", ")
-            ));
-        }
     } else {
         out.push_str(&format!("Created {}.\n", folder_name(&created.folder)));
         for folder in created
             .created
             .iter()
-            .filter(|folder| folder.id != created.folder.id)
+            .filter(|folder| folder.path != created.folder.path)
         {
             out.push_str(&format!(
                 "Folder created on the way: {}\n",
@@ -631,6 +611,10 @@ pub fn folder_changed(did: &str, changed: &FolderChanged) -> String {
         Some(before) if before.path != changed.folder.path => out.push_str(&format!(
             "{did} folder:{} \"{}\" -> \"{}\"",
             changed.folder.id.0, before.path, changed.folder.path
+        )),
+        Some(_) if did == "Moved" => out.push_str(&format!(
+            "Moved {} to another place among the folders beside it",
+            folder_name(&changed.folder)
         )),
         _ => out.push_str(&format!("{did} {}", folder_name(&changed.folder))),
     }
@@ -687,19 +671,10 @@ pub fn trash_emptied(emptied: &TrashEmptied) -> String {
     let written = &emptied.written;
     let mut out = String::from(dry_run_prefix(written));
     if emptied.folders == 0 && emptied.documents == 0 {
-        out.push_str(if written.dry_run {
-            "nothing, the trash is empty.\n"
-        } else {
-            "The trash was empty.\n"
-        });
+        out.push_str("The trash was empty.\n");
     } else {
         out.push_str(&format!(
-            "{} {} and {} for good.\n",
-            if written.dry_run {
-                "the trash is emptied:"
-            } else {
-                "Emptied the trash: erased"
-            },
+            "Emptied the trash: erased {} and {} for good.\n",
             plural(emptied.folders, "folder", "folders"),
             plural(emptied.documents, "document", "documents")
         ));
@@ -877,24 +852,18 @@ pub fn version_restored(restored: &VersionRestored) -> String {
 pub fn exported(exported: &Exported) -> String {
     let mut out = String::new();
     if exported.dry_run {
-        out.push_str("Dry run, nothing was written. This would happen: ");
+        out.push_str("Dry run: nothing was written. The real run would report:\n");
     }
+    let format = match exported.format {
+        ExportFormat::Markdown => "Markdown",
+        ExportFormat::Docx => "DOCX",
+        ExportFormat::PlainText => "plain text",
+    };
     out.push_str(&format!(
-        "{} \"{}\" ({}) {} {} ({}, {} bytes).\n",
-        if exported.dry_run {
-            "the export of"
-        } else {
-            "Exported"
-        },
+        "Exported \"{}\" ({}) to {} ({format}, {} bytes).\n",
         exported.title,
         plural(exported.documents.len() as u64, "document", "documents"),
-        if exported.dry_run {
-            "is written to"
-        } else {
-            "to"
-        },
         exported.path.display(),
-        exported.format.name(),
         count(exported.bytes)
     ));
     out

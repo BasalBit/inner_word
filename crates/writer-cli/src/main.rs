@@ -150,6 +150,13 @@ fn fail(as_json: bool, failure: &Failure) -> ExitCode {
     let mut stderr = std::io::stderr().lock();
     let _ = if as_json {
         writeln!(stderr, "{}", json!({ "error": failure.data }))
+    } else if failure.kind == ErrorKind::LibraryNotFound {
+        // The message of the command layer speaks of "the data directory option".
+        writeln!(
+            stderr,
+            "writer: {}\nHere that option is --library <dir>.",
+            failure.message
+        )
     } else {
         writeln!(stderr, "writer: {}", failure.message)
     };

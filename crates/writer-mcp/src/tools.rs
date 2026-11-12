@@ -22,8 +22,8 @@ use serde_json::{Map, Value, json};
 use writer_agent::{
     AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
-    EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest, FindRequest,
-    FolderInfoRequest, InfoRequest, InsertRequest, Item, Library, ListCommentsRequest,
+    EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport, ExportRequest, FindRequest,
+    FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind, Library, ListCommentsRequest,
     ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, ReadVersionRequest,
     RecentRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
     ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
@@ -76,7 +76,10 @@ impl Failure {
 
 impl From<Error> for Failure {
     fn from(error: Error) -> Failure {
-        let report = error.report();
+        let mut report = error.report();
+        if let Some(message) = ambiguous_items(&report) {
+            report.message = message;
+        }
         let data = serde_json::to_value(&report)
             .unwrap_or_else(|_| json!({ "code": report.code, "message": report.message }));
         Failure {
@@ -85,6 +88,42 @@ impl From<Error> for Failure {
             data,
         }
     }
+}
+
+/// The message for a name that fits several documents or folders, with each candidate
+/// written the way it can be passed back (`doc:12`, `folder:3`): a bare number would not
+/// say which of the two kinds it is.
+fn ambiguous_items(report: &ErrorReport) -> Option<String> {
+    let all_items = report
+        .candidates
+        .iter()
+        .all(|candidate| matches!(candidate.kind, ItemKind::Document | ItemKind::Folder));
+    if report.candidates.is_empty() || !all_items {
+        return None;
+    }
+    let (first_line, _) = report
+        .message
+        .split_once('\n')
+        .unwrap_or((&report.message, ""));
+    let subject = first_line
+        .split_once(" fits ")
+        .map_or("The name", |(subject, _)| subject);
+    let mut message = format!(
+        "{subject} fits {} items; name one by its id or by a longer path:",
+        report.candidates.len()
+    );
+    for candidate in &report.candidates {
+        let kind = if candidate.kind == ItemKind::Folder {
+            "folder"
+        } else {
+            "doc"
+        };
+        message.push_str(&format!("\n  {kind}:{}  {}", candidate.id, candidate.path));
+        if candidate.trashed {
+            message.push_str("  (in the trash)");
+        }
+    }
+    Some(message)
 }
 
 type Run = fn(&Library, Map<String, Value>) -> Result<Reply, Error>;

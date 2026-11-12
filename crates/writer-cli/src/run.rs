@@ -441,7 +441,11 @@ pub fn run(
             // What is erased for good is usually in the trash already.
             let in_trash = match toolbox.resolve(arg(0), true) {
                 Ok(_) => true,
-                Err(failure) if failure.kind == ErrorKind::NotFound => false,
+                Err(failure)
+                    if matches!(failure.kind, ErrorKind::NotFound | ErrorKind::WrongState) =>
+                {
+                    false
+                }
                 Err(failure) => return Err(failure),
             };
             toolbox.run_on_item(

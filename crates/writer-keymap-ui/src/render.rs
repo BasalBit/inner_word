@@ -1051,6 +1051,7 @@ impl KeymapView {
         div()
             .flex()
             .flex_col()
+            .min_h_0()
             .child(
                 div()
                     .flex()
@@ -1084,22 +1085,25 @@ impl KeymapView {
             .child(
                 div()
                     .flex()
+                    .flex_none()
                     .flex_col()
                     .px(px(14.))
                     .py(px(10.))
                     .child(Self::render_lines(&question.lines, Tone::Plain, &colors)),
             )
+            // The part that gives way when the window has less room than
+            // that: the rows scroll, what is around them keeps its height.
             .when(rows > 0, |el| {
                 el.child(Divider::horizontal()).child(
-                    div().py(px(4.)).child(
-                        div()
-                            .id("keymap-preview")
-                            .debug_selector(|| "keymap-preview-rows".into())
-                            .max_h(room)
-                            .overflow_y_scroll()
-                            .track_scroll(&preview.scroll)
-                            .children(self.render_preview_rows(preview, cx)),
-                    ),
+                    div()
+                        .id("keymap-preview")
+                        .debug_selector(|| "keymap-preview-rows".into())
+                        .my(px(4.))
+                        .min_h_0()
+                        .max_h(room)
+                        .overflow_y_scroll()
+                        .track_scroll(&preview.scroll)
+                        .children(self.render_preview_rows(preview, cx)),
                 )
             })
             // How the file names the selected row, for whoever edits it:
@@ -1202,6 +1206,7 @@ impl KeymapView {
             hints.extend(label("Close", &Close, cx));
         }
         div()
+            .debug_selector(|| "keymap-footer".into())
             .flex()
             .flex_none()
             .items_center()

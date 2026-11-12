@@ -622,12 +622,24 @@ fn a_preview_with_many_rows_of_each_kind_scrolls_and_keeps_its_choices(cx: &mut 
         let list = bounds(cx, "keymap-preview-rows");
         assert!(list.top() > panel.top() && list.bottom() < panel.bottom());
         assert!(list.left() >= panel.left() && list.right() <= panel.right());
+        // The hints at the bottom are whole and inside the panel: nothing
+        // above them pushed them out.
+        let footer = bounds(cx, "keymap-footer");
+        assert_eq!(footer.size.height, px(32.));
+        assert!(
+            footer.bottom() <= panel.bottom() && footer.top() >= list.bottom(),
+            "{footer:?} in {panel:?}"
+        );
         // The choices are under it, whole, inside the panel.
         let choices: Vec<_> = (0..2)
             .map(|ix| bounds(cx, selector(format!("keymap-choice-{ix}"))))
             .collect();
         for choice in &choices {
             assert!(choice.top() >= list.bottom(), "{choice:?} under {list:?}");
+            assert!(
+                choice.bottom() <= footer.top(),
+                "{choice:?} over {footer:?}"
+            );
             assert!(choice.bottom() <= panel.bottom() && choice.right() <= panel.right());
             assert!(choice.left() >= panel.left());
         }
@@ -686,6 +698,13 @@ fn a_preview_with_many_rows_of_each_kind_scrolls_and_keeps_its_choices(cx: &mut 
     cx.simulate_resize(gpui::size(px(640.), px(480.)));
     cx.run_until_parked();
     check(cx);
+    // And less room than that (a window cannot be this small; a summary
+    // of more lines takes the same room away): the rows give way, the
+    // rest keeps its place.
+    cx.simulate_resize(gpui::size(px(640.), px(400.)));
+    cx.run_until_parked();
+    check(cx);
+    assert!(bounds(cx, "keymap-preview-rows").size.height >= px(56.));
     // Nothing was applied by looking.
     assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
     press(cx, "escape");

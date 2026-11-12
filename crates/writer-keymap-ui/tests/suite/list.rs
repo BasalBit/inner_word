@@ -589,7 +589,9 @@ fn a_long_question_fits_the_smallest_window(cx: &mut TestAppContext) {
             window.height
         );
         let band = bounds(cx, "keymap-band");
-        assert!(band.bottom() <= panel.bottom());
+        let footer = bounds(cx, "keymap-footer");
+        assert_eq!(footer.size.height, px(32.));
+        assert!(band.bottom() <= footer.top() && footer.bottom() <= panel.bottom());
         // Every choice whole, inside the band, under what the band says.
         let text = bounds(cx, "keymap-question-text");
         assert!(text.top() >= band.top() && text.bottom() <= band.bottom());

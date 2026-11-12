@@ -167,7 +167,7 @@
 //! `keymap-preview-name-<n>` and `keymap-preview-reason-<n>` (the two
 //! parts of a skipped entry's row), `keymap-preview-detail`,
 //! `keymap-clash-<n>` (the warning sign of a row), `keymap-panel`,
-//! `keymap-band`.
+//! `keymap-band`, `keymap-footer` (the hints at the bottom).
 
 mod keys;
 mod listing;

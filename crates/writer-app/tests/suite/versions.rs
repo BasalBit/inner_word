@@ -177,7 +177,12 @@ fn a_version_an_agent_left_says_why_it_was_kept(cx: &mut TestAppContext) {
         view.read_with(vcx, |view, _| view.versions()[0].id),
         labelled.id
     );
-    assert_eq!(rows[0].1, "Before an edit by Claude \u{b7} 2 words");
+    assert!(
+        rows[0].0.starts_with("Today ") && rows[0].0.ends_with(" \u{b7} 2 words"),
+        "{rows:?}"
+    );
+    assert_eq!(rows[0].1, "Before an edit by Claude");
+    assert!(rows[1].0.starts_with("Today ") && !rows[1].0.contains("words"));
     assert_eq!(rows[1].1, "21 min ago \u{b7} 2 words");
 }
 

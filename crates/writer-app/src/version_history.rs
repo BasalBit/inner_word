@@ -275,12 +275,16 @@ impl VersionHistory {
                 let then = LocalTime::from_unix_ms(version.created_at);
                 let when = version_time_label(then, now);
                 let words = counted(version.word_count as usize, "word", "words");
-                // The reason comes first: the row cuts off what does not fit.
-                // "2 hours ago" helps for today's versions; an older one
-                // already says its day.
-                let detail = if let Some(reason) = reasons.get(&version.id) {
-                    format!("{reason} \u{b7} {words}")
-                } else if then.day_number() == now.day_number() {
+                // A version kept for a reason says the reason on its second line, whole
+                // (the word count moves up beside the time). "2 hours ago" helps for
+                // today's other versions; an older one already says its day.
+                if let Some(reason) = reasons.get(&version.id) {
+                    return (
+                        format!("{when} \u{b7} {words}").into(),
+                        reason.clone().into(),
+                    );
+                }
+                let detail = if then.day_number() == now.day_number() {
                     format!(
                         "{} \u{b7} {words}",
                         writer_comments::time::relative_time(version.created_at, now_ms)
@@ -319,8 +323,8 @@ impl VersionHistory {
     }
 
     /// The two lines of each row: when the version was taken, and how long
-    /// ago with its word count (or, for a version kept for a reason, the
-    /// reason with its word count).
+    /// ago with its word count. For a version kept for a reason: when with
+    /// its word count, and the reason.
     pub fn row_labels(&self) -> Vec<(String, String)> {
         self.labels
             .iter()

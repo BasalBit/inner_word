@@ -7,7 +7,13 @@
 
 use writer_keymap::{Changes, Holder, ImportMode, ImportPlan, KeySequence, Keymap, Target};
 
-/// One thing the user asked for. See the [module docs](self).
+/// One thing the user asked for in the view, emitted as an event of
+/// [`crate::KeymapView`].
+///
+/// The view changes nothing itself. The host carries a request out on its
+/// keymap ([`Request::apply_to`] for the ones that change keys), installs
+/// and stores the result, and hands the view the new state
+/// ([`crate::KeymapView::set_listing`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// Give `target` the key `new` in the place of its key `old`.

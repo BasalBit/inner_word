@@ -119,7 +119,15 @@ impl CommandRow {
     }
 }
 
-/// Everything the view shows. See the [module docs](self).
+/// Everything the view shows: the keymap as it is, and the commands to list
+/// with their names.
+///
+/// The view does not hold the keymap. The host owns it, installs it and
+/// stores it; each time it changes the host hands the view a new listing
+/// with a copy ([`crate::KeymapView::set_listing`]). From the copy the view
+/// reads the keys of every row, their defaults and whether the user changed
+/// them, and asks it what a proposed key would collide with
+/// ([`writer_keymap::Keymap::check`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Listing {
     /// The keymap as it is now: defaults, places and the user's changes.

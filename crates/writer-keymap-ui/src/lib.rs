@@ -44,7 +44,10 @@
 //! # Changing a key
 //!
 //! On a row, [`ChangeKey`] (or a click on the key) makes the view wait for
-//! the next keystroke. **The next key pressed is taken, whatever it is**:
+//! the next keystroke. On a row with several keys it is about the key the
+//! rest of the app shows for the command (the one bound last) until
+//! [`NextKey`] chooses another. **The next key pressed is taken, whatever
+//! it is**:
 //! no key ends the waiting instead of being recorded, so `escape` and
 //! `enter` can be given to a command like any other key. (A modifier held
 //! alone is not a key yet; the view shows it and goes on waiting.) The
@@ -60,12 +63,28 @@
 //! command that has it, keep both where the two are in different places,
 //! press another key, or cancel.
 //!
-//! A key that is held down repeats. The view does not take the repeats of
-//! the key that started the waiting for the new key, nor those of the key
-//! just recorded for an answer to its question: such a key counts again
-//! once it was released (or another key was pressed, a modifier changed,
-//! or two seconds went by without it; scripted keystrokes come without a
-//! release, see [`KeymapView::key_released`]).
+//! A key that is held down repeats, and GPUI does not tell an interceptor
+//! which key presses are repeats. So the view takes three keys to be still
+//! down until it hears otherwise: the key that started the waiting (its
+//! repeats are not the new key), the key just recorded (its repeats do not
+//! answer the question about it), and the key that answered (its repeats
+//! are not keys of the list). Such a key counts again once it was released
+//! (GPUI reports the release to the view), another key was pressed, the
+//! modifiers changed (a Mac does not report the release of a key pressed
+//! with the command key), or two seconds went by without it. **Keystrokes
+//! a script or a test dispatches come without a release**: tell the view
+//! with [`KeymapView::key_released`], or send the key-up event, before the
+//! same key is meant again.
+//!
+//! # What a row says
+//!
+//! Its title, its keys (or "No key"), and beside them: a dot and the
+//! default ("Default: ⌘B") when the user changed it; "Fixed" when it
+//! cannot be changed here, with the reason in the hints while it is
+//! selected and in its menu; a warning sign when another command has one
+//! of its keys in the same place (an import can leave that), with the
+//! sentence in the hints. Stored changes that do nothing in this version
+//! are counted in a line above the list; "Reset All" removes them too.
 //!
 //! # Keys
 //!
@@ -110,7 +129,8 @@
 //! row), `keymap-add-<n>`, `keymap-more-<n>`, `keymap-import`,
 //! `keymap-export`, `keymap-reset-all`, `keymap-changed-only`,
 //! `keymap-close`, `keymap-record-cancel`, `keymap-choice-<n>`,
-//! `keymap-preview-row-<n>`, `keymap-panel`, `keymap-band`.
+//! `keymap-preview-row-<n>`, `keymap-preview-detail`, `keymap-clash-<n>`
+//! (the warning sign of a row), `keymap-panel`, `keymap-band`.
 
 mod keys;
 mod listing;

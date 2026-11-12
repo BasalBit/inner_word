@@ -1100,7 +1100,7 @@ impl Render for KeymapView {
         };
         let room =
             f32::from(window.viewport_size().height) * 0.86 - 48. - 36. - 32. - 16. - band_room;
-        self.visible_rows = ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(4, 14) as usize;
+        self.visible_rows = ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(4, 20) as usize;
 
         let preview = match &self.mode {
             Mode::Asking(question) => match &question.subject {

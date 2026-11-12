@@ -37,6 +37,16 @@ pub(super) const GLOBAL: &[(&str, &str)] = &[
     ("cmd-alt-[", "comments::PreviousComment"),
     ("cmd-q", "app::Quit"),
     ("cmd-w", "app::CloseWindow"),
+    // The zoom of the text. Zoom in is the plus key with `cmd`, with or
+    // without shift: a real keyboard reports the one with shift as
+    // `cmd-+`, a script spells it out. `cmd-0` stays "Go to library":
+    // actual size is the same key with shift.
+    ("cmd-=", "zoom::ZoomIn"),
+    ("cmd-+", "zoom::ZoomIn"),
+    ("cmd-shift-=", "zoom::ZoomIn"),
+    ("cmd--", "zoom::ZoomOut"),
+    ("cmd-shift-0", "zoom::ActualSize"),
+    ("cmd-)", "zoom::ActualSize"),
 ];
 
 /// Keys of the text, with the keyboard in the editor.

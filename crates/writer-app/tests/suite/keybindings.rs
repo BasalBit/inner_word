@@ -225,6 +225,11 @@ fn with_the_default_keys_the_menu_bar_shows_what_it_showed_before(cx: &mut TestA
                 "editor::ToggleTodoChecked",
                 "cmd-shift-enter cmd-shift-enter",
             ),
+            // Since 0.6.0, the zoom: GPUI's own rule would show the key
+            // that was bound first (`cmd-=`, and `cmd-)` as a real
+            // keyboard reports shift with 0).
+            ("zoom::ZoomIn", "cmd-+"),
+            ("zoom::ActualSize", "cmd-shift-0"),
         ];
         let context =
             std::rc::Rc::new(KeyBindingContextPredicate::parse(menus::MENU_KEY_CONTEXT).unwrap());

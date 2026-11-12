@@ -2,14 +2,17 @@
 //! keymap and binding it again with other keystrokes. The widgets obey and
 //! show the new keys at once, and nothing in them still knows the old ones.
 
-use gpui::{Action, KeyBinding, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Action, Context, IntoElement, KeyBinding, Render, TestAppContext, VisualTestContext, Window,
+    div, point, px,
+};
 use writer_ui::{
     ContextMenu, ContextMenuItem, KeyHint, TextFieldEvent,
     context_menu::{self, OpenContextMenu},
     keymap, picker, text_field,
 };
 
-use super::{DOCS, Names, field_window, picker_window, root_window, selected_label};
+use super::{DOCS, Names, field_window, init, picker_window, root_window, selected_label};
 
 fn hint(action: &dyn Action, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| KeyHint::for_action(action, cx).map(|hint| hint.text()))
@@ -318,4 +321,28 @@ fn a_hint_is_asked_in_the_place_it_applies(cx: &mut TestAppContext) {
     cx.update(|_, cx| keymap::replace_key(&OpenContextMenu, "ctrl-enter", None, cx));
     cx.run_until_parked();
     assert_eq!(at(cx), (key("⌃M"), key("⌃M"), key("⌃M")));
+}
+
+/// A toast with a button can be on the very first frame of a window (a
+/// message at launch), before anything was drawn and with nothing focused.
+/// Asking for the key of its button there must not ask GPUI for a place
+/// that does not exist yet.
+#[gpui::test]
+fn a_hint_can_be_asked_before_the_first_frame(cx: &mut TestAppContext) {
+    init(cx);
+    struct FirstFrame {
+        asked: bool,
+    }
+    impl Render for FirstFrame {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // The first draw: no frame has been rendered, nothing is focused.
+            let hint = KeyHint::for_action_here(&text_field::Undo, window, cx);
+            assert_eq!(hint.map(|hint| hint.text()).as_deref(), Some("⌘Z"));
+            self.asked = true;
+            div()
+        }
+    }
+    let (view, cx) = cx.add_window_view(|_, _| FirstFrame { asked: false });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.asked));
 }

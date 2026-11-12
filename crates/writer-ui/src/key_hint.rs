@@ -234,28 +234,20 @@ impl KeyHint {
     }
 
     /// The key to show for `action` where the keyboard is now: the binding
-    /// of it that fires from the focused element (the one added last, when
-    /// several do), else the keymap-wide one ([`KeyHint::for_action`]).
-    /// What [`crate::Tooltip::for_action`] shows.
+    /// of it that fires from the focused element
+    /// ([`KeyHint::for_action_in`] with the focused handle), else the
+    /// keymap-wide one ([`KeyHint::for_action`]). What
+    /// [`crate::Tooltip::for_action`] and the button of a toast show.
     ///
-    /// The place is the key context stack of the focused element as of the
-    /// last frame (`Window::context_stack`), and a binding counts when its
-    /// key, pressed there, runs this action and not a nearer binding's.
-    /// (Not [`KeyHint::for_action_focused`]: see there.)
+    /// Safe before the first frame and with nothing focused: it then
+    /// answers keymap-wide. (Not [`KeyHint::for_action_focused`]: see
+    /// there. And not `Window::context_stack`, which GPUI answers from the
+    /// root of the last frame when nothing in it is focused, and asserts
+    /// that there is one: on the first frame there is none.)
     pub fn for_action_here(action: &dyn Action, window: &Window, cx: &App) -> Option<Self> {
-        let stack = window.context_stack();
-        let keymap = cx.key_bindings();
-        let keymap = keymap.borrow();
-        keymap
-            .bindings_for_action(action)
-            .rev()
-            .find(|binding| {
-                let (found, _) = keymap.bindings_for_input(binding.keystrokes(), &stack);
-                found
-                    .first()
-                    .is_some_and(|first| first.action().partial_eq(action))
-            })
-            .map(Self::from_binding)
+        window
+            .focused(cx)
+            .and_then(|focus| Self::for_action_in(action, &focus, window))
             .or_else(|| Self::for_action(action, cx))
     }
 

@@ -43,6 +43,10 @@ use gpui::{
 ///
 /// Actions are compared by value, so an action with fields finds its own
 /// binding. Only single keystrokes: a chord is never one key.
+///
+/// For a handler of a key that is being dispatched (an interceptor): GPUI
+/// has drawn a frame by then. Before the first frame of a window there is
+/// no place to ask in, and `Window::context_stack` asserts that there is.
 pub fn keystroke_runs(
     keystroke: &Keystroke,
     action: &dyn Action,

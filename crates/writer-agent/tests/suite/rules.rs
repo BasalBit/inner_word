@@ -1177,3 +1177,221 @@ fn the_default_library_follows_the_environment_variable() {
     let named = Library::locate(Some(&fx.dir.path().join("named"))).unwrap();
     assert_eq!(named.data_dir(), fx.dir.path().join("named"));
 }
+
+#[test]
+fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it() {
+    let fx = seeded();
+    // As schema version 1 left it: without the index version 2 added.
+    let downgrade = || {
+        let conn = rusqlite::Connection::open(fx.library.database_path()).unwrap();
+        conn.execute_batch("DROP INDEX documents_meta; PRAGMA user_version = 1;")
+            .unwrap();
+    };
+    downgrade();
+    // The app (of that older version) has it open: reading cannot upgrade it, and says so
+    // instead of failing somewhere inside.
+    let app = instance_lock::acquire(&fx.data_dir())
+        .unwrap()
+        .lock()
+        .unwrap();
+    match fx.library.tree(&TreeRequest::default()) {
+        Err(error @ Error::OutdatedLibrary { found: 1, .. }) => {
+            assert_eq!(error.kind(), ErrorKind::AppIsOpen);
+            assert!(error.to_string().contains("Quit The Writer"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
+    drop(app);
+    // With the app closed the library is upgraded, as the app would at its next start.
+    let tree = fx.library.tree(&TreeRequest::default()).unwrap();
+    assert_eq!(tree.total_documents, 3);
+    assert_eq!(
+        fx.store().schema_version().unwrap(),
+        writer_store::SCHEMA_VERSION
+    );
+    assert_eq!(instance_lock::holder(&fx.data_dir()).unwrap(), None);
+    // Writing upgrades it too.
+    downgrade();
+    fx.create(None, "# After the upgrade\n\ntext");
+    assert_eq!(
+        fx.store().schema_version().unwrap(),
+        writer_store::SCHEMA_VERSION
+    );
+
+    // What is not a library is refused, for reading and for writing, and left alone.
+    let other = fixture();
+    std::fs::create_dir_all(other.data_dir()).unwrap();
+    let conn = rusqlite::Connection::open(other.library.database_path()).unwrap();
+    conn.execute_batch("CREATE TABLE mine (x); INSERT INTO mine VALUES (1);")
+        .unwrap();
+    drop(conn);
+    let before = std::fs::read(other.library.database_path()).unwrap();
+    for error in [
+        other.library.tree(&TreeRequest::default()).unwrap_err(),
+        other
+            .library
+            .create_document(&CreateDocumentRequest {
+                markdown: "x".into(),
+                write: claude(),
+                ..Default::default()
+            })
+            .unwrap_err(),
+    ] {
+        assert_eq!(error.kind(), ErrorKind::Failed);
+        assert!(
+            error.to_string().contains("not a library of The Writer"),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(other.library.database_path()).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn content_that_is_not_a_document_is_reported_and_never_written_over() {
+    let fx = seeded();
+    let id = fx
+        .library
+        .resolve_document(&Target::path("Loose"))
+        .unwrap()
+        .id;
+    let mut store = writer_store::Store::open(fx.library.database_path()).unwrap();
+    let junk = "{\"format\": \"the-writer-document\", \"version\": 99, \"blocks\": []}";
+    store
+        .save_document(
+            id,
+            &writer_store::DocumentContent {
+                content: junk,
+                title: "Loose",
+                plain_text: "from the future",
+                word_count: 3,
+                char_count: 15,
+            },
+        )
+        .unwrap();
+    store.close().unwrap();
+    let unreadable = |error: Error| {
+        assert_eq!(error.kind(), ErrorKind::Unreadable, "{error}");
+        assert_eq!(error.exit_code(), 13);
+        let message = error.to_string();
+        assert!(
+            message.contains("\u{201c}Loose\u{201d}") && message.contains("left as it is"),
+            "{message}"
+        );
+    };
+    unreadable(
+        fx.library
+            .read(&ReadRequest {
+                document: id.into(),
+                ..Default::default()
+            })
+            .unwrap_err(),
+    );
+    unreadable(
+        fx.library
+            .insert(&InsertRequest {
+                document: id.into(),
+                markdown: "More.".into(),
+                write: claude(),
+                ..Default::default()
+            })
+            .unwrap_err(),
+    );
+    unreadable(
+        fx.library
+            .replace_document(&ReplaceDocumentRequest {
+                document: id.into(),
+                markdown: "All new.".into(),
+                write: claude(),
+            })
+            .unwrap_err(),
+    );
+    assert_eq!(fx.store().document(id).unwrap().content, junk);
+    // What does not read its text still works: the tree, a move, the trash.
+    assert_eq!(
+        fx.library
+            .tree(&TreeRequest::default())
+            .unwrap()
+            .total_documents,
+        3
+    );
+    fx.library
+        .move_document(&MoveDocumentRequest {
+            document: id.into(),
+            folder: Some(Target::path("Notes")),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    fx.library
+        .trash_document(&TrashDocumentRequest {
+            document: id.into(),
+            write: claude(),
+        })
+        .unwrap();
+    assert_eq!(fx.store().document(id).unwrap().content, junk);
+}
+
+#[test]
+fn requests_and_results_are_json() {
+    let fx = seeded();
+    // What an MCP client sends: the item as a string or a number, only the fields it
+    // needs, the write options beside them.
+    let request: EditRequest = serde_json::from_str(
+        r#"{"document": "Book/Chapter 1", "old_text": "at dawn", "new_text": "at dusk",
+            "author": "Claude", "dry_run": true}"#,
+    )
+    .unwrap();
+    assert_eq!(request.document, Target::path("Book/Chapter 1"));
+    assert_eq!(request.write.author.as_deref(), Some("Claude"));
+    let tried = fx.library.edit(&request).unwrap();
+    let json = serde_json::to_value(&tried).unwrap();
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["app_is_open"], false);
+    assert_eq!(json["replacements"], 1);
+    assert_eq!(json["matched_as"], "text");
+    assert_eq!(json["document"]["path"], "Book/Chapter 1");
+    assert_eq!(json["snapshot"], serde_json::Value::Null);
+    let back: writer_agent::ContentChanged = serde_json::from_value(json).unwrap();
+    assert_eq!(back, tried);
+
+    let request: InsertRequest = serde_json::from_str(
+        r#"{"document": "doc:1", "markdown": "More.", "position": "after_heading",
+            "heading": "Notes"}"#,
+    )
+    .unwrap();
+    assert_eq!(request.document, Target::DocumentId(1));
+    assert_eq!(request.position, InsertPosition::AfterHeading);
+    let done = fx.library.insert(&request).unwrap();
+    assert_eq!(done.headings, ["Notes"]);
+    let request: MoveDocumentRequest =
+        serde_json::from_str(r#"{"document": 3, "folder": "/", "placement": {"before": "Loose"}}"#)
+            .unwrap();
+    assert_eq!(request.folder, Some(Target::root()));
+    let request: writer_agent::ExportRequest =
+        serde_json::from_str(r#"{"folder": "Book", "path": "/tmp/x.docx", "format": "docx"}"#)
+            .unwrap();
+    assert_eq!(request.format, Some(writer_agent::ExportFormat::Docx));
+    assert!(serde_json::from_str::<ReadRequest>(r#"{"document": 1, "format": "text"}"#).is_ok());
+    assert!(serde_json::from_str::<ReadRequest>(r#"{"document": 1, "format": "pdf"}"#).is_err());
+
+    // An error as data.
+    let error = fx
+        .library
+        .edit(&EditRequest {
+            document: Target::path("Chapter 1"),
+            old_text: "o".into(),
+            new_text: "0".into(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap_err();
+    let report = serde_json::to_value(error.report()).unwrap();
+    assert_eq!(report["code"], "not_unique");
+    assert!(report["message"].as_str().unwrap().contains("occurs"));
+    assert_eq!(report["occurrences"][0]["occurrence"], 1);
+    assert!(report.get("candidates").is_none());
+}

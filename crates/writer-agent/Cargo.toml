@@ -17,3 +17,6 @@ unicode-segmentation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# To make a library as an older version of the app left it (the same build of SQLite
+# the store uses).
+rusqlite = { version = "0.42", features = ["bundled"] }

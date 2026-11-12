@@ -346,8 +346,8 @@ pub enum TextFormat {
     /// operation that takes text reads.
     #[default]
     Markdown,
-    /// Plain text without any markup: the text that `old_text` of an edit and the `quote`
-    /// of a comment are matched against.
+    /// Plain text without any markup, as the app's plain text export writes it: a blank
+    /// line between blocks, list items with their bullets and numbers.
     #[serde(alias = "text", alias = "txt", alias = "plain")]
     PlainText,
     /// The document as the library stores it: the native JSON of the document model, with
@@ -972,16 +972,27 @@ pub struct DocumentCreated {
 
 /// A request to replace the whole text of a document with Markdown.
 ///
-/// The document is brought to the given text with as few changes as possible: a block
-/// (paragraph, heading, list item) that reads the same in the new text is left exactly as
-/// it is, with everything Markdown cannot say (colours, fonts, alignment) and with the
-/// comments anchored in it. The settings of the document stay.
+/// The document is brought to the given text with as few changes as possible, so that an
+/// agent can read the Markdown, change it and write it back without disturbing what it
+/// did not change:
 ///
-/// Comments: a thread stays anchored to its text wherever that text is unchanged. Where a
-/// block was rewritten, the anchors inside the rewritten words go with them; a thread
-/// that is left without any anchored text is not deleted: it is kept without a place
-/// (the app lists such threads last), and the result names it in
-/// [`ContentChanged::comments_detached`].
+/// - A block (paragraph, heading, list item) that reads the same in the new text is not
+///   touched. It keeps its comments and everything Markdown does not say (colours, fonts,
+///   alignment, text size).
+/// - A block that was edited (the old and the new one are of the same kind and share at
+///   least half of their words, or one is nearly all inside the other) is changed word by
+///   word. The words that are the same keep their comments and everything else.
+/// - Everything else is removed and inserted.
+///
+/// The settings of the document (page, font, language) stay.
+///
+/// **Comments.** A thread stays anchored to its text wherever that text is unchanged.
+/// Where words are replaced by other words, a thread that began at the first of the
+/// replaced words stays on the replacement; a thread on words that are removed without a
+/// replacement, or on a block that is removed, loses its place. It is not deleted: it is
+/// kept without a place (the app lists such threads last), and the result names it in
+/// [`ContentChanged::comments_detached`]. The version kept before the change has every
+/// thread where it was.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplaceDocumentRequest {
@@ -997,28 +1008,39 @@ pub struct ReplaceDocumentRequest {
 /// A request to replace a piece of text in a document, the way an agent's own edit tool
 /// replaces a string in a file.
 ///
-/// **What `old_text` is matched against.** The text of the document without markup, as
-/// [`TextFormat::PlainText`] reads it, with one line break between two blocks. The match
-/// is exact: every character, capitals and punctuation included. When the text does not
-/// occur like that, it is read as Markdown and looked for again, so a piece copied from
-/// the Markdown form of the document (with `**bold**`, a `## ` in front of a heading, list
-/// markers, a blank line between paragraphs) finds its place too;
-/// [`ContentChanged::matched_as`] says which it was.
+/// **What `old_text` is matched against.** The text of the document without markup: the
+/// text of its blocks (paragraphs, headings, list items, without list markers or `#`
+/// signs), with one line break between two blocks. The match is exact: every character,
+/// capitals and punctuation included; line breaks at the ends of `old_text` do not count.
+/// When the text does not occur like that, it is read as Markdown and looked for again,
+/// so a piece copied from the Markdown form of the document (with `**bold**`, a `## ` in
+/// front of a heading, list markers, a blank line between paragraphs) finds its place
+/// too; [`ContentChanged::matched_as`] says which it was. [`Library::find`](crate::Library::find)
+/// shows what a text would match without changing anything.
 ///
 /// **How many matches.** Exactly one, or the request fails: with
 /// [`Error::NoMatch`](crate::Error::NoMatch) for none, with
 /// [`Error::NotUnique`](crate::Error::NotUnique) for several (it lists them). `all`
 /// replaces every match; `occurrence` chooses one by its number.
 ///
-/// **What `new_text` is.** Markdown. Words without markup take the formatting of the
-/// text they replace (a replaced word in a bold passage stays bold); markup becomes
-/// formatting (`*so*` is italic, `[text](url)` a link); several paragraphs become several
-/// blocks. A leading `#`, `-`, `>` or `1.` is only read as a heading, a list item or a
-/// quote when the match covers whole blocks: in the middle of a sentence it is the
-/// character it is. With `literal` nothing is read as Markdown at all.
+/// **What `new_text` is.** Markdown. Markup becomes formatting (`*so*` is italic,
+/// `[text](url)` a link); several paragraphs become several blocks; a line break at the
+/// start or the end of `new_text` ends the block there. When `old_text` was found as it
+/// stands, words without markup take the formatting of the text they replace (a replaced
+/// word in a bold passage stays bold); when it was found by reading it as Markdown, the
+/// markup of `new_text` is all the formatting the replacement has (`**word**` replaced by
+/// `word` is no longer bold). A leading `#`, `-`, `>` or `1.` is only read as a heading,
+/// a list item or a quote when the match covers whole blocks: in the middle of a
+/// sentence it is the character it is. With `literal` nothing is read as Markdown at
+/// all, in `old_text` or in `new_text`; a line break in `new_text` is then a new
+/// paragraph.
 ///
-/// Everything outside the replaced text keeps its formatting and its comments. An empty
-/// `new_text` deletes the match.
+/// **What stays.** Everything outside the replaced text keeps its formatting and its
+/// comments, and inside one block only the words that differ between the match and
+/// `new_text` are touched. A comment on a replaced word stays on its replacement; a
+/// comment on text that is deleted loses its place and is named in
+/// [`ContentChanged::comments_detached`]. An empty `new_text` deletes the match, and a
+/// block whose whole text is deleted goes with it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditRequest {
@@ -1103,9 +1125,10 @@ pub struct InsertRequest {
 ///
 /// The section is everything from the heading to the next heading of the same or a higher
 /// level, subsections included. The heading line itself stays unless `include_heading` is
-/// set; then the Markdown replaces it too (and should begin with the new heading).
-/// Comments anchored in the replaced text are kept without a place, as in
-/// [`ReplaceDocumentRequest`].
+/// set; then the Markdown replaces it too (and should begin with the new heading). The
+/// section is brought to the new text the way [`ReplaceDocumentRequest`] brings a
+/// document to it: what reads the same is not touched, and comments stay or lose their
+/// place by the same rules.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplaceSectionRequest {
@@ -1278,7 +1301,8 @@ pub struct DeleteDocumentRequest {
 pub struct DocumentChanged {
     /// The document as it is after the change (for a permanent deletion: as it was).
     pub document: DocumentSummary,
-    /// The document as it was before, when the change is one of name or place.
+    /// The document as it was before, when the change is one of name, place or state.
+    /// For a copy: the original. `None` for a permanent deletion.
     pub before: Option<DocumentSummary>,
     /// The folders that were created for a move, outermost first.
     #[serde(default)]
@@ -1390,9 +1414,11 @@ pub struct DeleteFolderRequest {
 pub struct FolderChanged {
     /// The folder as it is after the change (for a permanent deletion: as it was).
     pub folder: FolderSummary,
-    /// The folder as it was before, when the change is one of name or place.
+    /// The folder as it was before, when the change is one of name, place or state.
+    /// `None` for a permanent deletion.
     pub before: Option<FolderSummary>,
-    /// How many folders inside it went with it (trash, restore, permanent deletion).
+    /// How many folders inside it went with it (move, trash, restore, permanent
+    /// deletion). 0 for a rename.
     pub folders: u64,
     /// How many documents inside it went with it.
     pub documents: u64,
@@ -1524,7 +1550,9 @@ pub struct CommentRequest {
 }
 
 /// A request to delete a comment thread, or one reply of it. The text it was about is not
-/// touched. A version of the document is kept first, so the thread can be brought back.
+/// touched. A version of the document is kept first, so the thread can be brought back
+/// (adding, answering, resolving and reopening keep none: they lose nothing, and each
+/// can be taken back with a request of this kind).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeleteCommentRequest {

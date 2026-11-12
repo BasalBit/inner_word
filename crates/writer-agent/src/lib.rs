@@ -36,10 +36,12 @@
 //! lock for its duration and fails with [`Error::AppIsOpen`] when the app has it. Nothing
 //! is written in that case. Reading opens the database read-only and takes no lock.
 //!
-//! **Nothing an agent does is final.** Before the text or the comments of a document are
-//! changed, a version of the document as it was is kept and labelled ("Before an edit by
-//! Claude"); [`ContentChanged::snapshot`] names it and [`Library::restore_version`] brings
-//! it back. Deleting means the trash. Deleting for good exists
+//! **Nothing an agent does is final.** Before the text of a document is changed, or a
+//! comment deleted, a version of the document as it was is kept and labelled ("Before an
+//! edit by Claude"); [`ContentChanged::snapshot`] names it and
+//! [`Library::restore_version`] brings it back. The label lives beside the version in the
+//! library (`writer_store::Store::snapshot_labels`), where the app can show it. Deleting
+//! means the trash. Deleting for good exists
 //! ([`Library::delete_document`], [`Library::delete_folder`], [`Library::empty_trash`]) and
 //! is refused with [`Error::ConfirmationRequired`] unless the request says `permanently`.
 //!

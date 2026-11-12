@@ -60,6 +60,15 @@ impl PaletteDelegate {
         }
     }
 
+    /// Lists what answers `query`, as typing it into the palette does.
+    pub fn search(&mut self, query: &str) {
+        self.rows = if query.trim().is_empty() {
+            self.browse_rows()
+        } else {
+            self.search_rows(query)
+        };
+    }
+
     /// The titles of the listed commands, in order (headers excluded).
     pub fn listed_titles(&self) -> Vec<String> {
         self.rows
@@ -156,11 +165,7 @@ pub fn words_match(query: &str, text: &str) -> bool {
 
 impl PickerDelegate for PaletteDelegate {
     fn update_matches(&mut self, query: &str, _: &mut Window, _: &mut Context<Picker<Self>>) {
-        self.rows = if query.trim().is_empty() {
-            self.browse_rows()
-        } else {
-            self.search_rows(query)
-        };
+        self.search(query);
     }
 
     fn entry_count(&self) -> usize {

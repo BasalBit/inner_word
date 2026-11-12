@@ -213,7 +213,7 @@ impl Workspace {
                 continue;
             };
             if percent == 100 {
-                // "Actual size", above.
+                // "Zoom to actual size", above.
                 continue;
             }
             root = root.on_boxed_action(

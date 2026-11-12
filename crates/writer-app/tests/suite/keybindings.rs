@@ -2209,7 +2209,7 @@ fn a_key_reads_the_same_in_the_menu_bar_the_hints_and_the_list(cx: &mut TestAppC
     assert_eq!(chips("Zoom in", Place::Anywhere, vcx), ["⌘=", "⌘+"]);
     // The other keys made with shift and punctuation read as they did, in
     // the list and in the menu bar alike.
-    assert_eq!(chips("Actual size", Place::Anywhere, vcx), ["⇧⌘0"]);
+    assert_eq!(chips("Zoom to actual size", Place::Anywhere, vcx), ["⇧⌘0"]);
     assert_eq!(chips("Numbered list", Place::Text, vcx), ["⇧⌘7"]);
     assert_eq!(
         menu_key(&zoom::ActualSize, vcx).as_deref(),
@@ -3795,7 +3795,7 @@ fn the_zoom_commands_are_given_other_keys_in_the_list(cx: &mut TestAppContext) {
     assert_eq!(row_keys("Zoom in", Place::Anywhere, vcx), zoom_in_default);
     assert_eq!(row_keys("Zoom out", Place::Anywhere, vcx), ["cmd--"]);
     assert_eq!(
-        row_keys("Actual size", Place::Anywhere, vcx),
+        row_keys("Zoom to actual size", Place::Anywhere, vcx),
         ["cmd-shift-0"]
     );
     for title in ["Zoom to fit width", "Zoom to fit page", "Zoom to life size"] {
@@ -3835,7 +3835,7 @@ fn the_zoom_commands_are_given_other_keys_in_the_list(cx: &mut TestAppContext) {
     let changes: [(&str, &str, &str, &str); 6] = [
         ("zoom::ZoomIn", "Zoom in", "cmd-alt-=", "⌥⌘="),
         ("zoom::ZoomOut", "Zoom out", "cmd-alt--", "⌥⌘-"),
-        ("zoom::ActualSize", "Actual size", "f6", "F6"),
+        ("zoom::ActualSize", "Zoom to actual size", "f6", "F6"),
         ("zoom::FitWidth", "Zoom to fit width", "f7", "F7"),
         ("zoom::FitPage", "Zoom to fit page", "f8", "F8"),
         ("zoom::LifeSize", "Zoom to life size", "f9", "F9"),

@@ -1086,7 +1086,9 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   and there is no "Life Size" to choose.
 - **How it is reached.** Keys: zoom in `cmd-+` (and `cmd-=`), zoom out `cmd--`, actual
   size `cmd-shift-0` (bound in both spellings: `cmd-)` is what a real keyboard reports).
-  Palette: "Zoom in", "Zoom out", "Actual size", "Zoom to fit width", "Zoom to fit page",
+  Palette: "Zoom in", "Zoom out", "Zoom to actual size" (the menus say "Actual Size"; the
+  title has "zoom" in it so that the list of shortcuts, which searches titles and not
+  keywords, finds it with the others), "Zoom to fit width", "Zoom to fit page",
   "Zoom to life size" and "Zoom to 50 %" ... "Zoom to 400 %" (no keys by default; the user
   can give them one). Menu bar: View > Zoom In, Zoom Out, Actual Size, Fit Width, and Zoom
   To > Fit Page, Life Size and the steps. Pointer: the zoom in the status bar ("125 %"), a

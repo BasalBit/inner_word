@@ -266,7 +266,7 @@ fn the_keys_and_the_palette_zoom_the_text_and_nothing_else(cx: &mut TestAppConte
         ("Zoom to 250 %", Zoom::Percent(250)),
         ("Zoom to 50 %", Zoom::Percent(50)),
         ("Zoom to fit width", Zoom::FitWidth),
-        ("Actual size", Zoom::Percent(100)),
+        ("Zoom to actual size", Zoom::Percent(100)),
         ("Zoom to 175 %", Zoom::Percent(175)),
     ] {
         run_command(&workspace, title, cx);
@@ -331,7 +331,7 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
         [
             "View: Zoom in",
             "View: Zoom out",
-            "View: Actual size",
+            "View: Zoom to actual size",
             "View: Zoom to fit width",
             "View: Zoom to fit page",
             "View: Zoom to life size",
@@ -347,8 +347,59 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
         ]
     );
 
+    // Whoever types "zoom" finds every one of them, the one with ⇧⌘0
+    // among them (0.6.0 called it "Actual size", and the list of keyboard
+    // shortcuts, which searches titles, did not find it): in the palette...
+    let found_by_zoom = |found: Vec<String>, place: &str| {
+        for title in &titles {
+            let title = title.strip_prefix("View: ").unwrap();
+            assert!(
+                found.iter().any(|found| found == title),
+                "\"zoom\" does not find {title} in {place}: {found:?}"
+            );
+        }
+    };
+    let palette = cx.update(|cx| {
+        let mut palette = writer_app::palette::PaletteDelegate::with_commands(
+            gpui::WeakEntity::new_invalid(),
+            commands::all(cx),
+            Vec::new(),
+        );
+        palette.search("zoom");
+        palette.listed_titles()
+    });
+    // (By title, so among the first: what only a keyword finds, "Larger
+    // body text", comes after them.)
+    assert!(
+        palette[..titles.len()]
+            .iter()
+            .any(|title| title == "Zoom to actual size"),
+        "{palette:?}"
+    );
+    found_by_zoom(palette, "the palette");
+    // ... and in the list of keyboard shortcuts.
+    {
+        let library = library(cx);
+        add_document(&library, None, &simple_document("Zoom", "A few words."), cx);
+        let (workspace, vcx) = open_workspace(&library, cx);
+        vcx.simulate_keystrokes("cmd-/");
+        vcx.run_until_parked();
+        let list = workspace
+            .read_with(vcx, |workspace, cx| workspace.shortcuts_list(cx))
+            .expect("the list of keyboard shortcuts is open");
+        list.update(vcx, |list, cx| list.set_query("zoom", cx));
+        vcx.run_until_parked();
+        let listed: Vec<String> = list.read_with(vcx, |list, _| {
+            list.listed().into_iter().map(|(_, title)| title).collect()
+        });
+        assert_eq!(listed.len(), titles.len(), "{listed:?}");
+        found_by_zoom(listed, "the list of keyboard shortcuts");
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+    }
+
     // The View menu: in, out, actual size and fit width, then the rest
-    // under "Zoom To".
+    // under "Zoom To". Its words are a Mac's: "Actual Size".
     fn names_of(items: &[gpui::MenuItem], out: &mut Vec<String>) {
         for item in items {
             match item {

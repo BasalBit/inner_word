@@ -140,8 +140,12 @@ pub fn commands() -> Vec<CommandDescriptor> {
         ]),
         CommandDescriptor::new("Zoom out", CATEGORY_VIEW, ZoomOut)
             .keywords(["smaller", "reduce", "shrink", "further", "view", "scale"]),
-        CommandDescriptor::new("Actual size", CATEGORY_VIEW, ActualSize).keywords([
-            "zoom",
+        // Named like its neighbours, so that "zoom" finds it with them in
+        // the palette and in the list of keyboard shortcuts (which searches
+        // titles; 0.6.0 called it "Actual size" and the list found fourteen
+        // zoom commands, not the one with a key). The menus say "Actual
+        // Size", as a Mac does.
+        CommandDescriptor::new("Zoom to actual size", CATEGORY_VIEW, ActualSize).keywords([
             "100",
             "reset zoom",
             "normal size",
@@ -172,7 +176,7 @@ pub fn commands() -> Vec<CommandDescriptor> {
     ];
     for percent in MENU_STEPS {
         if percent == 100 {
-            // "Actual size" above.
+            // "Zoom to actual size" above.
             continue;
         }
         if let Some(action) = step_action(percent) {

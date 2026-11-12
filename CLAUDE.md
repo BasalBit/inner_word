@@ -12,7 +12,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), input, and the seams the crates below plug into. |
+| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, and the seams the crates below plug into. |
 | `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
@@ -20,7 +20,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted) and the library sidebar panel. |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
@@ -81,7 +81,7 @@ THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/som
 ```
 
 Steps: `wait:<ms>`, `keys:<keystrokes>` (the key `;` is written `\;`: `keys:cmd-\;`), `type:<text>`, `action:<name>`, `menu:<name>` (opens
-a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`),
+a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`, `zoom`),
 `choose:<label>` (chooses that item of the open context menu, as a click would),
 `menukey:<title>` (prints the key the native menu bar has beside that item, read from
 AppKit's own menu: `menukey:Bold`),
@@ -92,8 +92,10 @@ keys"), `agents:<n>[:<ms>]` (waits until agents have made `n` changes through th
 the `writer` tool being run from outside meanwhile; fails after `ms`, 10 s unless given) and
 `agents:on` / `agents:off` (the switch "Agents can make changes while The Writer is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
-written), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
+written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`, `zoom:fit`),
+`resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
+the zoom of the view (`zoom=[page 177% fit-width life=177%]`),
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
 is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
@@ -183,7 +185,11 @@ bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from
 with the real listener, and the real client of `writer-agent` asking from a second thread;
 `tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine;
 `tests/suite/keybindings.rs` holds the keys the user changes: the keymap taken apart and put
-back, every kind of change, the list, the guard rails, storage, the shortcuts file.
+back, every kind of change, the list, the guard rails, storage, the shortcuts file;
+`tests/suite/zoom.rs` holds the zoom in the assembled app: the keys, the palette, the menu
+bar, the status bar item and its menu with the pointer, `cmd` with the wheel, what is kept
+over a relaunch, what a page opens at, and the tools, the menus, the format bar, the quick
+chat, the comments and Vim's caret at 75 %, 100 % and 150 % in both views.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -597,6 +603,8 @@ Global (work anywhere in the window):
 | `cmd-,` | Settings |
 | `cmd-/` | Keyboard shortcuts: every key, to look up and to change |
 | `cmd-opt-p` | Turn page view on or off |
+| `cmd-+` (and `cmd-=`, the same key without shift) / `cmd--` | Zoom in / zoom out: the text is drawn larger or smaller, nothing of the document changes |
+| `cmd-shift-0` | Actual size, 100 % (`cmd-0` is "Go to library") |
 | `cmd-opt-v` | Turn Vim mode on or off |
 | `cmd-opt-a` | Agents panel (the command line tool, the skill, the MCP server) |
 | `cmd-opt-c` | Show or hide comments |
@@ -935,6 +943,102 @@ document"). Three crates: `writer-keymap` knows what a change is,
   `THE_WRITER_EXPORT_DIR`. A test names the file an "Import…" takes with
   `workspace::choose_import_file_beforehand`.
 
+## Zoom
+
+The view of the text is drawn larger or smaller, in flow view and in page view: type,
+spacing, indents, the sheets with their margins, shadows and page numbers, all together.
+Nothing of the document changes: text sizes stay what they are in points, nothing is marked
+as edited, undo knows nothing of it, an export is the same. The interface around the text
+does not zoom. Where it lives: `crates/writer-editor/src/zoom.rs` (what a zoom is, setting
+it, keeping the place), `crates/writer-app/src/zoom.rs` (the commands and their keys, the
+stored form, how large the display is), `workspace/zoom.rs` (the handlers, the status bar
+item and its menu, storing), `pinch.rs` (the trackpad).
+
+- **What a zoom is** (`writer_editor::Zoom`): a percentage from 50 to 400, "fit width" (the
+  sheet, or in flow view the column, as wide as its room), "fit page" (one whole sheet), and
+  "fit width up to N %". The three fits follow the window. Zoom in and out step through 50,
+  67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400 (`ZOOM_STEPS`), from whatever
+  the view shows (from a fit of 163 %: in is 175, out is 150).
+- **What 100 % is**: one point of the document is one pixel of the window (a logical pixel,
+  two device pixels on a Retina display), in both views. Pages and TextEdit draw their 100 %
+  so, and by everything that could be found Word for Mac does too (Word for Windows draws
+  96 to the inch, a third larger). On today's displays that is much smaller than paper: at
+  127 pixels to the inch an A4 sheet at 100 % is 12 cm wide. That, and not the layout, is
+  why a page looked small.
+- **The layout never sees the zoom.** It is computed in the document's own points
+  (`crate::layout`: no scale in `LayoutStyle`, `PageGeometry` is the page setup and nothing
+  else), and one transform (`layout::View`) puts layout coordinates into the window when a
+  frame is planned, a geometry query is answered or a pointer position comes in. Glyphs are
+  painted one by one at their shaped place times the zoom, in their font at its size times
+  the zoom (`paint.rs`). So in page view the same words stand on the same lines and the
+  same lines on the same pages at every zoom, by construction, and a zoom shapes nothing
+  again (`tests/zoom.rs`: `the_same_words_on_the_same_lines_and_pages_at_every_zoom`).
+- **Page view**: a true zoom of the sheets. A sheet wider than its room does not shrink
+  (the clamp of 0.5.0 that only ever made a page smaller is gone): the view scrolls
+  sideways, with two fingers or with shift and the wheel, a move that goes mostly up and
+  down leaves the sheet where it is, and the caret is kept in view while typing.
+  **Flow view**: the column is 700 points wide and grows with the zoom until it fills the
+  width there is; beyond that it holds fewer points and the text reflows. Flow view never
+  scrolls sideways. Compact editors (a comment being written) do not zoom.
+- **Everything the editor says in window coordinates is at the zoom**: `caret_bounds`,
+  `position_bounds`, `range_bounds`, `selection_bounds`, `position_at_point`, the rectangle
+  macOS gets for its input windows, `scroll_offset` and `scroll_by_pixels`. So whatever is
+  anchored through them follows by itself (the tools, the context menus, the format bar,
+  the quick chat, the comments, Vim's caret and its motions by screen row, spelling and
+  find marks). **Never work a position out from points and a line height: ask the editor.**
+- **Zooming keeps the place.** From the keyboard and the menus the line the caret is on
+  stays where it is on screen (`Editor::set_zoom`); with `cmd` and the wheel and with a
+  pinch what is under the pointer stays under it (`Editor::zoom_by`; sideways only where the
+  sheet is wider than its room, otherwise it stays in the middle).
+- **Each view has its own zoom**, kept in the library's settings: `view.zoom.flow` and
+  `view.zoom.page`, as text (`"125"`, `"fit-width"`, `"fit-page"`). A fit is kept as a fit
+  and follows the window again after a relaunch. Only the zoom the writer changed is
+  written, 300 ms after the last change (the wheel makes many), and when the window closes
+  or the app quits. Flow view starts at 100 %.
+- **What a page opens at before a zoom was ever chosen for it**: as large as the paper it
+  stands for, or as wide as the window where that is narrower ("fit width up to life size",
+  `zoom::first_page_zoom`; it follows the window and is not stored). Life size is the
+  display's: `CGDisplayScreenSize` and the display's width in pixels give pixels to the
+  inch, over 72 (177 % on this Mac's built-in display at its default scaling, 210 % at
+  "More Space"). `main` asks this Mac (`zoom::use_this_mac`); a test names a density
+  (`zoom::set_display_density`) or has none, and with none a page opens at 100 % and there
+  is no "Life Size" to choose.
+- **How it is reached.** Keys: zoom in `cmd-+` (and `cmd-=`), zoom out `cmd--`, actual
+  size `cmd-shift-0` (bound in both spellings: `cmd-)` is what a real keyboard reports).
+  Palette: "Zoom in", "Zoom out", "Actual size", "Zoom to fit width", "Zoom to fit page",
+  "Zoom to life size" and "Zoom to 50 %" ... "Zoom to 400 %" (no keys by default; the user
+  can give them one). Menu bar: View > Zoom In, Zoom Out, Actual Size, Fit Width, and Zoom
+  To > Fit Page, Life Size and the steps. Pointer: the zoom in the status bar ("125 %"), a
+  click or a right-click opens the same choices with the one in force checked
+  (`MenuKind::Zoom`); `cmd` with the wheel; a pinch on the trackpad. The commands are only
+  there while a document is open.
+- **The pinch** is AppKit's, not GPUI's: gpui 0.2.2 has no magnify event, so `pinch.rs`
+  installs a local monitor for magnify events (and no others: scroll events never reach
+  it), which hands each event on untouched after reading how much and where, through a
+  channel, to `Workspace::pinch`. The way from there to the zoom is tested; the monitor is
+  installed in every run of the real binary; **the gesture itself has only been tried by
+  whoever pinched** (no script can pinch).
+- **Scripted runs**: `zoom:in`, `zoom:out`, `zoom:actual`, `zoom:fit`, `zoom:page`,
+  `zoom:life`, `zoom:125`, `zoom:by:1.25` (as a pinch at the middle of the text),
+  `zoom:sideways:300` (scrolls a sheet that is wider than its room); `menu:zoom` opens the
+  status bar's menu; `state` has `zoom=[page 200% sideways=144/470 life=210%]`.
+- **What it costs** (release build, the generated book of 10,000 paragraphs, measured for
+  0.6.0 with `keycost:cmd-= ...` and `typecost:` after `zoom:150`): a change of zoom from
+  the keyboard reaches the picture in 8 ms in page view (33 ms at worst) and in 14 ms in
+  flow view where the column has to reflow (42 ms at worst); the main thread kept a 4 ms
+  timer waiting 3.4 ms at most. A typed key reaches the picture at 150 % in the time it
+  takes at 100 %: page view 10.0 and 9.1 ms at 100 %, 9.9 and 9.9 ms at 150 %; flow view
+  9.4, 9.9 and 6.5 ms at 100 %, 8.0, 8.7 and 6.7 ms at 150 % (medians of 20 keys, the two
+  zooms in turns in one run; the frame itself wanders between 2 and 10 ms from run to run).
+- **How much a page holds** does not depend on any of this; it is paper, margins, font,
+  size and line spacing. `pagefit:<font>|<size>|<line spacing>|<a4 or letter>|<file>` lays
+  a text out and counts. Per line the page holds what CoreText puts on it, character for
+  character, in Times New Roman 12, Arial 11, Georgia 12 and Charter 12 on A4 and Letter
+  (91.8, 90.0, 83.1 and 83.1 characters on A4). Per page it differs from Word only through
+  what "line spacing" means: here a multiple of the text size, rounded to whole points
+  (`LayoutStyle::line_points`), in Word a multiple of the font's own line (1.15 to 1.22
+  times the size).
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
@@ -968,7 +1072,8 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   turns it off through `EditorTools::set_format_bar_enabled`. It is not a `ToolKind`.
 - **The app's own menus** (`crates/writer-app/src/workspace/menus.rs`): the title above the
   text (right-click, or the chevron beside it) and the items of the status bar (the save
-  state, the counts, the page indicator, the character limit; a click or a right-click).
+  state, the counts, the page indicator, the character limit, the zoom; a click or a
+  right-click).
 - **Modals** close on `escape`, a click on the backdrop, or their close control; rows and
   controls take clicks.
 - An item that is a command is the command's action, so it shows the key and does what the

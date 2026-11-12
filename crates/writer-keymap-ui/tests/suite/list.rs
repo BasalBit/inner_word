@@ -277,3 +277,113 @@ fn no_row_is_taller_than_its_text(cx: &mut TestAppContext) {
     assert!(panel.size.height < window.height);
     drop(host);
 }
+
+#[gpui::test]
+fn the_view_fits_the_smallest_window(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    // The smallest size the app's window can have.
+    cx.simulate_resize(gpui::size(px(640.), px(480.)));
+    cx.run_until_parked();
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(window.height, px(480.));
+    let panel = bounds(cx, "keymap-panel");
+    assert!(panel.size.width <= window.width, "{:?}", panel.size.width);
+    assert!(
+        panel.bottom() <= window.height,
+        "the panel ends at {:?}",
+        panel.bottom()
+    );
+    // Some rows are still shown, each at its height.
+    let rows = (0..12)
+        .filter(|row| {
+            cx.debug_bounds(selector(format!("keymap-row-{row}")))
+                .is_some()
+        })
+        .count();
+    assert!(rows >= 4, "{rows}");
+    // The controls are all inside.
+    for control in [
+        "keymap-import",
+        "keymap-export",
+        "keymap-reset-all",
+        "keymap-close",
+    ] {
+        let at = bounds(cx, control);
+        assert!(
+            at.right() <= panel.right() && at.left() >= panel.left(),
+            "{control}: {at:?}"
+        );
+    }
+    // With a question open the panel still ends inside the window.
+    select(&view, &bold(), cx);
+    press(cx, "enter cmd-i");
+    let panel = bounds(cx, "keymap-panel");
+    assert!(
+        panel.bottom() <= window.height,
+        "with the band: {:?}",
+        panel.bottom()
+    );
+    let choice = bounds(cx, "keymap-choice-0");
+    assert!(choice.bottom() <= panel.bottom());
+    press(cx, "escape");
+    // And the import preview.
+    host.update(cx, |host, _| {
+        host.import_file = Some(("Mine.json".into(), host::edited_file(host)));
+    });
+    press(cx, "cmd-i");
+    let panel = bounds(cx, "keymap-panel");
+    assert!(
+        panel.bottom() <= window.height,
+        "the preview: {:?}",
+        panel.bottom()
+    );
+    assert!(bounds(cx, "keymap-choice-0").bottom() <= panel.bottom());
+}
+
+#[gpui::test]
+fn changes_kept_from_another_version_are_said_and_can_be_removed(cx: &mut TestAppContext) {
+    use writer_keymap::{Changes, DefaultBinding, Defaults, Keymap, Places};
+    let (host, view, cx) = open(cx);
+    // A change stored by a version that had a command this one has not.
+    let stored = {
+        let defaults =
+            Defaults::from_bindings([
+                DefaultBinding::new("old::Gone", None, None, "cmd-g").unwrap()
+            ]);
+        let mut other = Keymap::new(defaults, Places::new());
+        other.replace_key(
+            &Target::new("old::Gone", None),
+            &key("cmd-g"),
+            key("cmd-alt-g"),
+        );
+        other.stored().unwrap()
+    };
+    let listing = host.update(cx, |host, _| {
+        host.keymap
+            .set_changes(Changes::from_stored(&stored).unwrap());
+        host.listing()
+    });
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    view.read_with(cx, |view, _| {
+        let headings = view.headings();
+        assert_eq!(headings[0], host::NOTE);
+        assert_eq!(
+            headings[1],
+            "1 change made in another version is kept, without effect in this one"
+        );
+        assert_eq!(view.changed_count(), 0);
+        // It is something Reset All removes.
+        assert!(view.can_reset_all());
+    });
+    press(cx, "cmd-shift-d");
+    assert!(
+        view.read_with(cx, |view, _| view.question_lines()[0].text.clone())
+            .starts_with("No key differs from its default in this version.")
+    );
+    press(cx, "enter");
+    assert!(host.read_with(cx, |host, _| host.keymap.changes().is_empty()));
+    view.read_with(cx, |view, _| {
+        assert!(!view.can_reset_all());
+        assert_eq!(view.headings()[1], "Anywhere \u{b7} View");
+    });
+}

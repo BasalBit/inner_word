@@ -11,6 +11,8 @@
 //! (the numbers behind the view show that neither runs while a key is
 //! recorded).
 //!
+//! `SHORTCUTS_WINDOW=<w>x<h>` sets the size of the window.
+//!
 //! Visual QA: set `THE_WRITER_AUTOMATION` (see `automation.rs`), e.g.
 //! `THE_WRITER_AUTOMATION="wait:800; keys:cmd-/; screenshot:/tmp/k.png; quit"`.
 //! The run stays in the background and captures only its own window.
@@ -32,7 +34,17 @@ fn main() {
         .run(|cx: &mut App| {
             theme::init(ThemeMode::System, cx);
             host::init(cx);
-            let bounds = Bounds::centered(None, size(px(980.), px(760.)), cx);
+            // `SHORTCUTS_WINDOW=640x480` opens the window at another size
+            // (the smallest the app's window gets, for a look at the view
+            // when it has little room).
+            let (width, height) = std::env::var("SHORTCUTS_WINDOW")
+                .ok()
+                .and_then(|text| {
+                    let (width, height) = text.split_once('x')?;
+                    Some((width.parse::<f32>().ok()?, height.parse::<f32>().ok()?))
+                })
+                .unwrap_or((980., 760.));
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
             let window = cx
                 .open_window(
                     WindowOptions {

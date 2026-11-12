@@ -59,7 +59,7 @@ fn tone_color(tone: Tone, colors: &ThemeColors) -> Hsla {
     match tone {
         Tone::Plain => colors.ink,
         Tone::Good => colors.success,
-        Tone::Warning => colors.muted,
+        Tone::Warning => colors.ink,
         Tone::Stop => colors.danger,
     }
 }
@@ -122,7 +122,8 @@ impl KeymapView {
                                 .min_w_0()
                                 .text_size(UI_TEXT_SM)
                                 .text_color(colors.muted)
-                                .truncate()
+                                .line_clamp(1)
+                                .text_ellipsis()
                                 .child(text),
                         )
                         .into_any_element(),
@@ -187,6 +188,20 @@ impl KeymapView {
         };
 
         let mut key_area = div().flex().flex_none().items_center().gap(px(4.));
+        if entry.clash.is_some() {
+            // Two commands on this key in one place: a sign beside the key,
+            // the sentence in the hints while the row is selected.
+            key_area = key_area.child(
+                div()
+                    .debug_selector(move || format!("keymap-clash-{ix}"))
+                    .flex_none()
+                    .child(
+                        Icon::new(IconName::Alert)
+                            .size(px(14.))
+                            .color(colors.danger),
+                    ),
+            );
+        }
         if entry.keys.is_empty() && pending.is_none() {
             key_area = key_area.child(
                 div()
@@ -285,19 +300,9 @@ impl KeymapView {
                     ),
             );
 
-        let detail: Option<SharedString> = if let Some(reason) = entry
-            .row
-            .locked
-            .as_ref()
-            .map(|locked| locked.reason.clone())
-            .filter(|_| selected)
-        {
-            Some(reason)
-        } else if !browsing {
-            Some(entry.row.heading.clone())
-        } else {
-            None
-        };
+        // A search shows no headings: the row says where it belongs.
+        let detail: Option<SharedString> = (!browsing).then(|| entry.row.heading.clone());
+        let fixed = entry.locked_reason().is_some();
 
         let bounds = self.selected_bounds.clone();
         outer
@@ -378,7 +383,8 @@ impl KeymapView {
                                         .min_w_0()
                                         .text_size(UI_TEXT_SM)
                                         .text_color(colors.muted)
-                                        .truncate()
+                                        .line_clamp(1)
+                                        .text_ellipsis()
                                         .child(detail),
                                 )
                             }),
@@ -390,7 +396,18 @@ impl KeymapView {
                                 .text_size(UI_TEXT_XS)
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
-                                .child(format!("Default {}", default_label(&entry.default_keys))),
+                                .child(format!("Default: {}", default_label(&entry.default_keys))),
+                        )
+                    })
+                    // Why a row has no controls to change it is in the
+                    // hints while it is selected.
+                    .when(fixed, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(UI_TEXT_XS)
+                                .text_color(colors.muted)
+                                .child("Fixed"),
                         )
                     })
                     .child(key_area)
@@ -598,11 +615,37 @@ impl KeymapView {
             .flex_col()
             .gap(px(4.))
             .children(lines.iter().map(|line| {
+                // A sign beside what stands in the way and what is worth
+                // reading, so the tone does not hang on the colour alone.
+                let sign = match line.tone {
+                    Tone::Stop => Some((IconName::Alert, colors.danger)),
+                    Tone::Warning => Some((IconName::Alert, colors.muted)),
+                    Tone::Good => Some((IconName::Check, colors.success)),
+                    Tone::Plain => None,
+                };
                 div()
-                    .text_size(UI_TEXT_BASE)
-                    .line_height(px(18.))
-                    .text_color(tone_color(line.tone, colors))
-                    .child(line.text.clone())
+                    .flex()
+                    .items_start()
+                    .gap(px(6.))
+                    .when_some(sign, |el, (icon, color)| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .pt(px(2.))
+                                .child(Icon::new(icon).size(px(14.)).color(color)),
+                        )
+                    })
+                    // A plain block: wrapped text in a flex column that is
+                    // the growing child of a row is measured at no width.
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(UI_TEXT_BASE)
+                            .line_height(px(18.))
+                            .text_color(tone_color(line.tone, colors))
+                            .child(line.text.clone()),
+                    )
             }))
     }
 
@@ -791,14 +834,22 @@ impl KeymapView {
                         before,
                         after,
                     } => inner
-                        .child(div().flex_none().max_w(px(260.)).truncate().child(title))
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(260.))
+                                .line_clamp(1)
+                                .text_ellipsis()
+                                .child(title),
+                        )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(UI_TEXT_SM)
                                 .text_color(colors.muted)
-                                .truncate()
+                                .line_clamp(1)
+                                .text_ellipsis()
                                 .child(place),
                         )
                         .child(
@@ -828,9 +879,7 @@ impl KeymapView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(UI_TEXT_SM)
-                            .truncate()
-                            .child(text),
+                            .child(div().min_w_0().line_clamp(1).text_ellipsis().child(text)),
                     ),
                     PreviewRow::Header(_) => inner,
                 };
@@ -877,7 +926,8 @@ impl KeymapView {
                         div()
                             .flex_none()
                             .max_w(px(360.))
-                            .truncate()
+                            .line_clamp(1)
+                            .text_ellipsis()
                             .text_size(UI_TEXT_LG)
                             .child(question.title.clone()),
                     )
@@ -885,7 +935,8 @@ impl KeymapView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .line_clamp(1)
+                            .text_ellipsis()
                             .text_size(UI_TEXT_SM)
                             .text_color(colors.muted)
                             .child(crate::words::import_file_line(&preview.plan)),
@@ -954,6 +1005,11 @@ impl KeymapView {
                 if let Some(entry) = self.selected_entry() {
                     if let Some(reason) = entry.locked_reason() {
                         note = Some(format!("Cannot be changed here. {reason}").into());
+                    } else if let Some(clash) = &entry.clash {
+                        // What is wrong with the row comes before what can
+                        // be done on it; both are in its menu.
+                        note = Some(clash.clone());
+                        hints.extend(label("Change", &ChangeKey, cx));
                     } else {
                         if entry.keys.is_empty() {
                             hints.extend(label("Add a Key", &ChangeKey, cx));
@@ -991,7 +1047,7 @@ impl KeymapView {
                         hints.push(KeyLabel::new("Choose", KeyHint::new(keystrokes)));
                     }
                 }
-                hints.extend(label("Take", &Choose, cx));
+                hints.extend(label("Confirm", &Choose, cx));
                 if matches!(question.subject, Subject::Key { .. }) {
                     hints.extend(label("Another Key", &PressAnotherKey, cx));
                 }
@@ -1017,7 +1073,8 @@ impl KeymapView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .line_clamp(1)
+                        .text_ellipsis()
                         .text_size(UI_TEXT_SM)
                         .text_color(colors.muted)
                         .child(note),

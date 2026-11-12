@@ -20,7 +20,7 @@ use writer_ui::{
 use crate::{
     AddKey, CHOICES_STACK, ChangeKey, LIST_STACK, RemoveKey, RunCommand, UseDefault,
     keys::{self, glyph_list, glyphs},
-    listing::{Entry, Listing, entries},
+    listing::{Entry, Listing, entries, inactive_note},
     question::{Choice, Preview, Question, Subject},
     record,
     request::Request,
@@ -418,6 +418,9 @@ impl KeymapView {
             if let Some(reason) = entry.locked_reason() {
                 out.push_str(&format!(" locked={reason:?}"));
             }
+            if let Some(clash) = &entry.clash {
+                out.push_str(&format!(" clash={clash:?}"));
+            }
         }
         match &self.mode {
             Mode::List => out.insert_str(0, "mode=list "),
@@ -432,6 +435,10 @@ impl KeymapView {
                         .map(|key| key.to_string())
                         .unwrap_or_else(|| "nothing".into()),
                 ));
+                let held = keys::modifier_glyphs(&recording.held);
+                if !held.is_empty() {
+                    out.push_str(&format!(" held={held}"));
+                }
                 if let Some(problem) = &recording.problem {
                     out.push_str(&format!(" problem={problem:?}"));
                 }
@@ -557,6 +564,7 @@ impl KeymapView {
         if query.trim().is_empty() {
             if !self.changed_only {
                 rows.extend(self.listing.notes.iter().cloned().map(DisplayRow::Note));
+                rows.extend(inactive_note(&self.listing).map(DisplayRow::Note));
             }
             let mut heading: Option<&SharedString> = None;
             for matched in matches {
@@ -585,7 +593,7 @@ impl KeymapView {
             }
             None => {
                 self.selected = self.next_command(0);
-                self.selected_key = 0;
+                self.selected_key = self.selected_entry().map_or(0, Entry::main_key);
                 // Show what stands above the first row.
                 self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
             }
@@ -631,7 +639,7 @@ impl KeymapView {
         self.scroll.scroll_to_item(target, strategy);
         if self.selected != Some(row) {
             self.selected = Some(row);
-            self.selected_key = 0;
+            self.selected_key = self.selected_entry().map_or(0, Entry::main_key);
         }
         cx.notify();
     }
@@ -1112,6 +1120,16 @@ impl KeymapView {
     }
 
     pub(crate) fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The key that answered is still down: its repeats are not keys of
+        // the list (a held `enter` would start changing the key again).
+        self.held = self
+            .last_key
+            .take()
+            .filter(|(_, at)| at.elapsed() < SAME_MOMENT)
+            .map(|(keystroke, at)| HeldKey {
+                keystroke,
+                last_seen: at,
+            });
         self.mode = Mode::List;
         let focus = self.query_field.focus_handle(cx);
         window.focus(&focus);

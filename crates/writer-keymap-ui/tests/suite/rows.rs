@@ -149,8 +149,9 @@ fn a_row_with_two_keys_changes_the_one_that_is_chosen(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.selected_keys()),
         vec![key("shift-f10"), key("ctrl-enter")]
     );
-    // `enter` acts on the first; `tab` moves on, `shift-tab` back, round.
-    press(cx, "tab enter");
+    // `enter` acts on the key the rest of the app shows for the command,
+    // the one bound last.
+    press(cx, "enter");
     assert!(
         describe(&view, cx).contains("replacing=ctrl-enter"),
         "{}",
@@ -158,8 +159,7 @@ fn a_row_with_two_keys_changes_the_one_that_is_chosen(cx: &mut TestAppContext) {
     );
     press(cx, "f9 enter");
     assert_eq!(keys_of(&host, &context_menu(), cx), vec!["shift-f10", "f9"]);
-    // The row keeps its chosen key over the change; `tab` goes round.
-    select(&view, &context_menu(), cx);
+    // `tab` moves on to the other key, `shift-tab` back, round.
     press(cx, "tab enter");
     assert!(describe(&view, cx).contains("replacing=shift-f10"));
     press(cx, "escape escape");

@@ -393,6 +393,17 @@ pub(crate) fn import_file_line(plan: &ImportPlan) -> String {
     parts.join(" \u{b7} ")
 }
 
+/// What is wrong with a row whose key another command has in the same
+/// place.
+pub(crate) fn clash_text(key: &KeySequence, other: &Target, names: &Names) -> String {
+    format!(
+        "{} is also the key of \u{201c}{}\u{201d} {}: one of the two cannot run with it.",
+        glyphs(key),
+        names.title(other),
+        names.place(other)
+    )
+}
+
 /// A collision an import would leave, as a sentence.
 pub(crate) fn collision_text(collision: &Collision, names: &Names) -> String {
     let key = glyphs(&collision.key);

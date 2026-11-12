@@ -182,6 +182,11 @@ fn only_a_real_key_ends_the_waiting(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(mode(&view, cx), ModeKind::Recording);
+    assert!(
+        describe(&view, cx).contains("held=⇧⌘"),
+        "{}",
+        describe(&view, cx)
+    );
     cx.simulate_keystrokes("shift");
     cx.simulate_keystrokes("platform");
     assert_eq!(mode(&view, cx), ModeKind::Recording);
@@ -266,6 +271,18 @@ fn a_key_that_is_held_down_is_not_taken_twice(cx: &mut TestAppContext) {
     // Another key is never held back.
     press(cx, "escape");
     assert_eq!(mode(&view, cx), ModeKind::List);
+
+    // The key that answers a question is not a key of the list while it is
+    // still down: a held `enter` does not start changing the key again.
+    press(cx, "enter f5");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(mode(&view, cx), ModeKind::List, "the answer was taken");
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["f5"]);
+    cx.simulate_keystrokes("enter enter");
+    assert_eq!(mode(&view, cx), ModeKind::List, "its repeats do nothing");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
 
     // A script's keys come without a release; it says so itself.
     cx.simulate_keystrokes("enter");

@@ -170,12 +170,28 @@ pub(crate) struct Entry {
     pub changed: bool,
     /// Whether the keymap holds the row's target.
     pub known: bool,
+    /// The key that key hints and the menu bar show for the command.
+    pub shown: Option<KeySequence>,
+    /// Set when another command has one of the row's keys in the same
+    /// place, so that one of the two cannot run with it: the sentence
+    /// that says so.
+    pub clash: Option<SharedString>,
 }
 
 impl Entry {
     /// Whether the row's keys can be changed.
     pub fn changeable(&self) -> bool {
         self.row.locked.is_none() && self.known
+    }
+
+    /// The key the keys of the view act on while nothing else was chosen:
+    /// the one the rest of the app shows for the command (the last one
+    /// bound), which is the one a person knows.
+    pub fn main_key(&self) -> usize {
+        self.shown
+            .as_ref()
+            .and_then(|shown| self.keys.iter().position(|key| key.keys == *shown))
+            .unwrap_or(0)
     }
 
     /// Why the row cannot be changed, if it cannot.
@@ -188,8 +204,60 @@ impl Entry {
     }
 }
 
-/// The rows of `listing` with their keys.
+/// The rows of `listing` with their keys, and with what the keymap says
+/// is wrong with them: two commands on one key in the same place (which
+/// the user can bring about by keeping both, and an import can leave).
 pub(crate) fn entries(listing: &Listing) -> Vec<Entry> {
+    let mut entries = entries_without_clashes(listing);
+    let collisions = listing.keymap.collisions();
+    if collisions.is_empty() {
+        return entries;
+    }
+    let mut clashes: Vec<(usize, SharedString)> = Vec::new();
+    {
+        let names = crate::words::Names {
+            entries: &entries,
+            catalogue: &listing.catalogue,
+        };
+        for collision in &collisions {
+            let sides = [
+                (&collision.target, &collision.key, &collision.holder.target),
+                (
+                    &collision.holder.target,
+                    &collision.holder.keys,
+                    &collision.target,
+                ),
+            ];
+            for (target, key, other) in sides {
+                if let Some(index) = entries.iter().position(|entry| entry.row.target == *target)
+                    && !clashes.iter().any(|(have, _)| *have == index)
+                {
+                    clashes.push((index, crate::words::clash_text(key, other, &names).into()));
+                }
+            }
+        }
+    }
+    for (index, text) in clashes {
+        entries[index].clash = Some(text);
+    }
+    entries
+}
+
+/// What to say above the list about stored changes that do nothing in
+/// this version (they are kept, and listed nowhere else).
+pub(crate) fn inactive_note(listing: &Listing) -> Option<SharedString> {
+    let inactive = listing.keymap.effective().inactive().len();
+    (inactive > 0).then(|| {
+        format!(
+            "{} made in another version {} kept, without effect in this one",
+            crate::words::count(inactive, "change", "changes"),
+            if inactive == 1 { "is" } else { "are" }
+        )
+        .into()
+    })
+}
+
+fn entries_without_clashes(listing: &Listing) -> Vec<Entry> {
     let effective = listing.keymap.effective();
     listing
         .rows
@@ -201,6 +269,8 @@ pub(crate) fn entries(listing: &Listing) -> Vec<Entry> {
                 default_keys: state.default_keys.clone(),
                 changed: state.changed,
                 known: true,
+                shown: state.shown.clone(),
+                clash: None,
             },
             None => {
                 let keys: Vec<KeySequence> = row
@@ -220,6 +290,8 @@ pub(crate) fn entries(listing: &Listing) -> Vec<Entry> {
                     default_keys: keys,
                     changed: false,
                     known: false,
+                    shown: None,
+                    clash: None,
                 }
             }
         })

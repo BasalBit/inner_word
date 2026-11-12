@@ -291,6 +291,30 @@ fn a_collision_an_import_would_leave_is_said(cx: &mut TestAppContext) {
         rows.contains(&"⌘I would be the key of “Bold” and of “Italic” in the text.".to_string()),
         "{rows:?}"
     );
+
+    // Imported all the same: both rows say what is wrong with them, by a
+    // sign beside the key and in words while the row is selected.
+    press(cx, "enter");
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-i"]);
+    assert_eq!(keys_of(&host, &italic(), cx), vec!["cmd-i"]);
+    select(&view, &bold(), cx);
+    let line = describe(&view, cx);
+    assert!(
+        line.contains("clash=\"⌘I is also the key of “Italic” in the text: one of the two cannot run with it.\""),
+        "{line}"
+    );
+    let bold_row = view.read_with(cx, |view, _| view.row_of(&bold()).unwrap());
+    assert!(
+        cx.debug_bounds(selector(format!("keymap-clash-{bold_row}")))
+            .is_some()
+    );
+    select(&view, &italic(), cx);
+    assert!(describe(&view, cx).contains("clash=\"⌘I is also the key of “Bold”"));
+    // Settled by giving one of them another key.
+    press(cx, "enter cmd-alt-i enter");
+    assert!(!describe(&view, cx).contains("clash="));
+    select(&view, &bold(), cx);
+    assert!(!describe(&view, cx).contains("clash="));
 }
 
 #[gpui::test]

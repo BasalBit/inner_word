@@ -1085,12 +1085,24 @@ item and its menu, storing), `pinch.rs` (the trackpad).
 - **The pinch** is AppKit's, not GPUI's: gpui 0.2.2 has no magnify event, so `pinch.rs`
   installs a local monitor for magnify events (and no others: scroll events never reach
   it), which hands each event on untouched after reading how much and where, through a
-  channel, to `Workspace::pinch`. The way from there to the zoom is tested; the monitor is
-  installed in every run of the real binary; **the gesture itself has only been tried by
-  whoever pinched** (no script can pinch).
+  channel, to `Workspace::pinch`. The monitor is installed in every run of the real
+  binary; `THE_WRITER_PINCH=off` in the environment keeps it from being installed. **No
+  script can pinch, so no real magnify event has been read by anything but fingers.** What
+  stands in for that: a test compares the return types of the seven methods the monitor
+  calls (`type`, `window`, `magnification`, `locationInWindow` of `NSEvent`, `windowNumber`
+  and `contentView` of `NSWindow`, `frame` of `NSView`), as the Objective-C runtime of the
+  Mac has them, with the types `pinch.rs` reads; `pinch::stand_in::Event` is an object of a
+  class declared with the runtime that answers the four messages of an event with those
+  types, and tests hand it to the block the way AppKit calls a block (`Monitor::hand`) and
+  see what is read and the zoom follow (`pinch::follow`); `zoom:pinch:<magnification>` in a
+  scripted run hands one whose window is the real `NSWindow` to the very block AppKit
+  holds. The stand-in ends the process when `magnification` is asked of an event that is
+  not a magnify event, as AppKit's exception would. The x86_64 half is read, not run
+  (`objc` 0.2 takes `objc_msgSend_stret` there for the `NSRect` and not for the `NSPoint`).
 - **Scripted runs**: `zoom:in`, `zoom:out`, `zoom:actual`, `zoom:fit`, `zoom:page`,
   `zoom:life`, `zoom:125`, `zoom:by:1.25` (as a pinch at the middle of the text),
-  `zoom:sideways:300` (scrolls a sheet that is wider than its room); `menu:zoom` opens the
+  `zoom:pinch:0.25` (the same through AppKit's monitor and a stand-in for the event; the
+  zoom follows a moment later, so `wait:` before `state`), `zoom:sideways:300` (scrolls a sheet that is wider than its room); `menu:zoom` opens the
   status bar's menu; `state` has `zoom=[page 200% sideways=144/470 life=210%]`.
 - **What it costs** (release build, the generated book of 10,000 paragraphs, measured for
   0.6.0 with `keycost:cmd-= ...` and `typecost:` after `zoom:150`): a change of zoom from

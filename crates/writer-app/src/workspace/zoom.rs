@@ -435,8 +435,11 @@ impl Workspace {
 
     /// The `zoom:` step of a scripted run: `in`, `out`, `actual`, `fit`
     /// (the width), `page`, `life`, a percentage (`125`), `by:<factor>`
-    /// (as a pinch at the middle of the text does) and `sideways:<pixels>`
-    /// (scrolls a sheet that is wider than its room).
+    /// (as a pinch at the middle of the text does), `pinch:<magnification>`
+    /// (the monitor AppKit calls is handed a stand-in for a magnify event
+    /// with the pointer at the middle of the text: `crate::pinch::script`;
+    /// the zoom follows a moment later) and `sideways:<pixels>` (scrolls a
+    /// sheet that is wider than its room).
     pub fn zoom_step(
         &mut self,
         what: &str,
@@ -468,6 +471,12 @@ impl Workspace {
                         anyhow::bail!("the text was not drawn yet");
                     };
                     self.pinch(factor, viewport.center(), cx);
+                } else if let Some(magnification) = other.strip_prefix("pinch:") {
+                    let magnification = number(magnification)?;
+                    let Some(viewport) = self.editor.read(cx).viewport_bounds() else {
+                        anyhow::bail!("the text was not drawn yet");
+                    };
+                    crate::pinch::script(magnification, viewport.center(), window, cx)?;
                 } else if let Some(pixels) = other.strip_prefix("sideways:") {
                     let pixels = number(pixels)?;
                     self.editor.update(cx, |editor, cx| {

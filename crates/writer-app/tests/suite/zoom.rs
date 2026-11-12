@@ -1439,6 +1439,174 @@ fn a_pinch_is_a_factor_at_a_place() {
     assert_eq!((x, y), (108., 300.));
 }
 
+/// What the monitor asks of AppKit's objects is answered with the types it
+/// reads the answers as: the return types of the seven methods, from the
+/// Objective-C runtime of this Mac, beside what `pinch.rs` takes them for.
+/// And the stand-ins the next tests hand the monitor answer with the same
+/// types, so what is read from them is read the way it is from an event.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_monitor_reads_what_appkit_answers_with() {
+    use writer_app::pinch::{appkit_return_types, stand_in};
+
+    let appkit = appkit_return_types();
+    assert_eq!(appkit.len(), 7);
+    for (method, declared, read_as) in &appkit {
+        assert_eq!(declared, read_as, "{method}");
+    }
+    let ours = stand_in::return_types();
+    assert_eq!(ours.len(), appkit.len());
+    for ((method, declared, _), (name, stood_in)) in appkit.iter().zip(&ours) {
+        assert!(method.contains(name), "{method} beside {name}");
+        assert_eq!(declared, stood_in, "{method}");
+    }
+}
+
+/// The block AppKit is given, called the way AppKit calls a block, with
+/// objects that answer what an event answers: it reads a magnify event
+/// (how much, over which window, where, counted from the top), reads
+/// nothing from anything else, never asks a magnification of an event
+/// that is not a magnify event (the stand-in ends the process when asked,
+/// as AppKit's exception would), and hands every event back untouched.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_monitor_reads_a_magnify_event_and_hands_every_event_on() {
+    use writer_app::pinch::{
+        Monitor, Pinch, stand_in::Event, stand_in::MAGNIFY, stand_in::SCROLL_WHEEL,
+    };
+
+    let (monitor, pinches) = Monitor::new();
+    let hand = |event: &Event| {
+        // SAFETY: a stand-in answers what the monitor asks, with the
+        // types AppKit answers with (the test above).
+        let back = unsafe { monitor.hand(event.as_ptr()) };
+        assert_eq!(back, event.as_ptr(), "the event is handed on untouched");
+    };
+    // Fingers parting over window 4242, whose content is 800 points
+    // high, the pointer 300 from the left and 200 from the bottom.
+    hand(&Event::over_a_made_up_window(
+        MAGNIFY, 0.25, 300., 200., 4242, 800.,
+    ));
+    assert_eq!(
+        pinches.try_recv(),
+        Ok(Pinch {
+            window: 4242,
+            magnification: 0.25,
+            x: 300.,
+            y: 600.,
+        })
+    );
+    // Fingers closing, somewhere else, over another window.
+    hand(&Event::over_a_made_up_window(
+        MAGNIFY, -0.125, 12.5, 790., -7, 800.,
+    ));
+    assert_eq!(
+        pinches.try_recv(),
+        Ok(Pinch {
+            window: -7,
+            magnification: -0.125,
+            x: 12.5,
+            y: 10.,
+        })
+    );
+    // Not a pinch: nothing is read (and no magnification asked).
+    hand(&Event::over_a_made_up_window(
+        SCROLL_WHEEL,
+        0.5,
+        300.,
+        200.,
+        4242,
+        800.,
+    ));
+    assert!(pinches.try_recv().is_err());
+    // A pinch with no window under it.
+    hand(&Event::without_a_window(MAGNIFY, 0.5));
+    assert!(pinches.try_recv().is_err());
+    // No event at all.
+    // SAFETY: null is allowed.
+    assert!(unsafe { monitor.hand(std::ptr::null_mut()) }.is_null());
+    assert!(pinches.try_recv().is_err());
+    // Many in a row, as a real pinch sends them.
+    for _ in 0..500 {
+        hand(&Event::over_a_made_up_window(
+            MAGNIFY, 0.01, 300., 200., 4242, 800.,
+        ));
+    }
+    assert_eq!(pinches.try_iter().count(), 500);
+    // Nobody listening any more: the event is still handed on.
+    drop(pinches);
+    hand(&Event::over_a_made_up_window(
+        MAGNIFY, 0.25, 300., 200., 4242, 800.,
+    ));
+}
+
+/// From the block to the zoom: what the monitor reads from stand-ins for
+/// magnify events over this window zooms the text around the pointer;
+/// what it reads over another window, or with the pointer off the text,
+/// does not.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn a_magnify_event_handed_to_the_monitor_zooms_the_text(cx: &mut TestAppContext) {
+    use writer_app::pinch::{self, Monitor, stand_in::Event, stand_in::MAGNIFY};
+
+    init(cx);
+    let (_library, workspace, cx) = open_document(&manuscript(false), cx);
+    let handle = cx
+        .update(|window, _| window.window_handle())
+        .downcast::<Workspace>()
+        .expect("the window shows a workspace");
+    assert_eq!(percent_of(&workspace, cx), 100.);
+    let content_height = 1100.;
+    let text = workspace
+        .read_with(cx, |w, cx| w.editor().read(cx).viewport_bounds())
+        .expect("the text was drawn")
+        .center();
+    let sidebar = bounds_of("sidebar", cx).center();
+    // What the monitor is handed, and then what became of the zoom. The
+    // monitor is gone before the app looks: the pinches it read are still
+    // taken, and the task that waits for more ends.
+    let pinch = |events: &[(f64, isize, gpui::Point<Pixels>)], cx: &mut VisualTestContext| {
+        let (monitor, pinches) = Monitor::new();
+        for (magnification, window, at) in events {
+            let event = Event::over_a_made_up_window(
+                MAGNIFY,
+                *magnification,
+                f64::from(f32::from(at.x)),
+                // AppKit counts from the bottom.
+                content_height - f64::from(f32::from(at.y)),
+                *window,
+                content_height,
+            );
+            // SAFETY: as in the test above.
+            let back = unsafe { monitor.hand(event.as_ptr()) };
+            assert_eq!(back, event.as_ptr());
+        }
+        drop(monitor);
+        cx.update(|_, cx| pinch::follow(handle, 4242, pinches, cx));
+        cx.run_until_parked();
+        percent_of(&workspace, cx)
+    };
+    // Over the text of this window: a quarter larger.
+    assert_eq!(pinch(&[(0.25, 4242, text)], cx), 125.);
+    // Over another window, and over the library of this one: nothing.
+    assert_eq!(pinch(&[(0.25, 77, text)], cx), 125.);
+    assert_eq!(pinch(&[(0.25, 4242, sidebar)], cx), 125.);
+    // Several at once are one pinch: back to 100 % in two events, the
+    // one over another window between them left out.
+    let back = pinch(
+        &[
+            (-0.1, 4242, text),
+            (0.5, 77, text),
+            (-0.111_111, 4242, text),
+        ],
+        cx,
+    );
+    assert!((back - 100.).abs() < 0.5, "{back}");
+    // Nothing of the document changed.
+    let saved = workspace.read_with(cx, |w, _| w.save_state());
+    assert_eq!(saved, Some(SaveState::Saved));
+}
+
 #[gpui::test]
 fn life_size_follows_the_display_the_window_is_on(cx: &mut TestAppContext) {
     init(cx);

@@ -55,6 +55,13 @@ pub fn window_number(_window: &Window) -> Result<u32> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeView(usize);
 
+impl NativeView {
+    /// The `NSView`, as a pointer.
+    pub fn as_ptr(self) -> *mut std::ffi::c_void {
+        self.0 as *mut std::ffi::c_void
+    }
+}
+
 /// The native view of `window`.
 #[cfg(target_os = "macos")]
 pub fn native_view(window: &Window) -> Result<NativeView> {

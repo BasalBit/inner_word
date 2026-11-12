@@ -26,6 +26,12 @@ writer-spell = { path = "crates/writer-spell" }
 writer-agent = { path = "crates/writer-agent" }
 writer-mcp = { path = "crates/writer-mcp" }
 writer-agent-setup = { path = "crates/writer-agent-setup" }
+# The assistant inside the app: the engine behind one interface (Claude Code is
+# its first backend; no GPUI), the shared chat components with the side chat
+# panel, and the quick chat popover.
+writer-assistant = { path = "crates/writer-assistant" }
+writer-assistant-ui = { path = "crates/writer-assistant-ui" }
+writer-assistant-quick = { path = "crates/writer-assistant-quick" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

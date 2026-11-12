@@ -82,7 +82,7 @@ use crate::context::{Context, Places};
 use crate::defaults::{Command, Defaults, Target};
 use crate::effective::apply;
 use crate::keystroke::{KeySequence, KeystrokeError};
-use crate::verdict::{Absent, Collision, Refusal, collisions_in, guard};
+use crate::verdict::{Absent, Collision, Listed, Refusal, collisions_in, guard};
 
 /// The `format` of a shortcuts file.
 pub const FILE_FORMAT: &str = "the-writer-shortcuts";
@@ -535,6 +535,24 @@ pub fn plan_import_among(
     places: &Places,
     absent: &Absent,
 ) -> Result<ImportPlan, ImportError> {
+    let listed = Listed {
+        absent: absent.clone(),
+        rows: Vec::new(),
+    };
+    plan_import_listed(text, defaults, changes, places, &listed)
+}
+
+/// [`plan_import`] for the keymap as the caller lists it
+/// ([`crate::Listed`]): the conflicts are counted without the commands
+/// that are not there and between rows, as [`crate::check_listed`] judges
+/// a single key.
+pub fn plan_import_listed(
+    text: &str,
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    listed: &Listed,
+) -> Result<ImportPlan, ImportError> {
     let value: Value = serde_json::from_str(text).map_err(|error| ImportError::NotJson {
         line: error.line(),
         column: error.column(),
@@ -645,14 +663,21 @@ pub fn plan_import_among(
                 });
             }
         }
-        let already = collisions_in(&before, places, absent);
-        let conflicts = collisions_in(&after, places, absent)
+        let already = collisions_in(&before, places, listed);
+        let conflicts = collisions_in(&after, places, listed)
             .into_iter()
             .filter(|collision| {
+                // A conflict is reported with the key context that stands
+                // for its row: the import touches it when it changes the
+                // row in any of its key contexts.
                 let touched = |target: &Target| {
-                    differences
-                        .iter()
-                        .any(|difference| difference.target == *target)
+                    differences.iter().any(|difference| {
+                        difference.target == *target
+                            || listed.rows.iter().any(|row| {
+                                row.targets.contains(target)
+                                    && row.targets.contains(&difference.target)
+                            })
+                    })
                 };
                 (touched(&collision.target) || touched(&collision.holder.target))
                     && !already.iter().any(|old| {

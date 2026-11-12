@@ -14,6 +14,7 @@
 //! | [`apply`], [`Effective`] | The keymap to install, in an order that keeps precedence, and the state of every target ([`mod@effective`]). |
 //! | [`check`], [`Verdict`] | Guard rails and conflicts for a key the user proposes ([`mod@verdict`]). |
 //! | [`Absent`] | The commands of a part of the app that is not there right now: their keys count for nothing in a verdict ([`mod@verdict`]). |
+//! | [`Row`], [`Listed`] | The rows of the caller's list: the key contexts that are one command with one key to the user, and the name of the place of each. A verdict is about rows ([`mod@verdict`]). |
 //! | [`export`], [`plan_import`] | The shortcuts file ([`mod@file`]). |
 //! | [`Keymap`] | Defaults, places and changes held together ([`mod@keymap`]). |
 //!
@@ -86,13 +87,13 @@ pub use effective::{
 pub use file::{
     Carried, Catalogue, CommandInfo, FILE_FORMAT, FILE_NAME, FILE_VERSION, FileChange, ImportError,
     ImportMode, ImportOutcome, ImportPlan, KeyDifference, SkipReason, Skipped, export, plan_import,
-    plan_import_among,
+    plan_import_among, plan_import_listed,
 };
 pub use keymap::Keymap;
 pub use keystroke::{
     KeySequence, Keystroke, KeystrokeError, KeystrokeProblem, Modifiers, SystemUse,
 };
 pub use verdict::{
-    Absent, Collision, Holder, Overlap, Refusal, Verdict, VerdictKind, Warning, check, check_among,
-    collisions, collisions_among, guard,
+    Absent, Collision, Holder, Listed, Overlap, Refusal, Row, Verdict, VerdictKind, Warning, check,
+    check_among, check_listed, collisions, collisions_among, collisions_listed, guard,
 };

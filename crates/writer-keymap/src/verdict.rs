@@ -38,6 +38,36 @@
 //! the user's changes to them stay stored, so the day the part is there
 //! again the same functions, asked without them in [`Absent`], say what
 //! collides.
+//!
+//! # Rows: what is one key, and one place, to the user
+//!
+//! The caller's list has rows, and tells which ([`Row`], in [`Listed`]):
+//! the key contexts a command is bound in that are one command with one
+//! key to the user (the find bar binds "case sensitive" for the bar and
+//! for its field), and the name of the place the row is listed under ("In
+//! the library"). The verdict is then about rows
+//! ([`check_listed`], [`collisions_listed`]):
+//!
+//! - **A command the key collides with is named once**, however many
+//!   key contexts its row has: by the most serious of what was found
+//!   among them. (The key itself is judged where the caller asks: in the
+//!   key context that stands for its row, the one the keyboard itself is
+//!   in. A second key context of the row that only ever has the keyboard
+//!   in something inside it, such as the find bar around its field,
+//!   would say that a key of the window beats it, which is true of the
+//!   bar and not of the row.)
+//! - **Two rows under one place name that can apply together are in the
+//!   same place.** Their key contexts may only overlap (the library binds
+//!   some keys wherever the keyboard is in it and others only while
+//!   nothing is typed there), so that by the contexts one of the two
+//!   would keep the key "in the rest of its place". The user is told one
+//!   place for both, where one of them has lost the key: that is
+//!   **taken**, never "another place". (Two rows under one name whose
+//!   contexts never apply together would both work; the caller gives
+//!   places that are apart names of their own.)
+//!
+//! Without rows every key context is a row of its own and its place has
+//! no name: the verdict is then about key contexts alone.
 
 use std::collections::BTreeSet;
 
@@ -50,6 +80,66 @@ use crate::keystroke::{KeySequence, SystemUse};
 /// The commands that are not there right now, by their targets: see the
 /// [module docs](self). Empty when everything is there.
 pub type Absent = BTreeSet<Target>;
+
+/// One row of the caller's list: a command in every key context that is
+/// one command with one key to the user, and the name of the place the
+/// row is listed under. See the [module docs](self).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    /// The command in each key context of the row. The first stands for
+    /// the row: a conflict of the row is reported with it.
+    pub targets: Vec<Target>,
+    /// The name of the place, as the list writes it ("In the text").
+    pub place: String,
+}
+
+impl Row {
+    /// A row of `targets` listed under `place`.
+    pub fn new(targets: impl IntoIterator<Item = Target>, place: &str) -> Self {
+        Self {
+            targets: targets.into_iter().collect(),
+            place: place.to_string(),
+        }
+    }
+}
+
+/// How the keymap is listed right now: which commands are not there, and
+/// which key contexts are one row under which place name. Empty when the
+/// caller says nothing: every key context is then a row of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listed {
+    /// The commands that are not there: see [`Absent`].
+    pub absent: Absent,
+    /// The rows: see [`Row`].
+    pub rows: Vec<Row>,
+}
+
+impl Listed {
+    /// The row `target` is in, with its index.
+    fn row_of(&self, target: &Target) -> Option<(usize, &Row)> {
+        self.rows
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.targets.contains(target))
+    }
+
+    /// The target that stands for the row of `target`: the row's first,
+    /// or `target` itself when it is in no row.
+    fn standing_for(&self, target: &Target) -> Target {
+        self.row_of(target)
+            .and_then(|(_, row)| row.targets.first())
+            .unwrap_or(target)
+            .clone()
+    }
+
+    /// Whether the two are rows under one place name.
+    fn in_one_named_place(&self, a: &Target, b: &Target) -> bool {
+        match (self.row_of(a), self.row_of(b)) {
+            (Some((_, a)), Some((_, b))) => a.place == b.place,
+            _ => false,
+        }
+    }
+}
 
 /// Why a key cannot be given.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +198,20 @@ impl Overlap {
             self,
             Overlap::SamePlace | Overlap::HolderNeverRuns | Overlap::ProposedNeverRuns
         )
+    }
+
+    /// How much there is to say about it, for choosing what to say about
+    /// a row that was found in several of its key contexts: a conflict
+    /// before an overlap, an overlap before a place of its own.
+    fn weight(self) -> u8 {
+        match self {
+            Overlap::SamePlace => 5,
+            Overlap::HolderNeverRuns => 4,
+            Overlap::ProposedNeverRuns => 3,
+            Overlap::ProposedWinsThere => 2,
+            Overlap::HolderWinsThere => 1,
+            Overlap::Apart => 0,
+        }
     }
 }
 
@@ -263,6 +367,30 @@ pub fn check_among(
     key: &KeySequence,
     replacing: Option<&KeySequence>,
 ) -> Verdict {
+    let listed = Listed {
+        absent: absent.clone(),
+        rows: Vec::new(),
+    };
+    check_listed(defaults, changes, places, &listed, target, key, replacing)
+}
+
+/// [`check`] for the keymap as the caller lists it ([`Listed`]): without
+/// the commands that are not there, and about rows. What the key collides
+/// with is said once for each row, and a row under the place name of
+/// `target`'s own that can apply together with it is in the same place.
+/// See the [module docs](self).
+///
+/// `target` is the key context that stands for its row: the caller asks
+/// with the one where a key is judged hardest.
+pub fn check_listed(
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    listed: &Listed,
+    target: &Target,
+    key: &KeySequence,
+    replacing: Option<&KeySequence>,
+) -> Verdict {
     let mut verdict = Verdict {
         key: key.clone(),
         refusal: None,
@@ -304,7 +432,8 @@ pub fn check_among(
         .iter()
         .rposition(|binding| binding.target == *target && binding.keys == *key);
     if let Some(position) = position {
-        for holder in holders(&effective, places, absent, position) {
+        let found = holders(&effective, places, listed, position);
+        for holder in once_for_each_row(found, listed) {
             if holder.overlap.is_taken() {
                 verdict.taken.push(holder);
             } else {
@@ -315,15 +444,41 @@ pub fn check_among(
     verdict
 }
 
+/// `holders` with each row named once: of the holders that are one row
+/// (and have the same key), the one there is most to say about. A holder
+/// in no row is a row of its own.
+fn once_for_each_row(holders: Vec<Holder>, listed: &Listed) -> Vec<Holder> {
+    let mut kept: Vec<(Target, Holder)> = Vec::new();
+    for holder in holders {
+        let stands = listed.standing_for(&holder.target);
+        match kept
+            .iter_mut()
+            .find(|(have, kept)| *have == stands && kept.keys == holder.keys)
+        {
+            Some((_, kept)) => {
+                if holder.overlap.weight() > kept.overlap.weight() {
+                    *kept = holder;
+                }
+            }
+            None => kept.push((stands, holder)),
+        }
+    }
+    kept.into_iter().map(|(_, holder)| holder).collect()
+}
+
 /// Every other command that has the key of the binding at `position` (or
 /// a key that collides with it), with how the two get along. The binding
 /// at `position` is "the proposed key". Bindings of the same command in
 /// other contexts are not holders: the same thing runs either way. Nor are
-/// the bindings of a command that is not there (`absent`).
+/// the bindings of a command that is not there ([`Listed::absent`]).
+///
+/// Two rows under one place name whose contexts overlap are in the same
+/// place to the user: the one that loses where both apply has lost its
+/// key (see the [module docs](self)).
 pub(crate) fn holders(
     effective: &Effective,
     places: &Places,
-    absent: &Absent,
+    listed: &Listed,
     position: usize,
 ) -> Vec<Holder> {
     let bindings = effective.bindings();
@@ -334,7 +489,7 @@ pub(crate) fn holders(
     for (index, binding) in bindings.iter().enumerate() {
         if binding.target.command == proposed.target.command
             || !binding.keys.collides_with(&proposed.keys)
-            || absent.contains(&binding.target)
+            || listed.absent.contains(&binding.target)
         {
             continue;
         }
@@ -353,6 +508,20 @@ pub(crate) fn holders(
             Extent::SecondInsideFirst => Overlap::HolderWinsThere,
             Extent::Overlapping if proposed_wins => Overlap::ProposedWinsThere,
             Extent::Overlapping => Overlap::HolderWinsThere,
+        };
+        // One place by its name: who loses where both apply has lost the
+        // key there.
+        let overlap = match overlap {
+            Overlap::ProposedWinsThere | Overlap::HolderWinsThere
+                if listed.in_one_named_place(&proposed.target, &binding.target) =>
+            {
+                if proposed_wins {
+                    Overlap::HolderNeverRuns
+                } else {
+                    Overlap::ProposedNeverRuns
+                }
+            }
+            other => other,
         };
         let holder = Holder {
             target: binding.target.clone(),
@@ -402,18 +571,36 @@ pub fn collisions_among(
     places: &Places,
     absent: &Absent,
 ) -> Vec<Collision> {
-    collisions_in(&apply(defaults, changes), places, absent)
+    let listed = Listed {
+        absent: absent.clone(),
+        rows: Vec::new(),
+    };
+    collisions_listed(defaults, changes, places, &listed)
+}
+
+/// [`collisions`] for the keymap as the caller lists it ([`Listed`]):
+/// without the commands that are not there, and about rows. A conflict
+/// between two rows is reported once, with the key context that stands
+/// for each ([`Row::targets`], the first), by the rule [`check_listed`]
+/// judges a key with.
+pub fn collisions_listed(
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    listed: &Listed,
+) -> Vec<Collision> {
+    collisions_in(&apply(defaults, changes), places, listed)
 }
 
 pub(crate) fn collisions_in(
     effective: &Effective,
     places: &Places,
-    absent: &Absent,
+    listed: &Listed,
 ) -> Vec<Collision> {
     let bindings = effective.bindings();
     let mut found: Vec<Collision> = Vec::new();
     for (position, binding) in bindings.iter().enumerate() {
-        if !binding.origin.is_users() || absent.contains(&binding.target) {
+        if !binding.origin.is_users() || listed.absent.contains(&binding.target) {
             continue;
         }
         // The last binding of a key in two spellings speaks for both.
@@ -423,19 +610,37 @@ pub(crate) fn collisions_in(
         if !is_last {
             continue;
         }
-        for holder in holders(effective, places, absent, position) {
+        // A row's key is judged in the key context that stands for the
+        // row, as the question about it was: a second key context of the
+        // row with the same key is not asked by itself.
+        let target = listed.standing_for(&binding.target);
+        if target != binding.target
+            && bindings
+                .iter()
+                .any(|other| other.target == target && other.keys == binding.keys)
+        {
+            continue;
+        }
+        for mut holder in holders(effective, places, listed, position) {
             if !holder.overlap.is_taken() {
                 continue;
             }
+            holder.target = listed.standing_for(&holder.target);
+            // Each pair of rows once, whichever of the two it was found
+            // from and in however many of their key contexts.
             let seen = found.iter().any(|collision| {
-                collision.target == holder.target
+                (collision.target == holder.target
                     && collision.key == holder.keys
-                    && collision.holder.target == binding.target
-                    && collision.holder.keys == binding.keys
+                    && collision.holder.target == target
+                    && collision.holder.keys == binding.keys)
+                    || (collision.target == target
+                        && collision.key == binding.keys
+                        && collision.holder.target == holder.target
+                        && collision.holder.keys == holder.keys)
             });
             if !seen {
                 found.push(Collision {
-                    target: binding.target.clone(),
+                    target: target.clone(),
                     key: binding.keys.clone(),
                     holder,
                 });

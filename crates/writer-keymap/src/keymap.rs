@@ -5,9 +5,11 @@ use crate::changes::{Changes, StoredError};
 use crate::context::Places;
 use crate::defaults::{Command, Defaults, Target};
 use crate::effective::{Effective, apply};
-use crate::file::{Catalogue, ImportError, ImportMode, ImportPlan, export, plan_import_among};
+use crate::file::{Catalogue, ImportError, ImportMode, ImportPlan, export, plan_import_listed};
 use crate::keystroke::KeySequence;
-use crate::verdict::{Absent, Collision, Holder, Verdict, check_among, collisions_among};
+use crate::verdict::{
+    Absent, Collision, Holder, Listed, Row, Verdict, check_listed, collisions_listed,
+};
 
 /// The keymap of the app as data: what every crate bound, what the caller
 /// says about the places of the window, and what the user changed. Every
@@ -37,7 +39,7 @@ pub struct Keymap {
     defaults: Defaults,
     places: Places,
     changes: Changes,
-    absent: Absent,
+    listed: Listed,
 }
 
 impl Keymap {
@@ -47,7 +49,7 @@ impl Keymap {
             defaults,
             places,
             changes: Changes::new(),
-            absent: Absent::new(),
+            listed: Listed::default(),
         }
     }
 
@@ -97,19 +99,43 @@ impl Keymap {
     /// set changed.
     pub fn set_absent(&mut self, absent: impl IntoIterator<Item = Target>) -> bool {
         let absent: Absent = absent.into_iter().collect();
-        let changed = absent != self.absent;
-        self.absent = absent;
+        let changed = absent != self.listed.absent;
+        self.listed.absent = absent;
         changed
     }
 
     /// The commands that are not there right now ([`Keymap::set_absent`]).
     pub fn absent(&self) -> &Absent {
-        &self.absent
+        &self.listed.absent
     }
 
     /// Whether `target` is a command that is not there right now.
     pub fn is_absent(&self, target: &Target) -> bool {
-        self.absent.contains(target)
+        self.listed.absent.contains(target)
+    }
+
+    /// Says which key contexts are one row of the caller's list, and under
+    /// which place name each row is listed. [`Keymap::check`],
+    /// [`Keymap::collisions`] and the conflicts of [`Keymap::plan_import`]
+    /// are then about rows: a command a key collides with is named once,
+    /// and two rows under one place name whose key contexts can apply
+    /// together are in the same place, where one of them has lost the
+    /// key ("taken", never "another place"). See
+    /// [`crate::verdict`]. The rows are the caller's to keep current: they
+    /// change with the keys (key contexts of one command that got
+    /// different keys are rows of their own).
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = Row>) {
+        self.listed.rows = rows.into_iter().collect();
+    }
+
+    /// The rows of the caller's list ([`Keymap::set_rows`]).
+    pub fn rows(&self) -> &[Row] {
+        &self.listed.rows
+    }
+
+    /// How the keymap is listed: [`Keymap::absent`] and [`Keymap::rows`].
+    pub fn listed(&self) -> &Listed {
+        &self.listed
     }
 
     /// Puts other changes in the place of the user's and returns the old
@@ -138,11 +164,11 @@ impl Keymap {
         key: &KeySequence,
         replacing: Option<&KeySequence>,
     ) -> Verdict {
-        check_among(
+        check_listed(
             &self.defaults,
             &self.changes,
             &self.places,
-            &self.absent,
+            &self.listed,
             target,
             key,
             replacing,
@@ -152,7 +178,7 @@ impl Keymap {
     /// The conflicts in the keymap as it is: see
     /// [`collisions`](crate::collisions).
     pub fn collisions(&self) -> Vec<Collision> {
-        collisions_among(&self.defaults, &self.changes, &self.places, &self.absent)
+        collisions_listed(&self.defaults, &self.changes, &self.places, &self.listed)
     }
 
     /// "Take it from that command": removes the key from a holder a
@@ -209,12 +235,12 @@ impl Keymap {
     /// Reads a shortcuts file and plans its import: see
     /// [`plan_import`](crate::plan_import). Nothing is changed.
     pub fn plan_import(&self, text: &str) -> Result<ImportPlan, ImportError> {
-        plan_import_among(
+        plan_import_listed(
             text,
             &self.defaults,
             &self.changes,
             &self.places,
-            &self.absent,
+            &self.listed,
         )
     }
 

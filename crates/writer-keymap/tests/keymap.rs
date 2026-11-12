@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use writer_keymap::{
     Catalogue, Changes, Context, DefaultBinding, Defaults, Effective, FILE_FORMAT, FILE_NAME,
     FILE_VERSION, ImportError, ImportMode, InactiveReason, KeySequence, Keymap, Keystroke, Origin,
-    Overlap, Places, Refusal, SkipReason, Target, VerdictKind, apply,
+    Overlap, Places, Refusal, Row, SkipReason, Target, VerdictKind, apply,
 };
 
 // ---------------------------------------------------------------------
@@ -1508,6 +1508,260 @@ fn the_question_about_a_key_and_the_plan_of_an_import_agree() {
     let verdict = keymap.check(&find, &key("cmd-b"), None);
     assert_eq!(verdict.kind(), VerdictKind::Taken);
     assert_eq!(verdict.taken[0].target, bold());
+}
+
+/// A keymap with rows: a find bar that binds two commands for the bar
+/// and for its field (one row each), a library with keys for the whole
+/// panel and keys for the tree alone.
+fn listed_keymap() -> Keymap {
+    let binding = |action: &str, context: Option<&str>, keys: &str| {
+        DefaultBinding::new(action, None, context, keys).unwrap()
+    };
+    let defaults = Defaults::from_bindings([
+        binding("app::Palette", None, "cmd-shift-p"),
+        binding("library::SelectNext", Some("LibraryPanel"), "down"),
+        binding("library::Open", Some("LibraryPanel"), "enter"),
+        binding(
+            "library::Rename",
+            Some("LibraryPanel && mode == tree && !TextField"),
+            "f2",
+        ),
+        binding(
+            "library::Restore",
+            Some("LibraryPanel && mode == trash && !TextField"),
+            "f3",
+        ),
+        binding("bar::Next", Some("FindBar"), "cmd-g"),
+        binding("bar::Case", Some("FindBar"), "cmd-alt-c"),
+        binding("bar::Case", Some("FindBar > TextField"), "cmd-alt-c"),
+        binding("bar::Word", Some("FindBar"), "cmd-alt-w"),
+        binding("bar::Word", Some("FindBar > TextField"), "cmd-alt-w"),
+    ]);
+    let mut keymap = Keymap::new(defaults, places());
+    let tree = "LibraryPanel && mode == tree && !TextField";
+    let trash = "LibraryPanel && mode == trash && !TextField";
+    let field = "FindBar > TextField";
+    keymap.set_rows([
+        Row::new([Target::new("app::Palette", None)], "Anywhere"),
+        Row::new(
+            [Target::new("library::SelectNext", Some("LibraryPanel"))],
+            "In the library",
+        ),
+        Row::new(
+            [Target::new("library::Open", Some("LibraryPanel"))],
+            "In the library",
+        ),
+        Row::new(
+            [Target::new("library::Rename", Some(tree))],
+            "In the library",
+        ),
+        Row::new(
+            [Target::new("library::Restore", Some(trash))],
+            "In the trash",
+        ),
+        Row::new(
+            [Target::new("bar::Next", Some("FindBar"))],
+            "In the find bar",
+        ),
+        // The field stands for the row: text is typed there.
+        Row::new(
+            [
+                Target::new("bar::Case", Some(field)),
+                Target::new("bar::Case", Some("FindBar")),
+            ],
+            "In the find bar",
+        ),
+        Row::new(
+            [
+                Target::new("bar::Word", Some(field)),
+                Target::new("bar::Word", Some("FindBar")),
+            ],
+            "In the find bar",
+        ),
+    ]);
+    keymap
+}
+
+/// With the rows of the list known, a verdict is about rows: two rows
+/// under one place name that can apply together are in the same place
+/// ("taken", never "another place"), and a row a key collides with is
+/// named once.
+#[test]
+fn a_verdict_is_about_the_rows_of_the_list() {
+    let tree = "LibraryPanel && mode == tree && !TextField";
+    let field = "FindBar > TextField";
+    let rename = Target::new("library::Rename", Some(tree));
+    let next = Target::new("library::SelectNext", Some("LibraryPanel"));
+    let restore = Target::new(
+        "library::Restore",
+        Some("LibraryPanel && mode == trash && !TextField"),
+    );
+    let listed = listed_keymap();
+    // The same keymap without rows: key contexts alone.
+    let mut bare = listed.clone();
+    bare.set_rows([]);
+
+    // Two rows "In the library" whose contexts overlap: Rename, bound for
+    // the tree, on the key that selects the next row wherever the keyboard
+    // is in the library. By the contexts Rename would get it in the tree
+    // and "select next" would keep it in the filter field: allowed. To the
+    // user both are in the library, where the arrow has stopped moving.
+    let by_contexts = bare.check(&rename, &key("down"), None);
+    assert_eq!(by_contexts.kind(), VerdictKind::UsedElsewhere);
+    assert_eq!(by_contexts.elsewhere[0].overlap, Overlap::ProposedWinsThere);
+    let by_rows = listed.check(&rename, &key("down"), None);
+    assert_eq!(by_rows.kind(), VerdictKind::Taken);
+    assert!(by_rows.elsewhere.is_empty());
+    assert_eq!(by_rows.taken[0].target, next);
+    assert_eq!(by_rows.taken[0].overlap, Overlap::HolderNeverRuns);
+    // The other way round: the key of the panel given the key of the
+    // tree's command would do nothing in the tree.
+    let other_way = listed.check(&next, &key("f2"), None);
+    assert_eq!(other_way.kind(), VerdictKind::Taken);
+    assert_eq!(other_way.taken[0].overlap, Overlap::ProposedNeverRuns);
+    assert_eq!(
+        bare.check(&next, &key("f2"), None).kind(),
+        VerdictKind::UsedElsewhere
+    );
+
+    // Under another place name an overlap stays what it is: the trash is
+    // listed as a place of its own.
+    let trash = listed.check(&next, &key("f3"), None);
+    assert_eq!(trash.kind(), VerdictKind::UsedElsewhere);
+    assert_eq!(trash.elsewhere[0].target, restore);
+    // And two contexts that never apply together stay apart, whatever
+    // they are called.
+    assert_eq!(
+        listed.check(&rename, &key("f3"), None).elsewhere[0].overlap,
+        Overlap::Apart
+    );
+
+    // A row of two key contexts is named once: "whole word" on the key of
+    // "case sensitive". By the contexts the field's binding collides with
+    // the field's, and overlaps with the bar's.
+    let word = Target::new("bar::Word", Some(field));
+    let case = Target::new("bar::Case", Some(field));
+    let by_contexts = bare.check(&word, &key("cmd-alt-c"), None);
+    assert_eq!(by_contexts.taken.len() + by_contexts.elsewhere.len(), 2);
+    let by_rows = listed.check(&word, &key("cmd-alt-c"), None);
+    assert_eq!(by_rows.taken.len(), 1, "{by_rows:#?}");
+    assert!(by_rows.elsewhere.is_empty(), "{by_rows:#?}");
+    assert_eq!(by_rows.taken[0].target, case);
+    assert_eq!(by_rows.taken[0].overlap, Overlap::SamePlace);
+
+    // A command bound for the bar alone: the field lies deeper, so the
+    // row's key would be the one that runs wherever the keyboard is in
+    // the bar's field, and "find next" has lost it in the find bar.
+    let bar_next = Target::new("bar::Next", Some("FindBar"));
+    let verdict = listed.check(&word, &key("cmd-g"), None);
+    assert_eq!(verdict.kind(), VerdictKind::Taken);
+    assert_eq!(verdict.taken.len(), 1);
+    assert_eq!(verdict.taken[0].target, bar_next);
+    assert_eq!(verdict.taken[0].overlap, Overlap::HolderNeverRuns);
+    // A key of the window is not in the way of the row: the field keeps
+    // a key against the window (bound later), whatever is true of the bar
+    // around it, which the row binds too.
+    let palette = listed.check(&word, &key("cmd-shift-p"), None);
+    assert_eq!(palette.kind(), VerdictKind::UsedElsewhere, "{palette:#?}");
+    assert_eq!(palette.elsewhere[0].overlap, Overlap::ProposedWinsThere);
+
+    // The conflicts of the keymap are between rows too: each pair once,
+    // with the key context that stands for each row.
+    let mut changed = listed.clone();
+    for context in [field, "FindBar"] {
+        let target = Target::new("bar::Word", Some(context));
+        assert!(changed.replace_key(&target, &key("cmd-alt-w"), key("cmd-alt-c")));
+    }
+    let collisions = changed.collisions();
+    assert_eq!(collisions.len(), 1, "{collisions:#?}");
+    assert_eq!(collisions[0].target, word);
+    assert_eq!(collisions[0].holder.target, case);
+    let mut bare_changed = changed.clone();
+    bare_changed.set_rows([]);
+    assert!(bare_changed.collisions().len() > 1);
+}
+
+/// With rows the question about a key and the plan of an import still
+/// judge by one rule: the import of one row's change lists a collision
+/// exactly when the question says "taken", and with the same rows.
+#[test]
+fn with_rows_the_question_and_the_import_agree() {
+    let keymap = listed_keymap();
+    let effective = keymap.effective();
+    let mut all_keys: Vec<KeySequence> = effective
+        .bindings()
+        .iter()
+        .map(|binding| binding.keys.clone())
+        .collect();
+    all_keys.sort();
+    all_keys.dedup();
+    let mut taken_somewhere = 0;
+    for row in keymap.rows() {
+        let stands = &row.targets[0];
+        for proposed in &all_keys {
+            let verdict = keymap.check(stands, proposed, None);
+            if verdict.refusal.is_some() {
+                continue;
+            }
+            // The file changes the row in every one of its key contexts.
+            let entries: Vec<Value> = row
+                .targets
+                .iter()
+                .map(|target| {
+                    let default: Vec<String> = keymap
+                        .defaults()
+                        .default_keys(target)
+                        .iter()
+                        .map(|key| key.to_string())
+                        .collect();
+                    let mut with_it = default.clone();
+                    with_it.push(proposed.to_string());
+                    json!({
+                        "command": target.command.action,
+                        "context": target.context.text(),
+                        "default": default,
+                        "keys": with_it,
+                    })
+                })
+                .collect();
+            let plan = keymap.plan_import(&file(json!(entries))).unwrap();
+            assert!(plan.skipped.is_empty(), "{stands} {proposed}");
+            let mut asked: Vec<Target> = verdict
+                .taken
+                .iter()
+                .map(|holder| holder.target.clone())
+                .collect();
+            let mut planned: Vec<Target> = plan
+                .outcome(ImportMode::Merge)
+                .conflicts
+                .iter()
+                .map(|collision| {
+                    assert_eq!(collision.target, *stands, "{stands} {proposed}");
+                    collision.holder.target.clone()
+                })
+                .collect();
+            // The question names the key context it found; the plan the
+            // one that stands for the row. The rows are the same.
+            let standing = |targets: &mut Vec<Target>| {
+                for target in targets.iter_mut() {
+                    if let Some(row) = keymap
+                        .rows()
+                        .iter()
+                        .find(|row| row.targets.contains(target))
+                    {
+                        *target = row.targets[0].clone();
+                    }
+                }
+                targets.sort();
+                targets.dedup();
+            };
+            standing(&mut asked);
+            standing(&mut planned);
+            assert_eq!(asked, planned, "{stands} with {proposed}");
+            taken_somewhere += usize::from(!asked.is_empty());
+        }
+    }
+    assert!(taken_somewhere >= 10, "{taken_somewhere}");
 }
 
 #[test]

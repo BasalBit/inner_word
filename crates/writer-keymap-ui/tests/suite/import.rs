@@ -68,7 +68,7 @@ fn the_preview_says_what_changes_what_is_skipped_and_why(cx: &mut TestAppContext
     let rows = rows(&view, cx);
     assert_eq!(rows[0], "Commands that get other keys (2)");
     assert_eq!(rows[1], "Bold (in the text): ⌘B → ⌥⌘B");
-    assert_eq!(rows[2], "Version history (anywhere): none → ⌥⌘H");
+    assert_eq!(rows[2], "Version history (anywhere): no key → ⌥⌘H");
     assert_eq!(rows[3], "Entries that are skipped (3)");
     // Each with its reason: a key that cannot be read, a key a guard rail
     // refuses, a command this version does not have.

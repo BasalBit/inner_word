@@ -12,7 +12,8 @@ use writer_keymap::{
 };
 
 use crate::{
-    keys::{glyph_list, glyphs},
+    keys::glyphs,
+    view::default_label,
     words::{self, Line, Names, SeenFirst, Tone},
 };
 
@@ -427,8 +428,9 @@ impl Preview {
             let shown = (
                 names.title(&difference.target),
                 names.place(&difference.target),
-                glyph_list(&difference.before),
-                glyph_list(&difference.after),
+                // "no key", as a row of the list says it.
+                default_label(&difference.before),
+                default_label(&difference.after),
             );
             let same = changes.iter_mut().find_map(|row| match row {
                 PreviewRow::Change {

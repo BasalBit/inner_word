@@ -36,11 +36,20 @@
 //! # Errors
 //!
 //! Protocol errors are JSON-RPC errors: `-32700` for a line that is not JSON (without an
-//! `id`, since none could be read), `-32600` for a message that is not a request,
+//! `id`, since none could be read; see below), `-32600` for a message that is not a request,
 //! `-32601` for a method the server does not have, `-32602` for parameters it cannot use
 //! (an unknown tool among them). Everything a tool itself reports, the refusal while the
 //! app is open included, is a normal `tools/call` result with `isError: true`, so that the
 //! model reads the message and can act on it.
+//!
+//! **An error for a message whose id could not be read has no `id` member, and not
+//! `"id": null`.** The two specifications disagree here, and this server speaks MCP.
+//! JSON-RPC 2.0 says of that case that the id "MUST be Null". The schema of MCP says
+//! `JSONRPCErrorResponse { jsonrpc; id?: RequestId; error }` with
+//! `RequestId = string | number`: the member may be left out and is never null, and a
+//! client that checks messages against that schema (the SDKs do) takes `"id": null` for
+//! a message it cannot read. Read again on 2026-11-12 in `schema/draft/schema.ts` of
+//! modelcontextprotocol/modelcontextprotocol and in section 5 of jsonrpc.org/specification.
 
 use std::io::{self, BufRead, Write};
 
@@ -613,7 +622,8 @@ fn valid_id(id: Option<&Value>) -> Option<Value> {
 }
 
 /// An error response. Without an id (one that could not be read) the member is left out,
-/// as the protocol's schema has it.
+/// as the protocol's schema has it (`id?: RequestId`; never null, although JSON-RPC 2.0
+/// by itself asks for null there: see "Errors" at the top of this file).
 fn error_response(id: Option<Value>, error: RpcError) -> Value {
     let mut body = Map::new();
     body.insert("code".into(), json!(error.code));
@@ -949,10 +959,14 @@ mod tests {
         let mut server = server();
         let parse: Value = serde_json::from_str(&server.handle_line("{not json").unwrap()).unwrap();
         assert_eq!(parse["error"]["code"], PARSE_ERROR);
+        // MCP's schema: `id?: RequestId`, a string or a number. Left out, never null
+        // (JSON-RPC 2.0 alone would have null here; a client that checks against MCP's
+        // schema cannot read that).
         assert!(
             parse.get("id").is_none(),
             "no id could be read, so none is sent"
         );
+        assert!(parse.as_object().unwrap().keys().all(|key| key != "id"));
         assert_eq!(parse["jsonrpc"], "2.0");
 
         let utf8: Value =

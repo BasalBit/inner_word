@@ -815,6 +815,20 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   `on_key_down` sees them (tested).
 - Tests run on normal test threads; no main thread or GUI session needed. `cargo test -p writer-ui`
   takes ~0.01s per test.
+- **A real thread can wake a task of the test's main thread** (tested,
+  `crates/writer-app/tests/suite/live.rs`): the waker of a foreground task may be called from
+  any thread (the test dispatcher's queue is behind a mutex), but the task only runs when the
+  test lets it: `run_until_parked()`. A test that waits for work another thread started (a
+  socket client that blocks until the app answers) therefore loops: `run_until_parked()`,
+  look whether the thread is done (a channel's `try_recv`), sleep a millisecond or two; never
+  `join()` first, which would wait for an answer nobody is there to give. Timers of the app
+  (`cx.background_executor().timer(..)`, `.now()`) are on the test clock and need
+  `advance_clock` in that loop; the other thread's own waits are real time.
+- **What a view emitted inside `window.update(cx, ..)` from an async task has been delivered
+  when `update` returns** (effects are flushed at the end of the outermost update, before the
+  task goes on; tested by the same file: a toast pushed by a subscriber is there). So an
+  answer sent right after the `update` is sent after every subscriber has heard, and no key
+  press can come between the closure and the delivery.
 
 ## Visual QA
 

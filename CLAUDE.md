@@ -100,7 +100,8 @@ Vim, tool, the format bar, comments, spelling, how many keys are changed and wha
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
 is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
 write while the app is open (`live=[channel=open|closed switch=on|off waiting=N changes=N
-last="Claude changed “Chapter 2”" run=N offers=Undo|Open|nothing]`), the Agents panel while it is
+last="Claude changed “Chapter 2”" run=N offers=Undo|Open|nothing cost=[save, change, window]]`:
+the last part is what the last change cost on the main thread), the Agents panel while it is
 open, and in a run with an engine the assistant: whether it is shown, the quick chat while
 it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
@@ -157,6 +158,21 @@ stored):
 THE_WRITER_AUTOMATION="wait:5000; keyscost:15; keys:cmd-/; wait:1000; keyscost:15; quit"
 # keyscost: a change of a key, 30 times: 9.10 ms (worst 12.57)
 # keyscost: installing 452 bindings: what to bind 1.00 ms, building them 1.29 ms, clear and bind 0.09 ms, the menu bar 4.82 ms
+```
+
+What a change by an agent costs while a book is open (the main thread is held for all of
+it; **measured for 0.6.0 in the debug build only**, with the debug tool: 2.5 s for an
+append to a book of 10,000 blocks and 660,000 words, of which the change in the library is
+2.1 s, bringing the window up to date 0.4 s and saving unsaved typing first 0.2 s; a
+comment 1.4 s; a short document is not noticeable. The release build has not been
+measured yet: do it with this line and the release tool, and write the numbers here):
+
+```bash
+THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
+# when the log says "book ready", from a second terminal, with the same temporary library:
+#   writer --library <dir> recent                # the id of the book
+#   time writer --library <dir> append doc:<id> --content "One more paragraph." --author Claude
+# state: live=[... cost=[save 0.1 ms, change 2103.1 ms, window 379.4 ms]]   (debug)
 ```
 
 What spell checking costs in a book (measured for 0.2.0: the text on screen is checked

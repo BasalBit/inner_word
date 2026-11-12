@@ -77,6 +77,19 @@ fn dry_run_prefix(written: &Written) -> &'static str {
     if written.dry_run { DRY_RUN } else { "" }
 }
 
+/// How the report of a request that has nothing to do begins (the text is that text
+/// already, the item has that name or is in that place), or `None` when there is
+/// something to do. A dry run says so as well: it reports what the real run would.
+fn nothing_to_do(written: &Written) -> Option<&'static str> {
+    if written.would_change || written.changed {
+        None
+    } else if written.dry_run {
+        Some("Dry run: the real run would change nothing")
+    } else {
+        Some("Nothing changed")
+    }
+}
+
 /// What a write says about itself, after everything else.
 fn written_suffix(written: &Written, out: &mut String) {
     if written.dry_run && written.app_is_open {
@@ -437,10 +450,8 @@ pub fn content_changed(did: &str, changed: &ContentChanged) -> String {
     let written = &changed.written;
     let name = document_name(&changed.document);
     let mut out = String::new();
-    if !written.changed && !written.dry_run {
-        out.push_str(&format!(
-            "Nothing changed: {name} already reads that way.\n"
-        ));
+    if let Some(nothing) = nothing_to_do(written) {
+        out.push_str(&format!("{nothing}: {name} already reads that way.\n"));
         warnings(&changed.warnings, &mut out);
         return out;
     }
@@ -527,9 +538,9 @@ pub fn content_changed(did: &str, changed: &ContentChanged) -> String {
 pub fn document_changed(did: &str, changed: &DocumentChanged) -> String {
     let written = &changed.written;
     let mut out = String::new();
-    if !written.changed && !written.dry_run {
+    if let Some(nothing) = nothing_to_do(written) {
         out.push_str(&format!(
-            "Nothing changed: {} is already so.\n",
+            "{nothing}: {} is already so.\n",
             document_name(&changed.document)
         ));
         return out;
@@ -599,9 +610,9 @@ pub fn folder_created(created: &FolderCreated) -> String {
 pub fn folder_changed(did: &str, changed: &FolderChanged) -> String {
     let written = &changed.written;
     let mut out = String::new();
-    if !written.changed && !written.dry_run {
+    if let Some(nothing) = nothing_to_do(written) {
         out.push_str(&format!(
-            "Nothing changed: {} is already so.\n",
+            "{nothing}: {} is already so.\n",
             folder_name(&changed.folder)
         ));
         return out;
@@ -739,9 +750,9 @@ pub fn comment_changed(did: &str, changed: &CommentChanged) -> String {
     let written = &changed.written;
     let name = document_name(&changed.document);
     let mut out = String::new();
-    if !written.changed && !written.dry_run {
+    if let Some(nothing) = nothing_to_do(written) {
         out.push_str(&format!(
-            "Nothing changed: thread {} in {name} is already so.\n",
+            "{nothing}: thread {} in {name} is already so.\n",
             changed.thread.id
         ));
         return out;
@@ -823,9 +834,9 @@ pub fn version_restored(restored: &VersionRestored) -> String {
     let written = &restored.written;
     let name = document_name(&restored.document);
     let mut out = String::new();
-    if !written.changed && !written.dry_run {
+    if let Some(nothing) = nothing_to_do(written) {
         out.push_str(&format!(
-            "Nothing changed: {name} already has the text of version {}.\n",
+            "{nothing}: {name} already has the text of version {}.\n",
             restored.restored.id.0
         ));
         return out;

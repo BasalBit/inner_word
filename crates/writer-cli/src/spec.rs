@@ -31,7 +31,9 @@ impl Group {
             Group::Documents => "Documents (text goes in and comes out as Markdown)",
             Group::Items => "Documents and folders",
             Group::Comments => "Comments (to review a text instead of rewriting it)",
-            Group::History => "History (a version is kept before every change made with this tool)",
+            Group::History => {
+                "History (a version is kept before this tool changes the text of a document)"
+            }
             Group::Agents => "Agents",
         }
     }

@@ -8,6 +8,13 @@
 # Output (replaced on every run):
 #   dist/The Writer.app
 #   dist/The-Writer-<version>-<arm64|x86_64|universal>.dmg
+# THE_WRITER_DIST_DIR=<dir> writes both there instead of dist/ (a trial build that must not
+# replace the images of a release with the same version number).
+#
+# The bundle holds two executables: the app (Contents/MacOS/the-writer) and the command
+# line tool for agents (Contents/MacOS/writer, the binary of crates/writer-cli), built from
+# the same commit so they always have the same version. Agents call the tool by its path
+# inside the bundle; nothing is installed outside it.
 #
 # There is no Apple developer certificate: the app is signed with the ad-hoc identity
 # ("-"), which Apple Silicon requires to run code at all, and it is not notarised.
@@ -21,12 +28,14 @@ set -euo pipefail
 APP_NAME="The Writer"
 BIN_NAME="the-writer"
 CRATE="writer-app"
+TOOL_NAME="writer"
+TOOL_CRATE="writer-cli"
 BUNDLE_ID="app.thewriter.TheWriter"
 SMOKE_TIMEOUT_SECS=60
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING="$ROOT/packaging"
-DIST="$ROOT/dist"
+DIST="${THE_WRITER_DIST_DIR:-$ROOT/dist}"
 PLIST_SRC="$PACKAGING/Info.plist"
 ICNS="$PACKAGING/TheWriter.icns"
 README="$PACKAGING/Read Me First.txt"
@@ -38,7 +47,7 @@ for arg in "$@"; do
     case "$arg" in
         --universal) UNIVERSAL=1 ;;
         --no-smoke-test) SMOKE=0 ;;
-        -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "bundle: unknown argument: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -93,28 +102,28 @@ DMG="$DIST/The-Writer-$VERSION-$ARCH_LABEL.dmg"
 echo "The Writer $VERSION, $ARCH_LABEL, minimum macOS $MIN_MACOS"
 
 # ---------------------------------------------------------------- build
+# Both executables, each for every architecture asked for.
 BINARY="$WORK/$BIN_NAME"
+TOOL="$WORK/$TOOL_NAME"
 if [[ $UNIVERSAL -eq 1 ]]; then
     SLICES=()
+    TOOL_SLICES=()
     for target in aarch64-apple-darwin x86_64-apple-darwin; do
-        step "Building release binary for $target"
+        step "Building release binaries for $target"
         cargo build --release -p "$CRATE" --bin "$BIN_NAME" --target "$target"
+        cargo build --release -p "$TOOL_CRATE" --bin "$TOOL_NAME" --target "$target"
         SLICES+=("$TARGET_DIR/$target/release/$BIN_NAME")
+        TOOL_SLICES+=("$TARGET_DIR/$target/release/$TOOL_NAME")
     done
     step "Joining the two architectures with lipo"
     lipo -create "${SLICES[@]}" -output "$BINARY"
+    lipo -create "${TOOL_SLICES[@]}" -output "$TOOL"
 else
-    step "Building release binary for $HOST_TARGET"
+    step "Building release binaries for $HOST_TARGET"
     cargo build --release -p "$CRATE" --bin "$BIN_NAME"
+    cargo build --release -p "$TOOL_CRATE" --bin "$TOOL_NAME"
     cp "$TARGET_DIR/release/$BIN_NAME" "$BINARY"
-fi
-
-ARCHS="$(lipo -archs "$BINARY")"
-echo "architectures: $ARCHS"
-if [[ $UNIVERSAL -eq 1 ]]; then
-    [[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] || die "universal binary is missing a slice: $ARCHS"
-else
-    [[ "$ARCHS" == "$NATIVE_ARCH" ]] || die "expected a $NATIVE_ARCH binary, got: $ARCHS"
+    cp "$TARGET_DIR/release/$TOOL_NAME" "$TOOL"
 fi
 
 # The deployment target the linker recorded in each slice must not be newer than what
@@ -126,22 +135,36 @@ version_le() {
     sorted="$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n)"
     [[ "${sorted%%$'\n'*}" == "$1" ]]
 }
-for arch in $ARCHS; do
-    build_info="$(vtool -arch "$arch" -show-build "$BINARY")"
-    minos="$(awk '($1 == "minos" || $1 == "version") && !seen { print $2; seen = 1 }' <<<"$build_info")"
-    [[ -n "$minos" ]] || die "could not read the minimum OS version of the $arch slice"
-    allowed="$MIN_MACOS"
-    if [[ "$arch" == arm64 ]] && version_le "$MIN_MACOS" 11.0; then allowed=11.0; fi
-    echo "minimum macOS recorded in the $arch slice: $minos"
-    version_le "$minos" "$allowed" || die "the $arch slice needs macOS $minos, but Info.plist promises $MIN_MACOS"
-done
+# check_binary <file> <name>: the architectures and the minimum macOS of each slice.
+check_binary() {
+    local file="$1" name="$2" archs arch build_info minos allowed
+    archs="$(lipo -archs "$file")"
+    echo "$name: architectures: $archs"
+    if [[ $UNIVERSAL -eq 1 ]]; then
+        [[ "$archs" == *arm64* && "$archs" == *x86_64* ]] || die "the universal $name is missing a slice: $archs"
+    else
+        [[ "$archs" == "$NATIVE_ARCH" ]] || die "expected a $NATIVE_ARCH $name, got: $archs"
+    fi
+    for arch in $archs; do
+        build_info="$(vtool -arch "$arch" -show-build "$file")"
+        minos="$(awk '($1 == "minos" || $1 == "version") && !seen { print $2; seen = 1 }' <<<"$build_info")"
+        [[ -n "$minos" ]] || die "could not read the minimum OS version of the $arch slice of $name"
+        allowed="$MIN_MACOS"
+        if [[ "$arch" == arm64 ]] && version_le "$MIN_MACOS" 11.0; then allowed=11.0; fi
+        echo "$name: minimum macOS recorded in the $arch slice: $minos"
+        version_le "$minos" "$allowed" || die "the $arch slice of $name needs macOS $minos, but Info.plist promises $MIN_MACOS"
+    done
+}
+check_binary "$BINARY" "$BIN_NAME"
+check_binary "$TOOL" "$TOOL_NAME"
 
 # ---------------------------------------------------------------- assemble the .app
 step "Assembling $APP_NAME.app"
 STAGE_APP="$WORK/$APP_NAME.app"
 mkdir -p "$STAGE_APP/Contents/MacOS" "$STAGE_APP/Contents/Resources"
 cp "$BINARY" "$STAGE_APP/Contents/MacOS/$BIN_NAME"
-chmod 755 "$STAGE_APP/Contents/MacOS/$BIN_NAME"
+cp "$TOOL" "$STAGE_APP/Contents/MacOS/$TOOL_NAME"
+chmod 755 "$STAGE_APP/Contents/MacOS/$BIN_NAME" "$STAGE_APP/Contents/MacOS/$TOOL_NAME"
 cp "$ICNS" "$STAGE_APP/Contents/Resources/TheWriter.icns"
 cp "$PLIST_SRC" "$STAGE_APP/Contents/Info.plist"
 printf 'APPL????' > "$STAGE_APP/Contents/PkgInfo"
@@ -157,19 +180,48 @@ xattr -cr "$STAGE_APP"
 
 # ---------------------------------------------------------------- sign
 step "Signing (ad-hoc)"
+# Inside out: the tool is code nested in the bundle and has to carry its own signature
+# before the bundle is sealed over it.
+codesign --force --sign - --identifier "$BUNDLE_ID.$TOOL_NAME" --timestamp=none "$STAGE_APP/Contents/MacOS/$TOOL_NAME"
 codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$STAGE_APP"
 codesign --verify --deep --strict --verbose=2 "$STAGE_APP"
+codesign --verify --strict --verbose=2 "$STAGE_APP/Contents/MacOS/$TOOL_NAME"
 SIGN_INFO="$(codesign --display --verbose=2 "$STAGE_APP" 2>&1)"
 grep -E '^(Identifier|Format|Signature|CodeDirectory)' <<<"$SIGN_INFO" || true
 grep -q '^Signature=adhoc$' <<<"$SIGN_INFO" || die "the bundle is not ad-hoc signed"
+TOOL_SIGN_INFO="$(codesign --display --verbose=2 "$STAGE_APP/Contents/MacOS/$TOOL_NAME" 2>&1)"
+grep -E '^(Identifier|Signature)' <<<"$TOOL_SIGN_INFO" || true
+grep -q '^Signature=adhoc$' <<<"$TOOL_SIGN_INFO" || die "the $TOOL_NAME tool in the bundle is not ad-hoc signed"
+grep -q "^Identifier=$BUNDLE_ID.$TOOL_NAME\$" <<<"$TOOL_SIGN_INFO" || die "the $TOOL_NAME tool in the bundle does not carry its identifier"
 
 mkdir -p "$DIST"
 rm -rf "$APP"
 ditto "$STAGE_APP" "$APP"
 codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$APP/Contents/MacOS/$TOOL_NAME"
 echo "app: $APP"
+echo "tool: $APP/Contents/MacOS/$TOOL_NAME"
 
 # ---------------------------------------------------------------- smoke test
+# wait_for_app <log>: waits until the app started in the background ($APP_PID) has ended,
+# and fails when it does not within the time limit or ends with an error.
+wait_for_app() {
+    local log="$1" waited=0 status=0
+    while kill -0 "$APP_PID" 2>/dev/null; do
+        if [[ $waited -ge $((SMOKE_TIMEOUT_SECS * 2)) ]]; then
+            kill -9 "$APP_PID" 2>/dev/null || true
+            sed 's/^/    /' "$log" >&2
+            die "the app did not quit within ${SMOKE_TIMEOUT_SECS}s"
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    wait "$APP_PID" || status=$?
+    APP_PID=""
+    sed 's/^/    /' "$log"
+    [[ $status -eq 0 ]] || die "the app exited with status $status"
+}
+
 if [[ $SMOKE -eq 1 ]]; then
     step "Smoke test: launching the bundled binary against a temporary library"
     SMOKE_DATA="$WORK/smoke-data"
@@ -177,23 +229,82 @@ if [[ $SMOKE -eq 1 ]]; then
     THE_WRITER_DATA_DIR="$SMOKE_DATA" THE_WRITER_AUTOMATION="wait:1500; info; quit" \
         "$APP/Contents/MacOS/$BIN_NAME" >"$SMOKE_LOG" 2>&1 &
     APP_PID=$!
-    waited=0
-    while kill -0 "$APP_PID" 2>/dev/null; do
-        if [[ $waited -ge $((SMOKE_TIMEOUT_SECS * 2)) ]]; then
-            kill -9 "$APP_PID" 2>/dev/null || true
-            sed 's/^/    /' "$SMOKE_LOG" >&2
-            die "the app did not quit within ${SMOKE_TIMEOUT_SECS}s"
+    wait_for_app "$SMOKE_LOG"
+    [[ -d "$SMOKE_DATA" ]] || die "the app did not create its data directory ($SMOKE_DATA)"
+    echo "smoke test passed: launched, ran the automation script, quit with status 0"
+
+    # The tool, as an agent runs it: by its path in the bundle, on a library of its own.
+    # (Never the real one: every call names the temporary directory, and the variable is
+    # set too, so that a call that lost its option still could not reach it.)
+    step "Smoke test: the bundled $TOOL_NAME tool against a temporary library"
+    BUNDLED_TOOL="$APP/Contents/MacOS/$TOOL_NAME"
+    TOOL_DATA="$WORK/tool-data"
+    TOOL_OUT="$WORK/tool.out"
+    TOOL_LOG="$WORK/tool-app.log"
+    export THE_WRITER_DATA_DIR="$TOOL_DATA"
+    # run_tool <expected exit code> <arguments>: output and errors go to $TOOL_OUT.
+    run_tool() {
+        local expected="$1" status=0
+        shift
+        "$BUNDLED_TOOL" --library "$TOOL_DATA" "$@" >"$TOOL_OUT" 2>&1 || status=$?
+        if [[ $status -ne $expected ]]; then
+            sed 's/^/    /' "$TOOL_OUT" >&2
+            die "$TOOL_NAME $* exited with status $status, expected $expected"
         fi
+    }
+    tool_said() {
+        grep -q -- "$1" "$TOOL_OUT" || { sed 's/^/    /' "$TOOL_OUT" >&2; die "the output of the tool does not have: $1"; }
+    }
+
+    run_tool 0 --version
+    tool_said "^$TOOL_NAME $VERSION\$"
+    echo "version: $(cat "$TOOL_OUT")"
+
+    # With the app closed the tool does everything: create a document, read it back.
+    run_tool 0 create "Tool smoke test" --content $'# Tool smoke test\n\nWritten by the bundled tool.'
+    sed 's/^/    /' "$TOOL_OUT"
+    run_tool 0 get "Tool smoke test"
+    tool_said "Written by the bundled tool."
+    echo "created a document and read it back"
+
+    # With the app open on that library: the app shows what the tool wrote, reading still
+    # works, and a change is refused with the exit code for "the app is open" (5) and
+    # changes nothing.
+    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; state; wait:120000; quit" \
+        "$APP/Contents/MacOS/$BIN_NAME" >"$TOOL_LOG" 2>&1 &
+    APP_PID=$!
+    waited=0
+    until grep -q 'document=' "$TOOL_LOG" 2>/dev/null; do
+        kill -0 "$APP_PID" 2>/dev/null || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app ended before it showed the library"; }
+        [[ $waited -lt $((SMOKE_TIMEOUT_SECS * 2)) ]] || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not show the library within ${SMOKE_TIMEOUT_SECS}s"; }
         sleep 0.5
         waited=$((waited + 1))
     done
-    smoke_status=0
-    wait "$APP_PID" || smoke_status=$?
-    APP_PID=""
-    sed 's/^/    /' "$SMOKE_LOG"
-    [[ $smoke_status -eq 0 ]] || die "the app exited with status $smoke_status"
-    [[ -d "$SMOKE_DATA" ]] || die "the app did not create its data directory ($SMOKE_DATA)"
-    echo "smoke test passed: launched, ran the automation script, quit with status 0"
+    grep -q 'title="Tool smoke test"' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app does not show the document the tool created"; }
+    echo "the app shows the document the tool created"
+    run_tool 0 get "Tool smoke test"
+    tool_said "Written by the bundled tool."
+    echo "read while the app is open"
+    run_tool 5 create "Written while open" --content "This must not be stored."
+    sed 's/^/    /' "$TOOL_OUT"
+    tool_said "Quit The Writer"
+    run_tool 5 append "Tool smoke test" --content "This must not be stored."
+    run_tool 0 list
+    if grep -q "Written while open" "$TOOL_OUT"; then die "a document was created while the app was open"; fi
+    run_tool 0 get "Tool smoke test"
+    if grep -q "This must not be stored." "$TOOL_OUT"; then die "a document was changed while the app was open"; fi
+    echo "changes were refused while the app was open (exit code 5), and nothing was changed"
+
+    # The app is asked to quit the way "kill" asks: it saves and ends with status 0.
+    kill -TERM "$APP_PID"
+    wait_for_app "$TOOL_LOG"
+    # And with the app closed again, the tool writes again.
+    run_tool 0 append "Tool smoke test" --content "Added after the app was closed."
+    run_tool 0 get "Tool smoke test"
+    tool_said "Added after the app was closed."
+    unset THE_WRITER_DATA_DIR
+    echo "smoke test passed: the tool writes with the app closed and only reads while it is open"
 else
     step "Smoke test skipped (--no-smoke-test)"
 fi
@@ -216,9 +327,14 @@ mkdir -p "$MOUNT_POINT"
 hdiutil attach "$DMG" -readonly -nobrowse -noautoopen -noverify -mountpoint "$MOUNT_POINT" -quiet
 ls -la "$MOUNT_POINT" | sed 's/^/    /'
 [[ -x "$MOUNT_POINT/$APP_NAME.app/Contents/MacOS/$BIN_NAME" ]] || die "the app is missing from the disk image"
+[[ -x "$MOUNT_POINT/$APP_NAME.app/Contents/MacOS/$TOOL_NAME" ]] || die "the $TOOL_NAME tool is missing from the app in the disk image"
 [[ -f "$MOUNT_POINT/Read Me First.txt" ]] || die "Read Me First.txt is missing from the disk image"
 [[ "$(readlink "$MOUNT_POINT/Applications")" == "/Applications" ]] || die "the Applications link is missing from the disk image"
 codesign --verify --deep --strict "$MOUNT_POINT/$APP_NAME.app" || die "the app inside the disk image fails signature verification"
+codesign --verify --strict "$MOUNT_POINT/$APP_NAME.app/Contents/MacOS/$TOOL_NAME" || die "the $TOOL_NAME tool inside the disk image fails signature verification"
+# The tool runs from the image as it stands (it only prints its version: no library is opened).
+IMAGE_TOOL_VERSION="$("$MOUNT_POINT/$APP_NAME.app/Contents/MacOS/$TOOL_NAME" --version)"
+[[ "$IMAGE_TOOL_VERSION" == "$TOOL_NAME $VERSION" ]] || die "the $TOOL_NAME tool inside the disk image says '$IMAGE_TOOL_VERSION', expected '$TOOL_NAME $VERSION'"
 hdiutil detach "$MOUNT_POINT" -quiet || hdiutil detach "$MOUNT_POINT" -force -quiet
 MOUNT_POINT=""
 echo "disk image contents and signature verified"
@@ -226,6 +342,7 @@ echo "disk image contents and signature verified"
 # ---------------------------------------------------------------- summary
 step "Done"
 echo "app:     $APP ($(du -sh "$APP" | awk '{print $1}'))"
+echo "tool:    $APP/Contents/MacOS/$TOOL_NAME ($(du -h "$APP/Contents/MacOS/$TOOL_NAME" | awk '{print $1}'))"
 echo "dmg:     $DMG"
 echo "size:    $(stat -f %z "$DMG") bytes ($(du -h "$DMG" | awk '{print $1}'))"
 echo "sha256:  $(shasum -a 256 "$DMG" | awk '{print $1}')"

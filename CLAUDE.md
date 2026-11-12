@@ -46,6 +46,7 @@ THE_WRITER_DATA_DIR=/some/tmp cargo run -p writer-app   # run against a throwawa
 CARGO_TARGET_DIR=target-pure cargo build -p writer-cli   # the `writer` tool (target-pure/debug/writer)
 cargo build -p writer-cli            # the same beside a debug app (target/debug/writer), where the Agents panel looks for it
 scripts/bundle.sh                    # release .app (the app and the tool) + .dmg in dist/
+THE_WRITER_DIST_DIR=/some/tmp scripts/bundle.sh   # a trial build that leaves the released images in dist/ alone
 ```
 
 The real library lives in `~/Library/Application Support/The Writer/`. Tests and manual
@@ -157,7 +158,9 @@ built only from the crates without GPUI. It does not need the app to be running.
 - **Where it is.** In the bundle at `The Writer.app/Contents/MacOS/writer`, beside the
   app's executable, built from the same commit by `scripts/bundle.sh` and signed with the
   bundle. Agents call it by its absolute path; nothing is added to `PATH`. A debug app
-  looks for it at `target/debug/writer` (`cargo build -p writer-cli`).
+  looks for it at `target/debug/writer` (`cargo build -p writer-cli`). The script's smoke
+  test runs the bundled tool on a temporary library: create, read back, the app shows the
+  document, a write while the bundled app is open is refused with exit code 5.
 - **The one rule.** Agents can read at any time (list, search, get, info, history,
   export). They can change things only while the app is closed: while the app holds the
   lock of the data directory every write is refused with exit code 5 and a message that

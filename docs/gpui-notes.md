@@ -825,10 +825,11 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   (`cx.background_executor().timer(..)`, `.now()`) are on the test clock and need
   `advance_clock` in that loop; the other thread's own waits are real time.
 - **What a view emitted inside `window.update(cx, ..)` from an async task has been delivered
-  when `update` returns** (effects are flushed at the end of the outermost update, before the
-  task goes on; tested by the same file: a toast pushed by a subscriber is there). So an
-  answer sent right after the `update` is sent after every subscriber has heard, and no key
-  press can come between the closure and the delivery.
+  when `update` returns** (read from `$G/src/app.rs`: `update_window_id` runs inside
+  `App::update`, and `finish_update` flushes the effects when the outermost update ends,
+  before the task goes on; not tested by itself, the tests of that file only see the state
+  afterwards). So an answer sent right after the `update` is sent after every subscriber has
+  heard, and no key press can come between the closure and the delivery.
 
 ## Visual QA
 

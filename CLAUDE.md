@@ -426,6 +426,12 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   element has (`menus::menu_key_bindings`, added before all other bindings; they never run).
   A key with `enter` in it cannot be given to AppKit: those items show no key.
 
+A layout fact that bites: text that wraps (or has several lines) inside a `flex_col`
+container that is itself the growing child (`flex_1`) of a flex row is measured at no
+width, and the row comes out thousands of pixels tall. Make the growing child a plain block
+`div()` and space its children with margins (`crates/writer-app/src/agents_view.rs`,
+`render_row`; the test `no_row_is_taller_than_its_text`).
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:

@@ -102,6 +102,33 @@ open this one. The preview does not take part in that check, so the two
 could otherwise have your library open together.
 
 
+Agents
+------
+
+The AI agents that run on your Mac (Claude Code, Codex, Gemini CLI and
+others) can work with your library: find and read documents, create and edit
+them, file them in folders, leave comments for you to go through, export.
+They do it through a command line tool that comes inside the app:
+
+    /Applications/The Writer.app/Contents/MacOS/writer
+
+Agents can read at any time. They can only change things while The Writer is
+closed: while the app is open the tool says so and changes nothing, so an
+agent never writes into a document you are working on. Before an agent
+changes a document a version of it is kept (File > Version History brings it
+back), and what an agent deletes goes to the trash.
+
+The Writer > Agents... (Option-Command-A) shows the tool, installs the skill
+that tells your agents about it, and lists the command that adds The
+Writer's MCP server to each of them. Nothing is installed anywhere until you
+press a button there, and The Writer does not edit the configuration of any
+agent.
+
+If an agent reports that macOS does not let it run the tool, the app still
+carries the "downloaded from the internet" mark (see above: the tool is not
+notarised either). Run the command of Option B once; it covers the tool too.
+
+
 Your documents
 --------------
 

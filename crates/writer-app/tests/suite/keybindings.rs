@@ -268,3 +268,780 @@ fn with_the_default_keys_the_menu_bar_shows_what_it_showed_before(cx: &mut TestA
         assert_eq!(sorted, by_hand);
     });
 }
+
+// ----- the user's changes ---------------------------------------------------------
+
+use gpui::KeyUpEvent;
+use writer_app::{
+    menus,
+    settings::keys as setting_keys,
+    shortcuts::{Place, collect_shortcuts},
+};
+use writer_keymap::{KeySequence, Target};
+use writer_keymap_ui::{Choice, KeymapView, ModeKind};
+
+fn key(text: &str) -> KeySequence {
+    KeySequence::parse(text).expect("a key")
+}
+
+fn bold() -> Target {
+    Target::new("editor::ToggleBold", Some("Editor"))
+}
+
+/// A workspace with a document open and the keyboard in its text.
+fn workspace_in_the_text(
+    cx: &mut TestAppContext,
+) -> (Entity<Library>, Entity<Workspace>, &mut VisualTestContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Keys", "A paragraph with a few words in it."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert!(editor_focused(&workspace, vcx));
+    (library, workspace, vcx)
+}
+
+/// Changes the keymap the way every change of the user gets in.
+fn change<R>(
+    workspace: &Entity<Workspace>,
+    cx: &mut VisualTestContext,
+    change: impl FnOnce(&mut writer_keymap::Keymap) -> R,
+) -> R {
+    let result = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.change_keys(window, cx, change)
+    });
+    cx.run_until_parked();
+    result.expect("the app has a keymap")
+}
+
+/// The action GPUI would run for `keys` where the keyboard is now.
+fn runs(keys: &str, cx: &mut VisualTestContext) -> Option<String> {
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let keystrokes: Vec<Keystroke> = keys
+            .split(' ')
+            .map(|key| Keystroke::parse(key).expect("a valid keystroke"))
+            .collect();
+        let stack = window.context_stack();
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, _) = keymap.bindings_for_input(&keystrokes, &stack);
+        bindings
+            .first()
+            .map(|binding| binding.action().name().to_string())
+    })
+}
+
+/// Presses and releases each key, as a keyboard does (the list takes a
+/// key that is pressed again without a release for a held one).
+fn press(cx: &mut VisualTestContext, keys: &str) {
+    for key in keys.split_whitespace() {
+        cx.simulate_keystrokes(key);
+        cx.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse(key).unwrap(),
+        });
+    }
+    cx.run_until_parked();
+}
+
+fn list(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Entity<KeymapView> {
+    workspace
+        .read_with(cx, |workspace, cx| workspace.shortcuts_list(cx))
+        .expect("the list of keyboard shortcuts is open")
+}
+
+/// Opens the list and selects the row of `target`.
+fn open_list_at(
+    workspace: &Entity<Workspace>,
+    target: &Target,
+    cx: &mut VisualTestContext,
+) -> Entity<KeymapView> {
+    if workspace
+        .read_with(cx, |workspace, cx| workspace.shortcuts_list(cx))
+        .is_none()
+    {
+        press(cx, "cmd-/");
+    }
+    let list = list(workspace, cx);
+    assert!(
+        list.update(cx, |list, cx| list.select_target(target, cx)),
+        "{target} has a row"
+    );
+    cx.run_until_parked();
+    list
+}
+
+fn question(
+    list: &Entity<KeymapView>,
+    cx: &mut VisualTestContext,
+) -> (String, String, Vec<String>) {
+    list.read_with(cx, |list, _| {
+        (
+            list.question_title().unwrap_or_default(),
+            list.question_lines()
+                .iter()
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+                .join(" "),
+            list.choices().into_iter().map(|(_, label)| label).collect(),
+        )
+    })
+}
+
+fn choose(list: &Entity<KeymapView>, choice: Choice, cx: &mut VisualTestContext) {
+    assert!(
+        list.update_in(cx, |list, window, cx| list.choose(choice, window, cx)),
+        "the question offers {choice:?}"
+    );
+    cx.run_until_parked();
+}
+
+/// The key beside the menu bar item of `action`, as GPUI picks it.
+fn menu_key(action: &dyn Action, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        menus::native_menu_binding(&keymap, action)
+            .filter(|binding| binding.keystrokes().len() == 1)
+            .map(keys_of)
+    })
+}
+
+/// The key a hint shows for `action` (the palette, a context menu).
+fn hint(action: &dyn Action, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| writer_ui::KeyHint::for_action(action, cx).map(|hint| hint.text()))
+}
+
+/// The keys of the row of `title` in `place`, as the list has them.
+fn row_keys(title: &str, place: Place, cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .into_iter()
+            .find(|shortcut| shortcut.title.as_ref() == title && shortcut.place == place)
+            .unwrap_or_else(|| panic!("{title} is not listed in {place:?}"))
+            .all_keys
+            .iter()
+            .map(|key| key.keys.to_string())
+            .collect()
+    })
+}
+
+fn toasts(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Vec<String> {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .toast_layer()
+            .read(cx)
+            .toasts()
+            .map(|toast| toast.message.to_string())
+            .collect()
+    })
+}
+
+/// Presses the button of the toast that has one.
+fn press_toast_button(workspace: &Entity<Workspace>, label: &str, cx: &mut VisualTestContext) {
+    let layer = workspace.read_with(cx, |workspace, _| workspace.toast_layer().clone());
+    let id = layer.read_with(cx, |layer, _| {
+        layer
+            .ids()
+            .into_iter()
+            .zip(layer.toasts())
+            .find(|(_, toast)| toast.action_label().map(|have| have.as_ref()) == Some(label))
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("no toast has a button {label:?}"))
+    });
+    cx.update(|window, cx| layer.update(cx, |layer, cx| layer.run_action(id, window, cx)));
+    cx.run_until_parked();
+}
+
+/// With no change installed the keymap that runs is the defaults, binding
+/// for binding, behind the menu bar's own.
+#[gpui::test]
+fn without_changes_the_keymap_is_the_defaults(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(|cx| {
+        let installed: Vec<(String, String, Option<String>)> = cx
+            .key_bindings()
+            .borrow()
+            .bindings()
+            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .map(|binding| {
+                (
+                    keys_of(binding),
+                    binding.action().name().to_string(),
+                    binding.predicate().map(|predicate| predicate.to_string()),
+                )
+            })
+            .collect();
+        let defaults: Vec<(String, String, Option<String>)> = writer_app::keymap::defaults(cx)
+            .iter()
+            .map(|binding| {
+                (
+                    keys_of(binding),
+                    binding.action().name().to_string(),
+                    binding.predicate().map(|predicate| predicate.to_string()),
+                )
+            })
+            .collect();
+        assert_eq!(installed, defaults);
+        assert_eq!(writer_app::keymap::changed_count(cx), 0);
+        // Everything is handed over to be changed, except the two keys of
+        // the window that stands in when the library cannot be opened.
+        let model = writer_app::keymap::model(cx).expect("the keymap as data");
+        assert_eq!(model.defaults().bindings().len(), defaults.len() - 2);
+        assert!(model.defaults().knows(&bold()));
+        assert!(
+            model
+                .defaults()
+                .knows(&Target::new("workspace::ShowVersionHistory", None)),
+            "a command without a key can be given one"
+        );
+        assert!(
+            !model
+                .defaults()
+                .targets()
+                .iter()
+                .any(|target| target.context.text() == Some("ErrorWindow"))
+        );
+    });
+}
+
+#[gpui::test]
+fn a_changed_key_runs_its_command_and_the_old_key_no_longer_does(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"))
+    }));
+    assert_eq!(
+        runs("cmd-alt-b", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(runs("cmd-b", vcx), None);
+
+    vcx.simulate_keystrokes("cmd-a cmd-b");
+    assert!(
+        !is_bold(&workspace, "paragraph", vcx),
+        "the old key does nothing"
+    );
+    vcx.simulate_keystrokes("cmd-alt-b");
+    assert!(
+        is_bold(&workspace, "paragraph", vcx),
+        "the new key runs Bold"
+    );
+
+    // Everything that shows the key shows the new one, at once: a hint of
+    // the palette and of a menu, the list of shortcuts, the menu bar.
+    assert_eq!(
+        hint(&writer_editor::actions::ToggleBold, vcx).as_deref(),
+        Some("⌥⌘B")
+    );
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
+    assert_eq!(
+        menu_key(&writer_editor::actions::ToggleBold, vcx).as_deref(),
+        Some("alt-cmd-b")
+    );
+    let (command_hint, changed) = vcx.update(|_, cx| {
+        let commands = writer_app::commands::all(cx);
+        let bold = commands
+            .iter()
+            .find(|command| command.action_name() == "editor::ToggleBold")
+            .expect("Bold is a command");
+        (
+            bold.key_hint(cx).map(|hint| hint.text()),
+            writer_app::keymap::changed_count(cx),
+        )
+    });
+    assert_eq!(command_hint.as_deref(), Some("⌥⌘B"));
+    assert_eq!(changed, 1);
+    // The text menu, opened from the keyboard: its item for Bold shows
+    // the key the keymap has when the menu is made.
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    let in_menu = vcx.update(|window, cx| {
+        let menu = writer_ui::ContextMenu::current(window, cx).expect("the text menu is open");
+        let menu = menu.read(cx);
+        let item = menu
+            .items()
+            .iter()
+            .flat_map(|item| {
+                std::iter::once(item).chain(item.submenu_items().into_iter().flatten())
+            })
+            .find(|item| item.action_name() == Some("editor::ToggleBold"))
+            .expect("the text menu has Bold");
+        match item.explicit_key_hint() {
+            Some(hint) => Some(hint.text()),
+            // Looked up when the menu is drawn.
+            None => writer_ui::KeyHint::for_action(&writer_editor::actions::ToggleBold, cx)
+                .map(|hint| hint.text()),
+        }
+    });
+    assert_eq!(in_menu.as_deref(), Some("⌥⌘B"));
+    vcx.simulate_keystrokes("escape");
+}
+
+/// Whether the word `needle` of the open document is italic.
+fn is_italic(workspace: &Entity<Workspace>, needle: &str, cx: &mut VisualTestContext) -> bool {
+    workspace.read_with(cx, |workspace, cx| {
+        let editor = workspace.editor().read(cx);
+        editor
+            .document()
+            .blocks()
+            .iter()
+            .find_map(|block| {
+                let offset = block.text().find(needle)?;
+                Some(block.attrs_at(offset).is_some_and(|attrs| attrs.italic))
+            })
+            .unwrap_or_else(|| panic!("{needle:?} is not in the document"))
+    })
+}
+
+fn has_modal(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace.modal_layer().read(cx).has_modal()
+    })
+}
+
+#[gpui::test]
+fn a_removed_key_does_nothing_and_is_shown_nowhere(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let italic = Target::new("editor::ToggleItalic", Some("Editor"));
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.remove_key(&italic, &key("cmd-i"))
+    }));
+    assert_eq!(runs("cmd-i", vcx), None);
+    vcx.simulate_keystrokes("cmd-a cmd-i");
+    assert!(!is_italic(&workspace, "paragraph", vcx));
+    // Nothing was typed in its place either.
+    assert_eq!(
+        editor_text(&workspace, vcx),
+        "Keys\nA paragraph with a few words in it."
+    );
+
+    assert_eq!(hint(&writer_editor::actions::ToggleItalic, vcx), None);
+    assert_eq!(menu_key(&writer_editor::actions::ToggleItalic, vcx), None);
+    assert!(row_keys("Italic", Place::Text, vcx).is_empty());
+    // The command is still there, and still runs from the palette.
+    vcx.dispatch_action(writer_editor::actions::ToggleItalic);
+    vcx.run_until_parked();
+    assert!(is_italic(&workspace, "paragraph", vcx));
+    // No binding of any kind is left for it: the menu bar has nothing to
+    // answer `cmd-i` with.
+    vcx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        assert_eq!(
+            keymap
+                .bindings_for_action(&writer_editor::actions::ToggleItalic)
+                .count(),
+            0
+        );
+    });
+}
+
+#[gpui::test]
+fn a_key_given_to_a_command_without_one_works(cx: &mut TestAppContext) {
+    use writer_app::version_history::VersionHistory;
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    assert!(row_keys("Version history", Place::Anywhere, vcx).is_empty());
+    assert!(change(&workspace, vcx, |keymap| {
+        assert!(
+            keymap
+                .check(&history, &key("ctrl-alt-h"), None)
+                .is_allowed()
+        );
+        keymap.add_key(&history, key("ctrl-alt-h"))
+    }));
+    let open = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, cx| {
+            workspace.modal_layer().read(cx).is_open::<VersionHistory>()
+        })
+    };
+    assert_eq!(
+        runs("ctrl-alt-h", vcx).as_deref(),
+        Some("workspace::ShowVersionHistory")
+    );
+    vcx.simulate_keystrokes("ctrl-alt-h");
+    vcx.run_until_parked();
+    assert!(open(vcx), "the key opens the version history from the text");
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(!has_modal(&workspace, vcx));
+    // It works anywhere, like the other keys of the window.
+    vcx.simulate_keystrokes("cmd-0 ctrl-alt-h");
+    vcx.run_until_parked();
+    assert!(open(vcx), "and from the library");
+    vcx.simulate_keystrokes("escape cmd-1");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        hint(&writer_app::actions::ShowVersionHistory, vcx).as_deref(),
+        Some("⌃⌥H")
+    );
+    assert_eq!(
+        menu_key(&writer_app::actions::ShowVersionHistory, vcx).as_deref(),
+        Some("ctrl-alt-h")
+    );
+    assert_eq!(
+        row_keys("Version history", Place::Anywhere, vcx),
+        ["ctrl-alt-h"]
+    );
+
+    // A command of the text without a key gets one where the keys of the
+    // text work.
+    let divider = Target::new("editor::InsertDivider", Some("Editor"));
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.add_key(&divider, key("cmd-alt-d"))
+    }));
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-alt-d");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |workspace, cx| {
+        workspace
+            .editor()
+            .read(cx)
+            .document()
+            .blocks()
+            .iter()
+            .any(|block| *block.kind() == writer_core::BlockKind::Divider)
+    }));
+    assert_eq!(row_keys("Divider", Place::Text, vcx), ["cmd-alt-d"]);
+}
+
+#[gpui::test]
+fn a_key_bound_in_two_spellings_is_changed_as_one(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let numbered = Target::new("editor::ToggleNumberedList", Some("Editor"));
+    let action = writer_editor::actions::ToggleNumberedList;
+    // One key to the user, although two bindings make it.
+    assert_eq!(row_keys("Numbered list", Place::Text, vcx), ["cmd-shift-7"]);
+    assert_eq!(
+        runs("cmd-&", vcx).as_deref(),
+        Some("editor::ToggleNumberedList")
+    );
+
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&numbered, &key("cmd-shift-7"), key("cmd-shift-1"))
+    }));
+    // Both spellings of the old key are gone, both of the new one work:
+    // the one a test or a script sends and the one a keyboard sends.
+    for old in ["cmd-shift-7", "cmd-&"] {
+        assert_eq!(runs(old, vcx), None, "{old}");
+    }
+    for new in ["cmd-shift-1", "cmd-!"] {
+        assert_eq!(
+            runs(new, vcx).as_deref(),
+            Some("editor::ToggleNumberedList"),
+            "{new}"
+        );
+    }
+    // Shown in the readable spelling, by hints and by the menu bar.
+    assert_eq!(hint(&action, vcx).as_deref(), Some("⇧⌘1"));
+    assert_eq!(menu_key(&action, vcx).as_deref(), Some("cmd-shift-1"));
+    assert_eq!(row_keys("Numbered list", Place::Text, vcx), ["cmd-shift-1"]);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+
+    // A key without a second spelling in the place of one with two, and
+    // back to the default: two bindings again, where they stood.
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&numbered, &key("cmd-shift-1"), key("cmd-alt-l"))
+    }));
+    assert_eq!(runs("cmd-!", vcx), None);
+    assert_eq!(
+        runs("cmd-alt-l", vcx).as_deref(),
+        Some("editor::ToggleNumberedList")
+    );
+    assert!(change(&workspace, vcx, |keymap| keymap.reset(&numbered)));
+    vcx.update(|_, cx| {
+        let installed: Vec<String> = cx
+            .key_bindings()
+            .borrow()
+            .bindings()
+            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .map(keys_of)
+            .collect();
+        let defaults: Vec<String> = writer_app::keymap::defaults(cx)
+            .iter()
+            .map(keys_of)
+            .collect();
+        assert_eq!(installed, defaults, "back to the defaults, in their order");
+    });
+}
+
+/// A key recorded in the list for a command: taken from the command that
+/// has it, kept by both where the places differ, or left alone.
+#[gpui::test]
+fn a_conflict_is_shown_and_settled_each_way(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let italic = Target::new("editor::ToggleItalic", Some("Editor"));
+
+    // Bold is given the key of Italic: taken, in the same place.
+    let view = open_list_at(&workspace, &bold(), vcx);
+    press(vcx, "enter");
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Recording
+    );
+    press(vcx, "cmd-i");
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    let (title, says, choices) = question(&view, vcx);
+    assert_eq!(title, "⌘I is taken");
+    assert!(says.contains("Italic"), "{says}");
+    assert!(
+        choices.iter().any(|choice| choice.contains("Italic")),
+        "{choices:?}"
+    );
+    // Nothing changed yet, and nothing ran: the text is not italic.
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    assert!(!is_italic(&workspace, "paragraph", vcx));
+
+    // Cancel: nothing changes.
+    choose(&view, Choice::Cancel, vcx);
+    assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+
+    // Take it from that command.
+    press(vcx, "enter");
+    press(vcx, "cmd-i");
+    choose(&view, Choice::TakeKey, vcx);
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-i"]);
+    assert!(row_keys("Italic", Place::Text, vcx).is_empty());
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 2);
+    // The list shows it at once.
+    view.read_with(vcx, |view, _| {
+        assert_eq!(view.selected_keys(), vec![key("cmd-i")]);
+        assert_eq!(view.changed_count(), 2);
+    });
+    press(vcx, "escape");
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(runs("cmd-i", vcx).as_deref(), Some("editor::ToggleBold"));
+    assert_eq!(runs("cmd-b", vcx), None);
+    vcx.simulate_keystrokes("cmd-a cmd-i");
+    assert!(is_bold(&workspace, "paragraph", vcx));
+    assert!(!is_italic(&workspace, "paragraph", vcx));
+    // The model agrees with what is installed.
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        assert!(effective.target(&italic).unwrap().keys.is_empty());
+        assert!(
+            writer_app::keymap::model(cx)
+                .unwrap()
+                .collisions()
+                .is_empty()
+        );
+    });
+
+    // A command of the window is given a key the text and the library
+    // have for something of their own: different places, both keep it.
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    let view = open_list_at(&workspace, &history, vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-backspace");
+    let (title, says, choices) = question(&view, vcx);
+    assert!(
+        choices.contains(&"Keep Both".to_string()),
+        "{title}: {says} {choices:?}"
+    );
+    choose(&view, Choice::KeepBoth, vcx);
+    assert_eq!(
+        row_keys("Version history", Place::Anywhere, vcx),
+        ["cmd-backspace"]
+    );
+    press(vcx, "escape");
+    assert!(editor_focused(&workspace, vcx));
+    // In the text and in the library the key does what it did.
+    assert_eq!(
+        runs("cmd-backspace", vcx).as_deref(),
+        Some("editor::DeleteToLineStart")
+    );
+    vcx.simulate_keystrokes("cmd-0");
+    assert_eq!(
+        runs("cmd-backspace", vcx).as_deref(),
+        Some("library_panel::MoveToTrash")
+    );
+    // Where nothing else has it, it opens the version history: on a row
+    // of the settings.
+    vcx.simulate_keystrokes("cmd-1 cmd-,");
+    vcx.run_until_parked();
+    assert_eq!(
+        runs("cmd-backspace", vcx).as_deref(),
+        Some("workspace::ShowVersionHistory")
+    );
+}
+
+#[gpui::test]
+fn a_key_that_would_stop_text_from_being_typed_is_refused(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let view = open_list_at(&workspace, &bold(), vcx);
+
+    // A bare character where text is typed.
+    press(vcx, "enter");
+    press(vcx, "b");
+    let (title, says, choices) = question(&view, vcx);
+    assert_eq!(choices, ["Press Another Key", "Cancel"], "{title}: {says}");
+    assert!(says.to_lowercase().contains("typed"), "{says}");
+    // Shift with a character is a character too.
+    choose(&view, Choice::PressAnotherKey, vcx);
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Recording
+    );
+    press(vcx, "shift-b");
+    let (_, says, choices) = question(&view, vcx);
+    assert_eq!(choices, ["Press Another Key", "Cancel"], "{says}");
+    // A key macOS keeps for itself.
+    choose(&view, Choice::PressAnotherKey, vcx);
+    press(vcx, "cmd-tab");
+    let (title, says, choices) = question(&view, vcx);
+    assert_eq!(choices, ["Press Another Key", "Cancel"], "{title}: {says}");
+    assert!(says.contains("macOS"), "{says}");
+    choose(&view, Choice::Cancel, vcx);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    // Nothing of what was pressed was typed or run.
+    assert_eq!(
+        editor_text(&workspace, vcx),
+        "Keys\nA paragraph with a few words in it."
+    );
+
+    // The same as the model says it, and where no text is typed a letter
+    // is a key like any other (the library moves with `j`).
+    vcx.update(|_, cx| {
+        use writer_keymap::Refusal;
+        let model = writer_app::keymap::model(cx).unwrap();
+        assert_eq!(
+            model.check(&bold(), &key("b"), None).refusal,
+            Some(Refusal::TypesText)
+        );
+        assert!(matches!(
+            model.check(&bold(), &key("cmd-tab"), None).refusal,
+            Some(Refusal::SystemKeeps(_))
+        ));
+        // A key macOS uses unless that was switched off is allowed, with a
+        // warning.
+        let spotlight = model.check(&bold(), &key("cmd-space"), None);
+        assert_eq!(spotlight.refusal, None);
+        assert!(matches!(
+            spotlight.warnings.as_slice(),
+            [writer_keymap::Warning::SystemUses(_)]
+        ));
+        let anywhere = Target::new("workspace::ShowVersionHistory", None);
+        assert_eq!(
+            model.check(&anywhere, &key("x"), None).refusal,
+            Some(Refusal::TypesText),
+            "a command of the window applies in the text too"
+        );
+        let rename = Target::new(
+            "library_panel::Rename",
+            Some("LibraryPanel && mode == tree && !TextField"),
+        );
+        assert!(model.defaults().knows(&rename), "the library's rename");
+        assert_eq!(model.check(&rename, &key("y"), None).refusal, None);
+    });
+}
+
+#[gpui::test]
+fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
+    let (library, workspace, vcx) = workspace_in_the_text(cx);
+    let italic = Target::new("editor::ToggleItalic", Some("Editor"));
+    change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"));
+        keymap.remove_key(&italic, &key("cmd-i"));
+    });
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 2);
+    let stored = |cx: &mut VisualTestContext| -> Option<serde_json::Value> {
+        library.read_with(cx, |library, _| {
+            library
+                .setting(setting_keys::KEYBOARD_SHORTCUTS)
+                .expect("the settings can be read")
+        })
+    };
+    assert!(stored(vcx).is_some());
+
+    // One command, from its row: the key of "use default".
+    let view = open_list_at(&workspace, &bold(), vcx);
+    press(vcx, "cmd-d");
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-b"]);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        runs_in_text("cmd-b", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(runs_in_text("cmd-alt-b", vcx), None);
+
+    // Everything, from the list's control: it asks first.
+    assert!(view.update_in(vcx, |view, window, cx| view.press("Reset All…", window, cx)));
+    vcx.run_until_parked();
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+    choose(&view, Choice::ResetAll, vcx);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    assert!(row_keys("Italic", Place::Text, vcx) == ["cmd-i"]);
+    assert_eq!(
+        stored(vcx),
+        None,
+        "nothing is stored while every key is the default"
+    );
+    assert!(
+        toasts(&workspace, vcx)
+            .iter()
+            .any(|toast| toast.contains("back to its default")),
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+    // Undo, from the toast.
+    press_toast_button(&workspace, "Undo", vcx);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+    assert!(row_keys("Italic", Place::Text, vcx).is_empty());
+    assert!(stored(vcx).is_some());
+    press(vcx, "escape");
+
+    // And from the menu bar or the palette, which asks in a system dialog
+    // that no key of the app can break.
+    vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
+    vcx.run_until_parked();
+    assert!(vcx.has_pending_prompt());
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+    vcx.simulate_prompt_answer("Reset All");
+    vcx.run_until_parked();
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    assert_eq!(stored(vcx), None);
+    // With nothing changed there is nothing to ask.
+    vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
+    vcx.run_until_parked();
+    assert!(!vcx.has_pending_prompt());
+    // The palette's own undo brings the last reset back as well.
+    vcx.dispatch_action(writer_app::actions::UndoShortcutsChange);
+    vcx.run_until_parked();
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+}
+
+/// What `keys` runs with the keyboard in the text, wherever it is now.
+fn runs_in_text(keys: &str, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        let keystrokes: Vec<Keystroke> = keys
+            .split(' ')
+            .map(|key| Keystroke::parse(key).expect("a valid keystroke"))
+            .collect();
+        let stack = [
+            gpui::KeyContext::parse("Workspace").unwrap(),
+            gpui::KeyContext::parse("EditorTools").unwrap(),
+            gpui::KeyContext::parse("Editor").unwrap(),
+        ];
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, _) = keymap.bindings_for_input(&keystrokes, &stack);
+        bindings
+            .first()
+            .map(|binding| binding.action().name().to_string())
+    })
+}

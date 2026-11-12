@@ -237,6 +237,10 @@ pub struct ThemeColors {
     pub comment_active: Hsla,
     /// Underline colour for commented text.
     pub comment_underline: Hsla,
+    /// The wavy underline of a misspelled word: a quiet red that reads as
+    /// a mark on the canvas and on the page sheet without shouting, and is
+    /// not the terracotta of the accent.
+    pub spelling: Hsla,
     /// Find match background (translucent): the hue of the current match,
     /// paler, so it is not taken for a highlight of the document.
     pub find_match: Hsla,
@@ -628,6 +632,15 @@ mod tests {
         at_least("accent on canvas", theme.accent, theme.canvas, 3.0);
         at_least("caret on page", theme.caret, theme.page, 3.0);
         at_least("danger on canvas", theme.danger, theme.canvas, 4.5);
+        // A thin wavy line has to be found: the contrast of a graphical
+        // mark, on both surfaces the text is written on.
+        at_least("spelling on canvas", theme.spelling, theme.canvas, 3.0);
+        at_least("spelling on page", theme.spelling, theme.page, 3.0);
+        let hue = |color: Hsla| color.h * 360.;
+        assert!(
+            (hue(theme.accent) - hue(theme.spelling)).abs() > 6.,
+            "{name}: the spelling mark has the hue of the accent"
+        );
         at_least("success on canvas", theme.success, theme.canvas, 4.5);
         at_least("ink on comment", theme.ink, theme.comment, 10.0);
         at_least(

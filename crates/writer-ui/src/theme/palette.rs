@@ -59,6 +59,7 @@ pub fn paper() -> ThemeColors {
         comment: c(0xF5E3DB),
         comment_active: c(0xEBC5B6),
         comment_underline: c(0xC9795F),
+        spelling: c(0xD63A3A),
 
         // The orange of the current match, paler: a yellow wash could not be
         // told from the default (yellow) highlight of the document.
@@ -115,6 +116,7 @@ pub fn night() -> ThemeColors {
         comment: c(0x3F2820),
         comment_active: c(0x66392A),
         comment_underline: c(0xC46F55),
+        spelling: c(0xF0625F),
 
         find_match: hsla(28. / 360., 0.90, 0.55, 0.24),
         find_match_current: hsla(28. / 360., 0.90, 0.55, 0.52),

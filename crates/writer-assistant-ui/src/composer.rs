@@ -310,6 +310,16 @@ impl Composer {
     }
 }
 
+impl Composer {
+    /// The key that sends, as the keymap has it now: the composer is a
+    /// compact editor that submits on the key of the editor's "new
+    /// paragraph" (`enter` unless the keymap was changed). The Send control
+    /// names it in its tooltip.
+    pub fn send_key(cx: &App) -> Option<KeyHint> {
+        KeyHint::for_action(&writer_editor::actions::Newline, cx)
+    }
+}
+
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors;
@@ -334,7 +344,7 @@ impl Render for Composer {
                     "assistant-send",
                     IconName::Send,
                     "Send",
-                    KeyHint::parse("enter"),
+                    Self::send_key(cx),
                     can_submit,
                 )
             };

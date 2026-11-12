@@ -9,6 +9,11 @@
 //! The family list and the recently used families live in the
 //! [`FontLibrary`] global, shared by every editor. The list is read from
 //! the text system once, on first use.
+//!
+//! What can be chosen, and in which order, is [`FontList`]: the picker
+//! shows its rows, and so does every other list of fonts in the app (the
+//! two font rows of the settings). One source, so a family is never
+//! offered in one place and missing in the other.
 
 use std::sync::Arc;
 
@@ -117,7 +122,9 @@ where
     cx.default_global::<FontLibrary>().recent = list;
 }
 
-fn remember_font(family: &SharedString, cx: &mut App) {
+/// Puts `family` at the front of the recently used families (a family
+/// was chosen from a list of fonts).
+pub fn remember_font(family: &SharedString, cx: &mut App) {
     let mut recent = recent_fonts(cx);
     if recent.first() == Some(family) {
         return;
@@ -129,12 +136,137 @@ fn remember_font(family: &SharedString, cx: &mut App) {
     cx.default_global::<FontLibrary>().recent = recent;
 }
 
-pub(crate) struct FontMenu {
-    pub(crate) menu: Entity<Menu>,
-    /// Snapshot of the family list; row id `i + 1` is `families[i]`, row id
-    /// 0 is "Document default".
+/// One row of a list of fonts ([`FontList::rows`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FontRow {
+    /// The heading of a group: "Writing fonts", "Recent", "All fonts".
+    Header(&'static str),
+    /// A row that is not an installed family: number `index` of the
+    /// `leading` rows the list was asked with. `positions` are the byte
+    /// offsets of the characters of its label that matched the query.
+    Leading {
+        /// Index into the `leading` labels.
+        index: usize,
+        /// Matched characters of the label.
+        positions: Vec<usize>,
+    },
+    /// An installed family.
+    Family {
+        /// Index into [`FontList::families`].
+        index: usize,
+        /// Matched characters of the name.
+        positions: Vec<usize>,
+    },
+}
+
+/// The fonts that can be chosen, in the one order every list of fonts in
+/// the app shows them: the font picker of the text and the font rows of
+/// the settings.
+///
+/// The families are the installed ones without the hidden system families
+/// ([`font_families`]). Without a query the rows are the installed
+/// [`WRITING_FONTS`], the recently used families that are not among them,
+/// and every family by name, each group under its heading; a family can
+/// stand in more than one group. With a query they are the fuzzy matches,
+/// best first, without headings.
+#[derive(Clone, Debug)]
+pub struct FontList {
     families: Arc<[SharedString]>,
     recent: Vec<SharedString>,
+}
+
+impl FontList {
+    /// The list as it is now: the installed families and the recently
+    /// used ones.
+    pub fn current(cx: &mut App) -> Self {
+        Self {
+            families: font_families(cx),
+            recent: recent_fonts(cx),
+        }
+    }
+
+    /// Every family that can be chosen, by name.
+    pub fn families(&self) -> &[SharedString] {
+        &self.families
+    }
+
+    /// Where `family` stands among [`Self::families`]; `None` for a family
+    /// that is not installed.
+    pub fn position(&self, family: &str) -> Option<usize> {
+        self.families
+            .iter()
+            .position(|other| other.as_ref() == family)
+    }
+
+    /// The rows for `query`. `leading` are the labels of rows that are not
+    /// installed families and stand before every group ("Document default"
+    /// in the font picker, a font that is set but not installed in the
+    /// settings); with a query they are matched like the families.
+    pub fn rows(&self, leading: &[&str], query: &str) -> Vec<FontRow> {
+        let family = |index: usize| FontRow::Family {
+            index,
+            positions: Vec::new(),
+        };
+        if query.trim().is_empty() {
+            let mut rows = Vec::with_capacity(
+                leading.len() + self.families.len() + self.recent.len() + WRITING_FONTS.len() + 3,
+            );
+            rows.extend((0..leading.len()).map(|index| FontRow::Leading {
+                index,
+                positions: Vec::new(),
+            }));
+            let writing: Vec<usize> = WRITING_FONTS
+                .iter()
+                .filter_map(|family| self.position(family))
+                .collect();
+            if !writing.is_empty() {
+                rows.push(FontRow::Header("Writing fonts"));
+                rows.extend(writing.into_iter().map(family));
+            }
+            // A recent family that is a writing font is already in view.
+            let recent: Vec<usize> = self
+                .recent
+                .iter()
+                .filter(|family| !WRITING_FONTS.contains(&family.as_ref()))
+                .filter_map(|family| self.position(family))
+                .collect();
+            if !recent.is_empty() {
+                rows.push(FontRow::Header("Recent"));
+                rows.extend(recent.into_iter().map(family));
+            }
+            if !self.families.is_empty() {
+                rows.push(FontRow::Header("All fonts"));
+                rows.extend((0..self.families.len()).map(family));
+            }
+            return rows;
+        }
+        let candidates = leading
+            .iter()
+            .copied()
+            .chain(self.families.iter().map(|name| name.as_ref()));
+        fuzzy::match_strings(query, candidates, usize::MAX)
+            .into_iter()
+            .map(
+                |found| match found.candidate_index.checked_sub(leading.len()) {
+                    Some(index) => FontRow::Family {
+                        index,
+                        positions: found.positions,
+                    },
+                    None => FontRow::Leading {
+                        index: found.candidate_index,
+                        positions: found.positions,
+                    },
+                },
+            )
+            .collect()
+    }
+}
+
+pub(crate) struct FontMenu {
+    pub(crate) menu: Entity<Menu>,
+    /// Snapshot of the fonts that can be chosen; row id `i + 1` is
+    /// `fonts.families()[i]`, row id 0 is "Document default".
+    fonts: FontList,
     /// The family of the selection: `Some(None)` is the document default,
     /// `None` is mixed.
     current: Option<Option<String>>,
@@ -144,10 +276,7 @@ pub(crate) struct FontMenu {
 
 impl FontMenu {
     fn family_id(&self, family: &str) -> Option<usize> {
-        self.families
-            .iter()
-            .position(|other| other.as_ref() == family)
-            .map(|index| index + 1)
+        self.fonts.position(family).map(|index| index + 1)
     }
 
     fn current_id(&self) -> Option<usize> {
@@ -174,7 +303,7 @@ impl FontMenu {
                 ..MenuItem::default()
             },
             _ => {
-                let family = self.families[id - 1].clone();
+                let family = self.fonts.families()[id - 1].clone();
                 MenuItem {
                     id,
                     label: family.clone(),
@@ -189,41 +318,14 @@ impl FontMenu {
     }
 
     fn entries(&self, query: &str) -> Vec<MenuEntry> {
-        if query.trim().is_empty() {
-            let mut entries = Vec::with_capacity(
-                self.families.len() + self.recent.len() + WRITING_FONTS.len() + 4,
-            );
-            entries.push(self.item(0, Vec::new()));
-            let writing: Vec<usize> = WRITING_FONTS
-                .iter()
-                .filter_map(|family| self.family_id(family))
-                .collect();
-            if !writing.is_empty() {
-                entries.push(MenuEntry::Header("Writing fonts".into()));
-                entries.extend(writing.into_iter().map(|id| self.item(id, Vec::new())));
-            }
-            // A recent family that is a writing font is already in view.
-            let recent: Vec<usize> = self
-                .recent
-                .iter()
-                .filter(|family| !WRITING_FONTS.contains(&family.as_ref()))
-                .filter_map(|family| self.family_id(family))
-                .collect();
-            if !recent.is_empty() {
-                entries.push(MenuEntry::Header("Recent".into()));
-                entries.extend(recent.into_iter().map(|id| self.item(id, Vec::new())));
-            }
-            if !self.families.is_empty() {
-                entries.push(MenuEntry::Header("All fonts".into()));
-                entries.extend((1..=self.families.len()).map(|id| self.item(id, Vec::new())));
-            }
-            return entries;
-        }
-        let candidates =
-            std::iter::once(DEFAULT_LABEL).chain(self.families.iter().map(|name| name.as_ref()));
-        fuzzy::match_strings(query, candidates, usize::MAX)
+        self.fonts
+            .rows(&[DEFAULT_LABEL], query)
             .into_iter()
-            .map(|found| self.item(found.candidate_index, found.positions))
+            .map(|row| match row {
+                FontRow::Header(title) => MenuEntry::Header(title.into()),
+                FontRow::Leading { positions, .. } => self.item(0, positions),
+                FontRow::Family { index, positions } => self.item(index + 1, positions),
+            })
             .collect()
     }
 }
@@ -236,8 +338,7 @@ impl EditorTools {
             return;
         }
         self.make_room(window, cx);
-        let families = font_families(cx);
-        let recent = recent_fonts(cx);
+        let fonts = FontList::current(cx);
         let editor = self.editor.read(cx);
         let collapsed = editor.selection().is_collapsed();
         let current = match editor.state().format_state().font {
@@ -270,8 +371,7 @@ impl EditorTools {
         });
         let tool = FontMenu {
             menu: menu.clone(),
-            families,
-            recent,
+            fonts,
             current,
             body_font,
             _subscription: cx.subscribe_in(&menu, window, Self::on_menu_event),
@@ -383,10 +483,10 @@ impl EditorTools {
         let Some(PopupTool::Font(tool)) = &self.popup else {
             return;
         };
-        if id > tool.families.len() {
+        if id > tool.fonts.families().len() {
             return;
         }
-        let family = (id > 0).then(|| tool.families[id - 1].clone());
+        let family = (id > 0).then(|| tool.fonts.families()[id - 1].clone());
         self.close_popup(true, window, cx);
         self.editor.update(cx, |editor, cx| {
             if editor.is_read_only() {

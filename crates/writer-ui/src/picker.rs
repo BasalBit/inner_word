@@ -91,6 +91,10 @@ use crate::{
 
 pub const KEY_CONTEXT: &str = "Picker";
 
+/// The width of the slot a row's font sample stands in
+/// ([`PickerItem::sample_font`]).
+const SAMPLE_WIDTH: Pixels = px(84.);
+
 actions!(
     picker,
     [
@@ -146,6 +150,9 @@ pub struct PickerItem {
     pub icon: Option<IconName>,
     /// Right-aligned key binding.
     pub key_hint: Option<KeyHint>,
+    /// A font family: the row ends with a short sample set in it (a list
+    /// of fonts).
+    pub sample_font: Option<SharedString>,
 }
 
 impl PickerItem {
@@ -173,6 +180,12 @@ impl PickerItem {
 
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Ends the row with a short sample in `family`.
+    pub fn sample_font(mut self, family: impl Into<SharedString>) -> Self {
+        self.sample_font = Some(family.into());
         self
     }
 
@@ -604,6 +617,7 @@ impl<D: PickerDelegate> Picker<D> {
                     PickerEntry::Item(item) => {
                         let selected = self.selected == Some(ix);
                         outer
+                            .debug_selector(move || format!("picker-row-{ix}"))
                             .cursor_pointer()
                             .on_mouse_move(cx.listener(move |this, _, window, cx| {
                                 if this.selected != Some(ix) {
@@ -677,6 +691,32 @@ impl<D: PickerDelegate> Picker<D> {
                                                 )
                                             }),
                                     )
+                                    // A sample in the family itself. Script
+                                    // and display faces are much wider and
+                                    // taller than their point size says, so
+                                    // the sample has a slot of its own and
+                                    // is cut off at the slot's edges.
+                                    .when_some(item.sample_font, |el, family| {
+                                        el.child(
+                                            div()
+                                                .flex_none()
+                                                .w(SAMPLE_WIDTH)
+                                                .h_full()
+                                                .overflow_hidden()
+                                                .flex()
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .flex_none()
+                                                        .whitespace_nowrap()
+                                                        .font_family(family)
+                                                        .text_size(UI_TEXT_BASE)
+                                                        .line_height(px(18.))
+                                                        .text_color(colors.muted)
+                                                        .child("Aa Bb Cc"),
+                                                ),
+                                        )
+                                    })
                                     .when_some(item.key_hint, |el, hint| el.child(hint)),
                             )
                             .into_any_element()

@@ -187,8 +187,9 @@ pub struct SpellChecker {
     /// The selection right after the last edit: a `SelectionChanged` that
     /// finds it unchanged belongs to that edit.
     pub(crate) selection_at_edit: Option<Selection>,
-    /// Scroll offset and viewport size when the checker last looked.
-    pub(crate) last_view: Option<(Pixels, Option<Size<Pixels>>)>,
+    /// Scroll offset, viewport size and zoom when the checker last looked
+    /// (a smaller zoom shows more of the text at the same offset).
+    pub(crate) last_view: Option<(Pixels, Option<Size<Pixels>>, f32)>,
 
     // --- Languages, with automatic detection ---
     pub(crate) tags: HashMap<BlockId, Tag>,

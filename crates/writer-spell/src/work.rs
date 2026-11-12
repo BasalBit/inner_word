@@ -137,13 +137,14 @@ impl SpellChecker {
         let view = (
             editor.scroll_offset(),
             editor.viewport_bounds().map(|bounds| bounds.size),
+            editor.zoom_percent(),
         );
         if self.last_view == Some(view) {
             return;
         }
         let scrolled = self
             .last_view
-            .is_some_and(|(offset, size)| size.is_some() && offset != view.0);
+            .is_some_and(|(offset, size, _)| size.is_some() && offset != view.0);
         self.last_view = Some(view);
         // What came into view goes first.
         let unchecked = visible_blocks(editor)

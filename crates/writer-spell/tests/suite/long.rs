@@ -199,6 +199,51 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn zooming_out_checks_what_comes_into_view_first(cx: &mut TestAppContext) {
+    setup(cx);
+    let service = Rc::new(english().check_cost(Duration::from_micros(150)));
+    let (_checker, editor, cx) = open(book(10_000), &service, cx);
+    let on_screen = |cx: &mut gpui::VisualTestContext| {
+        editor
+            .read_with(cx, |editor, _| editor.visible_range())
+            .map(|range| range.start.block..range.end.block + 1)
+            .expect("a layout")
+    };
+    // Far into the book, where the background pass has not been, at a
+    // large zoom: a few paragraphs are on screen, and checked.
+    editor.update(cx, |editor, cx| {
+        editor.set_zoom(writer_editor::Zoom::Percent(300), cx);
+        editor.scroll_to_position(Position::new(6_000, 0), writer_editor::Autoscroll::Top, cx)
+    });
+    cx.run_until_parked();
+    wait(SLICE_PAUSE, cx);
+    wait(SLICE_PAUSE, cx);
+    let near = on_screen(cx);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.first_unchecked_spelling_block(near.clone()), None);
+    });
+    // Zoomed out, the same place shows several times as much text. The
+    // view did not scroll and the window did not change: the zoom alone
+    // brought those paragraphs into view, and they are checked now, not
+    // when the background pass arrives.
+    editor.update(cx, |editor, cx| {
+        editor.set_zoom(writer_editor::Zoom::Percent(50), cx)
+    });
+    cx.run_until_parked();
+    wait(SLICE_PAUSE, cx);
+    wait(SLICE_PAUSE, cx);
+    let far = on_screen(cx);
+    assert!(far.len() > near.len() * 3, "{near:?} then {far:?}");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.first_unchecked_spelling_block(far.clone()), None);
+        assert!(
+            !editor.spelling_checked(far.end + 2_000),
+            "the pass is not there yet"
+        );
+    });
+}
+
+#[gpui::test]
 fn next_misspelling_checks_ahead_in_a_book_that_is_not_checked_yet(cx: &mut TestAppContext) {
     setup(cx);
     let service = Rc::new(english());

@@ -26,7 +26,7 @@ use gpui::{
     Window, actions, div, point, prelude::*, px, uniform_list,
 };
 use writer_core::BlockKind;
-use writer_library::{DocumentId, Library, SnapshotId, SnapshotMeta};
+use writer_library::{DocumentId, Library, LibraryEvent, SnapshotId, SnapshotMeta};
 use writer_ui::{
     Button, ButtonSize, Icon, IconName,
     theme::{
@@ -240,6 +240,9 @@ pub struct VersionHistory {
     focus_handle: FocusHandle,
     list_scroll: UniformListScrollHandle,
     preview_scroll: ScrollHandle,
+    /// A version that is kept while the list is open (an agent changed
+    /// the document through the app) is listed at once.
+    _library: gpui::Subscription,
 }
 
 impl EventEmitter<DismissEvent> for VersionHistory {}
@@ -260,6 +263,37 @@ impl VersionHistory {
         title: String,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (versions, labels) = Self::listing(&library, document, cx);
+        let subscription = cx.subscribe(&library, |this: &mut Self, _, event, cx| {
+            if matches!(event, LibraryEvent::SnapshotsChanged(id) if *id == this.document) {
+                this.reload(cx);
+            }
+        });
+        let mut this = Self {
+            workspace,
+            library,
+            document,
+            title,
+            versions,
+            labels,
+            selected: 0,
+            preview: None,
+            focus_handle: cx.focus_handle(),
+            list_scroll: UniformListScrollHandle::new(),
+            preview_scroll: ScrollHandle::new(),
+            _library: subscription,
+        };
+        this.load_preview(cx);
+        this
+    }
+
+    /// The versions of `document`, newest first, and the two lines of
+    /// each row.
+    fn listing(
+        library: &Entity<Library>,
+        document: DocumentId,
+        cx: &App,
+    ) -> (Vec<SnapshotMeta>, Vec<(SharedString, SharedString)>) {
         let versions = library.read(cx).snapshots(document).unwrap_or_default();
         let now_ms = library.read(cx).clock().now_ms();
         let now = LocalTime::from_unix_ms(now_ms);
@@ -296,21 +330,21 @@ impl VersionHistory {
                 (when.into(), detail.into())
             })
             .collect();
-        let mut this = Self {
-            workspace,
-            library,
-            document,
-            title,
-            versions,
-            labels,
-            selected: 0,
-            preview: None,
-            focus_handle: cx.focus_handle(),
-            list_scroll: UniformListScrollHandle::new(),
-            preview_scroll: ScrollHandle::new(),
-        };
-        this.load_preview(cx);
-        this
+        (versions, labels)
+    }
+
+    /// Reads the versions again (one was kept or deleted while the list is
+    /// open). The selected version stays selected when it is still there.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let selected = self.selected().map(|version| version.id);
+        let (versions, labels) = Self::listing(&self.library, self.document, cx);
+        self.versions = versions;
+        self.labels = labels;
+        self.selected = selected
+            .and_then(|id| self.versions.iter().position(|version| version.id == id))
+            .unwrap_or(0);
+        self.load_preview(cx);
+        cx.notify();
     }
 
     /// The versions listed, newest first.

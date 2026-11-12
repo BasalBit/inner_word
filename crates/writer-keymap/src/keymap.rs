@@ -7,7 +7,7 @@ use crate::defaults::{Command, Defaults, Target};
 use crate::effective::{Effective, apply};
 use crate::file::{Catalogue, ImportError, ImportMode, ImportPlan, export, plan_import};
 use crate::keystroke::KeySequence;
-use crate::verdict::{Collision, Verdict, check, collisions};
+use crate::verdict::{Collision, Holder, Verdict, check, collisions};
 
 /// The keymap of the app as data: what every crate bound, what the caller
 /// says about the places of the window, and what the user changed. Every
@@ -123,6 +123,12 @@ impl Keymap {
     /// The conflicts in the keymap as it is: see [`collisions`].
     pub fn collisions(&self) -> Vec<Collision> {
         collisions(&self.defaults, &self.changes, &self.places)
+    }
+
+    /// "Take it from that command": removes the key from a holder a
+    /// verdict named. See [`Holder::take`].
+    pub fn take(&mut self, holder: &Holder) -> bool {
+        holder.take(&self.defaults, &mut self.changes)
     }
 
     /// See [`Changes::replace_key`].

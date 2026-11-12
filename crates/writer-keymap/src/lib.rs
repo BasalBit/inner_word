@@ -33,9 +33,13 @@
 //!    and the context predicate of the default binding at its `source`
 //!    (or, without a source, the action built from its name and the
 //!    context parsed from its text).
-//! 4. For a key the user proposes, show [`Keymap::check`], then change
+//! 4. For a key the user proposes (a recorded GPUI keystroke is read with
+//!    `Keystroke::parse(&keystroke.unparse())`, or from its parts with
+//!    [`Keystroke::from_parts`]), show [`Keymap::check`], then change
 //!    ([`Keymap::replace_key`] and the others), store
 //!    [`Keymap::stored`], install again.
+//! 5. To show a key, hand its text to GPUI: `Keystroke::to_string` is a
+//!    text `gpui::Keystroke::parse` reads.
 //!
 //! # One key, two spellings
 //!

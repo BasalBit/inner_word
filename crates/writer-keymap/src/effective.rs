@@ -102,8 +102,8 @@ pub struct TargetKeys {
     pub default_keys: Vec<KeySequence>,
     /// Whether it differs from its defaults.
     pub changed: bool,
-    /// The key that key hints and the menu bar show for the target: the
-    /// last one bound. `None` when the target has no key.
+    /// The key that stands last in the keymap for the target, which is
+    /// the one key hints show for it. `None` when the target has no key.
     pub shown: Option<KeySequence>,
 }
 

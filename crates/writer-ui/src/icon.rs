@@ -70,6 +70,10 @@ icons! {
     Keyboard => "keyboard",
     Alert => "alert",
     Link => "link",
+    Send => "send",
+    Stop => "stop",
+    Copy => "copy",
+    Sparkle => "sparkle",
 }
 
 /// The default icon size.

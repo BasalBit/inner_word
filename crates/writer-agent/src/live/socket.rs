@@ -370,10 +370,12 @@ impl Drop for Listener {
 }
 
 /// Reads a request, or says what to answer to a line that is none.
-fn parse_request(line: &str) -> Result<Request, AnswerLine> {
-    let answer = |answer: Answer| AnswerLine {
-        version: PROTOCOL_VERSION,
-        answer,
+fn parse_request(line: &str) -> Result<Request, Box<AnswerLine>> {
+    let answer = |answer: Answer| {
+        Box::new(AnswerLine {
+            version: PROTOCOL_VERSION,
+            answer,
+        })
     };
     let unreadable = |error: &dyn std::fmt::Display| {
         answer(Answer::failed(&Error::invalid(format!(

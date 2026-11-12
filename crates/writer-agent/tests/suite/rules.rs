@@ -799,6 +799,75 @@ fn a_version_is_kept_before_every_change_of_text_and_deleting_needs_a_yes() {
     assert_eq!(fx.markdown(doc.id), "# Plan\n\nAll new.\n");
 }
 
+/// The app saves the writer's typing before it carries an agent's change out, and that
+/// save may take a version itself. It is the text from before the change: the safety net
+/// makes no second copy of it and says on that one why it is kept.
+#[test]
+fn a_version_the_app_took_a_moment_ago_is_labelled_and_not_copied() {
+    let fx = fixture();
+    let doc = fx.create(None, "# Plan\n\nFirst draft.\n");
+    let versions = |fx: &Fixture| {
+        fx.library
+            .versions(&ListVersionsRequest {
+                document: doc.id.into(),
+            })
+            .unwrap()
+            .versions
+    };
+    let edit = |old: &str, new: &str, author: &str| {
+        fx.library
+            .edit(&EditRequest {
+                document: doc.id.into(),
+                old_text: old.into(),
+                new_text: new.into(),
+                write: WriteOptions::by(author),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    // The app's own version of the text as it is, without a label.
+    let taken = {
+        let mut store = writer_store::Store::open(fx.library.database_path()).unwrap();
+        store.set_clock(fx.clock.clone());
+        store.create_snapshot(doc.id).unwrap()
+    };
+    assert_eq!(versions(&fx)[0].label, None);
+    fx.clock.advance_ms(1000);
+    let edited = edit("First", "Second", "Claude");
+    let kept = edited.snapshot.expect("the version before the edit");
+    assert_eq!(kept.id, taken.id, "the one that was there");
+    assert_eq!(kept.label.as_deref(), Some("Before an edit by Claude"));
+    assert_eq!(versions(&fx), vec![kept.clone()]);
+
+    // The writer takes the edit back in the app (which saves the old text again), and
+    // another agent changes it: the version that holds this text keeps the label it has.
+    {
+        let mut store = writer_store::Store::open(fx.library.database_path()).unwrap();
+        store.set_clock(fx.clock.clone());
+        let before = store.snapshot(taken.id).unwrap();
+        let document = Document::from_json(&before.content).unwrap();
+        let stats = document.stats();
+        store
+            .save_document(
+                doc.id,
+                &writer_store::DocumentContent {
+                    content: &before.content,
+                    title: &before.meta.title,
+                    plain_text: &document.plain_text(),
+                    word_count: stats.words as u64,
+                    char_count: stats.characters as u64,
+                },
+            )
+            .unwrap();
+    }
+    fx.clock.advance_ms(1000);
+    let again = edit("First", "Third", "Codex");
+    let kept_again = again.snapshot.expect("a version");
+    assert_eq!(kept_again, kept, "no second copy, and the label it had");
+    assert_eq!(versions(&fx).len(), 1);
+    assert_eq!(fx.markdown(doc.id), "# Plan\n\nThird draft.\n");
+}
+
 /// What the app stores for a document: `writer_app::document_io::StoredForm`.
 fn as_the_app_stores(
     document: &Document,

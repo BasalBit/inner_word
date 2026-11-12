@@ -202,7 +202,9 @@ impl Reason {
 
 /// Keeps the stored text of a document as a version before it is changed, with a label
 /// that says why. When the newest version already is this text, that one is the version
-/// and no second copy is made.
+/// and no second copy is made; it is given the label when it has none (the app took it
+/// when it saved the writer's typing a moment ago, and it is the text from before this
+/// change all the same). A label it has stays: it says why the version was first kept.
 pub(crate) fn keep_version(
     store: &mut Store,
     id: DocumentId,
@@ -212,8 +214,14 @@ pub(crate) fn keep_version(
     if let Some(newest) = store.snapshots(id)?.into_iter().next()
         && store.snapshot(newest.id)?.content == raw
     {
-        let label = store.snapshot_label(newest.id)?;
-        return Ok(version_info(&newest, label));
+        let label = match store.snapshot_label(newest.id)? {
+            Some(label) => label,
+            None => {
+                store.label_snapshot(newest.id, label)?;
+                label.to_string()
+            }
+        };
+        return Ok(version_info(&newest, Some(label)));
     }
     let meta = store.create_labeled_snapshot(id, label)?;
     // What the app does after it takes one: thin out the old ones.

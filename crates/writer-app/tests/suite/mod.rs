@@ -12,6 +12,7 @@ mod saving;
 mod session;
 mod settings;
 mod shell;
+mod spelling;
 mod story;
 mod units;
 mod versions;

@@ -824,12 +824,18 @@ impl Workspace {
     }
 
     /// One part of the `state` line of a scripted run: whether the
-    /// assistant is shown, the quick chat while it is open, the side chat
-    /// while it is in the slot.
+    /// assistant is shown, its engine, the command of the side chat's
+    /// tools, the quick chat while it is open, the side chat while it is
+    /// in the slot.
     pub fn describe_assistant(&self, window: &Window, cx: &App) -> Option<String> {
         let host = self.assistant.host.as_ref()?;
+        // The command the side chat's tools are started with.
+        let tools = match library_tool_server(self.library.read(cx), cx) {
+            Some(server) => format!("{} {}", server.command.display(), server.args.join(" ")),
+            None => "none".to_string(),
+        };
         let mut line = format!(
-            "shown={} engine=[{}]",
+            "shown={} engine=[{}] tools=[{tools}]",
             self.assistant.shown,
             host.read(cx).status_line()
         );

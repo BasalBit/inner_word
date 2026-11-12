@@ -295,6 +295,18 @@ if [[ $SMOKE -eq 1 ]]; then
     run_tool 0 get "Tool smoke test"
     if grep -q "This must not be stored." "$TOOL_OUT"; then die "a document was changed while the app was open"; fi
     echo "changes were refused while the app was open (exit code 5), and nothing was changed"
+    # The MCP server of the tool, which the assistant's side chat starts for its read-only
+    # tools, reads the library while the app has it open.
+    MCP_OUT="$WORK/mcp.out"
+    printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_library","arguments":{}}}' \
+        | "$BUNDLED_TOOL" --library "$TOOL_DATA" mcp >"$MCP_OUT" 2>&1 \
+        || { sed 's/^/    /' "$MCP_OUT" >&2; die "the MCP server of the tool failed while the app was open"; }
+    grep -q '"id":2' "$MCP_OUT" && grep -q 'Tool smoke test' "$MCP_OUT" \
+        || { sed 's/^/    /' "$MCP_OUT" >&2; die "the MCP server did not list the library while the app was open"; }
+    echo "the MCP server lists the library while the app is open"
 
     # The app is asked to quit the way "kill" asks: it saves and ends with status 0.
     kill -TERM "$APP_PID"
@@ -303,8 +315,32 @@ if [[ $SMOKE -eq 1 ]]; then
     run_tool 0 append "Tool smoke test" --content "Added after the app was closed."
     run_tool 0 get "Tool smoke test"
     tool_said "Added after the app was closed."
-    unset THE_WRITER_DATA_DIR
     echo "smoke test passed: the tool writes with the app closed and only reads while it is open"
+
+    # The assistant, on the fake engine (which starts no program and spends nothing; the
+    # real one is never used by this script): it is shown, the side chat takes a message
+    # about the open document and gets its answer, and the tools it would be given are the
+    # MCP server of the tool in this very bundle, on this library.
+    step "Smoke test: the assistant in the bundled app, on the fake engine"
+    ASSISTANT_LOG="$WORK/assistant-app.log"
+    THE_WRITER_ASSISTANT_FAKE=ready \
+    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; keys:cmd-3; wait:300; type:Is this a test?; keys:enter; wait:600; state; quit" \
+        "$APP/Contents/MacOS/$BIN_NAME" >"$ASSISTANT_LOG" 2>&1 &
+    APP_PID=$!
+    wait_for_app "$ASSISTANT_LOG"
+    assistant_said() {
+        grep -qF -- "$1" "$ASSISTANT_LOG" || die "the state of the app does not have: $1"
+    }
+    assistant_said 'assistant=[shown=true'
+    assistant_said 'side=[document="Tool smoke test" messages=2 answering=false last=done'
+    # The executable's path with its symbolic links resolved, as the app names the tool.
+    RESOLVED_TOOL="$(cd "$APP/Contents/MacOS" && pwd -P)/$TOOL_NAME"
+    RESOLVED_DATA="$(cd "$TOOL_DATA" && pwd -P)"
+    grep -qF -- "tools=[$RESOLVED_TOOL --library $RESOLVED_DATA mcp]" "$ASSISTANT_LOG" \
+        || grep -qF -- "tools=[$RESOLVED_TOOL --library $TOOL_DATA mcp]" "$ASSISTANT_LOG" \
+        || die "the side chat's tools are not the MCP server of the bundled tool on this library"
+    unset THE_WRITER_DATA_DIR
+    echo "smoke test passed: the assistant answers in the side chat, with the bundled tool as its tools"
 else
     step "Smoke test skipped (--no-smoke-test)"
 fi

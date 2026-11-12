@@ -55,6 +55,7 @@ pub mod commands;
 pub mod controls;
 pub mod document_io;
 pub mod export;
+pub mod font_choice;
 pub mod keymap;
 pub mod library_search;
 pub mod menus;

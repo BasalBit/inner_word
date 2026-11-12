@@ -10,6 +10,7 @@
 
 use gpui::App;
 use writer_core::{DocumentSettings, PaperSize, SpellingLanguage};
+use writer_editor_tools::FontList;
 use writer_export::SocialNetwork;
 use writer_library::Library;
 use writer_ui::ThemeMode;
@@ -176,22 +177,6 @@ pub const MAX_SIDEBAR_WIDTH: f32 = 480.;
 pub const TEXT_SIZES: [f32; 11] = [13., 14., 15., 16., 17., 18., 19., 20., 22., 24., 28.];
 /// Line heights offered for new documents.
 pub const LINE_HEIGHTS: [f32; 8] = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2.0];
-/// Font families offered for new documents (filtered by what is installed).
-pub const FONT_CANDIDATES: [&str; 12] = [
-    "Charter",
-    "Iowan Old Style",
-    "Georgia",
-    "Palatino",
-    "Baskerville",
-    "Hoefler Text",
-    "Times New Roman",
-    "New York",
-    "Helvetica Neue",
-    "Avenir Next",
-    "Menlo",
-    "Courier New",
-];
-
 /// Paper sizes offered for new documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Paper {
@@ -506,22 +491,49 @@ impl Settings {
     }
 }
 
-/// The font families offered for new documents: the installed ones among
-/// [`FONT_CANDIDATES`], plus `current` when it is not in the list.
-pub fn available_fonts(current: &str, cx: &App) -> Vec<String> {
-    let installed = cx.text_system().all_font_names();
-    let mut fonts: Vec<String> = FONT_CANDIDATES
-        .iter()
-        .filter(|candidate| installed.iter().any(|name| name == *candidate))
-        .map(|candidate| candidate.to_string())
-        .collect();
-    if !current.is_empty() && !fonts.iter().any(|font| font == current) {
-        fonts.insert(0, current.to_string());
+/// The font families `left` / `right` step through on a font row of the
+/// settings: every family that can be chosen in a document, by name (the
+/// "All fonts" group of [`FontList`], which the font picker of the text
+/// and the searchable list of the row show too). A font that is set but
+/// not installed on this Mac (`current`) stands before them, so the row
+/// can show it and step away from it.
+pub fn font_steps(current: &str, cx: &mut App) -> Vec<String> {
+    let list = FontList::current(cx);
+    (0..font_step_count(&list, current))
+        .filter_map(|index| font_step(&list, current, index))
+        .collect()
+}
+
+/// Whether `font` is a family that can be chosen on this Mac. A library
+/// that came from another Mac can name one that is not.
+pub fn font_is_installed(font: &str, cx: &mut App) -> bool {
+    FontList::current(cx).position(font).is_some()
+}
+
+/// Whether `current` is a font that is set but not among `list`.
+fn font_is_missing(list: &FontList, current: &str) -> bool {
+    !current.is_empty() && list.position(current).is_none()
+}
+
+/// How many steps [`font_steps`] has, without building them.
+pub fn font_step_count(list: &FontList, current: &str) -> usize {
+    list.families().len() + usize::from(font_is_missing(list, current))
+}
+
+/// Where `current` stands among the steps.
+pub fn font_step_index(list: &FontList, current: &str) -> usize {
+    list.position(current).unwrap_or(0)
+}
+
+/// Step number `index`.
+pub fn font_step(list: &FontList, current: &str, index: usize) -> Option<String> {
+    if font_is_missing(list, current) {
+        return match index.checked_sub(1) {
+            None => Some(current.to_string()),
+            Some(index) => list.families().get(index).map(|family| family.to_string()),
+        };
     }
-    if fonts.is_empty() {
-        fonts.push(writer_core::Typography::default().body_font);
-    }
-    fonts
+    list.families().get(index).map(|family| family.to_string())
 }
 
 /// The unit a length (paper size, margin) is shown and typed in.

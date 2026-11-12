@@ -62,6 +62,7 @@
 //! modals get their keys directly.
 
 mod assistant;
+mod fonts;
 mod measure;
 mod menus;
 mod render;

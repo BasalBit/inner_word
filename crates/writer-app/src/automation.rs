@@ -1276,6 +1276,11 @@ pub fn describe_state(
             )
         })
         .unwrap_or_default();
+    // The list of fonts of the settings, while it is open.
+    let font_list = workspace
+        .describe_font_list(cx)
+        .map(|list| format!(" font_list=[{list}]"))
+        .unwrap_or_default();
     let menu = match writer_ui::ContextMenu::current(window, cx) {
         Some(menu) => menu.read(cx).labels().join(" | "),
         None => "none".to_string(),
@@ -1286,7 +1291,7 @@ pub fn describe_state(
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
-         limit={:?}{agents}{assistant}",
+         limit={:?}{agents}{assistant}{font_list}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),
         workspace.save_state(),

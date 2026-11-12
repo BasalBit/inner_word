@@ -12,6 +12,15 @@
 //! row opens the searchable list ([`crate::spelling::LanguagePicker`]),
 //! which comes back here.
 //!
+//! The two font rows (new documents, this document) work the same way over
+//! every font family that can be chosen in a document, the list the font
+//! picker of the text has ([`writer_editor_tools::FontList`]): `left` /
+//! `right` step through the families by name, and `enter`, `space` or a
+//! click on the row opens the searchable list
+//! ([`crate::font_choice::FontChoicePicker`]) with the writing fonts and
+//! the recently used ones first. A font that is set but not installed on
+//! this Mac stays set, and the row says so.
+//!
 //! The app's settings are written to the library at once; the workspace
 //! applies them live (see [`crate::settings`]).
 //!
@@ -49,6 +58,7 @@ use gpui::{
 use serde::Serialize;
 use writer_core::{DocumentSettings, Orientation, PaperSize};
 use writer_editor::{Autoscroll, Editor, EditorEvent};
+use writer_editor_tools::FontList;
 use writer_export::SocialNetwork;
 use writer_library::{Library, LibraryEvent};
 use writer_ui::{
@@ -60,6 +70,7 @@ use writer_ui::{
 };
 
 use crate::{
+    font_choice::FontTarget,
     settings::{
         self, LINE_HEIGHTS, LengthUnit, Paper, Settings, TEXT_SIZES, character_limit_name,
         format_length, keys, parse_length,
@@ -425,8 +436,8 @@ pub struct SettingsView {
     /// The editor whose document the "This document" rows change. `None`
     /// while no document is open.
     document: Option<Entity<Editor>>,
-    fonts: Vec<String>,
-    document_fonts: Vec<String>,
+    /// The fonts that can be chosen, as they were when the modal opened.
+    font_list: FontList,
     handles: HashMap<SettingRow, FocusHandle>,
     author_field: Entity<TextField>,
     length_fields: HashMap<SettingRow, Entity<TextField>>,
@@ -449,6 +460,9 @@ pub enum SettingsEvent {
     /// Open the searchable list of spelling languages for the app's
     /// setting or for the open document, and come back to its row.
     ChooseLanguage(LanguageTarget),
+    /// Open the searchable list of fonts for new documents or for the
+    /// open document, and come back to its row.
+    ChooseFont(FontTarget),
     /// Open the list of keyboard shortcuts in the place of the settings.
     OpenKeyboardShortcuts,
 }
@@ -518,14 +532,10 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = Settings::load(library.read(cx));
-        let fonts = settings::available_fonts(&settings.new_document_font, cx);
+        let font_list = FontList::current(cx);
         let document_settings = document
             .as_ref()
             .map(|editor| editor.read(cx).document().settings().clone());
-        let document_fonts = document_settings
-            .as_ref()
-            .map(|settings| settings::available_fonts(&settings.typography.body_font, cx))
-            .unwrap_or_default();
 
         let author_field = cx.new(|cx| {
             let mut field = TextField::new(window, cx)
@@ -640,8 +650,7 @@ impl SettingsView {
             library,
             settings,
             document,
-            fonts,
-            document_fonts,
+            font_list,
             handles,
             author_field,
             length_fields,
@@ -841,6 +850,19 @@ impl SettingsView {
             SettingRow::SpellingLanguage => {
                 format!("{}{}", row.description(), whole_list_sentence(cx)).into()
             }
+            SettingRow::Font | SettingRow::DocumentFont => {
+                let font = self.font_of(row, cx);
+                let says = if self.font_is_missing(row, cx) {
+                    format!(
+                        "{} {font} is not on this Mac: another face stands in for it until you \
+                         choose one.",
+                        row.description()
+                    )
+                } else {
+                    row.description().to_string()
+                };
+                format!("{says}{}", whole_list_sentence(cx)).into()
+            }
             SettingRow::KeyboardShortcuts => {
                 let changed = crate::workspace::changed_command_count(cx);
                 match crate::workspace::own_keys_sentence(changed) {
@@ -861,6 +883,25 @@ impl SettingsView {
             }
             _ => row.description().into(),
         }
+    }
+
+    /// The font a font row shows: the font of new documents, or the body
+    /// font of the open document.
+    fn font_of(&self, row: SettingRow, cx: &App) -> String {
+        match row {
+            SettingRow::DocumentFont => self
+                .document_settings(cx)
+                .map(|settings| settings.typography.body_font)
+                .unwrap_or_default(),
+            _ => self.settings.new_document_font.clone(),
+        }
+    }
+
+    /// Whether the font of a font row is set but not installed on this
+    /// Mac (a library that came from another one).
+    pub fn font_is_missing(&self, row: SettingRow, cx: &App) -> bool {
+        let font = self.font_of(row, cx);
+        !font.is_empty() && self.font_list.position(&font).is_none()
     }
 
     fn write<T: Serialize + ?Sized>(&mut self, key: &str, value: &T, cx: &mut Context<Self>) {
@@ -994,16 +1035,12 @@ impl SettingsView {
                 }
             }
             SettingRow::Author => Control::Field { unit: None },
-            SettingRow::Font => {
-                let index = self
-                    .fonts
-                    .iter()
-                    .position(|font| *font == settings.new_document_font)
-                    .unwrap_or(0);
+            SettingRow::Font | SettingRow::DocumentFont => {
+                let font = self.font_of(row, cx);
                 Control::Stepper {
-                    value: settings.new_document_font.clone().into(),
-                    index,
-                    count: self.fonts.len(),
+                    index: settings::font_step_index(&self.font_list, &font),
+                    count: settings::font_step_count(&self.font_list, &font).max(1),
+                    value: font.into(),
                 }
             }
             SettingRow::TextSize => Control::Stepper {
@@ -1108,18 +1145,6 @@ impl SettingsView {
             | SettingRow::DocumentMarginRight => Control::Field {
                 unit: Some(LengthUnit::for_paper(document.page.paper).abbreviation()),
             },
-            SettingRow::DocumentFont => {
-                let font = &document.typography.body_font;
-                Control::Stepper {
-                    value: font.clone().into(),
-                    index: self
-                        .document_fonts
-                        .iter()
-                        .position(|candidate| candidate == font)
-                        .unwrap_or(0),
-                    count: self.document_fonts.len().max(1),
-                }
-            }
             SettingRow::DocumentTextSize => {
                 let (low, high) = DOCUMENT_TEXT_SIZES;
                 let size = document.typography.base_size;
@@ -1188,7 +1213,8 @@ impl SettingsView {
             }
             SettingRow::Author | SettingRow::KeyboardShortcuts => {}
             SettingRow::Font => {
-                if let Some(font) = self.fonts.get(index).cloned() {
+                let current = self.font_of(row, cx);
+                if let Some(font) = settings::font_step(&self.font_list, &current, index) {
                     self.write(keys::NEW_DOCUMENT_FONT, &font, cx);
                 }
             }
@@ -1285,7 +1311,8 @@ impl SettingsView {
                 cx,
             ),
             SettingRow::DocumentFont => {
-                if let Some(font) = self.document_fonts.get(index).cloned() {
+                let current = self.font_of(row, cx);
+                if let Some(font) = settings::font_step(&self.font_list, &current, index) {
                     self.change_document(|settings| settings.typography.body_font = font, cx);
                 }
             }
@@ -1360,6 +1387,11 @@ impl SettingsView {
             cx.emit(SettingsEvent::ChooseLanguage(target));
             return;
         }
+        if let Some(target) = Self::font_target(row) {
+            // As long a list: every font family of the Mac.
+            cx.emit(SettingsEvent::ChooseFont(target));
+            return;
+        }
         if row == SettingRow::KeyboardShortcuts {
             cx.emit(SettingsEvent::OpenKeyboardShortcuts);
             return;
@@ -1383,6 +1415,21 @@ impl SettingsView {
             SettingRow::DocumentSpellingLanguage => Some(LanguageTarget::Document),
             _ => None,
         }
+    }
+
+    /// Whose font the row chooses, for the two font rows.
+    fn font_target(row: SettingRow) -> Option<FontTarget> {
+        match row {
+            SettingRow::Font => Some(FontTarget::NewDocuments),
+            SettingRow::DocumentFont => Some(FontTarget::Document),
+            _ => None,
+        }
+    }
+
+    /// Whether `enter`, `space` or a click on the row opens a searchable
+    /// list instead of stepping its value.
+    fn opens_list(row: SettingRow) -> bool {
+        Self::language_target(row).is_some() || Self::font_target(row).is_some()
     }
 
     fn move_focus(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1698,8 +1745,9 @@ impl Render for SettingsView {
         let overlay_shadow = theme.shadow_overlay();
         // Leave room for the modal's top offset and a margin below.
         let list_height = (f32::from(window.viewport_size().height) * 0.80 - 150.).max(160.);
-        // What space does on the row the keyboard is on: the two language
-        // rows open their list, every other row switches or steps.
+        // What space does on the row the keyboard is on: the language rows
+        // and the font rows open their list, every other row switches or
+        // steps.
         let on_row = |wanted: &dyn Fn(SettingRow) -> bool| {
             self.handles
                 .iter()
@@ -1707,7 +1755,7 @@ impl Render for SettingsView {
         };
         // The row that opens the keyboard shortcuts has nothing to step.
         let opens = on_row(&|row| row == SettingRow::KeyboardShortcuts);
-        let space_hint = if on_row(&|row| Self::language_target(row).is_some()) {
+        let space_hint = if on_row(&Self::opens_list) {
             "Whole list"
         } else if opens {
             "Open"

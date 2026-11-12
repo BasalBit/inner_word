@@ -231,6 +231,32 @@ code 5; ask the user to quit the app first).\n",
         out.push('\n');
     }
 
+    // The other commands of the same family (`comment add` beside `comment list`): whoever
+    // asks for the help of one usually wants to know the others exist.
+    if let Some((family, _)) = spec.name.split_once(' ') {
+        let siblings: Vec<&Spec> = COMMANDS
+            .iter()
+            .filter(|other| other.name != spec.name)
+            .filter(|other| {
+                other
+                    .name
+                    .split_once(' ')
+                    .is_some_and(|(first, _)| first == family)
+            })
+            .collect();
+        let rows: Vec<(String, String)> = siblings
+            .iter()
+            .map(|other| {
+                (
+                    format!("writer {}", left_column(other)),
+                    other.summary.to_string(),
+                )
+            })
+            .collect();
+        out.push_str("\nSee also\n");
+        out.push_str(&table(&rows));
+    }
+
     out.push_str(if spec.examples.len() == 1 {
         "\nExample\n"
     } else {

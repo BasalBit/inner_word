@@ -8,6 +8,7 @@ mod commands;
 mod context_menus;
 mod export;
 mod findings;
+mod keybindings;
 mod keymap;
 mod launch;
 mod mouse;

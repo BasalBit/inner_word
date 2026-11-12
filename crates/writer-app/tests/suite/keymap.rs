@@ -40,7 +40,7 @@ pub(super) const GLOBAL: &[(&str, &str)] = &[
 ];
 
 /// Keys of the text, with the keyboard in the editor.
-const EDITOR: &[(&str, &str)] = &[
+pub(super) const EDITOR: &[(&str, &str)] = &[
     ("cmd-b", "editor::ToggleBold"),
     ("cmd-i", "editor::ToggleItalic"),
     ("cmd-u", "editor::ToggleUnderline"),

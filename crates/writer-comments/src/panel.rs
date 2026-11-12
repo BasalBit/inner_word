@@ -21,7 +21,7 @@ use writer_editor::{
     Autoscroll, CompactOptions, Editor, EditorConfig, EditorEvent, InterceptPriority,
     KeyDisposition,
 };
-use writer_ui::{Toast, keymap, toast::show_toast};
+use writer_ui::{KeyHint, Toast, context_menu::OpenContextMenu, keymap, toast::show_toast};
 
 use crate::{
     actions::{CancelComment, SubmitComment},
@@ -201,6 +201,12 @@ pub struct CommentsPanel {
     /// [`CommentsEvent::OpenChanged`].
     reported_open: bool,
     pub(crate) show_resolved: bool,
+    /// The key that opens the menu of a thread, for the tooltip of the
+    /// "more" controls: asked of the keymap in the thread list's own place
+    /// each time a row is built (`render_row`), never kept from one frame
+    /// to the next. (The action is the shared one that the library, the
+    /// text fields and the chats bind too, each with a key of its own.)
+    pub(crate) menu_key: Option<KeyHint>,
     /// Every thread of the document: anchored ones in document order, then
     /// detached ones.
     pub(crate) threads: Vec<ThreadEntry>,
@@ -367,6 +373,7 @@ impl CommentsPanel {
             editor,
             author: author.into(),
             show_resolved: false,
+            menu_key: None,
             threads: Vec::new(),
             active: None,
             selected_reply: None,
@@ -612,6 +619,14 @@ impl CommentsPanel {
     /// (`KeyHint::for_action_in`).
     pub fn list_focus_handle(&self) -> FocusHandle {
         self.focus_handle.clone()
+    }
+
+    /// The key that opens the menu of a thread, as the "more" controls of
+    /// the cards name it: the binding of the shared
+    /// `writer_ui::context_menu::OpenContextMenu` that fires in the thread
+    /// list, as the keymap has it now.
+    pub fn context_menu_key(&self, window: &Window, cx: &App) -> Option<KeyHint> {
+        KeyHint::for_action_at(&OpenContextMenu, &self.focus_handle, window, cx)
     }
 
     /// Whether the thread list itself has keyboard focus.

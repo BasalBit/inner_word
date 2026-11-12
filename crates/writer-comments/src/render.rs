@@ -344,6 +344,7 @@ impl CommentsPanel {
     /// One row of the thread list, built when the list needs it.
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.rows_built += 1;
+        self.menu_key = self.context_menu_key(window, cx);
         let colors = cx.theme().colors;
         // The list lays its rows out edge to edge and one under the other,
         // so the side margin and the space between two cards belong to
@@ -966,7 +967,7 @@ impl CommentsPanel {
             name,
             IconName::More,
             "More",
-            KeyHint::for_action(&OpenContextMenu, cx),
+            self.menu_key.clone(),
             Press::Bubble,
             colors,
         )

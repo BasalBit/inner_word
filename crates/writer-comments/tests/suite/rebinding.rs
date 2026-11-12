@@ -153,3 +153,58 @@ fn the_keys_of_the_thread_list(cx: &mut TestAppContext) {
     assert_eq!(f.focus(cx), Focus::Composer);
     assert_eq!(f.composer_text(cx), "Second");
 }
+
+/// The key that opens the menu of a thread is the binding of an action the
+/// library, the text fields and the chats bind too, each in its own place
+/// and with a key that can be changed by itself. The "more" control of a
+/// card names the key of the thread list, not the binding added last.
+#[gpui::test]
+fn the_more_control_names_the_key_of_the_thread_list(cx: &mut TestAppContext) {
+    use writer_ui::context_menu::OpenContextMenu;
+
+    let (f, cx) = open(sample(), cx);
+    f.comment(0, 4, 9, "First", cx);
+    // Another place binds the action after the comments did, as the chats
+    // of the assistant do in the app.
+    cx.update(|_, cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "ctrl-m",
+            OpenContextMenu,
+            Some("Elsewhere"),
+        )])
+    });
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(f.focus(cx), Focus::List);
+    let shown = |cx: &mut VisualTestContext| {
+        f.panel.update_in(cx, |panel, window, cx| {
+            panel.context_menu_key(window, cx).map(|key| key.text())
+        })
+    };
+    assert_eq!(hint(&OpenContextMenu, cx).as_deref(), Some("⌃M"));
+    assert_eq!(shown(cx).as_deref(), Some("⌃↩"), "the list's own key");
+
+    // The list's key is changed, and only the list's.
+    let threads = "CommentThreads && !confirming && !composing";
+    let changed = cx.update(|_, cx| {
+        keymap::replace_key_in(
+            &OpenContextMenu,
+            Some(threads),
+            "ctrl-enter",
+            Some("ctrl-o"),
+            cx,
+        )
+    });
+    assert_eq!(changed, 1);
+    cx.run_until_parked();
+    assert_eq!(shown(cx).as_deref(), Some("⌃O"));
+    let menu_open = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| writer_ui::ContextMenu::is_open(window, cx))
+    };
+    cx.simulate_keystrokes("ctrl-enter");
+    assert!(!menu_open(cx), "the old key opens no menu");
+    cx.simulate_keystrokes("ctrl-o");
+    assert!(menu_open(cx));
+    // The key that opened it closes it, as `ctrl-enter` did.
+    cx.simulate_keystrokes("ctrl-o");
+    assert!(!menu_open(cx));
+}

@@ -251,6 +251,10 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   asks in the quick chat, `keys:cmd-3` goes to the side chat, `keys:cmd-shift-a; type:Part
   one; keys:enter` adds a folder there. Do not script "Copy" (it is the user's clipboard;
   the side chat's Copy leaves it alone in a scripted run, the quick chat's does not).
+  `THE_WRITER_ASSISTANT_REAL=1` gives a scripted run the real Claude Code instead, for the
+  few checks that are meant to reach it without bringing the window to the front: a
+  script that only looks (the settings, `state`) sends nothing, and **every message such
+  a script sends spends the user's allowance** (see the rule above).
 
 ## Agents
 

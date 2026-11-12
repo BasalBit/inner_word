@@ -9,7 +9,9 @@
 //!   before it opens a workspace, and **no test ever runs the real
 //!   program** (a message spends the user's own allowance);
 //! - a scripted run gets the fake backend when [`FAKE_ENV`] is set, and no
-//!   assistant at all otherwise, so a script can never send anything;
+//!   assistant at all otherwise, so a script can never send anything by
+//!   accident. The one way a script reaches the real engine is
+//!   [`REAL_ENV`], for the few checks that are meant to: see its warning;
 //! - without a backend there is no assistant: nothing of it is shown.
 //!
 //! # Availability
@@ -41,6 +43,23 @@ use writer_assistant::{Availability, Backend, BackendInfo, Catalog};
 ///
 /// Only read while `THE_WRITER_AUTOMATION` is set.
 pub const FAKE_ENV: &str = "THE_WRITER_ASSISTANT_FAKE";
+
+/// Environment variable of a scripted run: when set to `1`, the run uses
+/// the real engine (Claude Code, with the user's own sign-in) as the app
+/// itself does. **Every message such a script sends spends the user's own
+/// allowance.** It exists so that the real engine can be checked in the
+/// real app without bringing its window to the front; a script that only
+/// looks (the settings, the `state` line) sends nothing, and one that
+/// asks must be a single short question on the cheapest model at low
+/// effort, never in a loop. [`FAKE_ENV`] wins when both are set.
+///
+/// Only read while `THE_WRITER_AUTOMATION` is set.
+pub const REAL_ENV: &str = "THE_WRITER_ASSISTANT_REAL";
+
+/// Whether [`REAL_ENV`] asks a scripted run for the real engine.
+pub fn real_engine_requested() -> bool {
+    std::env::var(REAL_ENV).is_ok_and(|value| value.trim() == "1")
+}
 
 /// The engine and what is known about it.
 pub struct Host {

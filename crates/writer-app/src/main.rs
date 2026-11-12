@@ -57,6 +57,13 @@ fn main() {
                 writer_app::assistant::use_claude_code(cx);
             } else if let Some(fake) = writer_app::assistant::fake::from_env() {
                 writer_app::assistant::fake::install(fake, cx);
+            } else if writer_app::assistant::real_engine_requested() {
+                // Asked for in so many words: see `assistant::REAL_ENV`.
+                eprintln!(
+                    "The Writer: this scripted run uses the real Claude Code; every message it \
+                     sends spends the user's allowance"
+                );
+                writer_app::assistant::use_claude_code(cx);
             }
             // A scripted run stays in the background, also when it finds
             // another copy running.

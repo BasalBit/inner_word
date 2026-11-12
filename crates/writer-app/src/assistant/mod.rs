@@ -16,4 +16,7 @@ pub mod conversations;
 pub mod fake;
 pub mod host;
 
-pub use host::{FAKE_ENV, Host, HostEvent, clear_backend, host, set_backend, use_claude_code};
+pub use host::{
+    FAKE_ENV, Host, HostEvent, REAL_ENV, clear_backend, host, real_engine_requested, set_backend,
+    use_claude_code,
+};

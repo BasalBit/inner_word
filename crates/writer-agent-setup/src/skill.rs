@@ -44,7 +44,13 @@ pub const DEFAULT_BINARY_PATH: &str = "/Applications/The Writer.app/Contents/Mac
 /// names the app and the words people use for what is in it, and says when to use it.
 pub const DESCRIPTION: &str = "Work with the user's writing in The Writer, the macOS writing app, and with the documents, drafts, chapters, books, blog posts, notes and folders in its library. Use it whenever the user mentions The Writer or their library, or asks to find, read, list, search, create, edit, rename, move, organise, comment on, review, export or restore a document, a draft, a chapter or a folder that lives in that app. It provides the writer command line tool, which reads and changes the library directly, also while the app is closed.";
 
+/// The text below the front matter. In its code blocks a line that starts with `writer `
+/// is an example; the installed text has the quoted path of the binary in place of that
+/// word.
 const BODY: &str = include_str!("skill_body.md");
+
+/// How an example line of [`BODY`] starts.
+const EXAMPLE_PREFIX: &str = "writer ";
 
 /// The path of the `writer` binary that lies beside an executable: for the app's own
 /// executable (`The Writer.app/Contents/MacOS/the-writer`) that is the tool in the bundle,
@@ -111,12 +117,24 @@ impl SkillSpec {
         ));
         text.push_str(&format!("  binary: {}\n", shell::string_literal(&binary)));
         text.push_str("---\n\n");
-        text.push_str(
-            &BODY
-                .replace("{{WRITER_QUOTED}}", &shell::quote(&binary))
-                .replace("{{WRITER}}", &binary)
-                .replace("{{VERSION}}", &self.version),
-        );
+        // In the examples the tool is called by its full path, quoted for the shell: an
+        // agent copies them as they stand.
+        let quoted = shell::quote(&binary);
+        let mut in_code = false;
+        for line in BODY.lines() {
+            if line.trim_start().starts_with("```") {
+                in_code = !in_code;
+            }
+            match line.strip_prefix(EXAMPLE_PREFIX).filter(|_| in_code) {
+                Some(rest) => {
+                    text.push_str(&quoted);
+                    text.push(' ');
+                    text.push_str(rest);
+                }
+                None => text.push_str(&line.replace("{{VERSION}}", &self.version)),
+            }
+            text.push('\n');
+        }
         text
     }
 }
@@ -197,7 +215,7 @@ pub fn mentioned_commands() -> Vec<Vec<String>> {
         if !in_code {
             continue;
         }
-        let Some(rest) = line.trim().strip_prefix("writer ") else {
+        let Some(rest) = line.strip_prefix(EXAMPLE_PREFIX) else {
             continue;
         };
         let words: Vec<String> = rest
@@ -215,15 +233,16 @@ pub fn mentioned_commands() -> Vec<Vec<String>> {
 }
 
 /// Every example line of the skill's text that calls the tool (the lines of its code blocks
-/// that start with `writer`), as written.
+/// that start with `writer`), with the bare word `writer` where the installed text has the
+/// quoted path of the binary.
 pub fn example_lines() -> Vec<&'static str> {
     let mut lines = Vec::new();
     let mut in_code = false;
     for line in BODY.lines() {
         if line.trim_start().starts_with("```") {
             in_code = !in_code;
-        } else if in_code && line.trim().starts_with("writer ") {
-            lines.push(line.trim());
+        } else if in_code && line.starts_with(EXAMPLE_PREFIX) {
+            lines.push(line);
         }
     }
     lines
@@ -379,7 +398,94 @@ mod tests {
     #[test]
     fn the_text_shows_commands() {
         let commands = mentioned_commands();
-        assert!(commands.len() >= 10, "{commands:?}");
+        assert!(commands.len() >= 25, "{commands:?}");
         assert!(example_lines().len() >= commands.len());
+        for expected in [
+            vec!["list"],
+            vec!["search"],
+            vec!["get"],
+            vec!["edit"],
+            vec!["replace-section"],
+            vec!["comment", "add"],
+            vec!["history", "restore"],
+            vec!["export"],
+        ] {
+            let expected: Vec<String> = expected.into_iter().map(str::to_string).collect();
+            assert!(commands.contains(&expected), "{expected:?} is not shown");
+        }
+    }
+
+    /// What the text has to teach, whatever its wording.
+    #[test]
+    fn the_text_teaches_the_rules() {
+        let text = spec().render();
+        for needed in [
+            "exit code 5",
+            "Quit The Writer",
+            "do not quit the app yourself",
+            "--dry-run",
+            "--json",
+            "Read before you change",
+            "`comment add`",
+            "Use the ids",
+            "--permanently",
+            "is not on the PATH",
+        ] {
+            assert!(text.contains(needed), "the skill does not say: {needed}");
+        }
+    }
+
+    /// Every example of the installed text is a command line that runs the tool at its
+    /// path with spaces: each one is handed to the real shell, with a stand-in for the
+    /// tool that prints its arguments.
+    #[test]
+    fn every_example_of_the_installed_text_runs_the_tool_at_its_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::Builder::new()
+            .prefix("skill examples ")
+            .tempdir()
+            .unwrap();
+        let binary = home
+            .path()
+            .join("My Apps/The Writer.app/Contents/MacOS/writer");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let text = SkillSpec::new(&binary).unwrap().render();
+        let quoted = shell::quote(&binary.to_string_lossy());
+        let mut in_code = false;
+        let mut ran = 0;
+        for line in text.lines() {
+            if line.starts_with("```") {
+                in_code = !in_code;
+                continue;
+            }
+            if !in_code {
+                continue;
+            }
+            assert!(
+                line.starts_with(&quoted),
+                "an example that does not call the tool by its path: {line}"
+            );
+            let output = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(line)
+                .current_dir(home.path())
+                .env("HOME", home.path())
+                .output()
+                .expect("run /bin/sh");
+            assert!(
+                output.status.success(),
+                "{line}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let printed = String::from_utf8_lossy(&output.stdout);
+            let first = printed.lines().next().unwrap_or_default();
+            let expected = line[quoted.len()..].split_whitespace().next().unwrap();
+            assert_eq!(first, expected, "{line}");
+            ran += 1;
+        }
+        assert_eq!(ran, example_lines().len(), "every example was run");
     }
 }

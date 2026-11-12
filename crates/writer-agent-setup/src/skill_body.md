@@ -1,25 +1,25 @@
 # The Writer
 
-The Writer is a writing app for macOS. Its library holds the user's folders and documents (books, chapters, drafts, posts, notes) as rich text. This skill gives you `writer`, a command line tool that reads and changes that library directly. The app does not have to be running.
+The Writer is a writing app for macOS. Its library holds the user's folders and documents (books, chapters, drafts, posts, notes) as rich text. `writer` is its command line tool: it reads and changes that library directly, whether the app is running or not.
 
 ## Calling the tool
 
 The tool is not on the PATH. Call it by its full path, in quotes because the path contains a space:
 
 ```
-{{WRITER_QUOTED}} list
+writer --help
 ```
 
-The examples below write `writer` for short. Always run the full quoted path.
+Every example here is a complete command line. Only the ids, names and files in them are made up.
 
-- `writer --help` lists every command, and `writer <command> --help` explains one, with examples.
-- Add `--json` to any command for JSON on standard output. Errors go to standard error and set the exit code.
-- A document or a folder is named by its id (`doc:12`, `folder:3`) or by its path in the library (`"The Salt Road/Part one/Chapter 1"`). Every output shows ids. Once you have an id, use it: a path can fit several items, an id cannot.
-- Text goes in and comes out as Markdown. Give it with `--content "..."`, with `--file <path>` or on standard input. For anything longer than a line, write a file and pass `--file`: that avoids shell quoting mistakes.
+- `--help` lists every command. After a command (`edit --help`) it explains that command, with examples.
+- `--json` after any command prints the result as JSON on standard output. Errors go to standard error, and the exit code says what kind of failure it was.
+- A document or a folder is named by its id (`doc:12`, `folder:3`) or by its path in the library (`"The Salt Road/Part one/Chapter 1"`). Every output shows ids. Once you have an id, use it: a name can fit several items, an id cannot.
+- Text goes in and comes out as Markdown. Give it with `--content "..."`, with `--file <path>`, or on standard input with `--stdin`. For anything longer than a line, write a file and pass `--file`: that avoids shell quoting mistakes.
 
 ## While The Writer is open
 
-While the app is open you can read (list, search, recent, info, get, comments, history, export), but every change is refused with exit code 5 and nothing is changed. That is deliberate: the app has the library in its hands and the two would overwrite each other.
+While the app is open you can read (list, search, recent, info, get, comments, history, export), but every change is refused with exit code 5 and nothing is changed. That is deliberate: the app has the library in its hands, and the two would overwrite each other.
 
 When a change is refused, do not retry it and do not quit the app yourself. Tell the user: "The Writer is open, so I can read your library but not change it. Quit The Writer (Cmd-Q, it saves by itself) and tell me to go on." Then wait. Reading in the meantime is fine.
 
@@ -35,7 +35,7 @@ writer recent
 writer info doc:12
 ```
 
-`list` prints the library as a tree with ids, `search` is full-text with snippets, `info` gives the path, the word and character counts, the dates and the settings of one item.
+`list` prints the library as a tree with ids, `search` is full-text with snippets, `info` gives the path, the word and character counts, the dates, the headings and the settings of one item.
 
 Read a document:
 
@@ -44,7 +44,7 @@ writer get doc:12
 writer get doc:12 --format text
 ```
 
-Markdown is the default; `--format text` is the plain text without markup.
+Markdown is the default. `--format text` is the plain text without markup.
 
 Write. Every command that changes something takes `--dry-run`, which reports what would change and changes nothing:
 
@@ -57,7 +57,7 @@ writer replace-section doc:12 "Synopsis" --file synopsis.md
 writer set doc:12 --file rewritten.md
 ```
 
-`edit` replaces an exact piece of text: `--old` must stand in the document exactly once (or pass `--all`), and everything around it keeps its formatting and its comments. `insert` also takes `--at-start` and `--before <heading>`. `replace-section` replaces what stands under a heading. `set` replaces the whole text and is the last resort.
+`edit` replaces an exact piece of text. `--old` is the text as `get --format text` prints it (no Markdown markup) and must stand in the document exactly once, unless you pass `--all`. Everything around it keeps its formatting and its comments. `insert` also takes `--at-start` and `--before <heading>`. `replace-section` replaces what stands under a heading and keeps the heading. `set` replaces the whole text and is the last resort.
 
 Organise:
 
@@ -84,7 +84,7 @@ writer comment reopen doc:12 3
 writer comment delete doc:12 3
 ```
 
-`--quote` is the exact text the comment is anchored to, and it must stand in the document exactly once.
+`--quote` is the exact text the comment is anchored to, as `get --format text` prints it, and it must stand in the document exactly once. The number after the document is the id of the thread, which `comment list` prints.
 
 History. A version of the document is kept before every change this tool makes, so anything can be taken back:
 
@@ -94,7 +94,7 @@ writer history show doc:12 87
 writer history restore doc:12 87
 ```
 
-Export a document, or a folder as one file, to Markdown, DOCX or plain text (the ending of the path chooses the format):
+Export a document, or a folder as one file, to Markdown, DOCX or plain text. The ending of the path chooses the format:
 
 ```
 writer export "The Salt Road" --to ~/Desktop/salt-road.docx
@@ -102,18 +102,18 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 
 ## Working well
 
-1. Read before you change. `get` the document first and work from what it says now, not from memory of an earlier turn: the user may have written since.
-2. Change as little as you can. Use `edit` with exact text, or `append`, `insert` and `replace-section`. Do not rewrite a whole document with `set` to change a sentence: it discards formatting that Markdown cannot carry and the comment anchors in the text.
+1. Read before you change. `get` the document first and work from what it says now, not from what you remember of an earlier turn: the user may have written since.
+2. Change as little as you can. Use `edit` with exact text, or `append`, `insert` and `replace-section`. Do not rewrite a whole document with `set` to change a sentence: that discards the formatting Markdown cannot carry and the places comments are anchored to.
 3. When the user asks for feedback, a review or suggestions, comment (`comment add`) and leave the text alone. Change the text when they ask for the change.
 4. When you are not sure what a command will do, run it with `--dry-run` first.
 5. Use the ids that earlier output gave you. After `create`, `duplicate` or `mkdir`, the output has the new id.
-6. Tell the user what you changed and in which document. They can see every version in the app under "Version history".
+6. Tell the user what you changed and in which document. They find every earlier version in the app's version history, and you can restore one with `history restore`.
 
 ## Exit codes
 
 - 0: done.
-- 1: failed (the message says why).
-- 2: the command line is wrong. Read `writer <command> --help`.
+- 1: failed. The message says why.
+- 2: the command line is wrong. Read the command's `--help`.
 - 3: not found. Check the id or the path with `list` or `search`.
 - 4: a name fits several items. The message lists them with their ids: use the id.
 - 5: The Writer is open and the change was refused. See above.

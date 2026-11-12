@@ -885,8 +885,8 @@ pub static AGENTS: &[Agent] = &[
         mcp: McpSupport {
             command: Some(McpCommand {
                 add: "copilot mcp add the-writer -- {writer} mcp",
-                remove: None,
-                check: None,
+                remove: Some("copilot mcp remove the-writer"),
+                check: Some("copilot mcp list"),
                 sources: &[COPILOT_CLI_MCP],
             }),
             config: Some(McpConfig {
@@ -979,7 +979,9 @@ pub static AGENTS: &[Agent] = &[
             command: None,
             config: Some(McpConfig {
                 home_relative: Some(".gemini/config/mcp_config.json"),
-                open_with: None,
+                open_with: Some(
+                    "Customizations > MCP Servers, in the Antigravity app (Copy Config File Path shows where the file is)",
+                ),
                 format: ConfigFormat::Json,
                 snippet: SNIPPET_MCP_SERVERS,
                 placement: MCP_SERVERS_PLACEMENT,

@@ -468,9 +468,9 @@ impl KeymapView {
                         .pointer_only()
                         .tooltip("Close")
                         .key_hint(hint_in(&Close, &LIST_STACK, cx))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.close(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.close(window, cx)),
+                        ),
                 ),
             )
     }
@@ -525,9 +525,9 @@ impl KeymapView {
                         .size(ButtonSize::Compact)
                         .pointer_only()
                         .key_hint(hint_in(&Import, &LIST_STACK, cx))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.import(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.import(window, cx)),
+                        ),
                 ),
             )
             .child(
@@ -536,9 +536,9 @@ impl KeymapView {
                         .size(ButtonSize::Compact)
                         .pointer_only()
                         .key_hint(hint_in(&Export, &LIST_STACK, cx))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.export(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.export(window, cx)),
+                        ),
                 ),
             )
             .child(
@@ -610,12 +610,8 @@ impl KeymapView {
     /// the key that takes it.
     fn render_choices(&self, question: &Question, cx: &mut Context<Self>) -> impl IntoElement {
         let choose = hint_in(&Choose, &CHOICES_STACK, cx);
-        div()
-            .flex()
-            .flex_wrap()
-            .justify_end()
-            .gap(px(8.))
-            .children(question.choices.iter().enumerate().map(|(ix, button)| {
+        div().flex().flex_wrap().justify_end().gap(px(8.)).children(
+            question.choices.iter().enumerate().map(|(ix, button)| {
                 let marked = ix == question.selected;
                 let choice = button.choice;
                 let hint: Option<KeyHint> = if marked {
@@ -642,7 +638,8 @@ impl KeymapView {
                                 this.choose(choice, window, cx);
                             })),
                     )
-            }))
+            }),
+        )
     }
 
     /// The band under the list: waiting for a key, or a question.
@@ -687,10 +684,9 @@ impl KeymapView {
                                 .line_height(px(17.))
                                 .text_color(colors.muted)
                                 .child(
-                                    "The next key you press is taken, whatever it is: Esc and \
-                                     \u{21a9} too. No key ends the waiting; the Cancel control \
-                                     does, and so does any key followed by Cancel. A modifier \
-                                     held alone is not a key yet.",
+                                    "The next key you press is taken, whatever it is, Esc and \u{21a9} \
+                                     too. To leave without a key: Cancel, or any key and then \
+                                     Esc. A modifier held alone is not a key yet.",
                                 ),
                         )
                         .when_some(recording.problem.clone(), |el, problem| {
@@ -852,7 +848,12 @@ impl KeymapView {
             .collect()
     }
 
-    fn render_preview(&self, question: &Question, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
+    fn render_preview(
+        &self,
+        question: &Question,
+        preview: &Preview,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let colors = cx.theme().colors;
         let rows = preview.rows.len();
         let visible = rows.min(self.visible_rows.saturating_sub(1).max(4));
@@ -949,8 +950,8 @@ impl KeymapView {
         let mut hints: Vec<KeyLabel> = Vec::new();
         let mut note: Option<SharedString> = None;
         match &self.mode {
-            Mode::List => match self.selected_entry() {
-                Some(entry) => {
+            Mode::List => {
+                if let Some(entry) = self.selected_entry() {
                     if let Some(reason) = entry.locked_reason() {
                         note = Some(format!("Cannot be changed here. {reason}").into());
                     } else {
@@ -968,30 +969,26 @@ impl KeymapView {
                             hints.extend(label("Default", &UseDefault, cx));
                         }
                     }
-                    if entry.row.runnable {
-                        hints.extend(label("Run", &RunCommand, cx));
-                    }
+                    // Running the command is in the row's menu, with its key.
                     hints.extend(label("Menu", &OpenContextMenu, cx));
                 }
-                None => {}
-            },
+            }
             Mode::Recording(_) => {
                 note = Some("Waiting for a key".into());
             }
             Mode::Asking(question) => {
                 if question.choices.len() > 1 {
-                    let keys: Vec<String> = [
+                    // Both keys in one hint: "Choose ← →".
+                    let keystrokes: Vec<gpui::Keystroke> = [
                         hint_in(&PreviousChoice, stack, cx),
                         hint_in(&NextChoice, stack, cx),
                     ]
                     .into_iter()
                     .flatten()
-                    .map(|hint| hint.text())
+                    .flat_map(|hint| hint.keystrokes().to_vec())
                     .collect();
-                    if let Some(hint) = KeyHint::parse("left right").filter(|_| keys == ["←", "→"]) {
-                        hints.push(KeyLabel::new("Choose", hint));
-                    } else {
-                        hints.extend(label("Next Choice", &NextChoice, cx));
+                    if !keystrokes.is_empty() {
+                        hints.push(KeyLabel::new("Choose", KeyHint::new(keystrokes)));
                     }
                 }
                 hints.extend(label("Take", &Choose, cx));
@@ -1039,8 +1036,13 @@ impl Render for KeymapView {
 
         // As many rows as the window has room for under the modal's top
         // margin, with the band when it is shown.
-        let band_room = if matches!(self.mode, Mode::List) { 0. } else { 150. };
-        let room = f32::from(window.viewport_size().height) * 0.86 - 48. - 36. - 32. - 16. - band_room;
+        let band_room = if matches!(self.mode, Mode::List) {
+            0.
+        } else {
+            150.
+        };
+        let room =
+            f32::from(window.viewport_size().height) * 0.86 - 48. - 36. - 32. - 16. - band_room;
         self.visible_rows = ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(4, 14) as usize;
 
         let preview = match &self.mode {
@@ -1055,24 +1057,28 @@ impl Render for KeymapView {
         div()
             .key_context(KEY_CONTEXT)
             .debug_selector(|| "keymap-panel".into())
-            .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| {
-                match this.mode {
+            .on_action(
+                cx.listener(|this, _: &SelectPrevious, _, cx| match this.mode {
                     Mode::List => this.select_previous(cx),
                     _ => this.move_in_preview(-1, cx),
-                }
-            }))
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| match this.mode {
                 Mode::List => this.select_next(cx),
                 _ => this.move_in_preview(1, cx),
             }))
-            .on_action(cx.listener(|this, _: &SelectPageUp, _, cx| match this.mode {
-                Mode::List => this.select_page(false, cx),
-                _ => this.move_in_preview(-8, cx),
-            }))
-            .on_action(cx.listener(|this, _: &SelectPageDown, _, cx| match this.mode {
-                Mode::List => this.select_page(true, cx),
-                _ => this.move_in_preview(8, cx),
-            }))
+            .on_action(
+                cx.listener(|this, _: &SelectPageUp, _, cx| match this.mode {
+                    Mode::List => this.select_page(false, cx),
+                    _ => this.move_in_preview(-8, cx),
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SelectPageDown, _, cx| match this.mode {
+                    Mode::List => this.select_page(true, cx),
+                    _ => this.move_in_preview(8, cx),
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectFirst, _, cx| match this.mode {
                 Mode::List => this.select_first(cx),
                 _ => this.move_in_preview(isize::MIN / 2, cx),
@@ -1121,9 +1127,9 @@ impl Render for KeymapView {
                     cx.stop_propagation();
                 }
             }))
-            .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, _| {
-                this.released(&event.keystroke)
-            }))
+            .on_key_up(
+                cx.listener(|this, event: &KeyUpEvent, _, _| this.released(&event.keystroke)),
+            )
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.modifiers_changed(event.modifiers, cx)
             }))

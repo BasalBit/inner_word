@@ -64,7 +64,10 @@ pub(crate) fn register(view: WeakEntity<KeymapView>, window: &Window, cx: &mut A
 /// Forgets the view of the window `id`, if it is `view`.
 pub(crate) fn unregister(view: &WeakEntity<KeymapView>, id: WindowId, cx: &mut App) {
     if let Some(recorders) = cx.try_global::<Recorders>()
-        && recorders.by_window.get(&id).is_some_and(|have| have == view)
+        && recorders
+            .by_window
+            .get(&id)
+            .is_some_and(|have| have == view)
     {
         cx.global_mut::<Recorders>().by_window.remove(&id);
     }

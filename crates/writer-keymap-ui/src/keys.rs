@@ -112,11 +112,23 @@ mod tests {
 
     #[test]
     fn a_pressed_key_becomes_the_normal_form() {
-        assert_eq!(from_pressed(&pressed("cmd-alt-b")).unwrap().to_string(), "cmd-alt-b");
+        assert_eq!(
+            from_pressed(&pressed("cmd-alt-b")).unwrap().to_string(),
+            "cmd-alt-b"
+        );
         // What a real keyboard sends for shift with 7.
-        assert_eq!(from_pressed(&pressed("cmd-&")).unwrap().to_string(), "cmd-shift-7");
-        assert_eq!(from_pressed(&pressed("escape")).unwrap().to_string(), "escape");
-        assert_eq!(from_pressed(&pressed("cmd--")).unwrap().to_string(), "cmd--");
+        assert_eq!(
+            from_pressed(&pressed("cmd-&")).unwrap().to_string(),
+            "cmd-shift-7"
+        );
+        assert_eq!(
+            from_pressed(&pressed("escape")).unwrap().to_string(),
+            "escape"
+        );
+        assert_eq!(
+            from_pressed(&pressed("cmd--")).unwrap().to_string(),
+            "cmd--"
+        );
     }
 
     #[test]
@@ -126,7 +138,10 @@ mod tests {
         assert_eq!(glyphs(&keys("cmd-&")), "⇧⌘7");
         assert_eq!(glyphs(&keys("g g")), "G G");
         assert_eq!(glyphs(&keys("ctrl-enter")), "⌃↩");
-        assert_eq!(glyph_list(&[keys("ctrl-enter"), keys("shift-f10")]), "⌃↩, ⇧F10");
+        assert_eq!(
+            glyph_list(&[keys("ctrl-enter"), keys("shift-f10")]),
+            "⌃↩, ⇧F10"
+        );
         assert_eq!(glyph_list(&[]), "none");
     }
 

@@ -85,7 +85,11 @@ impl CommandRow {
 
     /// Says that the row's keys cannot be changed here, and why.
     pub fn locked(mut self, reason: impl Into<SharedString>) -> Self {
-        let keys = self.locked.take().map(|locked| locked.keys).unwrap_or_default();
+        let keys = self
+            .locked
+            .take()
+            .map(|locked| locked.keys)
+            .unwrap_or_default();
         self.locked = Some(Locked {
             reason: reason.into(),
             keys,

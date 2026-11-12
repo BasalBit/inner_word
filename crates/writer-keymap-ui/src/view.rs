@@ -405,7 +405,13 @@ impl KeymapView {
             out.push_str(&format!(
                 " selected={:?} keys=[{}] default=[{}]{}",
                 entry.row.title,
-                key_texts(&entry.keys.iter().map(|key| key.keys.clone()).collect::<Vec<_>>()),
+                key_texts(
+                    &entry
+                        .keys
+                        .iter()
+                        .map(|key| key.keys.clone())
+                        .collect::<Vec<_>>()
+                ),
                 key_texts(&entry.default_keys),
                 if entry.changed { " (changed)" } else { "" },
             ));
@@ -444,7 +450,11 @@ impl KeymapView {
                         }
                     })
                     .collect();
-                let lines: Vec<&str> = question.lines.iter().map(|line| line.text.as_str()).collect();
+                let lines: Vec<&str> = question
+                    .lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect();
                 out.push_str(&format!(
                     " question={:?} says={:?} choices=[{}]",
                     question.title,
@@ -600,7 +610,12 @@ impl KeymapView {
             .find(|row| self.is_command(*row))
     }
 
-    pub(crate) fn select_row(&mut self, row: usize, strategy: ScrollStrategy, cx: &mut Context<Self>) {
+    pub(crate) fn select_row(
+        &mut self,
+        row: usize,
+        strategy: ScrollStrategy,
+        cx: &mut Context<Self>,
+    ) {
         if !self.is_command(row) {
             return;
         }
@@ -849,7 +864,8 @@ impl KeymapView {
                 [] => items.push(record("Add a Key\u{2026}".into(), None).key_hint(add)),
                 [only] => {
                     items.push(
-                        record("Change Key\u{2026}".into(), Some(only.keys.clone())).key_hint(change),
+                        record("Change Key\u{2026}".into(), Some(only.keys.clone()))
+                            .key_hint(change),
                     );
                     items.push(record("Add Another Key\u{2026}".into(), None).key_hint(add));
                     items.push(remove("Remove Key".into(), only.keys.clone()).key_hint(take));
@@ -863,7 +879,10 @@ impl KeymapView {
                     }
                     items.push(record("Add Another Key\u{2026}".into(), None).key_hint(add));
                     for key in several {
-                        items.push(remove(format!("Remove {}", glyphs(&key.keys)), key.keys.clone()));
+                        items.push(remove(
+                            format!("Remove {}", glyphs(&key.keys)),
+                            key.keys.clone(),
+                        ));
                     }
                 }
             }
@@ -1148,7 +1167,11 @@ impl KeymapView {
         let Mode::Asking(question) = &self.mode else {
             return false;
         };
-        if !question.choices.iter().any(|button| button.choice == choice) {
+        if !question
+            .choices
+            .iter()
+            .any(|button| button.choice == choice)
+        {
             return false;
         }
         match (choice, &question.subject) {
@@ -1162,7 +1185,7 @@ impl KeymapView {
             ) => {
                 let take = match choice {
                     Choice::TakeKey if !verdict.taken.is_empty() => verdict.taken.clone(),
-                    Choice::TakeKey => verdict.elsewhere.clone(),
+                    Choice::TakeKey => crate::words::overlapping(verdict).cloned().collect(),
                     _ => Vec::new(),
                 };
                 let request = match replacing {
@@ -1181,7 +1204,12 @@ impl KeymapView {
                 self.back_to_list(window, cx);
                 cx.emit(request);
             }
-            (Choice::PressAnotherKey, Subject::Key { target, replacing, .. }) => {
+            (
+                Choice::PressAnotherKey,
+                Subject::Key {
+                    target, replacing, ..
+                },
+            ) => {
                 let (target, replacing) = (target.clone(), replacing.clone());
                 self.start_recording(target, replacing, window, cx);
             }
@@ -1228,7 +1256,8 @@ impl KeymapView {
             preview.move_selection(delta);
             if let Some(selected) = preview.selected {
                 // The heading above the first row of a group comes along.
-                let target = if selected > 0 && preview.rows[selected - 1].is_header() && delta < 0 {
+                let target = if selected > 0 && preview.rows[selected - 1].is_header() && delta < 0
+                {
                     selected - 1
                 } else {
                     selected

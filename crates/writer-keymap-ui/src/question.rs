@@ -4,7 +4,9 @@
 //! marked and taken with the key that chooses.
 
 use gpui::{SharedString, UniformListScrollHandle};
-use writer_keymap::{ImportError, ImportMode, ImportPlan, KeySequence, Target, Verdict, VerdictKind};
+use writer_keymap::{
+    ImportError, ImportMode, ImportPlan, KeySequence, Target, Verdict, VerdictKind,
+};
 
 use crate::{
     keys::{glyph_list, glyphs},
@@ -88,11 +90,16 @@ impl Question {
         let mut choices = Vec::new();
         match verdict.kind() {
             VerdictKind::Fine => choices.push(button(Choice::UseKey, format!("Use {key}"))),
+            // Only commands in places of their own have the key: nothing
+            // to settle.
+            VerdictKind::UsedElsewhere if words::overlapping(&verdict).next().is_none() => {
+                choices.push(button(Choice::UseKey, format!("Use {key}")))
+            }
             VerdictKind::UsedElsewhere => {
                 choices.push(button(Choice::KeepBoth, "Keep Both"));
                 choices.push(button(
                     Choice::TakeKey,
-                    words::take_label(&verdict.elsewhere, names),
+                    words::take_label(words::overlapping(&verdict), names),
                 ));
             }
             VerdictKind::Taken => choices.push(button(
@@ -303,7 +310,9 @@ impl Preview {
                 outcome.conflicts.len()
             )));
             for collision in &outcome.conflicts {
-                rows.push(PreviewRow::Collision(words::collision_text(collision, names)));
+                rows.push(PreviewRow::Collision(words::collision_text(
+                    collision, names,
+                )));
             }
         }
         if !self.plan.skipped.is_empty() {

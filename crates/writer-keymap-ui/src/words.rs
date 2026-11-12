@@ -4,8 +4,8 @@
 //! without a window.
 
 use writer_keymap::{
-    Catalogue, Collision, Holder, ImportOutcome, ImportPlan, KeySequence, Overlap, Refusal,
-    Target, Verdict, VerdictKind, Warning,
+    Catalogue, Collision, Holder, ImportOutcome, ImportPlan, KeySequence, Overlap, Refusal, Target,
+    Verdict, VerdictKind, Warning,
 };
 
 use crate::{keys::glyphs, listing::Entry};
@@ -51,7 +51,11 @@ pub(crate) struct Names<'a> {
 impl Names<'_> {
     /// What the command of `target` is called.
     pub fn title(&self, target: &Target) -> String {
-        if let Some(entry) = self.entries.iter().find(|entry| entry.row.target == *target) {
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.row.target == *target)
+        {
             return entry.row.title.to_string();
         }
         if let Some(info) = self.catalogue.info(target) {
@@ -71,8 +75,10 @@ impl Names<'_> {
     /// Where `target` applies, in words as they stand in a sentence: "in
     /// the text", "anywhere".
     pub fn place(&self, target: &Target) -> String {
-        let place = if let Some(entry) =
-            self.entries.iter().find(|entry| entry.row.target == *target)
+        let place = if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.row.target == *target)
         {
             entry.row.place.to_string()
         } else if let Some(info) = self.catalogue.info(target) {
@@ -148,10 +154,30 @@ pub(crate) fn verdict_lines(verdict: &Verdict, command: &str, names: &Names) -> 
     }
     let mut lines = Vec::new();
     for holder in &verdict.taken {
-        lines.push(Line::new(Tone::Stop, holder_text(holder, &verdict.key, names)));
+        lines.push(Line::new(
+            Tone::Stop,
+            holder_text(holder, &verdict.key, names),
+        ));
     }
-    for holder in &verdict.elsewhere {
-        lines.push(Line::new(Tone::Plain, holder_text(holder, &verdict.key, names)));
+    // The commands that share the key where both can apply, one by one;
+    // those in places of their own in one sentence (`escape` and the arrows
+    // are keys of many places).
+    for holder in overlapping(verdict) {
+        lines.push(Line::new(
+            Tone::Plain,
+            holder_text(holder, &verdict.key, names),
+        ));
+    }
+    let apart: Vec<&Holder> = verdict
+        .elsewhere
+        .iter()
+        .filter(|holder| holder.overlap == Overlap::Apart)
+        .collect();
+    if !apart.is_empty() {
+        lines.push(Line::new(
+            Tone::Plain,
+            apart_text(&apart, &verdict.key, names),
+        ));
     }
     for warning in &verdict.warnings {
         lines.push(Line::new(Tone::Warning, warning_text(warning, &key)));
@@ -220,9 +246,9 @@ fn holder_text(holder: &Holder, proposed: &KeySequence, names: &Names) -> String
         );
     }
     match holder.overlap {
-        Overlap::SamePlace => format!(
-            "{key} is the key of {who} {place}. Only one of the two can have it there."
-        ),
+        Overlap::SamePlace => {
+            format!("{key} is the key of {who} {place}. Only one of the two can have it there.")
+        }
         Overlap::HolderNeverRuns => format!(
             "{key} is the key of {who} {place}. This command would get it everywhere that one \
              applies, and {who} could no longer be run with it."
@@ -239,14 +265,60 @@ fn holder_text(holder: &Holder, proposed: &KeySequence, names: &Names) -> String
             "{key} is also the key of {who} {place}. Where both apply {who} keeps it, and this \
              command gets it in the rest of its place."
         ),
-        Overlap::Apart => format!(
-            "{key} is also the key of {who} {place}. That is a different place: both work."
+        Overlap::Apart => {
+            format!("{key} is also the key of {who} {place}. That is a different place: both work.")
+        }
+    }
+}
+
+/// The commands that have the key in a place that overlaps with the
+/// proposed one: both would work, and one of them decides where both apply.
+pub(crate) fn overlapping(verdict: &Verdict) -> impl Iterator<Item = &Holder> {
+    verdict
+        .elsewhere
+        .iter()
+        .filter(|holder| holder.overlap != Overlap::Apart)
+}
+
+/// The commands that have the key in places of their own, in one sentence.
+fn apart_text(holders: &[&Holder], proposed: &KeySequence, names: &Names) -> String {
+    const NAMED: usize = 2;
+    let key = glyphs(proposed);
+    let mut named: Vec<String> = Vec::new();
+    for holder in holders {
+        let text = format!(
+            "\u{201c}{}\u{201d} {}",
+            names.title(&holder.target),
+            names.place(&holder.target)
+        );
+        if !named.contains(&text) {
+            named.push(text);
+        }
+    }
+    let total = named.len();
+    let more = total.saturating_sub(NAMED);
+    named.truncate(NAMED);
+    let list = match (named.as_slice(), more) {
+        ([one], 0) => one.clone(),
+        ([one, two], 0) => format!("{one} and of {two}"),
+        (some, more) => format!(
+            "{} and of {} more",
+            some.join(", of "),
+            count(more, "command", "commands")
         ),
+    };
+    if total == 1 {
+        format!("{key} is also the key of {list}. That is a different place: both work.")
+    } else {
+        format!("{key} is also the key of {list}. Those are different places: all of them work.")
     }
 }
 
 /// "Take It from “Italic”", "Take It from 2 Commands".
-pub(crate) fn take_label(holders: &[Holder], names: &Names) -> String {
+pub(crate) fn take_label<'a>(
+    holders: impl IntoIterator<Item = &'a Holder>,
+    names: &Names,
+) -> String {
     let mut titles: Vec<String> = Vec::new();
     for holder in holders {
         let title = names.title(&holder.target);
@@ -329,7 +401,9 @@ pub(crate) fn collision_text(collision: &Collision, names: &Names) -> String {
     let place = names.place(&collision.target);
     let other_place = names.place(&collision.holder.target);
     if place == other_place {
-        format!("{key} would be the key of \u{201c}{one}\u{201d} and of \u{201c}{other}\u{201d} {place}.")
+        format!(
+            "{key} would be the key of \u{201c}{one}\u{201d} and of \u{201c}{other}\u{201d} {place}."
+        )
     } else {
         format!(
             "{key} would be the key of \u{201c}{one}\u{201d} {place} and of \u{201c}{other}\u{201d} {other_place}."
@@ -351,7 +425,11 @@ mod tests {
             binding("comments::Toggle", None, "cmd-alt-c"),
             binding("editor::ToggleBold", Some("Editor"), "cmd-b"),
             binding("editor::ToggleItalic", Some("Editor"), "cmd-i"),
-            binding("tools::CaseSensitive", Some("FindBar > TextField"), "cmd-alt-c"),
+            binding(
+                "tools::CaseSensitive",
+                Some("FindBar > TextField"),
+                "cmd-alt-c",
+            ),
         ]);
         Keymap::new(
             defaults,
@@ -372,13 +450,21 @@ mod tests {
 
     fn catalogue() -> Catalogue {
         let mut catalogue = Catalogue::new();
-        catalogue.add(Target::new("editor::ToggleBold", Some("Editor")), "Bold", "In the text");
+        catalogue.add(
+            Target::new("editor::ToggleBold", Some("Editor")),
+            "Bold",
+            "In the text",
+        );
         catalogue.add(
             Target::new("editor::ToggleItalic", Some("Editor")),
             "Italic",
             "In the text",
         );
-        catalogue.add(Target::new("app::QuickOpen", None), "Quick open", "Anywhere");
+        catalogue.add(
+            Target::new("app::QuickOpen", None),
+            "Quick open",
+            "Anywhere",
+        );
         catalogue
     }
 
@@ -426,7 +512,11 @@ mod tests {
         let lines = verdict_lines(&verdict, "Bold", &names_of(&catalogue));
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].tone, Tone::Stop);
-        assert!(lines[0].text.starts_with("B types a character"), "{}", lines[0].text);
+        assert!(
+            lines[0].text.starts_with("B types a character"),
+            "{}",
+            lines[0].text
+        );
     }
 
     #[test]
@@ -436,15 +526,25 @@ mod tests {
         let verdict = keymap.check(&bold, &key("cmd-tab"), None);
         let catalogue = catalogue();
         let lines = verdict_lines(&verdict, "Bold", &names_of(&catalogue));
-        assert!(lines[0].text.starts_with("macOS keeps ⌘⇥ for itself"), "{}", lines[0].text);
+        assert!(
+            lines[0].text.starts_with("macOS keeps ⌘⇥ for itself"),
+            "{}",
+            lines[0].text
+        );
     }
 
     #[test]
     fn a_command_without_a_name_gets_one_from_its_action() {
         let catalogue = Catalogue::new();
         let names = names_of(&catalogue);
-        assert_eq!(names.title(&Target::new("editor::MoveWordLeft", Some("Editor"))), "Move word left");
-        assert_eq!(names.place(&Target::new("editor::MoveWordLeft", Some("Editor"))), "in Editor");
+        assert_eq!(
+            names.title(&Target::new("editor::MoveWordLeft", Some("Editor"))),
+            "Move word left"
+        );
+        assert_eq!(
+            names.place(&Target::new("editor::MoveWordLeft", Some("Editor"))),
+            "in Editor"
+        );
         assert_eq!(names.place(&Target::new("app::Quit", None)), "anywhere");
     }
 

@@ -489,7 +489,7 @@ const OPENCODE_MCP: Source = doc(
 );
 const OPENCODE_CONFIG: Source = doc("OpenCode: Config", "https://opencode.ai/docs/config/");
 const OPENCODE_TRIED: Source = tried(
-    "opencode 1.19.5: \"opencode mcp add the-writer -- '<path with a space>' mcp\" wrote the server to ~/.config/opencode/opencode.jsonc, inside a Git project too; it rejects --global; \"opencode mcp list\" lists a server written under mcp.servers",
+    "opencode 1.19.5: \"opencode mcp add the-writer -- '<path with a space>' mcp\" wrote the server to ~/.config/opencode/opencode.jsonc, inside a Git project too; it rejects --global; \"opencode mcp list\" lists a server written under mcp.servers; the command itself writes the server directly under \"mcp\" (\"mcp\": {\"the-writer\": {\"type\": \"local\", \"command\": [...]}}), and \"opencode mcp list\" then shows it as connected",
 );
 const OPENCODE_CASK: Source = cask(
     "Homebrew cask opencode-desktop (OpenCode.app)",
@@ -1033,11 +1033,11 @@ pub static AGENTS: &[Agent] = &[
                 open_with: None,
                 format: ConfigFormat::Json,
                 snippet: SNIPPET_OPENCODE,
-                placement: "Add the \"the-writer\" entry to the \"servers\" object under \"mcp\"; keep what is already there.",
+                placement: "Add the \"the-writer\" entry to the \"servers\" object under \"mcp\"; keep what is already there. That is the form of OpenCode 2. OpenCode 1 keeps its servers directly under \"mcp\", without \"servers\": there, run the command, which writes the entry in the form its version reads.",
                 sources: &[OPENCODE_MCP, OPENCODE_CONFIG, OPENCODE_TRIED],
             }),
             note: Some(
-                "OpenCode 1.19.5 writes the server to the global configuration. If it turns up in one project only, repeat the command with --global after the name, as the documentation of newer versions describes.",
+                "The command writes the entry in the form the installed version reads. OpenCode 1.19.5 writes it to the global configuration (opencode.jsonc when that file exists). If it turns up in one project only, repeat the command with --global after the name, as the documentation of newer versions describes.",
             ),
         },
     },

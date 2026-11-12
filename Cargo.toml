@@ -32,6 +32,7 @@ writer-agent-setup = { path = "crates/writer-agent-setup" }
 writer-assistant = { path = "crates/writer-assistant" }
 writer-assistant-ui = { path = "crates/writer-assistant-ui" }
 writer-assistant-quick = { path = "crates/writer-assistant-quick" }
+writer-keymap = { path = "crates/writer-keymap" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

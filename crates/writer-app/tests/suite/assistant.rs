@@ -19,7 +19,7 @@ use writer_assistant::{
     AssistantError, Attachment, Backend as _, EffortChoice, FakeBackend, Mode, ModelChoice,
     Selection, Transcript, TurnId, fake_catalog,
 };
-use writer_core::{BlockKind, Position, TextRange};
+use writer_core::{Position, TextRange};
 
 use super::*;
 
@@ -468,6 +468,132 @@ fn an_answer_goes_into_the_text_as_formatted_text_in_one_undo_step(cx: &mut Test
     // Nothing in the answer: nothing happens.
     assert!(!vcx.update(|_, cx| apply::insert_at_caret(&editor, "  \n", cx)));
     assert_eq!(editor_text(&workspace, vcx), before);
+}
+
+#[gpui::test]
+fn an_answer_of_several_blocks_is_never_merged_into_the_text_around_it(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Notes"),
+        Block::paragraph("The keeper climbed the stairs."),
+        Block::paragraph(""),
+        Block::paragraph("The lamp was cold."),
+    ]);
+    add_document(&library, None, &document, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    let before = editor_text(&workspace, vcx);
+    let texts = |cx: &mut VisualTestContext| -> Vec<(BlockKind, String)> {
+        editor.read_with(cx, |editor, _| {
+            editor
+                .document()
+                .blocks()
+                .iter()
+                .map(|block| (block.kind().clone(), block.text().to_string()))
+                .collect()
+        })
+    };
+    let caret_at = |block: usize, offset: usize, cx: &mut VisualTestContext| {
+        editor.update(cx, |editor, cx| {
+            editor.edit(
+                |state| state.select_range(TextRange::empty(Position::new(block, offset))),
+                cx,
+            );
+        });
+    };
+    let undo = |cx: &mut VisualTestContext| {
+        editor.update(cx, |editor, cx| editor.edit(|state| state.undo(), cx));
+    };
+    let paragraph = |text: &str| (BlockKind::Paragraph, text.to_string());
+    let answer = "## A heading\n\nAnd a paragraph.";
+
+    // In the middle of a paragraph: the paragraph is split around the answer.
+    caret_at(1, 10, vcx);
+    assert!(vcx.update(|_, cx| apply::insert_at_caret(&editor, answer, cx)));
+    assert_eq!(
+        texts(vcx)[1..5],
+        [
+            paragraph("The keeper"),
+            (BlockKind::heading(2), "A heading".to_string()),
+            paragraph("And a paragraph."),
+            paragraph(" climbed the stairs."),
+        ]
+    );
+    // The caret is at the end of what went in, and one undo takes it out.
+    assert_eq!(
+        editor.read_with(vcx, |editor, _| editor.selection().head),
+        Position::new(3, "And a paragraph.".len())
+    );
+    undo(vcx);
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // In an empty paragraph: the answer takes its place.
+    caret_at(2, 0, vcx);
+    assert!(vcx.update(|_, cx| apply::insert_at_caret(&editor, answer, cx)));
+    assert_eq!(
+        texts(vcx)[1..],
+        [
+            paragraph("The keeper climbed the stairs."),
+            (BlockKind::heading(2), "A heading".to_string()),
+            paragraph("And a paragraph."),
+            paragraph("The lamp was cold."),
+        ]
+    );
+    undo(vcx);
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // At the start of a block: above it. At its end: below it.
+    caret_at(3, 0, vcx);
+    assert!(vcx.update(|_, cx| apply::insert_at_caret(&editor, answer, cx)));
+    assert_eq!(texts(vcx)[3].1, "A heading");
+    assert_eq!(texts(vcx)[5], paragraph("The lamp was cold."));
+    undo(vcx);
+    caret_at(0, 5, vcx);
+    assert!(vcx.update(|_, cx| apply::insert_at_caret(&editor, answer, cx)));
+    assert_eq!(texts(vcx)[0], (BlockKind::heading(1), "Notes".to_string()));
+    assert_eq!(texts(vcx)[1].1, "A heading");
+    undo(vcx);
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // A selection over two paragraphs is replaced by the blocks.
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| state.select_range(TextRange::new(Position::new(1, 0), Position::new(3, 18))),
+            cx,
+        );
+    });
+    assert!(vcx.update(|_, cx| apply::replace_selection(&editor, answer, cx)));
+    assert_eq!(
+        texts(vcx),
+        [
+            (BlockKind::heading(1), "Notes".to_string()),
+            (BlockKind::heading(2), "A heading".to_string()),
+            paragraph("And a paragraph."),
+        ]
+    );
+    undo(vcx);
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // One paragraph is running text: it joins the block and takes the
+    // formatting typed text would take there.
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.select_range(TextRange::in_block(1, 4, 10));
+                state.toggle_bold();
+            },
+            cx,
+        );
+    });
+    assert!(vcx.update(|_, cx| apply::replace_selection(&editor, "*warden*", cx)));
+    editor.read_with(vcx, |editor, _| {
+        let block = &editor.document().blocks()[1];
+        assert_eq!(block.text(), "The warden climbed the stairs.");
+        let attrs = block.attrs_at(5).unwrap();
+        assert!(attrs.bold && attrs.italic);
+        assert!(!block.attrs_at(12).unwrap().bold);
+    });
 }
 
 #[gpui::test]

@@ -85,7 +85,7 @@ pub const WELCOME_TITLE: &str = "Welcome to The Writer";
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
 /// insert menus, Markdown shortcuts, spelling, page view, comments, Vim
-/// mode, agents and export.
+/// mode, the assistant, agents and export.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
         heading(1, WELCOME_TITLE),
@@ -176,9 +176,32 @@ pub fn welcome_document() -> Document {
              the document; {c:]s} and {c:[s} step through misspelled words and {c:z=} \
              suggests.",
         ),
+        heading(2, "The assistant"),
+        paragraph(
+            "If Claude Code is installed on this Mac, The Writer has an assistant that runs on \
+             it, with the sign-in you have there. It advises and you apply: every answer has \
+             buttons to put it into the text, and nothing changes until you press one. What \
+             you ask goes to Anthropic through your own Claude Code plan, and nothing is sent \
+             before you send a message.",
+        ),
+        bullet(
+            "{k:⌘J} asks about the selected text in a small chat right at the selection: \
+             another word, a tighter sentence, a paragraph in a different tone. With nothing \
+             selected it is a plain question. {b:Replace Selection} and {b:Insert Below} put \
+             the answer into the text; one {k:⌘Z} takes it back.",
+        ),
+        bullet(
+            "{k:⌘3} opens a longer chat beside the text. It knows the whole document as it is \
+             now, and you can add other documents and folders of your library for it to look \
+             things up in. Each document keeps its own conversation.",
+        ),
+        bullet(
+            "The model and the effort are chosen in the chat itself. The switch for the \
+             assistant is in Settings, {k:⌘,}, under Assistant.",
+        ),
         heading(2, "Agents"),
         paragraph(
-            "The assistants that run on this Mac can work with your library through a small \
+            "The AI agents that run on this Mac can work with your library through a small \
              command line tool that comes inside The Writer: find and read your documents, \
              write and edit them, file them in folders, leave comments for you to go through. \
              They can read at any time. They can only change things while The Writer is \
@@ -186,7 +209,7 @@ pub fn welcome_document() -> Document {
         ),
         bullet(
             "{b:Agents} in the command palette, or {k:⌥⌘A}, shows where the tool is, installs \
-             the skill that tells your assistants about it, and lists the command that connects \
+             the skill that tells your agents about it, and lists the command that connects \
              each of them to The Writer. Nothing is installed until you press a button there.",
         ),
         heading(2, "Take your words elsewhere"),

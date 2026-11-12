@@ -639,9 +639,14 @@ impl Block {
         self.kind = self.kind.clone().sanitized();
         self.indent = self.indent.min(MAX_INDENT);
         self.text_size = sanitize_text_size(self.text_size);
-        let (text, runs) = rebuild(&self.text, &self.runs);
-        self.text = text;
-        self.runs = runs;
+        // A block the app wrote itself needs no rebuilding, and going
+        // through its text character by character is most of what reading
+        // a book costs: see `needs_rebuild`.
+        if needs_rebuild(&self.text, &self.runs) {
+            let (text, runs) = rebuild(&self.text, &self.runs);
+            self.text = text;
+            self.runs = runs;
+        }
         for r in &mut self.runs {
             r.attrs.sanitize();
         }
@@ -721,6 +726,24 @@ impl Block {
         }
         Ok(())
     }
+}
+
+/// Whether [`rebuild`] would change anything that [`runs::normalize`] does
+/// not put right by itself: the text has a character to drop or to turn
+/// into a line break, or the runs do not cover it exactly, or a run ends
+/// inside a character. Where none of that is so, every character already
+/// has the attributes of the run it lies in, and rebuilding would give the
+/// same text and the same runs, less the empty ones and with equal
+/// neighbours joined, which is what normalising does.
+pub(crate) fn needs_rebuild(text: &str, runs: &[Run]) -> bool {
+    let mut end = 0usize;
+    for run in runs {
+        end = match end.checked_add(run.len) {
+            Some(end) if end <= text.len() && text.is_char_boundary(end) => end,
+            _ => return true,
+        };
+    }
+    end != text.len() || !text::is_normalized(text)
 }
 
 /// Rebuilds possibly malformed text and runs: normalises control characters
@@ -840,6 +863,167 @@ mod tests {
         let (t, r) = rebuild("abc", &[]);
         assert_eq!(t, "abc");
         assert_eq!(r.len(), 1);
+    }
+
+    /// `repair` leaves a block that needs no rebuilding as it is. That is
+    /// only right when rebuilding it would have given the same block: here
+    /// both ways are taken on thousands of texts with runs, well formed
+    /// and not, and compared.
+    #[test]
+    fn a_block_that_is_not_rebuilt_is_what_rebuilding_would_give() {
+        // The repair of text and runs as it was before the short cut.
+        let the_long_way = |text: &str, runs: &[Run]| -> (String, Vec<Run>) {
+            let (text, mut runs) = rebuild(text, runs);
+            for run in &mut runs {
+                run.attrs.sanitize();
+            }
+            runs::normalize(&mut runs);
+            (text, runs)
+        };
+        let attrs = |n: u64| InlineAttrs {
+            bold: n & 1 == 1,
+            italic: n & 2 == 2,
+            font: match n % 5 {
+                0 => Some("Georgia".to_string()),
+                // Sanitised away, so two runs that differ only in this
+                // are one run afterwards.
+                1 => Some("  ".to_string()),
+                2 => Some(" Georgia ".to_string()),
+                _ => None,
+            },
+            link: n
+                .is_multiple_of(7)
+                .then(|| " https://example.org".to_string()),
+            ..Default::default()
+        };
+        let pieces = [
+            "a",
+            "b",
+            " ",
+            "é",
+            "中",
+            "\u{1F469}\u{200D}\u{1F467}",
+            "e\u{301}",
+            "\n",
+            "\t",
+            "word",
+        ];
+        let bad = ["\r", "\r\n", "\u{7}", "\u{85}", "\u{2028}", "\u{0}"];
+        // xorshift64*, as in tests/random.rs.
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+        let (mut kept, mut rebuilt) = (0, 0);
+        for round in 0..6000u32 {
+            // Text in runs that fit it, some of them empty, some equal to
+            // their neighbour.
+            let mut text = String::new();
+            let mut runs: Vec<Run> = Vec::new();
+            for _ in 0..next() % 6 {
+                let mut len = 0;
+                for _ in 0..next() % 4 {
+                    let piece = pieces[(next() % pieces.len() as u64) as usize];
+                    text.push_str(piece);
+                    len += piece.len();
+                }
+                runs.push(Run {
+                    len,
+                    attrs: attrs(next() % 4),
+                });
+            }
+            // Every third round something is wrong with it.
+            if round.is_multiple_of(3) {
+                match next() % 6 {
+                    // A character that does not belong in a text, in a
+                    // run of its own, so only the text is wrong.
+                    0 => {
+                        let piece = bad[(next() % bad.len() as u64) as usize];
+                        text.push_str(piece);
+                        runs.push(Run {
+                            len: piece.len(),
+                            attrs: attrs(next() % 4),
+                        });
+                    }
+                    1 => {
+                        let piece = bad[(next() % bad.len() as u64) as usize];
+                        text.insert_str(0, piece);
+                        runs.insert(
+                            0,
+                            Run {
+                                len: piece.len(),
+                                attrs: attrs(next() % 4),
+                            },
+                        );
+                    }
+                    2 => text.push_str("more text than the runs cover"),
+                    3 => runs.push(Run {
+                        len: 1 + (next() % 9) as usize,
+                        attrs: attrs(next() % 4),
+                    }),
+                    4 => {
+                        // A run that ends inside a character.
+                        text.insert(0, 'é');
+                        runs.insert(
+                            0,
+                            Run {
+                                len: 1,
+                                attrs: attrs(1),
+                            },
+                        );
+                        runs.insert(
+                            1,
+                            Run {
+                                len: 1,
+                                attrs: attrs(2),
+                            },
+                        );
+                    }
+                    _ => runs.push(Run {
+                        len: usize::MAX,
+                        attrs: attrs(0),
+                    }),
+                }
+            }
+            let expected = the_long_way(&text, &runs);
+            if needs_rebuild(&text, &runs) {
+                rebuilt += 1;
+            } else {
+                kept += 1;
+            }
+            let mut block = Block::new(BlockKind::Paragraph);
+            block.text = text.clone();
+            block.runs = runs.clone();
+            assert!(block.repair().is_none());
+            assert_eq!(
+                (block.text.clone(), block.runs.clone()),
+                expected,
+                "round {round}: {text:?} with {runs:?}"
+            );
+            assert!(block.check().is_ok(), "round {round}: {:?}", block.check());
+        }
+        // Both ways were taken often.
+        assert!(
+            kept > 2000 && rebuilt > 1000,
+            "{kept} kept, {rebuilt} rebuilt"
+        );
+        // What is wrong is seen, each kind of it.
+        let plain = |len| Run {
+            len,
+            attrs: InlineAttrs::default(),
+        };
+        assert!(!needs_rebuild("", &[]));
+        assert!(!needs_rebuild("aé", &[plain(1), plain(0), plain(2)]));
+        assert!(needs_rebuild("aé", &[plain(2), plain(1)]), "inside é");
+        assert!(needs_rebuild("abc", &[]), "no runs");
+        assert!(needs_rebuild("abc", &[plain(2)]), "too short");
+        assert!(needs_rebuild("abc", &[plain(4)]), "too long");
+        assert!(needs_rebuild("abc", &[plain(usize::MAX), plain(4)]));
+        assert!(needs_rebuild("a\rb", &[plain(3)]), "a carriage return");
+        assert!(needs_rebuild("a\u{7}b", &[plain(3)]), "a control character");
     }
 
     #[test]

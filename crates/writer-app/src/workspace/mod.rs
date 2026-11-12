@@ -399,6 +399,7 @@ impl Workspace {
             weak.update(cx, |this, cx| {
                 this.flush(cx);
                 this.store_assistant_conversation(cx);
+                this.store_zoom_now(cx);
                 this.save_window_bounds(cx);
             })
             .ok();

@@ -560,9 +560,7 @@ fn the_status_bar_shows_the_zoom_and_its_menu_sets_it(cx: &mut TestAppContext) {
 fn cmd_with_the_wheel_zooms_under_the_pointer_and_is_stored_once(cx: &mut TestAppContext) {
     init(cx);
     let (library, workspace, cx) = open_document(&manuscript(true), cx);
-    set_zoom(&workspace, Zoom::Percent(100), cx);
-    let_it_be_stored(cx);
-    assert_eq!(stored(&library, PAGE_ZOOM_KEY, cx), Some("100".to_string()));
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
     let editor = workspace.read_with(cx, |w, _| w.editor().clone());
     let at = position_bounds(&workspace, Position::new(2, 40), cx).center();
     let under = |cx: &mut VisualTestContext| {
@@ -588,15 +586,18 @@ fn cmd_with_the_wheel_zooms_under_the_pointer_and_is_stored_once(cx: &mut TestAp
     }
     let reached = percent_of(&workspace, cx);
     assert!(reached > 190. && reached < 215., "{reached}");
-    // The character under the pointer is still under it.
-    assert_eq!(under(cx).block, before.block);
-    assert!(
-        under(cx).offset.abs_diff(before.offset) <= 1,
-        "{:?}",
-        under(cx)
-    );
+    // The line under the pointer is still under it (the sheet has room
+    // in this window and stays in the middle of it: sideways the place
+    // is kept where a sheet is wider than its room, which the editor's
+    // own tests hold).
+    let row_of = |position: Position, cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.visual_row(position).unwrap().start)
+    };
+    let after = under(cx);
+    assert_eq!(row_of(after, cx), row_of(before, cx), "{after:?}");
     // Nothing was written while the wheel turned; one write afterwards.
-    assert_eq!(stored(&library, PAGE_ZOOM_KEY, cx), Some("100".to_string()));
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, cx), None);
+    assert_eq!(writes.get(), 0);
     let_it_be_stored(cx);
     assert_eq!(
         stored(&library, PAGE_ZOOM_KEY, cx),
@@ -714,15 +715,15 @@ fn each_view_keeps_its_zoom_and_it_comes_back_after_a_relaunch(cx: &mut TestAppC
         stored(&library, FLOW_ZOOM_KEY, vcx),
         Some("150".to_string())
     );
-    workspace.update(vcx, |w, cx| assert!(w.flush(cx)));
-    vcx.update(|window, _| window.remove_window());
-    vcx.run_until_parked();
-    drop(workspace);
+    assert!(vcx.simulate_close(), "the window may close");
     vcx.run_until_parked();
     assert_eq!(
         stored(&library, FLOW_ZOOM_KEY, vcx),
         Some("175".to_string())
     );
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
+    drop(workspace);
     drop(library);
 
     // The next launch: flow view at 175 %, and page view follows the
@@ -1262,6 +1263,10 @@ fn the_pages_do_not_depend_on_the_zoom(cx: &mut TestAppContext) {
     editor.update(cx, |editor, cx| {
         editor.edit(|state| state.set_caret(Position::new(60, 10)), cx);
     });
+    cx.run_until_parked();
+    // (Pages that were never on screen are estimates until the layout in
+    // the background has been there: let it finish.)
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
     cx.run_until_parked();
     let page = workspace.update(cx, |w, cx| w.status_line(cx).page);
     let (pages, row) = editor.read_with(cx, |editor, _| {

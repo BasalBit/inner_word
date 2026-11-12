@@ -44,6 +44,8 @@ pub(crate) struct ZoomState {
     /// What the library has for flow view and for page view; `None` where
     /// the writer never chose a zoom.
     stored: [Option<Zoom>; 2],
+    /// The views whose zoom the writer changed since it was last written.
+    changed: [bool; 2],
     /// Life size on the display the window is on, in percent.
     pub(crate) life_size: Option<u16>,
     store_task: Option<Task<()>>,
@@ -94,15 +96,16 @@ impl ZoomState {
             cx.observe_window_bounds(window, |this, window, cx| {
                 this.follow_the_display(window, cx)
             }),
-            // A change that is still waiting to be written.
+            // A change that is still waiting to be written (the window
+            // that closes writes it too: `Workspace::new`).
             cx.on_app_quit(|this, cx| {
                 this.store_zoom_now(cx);
                 async {}
             }),
-            cx.on_release(|this, cx| this.write_zoom(cx)),
         ];
         Self {
             stored,
+            changed: [false; 2],
             life_size,
             store_task: None,
             _subscriptions: subscriptions,
@@ -362,7 +365,15 @@ impl Workspace {
         if *event != EditorEvent::ZoomChanged {
             return;
         }
-        if self.zoom_differs_from_stored(cx) {
+        // The zoom of the view that is showing is the one that changed. A
+        // zoom that follows the window says so each time it comes out
+        // differently: that is no new choice.
+        let (page_view, zoom) = {
+            let editor = self.editor.read(cx);
+            (editor.page_view(), editor.zoom())
+        };
+        if zoom::stored_form(zoom).is_some() && self.zoom.stored[slot(page_view)] != Some(zoom) {
+            self.zoom.changed[slot(page_view)] = true;
             self.zoom.store_task = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(ZOOM_STORE_DELAY).await;
                 this.update(cx, |this, cx| this.store_zoom_now(cx)).ok();
@@ -377,23 +388,16 @@ impl Workspace {
         [editor.zoom_of(false), editor.zoom_of(true)]
     }
 
-    fn zoom_differs_from_stored(&self, cx: &App) -> bool {
-        self.view_zooms(cx)
-            .into_iter()
-            .zip(self.zoom.stored)
-            .any(|(zoom, stored)| zoom::stored_form(zoom).is_some() && Some(zoom) != stored)
-    }
-
-    /// Writes the zoom of each view to the library where it is not what
-    /// the library has. A zoom the writer did not choose (what a page
-    /// starts with) is not written.
+    /// Writes the zoom the writer chose for a view to the library, now
+    /// (it is written by itself a moment after the last change, and when
+    /// the window closes or the app quits). A zoom nobody chose, what a
+    /// view starts with, is not written.
     pub fn store_zoom_now(&mut self, cx: &mut Context<Self>) {
-        self.write_zoom(cx);
-    }
-
-    fn write_zoom(&mut self, cx: &mut App) {
         self.zoom.store_task = None;
         for page_view in [false, true] {
+            if !std::mem::take(&mut self.zoom.changed[slot(page_view)]) {
+                continue;
+            }
             let zoom = self.editor.read(cx).zoom_of(page_view);
             let Some(text) = zoom::stored_form(zoom) else {
                 continue;

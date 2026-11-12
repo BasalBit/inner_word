@@ -69,8 +69,9 @@
 //!    interception only applies while the editor itself is focused.
 //! 2. Keys held with `cmd`, function keys, and every key of an IME
 //!    composition in progress pass untouched: application and editor
-//!    shortcuts work in every mode. One exception: `cmd-v` pastes into an
-//!    open command line.
+//!    shortcuts work in every mode. One exception: the key of the
+//!    editor's paste (`cmd-v` unless the keymap was changed; asked of the
+//!    keymap) pastes into an open command line.
 //! 3. Every other key goes to the engine. In Normal, Visual, operator
 //!    pending and command-line mode the engine consumes nearly all of them
 //!    (see the [`writer_vim`] guide for the few it leaves to the editor:

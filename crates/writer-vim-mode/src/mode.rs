@@ -8,7 +8,7 @@ use gpui::{
 use writer_core::{EditorState, Position, Selection, TextRange};
 use writer_editor::{
     Autoscroll, CaretStyle, Editor, EditorEvent, HighlightStyle, InterceptPriority, KeyDisposition,
-    actions::OpenContextMenu,
+    actions::{OpenContextMenu, Paste},
 };
 use writer_ui::{
     keymap,
@@ -413,21 +413,23 @@ impl VimMode {
             self.set_composition(None, cx);
             return KeyDisposition::Consumed;
         }
+        // The key of paste (`cmd-v`, unless the keymap gives the editor's
+        // paste another key: it is asked of the keymap) pastes into an
+        // open command line, not into the document under it.
+        if self.vim.mode() == Mode::CommandLine
+            && keymap::keystroke_runs(keystroke, &Paste, window, cx)
+        {
+            let text = cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default();
+            let line = text.lines().next().unwrap_or_default().to_string();
+            let outcome = self.engine_call(Call::CommandLineInput(&line), cx);
+            self.apply(outcome, false, cx);
+            return KeyDisposition::Consumed;
+        }
         if modifiers.platform {
-            // Application and editor shortcuts, in every mode. One
-            // exception: paste goes into an open command line.
-            let plain_paste =
-                keystroke.key == "v" && !modifiers.control && !modifiers.alt && !modifiers.shift;
-            if plain_paste && self.vim.mode() == Mode::CommandLine {
-                let text = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .unwrap_or_default();
-                let line = text.lines().next().unwrap_or_default().to_string();
-                let outcome = self.engine_call(Call::CommandLineInput(&line), cx);
-                self.apply(outcome, false, cx);
-                return KeyDisposition::Consumed;
-            }
+            // Application and editor shortcuts, in every mode.
             return KeyDisposition::Pass;
         }
         if modifiers.function {

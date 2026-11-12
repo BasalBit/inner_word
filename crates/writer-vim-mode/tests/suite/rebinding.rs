@@ -13,7 +13,7 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{Action, TestAppContext, VisualTestContext};
 use writer_editor::{
     ContextMenuRequest, EditorEvent,
-    actions::{MoveBlockDown, OpenContextMenu, ToggleBold},
+    actions::{MoveBlockDown, OpenContextMenu, Paste, ToggleBold},
 };
 use writer_ui::{KeyHint, keymap};
 use writer_vim_mode::{Mode, ToggleVimMode};
@@ -137,6 +137,33 @@ fn the_keys_vim_lets_through_do_what_the_keymap_says_now(cx: &mut TestAppContext
     cx.simulate_keystrokes("alt-j");
     assert_eq!(rig.text(cx), "second\nfirst word");
     assert_eq!(rig.mode(cx), Mode::Normal);
+}
+
+/// Paste goes into an open command line instead of into the document.
+/// Which key pastes is the keymap's answer.
+#[gpui::test]
+fn the_key_of_paste_goes_into_an_open_command_line_whatever_it_is(cx: &mut TestAppContext) {
+    setup(cx);
+    let (rig, cx) = open(doc(&["one", "two", "three"]), cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("thr\nignored".into()));
+    assert_eq!(rebind(&Paste, "cmd-v", "cmd-alt-y", cx), 1);
+
+    cx.simulate_keystrokes("/ cmd-v");
+    assert_eq!(
+        rig.status(cx).command_line.unwrap().text,
+        "",
+        "the old key pastes nothing"
+    );
+    assert_eq!(rig.text(cx), "one\ntwo\nthree");
+    cx.simulate_keystrokes("cmd-alt-y");
+    assert_eq!(rig.status(cx).command_line.unwrap().text, "thr");
+    assert_eq!(rig.text(cx), "one\ntwo\nthree");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(rig.head(cx), at(2, 0));
+
+    // In Insert mode the key is the editor's, as before.
+    cx.simulate_keystrokes("g g i cmd-alt-y escape");
+    assert_eq!(rig.text(cx), "thr\nignoredone\ntwo\nthree");
 }
 
 /// The menu of the mode chip shows the key of "turn off Vim mode" as the

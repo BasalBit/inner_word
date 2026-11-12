@@ -113,6 +113,13 @@ pub mod keys {
     /// `"comments"` or `"assistant"`: which of the two panels at the right
     /// of the text is in front when both have something to show.
     pub const RIGHT_PANEL: &str = "right_panel.choice";
+    /// Object: the user's changes to the keyboard shortcuts, as
+    /// `writer_keymap::Changes` stores them (`{"version": 1, "changes":
+    /// [...]}`: for each changed command in a key context the keys it
+    /// has and the defaults at the time). Only the differences from the
+    /// defaults; absent while every key is the default. Read when the
+    /// library opens, before a key hint is drawn (see `crate::keymap`).
+    pub const KEYBOARD_SHORTCUTS: &str = "keyboard.shortcuts";
     /// Prefix of the side chat's conversation about a document:
     /// `assistant.conversation.<id>` holds it as JSON.
     pub const ASSISTANT_CONVERSATION_PREFIX: &str = "assistant.conversation.";

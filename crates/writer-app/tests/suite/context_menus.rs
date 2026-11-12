@@ -618,10 +618,9 @@ fn shift_f10_is_a_second_key_for_the_context_menu(cx: &mut TestAppContext) {
     );
     dismiss(vcx);
 
-    // The overlay names both keys for the context menu: the row shows the
-    // preferred one and says the other, in the text and where the shared
-    // action is listed (the comment list, the library, a text field).
-    let rows: Vec<(String, String, String)> = vcx.update(|_, cx| {
+    // The list of shortcuts has both keys on the row of the context menu,
+    // in every place it opens in, and shows the one macOS uses.
+    let rows: Vec<(String, String, String, Vec<String>)> = vcx.update(|_, cx| {
         collect_shortcuts(cx)
             .iter()
             .filter(|shortcut| shortcut.title.to_lowercase().contains("context menu"))
@@ -630,21 +629,33 @@ fn shift_f10_is_a_second_key_for_the_context_menu(cx: &mut TestAppContext) {
                     shortcut.place.label().to_string(),
                     shortcut.title.to_string(),
                     shortcut.keys.clone(),
+                    shortcut
+                        .all_keys
+                        .iter()
+                        .map(|key| key.keys.to_string())
+                        .collect(),
                 )
             })
             .collect()
     });
-    assert_eq!(rows.len(), 2, "{rows:?}");
-    assert!(
-        rows.iter().any(|(place, ..)| place == "In the text"),
+    let places: Vec<&str> = rows.iter().map(|(place, ..)| place.as_str()).collect();
+    assert_eq!(
+        places,
+        [
+            "In the text",
+            "In the comment list",
+            "In the library",
+            "In keyboard shortcuts",
+            "In a text field"
+        ],
         "{rows:?}"
     );
-    for (_, title, keys) in &rows {
+    for (_, _, keys, all) in &rows {
         assert_eq!(
             keys, "\u{2303}\u{21a9}",
             "ctrl-enter is the key shown: {rows:?}"
         );
-        assert!(title.ends_with("(also \u{21e7}F10)"), "{rows:?}");
+        assert_eq!(all, &["shift-f10", "ctrl-enter"], "{rows:?}");
     }
 }
 

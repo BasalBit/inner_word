@@ -13,7 +13,7 @@ use writer_app::{
     export::{ExportPicker, ExportScope, ExportTarget},
     menus,
     settings_view::{SettingRow, SettingsView},
-    shortcuts::{MENUS_NOTE, ShortcutsOverlay},
+    shortcuts::{MENUS_NOTE, collect_shortcuts},
     version_history::VersionHistory,
     welcome,
     workspace::{AUTOSAVE_DELAY, MenuKind},
@@ -153,7 +153,15 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
     let wanted: [(&str, &[&str]); 7] = [
         (
             "The Writer",
-            &["About The Writer", "Settings…", "Quit The Writer"],
+            &[
+                "About The Writer",
+                "Settings…",
+                "Keyboard Shortcuts…",
+                "Import Keyboard Shortcuts…",
+                "Export Keyboard Shortcuts…",
+                "Reset All Keyboard Shortcuts…",
+                "Quit The Writer",
+            ],
         ),
         (
             "File",
@@ -229,7 +237,7 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
                 "Command Palette…",
             ],
         ),
-        ("Help", &["Keyboard Shortcuts", "Welcome Document"]),
+        ("Help", &["Keyboard Shortcuts…", "Welcome Document"]),
     ];
     for (menu, wanted) in wanted {
         let have = items(menu);
@@ -648,13 +656,7 @@ fn modals_close_and_work_on_a_click(cx: &mut TestAppContext) {
     assert!(!has_modal(&workspace, vcx));
 
     // The pickers have the same control, at the right of their query row.
-    for open in [
-        "cmd-shift-p",
-        "cmd-p",
-        "cmd-shift-f",
-        "cmd-/",
-        "cmd-shift-s",
-    ] {
+    for open in ["cmd-shift-p", "cmd-p", "cmd-shift-f", "cmd-shift-s"] {
         vcx.simulate_keystrokes(open);
         assert!(has_modal(&workspace, vcx), "{open} opens a picker");
         let control = bounds_of(writer_app::controls::CLOSE_CONTROL, vcx);
@@ -667,6 +669,24 @@ fn modals_close_and_work_on_a_click(cx: &mut TestAppContext) {
         assert!(!has_modal(&workspace, vcx), "the control closes {open}");
         assert!(editor_focused(&workspace, vcx));
     }
+
+    // The list of keyboard shortcuts has a close control of its own, and
+    // closes on a click outside like the others.
+    vcx.simulate_keystrokes("cmd-/");
+    assert!(has_modal(&workspace, vcx));
+    vcx.simulate_input("a");
+    click("keymap-close", vcx);
+    assert!(!has_modal(&workspace, vcx), "the control closes the list");
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-/");
+    assert!(has_modal(&workspace, vcx));
+    vcx.simulate_click(point(px(40.), px(500.)), Modifiers::default());
+    vcx.run_until_parked();
+    assert!(
+        !has_modal(&workspace, vcx),
+        "a click outside closes the list"
+    );
+    assert!(editor_focused(&workspace, vcx));
 
     // Version history: rows are clicked, a button restores.
     let save = |text: &str, cx: &mut VisualTestContext| {
@@ -1020,29 +1040,29 @@ fn the_welcome_document_and_the_overlay_speak_of_the_mouse(cx: &mut TestAppConte
     // The shortcuts overlay: its first line names the menus, and it lists
     // the insert menu although no key binding opens it.
     vcx.simulate_keystrokes("cmd-/");
-    let overlay = workspace
-        .read_with(vcx, |w, cx| {
-            w.modal_layer().read(cx).active::<ShortcutsOverlay>()
-        })
-        .expect("the overlay is open");
-    let (first, insert) = overlay.read_with(vcx, |overlay, cx| {
-        use writer_ui::{PickerDelegate, PickerEntry};
-        let first = match overlay.delegate.entry(0, cx) {
-            PickerEntry::Header(title) => title.to_string(),
-            PickerEntry::Item(item) => item.label.to_string(),
-        };
-        let insert = overlay
-            .delegate
-            .listed()
+    let list = workspace
+        .read_with(vcx, |w, cx| w.shortcuts_list(cx))
+        .expect("the list is open");
+    let first = list
+        .read_with(vcx, |list, _| list.headings().into_iter().next())
+        .unwrap_or_default();
+    let insert = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
             .into_iter()
-            .find(|shortcut| shortcut.title.starts_with("Insert menu"))
-            .map(|shortcut| (shortcut.title.to_string(), shortcut.keys.clone()));
-        (first, insert)
+            .find(|shortcut| shortcut.title.starts_with("Insert menu ("))
+            .map(|shortcut| {
+                (
+                    shortcut.title.to_string(),
+                    shortcut.keys.clone(),
+                    shortcut.fixed.is_some(),
+                )
+            })
     });
     assert_eq!(first, MENUS_NOTE);
-    let (title, keys) = insert.expect("the insert menu is listed");
+    let (title, keys, fixed) = insert.expect("the insert menu is listed");
     assert!(title.contains("start of a line"), "{title}");
     assert_eq!(keys, "/");
+    assert!(fixed, "a character that is typed is not a key to change");
 }
 
 #[gpui::test]

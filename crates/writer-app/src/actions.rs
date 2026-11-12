@@ -69,8 +69,17 @@ actions!(
         Export,
         /// Open the settings.
         OpenSettings,
-        /// Show every keyboard shortcut.
+        /// Show every keyboard shortcut, to look one up or to change it.
         ShowShortcuts,
+        /// Choose a shortcuts file and import the keys it changes.
+        ImportShortcuts,
+        /// Write every keyboard shortcut to a file.
+        ExportShortcuts,
+        /// Put every keyboard shortcut back to its default.
+        ResetAllShortcuts,
+        /// Put the keyboard shortcuts back as they were before the last
+        /// import or the last "reset all".
+        UndoShortcutsChange,
         /// Switch the current document between the flowing column and page view.
         TogglePageView,
         /// Turn Vim mode on or off.
@@ -341,7 +350,34 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "bindings",
             "help",
             "cheat sheet",
+            "change",
+            "customize",
+            "remap",
+            "rebind",
+            "keymap",
         ]),
+        CommandDescriptor::new("Import keyboard shortcuts", CATEGORY_APP, ImportShortcuts)
+            .keywords([
+                "keys", "bindings", "keymap", "file", "load", "json", "restore",
+            ]),
+        CommandDescriptor::new("Export keyboard shortcuts", CATEGORY_APP, ExportShortcuts)
+            .keywords([
+                "keys", "bindings", "keymap", "file", "save", "json", "backup", "list",
+            ]),
+        CommandDescriptor::new(
+            "Reset all keyboard shortcuts",
+            CATEGORY_APP,
+            ResetAllShortcuts,
+        )
+        .keywords([
+            "keys", "bindings", "keymap", "defaults", "restore", "original",
+        ]),
+        CommandDescriptor::new(
+            "Undo keyboard shortcuts import or reset",
+            CATEGORY_APP,
+            UndoShortcutsChange,
+        )
+        .keywords(["keys", "bindings", "keymap", "revert", "back"]),
         CommandDescriptor::new("Dismiss notifications", CATEGORY_APP, DismissNotifications)
             .keywords(["toast", "message", "clear"]),
         CommandDescriptor::new("About The Writer", CATEGORY_APP, About).keywords(["version"]),

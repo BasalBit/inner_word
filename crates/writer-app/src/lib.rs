@@ -109,6 +109,9 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(settings_view::key_bindings());
     cx.bind_keys(version_history::key_bindings());
     cx.bind_keys(agents_view::key_bindings());
+    // The list of keyboard shortcuts: after the widgets, whose text field
+    // binds some of the same keys at the same depth.
+    writer_keymap_ui::init(cx);
     writer_comments::init(cx);
     writer_vim_mode::init(cx);
     writer_editor_tools::init(cx);
@@ -117,12 +120,13 @@ pub fn init(cx: &mut App) {
     writer_assistant_ui::init(cx);
     writer_assistant_quick::init(cx);
 
-    // Every crate has bound its keys: they are the defaults from here on,
-    // and the keymap that runs is the one `keymap` installs (the defaults
-    // with the user's changes, behind the menu bar's own bindings).
-    keymap::take_defaults(cx);
-
     register_commands(cx);
+
+    // Every crate has bound its keys and named its commands: the keys are
+    // the defaults from here on, and the keymap that runs is the one
+    // `keymap` installs (the defaults with the user's changes, behind the
+    // menu bar's own bindings).
+    keymap::take_defaults(cx);
 
     cx.on_action(|_: &actions::Quit, cx| cx.quit());
     cx.on_action(|_: &actions::Hide, cx| cx.hide());

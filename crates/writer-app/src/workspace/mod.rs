@@ -67,6 +67,7 @@ mod render;
 mod right_panel;
 mod saver;
 mod session;
+mod shortcuts;
 mod spelling;
 
 use std::time::Duration;
@@ -96,7 +97,6 @@ use crate::{
     quick_open::QuickOpenDelegate,
     settings::{self, Settings, keys},
     settings_view::SettingsView,
-    shortcuts::ShortcutsDelegate,
     version_history::VersionHistory,
     window::StoredBounds,
 };
@@ -115,6 +115,10 @@ pub use session::{
     SaveState, first_occurrence,
 };
 pub(crate) use session::{Session, display_title as session_title};
+pub use shortcuts::{
+    NOT_CHANGEABLE_NOTE, catalogue as shortcuts_catalogue, choose_import_file_beforehand,
+    listing as shortcuts_listing,
+};
 pub use spelling::CHECK_SPELLING_MENU_ITEM;
 
 /// The key context of the workspace root element.
@@ -190,6 +194,8 @@ pub struct Workspace {
     pub(crate) right: right_panel::RightSlot,
     /// The assistant: its engine and whether it is shown.
     pub(crate) assistant: assistant::AssistantState,
+    /// The keyboard shortcuts: the open list, what Undo puts back.
+    pub(crate) shortcuts: shortcuts::ShortcutsState,
     /// The panel beside the text that was used last: it keeps its place in
     /// a window too narrow for both.
     pub(crate) last_side_panel: SidePanel,
@@ -246,6 +252,9 @@ impl Workspace {
     ///
     /// Requires [`crate::init`] to have run.
     pub fn new(library: Entity<Library>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // First of all the keys the user chose: nothing below may draw or
+        // remember a key of the default keymap that this library changed.
+        let unread_shortcuts = shortcuts::install_stored_changes(&library, cx);
         let settings = Settings::load(library.read(cx));
         if theme::theme_mode(cx) != settings.theme {
             theme::set_theme_mode(settings.theme, cx);
@@ -408,6 +417,7 @@ impl Workspace {
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
             right,
             assistant,
+            shortcuts: shortcuts::ShortcutsState::new(unread_shortcuts),
             last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             vim_status_id: vim_status.entity_id(),
@@ -425,6 +435,7 @@ impl Workspace {
         this.extend_the_menus_of_other_crates(cx);
         this.connect_vim_spelling(cx);
         this.restore_session(window, cx);
+        this.report_unread_shortcuts(cx);
         this.offer_agents_hint(cx);
         this.sync_right_panel(cx);
         this.look_for_assistant(cx);
@@ -984,20 +995,6 @@ impl Workspace {
                 let rows = picker_rows(window, 14);
                 Picker::modal(delegate, window, cx)
                     .width(px(WIDE_MODAL_WIDTH))
-                    .max_visible_rows(rows)
-            });
-        });
-    }
-
-    /// Opens the keyboard shortcuts overlay, or closes it when it is open.
-    pub fn toggle_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let workspace = cx.weak_entity();
-        self.modal_layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |window, cx| {
-                let delegate = ShortcutsDelegate::new(workspace, cx);
-                let rows = picker_rows(window, 20);
-                Picker::modal(delegate, window, cx)
-                    .width(px(MODAL_WIDTH))
                     .max_visible_rows(rows)
             });
         });

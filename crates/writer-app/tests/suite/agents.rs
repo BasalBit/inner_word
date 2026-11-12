@@ -18,7 +18,7 @@ use writer_app::{
     controls::CLOSE_CONTROL,
     menus,
     settings::keys,
-    shortcuts::{Place, ShortcutsOverlay},
+    shortcuts::{Place, collect_shortcuts},
 };
 
 use super::*;
@@ -272,18 +272,14 @@ fn the_panel_opens_from_the_key_the_palette_and_the_menu_bar(cx: &mut TestAppCon
     // The shortcuts overlay lists the key that opens it and the keys in it.
     vcx.simulate_keystrokes("cmd-/");
     vcx.run_until_parked();
-    let overlay = workspace
-        .read_with(vcx, |workspace, cx| {
-            workspace
-                .modal_layer()
-                .read(cx)
-                .active::<ShortcutsOverlay>()
-        })
-        .expect("the overlay is open");
-    let listed = overlay.read_with(vcx, |overlay, _| {
-        overlay
-            .delegate
-            .listed()
+    assert!(
+        workspace
+            .read_with(vcx, |workspace, cx| workspace.shortcuts_list(cx))
+            .is_some(),
+        "the list is open"
+    );
+    let listed: Vec<(String, Place, String)> = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
             .iter()
             .map(|shortcut| {
                 (
@@ -292,7 +288,7 @@ fn the_panel_opens_from_the_key_the_palette_and_the_menu_bar(cx: &mut TestAppCon
                     shortcut.keys.clone(),
                 )
             })
-            .collect::<Vec<_>>()
+            .collect()
     });
     assert!(
         listed.contains(&("Agents".to_string(), Place::Anywhere, "⌥⌘A".to_string())),

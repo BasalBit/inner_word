@@ -6,7 +6,7 @@ use writer_app::{
     library_search::LibrarySearch,
     palette::CommandPalette,
     quick_open::{QuickOpen, QuickOpenChoice},
-    shortcuts::ShortcutsOverlay,
+    shortcuts::collect_shortcuts,
 };
 use writer_core::{Movement, Position, Selection};
 use writer_library::LibraryItem;
@@ -367,18 +367,18 @@ fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
+fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);
     add_document(&library, None, &simple_document("Keys", "Text here."), cx);
     let (workspace, vcx) = open_workspace(&library, cx);
 
     vcx.simulate_keystrokes("cmd-/");
-    let overlay = modal!(workspace, vcx, ShortcutsOverlay).expect("the overlay is open");
-    let listed = overlay.read_with(vcx, |overlay, _| {
-        overlay
-            .delegate
-            .listed()
+    let list = workspace
+        .read_with(vcx, |workspace, cx| workspace.shortcuts_list(cx))
+        .expect("the list is open");
+    let listed: Vec<(String, String, String)> = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
             .iter()
             .map(|shortcut| {
                 (
@@ -387,7 +387,7 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
                     shortcut.keys.clone(),
                 )
             })
-            .collect::<Vec<_>>()
+            .collect()
     });
     let find = |title: &str| {
         listed
@@ -408,29 +408,34 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
             "⌥←".into()
         )
     );
-    // Commands without a binding are not shortcuts.
-    assert!(
-        !listed
-            .iter()
-            .any(|(_, title, _)| title == "Use Night theme")
+    // A command without a key is listed too, so that it can be given one.
+    assert_eq!(
+        find("Use Night theme"),
+        ("View".into(), "Use Night theme".into(), String::new())
     );
+    assert_eq!(find("Version history").2, "");
+    // What the list shows is these rows: as many, in this order.
+    let shown: Vec<String> = list.read_with(vcx, |list, _| {
+        list.listed().into_iter().map(|(_, title)| title).collect()
+    });
+    let titles: Vec<String> = listed.iter().map(|(_, title, _)| title.clone()).collect();
+    assert_eq!(shown, titles);
 
     // Every key is listed under where the keyboard has to be for it.
-    let placed = overlay.read_with(vcx, |overlay, _| {
-        overlay
-            .delegate
-            .listed()
-            .iter()
-            .map(|shortcut| {
-                (
-                    shortcut.title.to_string(),
-                    shortcut.place,
-                    shortcut.heading.to_string(),
-                    shortcut.keys.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-    });
+    let placed: Vec<(String, writer_app::shortcuts::Place, String, String)> =
+        vcx.update(|_, cx| {
+            collect_shortcuts(cx)
+                .iter()
+                .map(|shortcut| {
+                    (
+                        shortcut.title.to_string(),
+                        shortcut.place,
+                        shortcut.heading.to_string(),
+                        shortcut.keys.clone(),
+                    )
+                })
+                .collect()
+        });
     let place = |title: &str, keys: &str| {
         placed
             .iter()
@@ -474,15 +479,32 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
         (Place::Library, "In the library".into())
     );
     assert_eq!(place("Add comment", "⌥⌘M").0, Place::Anywhere);
-    // A command with keys in several places is listed once, in the widest
-    // of them: undo also works in the comment list, but it is the text's.
+    // A command with keys in several places has a row in each of them,
+    // because each can be given another key: undo is the text's, it also
+    // works in the comment list, and a text field has one of its own.
     assert_eq!(
         place("Undo", "⌘Z"),
         (Place::Text, "In the text \u{b7} Edit".into())
     );
+    let undo: Vec<Place> = placed
+        .iter()
+        .filter(|(title, ..)| title == "Undo")
+        .map(|(_, place, ..)| *place)
+        .collect();
+    assert_eq!(undo, [Place::Text, Place::CommentList, Place::TextField]);
+    // The library moves with the arrows wherever the keyboard is in it and
+    // with letters while nothing is typed there: two rows, told apart.
+    let in_library: Vec<(&str, &str)> = placed
+        .iter()
+        .filter(|(title, place, ..)| *place == Place::Library && title.starts_with("Select next"))
+        .map(|(title, _, _, keys)| (title.as_str(), keys.as_str()))
+        .collect();
     assert_eq!(
-        placed.iter().filter(|(title, ..)| title == "Undo").count(),
-        1
+        in_library,
+        [
+            ("Select next item", "↓"),
+            ("Select next item (outside a text field)", "J")
+        ]
     );
     assert!(
         placed
@@ -502,6 +524,11 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
             .any(|(_, place, heading, _)| *place == Place::VersionHistory
                 && heading == "In the version history")
     );
+    // The list has keys of its own, and lists them.
+    assert_eq!(
+        place("Change key", "↩"),
+        (Place::Shortcuts, "In keyboard shortcuts".into())
+    );
     // Nothing is listed twice in one place.
     let mut titles: Vec<_> = placed.iter().map(|(t, _, h, _)| (h, t)).collect();
     let total = titles.len();
@@ -518,60 +545,56 @@ fn shortcuts_overlay_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     let places: Vec<Place> = placed.iter().map(|(_, place, _, _)| *place).collect();
     assert!(places.is_sorted(), "{places:?}");
     assert_eq!(places.first(), Some(&Place::Anywhere));
-    let headers = overlay.read_with(vcx, |overlay, cx| {
-        use writer_ui::{PickerDelegate, PickerEntry};
-        (0..overlay.delegate.entry_count())
-            .filter_map(|ix| match overlay.delegate.entry(ix, cx) {
-                PickerEntry::Header(title) => Some(title.to_string()),
-                PickerEntry::Item(_) => None,
-            })
-            .collect::<Vec<_>>()
-    });
+    let headers = list.read_with(vcx, |list, _| list.headings());
     let mut unique = headers.clone();
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), headers.len(), "{headers:?}");
-    // The first line says that the menus offer the same; then the places.
+    // The first line says that the menus offer the same, the second what
+    // cannot be changed here; then the places.
     assert_eq!(
         headers.first().map(String::as_str),
         Some(writer_app::shortcuts::MENUS_NOTE)
     );
     assert_eq!(
         headers.get(1).map(String::as_str),
+        Some(writer_app::workspace::NOT_CHANGEABLE_NOTE)
+    );
+    assert_eq!(
+        headers.get(2).map(String::as_str),
         Some("Anywhere \u{b7} File")
     );
     // Nothing is left without a place.
     assert!(!places.contains(&Place::Elsewhere), "{placed:?}");
 
-    // Searchable (also by place), and enter runs the shortcut's command.
+    // Searchable (also by place and by key), and the command of a row
+    // can be run from it.
+    let first = |cx: &mut VisualTestContext| {
+        list.read_with(cx, |list, _| {
+            list.listed().into_iter().next().map(|(_, title)| title)
+        })
+    };
     vcx.simulate_input("library rename");
-    let first = overlay.read_with(vcx, |overlay, _| {
-        overlay
-            .delegate
-            .listed()
-            .first()
-            .map(|s| (s.title.to_string(), s.place))
-    });
-    assert_eq!(first, Some(("Rename".to_string(), Place::Library)));
+    assert_eq!(first(vcx).as_deref(), Some("Rename"));
     vcx.simulate_keystrokes("cmd-a");
     vcx.simulate_input("document end");
-    let first = overlay.read_with(vcx, |overlay, _| {
-        overlay
-            .delegate
-            .listed()
-            .first()
-            .map(|s| s.title.to_string())
-    });
-    assert_eq!(first.as_deref(), Some("Move to document end"));
-    vcx.simulate_keystrokes("enter");
+    assert_eq!(first(vcx).as_deref(), Some("Move to document end"));
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("⌘B");
+    assert_eq!(first(vcx).as_deref(), Some("Bold"));
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("select all");
+    assert_eq!(first(vcx).as_deref(), Some("Select all"));
+    vcx.simulate_keystrokes("cmd-r");
     vcx.run_until_parked();
     assert!(!has_modal(&workspace, vcx));
     assert!(editor_focused(&workspace, vcx));
-    let (head, end) = workspace.read_with(vcx, |w, cx| {
+    let (selection, end) = workspace.read_with(vcx, |w, cx| {
         let editor = w.editor().read(cx);
-        (editor.selection().head, editor.document().end())
+        (editor.selection(), editor.document().end())
     });
-    assert_eq!(head, end);
+    assert!(!selection.is_collapsed());
+    assert_eq!(selection.head.max(selection.anchor), end);
     let _ = (Movement::DocEnd, LibraryItem::Document);
 }
 

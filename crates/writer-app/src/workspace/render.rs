@@ -767,7 +767,6 @@ impl Workspace {
         let standard = || {
             query::<crate::palette::PaletteDelegate>(layer, cx)
                 .or_else(|| query::<crate::quick_open::QuickOpenDelegate>(layer, cx))
-                .or_else(|| query::<crate::shortcuts::ShortcutsDelegate>(layer, cx))
                 .or_else(|| query::<crate::export::ExportDelegate>(layer, cx))
                 .map(|typed| (super::MODAL_WIDTH, typed))
         };
@@ -968,6 +967,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_quick_open))
             .on_action(cx.listener(Self::on_search_library))
             .on_action(cx.listener(Self::on_show_shortcuts))
+            .on_action(cx.listener(Self::on_import_shortcuts))
+            .on_action(cx.listener(Self::on_export_shortcuts))
+            .on_action(cx.listener(Self::on_reset_all_shortcuts))
+            .on_action(cx.listener(Self::on_undo_shortcuts_change))
             .on_action(cx.listener(Self::on_export))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_new_document))

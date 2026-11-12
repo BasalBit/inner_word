@@ -152,6 +152,14 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Agents…", ShowAgents),
                 MenuItem::separator(),
+                // Every key of the app, to look up and to change. "Reset
+                // All" is here for the day a change went wrong: the menu
+                // bar works whatever the keys do.
+                MenuItem::action("Keyboard Shortcuts…", ShowShortcuts),
+                MenuItem::action("Import Keyboard Shortcuts…", ImportShortcuts),
+                MenuItem::action("Export Keyboard Shortcuts…", ExportShortcuts),
+                MenuItem::action("Reset All Keyboard Shortcuts…", ResetAllShortcuts),
+                MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
                 MenuItem::action("Hide The Writer", Hide),
@@ -331,7 +339,7 @@ fn base_menus() -> Vec<Menu> {
         Menu {
             name: "Help".into(),
             items: vec![
-                MenuItem::action("Keyboard Shortcuts", ShowShortcuts),
+                MenuItem::action("Keyboard Shortcuts…", ShowShortcuts),
                 MenuItem::action("Welcome Document", OpenWelcomeDocument),
             ],
         },
@@ -381,7 +389,7 @@ pub fn menu_key_bindings(keymap: &Keymap) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     let mut seen: Vec<Box<dyn Action>> = Vec::new();
     for (_, action) in menu_actions(&app_menus()) {
-        // "Link…" is in two menus.
+        // "Link…" and "Keyboard Shortcuts…" are in two menus.
         if seen.iter().any(|seen| seen.partial_eq(action.as_ref())) {
             continue;
         }

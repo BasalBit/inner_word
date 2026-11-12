@@ -636,7 +636,7 @@ impl Workspace {
 
     /// Where the save panel starts: the directory of the last export, else
     /// `~/Documents`, else the home directory.
-    fn export_directory(&self, cx: &App) -> PathBuf {
+    pub(crate) fn export_directory(&self, cx: &App) -> PathBuf {
         let stored: String = self
             .library
             .read(cx)

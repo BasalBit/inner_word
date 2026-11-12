@@ -1,18 +1,26 @@
-//! The keyboard shortcuts overlay (`cmd-/`).
+//! The rows of "Keyboard shortcuts" (`cmd-/`): every command in every
+//! place it has a key, or can be given one.
 //!
 //! Generated, not written: the rows are the registered command descriptors
-//! that have a binding in GPUI's keymap, followed by the keys that have no
-//! descriptor (caret movement, selection and deletion in the text; moving
-//! around the find bar, the comment list, the library, the pickers and the
-//! settings), named after their actions. The key shown is whatever the
-//! keymap says right now.
+//! followed by the keys that have no descriptor (caret movement, selection
+//! and deletion in the text; moving around the find bar, the comment list,
+//! the library, the pickers and the settings), named after their actions.
+//! The keys shown are whatever the keymap says right now: the rows are made
+//! from what [`crate::keymap`] has installed, the defaults with the user's
+//! changes.
 //!
 //! A key only works where its binding applies, so the list is grouped by
 //! where the keyboard has to be ([`Place`], read from the key context of
 //! the binding): "Anywhere" first, then "In the text", then the panels and
 //! overlays. Within a place the commands keep their categories; a heading
-//! reads "In the text · Format". The list is searchable, and enter runs the
-//! selected command.
+//! reads "In the text · Format". A command with keys in several places
+//! (undo, in the text and in the comment list) has a row in each, because
+//! each can be given another key. A command without a key has a row too,
+//! in the place a key for it would apply.
+//!
+//! A row is what the user changes ([`Shortcut::targets`]: the command in
+//! every key context of the row's place; a change of the row is made to
+//! all of them, see `workspace/shortcuts.rs`).
 //!
 //! Two things the keymap cannot tell are added: the insert menu, which is
 //! opened by typing `/` and not by a binding ([`TYPED_TRIGGERS`]), and a
@@ -21,18 +29,16 @@
 
 use std::collections::HashSet;
 
-use gpui::{Action, App, Context, SharedString, WeakEntity, Window};
-use writer_ui::{KeyHint, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::fuzzy_match};
+use gpui::{Action, App, SharedString};
+use writer_keymap::{KeySequence, Target, TargetKey, TargetKeys};
+use writer_ui::KeyHint;
 
-use crate::{commands, workspace::Workspace};
-
-/// The shortcuts overlay as a modal view.
-pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
+use crate::commands;
 
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 11] = [
+const KEY_GROUPS: [(&str, &str); 18] = [
     ("editor", "Moving and selecting"),
     ("editor_tools", ""),
     ("comments", ""),
@@ -48,6 +54,15 @@ const KEY_GROUPS: [(&str, &str); 11] = [
     // `ctrl-enter` (and `shift-f10`) in the library, the comment list and a
     // text field.
     ("context_menu", ""),
+    // The keys of a text field, and of the small parts of a dialog.
+    ("text_field", ""),
+    ("modal", ""),
+    ("confirm_dialog", ""),
+    ("button", ""),
+    ("segmented", ""),
+    ("focus", ""),
+    // The keys of this list itself.
+    ("keymap_view", ""),
 ];
 
 /// The action namespaces of the assistant's chats. Their keys are left out
@@ -64,12 +79,9 @@ const TYPED_TRIGGERS: [(&str, &str, &str); 1] = [(
     "at the start of a line or after a space",
 )];
 
-/// Actions whose row names every key they are bound to in their place, not
-/// only the preferred one ("Context menu (also ⇧F10)"): the context menu
-/// opens on `ctrl-enter` and, should the system keep that key, on
-/// `shift-f10`. (Other actions have second bindings that are the same key
-/// spelled another way, `cmd-shift-7` and `cmd-&`; those are not named.)
-const EVERY_KEY: [&str; 2] = ["editor::OpenContextMenu", "context_menu::OpenContextMenu"];
+/// What the row of a typed trigger says about why its key stays.
+pub const TYPED_TRIGGER_NOTE: &str =
+    "This is typed into the text, not a keyboard shortcut. It cannot be changed.";
 
 /// What the overlay says above the list: the keys are one way, the menus
 /// are the other.
@@ -103,6 +115,8 @@ pub enum Place {
     VersionHistory,
     /// In the Agents panel.
     Agents,
+    /// In the list of keyboard shortcuts itself.
+    Shortcuts,
     /// In one of the assistant's chats: the quick chat at the selection,
     /// the side chat beside the text.
     AssistantChat,
@@ -130,6 +144,7 @@ impl Place {
             Place::Settings => "In settings",
             Place::VersionHistory => "In the version history",
             Place::Agents => "In the agents panel",
+            Place::Shortcuts => "In keyboard shortcuts",
             Place::AssistantChat => "In the assistant's chats",
             Place::Dialog => "In a dialog",
             Place::TextField => "In a text field",
@@ -144,7 +159,11 @@ impl Place {
             return Place::Anywhere;
         };
         let has = |name: &str| predicate.contains(name);
-        if has("FindBar") {
+        if has("Keymap") {
+            // The list of keyboard shortcuts: its query field, the
+            // question it asks about a key.
+            Place::Shortcuts
+        } else if has("FindBar") {
             Place::FindBar
         } else if has("LinkPopover") {
             Place::LinkField
@@ -172,6 +191,7 @@ impl Place {
         } else if has("Picker") {
             Place::List
         } else if [
+            "ModalLayer",
             "ConfirmDialog",
             "Button",
             "Toggle",
@@ -213,7 +233,7 @@ impl Place {
     }
 }
 
-/// One shortcut.
+/// One row: a command in a place, with its keys.
 pub struct Shortcut {
     /// What it does.
     pub title: SharedString,
@@ -223,79 +243,178 @@ pub struct Shortcut {
     pub place: Place,
     /// The heading it is listed under: place and category.
     pub heading: SharedString,
-    /// The keys, as shown.
+    /// The key the app shows for it (in hints and in the menu bar), as
+    /// shown; empty for a command without a key.
     pub keys: String,
+    /// Every key it has, in the order the row shows them, with where each
+    /// came from (a default, the user's in the place of a default, one the
+    /// user added).
+    pub all_keys: Vec<TargetKey>,
+    /// Its keys by default.
+    pub default_keys: Vec<KeySequence>,
+    /// Whether its keys are not the defaults.
+    pub changed: bool,
+    /// The command in the key context the row stands for: what the list
+    /// shows the keys of and checks a new key against. `None` for a row
+    /// that is not a binding ([`Shortcut::fixed`]).
+    pub target: Option<Target>,
+    /// The command in every key context of this place that has the same
+    /// keys ([`Shortcut::target`] among them): a change of the row is made
+    /// to all of them. The find bar binds "case sensitive" for the bar and
+    /// for the field in it; to the user that is one key.
+    pub targets: Vec<Target>,
+    /// For a row whose key is not a binding and cannot be changed: why.
+    pub fixed: Option<SharedString>,
+    /// What such a row shows as its key (the `/` of the insert menu).
+    pub typed: Option<KeySequence>,
+    /// Whether the row is a command of the palette (the others are keys
+    /// named after their actions, which only mean something where they are
+    /// pressed).
+    pub described: bool,
     action: Box<dyn Action>,
-    hint: KeyHint,
+    hint: Option<KeyHint>,
 }
 
-/// The binding to list for `action`, as a key hint and the place it works
-/// in. An action can be bound in several places (undo in the text and in
-/// the comment list); it is listed once, in the widest of them (the order
-/// of [`Place`]), and among the bindings there with the one the keymap
-/// prefers, which is the one added last.
-fn preferred_binding(action: &dyn Action, cx: &App) -> Option<(KeyHint, Place)> {
-    let keymap = cx.key_bindings();
-    let keymap = keymap.borrow();
-    let mut best: Option<(&gpui::KeyBinding, Place)> = None;
-    for binding in keymap.bindings_for_action(action) {
-        let place = binding_place(binding);
-        if best.is_none_or(|(_, best_place)| place <= best_place) {
-            best = Some((binding, place));
-        }
+impl Shortcut {
+    /// The command's action, for whoever runs it from its row.
+    pub fn action(&self) -> Box<dyn Action> {
+        self.action.boxed_clone()
     }
-    best.map(|(binding, place)| (KeyHint::from_binding(binding), place))
+
+    /// The name of the command's action (`editor::ToggleBold`).
+    pub fn action_name(&self) -> &'static str {
+        self.action.name()
+    }
+
+    /// The key the app shows for it, as a hint.
+    pub fn hint(&self) -> Option<&KeyHint> {
+        self.hint.as_ref()
+    }
 }
 
-/// `title` with the other keys `action` is bound to in `place`, for the
-/// actions of [`EVERY_KEY`]: every binding there whose key is not
-/// `preferred`, once each, in the order the keymap has them, as the keymap
-/// spells them.
-fn with_second_keys(
-    title: SharedString,
+/// A key of the model as a hint.
+pub fn hint_of(keys: &KeySequence) -> Option<KeyHint> {
+    KeyHint::parse(&keys.to_string())
+}
+
+/// A key of the model as the app shows keys ("⇧⌘7").
+pub fn key_text(keys: &KeySequence) -> String {
+    hint_of(keys).map(|hint| hint.text()).unwrap_or_default()
+}
+
+/// The place a command in a key context is listed under.
+pub fn place_of(target: &Target) -> Place {
+    Place::of_predicate(target.context.text())
+}
+
+/// What tells two rows of one command in one place apart, by something
+/// in the key context of the second: the library moves with the arrows
+/// wherever the keyboard is in it and with letters only while nothing is
+/// typed there; the list of shortcuts moves through its rows and through
+/// the lines of a question it asks.
+const DISTINCTIONS: [(&str, &str); 2] = [
+    ("!TextField", " (outside a text field)"),
+    ("KeymapChoices", " (in a question)"),
+];
+
+fn distinction(target: &Target) -> Option<&'static str> {
+    let context = target.context.text()?;
+    DISTINCTIONS
+        .iter()
+        .find(|(mark, _)| context.contains(mark))
+        .map(|(_, words)| *words)
+}
+
+fn same_keys(a: &TargetKeys, b: &TargetKeys) -> bool {
+    let set = |keys: &[KeySequence]| {
+        let mut keys: Vec<String> = keys.iter().map(|key| key.to_string()).collect();
+        keys.sort();
+        keys
+    };
+    let now = |target: &TargetKeys| {
+        set(&target
+            .keys
+            .iter()
+            .map(|key| key.keys.clone())
+            .collect::<Vec<_>>())
+    };
+    now(a) == now(b) && set(&a.default_keys) == set(&b.default_keys)
+}
+
+/// The rows of one command: one for each place it has targets in, the
+/// widest place first. Targets of one place that have the same keys are
+/// one row (the same key bound in the bar and in the field of the bar is
+/// one key "in the find bar"); targets with keys of their own are rows of
+/// their own.
+fn rows_of(
+    title: &SharedString,
+    category: &SharedString,
     action: &dyn Action,
-    place: Place,
-    preferred: &KeyHint,
+    described: bool,
+    targets: &[&TargetKeys],
     cx: &App,
-) -> SharedString {
-    if !EVERY_KEY.contains(&action.name()) {
-        return title;
-    }
-    let keymap = cx.key_bindings();
-    let keymap = keymap.borrow();
-    let mut others: Vec<String> = Vec::new();
-    for binding in keymap.bindings_for_action(action) {
-        if binding_place(binding) != place {
-            continue;
+) -> Vec<Shortcut> {
+    let places = crate::keymap::model(cx).map(|model| model.places());
+    // Where the keyboard itself can be, and text is typed: that is where
+    // a new key is checked hardest, and where it has to win. (A context
+    // that only ever has the keyboard in something inside it, such as the
+    // find bar around its field, would say that a key of the window beats
+    // it, which is true of the bar and not of the field.)
+    let stands_for_the_row = |target: &Target| {
+        places.is_some_and(|places| {
+            places.is_typing(&target.context)
+                && places
+                    .relation(&target.context, &writer_keymap::Context::anywhere())
+                    .rank
+                    == writer_keymap::Rank::LaterWins
+        })
+    };
+    let mut places: Vec<Place> = targets.iter().map(|keys| place_of(&keys.target)).collect();
+    places.sort();
+    places.dedup();
+    let mut rows = Vec::new();
+    for place in places {
+        let mut groups: Vec<Vec<&TargetKeys>> = Vec::new();
+        for target in targets
+            .iter()
+            .filter(|keys| place_of(&keys.target) == place)
+        {
+            match groups.iter_mut().find(|group| same_keys(group[0], target)) {
+                Some(group) => group.push(target),
+                None => groups.push(vec![target]),
+            }
         }
-        let text = KeyHint::from_binding(binding).text();
-        if text != preferred.text() && !others.contains(&text) {
-            others.push(text);
+        let several = groups.len() > 1;
+        for group in groups {
+            let state = group
+                .iter()
+                .find(|keys| stands_for_the_row(&keys.target))
+                .unwrap_or(&group[0]);
+            let title: SharedString = match distinction(&state.target).filter(|_| several) {
+                Some(words) => format!("{title}{words}").into(),
+                None => title.clone(),
+            };
+            let hint = state.shown.as_ref().and_then(hint_of);
+            rows.push(Shortcut {
+                title,
+                category: category.clone(),
+                place,
+                heading: place.heading(category).into(),
+                keys: hint.as_ref().map(KeyHint::text).unwrap_or_default(),
+                all_keys: state.keys.clone(),
+                default_keys: state.default_keys.clone(),
+                changed: group.iter().any(|keys| keys.changed),
+                target: Some(state.target.clone()),
+                targets: group.iter().map(|keys| keys.target.clone()).collect(),
+                fixed: None,
+                typed: None,
+                described,
+                action: action.boxed_clone(),
+                hint,
+            });
         }
     }
-    if others.is_empty() {
-        title
-    } else {
-        format!("{title} (also {})", others.join(", ")).into()
-    }
-}
-
-fn binding_place(binding: &gpui::KeyBinding) -> Place {
-    let predicate = binding.predicate().map(|predicate| predicate.to_string());
-    Place::of_predicate(predicate.as_deref())
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum Row {
-    Header(SharedString),
-    Shortcut { index: usize, positions: Vec<usize> },
-}
-
-/// The picker delegate behind the shortcuts overlay.
-pub struct ShortcutsDelegate {
-    workspace: WeakEntity<Workspace>,
-    shortcuts: Vec<Shortcut>,
-    rows: Vec<Row>,
+    rows
 }
 
 /// `MoveWordLeft` as `Move word left`.
@@ -327,34 +446,43 @@ fn plain_words(title: &str) -> String {
     title.replace(" thread", " comment")
 }
 
-/// Every shortcut, in the order the overlay lists them: by place, within a
-/// place by heading (the commands' categories in registration order, then
-/// the undescribed keys of the [`KEY_GROUPS`] namespaces).
+/// The title of a command that has no descriptor, from its action's name.
+pub fn title_of_action(name: &str) -> String {
+    plain_words(&humanize_action_name(name))
+}
+
+/// Every row, in the order the list has them: by place, within a place by
+/// heading (the commands' categories in registration order, then the
+/// undescribed keys of the [`KEY_GROUPS`] namespaces).
 pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
+    let Some(effective) = crate::keymap::effective(cx) else {
+        return Vec::new();
+    };
+    let targets_of = |name: &str| -> Vec<&TargetKeys> {
+        effective
+            .targets()
+            .iter()
+            .filter(|keys| keys.target.command.action == name)
+            .collect()
+    };
     let mut shortcuts = Vec::new();
     let mut described: HashSet<&'static str> = HashSet::new();
     let all = commands::all(cx);
     for category in commands::categories(&all) {
         for command in all.iter().filter(|command| command.category == category) {
-            described.insert(command.action_name());
-            if let Some((hint, place)) = preferred_binding(command.action_ref(), cx) {
-                let title = with_second_keys(
-                    command.title.clone(),
-                    command.action_ref(),
-                    place,
-                    &hint,
-                    cx,
-                );
-                shortcuts.push(Shortcut {
-                    title,
-                    category: category.clone(),
-                    place,
-                    heading: place.heading(&category).into(),
-                    keys: hint.text(),
-                    action: command.action(),
-                    hint,
-                });
-            } else if let Some((_, typed, whereabouts)) = TYPED_TRIGGERS
+            if !described.insert(command.action_name()) {
+                continue;
+            }
+            let targets = targets_of(command.action_name());
+            shortcuts.extend(rows_of(
+                &command.title,
+                &category,
+                command.action_ref(),
+                true,
+                &targets,
+                cx,
+            ));
+            if let Some((_, typed, whereabouts)) = TYPED_TRIGGERS
                 .iter()
                 .find(|(action, _, _)| *action == command.action_name())
                 && let Some(hint) = KeyHint::parse(typed)
@@ -366,54 +494,61 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
                     place,
                     heading: place.heading(&category).into(),
                     keys: hint.text(),
+                    all_keys: Vec::new(),
+                    default_keys: Vec::new(),
+                    changed: false,
+                    target: None,
+                    targets: Vec::new(),
+                    fixed: Some(TYPED_TRIGGER_NOTE.into()),
+                    typed: KeySequence::parse(typed).ok(),
+                    described: true,
                     action: command.action(),
-                    hint,
+                    hint: Some(hint),
                 });
             }
         }
     }
+    // The commands of a hidden category are not rows; nor are their keys
+    // listed below under the names of their actions.
+    if let Some(registry) = cx.try_global::<commands::CommandRegistry>() {
+        for command in registry.commands() {
+            described.insert(command.action_name());
+        }
+    }
 
     // Keys without a descriptor, straight from the keymap, one row per
-    // action, in the order the actions were first bound.
-    let keymap = cx.key_bindings();
-    let keymap = keymap.borrow();
-    let mut undescribed: Vec<Box<dyn Action>> = Vec::new();
+    // action and place, in the order the actions were first bound.
     let assistant_hidden = commands::category_hidden(crate::actions::CATEGORY_ASSISTANT, cx);
     for (namespace, category) in KEY_GROUPS {
         if assistant_hidden && ASSISTANT_NAMESPACES.contains(&namespace) {
             continue;
         }
         let prefix = format!("{namespace}::");
-        let mut seen: HashSet<&'static str> = HashSet::new();
-        for binding in keymap.bindings() {
-            let name = binding.action().name();
-            if name.starts_with(&prefix) && !described.contains(name) && seen.insert(name) {
-                undescribed.push(binding.action().boxed_clone());
+        let mut seen: HashSet<&str> = HashSet::new();
+        for keys in effective.targets() {
+            let name = keys.target.command.action.as_str();
+            if !name.starts_with(&prefix) || described.contains(name) || !seen.insert(name) {
+                continue;
             }
-        }
-        for action in undescribed.drain(..) {
-            let Some((hint, place)) = preferred_binding(action.as_ref(), cx) else {
+            let Some(action) = crate::keymap::action_named(name, cx) else {
                 continue;
             };
-            let title = with_second_keys(
-                plain_words(&humanize_action_name(action.name())).into(),
+            shortcuts.extend(rows_of(
+                &title_of_action(name).into(),
+                &category.into(),
                 action.as_ref(),
-                place,
-                &hint,
+                false,
+                &targets_of(name),
                 cx,
-            );
-            shortcuts.push(Shortcut {
-                title,
-                category: category.into(),
-                place,
-                heading: place.heading(category).into(),
-                keys: hint.text(),
-                action,
-                hint,
-            });
+            ));
         }
     }
-    drop(keymap);
+
+    // Without the assistant its chats are not a place: the context menu
+    // that opens in an answer is not listed either.
+    if assistant_hidden {
+        shortcuts.retain(|shortcut| shortcut.place != Place::AssistantChat);
+    }
 
     // By place, then by heading in the order the headings first appeared;
     // rows keep their order within a heading.
@@ -432,121 +567,4 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     };
     shortcuts.sort_by_key(rank);
     shortcuts
-}
-
-impl ShortcutsDelegate {
-    /// Collects the shortcuts from the registry and the keymap.
-    pub fn new(workspace: WeakEntity<Workspace>, cx: &App) -> Self {
-        Self {
-            workspace,
-            shortcuts: collect_shortcuts(cx),
-            rows: Vec::new(),
-        }
-    }
-
-    /// The listed shortcuts, in order (headers excluded).
-    pub fn listed(&self) -> Vec<&Shortcut> {
-        self.rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Shortcut { index, .. } => Some(&self.shortcuts[*index]),
-                Row::Header(_) => None,
-            })
-            .collect()
-    }
-}
-
-impl PickerDelegate for ShortcutsDelegate {
-    fn update_matches(&mut self, query: &str, _: &mut Window, _: &mut Context<Picker<Self>>) {
-        self.rows.clear();
-        if query.trim().is_empty() {
-            self.rows.push(Row::Header(MENUS_NOTE.into()));
-            let mut heading: Option<&SharedString> = None;
-            for (index, shortcut) in self.shortcuts.iter().enumerate() {
-                if heading != Some(&shortcut.heading) {
-                    heading = Some(&shortcut.heading);
-                    self.rows.push(Row::Header(shortcut.heading.clone()));
-                }
-                self.rows.push(Row::Shortcut {
-                    index,
-                    positions: Vec::new(),
-                });
-            }
-            return;
-        }
-        let mut matches: Vec<(i32, usize, Vec<usize>)> = self
-            .shortcuts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, shortcut)| {
-                if let Some(found) = fuzzy_match(query, &shortcut.title) {
-                    return Some((found.score + 10_000, index, found.positions));
-                }
-                let haystack = format!(
-                    "{} {} {}",
-                    shortcut.heading, shortcut.category, shortcut.title
-                );
-                crate::palette::words_match(query, &haystack).then(|| (0, index, Vec::new()))
-            })
-            .collect();
-        matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        self.rows = matches
-            .into_iter()
-            .map(|(_, index, positions)| Row::Shortcut { index, positions })
-            .collect();
-    }
-
-    fn entry_count(&self) -> usize {
-        self.rows.len()
-    }
-
-    fn entry(&self, ix: usize, _: &App) -> PickerEntry {
-        match &self.rows[ix] {
-            Row::Header(title) => PickerEntry::Header(title.clone()),
-            Row::Shortcut { index, positions } => {
-                let shortcut = &self.shortcuts[*index];
-                let item = PickerItem::new(shortcut.title.clone())
-                    .positions(positions.clone())
-                    .key_hint(shortcut.hint.clone());
-                // Headers already say where and what while browsing.
-                if matches!(self.rows.first(), Some(Row::Header(_))) {
-                    item.into()
-                } else {
-                    item.detail(shortcut.heading.clone()).into()
-                }
-            }
-        }
-    }
-
-    fn is_selectable(&self, ix: usize, _: &App) -> bool {
-        matches!(self.rows.get(ix), Some(Row::Shortcut { .. }))
-    }
-
-    fn confirm(
-        &mut self,
-        ix: usize,
-        _secondary: bool,
-        window: &mut Window,
-        cx: &mut Context<Picker<Self>>,
-    ) -> bool {
-        let Some(Row::Shortcut { index, .. }) = self.rows.get(ix) else {
-            return false;
-        };
-        let action = self.shortcuts[*index].action.boxed_clone();
-        let workspace = self.workspace.clone();
-        window.defer(cx, move |window, cx| {
-            workspace
-                .update(cx, |workspace, cx| workspace.run_action(action, window, cx))
-                .ok();
-        });
-        false
-    }
-
-    fn placeholder(&self) -> SharedString {
-        "Search keyboard shortcuts".into()
-    }
-
-    fn empty_text(&self, _query: &str) -> SharedString {
-        "No shortcuts match".into()
-    }
 }

@@ -6906,6 +6906,8 @@ dependencies = [
  "writer-editor",
  "writer-editor-tools",
  "writer-export",
+ "writer-keymap",
+ "writer-keymap-ui",
  "writer-library",
  "writer-spell",
  "writer-ui",

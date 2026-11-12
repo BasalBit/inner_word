@@ -226,6 +226,35 @@ impl Store {
         Ok(meta)
     }
 
+    /// Gives a snapshot that is there already a label, in place of the one it has. An
+    /// empty label takes the label away. Fails with [`StoreError::NotFound`] when there
+    /// is no such snapshot.
+    ///
+    /// For a snapshot that turns out to be what a labelled one would have been: the app
+    /// took it a moment ago, and an agent is about to change the text it holds.
+    pub fn label_snapshot(&mut self, id: SnapshotId, label: &str) -> Result<()> {
+        let now = self.now();
+        let tx = self.conn.transaction()?;
+        let meta = tx
+            .query_row(
+                &format!("SELECT {SNAPSHOT_COLS} FROM snapshots WHERE id = ?1"),
+                [id],
+                snapshot_meta_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound {
+                kind: ItemKind::Snapshot,
+                id: id.0,
+            })?;
+        if label.trim().is_empty() {
+            tx.execute("DELETE FROM settings WHERE key = ?1", [label_key(meta.id)])?;
+        } else {
+            write_label(&tx, &meta, label.trim(), now)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// The label of a snapshot, `None` when it has none (or does not exist).
     pub fn snapshot_label(&self, id: SnapshotId) -> Result<Option<String>> {
         let row: Option<(i64, String)> = self

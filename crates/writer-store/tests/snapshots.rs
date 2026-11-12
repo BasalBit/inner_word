@@ -157,6 +157,31 @@ fn labels_say_why_a_snapshot_was_taken() {
     let bare = store.create_labeled_snapshot(d.id, "  ").unwrap();
     assert_eq!(store.snapshot_label(bare.id).unwrap(), None);
     assert_eq!(store.snapshot_label(SnapshotId(999)).unwrap(), None);
+
+    // A snapshot that is there already is given a label afterwards, another one in its
+    // place, or none again; nothing else about it changes.
+    store
+        .label_snapshot(plain.id, " Before an edit by Codex ")
+        .unwrap();
+    assert_eq!(
+        store.snapshot_label(plain.id).unwrap().as_deref(),
+        Some("Before an edit by Codex")
+    );
+    assert_eq!(store.snapshot(plain.id).unwrap().meta, plain);
+    assert_eq!(store.snapshot_labels(d.id).unwrap().len(), 2);
+    store.label_snapshot(plain.id, "Before a rewrite").unwrap();
+    assert_eq!(
+        store.snapshot_labels(d.id).unwrap()[&plain.id],
+        "Before a rewrite"
+    );
+    store.label_snapshot(plain.id, "").unwrap();
+    assert_eq!(store.snapshot_label(plain.id).unwrap(), None);
+    assert_eq!(store.snapshots(d.id).unwrap().len(), 3);
+    assert!(matches!(
+        store.label_snapshot(SnapshotId(999), "x"),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert_eq!(store.snapshot_label(SnapshotId(999)).unwrap(), None);
 }
 
 #[test]

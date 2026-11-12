@@ -90,7 +90,8 @@ assistant: hold its events back and let them through, for a capture of an answer
 written), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
-of shortcuts shows while it is open, status bar, the Agents panel while it is
+of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
+is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), the Agents panel while it is
 open, and in a run with an engine the assistant: whether it is shown, the quick chat while
 it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
@@ -476,6 +477,16 @@ typed, `20mm`, `0.75in`), "Rename document", "Reveal in library" and "Welcome do
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
+The two font rows of the settings ("Font" under "New documents" and under "This document")
+offer every font family that can be chosen in a document: the list the font picker of the
+text has (`writer_editor_tools::FontList` is the one source of both: the installed writing
+fonts, the recently used families, every family by name, without the hidden system
+families). `left` / `right` step through the families by name; `enter`, `space` or a click
+on the row opens the searchable list (`font_choice::FontChoicePicker`, each family with a
+sample in its own face), which takes the place of the settings as the list of spelling
+languages does and comes back to the row, chosen or not. A font that is set but not on this
+Mac (a library from another one) stays set until another is chosen: the row says so, and it
+is the first row of the list, marked "Not on this Mac".
 
 Spelling: misspelled words get a wavy red underline (not the word being typed, not code).
 A right-click on a marked word, or `ctrl-enter` / `shift-f10` with the caret in it, starts

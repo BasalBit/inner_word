@@ -16,7 +16,7 @@
 //! | step                  | effect                                                       |
 //! |-----------------------|--------------------------------------------------------------|
 //! | `wait:<ms>`           | sleep                                                        |
-//! | `keys:<keystrokes>`   | GPUI keystrokes separated by spaces: `keys:cmd-shift-p escape` |
+//! | `keys:<keystrokes>`   | GPUI keystrokes separated by spaces: `keys:cmd-shift-p escape`; the key `;` is written `\;` (`keys:cmd-\;`) |
 //! | `type:<text>`         | types each character (escapes: `\;` `\n` `\t` `\s` `\\`)     |
 //! | `action:<name>`       | dispatches a registered action by name: `action:app::Quit`   |
 //! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
@@ -234,9 +234,11 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             if arg.is_empty() {
                 bail!("expected keystrokes");
             }
+            // A key that is the step separator is written escaped:
+            // `keys:cmd-\;` is the next misspelling.
             let keys = arg
                 .split_whitespace()
-                .map(|key| Keystroke::parse(key).map_err(|err| anyhow!("{err}")))
+                .map(|key| Keystroke::parse(&unescape(key)).map_err(|err| anyhow!("{err}")))
                 .collect::<Result<Vec<_>>>()?;
             Step::Keys(keys)
         }

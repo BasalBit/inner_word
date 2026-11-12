@@ -45,6 +45,19 @@ mod automation {
                 Step::Action("app::Quit".into()),
             ]
         );
+        // A key that is the separator of steps is escaped.
+        assert_eq!(
+            Script::parse("keys:cmd-\\; cmd-shift-\\;; quit")
+                .unwrap()
+                .steps,
+            vec![
+                Step::Keys(vec![
+                    Keystroke::parse("cmd-;").unwrap(),
+                    Keystroke::parse("cmd-shift-;").unwrap()
+                ]),
+                Step::Quit,
+            ]
+        );
     }
 
     #[test]

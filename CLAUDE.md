@@ -55,7 +55,7 @@ THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/som
 ./target/debug/the-writer
 ```
 
-Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `action:<name>`, `menu:<name>` (opens
+Steps: `wait:<ms>`, `keys:<keystrokes>` (the key `;` is written `\;`: `keys:cmd-\;`), `type:<text>`, `action:<name>`, `menu:<name>` (opens
 a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`),
 `choose:<label>` (chooses that item of the open context menu, as a click would),
 `bar` (shows the format bar over the selection, as a selection made with the mouse does;

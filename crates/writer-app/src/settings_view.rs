@@ -1432,6 +1432,31 @@ impl SettingsView {
         Self::language_target(row).is_some() || Self::font_target(row).is_some()
     }
 
+    /// Whether the keyboard is on a row that `wanted` holds for.
+    fn on_row(&self, wanted: &dyn Fn(SettingRow) -> bool, window: &Window) -> bool {
+        self.handles
+            .iter()
+            .any(|(row, handle)| wanted(*row) && handle.is_focused(window))
+    }
+
+    /// What the footer says the keys of a row's own action do on the row
+    /// the keyboard is on: the language rows and the font rows open their
+    /// list, the row of the keyboard shortcuts opens them, every other row
+    /// switches or steps. The keys are every key the keymap has for it, in
+    /// the words the row's own sentence uses ("↩ or Space opens the whole
+    /// list."), so the row and the footer under it name the same keys.
+    /// `None` when the action has no key.
+    pub fn activate_hint(&self, window: &Window, cx: &App) -> Option<(String, &'static str)> {
+        let what = if self.on_row(&Self::opens_list, window) {
+            "Whole list"
+        } else if self.on_row(&|row| row == SettingRow::KeyboardShortcuts, window) {
+            "Open"
+        } else {
+            "Switch"
+        };
+        crate::keymap::keys_sentence_in(&Activate, ROW_KEY_CONTEXT, cx).map(|keys| (keys, what))
+    }
+
     fn move_focus(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let rows = self.rows(cx);
         let count = rows.len() as isize;
@@ -1745,23 +1770,9 @@ impl Render for SettingsView {
         let overlay_shadow = theme.shadow_overlay();
         // Leave room for the modal's top offset and a margin below.
         let list_height = (f32::from(window.viewport_size().height) * 0.80 - 150.).max(160.);
-        // What space does on the row the keyboard is on: the language rows
-        // and the font rows open their list, every other row switches or
-        // steps.
-        let on_row = |wanted: &dyn Fn(SettingRow) -> bool| {
-            self.handles
-                .iter()
-                .any(|(row, handle)| wanted(*row) && handle.is_focused(window))
-        };
         // The row that opens the keyboard shortcuts has nothing to step.
-        let opens = on_row(&|row| row == SettingRow::KeyboardShortcuts);
-        let space_hint = if on_row(&Self::opens_list) {
-            "Whole list"
-        } else if opens {
-            "Open"
-        } else {
-            "Switch"
-        };
+        let opens = self.on_row(&|row| row == SettingRow::KeyboardShortcuts, window);
+        let activate_hint = self.activate_hint(window, cx);
 
         // A scroll position asked for before the list was ever drawn is
         // worked out against a list at the top left of the window (GPUI
@@ -1933,7 +1944,10 @@ impl Render for SettingsView {
                     .when(!opens, |el| {
                         el.children(hint(&[&Decrease, &Increase], ROW_KEY_CONTEXT, "Change"))
                     })
-                    .children(hint(&[&Activate], ROW_KEY_CONTEXT, space_hint))
+                    .children(
+                        activate_hint
+                            .map(|(keys, what)| crate::controls::footer_keys(keys, what, cx)),
+                    )
                     .children(crate::controls::close_hint(cx)),
             )
     }

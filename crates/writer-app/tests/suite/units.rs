@@ -7,6 +7,27 @@ mod automation {
     use writer_app::automation::*;
     use writer_ui::ThemeMode;
 
+    /// The step `shortcuts:import:<path>` logs what it did: 0.6.0 logged
+    /// "shortcuts: read <path>" for a file that does not exist.
+    #[test]
+    fn the_import_step_says_whether_a_file_was_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("keys.json");
+        std::fs::write(&file, "{}").unwrap();
+        let there = |path: &std::path::Path| std::fs::metadata(path).map(|found| found.is_file());
+        assert_eq!(
+            import_log(&file, there(&file)),
+            format!("shortcuts: read {}", file.display())
+        );
+        let missing = dir.path().join("none.json");
+        let said = import_log(&missing, there(&missing));
+        assert!(!said.contains("shortcuts: read"), "{said}");
+        assert!(said.starts_with("shortcuts: could not read "), "{said}");
+        assert!(said.ends_with("nothing was read"), "{said}");
+        let said = import_log(dir.path(), there(dir.path()));
+        assert!(said.ends_with("is not a file, nothing was read"), "{said}");
+    }
+
     #[test]
     fn parses_example_script() {
         let script = Script::parse(

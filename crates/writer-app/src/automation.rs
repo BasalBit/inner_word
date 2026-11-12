@@ -678,10 +678,14 @@ async fn execute(
             match step {
                 ShortcutsStep::Import(path) => {
                     let path = absolute(path);
+                    // What the step did, and not what it was asked for: a
+                    // file that is not there was not read (the app says so
+                    // in a toast, as it does for whoever chose the file).
+                    let there = std::fs::metadata(&path).map(|found| found.is_file());
                     workspace.update(cx, |workspace, window, cx| {
                         workspace.import_shortcuts_file(&path, window, cx)
                     })?;
-                    eprintln!("[automation] shortcuts: read {}", path.display());
+                    eprintln!("[automation] {}", import_log(&path, there));
                 }
                 ShortcutsStep::Press(label) => {
                     let pressed = workspace.update(cx, |workspace, window, cx| {
@@ -1452,6 +1456,22 @@ fn draw_frame(window: AnyWindowHandle, view: Option<screenshot::NativeView>, cx:
         .unwrap_or(false);
     if open {
         screenshot::force_frame(view);
+    }
+}
+
+/// What the step `shortcuts:import:<path>` logs: that the file was read,
+/// or that there is none to read (`there`: what looking for the file gave).
+pub fn import_log(path: &std::path::Path, there: std::io::Result<bool>) -> String {
+    match there {
+        Ok(true) => format!("shortcuts: read {}", path.display()),
+        Ok(false) => format!(
+            "shortcuts: {} is not a file, nothing was read",
+            path.display()
+        ),
+        Err(error) => format!(
+            "shortcuts: could not read {} ({error}), nothing was read",
+            path.display()
+        ),
     }
 }
 

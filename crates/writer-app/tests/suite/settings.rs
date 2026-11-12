@@ -804,6 +804,26 @@ fn the_font_of_new_documents_is_chosen_from_the_list_with_the_keyboard(cx: &mut 
         view.description(SettingRow::Font, true, cx).to_string()
     });
     assert!(says.ends_with("opens the whole list."), "{says}");
+    // The footer under it names the same keys for the same thing (0.6.0
+    // said "↩ or Space opens the whole list" in the row and "Space  Whole
+    // list" under it).
+    let (keys, what) = vcx
+        .update(|window, cx| view.read(cx).activate_hint(window, cx))
+        .expect("the footer has a hint for the row's keys");
+    assert_eq!(what, "Whole list");
+    assert_eq!(keys, "↩ or Space");
+    assert!(
+        says.ends_with(&format!(" {keys} opens the whole list.")),
+        "{says}"
+    );
+    // On a row that switches, the same keys switch.
+    walk_to(SettingRow::PageView, &view, vcx);
+    assert_eq!(
+        vcx.update(|window, cx| view.read(cx).activate_hint(window, cx)),
+        Some(("↩ or Space".to_string(), "Switch"))
+    );
+    vcx.simulate_keystrokes("up up up");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::Font));
 
     // Enter opens the list in the place of the settings, on the font in
     // use.

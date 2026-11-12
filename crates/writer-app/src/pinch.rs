@@ -127,9 +127,8 @@ impl Monitor {
     }
 }
 
-/// The monitor AppKit has, and the window it is for: kept so that a
-/// scripted run can hand the same block a stand-in for an event
-/// ([`script`]).
+/// The monitor AppKit has: kept so that a scripted run can hand the same
+/// block a stand-in for an event ([`script`]).
 struct Installed {
     monitor: Monitor,
 }

@@ -37,15 +37,19 @@ pub fn footer_hint(
     cx: &App,
 ) -> Option<Div> {
     let keys = crate::keymap::keys_text_in(actions, place, cx)?;
+    Some(footer_keys(keys, what, cx))
+}
+
+/// One hint of a modal's footer for keys that are already written out
+/// ("↩ or Space"), then what they do.
+pub fn footer_keys(keys: impl Into<SharedString>, what: impl Into<SharedString>, cx: &App) -> Div {
     let colors = cx.theme().colors;
-    Some(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .child(div().text_color(colors.ink).child(keys))
-            .child(what.into()),
-    )
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(div().text_color(colors.ink).child(keys.into()))
+        .child(what.into())
 }
 
 /// The footer's "Esc Close".

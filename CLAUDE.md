@@ -860,10 +860,11 @@ document"). Three crates: `writer-keymap` knows what a change is,
   one row** (`tests/suite/keybindings.rs`,
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
-  list has 345 rows (344 commands in places and the `/` of the insert menu, which is no
-  binding) and the shortcuts file 370 entries, one for each key context: 13 rows stand for
-  several key contexts, 26 more than there are rows. Without the assistant: 315 rows, and
-  the same 370 entries.
+  list has 363 rows (362 commands in places and the `/` of the insert menu, which is no
+  binding) and the shortcuts file 388 entries, one for each key context: 13 rows stand for
+  several key contexts, 26 more than there are rows. Without the assistant: 333 rows, and
+  the same 388 entries. (Counted in a scripted run: `keys:cmd-/; state` has `rows=N`, and
+  "Export…" writes the file; the sixteen zoom commands are among them.)
 - **A place name is a promise.** Two rows under one place name ("In the library") are in
   the same place to whoever reads the list: a key of the one given to the other is "taken"
   and never "used in another place", in the question about a key and in the plan of an

@@ -725,3 +725,38 @@ fn an_explicit_target_gets_the_actions(cx: &mut TestAppContext) {
     let _ = OpenContextMenu;
     let _: fn(&mut App) = writer_ui::context_menu::init;
 }
+
+#[gpui::test]
+fn a_menu_of_choices_opens_on_the_current_one(cx: &mut TestAppContext) {
+    let (_host, cx, _log) = host_window(cx, false, 1);
+    let choices = |checked: Option<usize>| {
+        ["Small", "Medium", "Large"]
+            .into_iter()
+            .enumerate()
+            .map(|(ix, title)| {
+                ContextMenuItem::new(title, |_, _| {})
+                    .checked(checked == Some(ix))
+                    .disabled(ix == 0)
+            })
+            .collect::<Vec<_>>()
+    };
+    cx.update(|window, cx| {
+        ContextMenu::open(point(px(300.), px(300.)), choices(Some(2)), window, cx)
+            .update(cx, |menu, cx| menu.select_checked(cx));
+    });
+    assert_eq!(selected_title(cx).as_deref(), Some("Large"));
+    cx.simulate_keystrokes("up");
+    assert_eq!(selected_title(cx).as_deref(), Some("Medium"));
+    cx.simulate_keystrokes("escape");
+
+    // Nothing checked, or the checked item cannot be chosen: the first
+    // item that can.
+    for checked in [None, Some(0)] {
+        cx.update(|window, cx| {
+            ContextMenu::open(point(px(300.), px(300.)), choices(checked), window, cx)
+                .update(cx, |menu, cx| menu.select_checked(cx));
+        });
+        assert_eq!(selected_title(cx).as_deref(), Some("Medium"));
+        cx.simulate_keystrokes("escape");
+    }
+}

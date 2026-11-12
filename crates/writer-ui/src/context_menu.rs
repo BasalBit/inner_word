@@ -1029,6 +1029,20 @@ impl ContextMenu {
         self.set_selected(in_submenu, first, cx);
     }
 
+    /// Marks the item that carries the check mark (the current choice of a
+    /// menu of choices), or the first item that can be chosen when none
+    /// does. Call it after opening such a menu from the keyboard: `enter`
+    /// then keeps the choice, and the arrows start from it.
+    pub fn select_checked(&mut self, cx: &mut Context<Self>) {
+        let in_submenu = self.submenu.is_some();
+        let items = self.level_items(in_submenu);
+        let checked = items
+            .iter()
+            .position(|item| item.selectable() && item.is_checked() == Some(true));
+        let target = checked.or_else(|| first_selectable(items));
+        self.set_selected(in_submenu, target, cx);
+    }
+
     fn level_items(&self, submenu: bool) -> &[ContextMenuItem] {
         if submenu
             && let Some(open) = &self.submenu

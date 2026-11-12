@@ -37,7 +37,11 @@
 //! - `app_version` is the version of the app that wrote it; `about` is a
 //!   sentence for whoever opens the file. Neither is used when reading.
 //! - `shortcuts` has one entry for every command in every place it has (or
-//!   can be given) a key, in the order of the app's list:
+//!   can be given) a key, in the order of the app's list. Every command:
+//!   also those of a part of the app that is not shown on the Mac that
+//!   writes the file (the assistant without its engine), where the list
+//!   has them when it shows them, so that a file means the same on every
+//!   Mac and two files can be compared:
 //!   - `command`: the action's name. With `context` (the key context the
 //!     keys apply in, `null` for anywhere in the window) it says which
 //!     command where; `input` is there too for an action with input.
@@ -53,7 +57,11 @@
 //!   the other are separated by a space (`g g`). Shift with a digit or a
 //!   punctuation key is written with the key, not the character:
 //!   `cmd-shift-7`, not `cmd-&` (both are read). `opt`, `option`,
-//!   `command`, `control`, `esc` and `return` are read too.
+//!   `command`, `control`, `esc` and `return` are read too. A key is read
+//!   as a person wrote it ([`KeySequence::parse_written`]): a text that is
+//!   no key skips its entry with what is wrong with it (a word that is no
+//!   modifier, a name no key has, `+` between the parts, an empty text,
+//!   modifiers without a key, two keys in one keystroke).
 //!
 //! # What an import takes from a file
 //!

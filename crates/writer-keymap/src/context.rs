@@ -62,6 +62,14 @@
 //! inside it (a find bar: the keyboard is in its field), loses to the
 //! binding without a context whatever the order. [`Places::container`]
 //! names such contexts.
+//!
+//! A context that has the keyboard itself in one state and in a field
+//! inside it in another (a panel with a filter field, bound without
+//! ruling the field out) is neither: it is ranked as if the keyboard were
+//! always on it. Against a binding without a context that is right while
+//! the keyboard is on it and wrong while it is in the field, where the
+//! binding without a context wins whatever the order. The app says where
+//! this matters (`writer_app::keymap::places`, "What is not exact").
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

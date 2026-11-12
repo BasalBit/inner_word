@@ -42,7 +42,7 @@ pub const DEFAULT_BINARY_PATH: &str = "/Applications/The Writer.app/Contents/Mac
 
 /// The `description` of the skill: what an agent reads to decide whether to load it. It
 /// names the app and the words people use for what is in it, and says when to use it.
-pub const DESCRIPTION: &str = "Work with the user's writing in The Writer, the macOS writing app, and with the documents, drafts, chapters, books, blog posts, notes and folders in its library. Use it whenever the user mentions The Writer or their library, or asks to find, read, list, search, create, edit, rename, move, organise, comment on, review, export or restore a document, a draft, a chapter or a folder that lives in that app. It provides the writer command line tool, which reads and changes the library directly, also while the app is closed.";
+pub const DESCRIPTION: &str = "Work with the user's writing in The Writer, the macOS writing app, and with the documents, drafts, chapters, books, blog posts, notes and folders in its library. Use it whenever the user mentions The Writer or their library, or asks to find, read, list, search, create, edit, rename, move, organise, comment on, review, export or restore a document, a draft, a chapter or a folder that lives in that app. It provides the writer command line tool, which reads and changes the library whether the app is open or closed.";
 
 /// The text below the front matter. In its code blocks a line that starts with `writer `
 /// is an example; the installed text has the quoted path of the binary in place of that
@@ -315,6 +315,42 @@ mod tests {
         }
     }
 
+    /// The rule since 0.6.0: an agent changes things while the app is open too, the
+    /// writer sees the change and can undo it, and the agent says what it changed.
+    #[test]
+    fn the_skill_says_what_happens_while_the_app_is_open() {
+        let text = spec().render();
+        let part = text
+            .split("## While The Writer is open")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .expect("the part about the open app");
+        for words in [
+            "You can read and change the library whether the app is open or closed.",
+            "the app makes it, and the user sees it in the window at once",
+            "take it back there with Undo",
+            "Say what you changed and in which document, every time.",
+            "Pass `--author` with your name.",
+            "Exit code 5 means that the app is open and did not make the change.",
+            // The switch by the name it has in the app's Agents panel and in the tool's
+            // message.
+            "\"Agents can make changes while The Writer is open\"",
+            "do not quit the app yourself",
+            "it is not known whether the change was made",
+        ] {
+            assert!(part.contains(words), "the skill does not say: {words}");
+        }
+        // Nothing of the rule of before is left anywhere in it.
+        for words in [
+            "every change is refused",
+            "I can read your library but not change it",
+            "also while the app is closed",
+        ] {
+            assert!(!text.contains(words), "the skill still says: {words}");
+        }
+        assert!(DESCRIPTION.contains("whether the app is open or closed"));
+    }
+
     #[test]
     fn the_body_is_short_enough_and_has_no_placeholder_left() {
         let text = spec().render();
@@ -420,8 +456,8 @@ mod tests {
     fn the_text_teaches_the_rules() {
         let text = spec().render();
         for needed in [
-            "exit code 5",
-            "Quit The Writer",
+            "Exit code 5",
+            "Say what you changed",
             "do not quit the app yourself",
             "--dry-run",
             "--json",

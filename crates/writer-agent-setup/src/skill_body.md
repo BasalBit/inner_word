@@ -1,6 +1,6 @@
 # The Writer
 
-The Writer is a writing app for macOS. Its library holds the user's folders and documents (books, chapters, drafts, posts, notes) as rich text. `writer` is its command line tool: it reads and changes that library directly, whether the app is running or not.
+The Writer is a writing app for macOS. Its library holds the user's folders and documents (books, chapters, drafts, posts, notes) as rich text. `writer` is its command line tool: it reads and changes that library, whether the app is running or not.
 
 ## Calling the tool
 
@@ -19,9 +19,19 @@ Every example here is a complete command line. Only the ids, names and files in 
 
 ## While The Writer is open
 
-While the app is open you can read (list, search, recent, info, get, comments, history, export), but every change is refused with exit code 5 and nothing is changed. That is deliberate: the app has the library in its hands, and the two would overwrite each other.
+You can read and change the library whether the app is open or closed.
 
-When a change is refused, do not retry it and do not quit the app yourself. Tell the user: "The Writer is open, so I can read your library but not change it. Quit The Writer (Cmd-Q, it saves by itself) and tell me to go on." Then wait. Reading in the meantime is fine.
+While the app is open, a change is not written behind its back: the tool hands it to the app, the app makes it, and the user sees it in the window at once, with a short note that names you. They can take it back there with Undo, and the version from before the change is in the version history. A read gives you the text as it is on their screen at that moment, also what they typed a second ago. So:
+
+- Say what you changed and in which document, every time. The user sees the result arrive, not your commands.
+- Pass `--author` with your name. The note in the app and the version kept before the change carry it.
+- Read right before you change, and keep each change small and exact: the user may be writing in the same document.
+
+Exit code 5 means that the app is open and did not make the change. The message says which case it is and what to do:
+
+- Changes by agents are switched off in the app (the switch "Agents can make changes while The Writer is open" in its Agents panel), or the app is a version before 0.6.0. Nothing was changed. Do not retry, and do not quit the app yourself: tell the user what the message says, and wait. Reading in the meantime is fine.
+- The app was busy for a moment (the user is in the middle of typing a character, a dialog is open, the app is quitting). Nothing was changed: run the command again after a few seconds.
+- The message says that it is not known whether the change was made. Read the document again before you repeat anything.
 
 ## Commands
 
@@ -107,7 +117,7 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 3. When the user asks for feedback, a review or suggestions, comment (`comment add`) and leave the text alone. Change the text when they ask for the change.
 4. When you are not sure what a command will do, run it with `--dry-run` first.
 5. Use the ids that earlier output gave you. After `create`, `duplicate` or `mkdir`, the output has the new id.
-6. Tell the user what you changed and in which document. They find every earlier version in the app's version history, and you can restore one with `history restore`.
+6. Tell the user what you changed and in which document. While the app is open they see the change arrive and can undo it there; they find every earlier version in the app's version history, and you can restore one with `history restore`.
 
 ## Exit codes
 
@@ -116,7 +126,7 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 - 2: the command line is wrong. Read the command's `--help`.
 - 3: not found (a document, a folder, a heading, a comment thread, a version). The message says what there is; check the id or the path with `list` or `search`.
 - 4: a name fits several items. The message lists them with their ids: use the id. For a heading that occurs several times, pass `--occurrence <n>`.
-- 5: The Writer is open and the change was refused. See above.
+- 5: The Writer is open and did not make the change. The message says why, whether anything was changed, and what to do; see "While The Writer is open".
 - 6: the text to replace or to comment on is not in the document. `get` it again and copy the text exactly.
 - 7: the text occurs more than once. Quote more of the words around it, or pass `--occurrence <n>`, or `--all` to `edit`.
 - 8: erasing for good needs `--permanently`. Only when the user asked for exactly that.

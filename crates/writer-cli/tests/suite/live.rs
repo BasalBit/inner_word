@@ -619,13 +619,25 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
             "{args:?}: {message}"
         );
     }
+    // The switch has one name: the one the message gives is the one the skill tells
+    // agents about (and the one the app's Agents panel shows).
+    let message = sandbox.fail(&writes[0], 5);
+    let name = message
+        .split('\u{201c}')
+        .nth(1)
+        .and_then(|rest| rest.split('\u{201d}').next())
+        .expect("the message names the switch");
+    assert_eq!(name, "Agents can make changes while The Writer is open");
+    let skill = sandbox.ok(&["agents", "skill"]);
+    assert!(skill.contains(&format!("\"{name}\"")), "{skill}");
+
     // The app was asked each time, and refused each time.
     let served: Vec<_> = app
         .served()
         .into_iter()
         .filter(|served| served.name != "flush")
         .collect();
-    assert_eq!(served.len(), writes.len());
+    assert_eq!(served.len(), writes.len() + 1);
     assert!(
         served
             .iter()

@@ -27,6 +27,7 @@
 //! | [`palette`], [`quick_open`], [`library_search`], [`shortcuts`] | the picker modals |
 //! | [`settings`], [`settings_view`] | setting keys and the typed snapshot; the settings modal, with the section for the open document |
 //! | [`version_history`] | the snapshots of the open document, a preview, restore |
+//! | [`assistant`] | the assistant in the app: which engine it runs on and whether it is there, the model and effort of its two chats, the conversations it keeps per document, what the user applies to the text, the fake engine of a scripted run (the chats themselves are `writer-assistant-quick` and `writer-assistant-ui`, mounted by [`workspace`]) |
 //! | [`agents`], [`agents_view`] | the `writer` command line tool beside the app, the skill and the MCP server for the agents on this Mac; the Agents panel |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
@@ -85,10 +86,15 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 ///    and agents-panel bindings (later bindings win ties, so a focused
 ///    widget keeps its own keys);
 /// 4. the comments, Vim and editor-tools bindings and global handlers. The
-///    tools come last: inside the find bar `cmd-alt-c` is "case sensitive",
-///    and it must win over the window-wide "show or hide comments";
+///    tools come after the comments: inside the find bar `cmd-alt-c` is
+///    "case sensitive", and it must win over the window-wide "show or hide
+///    comments". Then the chats of the assistant, whose editors (the
+///    composer, the answers) bind keys that are the editor's own otherwise
+///    (`cmd-enter`, `escape`, `tab`);
 /// 5. the command registry: every crate's commands (see
-///    [`register_commands`] for the three that are left out);
+///    [`register_commands`] for the three that are left out; the
+///    assistant's are registered and hidden until a workspace finds its
+///    engine);
 /// 6. the app-global actions (quit, hide) and the menu bar;
 /// 7. quit when the last window closes.
 pub fn init(cx: &mut App) {

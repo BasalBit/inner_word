@@ -4,7 +4,7 @@
 //!
 //! | Module | Contents |
 //! |---|---|
-//! | [`host`] | which engine the app uses, and whether it is installed and signed in (looked up in the background) |
+//! | [`mod@host`] | which engine the app uses, and whether it is installed and signed in (looked up in the background) |
 //! | [`choices`] | the model and the effort each of the two chats asks with, as the settings keep them |
 //! | [`conversations`] | the side chat's conversations, one per document, stored in the library |
 //! | [`fake`] | the fake engine in a scripted run of the real app, for screenshots that cost nothing |

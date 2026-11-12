@@ -292,8 +292,8 @@ fn assistant_tool_path(cx: &App) -> Option<PathBuf> {
 
 impl Workspace {
     /// Whether the assistant is shown: the app has an engine, the engine
-    /// is installed on this Mac and the setting is on. See the
-    /// [module docs](self).
+    /// is installed on this Mac and the setting is on (the rules are in the
+    /// docs of `workspace/assistant.rs`).
     pub fn assistant_shown(&self) -> bool {
         self.assistant.shown
     }

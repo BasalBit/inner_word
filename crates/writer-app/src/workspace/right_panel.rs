@@ -204,7 +204,7 @@ impl Workspace {
     }
 
     /// Fills the slot at the right of the text with the panel that belongs
-    /// there now (see the [module docs](self)), or empties it.
+    /// there now (the rules are at the top of this file), or empties it.
     pub(crate) fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let comments = self.comments.read(cx).is_open();
         let assistant = self.assistant_panel_there();

@@ -82,10 +82,40 @@ pub mod keys {
     /// Prefix of the per-document flag "the user chose this title":
     /// `document.custom_title.<id>` holds `true`.
     pub const CUSTOM_TITLE_PREFIX: &str = "document.custom_title.";
+    /// `bool`: the assistant (the quick chat and the side chat) is on. It
+    /// is only ever shown when its engine is installed on this Mac.
+    pub const ASSISTANT_ENABLED: &str = "assistant.enabled";
+    /// `string`: the model the quick chat asks, as the engine names it;
+    /// absent or empty for the engine's own choice for a quick answer.
+    pub const ASSISTANT_QUICK_MODEL: &str = "assistant.quick.model";
+    /// `string`: the effort of the quick chat, as the engine names it;
+    /// absent or empty for the engine's own choice for a quick answer.
+    pub const ASSISTANT_QUICK_EFFORT: &str = "assistant.quick.effort";
+    /// `string`: the model of the side chat; absent or empty for the
+    /// engine's own choice.
+    pub const ASSISTANT_SIDE_MODEL: &str = "assistant.side.model";
+    /// `string`: the effort of the side chat; absent or empty for the
+    /// engine's own choice.
+    pub const ASSISTANT_SIDE_EFFORT: &str = "assistant.side.effort";
+    /// `bool`: the notice that what is asked goes to the engine's provider
+    /// has been read and accepted. Shown once, before the first message.
+    pub const ASSISTANT_NOTICE_ACCEPTED: &str = "assistant.notice_accepted";
+    /// `bool`: the side chat is open beside the text.
+    pub const ASSISTANT_PANEL_OPEN: &str = "assistant.panel_open";
+    /// `number`: the width of the side chat in pixels.
+    pub const ASSISTANT_PANEL_WIDTH: &str = "assistant.panel_width";
+    /// `number`: the width of the comments panel in pixels.
+    pub const COMMENTS_PANEL_WIDTH: &str = "comments.panel_width";
+    /// `"comments"` or `"assistant"`: which of the two panels at the right
+    /// of the text is in front when both have something to show.
+    pub const RIGHT_PANEL: &str = "right_panel.choice";
+    /// Prefix of the side chat's conversation about a document:
+    /// `assistant.conversation.<id>` holds it as JSON.
+    pub const ASSISTANT_CONVERSATION_PREFIX: &str = "assistant.conversation.";
 
     /// The keys behind [`super::Settings`]: a change to one of them is a
     /// change of the user settings.
-    pub const USER_SETTINGS: [&str; 20] = [
+    pub const USER_SETTINGS: [&str; 25] = [
         THEME,
         VIM_MODE,
         INPUT_RULES,
@@ -106,11 +136,21 @@ pub mod keys {
         STATUS_READING_TIME,
         SIDEBAR_VISIBLE,
         SIDEBAR_WIDTH,
+        ASSISTANT_ENABLED,
+        ASSISTANT_QUICK_MODEL,
+        ASSISTANT_QUICK_EFFORT,
+        ASSISTANT_SIDE_MODEL,
+        ASSISTANT_SIDE_EFFORT,
     ];
 
     /// The key of the custom-title flag of document `id`.
     pub fn custom_title(id: writer_library::DocumentId) -> String {
         format!("{CUSTOM_TITLE_PREFIX}{}", id.0)
+    }
+
+    /// The key of the side chat's conversation about document `id`.
+    pub fn assistant_conversation(id: writer_library::DocumentId) -> String {
+        format!("{ASSISTANT_CONVERSATION_PREFIX}{}", id.0)
     }
 }
 
@@ -252,6 +292,56 @@ pub struct Settings {
     pub sidebar_visible: bool,
     /// Width of the library sidebar in pixels.
     pub sidebar_width: f32,
+    /// The assistant: whether it is on, and what each of its two chats
+    /// asks with.
+    pub assistant: AssistantSettings,
+}
+
+/// The settings of the assistant. Models and efforts are kept as the
+/// engine names them (the app knows no engine's models); `None` leaves the
+/// choice to the engine, which has one for a quick answer and one for a
+/// conversation about a whole document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssistantSettings {
+    /// The switch: off hides the quick chat and the side chat.
+    pub enabled: bool,
+    /// The model of the quick chat.
+    pub quick_model: Option<String>,
+    /// The effort of the quick chat.
+    pub quick_effort: Option<String>,
+    /// The model of the side chat.
+    pub side_model: Option<String>,
+    /// The effort of the side chat.
+    pub side_effort: Option<String>,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quick_model: None,
+            quick_effort: None,
+            side_model: None,
+            side_effort: None,
+        }
+    }
+}
+
+impl AssistantSettings {
+    fn load(library: &Library) -> Self {
+        let name = |key: &str| -> Option<String> {
+            let stored: String = library.setting_or(key, String::new());
+            let stored = stored.trim();
+            (!stored.is_empty()).then(|| stored.to_string())
+        };
+        Self {
+            enabled: library.setting_or(keys::ASSISTANT_ENABLED, true),
+            quick_model: name(keys::ASSISTANT_QUICK_MODEL),
+            quick_effort: name(keys::ASSISTANT_QUICK_EFFORT),
+            side_model: name(keys::ASSISTANT_SIDE_MODEL),
+            side_effort: name(keys::ASSISTANT_SIDE_EFFORT),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -278,6 +368,7 @@ impl Default for Settings {
             status_reading_time: true,
             sidebar_visible: true,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            assistant: AssistantSettings::default(),
         }
     }
 }
@@ -388,6 +479,7 @@ impl Settings {
             sidebar_width: library
                 .setting_or(keys::SIDEBAR_WIDTH, defaults.sidebar_width)
                 .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+            assistant: AssistantSettings::load(library),
         }
     }
 

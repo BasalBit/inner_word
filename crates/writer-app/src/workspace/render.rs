@@ -375,7 +375,9 @@ impl Workspace {
     /// How the panels beside the text are drawn in this window: see
     /// [`panel_layout`]. Also notes which of them was used last.
     pub fn side_panels(&mut self, window: &Window, cx: &App) -> PanelLayout {
-        if self.comments.read(cx).has_focus(window, cx) {
+        if self.comments.read(cx).has_focus(window, cx)
+            || self.assistant_panel_has_focus(window, cx)
+        {
             self.last_side_panel = SidePanel::Right;
         } else if self.panel_has_focus(window, cx) {
             self.last_side_panel = SidePanel::Library;
@@ -790,6 +792,7 @@ impl Render for Workspace {
         let theme = cx.theme();
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
+        self.note_right_panel_focus(window, cx);
         let layout = self.side_panels(window, cx);
         // Where the title and the status bar items are is noted again as
         // they are drawn.
@@ -835,19 +838,13 @@ impl Render for Workspace {
             .right_panel
             .clone()
             .zip(layout.right)
-            .map(|(view, width)| {
-                div()
-                    .id("right-panel")
-                    .debug_selector(|| "right-panel".into())
-                    .w(px(width))
-                    .h_full()
-                    .flex_none()
-                    .overflow_hidden()
-                    .border_l_1()
-                    .border_color(colors.hairline)
-                    .bg(colors.sidebar)
-                    .child(view)
-            });
+            .map(|(view, width)| self.render_right_panel(view, width, tips, cx));
+        let right_resize_handle = self
+            .right_panel
+            .is_some()
+            .then_some(layout.right)
+            .flatten()
+            .and_then(|width| self.render_right_resize_handle(width, cx));
 
         // The library panel's commands (rename, move to trash, ...) work from
         // anywhere in the window, e.g. after the palette handed focus back
@@ -978,12 +975,16 @@ impl Render for Workspace {
                     this.close_modal_first(window, cx);
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.drag_sidebar(event, cx);
+                this.drag_right_panel(event, window, cx);
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_sidebar_drag(cx)),
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    this.end_sidebar_drag(cx);
+                    this.end_right_panel_drag(cx);
+                }),
             )
             .relative()
             .size_full()
@@ -993,7 +994,7 @@ impl Render for Workspace {
             .font_family(ui_font)
             .text_size(UI_TEXT_BASE)
             .line_height(px(18.))
-            .when(self.sidebar_dragging, |el| {
+            .when(self.sidebar_dragging || self.right.dragging, |el| {
                 el.cursor(CursorStyle::ResizeLeftRight)
             })
             .children(sidebar)
@@ -1036,6 +1037,7 @@ impl Render for Workspace {
                     .child(status_bar),
             )
             .children(resize_handle)
+            .children(right_resize_handle)
             .child(self.modal_layer.clone())
             .children(picker_close)
             .child(self.toast_layer.clone())

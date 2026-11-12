@@ -16,7 +16,7 @@
 //! | What | Where it shows | Kept in step by |
 //! |---|---|---|
 //! | [`EditorTools`] (format menu, insert menu, link popover, font picker, find bar) | the editor area: it wraps the editor | itself; recent fonts are stored from the `FontLibrary` global |
-//! | [`CommentsPanel`] | the right panel slot, while it has something to show | `on_comments_event`: the slot, the visibility setting, the "show resolved" setting |
+//! | [`CommentsPanel`] | the right panel slot, while it has something to show; it shares the slot with the assistant's side chat, one at a time (`right_panel.rs`) | `on_comments_event`: the slot, the visibility setting, the "show resolved" setting |
 //! | [`VimMode`] with its status item and command line | status bar (left), a strip under the editor | `apply_vim_setting` (the `editor.vim_mode` setting) and `on_vim_event` (`:w`, `:q`, named commands) |
 //! | [`writer_spell::SpellChecker`] (only when the app has a spell service, see [`crate::spelling`]) | wavy underlines in the text, the top of the text context menu | `apply_spelling`: the `spelling.*` settings and the open document's own language |
 //!
@@ -62,6 +62,7 @@
 mod measure;
 mod menus;
 mod render;
+mod right_panel;
 mod saver;
 mod session;
 mod spelling;
@@ -102,6 +103,9 @@ pub use menus::{Anchors, MenuKind};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
     counted, group_digits, limit_label, panel_layout,
+};
+pub use right_panel::{
+    DEFAULT_ASSISTANT_PANEL_WIDTH, MAX_RIGHT_PANEL_WIDTH, RIGHT_PANEL_TABS_HEIGHT, RightPanel,
 };
 pub use session::{
     AUTOSAVE_DELAY, CHANGED_OUTSIDE, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost,
@@ -177,6 +181,10 @@ pub struct Workspace {
     pub(crate) editor_host: Option<AnyView>,
     pub(crate) right_panel: Option<AnyView>,
     pub(crate) right_panel_width: Pixels,
+    /// The two panels that share the slot at the right of the text (the
+    /// comments and the assistant's side chat): which is in front, their
+    /// widths.
+    pub(crate) right: right_panel::RightSlot,
     /// The panel beside the text that was used last: it keeps its place in
     /// a window too narrow for both.
     pub(crate) last_side_panel: SidePanel,
@@ -369,6 +377,7 @@ impl Workspace {
         });
 
         let saver = saver::Saver::new(library.read(cx));
+        let right = right_panel::RightSlot::load(library.read(cx));
         let mut this = Self {
             library,
             editor,
@@ -389,6 +398,7 @@ impl Workspace {
             sidebar_dragging: false,
             right_panel: None,
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
+            right,
             last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             vim_status_id: vim_status.entity_id(),
@@ -407,7 +417,7 @@ impl Workspace {
         this.connect_vim_spelling(cx);
         this.restore_session(window, cx);
         this.offer_agents_hint(cx);
-        this.sync_comments_panel(cx);
+        this.sync_right_panel(cx);
         this.apply_vim_setting(cx);
         this.apply_spelling(cx);
         this.focus_editor(window, cx);
@@ -509,8 +519,10 @@ impl Workspace {
 
     /// Sets the width of the right panel slot (clamped to 220..=560). In a
     /// narrow window the panel is drawn narrower, see [`panel_layout`].
+    /// The widths of the comments and of the side chat are remembered per
+    /// panel: see [`Workspace::resize_right_panel`].
     pub fn set_right_panel_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        self.right_panel_width = width.clamp(px(MIN_RIGHT_PANEL_WIDTH), px(560.));
+        self.right_panel_width = width.clamp(px(MIN_RIGHT_PANEL_WIDTH), px(MAX_RIGHT_PANEL_WIDTH));
         cx.notify();
     }
 
@@ -1047,6 +1059,12 @@ impl Workspace {
     ) {
         let library = self.library.clone();
         let document = self.session.is_some().then(|| self.editor.clone());
+        // The assistant's engine is looked for again whenever the settings
+        // are opened (it may have been installed, or signed in to, since
+        // the launch); in the background, the modal does not wait.
+        if let Some(host) = crate::assistant::host(cx) {
+            host.update(cx, |host, cx| host.check(cx));
+        }
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let view = match document {
@@ -1182,16 +1200,6 @@ impl Workspace {
         self.write_setting(keys::COMMENTS_VISIBLE, &visible, cx);
     }
 
-    /// Puts the comments panel in the right slot while it has something to
-    /// show, and takes it out otherwise.
-    fn sync_comments_panel(&mut self, cx: &mut Context<Self>) {
-        let open = self.comments.read(cx).is_open();
-        if open != self.right_panel.is_some() {
-            let view = open.then(|| self.comments.clone().into());
-            self.set_right_panel(view, cx);
-        }
-    }
-
     /// The font picker's recently used families changed (or any other part
     /// of the font library): keep the stored list in step.
     fn store_recent_fonts(&mut self, cx: &mut Context<Self>) {
@@ -1280,14 +1288,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            CommentsEvent::OpenChanged(_) => self.sync_comments_panel(cx),
+            CommentsEvent::OpenChanged(_) => self.sync_right_panel(cx),
             // The panel shows or hides comments itself (cmd-alt-c, or "add
             // comment" while they are hidden): remember what it chose.
             CommentsEvent::VisibilityChanged(visible) => {
                 if self.settings.comments_visible != *visible {
                     self.write_setting(keys::COMMENTS_VISIBLE, visible, cx);
                 }
-                self.sync_comments_panel(cx);
+                self.sync_right_panel(cx);
             }
             CommentsEvent::ShowResolvedChanged(show) => {
                 self.library

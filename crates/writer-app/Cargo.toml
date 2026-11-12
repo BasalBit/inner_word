@@ -34,6 +34,9 @@ writer-spell.workspace = true
 writer-export.workspace = true
 # What is known about the agents on a Mac (no GPUI): the Agents panel.
 writer-agent-setup.workspace = true
+# The assistant: its engine (no GPUI; Claude Code behind one interface, and
+# the fake backend every test uses).
+writer-assistant.workspace = true
 # localtime_r for the times in the version history.
 libc.workspace = true
 # Window capture for visual QA: the NSWindow number behind a GPUI window.

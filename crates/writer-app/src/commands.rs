@@ -22,14 +22,22 @@ use writer_ui::CommandDescriptor;
 #[derive(Default)]
 pub struct CommandRegistry {
     commands: Vec<CommandDescriptor>,
+    /// Categories that are registered but not listed right now.
+    hidden: Vec<gpui::SharedString>,
 }
 
 impl Global for CommandRegistry {}
 
 impl CommandRegistry {
-    /// Every registered command, in registration order.
+    /// Every registered command, in registration order, hidden ones
+    /// included.
     pub fn commands(&self) -> &[CommandDescriptor] {
         &self.commands
+    }
+
+    /// Whether the commands of `category` are left out of [`all`].
+    pub fn is_hidden(&self, category: &str) -> bool {
+        self.hidden.iter().any(|hidden| hidden.as_ref() == category)
     }
 
     fn add(&mut self, command: CommandDescriptor) {
@@ -54,11 +62,46 @@ pub fn register(commands: impl IntoIterator<Item = CommandDescriptor>, cx: &mut 
     }
 }
 
-/// Every registered command, in registration order.
+/// Every command that is listed right now, in registration order: the
+/// registered ones without those of a hidden category
+/// ([`set_category_hidden`]). The palette, the shortcuts overlay and Vim's
+/// command line read this.
 pub fn all(cx: &App) -> Vec<CommandDescriptor> {
     cx.try_global::<CommandRegistry>()
-        .map(|registry| registry.commands.clone())
+        .map(|registry| {
+            registry
+                .commands
+                .iter()
+                .filter(|command| !registry.is_hidden(&command.category))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// Hides the commands of `category` from the palette and the shortcuts
+/// overlay, or lists them again. For a feature that is not there on every
+/// Mac (the assistant, without its engine): its commands stay registered
+/// and are simply not offered.
+pub fn set_category_hidden(category: &str, hidden: bool, cx: &mut App) {
+    let registry = cx.default_global::<CommandRegistry>();
+    let position = registry
+        .hidden
+        .iter()
+        .position(|existing| existing.as_ref() == category);
+    match (position, hidden) {
+        (None, true) => registry.hidden.push(category.to_string().into()),
+        (Some(ix), false) => {
+            registry.hidden.remove(ix);
+        }
+        _ => {}
+    }
+}
+
+/// Whether the commands of `category` are hidden right now.
+pub fn category_hidden(category: &str, cx: &App) -> bool {
+    cx.try_global::<CommandRegistry>()
+        .is_some_and(|registry| registry.is_hidden(category))
 }
 
 /// The category names in the order they were first registered.

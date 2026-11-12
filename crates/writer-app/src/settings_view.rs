@@ -15,6 +15,19 @@
 //! The app's settings are written to the library at once; the workspace
 //! applies them live (see [`crate::settings`]).
 //!
+//! # Assistant
+//!
+//! When the app has an engine for the assistant and the engine is
+//! installed on this Mac, the list has a section "Assistant": a switch
+//! that says which engine was found (its name, its version, the account)
+//! and turns the assistant off, and the model and the effort each of the
+//! two chats asks with. Under them stands the note about where the text
+//! goes. When the engine is not installed there is no such section, only
+//! one quiet line at the end of the app's settings that says what the
+//! assistant needs. The engine is looked for again every time the settings
+//! are opened (`Workspace::show_settings`), in the background; the section
+//! follows when the answer is in.
+//!
 //! # This document
 //!
 //! With a document open the list ends with a section for that document
@@ -138,6 +151,16 @@ pub enum SettingRow {
     StatusCharacters,
     /// The reading time in the status bar.
     StatusReadingTime,
+    /// The assistant: on or off. Says which engine was found.
+    Assistant,
+    /// The assistant: the model of the quick chat.
+    AssistantQuickModel,
+    /// The assistant: the effort of the quick chat.
+    AssistantQuickEffort,
+    /// The assistant: the model of the side chat.
+    AssistantSideModel,
+    /// The assistant: the effort of the side chat.
+    AssistantSideEffort,
     /// This document: page view or the flowing column.
     DocumentPageView,
     /// This document: A4, US Letter or a custom size.
@@ -188,6 +211,16 @@ impl SettingRow {
         SettingRow::StatusWords,
         SettingRow::StatusCharacters,
         SettingRow::StatusReadingTime,
+    ];
+
+    /// The rows about the assistant, in order. Listed while its engine is
+    /// installed; the four choices only while the assistant is on.
+    pub const ASSISTANT: [SettingRow; 5] = [
+        SettingRow::Assistant,
+        SettingRow::AssistantQuickModel,
+        SettingRow::AssistantQuickEffort,
+        SettingRow::AssistantSideModel,
+        SettingRow::AssistantSideEffort,
     ];
 
     /// The rows about the open document, in order. Listed while a document
@@ -244,6 +277,11 @@ impl SettingRow {
             | SettingRow::StatusWords
             | SettingRow::StatusCharacters
             | SettingRow::StatusReadingTime => "Status bar",
+            SettingRow::Assistant
+            | SettingRow::AssistantQuickModel
+            | SettingRow::AssistantQuickEffort
+            | SettingRow::AssistantSideModel
+            | SettingRow::AssistantSideEffort => ASSISTANT_SECTION,
             _ => "This document",
         }
     }
@@ -267,6 +305,11 @@ impl SettingRow {
             SettingRow::StatusWords => "Word count",
             SettingRow::StatusCharacters => "Character count",
             SettingRow::StatusReadingTime => "Reading time",
+            SettingRow::Assistant => "Assistant",
+            SettingRow::AssistantQuickModel => "Quick chat model",
+            SettingRow::AssistantQuickEffort => "Quick chat effort",
+            SettingRow::AssistantSideModel => "Side chat model",
+            SettingRow::AssistantSideEffort => "Side chat effort",
             SettingRow::DocumentPageView => "Page view",
             SettingRow::DocumentPaper => "Paper size",
             SettingRow::DocumentPaperWidth => "Paper width",
@@ -307,6 +350,14 @@ impl SettingRow {
             SettingRow::StatusWords => "Words in the document, or in the selection.",
             SettingRow::StatusCharacters => "Characters, spaces included.",
             SettingRow::StatusReadingTime => "Minutes at an unhurried pace.",
+            // Says which engine was found: see `SettingsView::description`.
+            SettingRow::Assistant => "",
+            SettingRow::AssistantQuickModel => {
+                "Answers about a word, a sentence or a paragraph. A fast model keeps it quick."
+            }
+            SettingRow::AssistantQuickEffort => "How long the model thinks before it answers.",
+            SettingRow::AssistantSideModel => "Answers about the whole document and the library.",
+            SettingRow::AssistantSideEffort => "How long the model thinks before it answers.",
             SettingRow::DocumentPageView => "Show sheets of paper instead of one column.",
             SettingRow::DocumentPaper => "Used by page view and Word export.",
             SettingRow::DocumentPaperWidth | SettingRow::DocumentPaperHeight => {
@@ -327,6 +378,9 @@ impl SettingRow {
         }
     }
 }
+
+/// The heading of the assistant's section.
+pub const ASSISTANT_SECTION: &str = "Assistant";
 
 /// How a row's value is shown and changed.
 #[derive(Clone, Debug, PartialEq)]
@@ -481,7 +535,11 @@ impl SettingsView {
         }
 
         let mut handles = HashMap::new();
-        for row in SettingRow::APP.into_iter().chain(SettingRow::DOCUMENT) {
+        for row in SettingRow::APP
+            .into_iter()
+            .chain(SettingRow::ASSISTANT)
+            .chain(SettingRow::DOCUMENT)
+        {
             let handle = match row {
                 SettingRow::Author => author_field.focus_handle(cx),
                 _ => match length_fields.get(&row) {
@@ -538,6 +596,12 @@ impl SettingsView {
                 },
             ));
         }
+        if let Some(host) = crate::assistant::host(cx) {
+            // The engine is looked for in the background while the modal
+            // is open: the section appears, or its line changes, when the
+            // answer is in.
+            subscriptions.push(cx.observe(&host, |_, _, cx| cx.notify()));
+        }
         if let Some(editor) = &document {
             // The document can change behind the modal (a shortcut such as
             // cmd-alt-p reaches the workspace): show what it is now.
@@ -587,6 +651,16 @@ impl SettingsView {
     /// The rows that are listed right now, in order.
     pub fn rows(&self, cx: &App) -> Vec<SettingRow> {
         let mut rows = SettingRow::APP.to_vec();
+        if self.assistant_installed(cx) {
+            rows.push(SettingRow::Assistant);
+            if self.settings.assistant.enabled {
+                rows.extend(
+                    SettingRow::ASSISTANT
+                        .into_iter()
+                        .filter(|row| *row != SettingRow::Assistant),
+                );
+            }
+        }
         if let Some(document) = self.document_settings(cx) {
             let custom = matches!(document.page.paper, PaperSize::Custom { .. });
             rows.extend(SettingRow::DOCUMENT.into_iter().filter(|row| {
@@ -598,6 +672,77 @@ impl SettingsView {
             }));
         }
         rows
+    }
+
+    /// Whether the app has an engine for the assistant and it is installed
+    /// on this Mac, as far as is known.
+    fn assistant_installed(&self, cx: &App) -> bool {
+        crate::assistant::host(cx).is_some_and(|host| host.read(cx).is_installed())
+    }
+
+    /// The line that stands in for the assistant's section while its
+    /// engine is not installed: what the assistant needs. `None` while the
+    /// engine is installed, while it is still being looked for, and in an
+    /// app without an engine.
+    pub fn assistant_missing_note(&self, cx: &App) -> Option<String> {
+        let host = crate::assistant::host(cx)?;
+        let host = host.read(cx);
+        match host.availability() {
+            Some(availability) if !availability.is_installed() => {
+                let info = host.info();
+                Some(format!(
+                    "The assistant needs {}, which is not installed on this Mac. {}",
+                    info.name, info.install_help
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// The note under the assistant's section: where the text goes and
+    /// what it costs. `None` while the section is not listed or the
+    /// assistant is off.
+    pub fn assistant_privacy_note(&self, cx: &App) -> Option<String> {
+        if !self.assistant_installed(cx) || !self.settings.assistant.enabled {
+            return None;
+        }
+        let host = crate::assistant::host(cx)?;
+        let info = host.read(cx).info().clone();
+        Some(format!(
+            "What you ask is sent to {vendor} through your own {name} sign-in, and each message \
+             counts against your {name} plan. The quick chat sends your question and the selected \
+             text; the side chat sends your messages, the open document and what the assistant \
+             reads from your library. Nothing is sent before you send a message, and the \
+             assistant never changes a document by itself.",
+            vendor = info.vendor,
+            name = info.name,
+        ))
+    }
+
+    /// The mode and whether the row is the model (not the effort), for the
+    /// four choices of the assistant.
+    fn assistant_choice(row: SettingRow) -> Option<(writer_assistant::Mode, bool)> {
+        use writer_assistant::Mode;
+        match row {
+            SettingRow::AssistantQuickModel => Some((Mode::Quick, true)),
+            SettingRow::AssistantQuickEffort => Some((Mode::Quick, false)),
+            SettingRow::AssistantSideModel => Some((Mode::Side, true)),
+            SettingRow::AssistantSideEffort => Some((Mode::Side, false)),
+            _ => None,
+        }
+    }
+
+    /// The engine's catalog and the remembered choice of `mode`.
+    fn assistant_selection(
+        &self,
+        mode: writer_assistant::Mode,
+        cx: &App,
+    ) -> Option<(writer_assistant::Catalog, writer_assistant::Selection)> {
+        let host = crate::assistant::host(cx)?;
+        let catalog = host.read(cx).catalog().clone();
+        let selection =
+            crate::assistant::choices::selection_for(mode, &self.settings.assistant, &catalog);
+        Some((catalog, selection))
     }
 
     /// The row that has focus.
@@ -633,6 +778,19 @@ impl SettingsView {
                     "Modal editing with Vim keys. Restart The Writer to get the accent menu on \
                      held keys back."
                         .into()
+                }
+            }
+            SettingRow::Assistant => {
+                // Which engine was found, and what to do when the user is
+                // not signed in to it.
+                let Some(host) = crate::assistant::host(cx) else {
+                    return "".into();
+                };
+                let host = host.read(cx);
+                if host.is_signed_out() {
+                    format!("{}. {}", host.status_line(), host.info().sign_in_help).into()
+                } else {
+                    format!("Runs on {}.", host.status_line()).into()
                 }
             }
             SettingRow::DocumentSpellingLanguage => {
@@ -843,6 +1001,45 @@ impl SettingsView {
             SettingRow::StatusWords => Control::Switch(settings.status_words),
             SettingRow::StatusCharacters => Control::Switch(settings.status_characters),
             SettingRow::StatusReadingTime => Control::Switch(settings.status_reading_time),
+            SettingRow::Assistant => Control::Switch(settings.assistant.enabled),
+            SettingRow::AssistantQuickModel
+            | SettingRow::AssistantQuickEffort
+            | SettingRow::AssistantSideModel
+            | SettingRow::AssistantSideEffort => {
+                use crate::assistant::choices;
+                let unknown = Control::Stepper {
+                    value: "".into(),
+                    index: 0,
+                    count: 1,
+                };
+                let Some((mode, is_model)) = Self::assistant_choice(row) else {
+                    return unknown;
+                };
+                let Some((catalog, selection)) = self.assistant_selection(mode, cx) else {
+                    return unknown;
+                };
+                if is_model {
+                    let options = choices::model_options(&catalog, &selection.model);
+                    Control::Stepper {
+                        value: catalog.model_label(&selection.model).into(),
+                        index: options
+                            .iter()
+                            .position(|option| *option == selection.model)
+                            .unwrap_or(0),
+                        count: options.len(),
+                    }
+                } else {
+                    let options = choices::effort_options(&catalog, &selection.model);
+                    Control::Stepper {
+                        value: catalog.effort_label(&selection.effort).into(),
+                        index: options
+                            .iter()
+                            .position(|option| *option == selection.effort)
+                            .unwrap_or(0),
+                        count: options.len(),
+                    }
+                }
+            }
             SettingRow::DocumentPageView => Control::Switch(document.page_view),
             SettingRow::DocumentPaper => Control::Segments {
                 options: vec!["A4".into(), "US Letter".into(), "Custom".into()],
@@ -976,6 +1173,41 @@ impl SettingsView {
             SettingRow::StatusCharacters => self.write(keys::STATUS_CHARACTERS, &(index != 0), cx),
             SettingRow::StatusReadingTime => {
                 self.write(keys::STATUS_READING_TIME, &(index != 0), cx)
+            }
+            SettingRow::Assistant => self.write(keys::ASSISTANT_ENABLED, &(index != 0), cx),
+            SettingRow::AssistantQuickModel
+            | SettingRow::AssistantQuickEffort
+            | SettingRow::AssistantSideModel
+            | SettingRow::AssistantSideEffort => {
+                use crate::assistant::choices;
+                let Some((mode, is_model)) = Self::assistant_choice(row) else {
+                    return;
+                };
+                let Some((catalog, selection)) = self.assistant_selection(mode, cx) else {
+                    return;
+                };
+                let (model_key, effort_key) = choices::keys_for(mode);
+                if is_model {
+                    let options = choices::model_options(&catalog, &selection.model);
+                    let Some(model) = options.get(index).cloned() else {
+                        return;
+                    };
+                    // An effort the new model does not take gives way to
+                    // the engine's default, and is stored so.
+                    let normalized = catalog.normalized(&writer_assistant::Selection {
+                        model: model.clone(),
+                        effort: selection.effort.clone(),
+                    });
+                    self.write(model_key, &choices::stored_model(&model), cx);
+                    if normalized.effort != selection.effort {
+                        self.write(effort_key, &choices::stored_effort(&normalized.effort), cx);
+                    }
+                } else {
+                    let options = choices::effort_options(&catalog, &selection.model);
+                    if let Some(effort) = options.get(index) {
+                        self.write(effort_key, &choices::stored_effort(effort), cx);
+                    }
+                }
             }
             SettingRow::DocumentPageView => {
                 self.change_document(|settings| settings.page_view = index != 0, cx)
@@ -1428,7 +1660,8 @@ impl Render for SettingsView {
         // cut at the edge of the list.
         let mut children: Vec<gpui::AnyElement> = Vec::new();
         let mut section = "";
-        for (ix, row) in self.rows(cx).into_iter().enumerate() {
+        let listed = self.rows(cx);
+        for (ix, row) in listed.iter().copied().enumerate() {
             let heading = (row.section() != section).then(|| {
                 section = row.section();
                 div()
@@ -1440,6 +1673,53 @@ impl Render for SettingsView {
                     .text_color(colors.muted)
                     .child(section)
             });
+            // What stands under a row without being a setting (and so
+            // without being a stop of the keyboard): it is part of that
+            // row's child, so that the list still has one child per row.
+            let note_after = if listed.get(ix + 1).map(|next| next.section()) != Some(section) {
+                match section {
+                    // The assistant's section ends with where the text
+                    // goes.
+                    ASSISTANT_SECTION => self
+                        .assistant_privacy_note(cx)
+                        .map(|note| (None, note, "assistant-privacy-note")),
+                    // Without its engine the assistant has no section:
+                    // one quiet line after the app's settings says what
+                    // it needs.
+                    "Status bar" => self
+                        .assistant_missing_note(cx)
+                        .map(|note| (Some(ASSISTANT_SECTION), note, "assistant-missing-note")),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let note_after = note_after.map(|(heading, note, selector)| {
+                div()
+                    .debug_selector(move || selector.into())
+                    .flex()
+                    .flex_col()
+                    .children(heading.map(|heading| {
+                        div()
+                            .px(SPACE_3)
+                            .pt(px(14.))
+                            .pb(px(4.))
+                            .text_size(UI_TEXT_XS)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(colors.muted)
+                            .child(heading)
+                    }))
+                    .child(
+                        div()
+                            .px(SPACE_3)
+                            .pt(px(4.))
+                            .pb(px(2.))
+                            .text_size(UI_TEXT_SM)
+                            .line_height(px(16.))
+                            .text_color(colors.muted)
+                            .child(note),
+                    )
+            });
             children.push(
                 div()
                     .debug_selector(move || format!("setting-{ix}"))
@@ -1449,6 +1729,7 @@ impl Render for SettingsView {
                     .flex_col()
                     .children(heading)
                     .child(self.render_row(ix, row, window, cx))
+                    .children(note_after)
                     .into_any_element(),
             );
         }

@@ -112,6 +112,17 @@ actions!(
         /// Show what agents on this Mac can do with the library: the command
         /// line tool, the skill and the MCP server.
         ShowAgents,
+        /// Ask the assistant in a small chat at the selection: about the
+        /// selected text, or a plain question when nothing is selected.
+        AskAssistant,
+        /// Go to the assistant's side chat, opening it when it is closed.
+        FocusAssistant,
+        /// Show or hide the assistant's side chat.
+        ToggleAssistant,
+        /// Start a new chat about the open document in the side chat.
+        NewAssistantChat,
+        /// Clear the side chat's conversation about the open document.
+        ClearAssistantChat,
     ]
 );
 
@@ -126,6 +137,10 @@ pub const CATEGORY_GO: &str = "Go";
 pub const CATEGORY_VIEW: &str = "View";
 /// Category of the app-wide commands.
 pub const CATEGORY_APP: &str = "App";
+/// Category of the assistant's commands. They are listed only while the
+/// assistant is shown (its engine is installed and the setting is on):
+/// see [`crate::commands::set_category_hidden`].
+pub const CATEGORY_ASSISTANT: &str = "Assistant";
 
 /// The app's context-free key bindings.
 pub fn key_bindings() -> Vec<KeyBinding> {
@@ -166,6 +181,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-p", TogglePageView, None),
         KeyBinding::new("cmd-alt-v", ToggleVimMode, None),
         KeyBinding::new("cmd-alt-a", ShowAgents, None),
+        KeyBinding::new("cmd-j", AskAssistant, None),
+        KeyBinding::new("cmd-3", FocusAssistant, None),
     ]
 }
 
@@ -354,6 +371,58 @@ pub fn spelling_commands() -> Vec<CommandDescriptor> {
             "automatic",
             "detect",
             "this document",
+        ]),
+    ]
+}
+
+/// The assistant's commands: the quick chat at the selection and the side
+/// chat beside the text. In the registry they are in a category of their
+/// own, which is hidden while the assistant is not shown.
+pub fn assistant_commands() -> Vec<CommandDescriptor> {
+    vec![
+        CommandDescriptor::new("Ask the assistant", CATEGORY_ASSISTANT, AskAssistant).keywords([
+            "ai",
+            "quick chat",
+            "question",
+            "selection",
+            "rewrite",
+            "rephrase",
+            "synonym",
+            "word",
+            "sentence",
+            "claude",
+        ]),
+        CommandDescriptor::new("Go to assistant", CATEGORY_ASSISTANT, FocusAssistant).keywords([
+            "ai",
+            "side chat",
+            "focus",
+            "open",
+            "panel",
+            "conversation",
+            "claude",
+        ]),
+        CommandDescriptor::new(
+            "Show or hide assistant",
+            CATEGORY_ASSISTANT,
+            ToggleAssistant,
+        )
+        .keywords(["ai", "side chat", "toggle", "panel", "close", "claude"]),
+        CommandDescriptor::new("New chat", CATEGORY_ASSISTANT, NewAssistantChat).keywords([
+            "ai",
+            "side chat",
+            "start",
+            "fresh",
+            "conversation",
+            "assistant",
+        ]),
+        CommandDescriptor::new("Clear chat", CATEGORY_ASSISTANT, ClearAssistantChat).keywords([
+            "ai",
+            "side chat",
+            "empty",
+            "delete",
+            "forget",
+            "conversation",
+            "assistant",
         ]),
     ]
 }

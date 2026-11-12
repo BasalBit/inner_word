@@ -45,6 +45,7 @@
 pub mod actions;
 pub mod agents;
 pub mod agents_view;
+pub mod assistant;
 pub mod automation;
 pub mod character_limit;
 pub mod commands;

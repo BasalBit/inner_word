@@ -146,6 +146,42 @@ fn version_history_lists_previews_and_restores(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_version_an_agent_left_says_why_it_was_kept(cx: &mut TestAppContext) {
+    init(cx);
+    // The library as the `writer` tool leaves it: a version kept before an agent's
+    // edit, with its label, and one kept while writing, without.
+    let clock = Clock::manual(1_800_000_000_000);
+    let mut store = writer_library::store::Store::open_in_memory_with_clock(clock.clone()).unwrap();
+    let form = StoredForm::of(&simple_document("Chapter", "Draft."), None);
+    let id = store.create_document(None, &form.content()).unwrap().id;
+    store.create_snapshot(id).unwrap();
+    clock.advance_ms(20 * MINUTE);
+    let labelled = store
+        .create_labeled_snapshot(id, "Before an edit by Claude")
+        .unwrap();
+    clock.advance_ms(MINUTE);
+    let library = cx.new(|_| Library::from_store(store).unwrap());
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
+    });
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.open_document(id, true, window, cx);
+    });
+    let view = open_history(&workspace, vcx);
+    let rows = view.read_with(vcx, |view, _| view.row_labels());
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.versions()[0].id),
+        labelled.id
+    );
+    assert_eq!(rows[0].1, "Before an edit by Claude \u{b7} 2 words");
+    assert_eq!(rows[1].1, "21 min ago \u{b7} 2 words");
+}
+
+#[gpui::test]
 fn version_history_without_versions_or_document(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);

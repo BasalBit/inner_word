@@ -8,6 +8,12 @@
 //! one. `enter` restores it: the text as it is now is saved and kept as a
 //! version first, so restoring can itself be taken back from this list.
 //!
+//! A version that was kept for a reason says so in place of how long ago it
+//! was taken: the `writer` tool keeps one before an agent changes a document
+//! and labels it ("Before an edit by Claude",
+//! `writer_store::Store::create_labeled_snapshot`), so the versions an agent
+//! left can be told from the ones kept while writing.
+//!
 //! Opened from the command palette ("Version history"). Keys, in the
 //! `"VersionHistory"` context: `up` / `down` (also `ctrl-p` / `ctrl-n`)
 //! choose a version, `home` / `end` the newest and the oldest, `pagedown` /
@@ -82,6 +88,9 @@ pub const PREVIEW_BLOCKS: usize = 200;
 
 /// Height of one row of the list.
 const ROW_HEIGHT: f32 = 46.;
+
+/// Width of the list: room for "Before a section was replaced by Claude".
+const LIST_WIDTH: f32 = 290.;
 
 /// A date and time of day in the local time zone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,15 +262,25 @@ impl VersionHistory {
         let versions = library.read(cx).snapshots(document).unwrap_or_default();
         let now_ms = library.read(cx).clock().now_ms();
         let now = LocalTime::from_unix_ms(now_ms);
+        // Why a version was kept, for those that say (the ones the `writer`
+        // tool keeps before an agent changes the document).
+        let reasons = library
+            .read(cx)
+            .store()
+            .snapshot_labels(document)
+            .unwrap_or_default();
         let labels = versions
             .iter()
             .map(|version| {
                 let then = LocalTime::from_unix_ms(version.created_at);
                 let when = version_time_label(then, now);
                 let words = counted(version.word_count as usize, "word", "words");
+                // The reason comes first: the row cuts off what does not fit.
                 // "2 hours ago" helps for today's versions; an older one
                 // already says its day.
-                let detail = if then.day_number() == now.day_number() {
+                let detail = if let Some(reason) = reasons.get(&version.id) {
+                    format!("{reason} \u{b7} {words}")
+                } else if then.day_number() == now.day_number() {
                     format!(
                         "{} \u{b7} {words}",
                         writer_comments::time::relative_time(version.created_at, now_ms)
@@ -300,7 +319,8 @@ impl VersionHistory {
     }
 
     /// The two lines of each row: when the version was taken, and how long
-    /// ago with its word count.
+    /// ago with its word count (or, for a version kept for a reason, the
+    /// reason with its word count).
     pub fn row_labels(&self) -> Vec<(String, String)> {
         self.labels
             .iter()
@@ -609,7 +629,7 @@ impl Render for VersionHistory {
                 .flex()
                 .child(
                     div()
-                        .w(px(250.))
+                        .w(px(LIST_WIDTH))
                         .flex_none()
                         .h_full()
                         .py(px(4.))

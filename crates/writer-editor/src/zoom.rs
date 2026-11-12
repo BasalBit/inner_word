@@ -156,7 +156,8 @@ impl Editor {
 
     /// Zooms the view that is showing. The line the caret is on stays
     /// where it is on screen (when it is on screen; otherwise the text at
-    /// the top of the viewport stays there). Emits
+    /// the top of the viewport stays there). "Fit page" shows the sheet
+    /// the caret is on, all of it. Emits
     /// [`EditorEvent::ZoomChanged`] when the zoom is another one. Nothing
     /// of the document changes.
     pub fn set_zoom(&mut self, zoom: Zoom, cx: &mut Context<Self>) {
@@ -169,9 +170,12 @@ impl Editor {
         // Sideways the view goes back to where it rests; the caret is
         // brought into view with the request below.
         self.layout.borrow_mut().set_scroll_x(None);
-        if let Some(viewport_y) = caret_y {
-            // The layout takes the zoom with the next frame; the request
-            // is applied then.
+        // The layout takes the zoom with the next frame; the request is
+        // applied then.
+        if zoom == Zoom::FitPage && self.page_view() {
+            // A whole sheet in the window: the one the caret is on.
+            self.defer_scroll(PendingScroll::SheetOfCaret);
+        } else if let Some(viewport_y) = caret_y {
             self.defer_scroll(PendingScroll::CaretAt { viewport_y });
         }
         cx.emit(EditorEvent::ZoomChanged);

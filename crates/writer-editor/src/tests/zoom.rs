@@ -1235,6 +1235,50 @@ fn a_sheet_wider_than_its_room_scrolls_sideways(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn fit_page_shows_the_whole_sheet_the_caret_is_on(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_wide(sample(true), cx);
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    // From the first sheet, and from one in the middle of the document
+    // with the caret near the bottom of the window.
+    for (block, autoscroll) in [(1, Autoscroll::Fit), (70, Autoscroll::Bottom)] {
+        zoom_to(&editor, Zoom::Percent(150), cx);
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::new(block, 4)), cx);
+            editor.scroll_to_caret(autoscroll, cx);
+        });
+        cx.run_until_parked();
+        let page = editor.read_with(cx, |editor, _| editor.caret_page().unwrap());
+        zoom_to(&editor, Zoom::FitPage, cx);
+        editor.read_with(cx, |editor, _| {
+            let viewport = editor.viewport_bounds().unwrap();
+            let caret = editor.caret_bounds().unwrap();
+            assert_eq!(editor.caret_page(), Some(page));
+            // The sheet the caret is on: all of it is in the window, with
+            // the same desk above it as under it.
+            let sheet = editor
+                .painted_sheets
+                .iter()
+                .find(|sheet| sheet.top() <= caret.top() && sheet.bottom() >= caret.bottom())
+                .unwrap_or_else(|| panic!("no sheet under the caret (block {block})"));
+            assert!(
+                sheet.top() >= viewport.top() && sheet.bottom() <= viewport.bottom(),
+                "block {block}: the sheet is at {sheet:?} in {viewport:?}"
+            );
+            let (above, under) = (
+                sheet.top() - viewport.top(),
+                viewport.bottom() - sheet.bottom(),
+            );
+            assert!(
+                (above - under).abs() <= px(1.),
+                "{above:?} above, {under:?} under"
+            );
+            assert!(sheet.size.height > viewport.size.height * 0.9);
+        });
+    }
+}
+
+#[gpui::test]
 fn each_view_has_its_zoom_and_a_zoom_is_not_an_edit(cx: &mut TestAppContext) {
     setup(cx);
     let (editor, cx) = open_wide(sample(false), cx);

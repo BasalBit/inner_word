@@ -75,6 +75,9 @@ pub(crate) enum PendingScroll {
         x: Pixels,
         at: gpui::Point<Pixels>,
     },
+    /// Page view: put the sheet the caret is on in the middle of the
+    /// viewport (the zoom became "fit page": the whole sheet shows).
+    SheetOfCaret,
 }
 
 /// Flow view: how far above the bottom of the viewport the last line of
@@ -332,11 +335,29 @@ impl Editor {
                 return (after.0 - before.0).abs() > px(0.01)
                     || (after.1 - before.1).abs() > px(0.01);
             }
+            if request == PendingScroll::SheetOfCaret {
+                let position = document.clamp_position(head);
+                let Some(placed) = lay.placed(position.block) else {
+                    return false;
+                };
+                let row = placed.caret_box(position.offset, head_upstream);
+                let env = lay.env();
+                let Some(geometry) = &env.page else {
+                    return false;
+                };
+                let sheet = geometry.page_at(row.top(), env.pad_top);
+                let above = ((viewport_height - geometry.sheet_height) / 2.).max(px(0.));
+                let target = geometry.sheet_top(sheet, env.pad_top) - above;
+                let before = lay.scroll_y();
+                let max = lay.layout.max_scroll();
+                lay.layout.set_scroll_y(target.clamp(px(0.), max));
+                return (lay.scroll_y() - before).abs() > px(0.01);
+            }
             let (position, mode, viewport_y) = match request {
                 PendingScroll::Position(position, mode) => (position, mode, px(0.)),
                 PendingScroll::Writing => (None, Autoscroll::Fit, px(0.)),
                 PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y / zoom),
-                PendingScroll::Anchor { .. } => return false,
+                PendingScroll::Anchor { .. } | PendingScroll::SheetOfCaret => return false,
             };
             // The caret is on the row its affinity puts it on.
             let upstream = position.is_none() && head_upstream;

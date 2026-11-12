@@ -37,7 +37,7 @@ use std::{
 use gpui::{AppContext as _, Context, Task, Window};
 use writer_core::{Block, BlockKind, Document, Position, SearchOptions, TextRange};
 use writer_editor::{Autoscroll, ViewState};
-use writer_library::{DocumentId, LibraryItem};
+use writer_library::{DocumentId, DocumentMeta, Library, LibraryItem};
 use writer_ui::Toast;
 
 use super::{
@@ -47,6 +47,7 @@ use super::{
 use crate::{
     document_io::{StoredForm, UNTITLED, derived_title, load_document},
     settings::keys,
+    view_memory::{self, TitleFlag, named_outside},
     welcome,
 };
 
@@ -59,6 +60,11 @@ pub const MAX_AUTOSAVE_WAIT: Duration = Duration::from_secs(5);
 pub const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// The minimum age of the newest version snapshot before another is taken.
 pub const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// What the toast says when a document is opened whose text was written by
+/// something other than this app since it was last open here (an agent,
+/// through the command line tool, while the app was closed).
+pub const CHANGED_OUTSIDE: &str = "This document was changed while The Writer was closed.";
 
 /// What the status bar says about saving.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,6 +143,7 @@ impl Workspace {
     /// First run: create the welcome document. Then open the document that
     /// was open last, else the most recently edited one.
     pub(crate) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconcile_title_flags(cx);
         let welcome_created: bool = self
             .library
             .read(cx)
@@ -241,19 +248,24 @@ impl Workspace {
                 cx,
             );
         }
-        let view_state: Option<ViewState> = stored
-            .view_state
-            .as_deref()
-            .and_then(|json| serde_json::from_str(json).ok())
-            .map(|mut state: ViewState| {
-                // With Vim mode on, a selection would open the document in
-                // Visual mode. Come back to the caret in Normal mode.
-                if self.settings.vim_mode {
-                    state.anchor_block = state.head_block;
-                    state.anchor_offset = state.head_offset;
-                }
-                state
-            });
+        // The caret and the scroll position, when they were taken on the
+        // text as it is now (see `view_memory`). After a change made while
+        // the app was closed the document opens at its start.
+        let remembered = if loaded.recovered_from.is_some() {
+            view_memory::Remembered::default()
+        } else {
+            view_memory::remembered(stored.view_state.as_deref(), &loaded.document)
+        };
+        let view_state: Option<ViewState> = remembered.view.map(|mut state: ViewState| {
+            // With Vim mode on, a selection would open the document in
+            // Visual mode. Come back to the caret in Normal mode.
+            if self.settings.vim_mode {
+                state.anchor_block = state.head_block;
+                state.anchor_offset = state.head_offset;
+            }
+            state
+        });
+        let custom_title = self.title_was_chosen(&stored.meta, &loaded, cx);
 
         self.editor.update(cx, |editor, cx| {
             editor.set_document(loaded.document, cx);
@@ -263,10 +275,6 @@ impl Workspace {
             }
         });
 
-        let custom_title = self
-            .library
-            .read(cx)
-            .setting_or(&keys::custom_title(id), false);
         self.session = Some(Session {
             id,
             title: stored.meta.title.clone(),
@@ -296,9 +304,89 @@ impl Workspace {
             })
             .ok();
         self.update_window_title(window);
+        if remembered.text_changed {
+            self.show_toast(
+                Toast::new(CHANGED_OUTSIDE)
+                    .action("Version History", crate::actions::ShowVersionHistory)
+                    .duration(Duration::from_secs(10)),
+                cx,
+            );
+        }
         cx.emit(WorkspaceEvent::DocumentOpened(id));
         cx.notify();
         true
+    }
+
+    /// Whether the title of the document `meta` is one somebody chose, so
+    /// that a save keeps it instead of deriving one from the text. Brings
+    /// the stored flag in line with what is found (see `view_memory`): a
+    /// flag left by an earlier document with the same id is dropped, and a
+    /// document that was named while the app was not running gets one.
+    fn title_was_chosen(
+        &mut self,
+        meta: &DocumentMeta,
+        loaded: &crate::document_io::LoadedDocument,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = keys::custom_title(meta.id);
+        let stored: Option<TitleFlag> = self.library.read(cx).setting(&key).ok().flatten();
+        let chosen = match stored {
+            Some(flag) if flag.holds_for(meta) => true,
+            // Unreadable content says nothing about the title.
+            _ => loaded.recovered_from.is_none() && named_outside(meta, &loaded.document),
+        };
+        let wanted = chosen.then(|| TitleFlag::of(meta));
+        if stored != wanted {
+            self.library
+                .update(cx, |library, cx| match wanted {
+                    Some(flag) => library.set_setting(&key, &flag, cx),
+                    None => library.remove_setting(&key, cx).map(|_| ()),
+                })
+                .ok();
+        }
+        chosen
+    }
+
+    /// Brings the per-document flags in line with the documents there are,
+    /// at launch. The app removes a flag when it deletes a document itself;
+    /// a document deleted by the command line tool leaves its flag behind,
+    /// and the library may give the id to the next document that is
+    /// created. So: a flag whose document is gone, or that was set for an
+    /// earlier document with the same id, is dropped, and a flag in the
+    /// form earlier versions stored is rewritten to name its document.
+    pub(crate) fn reconcile_title_flags(&mut self, cx: &mut Context<Self>) {
+        let changes: Vec<(String, Option<TitleFlag>)> = {
+            let library = self.library.read(cx);
+            library
+                .setting_keys()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|key| {
+                    let id = key
+                        .strip_prefix(keys::CUSTOM_TITLE_PREFIX)?
+                        .parse::<i64>()
+                        .ok()?;
+                    let stored: Option<TitleFlag> = library.setting(&key).ok().flatten();
+                    let wanted = match library.document_meta(DocumentId(id)) {
+                        Ok(meta) => stored
+                            .is_some_and(|flag| flag.holds_for(&meta))
+                            .then(|| TitleFlag::of(&meta)),
+                        Err(writer_library::StoreError::NotFound { .. }) => None,
+                        // Not known: leave it alone.
+                        Err(_) => return None,
+                    };
+                    (stored != wanted).then_some((key, wanted))
+                })
+                .collect()
+        };
+        for (key, wanted) in changes {
+            self.library
+                .update(cx, |library, cx| match wanted {
+                    Some(flag) => library.set_setting(&key, &flag, cx),
+                    None => library.remove_setting(&key, cx).map(|_| ()),
+                })
+                .ok();
+        }
     }
 
     /// Closes the open document (saving it first) and shows the empty state.
@@ -537,7 +625,7 @@ impl Workspace {
                 // thread instead of storing stale ones.
                 (!editor.stats_pending()).then(|| editor.stats()),
                 editor.state().revision(),
-                serde_json::to_string(&editor.view_state()).ok(),
+                view_memory::stored_view_state(editor),
             )
         };
         let seq = self.saver.next_seq();
@@ -774,8 +862,7 @@ impl Workspace {
             return;
         };
         let id = session.id;
-        let view_state = self.editor.read(cx).view_state();
-        let Ok(json) = serde_json::to_string(&view_state) else {
+        let Some(json) = view_memory::stored_view_state(self.editor.read(cx)) else {
             return;
         };
         if session.stored_view_state.as_deref() == Some(json.as_str()) {
@@ -870,15 +957,13 @@ impl Workspace {
     /// now on the title is theirs.
     pub(crate) fn document_renamed(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         let key = keys::custom_title(id);
+        let meta = self.library.read(cx).document_meta(id).ok();
+        // The flag names the document it is for (see `view_memory`).
+        let flag = meta.as_ref().map_or(TitleFlag::Plain(true), TitleFlag::of);
         self.library
-            .update(cx, |library, cx| library.set_setting(&key, &true, cx))
+            .update(cx, |library, cx| library.set_setting(&key, &flag, cx))
             .ok();
-        let title = self
-            .library
-            .read(cx)
-            .document_meta(id)
-            .ok()
-            .map(|meta| meta.title);
+        let title = meta.map(|meta| meta.title);
         if let Some(session) = self.session.as_mut().filter(|session| session.id == id) {
             session.custom_title.store(true, Ordering::SeqCst);
             if let Some(title) = title {
@@ -965,6 +1050,51 @@ impl Workspace {
             });
         }
         true
+    }
+}
+
+/// Drops what the sidebar stored about folders and documents that are gone
+/// (deleted for good by the command line tool while the app was closed):
+/// the open folders and the selected row. The library hands their ids out
+/// again, and a folder created later must not start out open because an
+/// earlier one was. Called before the sidebar reads its settings.
+pub(crate) fn forget_missing_sidebar_items(library: &gpui::Entity<Library>, cx: &mut gpui::App) {
+    use writer_library::{EXPANDED_FOLDERS_SETTING, FolderId, SELECTED_ITEM_SETTING, StoreError};
+    let (expanded, selected) = {
+        let library = library.read(cx);
+        let gone = |item: LibraryItem| match item {
+            LibraryItem::Folder(id) => {
+                matches!(library.folder(id), Err(StoreError::NotFound { .. }))
+            }
+            LibraryItem::Document(id) => {
+                matches!(library.document_meta(id), Err(StoreError::NotFound { .. }))
+            }
+        };
+        let stored: Vec<FolderId> = library.setting_or(EXPANDED_FOLDERS_SETTING, Vec::new());
+        let kept: Vec<FolderId> = stored
+            .iter()
+            .copied()
+            .filter(|id| !gone(LibraryItem::Folder(*id)))
+            .collect();
+        let selected: Option<LibraryItem> = library.setting_or(SELECTED_ITEM_SETTING, None);
+        (
+            (kept.len() != stored.len()).then_some(kept),
+            selected.filter(|item| gone(*item)).is_some(),
+        )
+    };
+    if let Some(kept) = expanded {
+        library
+            .update(cx, |library, cx| {
+                library.set_setting(EXPANDED_FOLDERS_SETTING, &kept, cx)
+            })
+            .ok();
+    }
+    if selected {
+        library
+            .update(cx, |library, cx| {
+                library.remove_setting(SELECTED_ITEM_SETTING, cx)
+            })
+            .ok();
     }
 }
 

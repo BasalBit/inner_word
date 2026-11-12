@@ -104,8 +104,8 @@ pub use render::{
     counted, group_digits, limit_label, panel_layout,
 };
 pub use session::{
-    AUTOSAVE_DELAY, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost, SaveState,
-    first_occurrence,
+    AUTOSAVE_DELAY, CHANGED_OUTSIDE, MAX_AUTOSAVE_WAIT, RETRY_DELAY, SNAPSHOT_INTERVAL, SaveCost,
+    SaveState, first_occurrence,
 };
 pub(crate) use session::{Session, display_title as session_title};
 pub use spelling::CHECK_SPELLING_MENU_ITEM;
@@ -247,6 +247,9 @@ impl Workspace {
             )
         });
         let modal_layer = cx.new(|_| ModalLayer::new());
+        // The sidebar reads what it stored at the last quit: not about
+        // folders and documents that were deleted since.
+        session::forget_missing_sidebar_items(&library, cx);
         let panel = cx.new(|cx| {
             let mut panel = LibraryPanel::new(library.clone(), cx);
             // One modal layer per window: the panel's pickers and

@@ -73,10 +73,11 @@ fn main() {
 /// `None` when no window could be opened at all.
 fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
     // One running copy per library: two would overwrite each other's text
-    // (see `single_instance`). The lock is held until the process ends.
+    // (see `single_instance`). The lock is held until the process ends. A
+    // command line tool that is writing right now is waited for.
     if let Ok(data_dir) = writer_library::data_dir() {
         match single_instance::acquire(&data_dir) {
-            Ok(Acquired::Lock(lock)) => cx.set_global(lock),
+            Ok(Acquired::Lock(lock)) => cx.set_global(single_instance::HeldLock(lock)),
             Ok(Acquired::Taken(running)) => {
                 let (title, message, detail) = window::already_running_text(&running);
                 eprintln!("The Writer: {title}. {message}\n{detail}");

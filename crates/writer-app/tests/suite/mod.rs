@@ -7,6 +7,7 @@ mod context_menus;
 mod export;
 mod findings;
 mod keymap;
+mod launch;
 mod mouse;
 mod saving;
 mod session;

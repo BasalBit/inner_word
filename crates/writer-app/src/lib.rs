@@ -29,6 +29,7 @@
 //! | [`version_history`] | the snapshots of the open document, a preview, restore |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
+//! | [`view_memory`] | the caret position and the chosen-title flag of a document, checked against the document as it is now |
 //! | [`character_limit`] | the character-limit indicator, counted block by block |
 //! | [`controls`] | the close control of a modal |
 //! | [`welcome`] | the welcome document, the demo library for QA |
@@ -60,6 +61,7 @@ pub mod signals;
 pub mod single_instance;
 pub mod spelling;
 pub mod version_history;
+pub mod view_memory;
 pub mod welcome;
 pub mod window;
 pub mod workspace;

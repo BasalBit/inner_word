@@ -128,7 +128,7 @@ impl Workspace {
 
             let at = Instant::now();
             let state =
-                serde_json::to_string(&self.editor.read(cx).view_state()).unwrap_or_default();
+                crate::view_memory::stored_view_state(self.editor.read(cx)).unwrap_or_default();
             let stored = self
                 .library
                 .update(cx, |library, _| library.save_view_state(id, &state));

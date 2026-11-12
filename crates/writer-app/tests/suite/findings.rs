@@ -412,6 +412,7 @@ fn a_second_copy_gets_a_window_that_says_so(cx: &mut TestAppContext) {
     let running = single_instance::RunningCopy {
         pid: Some(4321),
         data_dir: "/tmp/somewhere/The Writer".into(),
+        kind: single_instance::HolderKind::App,
     };
     let handle = cx
         .update(|cx| window::open_already_running_window(&running, false, cx))

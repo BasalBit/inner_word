@@ -19,7 +19,7 @@ use writer_ui::{
 use crate::{
     actions::{AcceptMessage, Quit},
     settings::keys,
-    single_instance::RunningCopy,
+    single_instance::{HolderKind, RunningCopy},
     workspace::Workspace,
 };
 
@@ -362,8 +362,25 @@ impl Render for ErrorView {
 }
 
 /// What the message window says when another running copy of The Writer
-/// has this library open (see [`crate::single_instance`]).
+/// has this library open (see [`crate::single_instance`]), or when the
+/// command line tool has been writing to it for longer than a launch
+/// waits.
 pub fn already_running_text(running: &RunningCopy) -> (String, String, String) {
+    if running.kind == HolderKind::Tool {
+        let tool = match running.pid {
+            Some(pid) => format!("The tool that is writing: process {pid}\n"),
+            None => String::new(),
+        };
+        return (
+            "The library is being changed right now".to_string(),
+            "An agent is writing to this library through the writer command line tool, and has \
+             been for longer than The Writer waits at launch. A write normally takes a moment. \
+             This copy has not opened the library and has changed nothing: quit, and open The \
+             Writer again when the agent is done."
+                .to_string(),
+            format!("{tool}Library folder: {}", running.data_dir.display()),
+        );
+    }
     let copy = match running.pid {
         Some(pid) => format!("The copy that is open: process {pid}\n"),
         None => String::new(),
@@ -381,7 +398,9 @@ pub fn already_running_text(running: &RunningCopy) -> (String, String, String) {
 
 /// Opens the window a second copy shows instead of the library: what is
 /// going on, a button that brings the copy that has the library to the
-/// front (and ends this one), and a button to quit.
+/// front (and ends this one), and a button to quit. When it is the command
+/// line tool that has the library there is no copy to show, and the window
+/// only offers to quit.
 ///
 /// With `may_activate` off (a scripted run, which must never bring a
 /// window to the front) the first button only ends this copy.
@@ -391,6 +410,12 @@ pub fn open_already_running_window(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<ErrorView>> {
     let (title, message, detail) = already_running_text(running);
+    if running.kind == HolderKind::Tool {
+        return open_message_window(
+            move |cx| ErrorView::new(title, message, detail, cx).as_notice(),
+            cx,
+        );
+    }
     let pid = running.pid;
     let way_out = WayOut::new("Show the Open Copy", move |_, cx| {
         if may_activate && let Some(pid) = pid {

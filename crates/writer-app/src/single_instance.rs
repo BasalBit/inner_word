@@ -14,113 +14,57 @@
 //! window that says so (see `main.rs` and
 //! [`crate::window::already_running_text`]).
 //!
+//! The lock itself is `writer_store::instance_lock`, shared with the
+//! `writer` command line tool: the tool refuses to change the library
+//! while the app holds the lock, and takes the lock itself for the moment
+//! of each write. A launch that finds the lock held by the tool therefore
+//! waits for it ([`TOOL_PATIENCE`]) instead of concluding that another
+//! copy is open; a write takes a fraction of a second. A lock held by the
+//! app is not waited for (beyond the quarter of a second the shared module
+//! allows for a holder that has not written its line yet).
+//!
 //! The lock belongs to the open file, not to the file's content: when the
 //! process ends, however it ends, the system releases it. A lock file left
 //! behind by a crash is therefore never mistaken for a running copy. The
-//! file holds the process id of the copy that has the lock, so the message
-//! can name it and the other copy can be brought to the front.
+//! file names the process that has the lock, and says when it is the tool,
+//! so the message can name it and the other copy can be brought to the
+//! front.
 //!
 //! A copy built before this guard existed takes no lock and is not seen.
 
-use std::{
-    fs::{File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    os::fd::AsRawFd,
-    path::{Path, PathBuf},
+use std::{io, path::Path, time::Duration};
+
+use writer_library::store::instance_lock;
+pub use writer_library::store::instance_lock::{
+    Acquired, HolderKind, InstanceLock, LOCK_FILE_NAME, RunningCopy,
 };
 
-/// The name of the lock file in the data directory.
-pub const LOCK_FILE_NAME: &str = "instance.lock";
+/// How long a launch waits for the command line tool to finish the write
+/// it holds the lock for, before it says that the library is in use.
+pub const TOOL_PATIENCE: Duration = Duration::from_secs(3);
 
-/// The lock of a data directory, held by this process until it is dropped
-/// (or the process ends).
+/// The lock of the data directory, kept by the app for as long as it runs.
 #[derive(Debug)]
-pub struct InstanceLock {
-    file: File,
-    path: PathBuf,
-}
+pub struct HeldLock(pub InstanceLock);
 
-impl InstanceLock {
-    /// The lock file.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for InstanceLock {
-    fn drop(&mut self) {
-        // Closing the file would release the lock too; saying it is clearer.
-        // SAFETY: the descriptor is open for as long as `self.file` lives.
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
-}
-
-impl gpui::Global for InstanceLock {}
-
-/// The copy that already has a data directory open.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunningCopy {
-    /// Its process id, when the lock file names one.
-    pub pid: Option<u32>,
-    /// The data directory both copies were asked to use.
-    pub data_dir: PathBuf,
-}
-
-/// What [`acquire`] found.
-#[derive(Debug)]
-pub enum Acquired {
-    /// This process now has the data directory to itself.
-    Lock(InstanceLock),
-    /// Another running copy has it.
-    Taken(RunningCopy),
-}
+impl gpui::Global for HeldLock {}
 
 /// Takes the lock of `data_dir` for this process, creating the directory
-/// when it does not exist yet.
+/// when it does not exist yet, and waiting up to [`TOOL_PATIENCE`] when
+/// the command line tool has it for a write.
 ///
-/// `Ok(Acquired::Taken(..))` means another running copy holds it. An `Err`
-/// means the lock could not be tried at all (the directory cannot be
-/// created or written): the caller decides; the library will most likely
-/// fail to open for the same reason and say so.
+/// `Ok(Acquired::Taken(..))` means another process still holds it: a
+/// running copy of the app, or (its `kind` says so) a tool that did not
+/// let go in time. An `Err` means the lock could not be tried at all (the
+/// directory cannot be created or written): the caller decides; the
+/// library will most likely fail to open for the same reason and say so.
 pub fn acquire(data_dir: &Path) -> io::Result<Acquired> {
-    std::fs::create_dir_all(data_dir)?;
-    let path = data_dir.join(LOCK_FILE_NAME);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)?;
-    // SAFETY: the descriptor belongs to `file`, which is open.
-    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-    if !locked {
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock {
-            return Err(error);
-        }
-        let mut text = String::new();
-        file.read_to_string(&mut text).ok();
-        return Ok(Acquired::Taken(RunningCopy {
-            pid: text.trim().parse().ok(),
-            data_dir: data_dir.to_path_buf(),
-        }));
-    }
-    // Ours: say who we are. A failure to write the id does not undo the
-    // lock; the message of a second copy is then only less specific.
-    let written = file
-        .set_len(0)
-        .and_then(|()| file.seek(SeekFrom::Start(0)).map(|_| ()))
-        .and_then(|()| writeln!(file, "{}", std::process::id()))
-        .and_then(|()| file.flush());
-    if let Err(error) = written {
-        eprintln!(
-            "The Writer: could not write {}: {error}",
-            path.to_string_lossy()
-        );
-    }
-    Ok(Acquired::Lock(InstanceLock { file, path }))
+    acquire_with_patience(data_dir, TOOL_PATIENCE)
+}
+
+/// [`acquire`] with another limit on the wait for a tool.
+pub fn acquire_with_patience(data_dir: &Path, patience: Duration) -> io::Result<Acquired> {
+    instance_lock::acquire_waiting(data_dir, HolderKind::App, patience)
 }
 
 /// Brings the copy with process id `pid` to the front. Returns whether a

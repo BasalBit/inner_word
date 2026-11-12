@@ -33,4 +33,6 @@ thiserror.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+# The tools test reads the server's own table.
+writer-mcp.workspace = true
 tempfile.workspace = true

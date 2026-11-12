@@ -38,7 +38,12 @@ alternatives. No headings and no code block around prose.
 Language: answer in the language of the user's request. Text that replaces the selection \
 stays in the language of the selection unless a translation is asked for.
 
-You cannot see the rest of the document and you cannot change it: you only answer.";
+You cannot see the rest of the document and you cannot change it: you only answer.
+
+A note about an environment may accompany the conversation: a working directory, a \
+platform, a shell. It comes from the program you run in and has nothing to do with the \
+user or their writing. Ignore it and never mention it; you are not a coding assistant \
+here. Today's date in it is right.";
 
 /// The side chat: a writing collaborator for the whole document, with the library to
 /// read from.
@@ -80,7 +85,12 @@ Format: Markdown (headings only in longer answers, lists, emphasis, block quotes
 quoted passages of the user's text). No code blocks around prose.
 
 Language: answer in the language of the user's message. Text meant for the document is in \
-the language of the document unless the user asks otherwise.";
+the language of the document unless the user asks otherwise.
+
+A note about an environment may accompany the conversation: a working directory, a \
+platform, a shell. It comes from the program you run in and has nothing to do with the \
+user or their writing. Ignore it and never mention it; you are not a coding assistant \
+here. Today's date in it is right.";
 
 /// The system prompt of a mode.
 pub fn system_prompt(mode: Mode) -> &'static str {

@@ -110,8 +110,8 @@ impl FakeReply {
         self
     }
 
-    /// The same answer with a tool call before what it has so far: the tool starts
-    /// (one event), then finishes (another).
+    /// The same answer with a tool call before its text (after the tool calls it
+    /// already has): the tool starts (one event), then finishes (another).
     pub fn with_tool(mut self, tool: impl Into<String>, description: impl Into<String>) -> Self {
         self.insert_tool(tool.into(), description.into(), ToolState::Done);
         self

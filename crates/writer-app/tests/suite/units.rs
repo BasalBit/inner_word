@@ -902,3 +902,77 @@ mod command_titles {
         }
     }
 }
+
+/// The path a toast names: `~` for the home directory, a long path
+/// shortened in the middle, the file name whole.
+mod paths_in_a_sentence {
+    use std::path::Path;
+
+    use writer_app::export::{SHORT_PATH_CHARS, display_path_from, shorten_path};
+
+    #[test]
+    fn the_home_directory_is_written_as_a_tilde() {
+        let home = Path::new("/Users/someone");
+        assert_eq!(
+            display_path_from(Path::new("/Users/someone/Documents/Essay.md"), Some(home)),
+            "~/Documents/Essay.md"
+        );
+        assert_eq!(
+            display_path_from(Path::new("/Volumes/Backup/Essay.md"), Some(home)),
+            "/Volumes/Backup/Essay.md"
+        );
+        assert_eq!(
+            display_path_from(Path::new("/Users/someone/Essay.md"), None),
+            "/Users/someone/Essay.md"
+        );
+    }
+
+    #[test]
+    fn a_path_that_fits_is_given_whole() {
+        for path in [
+            "~/Documents/The Writer Shortcuts.json",
+            "~/Essay.md",
+            "/Volumes/Backup/Essay.md",
+            "Essay.md",
+        ] {
+            assert_eq!(shorten_path(path, SHORT_PATH_CHARS), path);
+        }
+    }
+
+    #[test]
+    fn a_long_path_is_shortened_in_the_middle_and_keeps_the_file_name_whole() {
+        // The path of the capture of 0.5.0.
+        let long = "/private/tmp/claude-501/-Users-someone-Development-the-writer/\
+                    32da77ec-6880-4cdd-a335-5be772628529/scratchpad/shots-export/14/\
+                    The Writer Shortcuts.json";
+        assert_eq!(
+            shorten_path(long, SHORT_PATH_CHARS),
+            "/private/…/shots-export/14/The Writer Shortcuts.json"
+        );
+        // A real user's: the folders nearest to the file are kept.
+        let books = "~/Documents/Writing/Books/The Harbour at the End of the World/Drafts/\
+                     Third Draft/Exports/Chapter 2 - The Harbour.docx";
+        let short = shorten_path(books, SHORT_PATH_CHARS);
+        assert_eq!(short, "~/Documents/…/Exports/Chapter 2 - The Harbour.docx");
+        for (path, short) in [(long, shorten_path(long, SHORT_PATH_CHARS)), (books, short)] {
+            assert!(short.chars().count() <= SHORT_PATH_CHARS, "{short}");
+            let file = path.rsplit('/').next().unwrap();
+            assert!(short.ends_with(file), "{short}");
+            assert!(short.contains("/…/"), "{short}");
+        }
+    }
+
+    #[test]
+    fn a_file_name_that_is_long_by_itself_stays_whole() {
+        let name = "The Harbour at the End of the World, the third draft with every comment.docx";
+        let path = format!("~/Documents/Writing/Books/Exports/{name}");
+        assert_eq!(shorten_path(&path, SHORT_PATH_CHARS), format!("…/{name}"));
+        // A path with nothing between its first folder and the file has
+        // nothing to leave out.
+        let flat = format!("~/Documents/{name}");
+        assert_eq!(shorten_path(&flat, SHORT_PATH_CHARS), format!("…/{name}"));
+        // No file name at all: left as it is.
+        let folder = format!("~/{}/", "a".repeat(80));
+        assert_eq!(shorten_path(&folder, SHORT_PATH_CHARS), folder);
+    }
+}

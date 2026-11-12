@@ -72,6 +72,7 @@ mod saver;
 mod session;
 mod shortcuts;
 mod spelling;
+mod zoom;
 
 use std::time::Duration;
 
@@ -126,6 +127,7 @@ pub use shortcuts::{
     own_keys_sentence, reset_all_detail,
 };
 pub use spelling::CHECK_SPELLING_MENU_ITEM;
+pub use zoom::ZOOM_STORE_DELAY;
 
 /// The key context of the workspace root element.
 pub const KEY_CONTEXT: &str = "Workspace";
@@ -228,6 +230,8 @@ pub struct Workspace {
     /// the tools). Chosen while the keyboard is elsewhere in the window
     /// they are passed on to the text: see [`Workspace::forward_to_text`].
     pub(crate) text_commands: Vec<Box<dyn gpui::Action>>,
+    /// The zoom of the text: what the library has for it, life size.
+    pub(crate) zoom: zoom::ZoomState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -404,6 +408,7 @@ impl Workspace {
         let saver = saver::Saver::new(library.read(cx));
         let right = right_panel::RightSlot::load(library.read(cx));
         let assistant = assistant::AssistantState::new(&editor, &library, &settings, window, cx);
+        let zoom = zoom::ZoomState::new(&editor, &library, window, cx);
         let mut this = Self {
             library,
             editor,
@@ -440,6 +445,7 @@ impl Workspace {
             bounds_task: None,
             off_screen_focus: None,
             text_commands: text_commands(),
+            zoom,
             _subscriptions: subscriptions,
         };
         this.extend_the_menus_of_other_crates(cx);

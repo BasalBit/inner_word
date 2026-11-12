@@ -72,6 +72,7 @@ pub fn app_menus() -> Vec<Menu> {
 /// bar has none of its items, as the rest of the window has nothing of it.
 pub fn app_menus_with(assistant: bool) -> Vec<Menu> {
     let mut menus = base_menus();
+    crate::zoom::add_menu_items(&mut menus);
     if assistant {
         add_assistant_items(&mut menus);
     }

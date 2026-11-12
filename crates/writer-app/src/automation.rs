@@ -159,6 +159,8 @@ pub enum Step {
     TypeCost(String),
     KeyCost(Vec<Keystroke>),
     Stall(Duration),
+    /// What the zoom of the text is to become (`Workspace::zoom_step`).
+    Zoom(String),
     Quit,
 }
 
@@ -454,6 +456,12 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 .map(|key| Keystroke::parse(&unescape(key)).map_err(|err| anyhow!("{err}")))
                 .collect::<Result<Vec<_>>>()?;
             Step::KeyCost(keys)
+        }
+        "zoom" => {
+            if arg.is_empty() {
+                bail!("expected a zoom: in, out, actual, fit, page, life, a percentage");
+            }
+            Step::Zoom(arg.to_string())
         }
         "stall" => Step::Stall(Duration::from_millis(
             arg.parse().context("expected milliseconds")?,
@@ -867,6 +875,17 @@ async fn execute(
             for line in measure_keys(keys, window, view, cx).await? {
                 eprintln!("[automation] keycost: {line}");
             }
+        }
+        Step::Zoom(what) => {
+            workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                workspace.zoom_step(&what, window, cx)
+            })??;
+            // What a zoom that follows the window comes to is known after
+            // a frame.
+            frame_pause(window, view, cx).await;
+            let zoom = workspace_handle(window, cx)?
+                .update(cx, |workspace, _, cx| workspace.describe_zoom(cx))?;
+            eprintln!("[automation] zoom {what}: {zoom}");
         }
         Step::Stall(duration) => {
             reset_spelling_cost(window, cx);
@@ -1329,9 +1348,10 @@ pub fn describe_state(
         Some(menu) => menu.read(cx).labels().join(" | "),
         None => "none".to_string(),
     };
+    let zoom = workspace.describe_zoom(cx);
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
-         modal={} menu=[{menu}] sidebar={} page_view={} \
+         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \

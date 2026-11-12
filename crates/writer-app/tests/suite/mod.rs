@@ -21,6 +21,7 @@ mod spelling;
 mod story;
 mod units;
 mod versions;
+mod zoom;
 
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use writer_app::{Workspace, document_io::StoredForm};

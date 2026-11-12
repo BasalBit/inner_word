@@ -44,6 +44,7 @@
 //! | [`signals`] | `SIGTERM`, `SIGHUP` and `SIGINT` quit the way `cmd-q` does, saving first |
 //! | [`press_and_hold`] | held keys repeat while Vim mode is on (the `ApplePressAndHoldEnabled` user default) |
 //! | [`spelling`] | which spell service the workspaces use, the languages, the language picker |
+//! | [`zoom`] | the zoom of the text: its commands and keys, how it is stored, how large the display is (life size) |
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
 pub mod actions;
@@ -76,6 +77,7 @@ pub mod view_memory;
 pub mod welcome;
 pub mod window;
 pub mod workspace;
+pub mod zoom;
 
 use gpui::{Action as _, App};
 
@@ -114,6 +116,7 @@ pub fn init(cx: &mut App) {
     writer_ui::theme::init(writer_ui::ThemeMode::System, cx);
 
     cx.bind_keys(actions::key_bindings());
+    cx.bind_keys(zoom::key_bindings());
     writer_ui::init(cx);
     writer_editor::init(cx);
     writer_spell::init(cx);
@@ -172,6 +175,7 @@ pub fn init(cx: &mut App) {
 ///   overlay under "In the library".
 fn register_commands(cx: &mut App) {
     commands::register(actions::commands(), cx);
+    commands::register(zoom::commands(), cx);
     // Beside "Agents": what an agent changed last, to undo and to go to.
     commands::register(live::commands(), cx);
     // The editor and its tools title their commands Like This; the rest of

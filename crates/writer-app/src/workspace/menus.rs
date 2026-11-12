@@ -11,6 +11,7 @@
 //! | The counts in the status bar | click or right-click | which counts are shown, the character limit |
 //! | The page indicator | click turns page view off; right-click | page view, orientation, document settings |
 //! | The character-limit indicator | click or right-click | the network to count against, off |
+//! | The zoom ("125 %") | click or right-click | zoom in and out, actual size, fit width, fit page, life size, the steps (`zoom.rs`) |
 //! | The Vim mode chip | click or right-click (the Vim crate's own menu) | plus "Settings…" from here |
 //! | The text | right-click or `ctrl-enter` (the editor tools' menu) | plus "Add Comment" and "Go to Comment" from here, and "Ask the Assistant" while the assistant is shown |
 //! | A word marked as misspelled | the same menu | led by the suggestions, "Learn Spelling" and "Ignore Spelling" (the spell checker's rows, put first from here) |
@@ -56,16 +57,19 @@ pub enum MenuKind {
     Page,
     /// The character limit: on its indicator in the status bar.
     Limit,
+    /// The zoom of the text: on its percentage in the status bar.
+    Zoom,
 }
 
 impl MenuKind {
     /// Every menu of the workspace.
-    pub const ALL: [MenuKind; 5] = [
+    pub const ALL: [MenuKind; 6] = [
         MenuKind::Title,
         MenuKind::Save,
         MenuKind::Statistics,
         MenuKind::Page,
         MenuKind::Limit,
+        MenuKind::Zoom,
     ];
 
     /// The name of the menu in scripted runs (`menu:title`).
@@ -76,6 +80,7 @@ impl MenuKind {
             MenuKind::Statistics => "statistics",
             MenuKind::Page => "page",
             MenuKind::Limit => "limit",
+            MenuKind::Zoom => "zoom",
         }
     }
 
@@ -93,6 +98,7 @@ impl MenuKind {
             MenuKind::Statistics => "status-statistics",
             MenuKind::Page => "status-page",
             MenuKind::Limit => "status-limit",
+            MenuKind::Zoom => "status-zoom",
         }
     }
 
@@ -108,7 +114,7 @@ impl MenuKind {
 /// menu opened from the keyboard, from a script or by a plain click drops
 /// down from (or rises above) its control.
 #[derive(Clone, Default)]
-pub struct Anchors(Rc<[Cell<Option<Bounds<Pixels>>>; 5]>);
+pub struct Anchors(Rc<[Cell<Option<Bounds<Pixels>>>; 6]>);
 
 impl Anchors {
     /// Where the control of `kind` was drawn, if it was.
@@ -207,6 +213,7 @@ impl Workspace {
                     ContextMenuItem::action("Document Settings…", OpenDocumentSettings),
                 ]
             }
+            MenuKind::Zoom => self.zoom_menu_items(cx),
             MenuKind::Limit => {
                 let mut items = vec![ContextMenuItem::section("Count the text against")];
                 items.extend(self.limit_items(cx));

@@ -33,6 +33,9 @@ fn main() {
             // Spelling While Typing" in the real menu bar. Only here: tests
             // install a fake service and have no menu bar.
             writer_app::spelling::use_system_service(cx);
+            // How large this Mac's displays are: "Life Size", and the zoom a
+            // page opens at. Only read.
+            writer_app::zoom::use_this_mac(cx);
             writer_app::menus::manage_check_marks(cx);
             // kill, a closed terminal and ctrl-c quit like cmd-q: the open
             // document is saved first.

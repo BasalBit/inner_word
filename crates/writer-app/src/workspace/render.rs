@@ -522,7 +522,7 @@ impl Workspace {
     /// `tooltip` is `None` while a context menu is open: the pointer
     /// rests on the item whose menu has just opened above it, and a
     /// tooltip would come up over the menu.
-    fn status_item(
+    pub(super) fn status_item(
         &self,
         kind: MenuKind,
         id: &'static str,
@@ -638,6 +638,7 @@ impl Workspace {
             .filter(|text| !text.is_empty())
             .cloned()
             .collect();
+        let zoom = self.render_zoom_item(tips, cx);
         let statistics = (!counts.is_empty()).then(|| {
             self.status_item(
                 MenuKind::Statistics,
@@ -700,6 +701,7 @@ impl Workspace {
             .children(limit)
             .children(page)
             .children(statistics)
+            .children(zoom)
             .children(assistant);
 
         div()
@@ -962,6 +964,8 @@ impl Render for Workspace {
                     this.bring_the_side_chat_for_its_command(window, cx)
                 }));
         }
+        // The zoom of the text, while there is a text.
+        root = self.zoom_actions(root, cx);
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))

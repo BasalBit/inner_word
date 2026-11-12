@@ -241,7 +241,8 @@ pub struct VersionHistory {
     list_scroll: UniformListScrollHandle,
     preview_scroll: ScrollHandle,
     /// A version that is kept while the list is open (an agent changed
-    /// the document through the app) is listed at once.
+    /// the document through the app) is listed at once, and the list
+    /// closes when its document goes to the trash.
     _library: gpui::Subscription,
 }
 
@@ -264,10 +265,20 @@ impl VersionHistory {
         cx: &mut Context<Self>,
     ) -> Self {
         let (versions, labels) = Self::listing(&library, document, cx);
-        let subscription = cx.subscribe(&library, |this: &mut Self, _, event, cx| {
-            if matches!(event, LibraryEvent::SnapshotsChanged(id) if *id == this.document) {
-                this.reload(cx);
+        let subscription = cx.subscribe(&library, |this: &mut Self, _, event, cx| match event {
+            LibraryEvent::SnapshotsChanged(id) if *id == this.document => this.reload(cx),
+            // The document went to the trash or was deleted while its
+            // versions are listed (an agent did it, through the app): the
+            // window closes the document, and the list goes with it.
+            LibraryEvent::DocumentTrashed(id) | LibraryEvent::DocumentPurged(id)
+                if *id == this.document =>
+            {
+                cx.emit(DismissEvent)
             }
+            LibraryEvent::FolderTrashed { documents, .. } if documents.contains(&this.document) => {
+                cx.emit(DismissEvent)
+            }
+            _ => {}
         });
         let mut this = Self {
             workspace,

@@ -2181,3 +2181,28 @@ fn what_was_noted_about_a_text_does_not_hold_for_the_next_one(cx: &mut TestAppCo
     // The agent's change is where it was made.
     assert!(stored(&desk, open, cx).contains("is long"));
 }
+
+#[gpui::test]
+fn the_version_history_of_a_document_an_agent_trashes_closes(cx: &mut TestAppContext) {
+    let (desk, open, other, cx) = desk_with_two(cx);
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        workspace.toggle_version_history(window, cx);
+    });
+    cx.run_until_parked();
+    assert!(has_modal(&desk, cx));
+
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.trash_document(&TrashDocumentRequest {
+            document: open.into(),
+            write: claude(),
+        })
+    })
+    .unwrap();
+    // The document closed, and the list of its versions with it: nothing
+    // is left on screen that is about a document that is not there.
+    assert_eq!(open_id(&desk, cx), Some(other));
+    assert!(!has_modal(&desk, cx));
+    assert!(editor_focused(&desk.workspace, cx));
+    assert_eq!(editor_text(&desk.workspace, cx), "Other\nText.");
+}

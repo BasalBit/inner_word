@@ -363,9 +363,14 @@ impl Workspace {
             }
         }
         let shown = installed && self.settings.assistant.enabled;
-        self.assistant.shown = shown;
+        let was_shown = std::mem::replace(&mut self.assistant.shown, shown);
         crate::commands::set_category_hidden(CATEGORY_ASSISTANT, !shown, cx);
         crate::menus::set_assistant_shown(shown, cx);
+        if was_shown != shown {
+            // An open list of keyboard shortcuts has other rows now, and
+            // says other things about a key.
+            self.shortcuts_rows_changed(cx);
+        }
 
         // What the chats are told: what was found, and what each of them
         // asks with.

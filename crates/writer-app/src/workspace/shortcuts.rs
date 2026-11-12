@@ -105,6 +105,10 @@ pub(crate) struct ShortcutsState {
     /// The toast that says what the last export, import, reset or undo
     /// did, while it is shown.
     toast: Option<writer_ui::toast::ToastId>,
+    /// The rows of the list changed without a change of a key (a part of
+    /// the app was shown or hidden): an open list is handed them again
+    /// when the window is drawn next.
+    stale: bool,
 }
 
 impl ShortcutsState {
@@ -501,6 +505,29 @@ impl Workspace {
         if let Some(listing) = self.shortcuts_listing(cx) {
             list.update(cx, |list, cx| list.set_listing(listing, window, cx));
         }
+    }
+
+    /// The rows of the list are other rows now, with no key changed (the
+    /// assistant was shown or hidden): an open list follows when the
+    /// window is drawn next ([`Workspace::refresh_a_stale_shortcuts_list`]).
+    pub(crate) fn shortcuts_rows_changed(&mut self, cx: &mut Context<Self>) {
+        self.shortcuts.stale = true;
+        cx.notify();
+    }
+
+    /// Hands an open list its rows again when they changed behind it.
+    /// Called as the window is drawn.
+    pub(crate) fn refresh_a_stale_shortcuts_list(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !std::mem::take(&mut self.shortcuts.stale) || self.shortcuts_list(cx).is_none() {
+            return;
+        }
+        cx.defer_in(window, |this, window, cx| {
+            this.refresh_shortcuts_list(window, cx)
+        });
     }
 
     /// [`listing`] as this window's list shows it: with what it says about

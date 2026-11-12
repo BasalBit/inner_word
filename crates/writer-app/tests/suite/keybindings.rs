@@ -3373,3 +3373,244 @@ fn the_keymap_writes_a_key_as_the_list_shows_it(cx: &mut TestAppContext) {
         }
     });
 }
+
+/// What GPUI does with a key of the window against a key the library has
+/// "wherever the keyboard is in it" (the key context `LibraryPanel`
+/// without `!TextField`: the arrows, the page keys, `tab`), which the
+/// description of the places has only in part (`keymap::places`, "What is
+/// not exact").
+///
+/// The library has the keyboard itself (on a row) or in its filter field.
+/// A binding without a key context ranks like the deepest one. On a row
+/// the library's binding is at that same rank and comes later: it keeps
+/// the key, as the keymap says. In the filter field it lies one level
+/// further out: the window's command gets a key that the field does not
+/// bind itself. The keymap ranks the library's context as if the keyboard
+/// were always on it, so its sentence about such a pair ("where both apply
+/// the library's command keeps it") is true of the rows and not of the
+/// filter field. Whether a key is taken does not rest on that sentence
+/// for any default key: every key the library binds this way is also a
+/// key of a list or a dialog that never has the keyboard itself, which a
+/// key of the window does take.
+#[gpui::test]
+fn a_key_of_the_window_against_a_key_of_the_whole_library(cx: &mut TestAppContext) {
+    use writer_keymap::{Overlap, VerdictKind};
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    // A command of the window that has no key by default stands at the
+    // front of the keymap: every binding of the library comes later.
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    let focus_tree = Target::new("library_panel::FocusTree", Some("LibraryPanel"));
+
+    // What the keymap says about the pair.
+    let judged = verdict(&history, "tab", vcx);
+    let library = judged
+        .elsewhere
+        .iter()
+        .find(|holder| holder.target == focus_tree)
+        .expect("the library's command is named");
+    assert_eq!(library.overlap, Overlap::HolderWinsThere);
+
+    // What GPUI does.
+    change(&workspace, vcx, |keymap| {
+        keymap.add_key(&history, key("tab"))
+    });
+    vcx.simulate_keystrokes("cmd-0");
+    vcx.run_until_parked();
+    assert_eq!(
+        runs("tab", vcx).as_deref(),
+        Some("library_panel::FocusTree"),
+        "on a row the library keeps the key"
+    );
+    vcx.simulate_keystrokes("cmd-f");
+    vcx.run_until_parked();
+    let stack = vcx.update(|window, _| format!("{:?}", window.context_stack()));
+    assert!(stack.ends_with("TextField]"), "{stack}");
+    assert_eq!(
+        runs("tab", vcx).as_deref(),
+        Some("workspace::ShowVersionHistory"),
+        "in the filter field the window's command gets it"
+    );
+    // A key the field binds itself is the field's first, there.
+    change(&workspace, vcx, |keymap| {
+        keymap.add_key(&history, key("pagedown"))
+    });
+    assert_eq!(
+        runs("pagedown", vcx).as_deref(),
+        Some("text_field::PageDown")
+    );
+
+    // The verdict's kind does not rest on the inexact sentence: for every
+    // key the library has wherever the keyboard is in it, a command of
+    // the window that asks for it is told "taken" (a list or a dialog has
+    // the key too, and would lose it) or is refused.
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        let effective = listing.keymap.effective();
+        let comments = Target::new("comments::ToggleComments", None);
+        let mut asked = 0;
+        for state in effective.targets() {
+            if state.target.context.text() != Some("LibraryPanel") {
+                continue;
+            }
+            for default in &state.default_keys {
+                for window_wide in [&history, &comments] {
+                    asked += 1;
+                    let judged = listing.keymap.check(window_wide, default, None);
+                    assert!(
+                        matches!(judged.kind(), VerdictKind::Taken | VerdictKind::Refused),
+                        "{window_wide} given {default} of {}: {judged:?}",
+                        state.target
+                    );
+                }
+            }
+        }
+        assert!(asked >= 30, "{asked}");
+    });
+}
+
+/// The toast after an export names the file in a form that fits: the
+/// folders in the middle of a long path are left out, the file name is
+/// whole, and the message is drawn inside the toast. (0.5.0: "Exported the
+/// keyboard shortcuts to /private/tmp/claude-501/-Users-…", cut off at the
+/// right edge of the toast.) The same for the export of a document.
+#[gpui::test]
+fn the_toast_after_an_export_names_a_path_that_fits(cx: &mut TestAppContext) {
+    use writer_app::export::{
+        ExportChoice, ExportDestination, ExportScope, SHORT_PATH_CHARS, short_path,
+    };
+    use writer_export::ExportFormat;
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let folder = out
+        .path()
+        .join("Writing and other things")
+        .join("Books of the last ten years")
+        .join("The Harbour at the End of the World")
+        .join("Exports for the editor");
+    std::fs::create_dir_all(&folder).unwrap();
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+
+    let drawn = |workspace: &Entity<Workspace>, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        workspace.read_with(cx, |workspace, cx| {
+            let layer = workspace.toast_layer().read(cx);
+            let id = *layer.ids().last().expect("a toast is shown");
+            (
+                layer.toasts().last().unwrap().message.to_string(),
+                layer.drawn_message(id).expect("the toast was drawn"),
+            )
+        })
+    };
+    let check = |message: &str, before: &str, file: &std::path::Path| {
+        let path = message
+            .strip_prefix(before)
+            .unwrap_or_else(|| panic!("{message}"));
+        let name = file.file_name().unwrap().to_string_lossy();
+        assert_eq!(path, short_path(file), "{message}");
+        assert!(path.ends_with(&format!("/{name}")), "{message}");
+        assert!(path.contains("/\u{2026}/"), "{message}");
+        assert!(path.chars().count() <= SHORT_PATH_CHARS, "{message}");
+        assert!(!path.contains("Books of the last ten years"), "{message}");
+    };
+
+    // The shortcuts.
+    let file = folder.join("The Writer Shortcuts.json");
+    export_to(&file, vcx);
+    let (message, shown) = drawn(&workspace, vcx);
+    check(&message, "Exported the keyboard shortcuts to ", &file);
+    assert!(!shown.is_cut(), "{shown:?}");
+    assert_eq!(shown.text, message);
+    assert!(shown.lines.len() <= 2, "{shown:?}");
+    for line in &shown.lines {
+        assert!(*line <= shown.width + gpui::px(0.5), "{shown:?}");
+    }
+
+    // A document.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace
+            .toast_layer()
+            .update(cx, |layer, cx| layer.clear(cx));
+        workspace.export(
+            ExportChoice::new(
+                ExportScope::Document,
+                ExportFormat::Markdown,
+                ExportDestination::File,
+            ),
+            window,
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+    let file = folder.join("Keys.md");
+    let target = file.clone();
+    vcx.simulate_new_path_selection(move |_| Some(target));
+    vcx.run_until_parked();
+    assert!(file.exists());
+    let (message, shown) = drawn(&workspace, vcx);
+    check(&message, "Exported \u{201c}Keys\u{201d} to ", &file);
+    assert!(!shown.is_cut(), "{shown:?}");
+    for line in &shown.lines {
+        assert!(*line <= shown.width + gpui::px(0.5), "{shown:?}");
+    }
+
+    // A message that is far too long for any toast ends in an ellipsis
+    // inside the toast (an error with a long reason).
+    workspace.update(vcx, |workspace, cx| {
+        workspace.toast_layer().update(cx, |layer, cx| {
+            layer.clear(cx);
+            layer.push(
+                writer_ui::Toast::new(format!(
+                    "Could not write {}: {}",
+                    short_path(&file),
+                    "the volume is read-only and ".repeat(20)
+                ))
+                .error(),
+                cx,
+            );
+        })
+    });
+    let (_, shown) = drawn(&workspace, vcx);
+    assert!(shown.is_cut(), "{shown:?}");
+    assert_eq!(shown.lines.len(), writer_ui::toast::MESSAGE_LINES);
+    for line in &shown.lines {
+        assert!(*line <= shown.width + gpui::px(0.5), "{shown:?}");
+    }
+}
+
+/// An open list of keyboard shortcuts follows when the assistant is found
+/// (or switched off) behind it: its rows, and what it says about a key.
+#[gpui::test]
+fn an_open_list_follows_when_the_assistant_is_shown_or_hidden(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_with_the_assistant(cx);
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    let new_chat = Target::new("assistant::NewChat", Some("AssistantPanel"));
+    let view = open_list_at(&workspace, &new_chat, vcx);
+    let with_it = view.read_with(vcx, |view, _| view.listed().len());
+    switch_the_assistant(&workspace, false, vcx);
+    let without_it = view.read_with(vcx, |view, _| view.listed().len());
+    assert!(
+        without_it + 25 < with_it,
+        "{with_it} rows with the assistant, {without_it} without"
+    );
+    assert!(
+        !view.update(vcx, |view, cx| view.select_target(&new_chat, cx)),
+        "the row of a hidden command is gone"
+    );
+    // The open list asks the keymap that knows the assistant is hidden.
+    assert!(view.update(vcx, |view, cx| view.select_target(&history, cx)));
+    press(vcx, "enter");
+    press(vcx, "cmd-alt-k");
+    let (title, says, choices) = question(&view, vcx);
+    assert!(
+        !says.to_lowercase().contains("clear chat"),
+        "{title}: {says}"
+    );
+    assert!(
+        !choices.iter().any(|choice| choice.starts_with("Take It")),
+        "{choices:?}"
+    );
+    choose(&view, Choice::Cancel, vcx);
+    // And back.
+    switch_the_assistant(&workspace, true, vcx);
+    assert_eq!(view.read_with(vcx, |view, _| view.listed().len()), with_it);
+    assert!(view.update(vcx, |view, cx| view.select_target(&new_chat, cx)));
+}

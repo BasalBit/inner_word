@@ -99,10 +99,37 @@ pub fn home_context(action: &str) -> Option<&'static str> {
 }
 
 /// What `writer-keymap` is told about the places of the window: where
-/// text is typed, which key context can lie inside which, and which never
-/// has the keyboard itself (the keyboard is always in something inside
-/// it). It judges from this whether a key would stop text from being
-/// typed and whether two commands on one key get in each other's way.
+/// text is typed, which key context can lie inside which, which never has
+/// the keyboard itself (the keyboard is always in something inside it),
+/// and which is only around another (the tools around the text). It
+/// judges from this whether a key would stop text from being typed and
+/// whether two commands on one key get in each other's way. A new key
+/// context of a crate goes in here.
+///
+/// What the keymap is told besides, with every change of a key: the rows
+/// of the list and the names of their places ([`refresh_listed`]). Two
+/// rows under one place name are in the same place, whatever their key
+/// contexts are.
+///
+/// # What is not exact
+///
+/// The library has the keyboard itself (on a row) or in its filter field.
+/// Its key context without `!TextField` (the arrows, the page keys,
+/// `tab`: "wherever the keyboard is in the library") is ranked as if the
+/// keyboard were always on it. Against a command of the window on the
+/// same key that is right on a row (the later binding wins) and wrong in
+/// the filter field, where GPUI ranks the binding without a key context
+/// like the deepest one and the library's lies one level out: there the
+/// window's command gets a key the field does not bind itself. So the
+/// sentence "where both apply the library's command keeps it" is true of
+/// the rows only. To say it exactly the verdict would need a kind of its
+/// own ("keeps it on the rows, loses it in the field"), which nothing
+/// that words a verdict has. Whether such a key is *taken* does not rest
+/// on it for any default key: each of them is also a key of a list or a
+/// dialog that never has the keyboard itself, which a key of the window
+/// does take (`tests/suite/keybindings.rs`,
+/// `a_key_of_the_window_against_a_key_of_the_whole_library`, holds both
+/// what GPUI does and this).
 pub fn places() -> Places {
     use writer_assistant_quick::actions::KEY_CONTEXT as QUICK_CHAT;
     use writer_assistant_ui::actions as chat;

@@ -838,6 +838,7 @@ impl Render for Workspace {
         self.note_right_panel_focus(window, cx);
         self.follow_the_text(cx);
         self.close_a_hidden_quick_chat(window, cx);
+        self.refresh_a_stale_shortcuts_list(window, cx);
         let layout = self.side_panels(window, cx);
         // Where the title and the status bar items are is noted again as
         // they are drawn.

@@ -719,6 +719,41 @@ mod tests {
     }
 
     #[test]
+    fn a_command_bound_in_two_key_contexts_of_one_place_is_named_once() {
+        // The find bar binds "case sensitive" for the bar and for its
+        // field. "Find next" (in the field) on that key: taken by one
+        // command, said once, and not once more as a command that "keeps
+        // it in the rest of its place".
+        let find_next = Target::new("tools::FindNext", Some("FindBar > TextField"));
+        let asked = ask(&find_next, "cmd-alt-c", &[]);
+        assert_eq!(asked.title, "⌥⌘C is taken");
+        assert_eq!(asked.mark, Tone::Stop);
+        let about_it: Vec<&(Tone, String)> = asked
+            .lines
+            .iter()
+            .filter(|(_, text)| text.contains("“Case sensitive”"))
+            .collect();
+        assert_eq!(about_it.len(), 1, "{:?}", asked.lines);
+        assert_eq!(
+            *about_it[0],
+            (
+                Tone::Stop,
+                "⌥⌘C is the key of “Case sensitive” in the find bar. Only one of the two can \
+                 have it there."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            asked.choices,
+            [
+                "Take It from “Case sensitive”",
+                "Press Another Key",
+                "Cancel"
+            ]
+        );
+    }
+
+    #[test]
     fn a_character_is_refused() {
         let asked = ask(&bold(), "b", &[]);
         assert_eq!(asked.title, "B cannot be used");

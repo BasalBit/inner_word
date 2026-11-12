@@ -118,7 +118,14 @@ pub(crate) fn lower_first(text: &str) -> String {
     }
 }
 
+/// `text` as the start of a sentence: its first letter in upper case,
+/// unless its first word is written with a capital of its own further in
+/// ("macOS keeps ..." stays as it is).
 pub(crate) fn upper_first(text: &str) -> String {
+    let first_word = text.split_whitespace().next().unwrap_or_default();
+    if first_word.chars().any(char::is_uppercase) {
+        return text.to_string();
+    }
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
@@ -241,16 +248,26 @@ pub(crate) fn verdict_words(
         };
     }
 
+    // A command the keymap holds in several key contexts of one place is
+    // one command to the user (one row of the list): where it has the key
+    // in the same place as this one, that is said once, and not again for
+    // its other key context ("... keeps it in the rest of its place").
+    let called = |holder: &Holder| (names.title(&holder.target), names.place(&holder.target));
+    let taken: Vec<(String, String)> = verdict.taken.iter().map(called).collect();
+    let said_as_taken = |holder: &&Holder| !taken.contains(&called(holder));
     let keeps: Vec<&Holder> = overlapping(verdict)
         .filter(|holder| holder.overlap == Overlap::HolderWinsThere)
+        .filter(said_as_taken)
         .collect();
     let yields: Vec<&Holder> = overlapping(verdict)
         .filter(|holder| holder.overlap != Overlap::HolderWinsThere)
+        .filter(said_as_taken)
         .collect();
     let apart: Vec<&Holder> = verdict
         .elsewhere
         .iter()
         .filter(|holder| holder.overlap == Overlap::Apart)
+        .filter(said_as_taken)
         .collect();
     let system = verdict.warnings.iter().find_map(|warning| match warning {
         Warning::SystemUses(system) => Some(system),
@@ -259,13 +276,13 @@ pub(crate) fn verdict_words(
     let editing = verdict.warnings.contains(&Warning::EditingKey);
     let special = verdict.warnings.contains(&Warning::SpecialCharacter);
 
-    // The sentences, the most important first.
-    let mut lines = Vec::new();
+    // The sentences, the most important first; none twice.
+    let mut lines: Vec<Line> = Vec::new();
     for holder in &verdict.taken {
-        lines.push(Line::new(
-            Tone::Stop,
-            holder_text(holder, &verdict.key, names),
-        ));
+        let text = holder_text(holder, &verdict.key, names);
+        if !lines.iter().any(|line| line.text == text) {
+            lines.push(Line::new(Tone::Stop, text));
+        }
     }
     for warning in &verdict.warnings {
         if matches!(warning, Warning::SystemUses(_)) {
@@ -276,10 +293,10 @@ pub(crate) fn verdict_words(
         lines.push(Line::new(Tone::Warning, seen.warning.clone()));
     }
     for holder in &keeps {
-        lines.push(Line::new(
-            Tone::Warning,
-            holder_text(holder, &verdict.key, names),
-        ));
+        let text = holder_text(holder, &verdict.key, names);
+        if !lines.iter().any(|line| line.text == text) {
+            lines.push(Line::new(Tone::Warning, text));
+        }
     }
     for warning in &verdict.warnings {
         if !matches!(warning, Warning::SystemUses(_)) {
@@ -290,10 +307,10 @@ pub(crate) fn verdict_words(
     // those in places of their own in one sentence (`escape` and the arrows
     // are keys of many places).
     for holder in &yields {
-        lines.push(Line::new(
-            Tone::Plain,
-            holder_text(holder, &verdict.key, names),
-        ));
+        let text = holder_text(holder, &verdict.key, names);
+        if !lines.iter().any(|line| line.text == text) {
+            lines.push(Line::new(Tone::Plain, text));
+        }
     }
     if !apart.is_empty() {
         lines.push(Line::new(
@@ -659,6 +676,8 @@ pub(crate) mod tests {
             binding("editor::ToggleBold", Some("Editor"), "cmd-b"),
             binding("editor::ToggleItalic", Some("Editor"), "cmd-i"),
             binding("editor::Complete", Some("Editor"), "cmd-space"),
+            // One command to the user, bound for the bar and for its field.
+            binding("tools::CaseSensitive", Some("FindBar"), "cmd-alt-c"),
             binding(
                 "tools::CaseSensitive",
                 Some("FindBar > TextField"),
@@ -706,6 +725,12 @@ pub(crate) mod tests {
                 None,
                 "Show or hide comments",
                 "Anywhere",
+            ),
+            (
+                "tools::CaseSensitive",
+                Some("FindBar"),
+                "Case sensitive",
+                "In the find bar",
             ),
             (
                 "tools::CaseSensitive",
@@ -829,6 +854,23 @@ pub(crate) mod tests {
             waiting_help(None, false)
                 .ends_with("or press any key and choose Cancel in the question that follows.")
         );
+    }
+
+    #[test]
+    fn a_reason_becomes_a_sentence_without_spoiling_a_name() {
+        assert_eq!(upper_first("a key cannot be read"), "A key cannot be read");
+        assert_eq!(
+            upper_first("its \"keys\" is not a list"),
+            "Its \"keys\" is not a list"
+        );
+        // A key in glyphs, and a word with a capital of its own.
+        assert_eq!(upper_first("I is a character"), "I is a character");
+        assert_eq!(upper_first("⌘⇥ is kept"), "⌘⇥ is kept");
+        assert_eq!(
+            upper_first("macOS keeps ⌘⇥ for itself"),
+            "macOS keeps ⌘⇥ for itself"
+        );
+        assert_eq!(upper_first(""), "");
     }
 
     #[test]

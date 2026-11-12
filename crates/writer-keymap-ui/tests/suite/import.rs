@@ -597,6 +597,16 @@ fn a_preview_with_many_rows_of_each_kind_scrolls_and_keeps_its_choices(cx: &mut 
     let last = rows.len() - 1;
     let first_skipped = 2 + 20 + 10 + 1;
     assert!(rows[first_skipped].starts_with("Italic: "), "{rows:?}");
+    assert_eq!(
+        rows[last],
+        "A command of another version, number 11 (demo::Gone11): this version does not have \
+         the command"
+    );
+    // A long name is not cut off (for such a command it is all there is
+    // to go by): it takes a second line.
+    let long_name = bounds(cx, selector(format!("keymap-preview-name-{last}")));
+    assert!(long_name.size.height >= px(36.), "{long_name:?}");
+    assert!(long_name.size.width <= px(280.), "{long_name:?}");
 
     let check = |cx: &mut VisualTestContext| {
         let window = cx.update(|window, _| window.viewport_size());
@@ -639,6 +649,10 @@ fn a_preview_with_many_rows_of_each_kind_scrolls_and_keeps_its_choices(cx: &mut 
                 let name = bounds(cx, selector(format!("keymap-preview-name-{ix}")));
                 assert!(reason.right() <= row.right(), "row {ix}: {reason:?}");
                 assert!(name.right() <= reason.left(), "row {ix}: {name:?}");
+                assert!(
+                    name.top() >= row.top() && name.bottom() <= row.bottom(),
+                    "row {ix}: {name:?} in {row:?}"
+                );
                 assert!(reason.size.width >= px(200.), "row {ix}: {reason:?}");
                 assert!(
                     reason.top() >= row.top() && reason.bottom() <= row.bottom(),

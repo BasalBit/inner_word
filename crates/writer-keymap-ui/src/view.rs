@@ -135,7 +135,7 @@ impl KeymapView {
     pub fn new(listing: Listing, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query_field = cx.new(|cx| {
             let mut field = TextField::new(window, cx)
-                .with_placeholder("Search by name or by key")
+                .with_placeholder("Search by name, place or key")
                 .with_appearance(FieldAppearance::Borderless)
                 .with_text_size(UI_TEXT_LG);
             field.set_list_navigation(true);

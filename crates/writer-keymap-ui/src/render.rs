@@ -964,13 +964,14 @@ impl KeymapView {
                     PreviewRow::Skipped(skipped) => {
                         let reason = skipped.reason_shown();
                         inner
+                            // Not cut off either: for a command this
+                            // version does not have, the name is all
+                            // there is to go by.
                             .child(
                                 div()
                                     .debug_selector(move || format!("keymap-preview-name-{ix}"))
                                     .flex_none()
-                                    .max_w(px(260.))
-                                    .line_clamp(1)
-                                    .text_ellipsis()
+                                    .max_w(px(280.))
                                     .child(skipped.title),
                             )
                             .when_some(skipped.place, |el, place| {

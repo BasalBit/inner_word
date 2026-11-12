@@ -107,6 +107,7 @@ pub fn builtin_catalog() -> Catalog {
         quick_default,
         side_default,
         agent_default_label: DEFAULT_LABEL.to_string(),
+        agent_default_effort_label: DEFAULT_LABEL.to_string(),
         source: CatalogSource::BuiltIn {
             as_of: CATALOG_AS_OF.to_string(),
         },
@@ -205,6 +206,8 @@ pub fn catalog_from_initialize(response: &Value, version: Option<String>) -> Opt
         quick_default,
         side_default,
         agent_default_label: default_label,
+        // The effort's default is the program's too, but it is no model.
+        agent_default_effort_label: DEFAULT_LABEL.to_string(),
         source: CatalogSource::Agent { version },
     })
 }
@@ -295,6 +298,15 @@ mod tests {
         // The default's description names the model behind it.
         assert_eq!(
             catalog.agent_default_label,
+            "Claude Code's default (Fable 5.2)"
+        );
+        // The effort's default names no model.
+        assert_eq!(
+            catalog.effort_label(&crate::backend::EffortChoice::AgentDefault),
+            "Claude Code's default"
+        );
+        assert_eq!(
+            catalog.model_label(&ModelChoice::AgentDefault),
             "Claude Code's default (Fable 5.2)"
         );
         assert_eq!(

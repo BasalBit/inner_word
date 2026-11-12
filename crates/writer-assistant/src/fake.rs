@@ -795,6 +795,7 @@ pub fn fake_catalog() -> Catalog {
         quick_default: Selection::named("swift", "low"),
         side_default: Selection::named("deep", "medium"),
         agent_default_label: "Fake Agent's default".to_string(),
+        agent_default_effort_label: String::new(),
         source: CatalogSource::BuiltIn {
             as_of: "2026-11-12".to_string(),
         },

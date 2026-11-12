@@ -298,8 +298,15 @@ pub struct Catalog {
     pub quick_default: Selection,
     /// What the side chat uses until the user chooses: more capable.
     pub side_default: Selection,
-    /// The label of the choice "whatever the agent uses": "Claude Code's default".
+    /// The label of the choice "whatever the agent uses" for the model: "Claude Code's
+    /// default", with the model that is where the agent says which ("Claude Code's
+    /// default (Fable 5.2)").
     pub agent_default_label: String,
+    /// The same choice for the effort, where the name of a model has no place:
+    /// "Claude Code's default". Empty (as in a catalog stored before this field
+    /// existed): [`agent_default_label`](Self::agent_default_label) is shown.
+    #[serde(default)]
+    pub agent_default_effort_label: String,
     /// Where the list comes from.
     pub source: CatalogSource,
 }
@@ -339,7 +346,13 @@ impl Catalog {
     /// The name to show for an effort choice.
     pub fn effort_label(&self, choice: &EffortChoice) -> String {
         match choice {
-            EffortChoice::AgentDefault => self.agent_default_label.clone(),
+            EffortChoice::AgentDefault => {
+                if self.agent_default_effort_label.is_empty() {
+                    self.agent_default_label.clone()
+                } else {
+                    self.agent_default_effort_label.clone()
+                }
+            }
             EffortChoice::Named(id) => self
                 .effort(id)
                 .map(|effort| effort.name.clone())

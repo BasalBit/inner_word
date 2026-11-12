@@ -129,13 +129,18 @@ const PROPER_NOUNS: [&str; 4] = ["Markdown", "Vim", "Word", "I"];
 /// brings them to one.
 pub fn sentence_case(title: &str) -> String {
     let mut out = String::with_capacity(title.len());
+    let mut previous = "";
     for (ix, word) in title.split(' ').enumerate() {
         if ix > 0 {
             out.push(' ');
         }
         let mut chars = word.chars();
+        // "Word" is the program, except in "whole word".
+        let proper = PROPER_NOUNS.contains(&word)
+            && !(word == "Word" && previous.eq_ignore_ascii_case("whole"));
+        previous = word;
         let keeps_capital = ix == 0
-            || PROPER_NOUNS.contains(&word)
+            || proper
             || (word.chars().count() > 1
                 && word.chars().all(|ch| !ch.is_lowercase())
                 && word.chars().any(char::is_alphabetic));

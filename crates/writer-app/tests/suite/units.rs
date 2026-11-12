@@ -893,6 +893,9 @@ mod command_titles {
             ("Copy as Markdown", "Copy as Markdown"),
             ("Export as DOCX", "Export as DOCX"),
             ("Open a Word Document", "Open a Word document"),
+            // "Word" is the program, but not in "whole word" (the find
+            // bar's command read "Toggle whole Word").
+            ("Toggle Whole Word", "Toggle whole word"),
             ("", ""),
         ] {
             assert_eq!(sentence_case(given), expected);

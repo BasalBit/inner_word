@@ -23,7 +23,7 @@ use crate::document::Document;
 use crate::history::{EditKind, Entry, History, Op, push_op};
 use crate::movement::Movement;
 use crate::position::{Position, Selection, TextRange};
-use crate::settings::DocumentSettings;
+use crate::settings::{DocumentSettings, SpellingLanguage};
 use crate::stats::Stats;
 use crate::attrs::InlineAttrs;
 use crate::text::{self, CharClass};
@@ -458,6 +458,17 @@ impl EditorState {
     pub fn set_page_view(&mut self, on: bool) -> bool {
         let mut s = self.doc.settings.clone();
         s.page_view = on;
+        self.set_settings(s)
+    }
+
+    /// Sets the language the document is spell-checked in: `None` follows
+    /// the app's setting, otherwise the document overrides it (see
+    /// [`DocumentSettings::spelling_language`]). A settings change like any
+    /// other: sanitised, not undoable, bumps the revision and is reported
+    /// with `settings: true`; `false` when nothing changed.
+    pub fn set_spelling_language(&mut self, language: Option<SpellingLanguage>) -> bool {
+        let mut s = self.doc.settings.clone();
+        s.spelling_language = language;
         self.set_settings(s)
     }
 

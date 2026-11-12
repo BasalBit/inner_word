@@ -252,6 +252,88 @@ impl Typography {
     }
 }
 
+/// The language a document is spell-checked in, when the document says so
+/// itself ([`DocumentSettings::spelling_language`]).
+///
+/// The identifier of a language is whatever the spell checker of the
+/// platform calls it (`"en_GB"`, `"de"`, `"pt_BR"`); this crate does not know
+/// which languages exist, it only keeps the identifier in a tidy shape (see
+/// [`SpellingLanguage::language`]).
+///
+/// As one string ([`SpellingLanguage::as_setting_str`],
+/// [`SpellingLanguage::from_setting_str`]) it is `"auto"` or the identifier;
+/// the document format and the app's own setting both store it that way.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SpellingLanguage {
+    /// The checker detects the language of each paragraph by itself.
+    Automatic,
+    /// One language for the whole document, by its identifier. Build it
+    /// with [`SpellingLanguage::language`], which rejects what cannot be an
+    /// identifier.
+    Language(String),
+}
+
+impl SpellingLanguage {
+    /// How [`SpellingLanguage::Automatic`] is written as a setting string.
+    pub const AUTOMATIC: &'static str = "auto";
+    /// The longest identifier that is kept, in bytes.
+    pub const MAX_IDENTIFIER_LEN: usize = 40;
+
+    /// A fixed language. The identifier is trimmed; it has to start with an
+    /// ASCII letter, consist of ASCII letters, digits, `_` and `-` only and
+    /// be at most [`SpellingLanguage::MAX_IDENTIFIER_LEN`] bytes long,
+    /// otherwise there is no such language (`None`). An identifier that
+    /// spells "auto" or "automatic" (in any case) is
+    /// [`SpellingLanguage::Automatic`].
+    pub fn language(identifier: &str) -> Option<SpellingLanguage> {
+        let id = identifier.trim();
+        if id.eq_ignore_ascii_case(Self::AUTOMATIC) || id.eq_ignore_ascii_case("automatic") {
+            return Some(SpellingLanguage::Automatic);
+        }
+        let well_formed = !id.is_empty()
+            && id.len() <= Self::MAX_IDENTIFIER_LEN
+            && id.as_bytes()[0].is_ascii_alphabetic()
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        well_formed.then(|| SpellingLanguage::Language(id.to_string()))
+    }
+
+    /// Reads the one-string form: `"auto"` or a language identifier. The
+    /// same as [`SpellingLanguage::language`]; `None` for anything else
+    /// (callers treat that as "not set").
+    pub fn from_setting_str(value: &str) -> Option<SpellingLanguage> {
+        SpellingLanguage::language(value)
+    }
+
+    /// The one-string form: `"auto"` or the language identifier.
+    pub fn as_setting_str(&self) -> &str {
+        match self {
+            SpellingLanguage::Automatic => Self::AUTOMATIC,
+            SpellingLanguage::Language(id) => id,
+        }
+    }
+
+    /// The identifier of the fixed language; `None` for
+    /// [`SpellingLanguage::Automatic`].
+    pub fn identifier(&self) -> Option<&str> {
+        match self {
+            SpellingLanguage::Automatic => None,
+            SpellingLanguage::Language(id) => Some(id),
+        }
+    }
+
+    /// Whether this is [`SpellingLanguage::Automatic`].
+    pub fn is_automatic(&self) -> bool {
+        matches!(self, SpellingLanguage::Automatic)
+    }
+
+    fn sanitized(self) -> Option<SpellingLanguage> {
+        match self {
+            SpellingLanguage::Automatic => Some(SpellingLanguage::Automatic),
+            SpellingLanguage::Language(id) => SpellingLanguage::language(&id),
+        }
+    }
+}
+
 /// All per-document settings.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocumentSettings {
@@ -261,15 +343,23 @@ pub struct DocumentSettings {
     pub typography: Typography,
     /// Whether the document is shown paginated.
     pub page_view: bool,
+    /// The language this document is spell-checked in. `None` (the default)
+    /// means the document follows the app's setting; otherwise the document
+    /// overrides it, with automatic detection or with one fixed language.
+    /// A fixed language is also the proofing language of a DOCX export.
+    pub spelling_language: Option<SpellingLanguage>,
 }
 
 impl DocumentSettings {
-    /// Clamps every value into a usable range.
+    /// Clamps every value into a usable range. A spelling language whose
+    /// identifier cannot be one is dropped (the document follows the app's
+    /// setting again).
     pub fn sanitized(self) -> DocumentSettings {
         DocumentSettings {
             page: self.page.sanitized(),
             typography: self.typography.sanitized(),
             page_view: self.page_view,
+            spelling_language: self.spelling_language.and_then(SpellingLanguage::sanitized),
         }
     }
 }
@@ -291,6 +381,48 @@ mod tests {
         assert_eq!(t.line_height_for(&BlockKind::heading(2)), HEADING_MAX_LINE_HEIGHT);
         t.line_height = 1.1;
         assert_eq!(t.line_height_for(&BlockKind::heading(2)), 1.1);
+    }
+
+    #[test]
+    fn spelling_language_identifiers() {
+        use SpellingLanguage::{Automatic, Language};
+        assert_eq!(SpellingLanguage::language("en_GB"), Some(Language("en_GB".into())));
+        assert_eq!(SpellingLanguage::language("  pt-BR \n"), Some(Language("pt-BR".into())));
+        assert_eq!(SpellingLanguage::language("de"), Some(Language("de".into())));
+        assert_eq!(SpellingLanguage::language("auto"), Some(Automatic));
+        assert_eq!(SpellingLanguage::language(" Automatic "), Some(Automatic));
+        for bad in ["", "   ", "en GB", "en/GB", "1en", "_en", "é", "en\u{0}", "x".repeat(41).as_str()] {
+            assert_eq!(SpellingLanguage::language(bad), None, "{bad:?}");
+        }
+        assert!(SpellingLanguage::language(&"x".repeat(40)).is_some());
+        // The one-string form goes there and back.
+        for l in [Automatic, Language("en_AU".into())] {
+            assert_eq!(SpellingLanguage::from_setting_str(l.as_setting_str()), Some(l.clone()));
+            assert_eq!(l.is_automatic(), l.identifier().is_none());
+        }
+        assert_eq!(Language("fr".into()).identifier(), Some("fr"));
+    }
+
+    #[test]
+    fn spelling_language_is_sanitized_with_the_settings() {
+        let with = |l: Option<SpellingLanguage>| DocumentSettings {
+            spelling_language: l,
+            ..Default::default()
+        };
+        assert_eq!(DocumentSettings::default().spelling_language, None);
+        let fixed = with(Some(SpellingLanguage::Language("en_GB".into())));
+        assert_eq!(fixed.clone().sanitized(), fixed);
+        let auto = with(Some(SpellingLanguage::Automatic));
+        assert_eq!(auto.clone().sanitized(), auto);
+        // A hand-built identifier that cannot be one is dropped; one that
+        // only needs trimming is kept; "auto" is the automatic choice.
+        assert_eq!(with(Some(SpellingLanguage::Language("no such".into()))).sanitized(), with(None));
+        assert_eq!(with(Some(SpellingLanguage::Language(" de ".into()))).sanitized().spelling_language,
+            Some(SpellingLanguage::Language("de".into())));
+        assert_eq!(with(Some(SpellingLanguage::Language("AUTO".into()))).sanitized(), auto);
+        // Sanitising is a fixed point.
+        let s = with(Some(SpellingLanguage::Language(" de ".into()))).sanitized();
+        assert_eq!(s.clone().sanitized(), s);
     }
 
     #[test]

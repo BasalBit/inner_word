@@ -25,7 +25,12 @@
 //! `code`, `divider`, `page_break`), `level`, `checked`, `lang`, `align`,
 //! `indent`, `size`, `text`, `runs`. Run keys: `len`, `bold`, `italic`,
 //! `underline`, `strike`, `code`, `highlight`, `color` (`#rrggbb`), `font`,
-//! `link`, `comments` (thread ids).
+//! `link`, `comments` (thread ids). Settings keys: `page` (`paper`, `width`,
+//! `height`, `orientation`, `margins`), `typography` (`font`, `size`,
+//! `line_height`, `paragraph_spacing`), `page_view`, and `spelling_language`
+//! (`"auto"` or a language identifier such as `"en_GB"`; absent when the
+//! document follows the app's setting, which is also how a document written
+//! before the key existed reads).
 //!
 //! Reading is lenient: unknown keys are ignored, values of the wrong type
 //! fall back to defaults, and every model invariant is repaired (see
@@ -46,7 +51,7 @@ use crate::document::Document;
 use crate::fragment::Fragment;
 use crate::runs::Run;
 use crate::settings::{
-    DocumentSettings, Margins, Orientation, PageSetup, PaperSize, Typography,
+    DocumentSettings, Margins, Orientation, PageSetup, PaperSize, SpellingLanguage, Typography,
 };
 
 /// The `"format"` tag of serialised documents.
@@ -237,6 +242,8 @@ struct SettingsOut<'a> {
     typography: Option<TypographyOut<'a>>,
     #[serde(skip_serializing_if = "is_false")]
     page_view: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spelling_language: Option<&'a str>,
 }
 
 impl<'a> SettingsOut<'a> {
@@ -273,6 +280,7 @@ impl<'a> SettingsOut<'a> {
             page,
             typography,
             page_view: s.page_view,
+            spelling_language: s.spelling_language.as_ref().map(SpellingLanguage::as_setting_str),
         })
     }
 }
@@ -600,6 +608,7 @@ fn parse_settings(o: &Map<String, Value>) -> DocumentSettings {
         };
     }
     s.page_view = get_bool(o, "page_view");
+    s.spelling_language = get_str(o, "spelling_language").and_then(SpellingLanguage::from_setting_str);
     s.sanitized()
 }
 
@@ -669,6 +678,66 @@ mod tests {
         // serde path
         let via_serde: Document = serde_json::from_str(&json).unwrap();
         assert_eq!(via_serde, d);
+    }
+
+    #[test]
+    fn spelling_language_round_trips_compactly() {
+        let with = |l: Option<SpellingLanguage>| {
+            Document::new().with_settings(DocumentSettings {
+                spelling_language: l,
+                ..Default::default()
+            })
+        };
+        // Not set: nothing is written, exactly as version 0.1.0 wrote it.
+        assert_eq!(
+            with(None).to_json(),
+            r#"{"format":"the-writer-document","version":1,"blocks":[{"id":1}]}"#
+        );
+        let fixed = with(Some(SpellingLanguage::Language("en_GB".into())));
+        assert_eq!(
+            fixed.to_json(),
+            r#"{"format":"the-writer-document","version":1,"settings":{"spelling_language":"en_GB"},"blocks":[{"id":1}]}"#
+        );
+        assert_eq!(Document::from_json(&fixed.to_json()).unwrap(), fixed);
+        let auto = with(Some(SpellingLanguage::Automatic));
+        assert_eq!(
+            auto.to_json(),
+            r#"{"format":"the-writer-document","version":1,"settings":{"spelling_language":"auto"},"blocks":[{"id":1}]}"#
+        );
+        assert_eq!(Document::from_json(&auto.to_json()).unwrap(), auto);
+        let via_serde: Document = serde_json::from_str(&fixed.to_json()).unwrap();
+        assert_eq!(via_serde, fixed);
+    }
+
+    #[test]
+    fn spelling_language_is_read_leniently() {
+        let read = |settings: &str| {
+            let json = format!(r#"{{"blocks":[{{"id":1,"text":"x"}}],"settings":{settings}}}"#);
+            let d = Document::from_json(&json).unwrap();
+            d.check_invariants().unwrap();
+            d.settings().clone()
+        };
+        // A document of version 0.1.0: the key is not there.
+        let old = read(r#"{"page_view":true,"typography":{"size":19}}"#);
+        assert_eq!(old.spelling_language, None);
+        assert!(old.page_view);
+        assert_eq!(old.typography.base_size, 19.0);
+        // Trimmed; "auto" in any case; the other settings are untouched.
+        let s = read(r#"{"page_view":true,"spelling_language":"  fr_CA "}"#);
+        assert_eq!(s.spelling_language, Some(SpellingLanguage::Language("fr_CA".into())));
+        assert!(s.page_view);
+        assert_eq!(
+            read(r#"{"spelling_language":"Automatic"}"#).spelling_language,
+            Some(SpellingLanguage::Automatic)
+        );
+        // Anything that is not a usable identifier reads as "not set".
+        for bad in [r#""""#, r#""  ""#, r#""en GB""#, "7", "null", "true", r#"["en"]"#, r#"{"id":"en"}"#, r#""<script>""#] {
+            let s = read(&format!(r#"{{"spelling_language":{bad},"page_view":true}}"#));
+            assert_eq!(s.spelling_language, None, "{bad}");
+            assert!(s.page_view, "{bad}");
+        }
+        let long = format!(r#"{{"spelling_language":"{}"}}"#, "x".repeat(4000));
+        assert_eq!(read(&long).spelling_language, None);
     }
 
     #[test]

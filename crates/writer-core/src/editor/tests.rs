@@ -1552,3 +1552,56 @@ fn rtl_and_cjk_editing() {
     assert_eq!(m, vec![TextRange::in_block(1, 3, 6)]);
     check(&e);
 }
+
+#[test]
+fn spelling_language_is_a_settings_change() {
+    use crate::SpellingLanguage;
+    let mut e = EditorState::new(Document::from_blocks(vec![Block::paragraph("one two")]));
+    e.take_changes();
+    let stamps: Vec<u64> = e.document().blocks().iter().map(|b| b.revision()).collect();
+    let r = e.revision();
+    let depth = e.undo_depth();
+    assert_eq!(e.document().settings().spelling_language, None);
+
+    // Setting it bumps the revision, reports a settings change and nothing
+    // else, and is not an undo step; the blocks are untouched.
+    assert!(e.set_spelling_language(Some(SpellingLanguage::Language("en_GB".into()))));
+    assert_eq!(e.revision(), r + 1);
+    let c = e.take_changes().unwrap();
+    assert!(c.settings);
+    assert_eq!(c.blocks, None);
+    assert!(!c.comments);
+    assert_eq!(e.undo_depth(), depth);
+    assert_eq!(e.document().blocks().iter().map(|b| b.revision()).collect::<Vec<_>>(), stamps);
+    assert_eq!(
+        e.document().settings().spelling_language,
+        Some(SpellingLanguage::Language("en_GB".into()))
+    );
+
+    // The same value again is no change.
+    assert!(!e.set_spelling_language(Some(SpellingLanguage::Language(" en_GB ".into()))));
+    assert_eq!(e.revision(), r + 1);
+    assert!(e.take_changes().is_none());
+
+    // Automatic, an unusable identifier (reads as "not set"), and back to none.
+    assert!(e.set_spelling_language(Some(SpellingLanguage::Automatic)));
+    assert!(e.take_changes().unwrap().settings);
+    assert!(e.set_spelling_language(Some(SpellingLanguage::Language("not a language".into()))));
+    assert_eq!(e.document().settings().spelling_language, None);
+    assert!(!e.set_spelling_language(None));
+
+    // The other settings are kept, and an edit and its undo keep the language.
+    let mut s = e.document().settings().clone();
+    s.page_view = true;
+    s.spelling_language = Some(SpellingLanguage::Language("de".into()));
+    assert!(e.set_settings(s));
+    e.insert_text("x");
+    e.undo();
+    let s = e.document().settings();
+    assert!(s.page_view);
+    assert_eq!(s.spelling_language, Some(SpellingLanguage::Language("de".into())));
+    e.document().check_invariants().unwrap();
+    // It survives a save and a load.
+    let back = Document::from_json(&e.document().to_json()).unwrap();
+    assert_eq!(back.settings(), e.document().settings());
+}

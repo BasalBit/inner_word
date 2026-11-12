@@ -357,6 +357,12 @@ fn sanitising_settings_is_a_fixed_point() {
                 ..Typography::default()
             },
             page_view: i % 3 == 0,
+            spelling_language: match i % 4 {
+                0 => None,
+                1 => Some(writer_core::SpellingLanguage::Automatic),
+                2 => Some(writer_core::SpellingLanguage::Language(format!(" l{} ", i % 97))),
+                _ => Some(writer_core::SpellingLanguage::Language(format!("{} x", i % 97))),
+            },
         };
         let once = s.clone().sanitized();
         assert_eq!(once.clone().sanitized(), once, "{s:?}");

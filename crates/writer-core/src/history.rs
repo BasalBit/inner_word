@@ -39,7 +39,12 @@ fn op_bytes(op: &Op) -> usize {
         }
         Op::Thread { thread, .. } => {
             64 + thread.as_ref().map_or(0, |t| {
-                t.body.len() + t.author.len() + t.replies.iter().map(|r| 64 + r.body.len() + r.author.len()).sum::<usize>()
+                t.body.len()
+                    + t.author.len()
+                    + t.replies
+                        .iter()
+                        .map(|r| 64 + r.body.len() + r.author.len())
+                        .sum::<usize>()
             })
         }
     }

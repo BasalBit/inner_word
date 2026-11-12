@@ -37,7 +37,11 @@ impl Rng {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
     fn below(&mut self, n: usize) -> usize {
-        if n == 0 { 0 } else { (self.next() % n as u64) as usize }
+        if n == 0 {
+            0
+        } else {
+            (self.next() % n as u64) as usize
+        }
     }
     fn chance(&mut self, percent: u64) -> bool {
         self.next() % 100 < percent
@@ -55,16 +59,81 @@ fn seeds(default: u64) -> u64 {
 }
 
 const PIECES: &[&str] = &[
-    "a", "b", "word", " ", "  ", "é", "e\u{301}", "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}",
-    "中文", "שלום", "\n", "\u{1100}", "\u{1161}", "\u{1F1EB}\u{1F1F7}", "*", "**", "_", "`", "#",
-    "-", "\"", "'", ".", "=", "~", "1.", "[ ]", ">", "x", "\t", "\r\n", "Σ", "ς", "İ", "  \n",
-    "\u{0}", "\u{2028}", "a\u{308}\u{301}",
+    "a",
+    "b",
+    "word",
+    " ",
+    "  ",
+    "é",
+    "e\u{301}",
+    "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+    "中文",
+    "שלום",
+    "\n",
+    "\u{1100}",
+    "\u{1161}",
+    "\u{1F1EB}\u{1F1F7}",
+    "*",
+    "**",
+    "_",
+    "`",
+    "#",
+    "-",
+    "\"",
+    "'",
+    ".",
+    "=",
+    "~",
+    "1.",
+    "[ ]",
+    ">",
+    "x",
+    "\t",
+    "\r\n",
+    "Σ",
+    "ς",
+    "İ",
+    "  \n",
+    "\u{0}",
+    "\u{2028}",
+    "a\u{308}\u{301}",
 ];
 
 const TYPED: &[&str] = &[
-    "a", "b", "c", " ", " ", " ", "*", "_", "`", "~", "=", "#", "-", "\"", "'", ".", "1", ")",
-    "[", "]", "x", ">", "é", "\u{301}", "中", "ש", "\u{1F600}", "\u{200D}", "\u{1100}",
-    "\u{1161}", "+", "\u{1F1EB}", "(", "\t",
+    "a",
+    "b",
+    "c",
+    " ",
+    " ",
+    " ",
+    "*",
+    "_",
+    "`",
+    "~",
+    "=",
+    "#",
+    "-",
+    "\"",
+    "'",
+    ".",
+    "1",
+    ")",
+    "[",
+    "]",
+    "x",
+    ">",
+    "é",
+    "\u{301}",
+    "中",
+    "ש",
+    "\u{1F600}",
+    "\u{200D}",
+    "\u{1100}",
+    "\u{1161}",
+    "+",
+    "\u{1F1EB}",
+    "(",
+    "\t",
 ];
 
 fn random_kind(r: &mut Rng) -> BlockKind {
@@ -72,7 +141,9 @@ fn random_kind(r: &mut Rng) -> BlockKind {
         0 => BlockKind::heading(1 + r.below(6) as u8),
         1 => BlockKind::BulletItem,
         2 => BlockKind::NumberedItem,
-        3 => BlockKind::TodoItem { checked: r.chance(50) },
+        3 => BlockKind::TodoItem {
+            checked: r.chance(50),
+        },
         4 => BlockKind::Quote,
         5 => BlockKind::CodeBlock {
             language: r.chance(50).then(|| "rust".to_string()),
@@ -100,7 +171,11 @@ fn random_attrs(r: &mut Rng) -> InlineAttrs {
         a.color = Some(Rgb::new(r.below(256) as u8, 0, 9));
     }
     if r.chance(10) {
-        a.font = Some(if r.chance(80) { "Menlo".into() } else { "  ".into() });
+        a.font = Some(if r.chance(80) {
+            "Menlo".into()
+        } else {
+            "  ".into()
+        });
     }
     if r.chance(10) {
         a.link = Some(format!("https://example.com/{}", r.below(3)));
@@ -118,9 +193,14 @@ fn random_text_block(r: &mut Rng, kind: BlockKind) -> Block {
         let piece = *r.pick(PIECES);
         b = b.with_span(piece, random_attrs(r));
     }
-    b.with_alignment(*r.pick(&[Alignment::Left, Alignment::Center, Alignment::Right, Alignment::Justify]))
-        .with_indent(if r.chance(30) { r.below(4) as u8 } else { 0 })
-        .with_text_size(if r.chance(10) { Some(20.0) } else { None })
+    b.with_alignment(*r.pick(&[
+        Alignment::Left,
+        Alignment::Center,
+        Alignment::Right,
+        Alignment::Justify,
+    ]))
+    .with_indent(if r.chance(30) { r.below(4) as u8 } else { 0 })
+    .with_text_size(if r.chance(10) { Some(20.0) } else { None })
 }
 
 fn random_document(r: &mut Rng) -> Document {
@@ -206,7 +286,9 @@ impl Runner {
                 let a = random_position(r, e.document());
                 let h = match r.below(10) {
                     0..=6 => a,
-                    7..=8 => Position::new(a.block, r.below(a.offset.saturating_add(8).min(1 << 20))),
+                    7..=8 => {
+                        Position::new(a.block, r.below(a.offset.saturating_add(8).min(1 << 20)))
+                    }
                     _ => random_position(r, e.document()),
                 };
                 e.set_selection(Selection::new(a, h));
@@ -312,9 +394,21 @@ impl Runner {
             }
             56 => {
                 match r.below(8) {
-                    0 => e.set_highlight(if r.chance(70) { Some(*r.pick(&Highlight::ALL)) } else { None }),
-                    1 => e.set_text_color(if r.chance(70) { Some(Rgb::new(1, 2, 3)) } else { None }),
-                    2 => e.set_font_family(if r.chance(70) { Some("Georgia") } else { Some(" ") }),
+                    0 => e.set_highlight(if r.chance(70) {
+                        Some(*r.pick(&Highlight::ALL))
+                    } else {
+                        None
+                    }),
+                    1 => e.set_text_color(if r.chance(70) {
+                        Some(Rgb::new(1, 2, 3))
+                    } else {
+                        None
+                    }),
+                    2 => e.set_font_family(if r.chance(70) {
+                        Some("Georgia")
+                    } else {
+                        Some(" ")
+                    }),
                     3 => e.set_link(if r.chance(80) { "https://l.ink" } else { "  " }),
                     4 => e.remove_link(),
                     5 => e.toggle_highlight(*r.pick(&Highlight::ALL)),
@@ -334,7 +428,11 @@ impl Runner {
             62 => {
                 match r.below(7) {
                     0 => e.toggle_todo_checked(),
-                    1 => e.set_alignment(*r.pick(&[Alignment::Left, Alignment::Center, Alignment::Justify])),
+                    1 => e.set_alignment(*r.pick(&[
+                        Alignment::Left,
+                        Alignment::Center,
+                        Alignment::Justify,
+                    ])),
                     2 => e.step_text_size(*r.pick(&[1, -2, 30, i32::MIN])),
                     3 => e.set_text_size(Some(*r.pick(&[0.0, 13.0, 500.0, f32::NAN]))),
                     4 => e.reset_text_size(),
@@ -385,7 +483,10 @@ impl Runner {
                 // Round-trip through JSON as the clipboard would.
                 let back = Fragment::from_json(&f.to_json()).expect("fragment json");
                 assert_eq!(back, f);
-                assert_eq!(Fragment::from_plain_text(&f.to_plain_text()).to_plain_text(), f.to_plain_text());
+                assert_eq!(
+                    Fragment::from_plain_text(&f.to_plain_text()).to_plain_text(),
+                    f.to_plain_text()
+                );
                 self.clipboard.push(f);
                 "copy/cut".into()
             }
@@ -424,13 +525,19 @@ impl Runner {
                         e.add_reply(id, "reply", "you", 7);
                     }
                     2 => {
-                        let rid = e.document().comment(id).and_then(|t| t.replies.first().map(|r| r.id));
+                        let rid = e
+                            .document()
+                            .comment(id)
+                            .and_then(|t| t.replies.first().map(|r| r.id));
                         if let Some(rid) = rid {
                             e.edit_reply(id, rid, "changed");
                         }
                     }
                     3 => {
-                        let rid = e.document().comment(id).and_then(|t| t.replies.last().map(|r| r.id));
+                        let rid = e
+                            .document()
+                            .comment(id)
+                            .and_then(|t| t.replies.last().map(|r| r.id));
                         if let Some(rid) = rid {
                             e.delete_reply(id, rid);
                         }
@@ -501,7 +608,10 @@ impl Runner {
                 for s in ["k", "ka", "\u{304B}"] {
                     e.replace_range(range, s);
                     let end = e.selection().head;
-                    range = TextRange::new(Position::new(end.block, end.offset - s.len().min(end.offset)), end);
+                    range = TextRange::new(
+                        Position::new(end.block, end.offset - s.len().min(end.offset)),
+                        end,
+                    );
                 }
                 e.end_undo_group();
                 "ime".into()
@@ -621,7 +731,10 @@ impl Runner {
             assert_eq!(*o, d.numbered_ordinal(i));
         }
         let from = r.below(d.block_count() + 1);
-        assert_eq!(d.numbered_ordinals(from..d.block_count() + 3), all[from.min(all.len())..].to_vec());
+        assert_eq!(
+            d.numbered_ordinals(from..d.block_count() + 3),
+            all[from.min(all.len())..].to_vec()
+        );
         let flat = d.plain_text();
         let p = d.clamp_position(random_position(r, d));
         assert_eq!(d.position_from_flat(d.flat_offset(p)), p);
@@ -684,7 +797,8 @@ impl Runner {
                 if undoable == Undoable::No {
                     // Keep the undo-everything check meaningful: put the
                     // settings back (not undoable by design).
-                    self.e.set_settings(writer_core::DocumentSettings::default());
+                    self.e
+                        .set_settings(writer_core::DocumentSettings::default());
                 }
                 name
             }
@@ -742,7 +856,12 @@ fn run_seed(seed: u64, steps: usize) {
         let after = stamps(run.e.document());
         match run.e.take_changes() {
             None => {
-                assert_eq!(before, after, "seed {seed} step {step}: unreported change ({:?})", log.last());
+                assert_eq!(
+                    before,
+                    after,
+                    "seed {seed} step {step}: unreported change ({:?})",
+                    log.last()
+                );
                 assert_eq!(run.e.revision(), rev_before);
             }
             Some(c) => {
@@ -750,7 +869,11 @@ fn run_seed(seed: u64, steps: usize) {
                 assert_eq!(c.revision, run.e.revision());
                 if let Some(s) = c.blocks {
                     assert_eq!(before.len() - s.old_len + s.new_len, after.len());
-                    assert_eq!(before[..s.start], after[..s.start], "seed {seed} step {step}");
+                    assert_eq!(
+                        before[..s.start],
+                        after[..s.start],
+                        "seed {seed} step {step}"
+                    );
                     assert_eq!(
                         before[s.start + s.old_len..],
                         after[s.start + s.new_len..],
@@ -782,14 +905,22 @@ fn run_seed(seed: u64, steps: usize) {
             run.e.undo_depth(),
         );
     }
-    assert_eq!(Document::from_json(&final_doc.to_json()).unwrap(), final_doc, "seed {seed}");
+    assert_eq!(
+        Document::from_json(&final_doc.to_json()).unwrap(),
+        final_doc,
+        "seed {seed}"
+    );
     let mut undos = 0;
     while run.e.undo() {
         undos += 1;
         run.e.check_invariants().unwrap();
         run.record_versions();
     }
-    assert_eq!(run.e.document(), &original, "seed {seed}: undo all ({undos} steps)");
+    assert_eq!(
+        run.e.document(),
+        &original,
+        "seed {seed}: undo all ({undos} steps)"
+    );
     // Redo exactly what was undone (steps undone before the end of the
     // sequence may still be on the redo stack beyond that).
     for _ in 0..undos {
@@ -826,7 +957,9 @@ fn every_command_undoes_exactly() {
             let stamps0 = stamps(&doc0);
             let depth0 = run.e.undo_depth();
             let (what, undoable) = run.command();
-            run.e.check_invariants().unwrap_or_else(|err| panic!("seed {seed} step {step} {what}: {err}"));
+            run.e
+                .check_invariants()
+                .unwrap_or_else(|err| panic!("seed {seed} step {step} {what}: {err}"));
             if undoable == Undoable::No {
                 continue;
             }
@@ -835,7 +968,10 @@ fn every_command_undoes_exactly() {
             let stamps1 = stamps(&doc1);
             let k = run.e.undo_depth() - depth0;
             if doc1 != doc0 {
-                assert!(k >= 1, "seed {seed} step {step} {what}: change without an undo step");
+                assert!(
+                    k >= 1,
+                    "seed {seed} step {step} {what}: change without an undo step"
+                );
             }
             if k == 0 || run.r.chance(30) {
                 continue;
@@ -847,7 +983,11 @@ fn every_command_undoes_exactly() {
             let ctx = format!("seed {seed} step {step} {what} ({k} undo steps)");
             assert_eq!(run.e.document(), &doc0, "{ctx}: undo document");
             if undoable == Undoable::Yes {
-                assert_eq!(run.e.selection(), run.e.document().clamp_selection(sel0), "{ctx}: undo selection");
+                assert_eq!(
+                    run.e.selection(),
+                    run.e.document().clamp_selection(sel0),
+                    "{ctx}: undo selection"
+                );
             }
             assert_eq!(stamps(run.e.document()), stamps0, "{ctx}: undo stamps");
             for _ in 0..k {

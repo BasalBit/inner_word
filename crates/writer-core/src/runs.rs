@@ -211,7 +211,14 @@ mod tests {
 
     #[test]
     fn remove_merges_neighbours() {
-        let mut runs = vec![plain(2), Run { len: 3, attrs: bold() }, plain(2)];
+        let mut runs = vec![
+            plain(2),
+            Run {
+                len: 3,
+                attrs: bold(),
+            },
+            plain(2),
+        ];
         remove(&mut runs, 2..5);
         assert_eq!(runs, vec![plain(4)]);
         remove(&mut runs, 0..4);

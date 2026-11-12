@@ -42,7 +42,9 @@ impl EditorState {
         };
         self.edit(EditKind::Other, |ed| {
             let end = if s < e && s.block == e.block {
-                ed.update_block(s.block, |b| b.replace_text(s.offset..e.offset, &rep, &attrs));
+                ed.update_block(s.block, |b| {
+                    b.replace_text(s.offset..e.offset, &rep, &attrs)
+                });
                 Position::new(s.block, s.offset + rep.len())
             } else {
                 let p = if s < e { ed.delete_range_impl(s, e) } else { s };

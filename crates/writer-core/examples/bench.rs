@@ -15,8 +15,8 @@ use writer_core::*;
 
 fn build(blocks: usize) -> Document {
     let words = [
-        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "while", "writers",
-        "keep", "typing", "chapters", "of", "a", "very", "long", "book", "café", "naïve",
+        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "while", "writers", "keep",
+        "typing", "chapters", "of", "a", "very", "long", "book", "café", "naïve",
     ];
     let bold = InlineAttrs {
         bold: true,
@@ -27,7 +27,9 @@ fn build(blocks: usize) -> Document {
         let mut text = String::new();
         let mut k = i;
         while text.len() < 90 {
-            k = k.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            k = k
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             text.push_str(words[(k >> 33) % words.len()]);
             text.push(' ');
         }
@@ -60,7 +62,11 @@ fn per(d: Duration, n: usize) -> String {
 fn run(blocks: usize) {
     let (doc, t_build) = time(|| build(blocks));
     let bytes = doc.plain_text().len();
-    println!("\n== {blocks} blocks, {:.2} MB of text (built in {:?})", bytes as f64 / 1e6, t_build);
+    println!(
+        "\n== {blocks} blocks, {:.2} MB of text (built in {:?})",
+        bytes as f64 / 1e6,
+        t_build
+    );
     let mut e = EditorState::new(doc);
     // Comments spread through the document.
     for i in (0..blocks).step_by(97) {
@@ -71,13 +77,22 @@ fn run(blocks: usize) {
     e.set_caret(Position::new(mid, 10));
 
     let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
-    let chars: Vec<String> = text.chars().cycle().take(1000).map(|c| c.to_string()).collect();
+    let chars: Vec<String> = text
+        .chars()
+        .cycle()
+        .take(1000)
+        .map(|c| c.to_string())
+        .collect();
     let (_, t) = time(|| {
         for c in &chars {
             e.insert_text(c);
         }
     });
-    println!("type 1,000 chars mid-document     {}  total {:?}", per(t, 1000), t);
+    println!(
+        "type 1,000 chars mid-document     {}  total {:?}",
+        per(t, 1000),
+        t
+    );
 
     let start_e = e.clone();
     let mut e0 = start_e.clone();
@@ -89,7 +104,14 @@ fn run(blocks: usize) {
     });
     println!("type 1,000 chars at block 0       {}", per(t, 1000));
 
-    let moves = [Movement::Right, Movement::WordRight, Movement::Left, Movement::WordLeft, Movement::LineEnd, Movement::BlockStart];
+    let moves = [
+        Movement::Right,
+        Movement::WordRight,
+        Movement::Left,
+        Movement::WordLeft,
+        Movement::LineEnd,
+        Movement::BlockStart,
+    ];
     let (_, t) = time(|| {
         for i in 0..1000 {
             if i % 10 == 9 {
@@ -126,19 +148,38 @@ fn run(blocks: usize) {
     let (_, t) = time(|| {
         for i in 0..1000 {
             let _ = e.format_state();
-            let _ = e.document().numbered_ordinals(i % blocks..(i % blocks + 60).min(blocks));
+            let _ = e
+                .document()
+                .numbered_ordinals(i % blocks..(i % blocks + 60).min(blocks));
             let _ = e.take_changes();
         }
     });
-    println!("1,000 × (format_state + visible ordinals + take_changes) {}", per(t, 1000));
+    println!(
+        "1,000 × (format_state + visible ordinals + take_changes) {}",
+        per(t, 1000)
+    );
 
     let (n, t) = time(|| e.replace_all("fox", SearchOptions::default(), "wolf"));
     println!("replace_all {n} matches            {:?}", t);
     let (_, t) = time(|| e.undo());
     println!("undo replace_all                  {:?}", t);
-    let (m, t) = time(|| e.document().find_all("Quick", SearchOptions::default()).len());
+    let (m, t) = time(|| {
+        e.document()
+            .find_all("Quick", SearchOptions::default())
+            .len()
+    });
     println!("find_all ({m}, case-insensitive)  {:?}", t);
-    let (m, t) = time(|| e.document().find_all("quick", SearchOptions { case_sensitive: true, whole_word: true }).len());
+    let (m, t) = time(|| {
+        e.document()
+            .find_all(
+                "quick",
+                SearchOptions {
+                    case_sensitive: true,
+                    whole_word: true,
+                },
+            )
+            .len()
+    });
     println!("find_all ({m}, whole word)        {:?}", t);
 
     let (_, t) = time(|| e.document().stats());
@@ -147,14 +188,21 @@ fn run(blocks: usize) {
     e.set_caret(Position::new(mid, 3));
     e.insert_text("z");
     let (_, t2) = time(|| e.stats());
-    println!("EditorState::stats first / after one edit {:?} / {:?}", t1, t2);
+    println!(
+        "EditorState::stats first / after one edit {:?} / {:?}",
+        t1, t2
+    );
     let (_, t) = time(|| e.document().all_comment_ranges().len());
     println!("all_comment_ranges                {:?}", t);
     let (_, t) = time(|| e.document().next_comment(Position::new(mid, 0), true));
     println!("next_comment                      {:?}", t);
 
     let (json, t) = time(|| e.document().to_json());
-    println!("to_json ({:.2} MB)                {:?}", json.len() as f64 / 1e6, t);
+    println!(
+        "to_json ({:.2} MB)                {:?}",
+        json.len() as f64 / 1e6,
+        t
+    );
     let (back, t) = time(|| Document::from_json(&json).unwrap());
     println!("from_json                         {:?}", t);
     assert_eq!(&back, e.document());
@@ -171,7 +219,9 @@ fn run(blocks: usize) {
 
     // Large pastes in the middle of the document.
     let lines = blocks.min(10_000);
-    let plain: String = (0..lines).map(|i| format!("pasted line number {i}\n")).collect();
+    let plain: String = (0..lines)
+        .map(|i| format!("pasted line number {i}\n"))
+        .collect();
     e.set_caret(Position::new(mid, 3));
     let (_, t) = time(|| e.paste_plain_text(&plain));
     println!("paste_plain_text {lines} lines mid-document {:?}", t);
@@ -189,7 +239,11 @@ fn run(blocks: usize) {
     e.undo();
     e.select_all();
     let (f, t) = time(|| e.copy());
-    println!("copy everything ({} blocks)       {:?}", f.blocks().len(), t);
+    println!(
+        "copy everything ({} blocks)       {:?}",
+        f.blocks().len(),
+        t
+    );
 }
 
 /// One block holding a megabyte: typing clones the block, so this is the
@@ -200,14 +254,25 @@ fn huge_block() {
     println!("\n== one block of {:.2} MB", text.len() as f64 / 1e6);
     e.set_caret(Position::new(0, text.len() / 2));
     let (_, t) = time(|| {
-        for c in ["a", "b", " ", "c", "\"", "d", "*", "e", ".", "f"].iter().cycle().take(200) {
+        for c in ["a", "b", " ", "c", "\"", "d", "*", "e", ".", "f"]
+            .iter()
+            .cycle()
+            .take(200)
+        {
             e.insert_text(c);
         }
     });
     println!("type 200 chars                    {}", per(t, 200));
     let (_, t) = time(|| {
         for i in 0..200 {
-            e.move_caret(if i % 2 == 0 { Movement::WordLeft } else { Movement::Right }, false);
+            e.move_caret(
+                if i % 2 == 0 {
+                    Movement::WordLeft
+                } else {
+                    Movement::Right
+                },
+                false,
+            );
         }
     });
     println!("200 caret movements               {}", per(t, 200));

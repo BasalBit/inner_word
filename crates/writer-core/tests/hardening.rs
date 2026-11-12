@@ -16,13 +16,25 @@ fn p(b: usize, o: usize) -> Position {
     Position::new(b, o)
 }
 fn texts(e: &EditorState) -> Vec<String> {
-    e.document().blocks().iter().map(|b| b.text().to_string()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.text().to_string())
+        .collect()
 }
 fn kinds(e: &EditorState) -> Vec<BlockKind> {
-    e.document().blocks().iter().map(|b| b.kind().clone()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.kind().clone())
+        .collect()
 }
 fn ids(e: &EditorState) -> Vec<(BlockId, u64)> {
-    e.document().blocks().iter().map(|b| (b.id(), b.revision())).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| (b.id(), b.revision()))
+        .collect()
 }
 /// Types `s` one character at a time, as the keyboard does.
 fn typ(e: &mut EditorState, s: &str) {
@@ -74,9 +86,20 @@ fn whole_block_selection_leaves_the_following_block_untouched() {
     assert!(e.delete_selection());
     assert_eq!(texts(&e), ["Keep", "tail"]);
     assert_eq!(kinds(&e)[0], BlockKind::heading(2));
-    assert_eq!(ids(&e)[0], keep, "same id and same revision stamp: nothing to re-lay-out");
+    assert_eq!(
+        ids(&e)[0],
+        keep,
+        "same id and same revision stamp: nothing to re-lay-out"
+    );
     assert_eq!(e.selection(), Selection::caret(p(0, 0)));
-    assert_eq!(e.last_change().unwrap().blocks, Some(BlockSplice { start: 0, old_len: 2, new_len: 0 }));
+    assert_eq!(
+        e.last_change().unwrap().blocks,
+        Some(BlockSplice {
+            start: 0,
+            old_len: 2,
+            new_len: 0
+        })
+    );
     assert!(e.undo());
     assert_eq!(e.document(), &original);
     assert_eq!(e.selection(), Selection::new(p(0, 0), p(2, 0)));
@@ -92,7 +115,11 @@ fn whole_block_selection_leaves_the_following_block_untouched() {
     e.set_selection(Selection::new(p(0, 0), p(2, 0)));
     e.insert_text("x");
     assert_eq!(texts(&e), ["xKeep", "tail"]);
-    assert_eq!(kinds(&e)[0], BlockKind::heading(2), "the surviving line keeps its kind");
+    assert_eq!(
+        kinds(&e)[0],
+        BlockKind::heading(2),
+        "the surviving line keeps its kind"
+    );
 
     // A range that starts inside the first block still merges into it.
     let mut e = ed(blocks());
@@ -127,7 +154,11 @@ fn cut_whole_lines_and_paste_them_at_a_line_start() {
     // Cut the two list items as whole lines.
     e.set_selection(Selection::new(p(1, 0), p(3, 0)));
     let f = e.cut();
-    assert_eq!(f.blocks().len(), 3, "two items and the empty head of the next line");
+    assert_eq!(
+        f.blocks().len(),
+        3,
+        "two items and the empty head of the next line"
+    );
     assert_eq!(texts(&e), ["Title", "quote", "end"]);
     assert_eq!(kinds(&e)[1], BlockKind::Quote);
     // Paste them in front of "end".
@@ -145,13 +176,20 @@ fn cut_whole_lines_and_paste_them_at_a_line_start() {
         ]
     );
     assert_eq!(e.selection(), Selection::caret(p(4, 0)));
-    assert_eq!(e.document().numbered_ordinals(0..5), [None, None, Some(1), Some(2), None]);
+    assert_eq!(
+        e.document().numbered_ordinals(0..5),
+        [None, None, Some(1), Some(2), None]
+    );
     e.check_invariants().unwrap();
     // Replace a whole line by pasting over a whole-line selection.
     e.set_selection(Selection::new(p(1, 0), p(2, 0)));
     assert!(e.paste(&f));
     assert_eq!(texts(&e), ["Title", "one", "two", "one", "two", "end"]);
-    assert!(kinds(&e)[1..5].iter().all(|k| *k == BlockKind::NumberedItem));
+    assert!(
+        kinds(&e)[1..5]
+            .iter()
+            .all(|k| *k == BlockKind::NumberedItem)
+    );
     undo_redo_round_trip(&mut e, &original);
 }
 
@@ -160,7 +198,11 @@ fn cut_whole_lines_and_paste_them_at_a_line_start() {
 #[test]
 fn deleting_an_empty_line_never_restyles_the_text_next_to_it() {
     // Forward delete in an empty paragraph above a heading.
-    let mut e = ed(vec![para(""), kb(BlockKind::heading(1), "Title"), para("x")]);
+    let mut e = ed(vec![
+        para(""),
+        kb(BlockKind::heading(1), "Title"),
+        para("x"),
+    ]);
     let title = ids(&e)[1];
     assert!(e.delete_forward());
     assert_eq!(texts(&e), ["Title", "x"]);
@@ -172,7 +214,12 @@ fn deleting_an_empty_line_never_restyles_the_text_next_to_it() {
     assert_eq!(e.selection(), Selection::caret(p(0, 0)));
 
     // Backspace at the start of a paragraph below an empty heading / item.
-    for kind in [BlockKind::heading(3), BlockKind::BulletItem, BlockKind::Quote, BlockKind::code()] {
+    for kind in [
+        BlockKind::heading(3),
+        BlockKind::BulletItem,
+        BlockKind::Quote,
+        BlockKind::code(),
+    ] {
         let mut e = ed(vec![kb(kind.clone(), ""), para("text")]);
         let text = ids(&e)[1];
         e.set_caret(p(1, 0));
@@ -222,9 +269,18 @@ fn deleting_an_empty_line_never_restyles_the_text_next_to_it() {
 
 #[test]
 fn markdown_task_syntax_makes_a_todo() {
-    for (typed_text, checked) in [("- [ ] ", false), ("- [] ", false), ("* [x] ", true), ("+ [X] ", true)] {
+    for (typed_text, checked) in [
+        ("- [ ] ", false),
+        ("- [] ", false),
+        ("* [x] ", true),
+        ("+ [X] ", true),
+    ] {
         let mut e = typed(typed_text);
-        assert_eq!(kinds(&e), vec![BlockKind::TodoItem { checked }], "{typed_text:?}");
+        assert_eq!(
+            kinds(&e),
+            vec![BlockKind::TodoItem { checked }],
+            "{typed_text:?}"
+        );
         assert_eq!(texts(&e), [""]);
         typ(&mut e, "task");
         assert_eq!(texts(&e), ["task"]);
@@ -250,7 +306,10 @@ fn markdown_task_syntax_makes_a_todo() {
     assert_eq!(e.document().blocks()[0].indent(), 2);
     // Switched off with the other input rules.
     let mut e = ed(vec![kb(BlockKind::BulletItem, "")]);
-    e.set_options(EditorOptions { input_rules: false, smart_punctuation: true });
+    e.set_options(EditorOptions {
+        input_rules: false,
+        smart_punctuation: true,
+    });
     typ(&mut e, "[ ] ");
     assert_eq!(kinds(&e), vec![BlockKind::BulletItem]);
 }
@@ -260,11 +319,17 @@ fn triple_asterisk_is_bold_italic() {
     let mut e = typed("a ***both*** b");
     let b = &e.document().blocks()[0];
     assert_eq!(b.text(), "a both b");
-    let spans: Vec<(String, bool, bool)> =
-        b.text_spans().map(|(_, t, a)| (t.to_string(), a.bold, a.italic)).collect();
+    let spans: Vec<(String, bool, bool)> = b
+        .text_spans()
+        .map(|(_, t, a)| (t.to_string(), a.bold, a.italic))
+        .collect();
     assert_eq!(
         spans,
-        [("a ".to_string(), false, false), ("both".to_string(), true, true), (" b".to_string(), false, false)]
+        [
+            ("a ".to_string(), false, false),
+            ("both".to_string(), true, true),
+            (" b".to_string(), false, false)
+        ]
     );
     // Undo steps: "b", the space, then the rule (literal characters come back).
     e.undo();
@@ -276,7 +341,13 @@ fn triple_asterisk_is_bold_italic() {
     for s in ["***", "*** x ***", "a***b***", "2 *** 3 *** 4"] {
         let e = typed(s);
         assert_eq!(texts(&e), [s], "{s:?}");
-        assert!(e.document().blocks()[0].runs().iter().all(|r| r.attrs.is_plain()), "{s:?}");
+        assert!(
+            e.document().blocks()[0]
+                .runs()
+                .iter()
+                .all(|r| r.attrs.is_plain()),
+            "{s:?}"
+        );
     }
     // `**bold**` and `*italic*` are unaffected.
     let e = typed("**b** *i*");
@@ -292,11 +363,20 @@ fn smart_quotes_pair_up() {
         ("\"\"", "\u{201C}\u{201D}"),
         ("''", "\u{2018}\u{2019}"),
         ("say \"\" now", "say \u{201C}\u{201D} now"),
-        ("\"'nested' quotes\"", "\u{201C}\u{2018}nested\u{2019} quotes\u{201D}"),
-        ("'\"nested\" quotes'", "\u{2018}\u{201C}nested\u{201D} quotes\u{2019}"),
+        (
+            "\"'nested' quotes\"",
+            "\u{201C}\u{2018}nested\u{2019} quotes\u{201D}",
+        ),
+        (
+            "'\"nested\" quotes'",
+            "\u{2018}\u{201C}nested\u{201D} quotes\u{2019}",
+        ),
         ("\"'", "\u{201C}\u{2018}"),
         ("'\"", "\u{2018}\u{201C}"),
-        ("(\"a\") [\"b\"] {\"c\"}", "(\u{201C}a\u{201D}) [\u{201C}b\u{201D}] {\u{201C}c\u{201D}}"),
+        (
+            "(\"a\") [\"b\"] {\"c\"}",
+            "(\u{201C}a\u{201D}) [\u{201C}b\u{201D}] {\u{201C}c\u{201D}}",
+        ),
         ("don't won't it's", "don\u{2019}t won\u{2019}t it\u{2019}s"),
         ("dogs' bowls", "dogs\u{2019} bowls"),
         ("word\u{2014}\"quote\"", "word\u{2014}\u{201C}quote\u{201D}"),
@@ -346,9 +426,21 @@ fn sanitising_settings_is_a_fixed_point() {
     for i in 0..20_000 {
         let s = DocumentSettings {
             page: PageSetup {
-                paper: PaperSize::Custom { width: rnd(2000.0), height: rnd(2000.0) },
-                orientation: if i % 2 == 0 { Orientation::Portrait } else { Orientation::Landscape },
-                margins: Margins { top: rnd(900.0), right: rnd(900.0), bottom: rnd(900.0), left: rnd(900.0) },
+                paper: PaperSize::Custom {
+                    width: rnd(2000.0),
+                    height: rnd(2000.0),
+                },
+                orientation: if i % 2 == 0 {
+                    Orientation::Portrait
+                } else {
+                    Orientation::Landscape
+                },
+                margins: Margins {
+                    top: rnd(900.0),
+                    right: rnd(900.0),
+                    bottom: rnd(900.0),
+                    left: rnd(900.0),
+                },
             },
             typography: Typography {
                 base_size: rnd(100.0),
@@ -360,8 +452,14 @@ fn sanitising_settings_is_a_fixed_point() {
             spelling_language: match i % 4 {
                 0 => None,
                 1 => Some(writer_core::SpellingLanguage::Automatic),
-                2 => Some(writer_core::SpellingLanguage::Language(format!(" l{} ", i % 97))),
-                _ => Some(writer_core::SpellingLanguage::Language(format!("{} x", i % 97))),
+                2 => Some(writer_core::SpellingLanguage::Language(format!(
+                    " l{} ",
+                    i % 97
+                ))),
+                _ => Some(writer_core::SpellingLanguage::Language(format!(
+                    "{} x",
+                    i % 97
+                ))),
             },
         };
         let once = s.clone().sanitized();
@@ -386,11 +484,54 @@ fn sanitising_settings_is_a_fixed_point() {
 #[test]
 fn word_scans_agree_with_whole_text_segmentation() {
     let pieces = [
-        "can't", "don\u{2019}t", "3,14", "3.14.15", "a.b", "a'", "'a", "''", "x_y", "_", "__a__",
-        "שלום", "ש\"ח", "\"", "中文字", "カタカナ", "e\u{301}", "\u{301}",
-        "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}", "\u{1F1EB}\u{1F1F7}", "\u{1F1EB}", " ", "  ", "\n",
-        "\n\n", "\t", ".", ",", ":", "a:b", "1:2", "é", "-", "\u{2014}", "\u{2026}", "word", "A", "1",
-        "a1", "\u{663}", "\u{B7}", "l\u{B7}l", "\u{200D}", "\u{FE0F}", "#", "x@y.z", "\u{202F}", "\u{A0}",
+        "can't",
+        "don\u{2019}t",
+        "3,14",
+        "3.14.15",
+        "a.b",
+        "a'",
+        "'a",
+        "''",
+        "x_y",
+        "_",
+        "__a__",
+        "שלום",
+        "ש\"ח",
+        "\"",
+        "中文字",
+        "カタカナ",
+        "e\u{301}",
+        "\u{301}",
+        "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+        "\u{1F1EB}\u{1F1F7}",
+        "\u{1F1EB}",
+        " ",
+        "  ",
+        "\n",
+        "\n\n",
+        "\t",
+        ".",
+        ",",
+        ":",
+        "a:b",
+        "1:2",
+        "é",
+        "-",
+        "\u{2014}",
+        "\u{2026}",
+        "word",
+        "A",
+        "1",
+        "a1",
+        "\u{663}",
+        "\u{B7}",
+        "l\u{B7}l",
+        "\u{200D}",
+        "\u{FE0F}",
+        "#",
+        "x@y.z",
+        "\u{202F}",
+        "\u{A0}",
     ];
     let mut k: u64 = 99;
     let mut next = |n: usize| {
@@ -406,9 +547,17 @@ fn word_scans_agree_with_whole_text_segmentation() {
         }
         let words: Vec<std::ops::Range<usize>> = text::word_ranges(&t).collect();
         for o in (0..=t.len()).filter(|o| t.is_char_boundary(*o)) {
-            let start = words.iter().take_while(|r| r.start < o).last().map(|r| r.start);
+            let start = words
+                .iter()
+                .take_while(|r| r.start < o)
+                .last()
+                .map(|r| r.start);
             let end = words.iter().find(|r| r.end > o).map(|r| r.end);
-            assert_eq!(text::word_start_before(&t, o), start, "start in {t:?} at {o}");
+            assert_eq!(
+                text::word_start_before(&t, o),
+                start,
+                "start in {t:?} at {o}"
+            );
             assert_eq!(text::word_end_after(&t, o), end, "end in {t:?} at {o}");
         }
     }
@@ -423,7 +572,11 @@ fn word_scans_agree_with_whole_text_segmentation() {
 #[test]
 fn multi_line_plain_text_follows_the_enter_rules_in_one_step() {
     // In the middle of a heading: every piece stays a heading.
-    let mut e = ed(vec![para("before"), kb(BlockKind::heading(2), "HeadTail"), para("after")]);
+    let mut e = ed(vec![
+        para("before"),
+        kb(BlockKind::heading(2), "HeadTail"),
+        para("after"),
+    ]);
     let original = e.document().clone();
     let head = e.document().blocks()[1].id();
     e.set_caret(p(1, 4));
@@ -435,7 +588,11 @@ fn multi_line_plain_text_follows_the_enter_rules_in_one_step() {
     assert_eq!(e.selection(), Selection::caret(p(3, 1)));
     assert_eq!(
         e.take_changes().unwrap().blocks,
-        Some(BlockSplice { start: 1, old_len: 1, new_len: 3 }),
+        Some(BlockSplice {
+            start: 1,
+            old_len: 1,
+            new_len: 3
+        }),
         "one local splice, neighbours untouched"
     );
     assert_eq!(e.undo_depth(), 1);
@@ -447,8 +604,17 @@ fn multi_line_plain_text_follows_the_enter_rules_in_one_step() {
     e.set_caret(p(0, 4));
     e.paste_plain_text("\n\nx");
     assert_eq!(texts(&e), ["Head", "", "x"]);
-    assert_eq!(kinds(&e), vec![BlockKind::heading(1), BlockKind::Paragraph, BlockKind::Paragraph]);
-    let mut e = ed(vec![kb(BlockKind::TodoItem { checked: true }, "done").with_indent(1)]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::heading(1),
+            BlockKind::Paragraph,
+            BlockKind::Paragraph
+        ]
+    );
+    let mut e = ed(vec![
+        kb(BlockKind::TodoItem { checked: true }, "done").with_indent(1),
+    ]);
     e.set_caret(p(0, 4));
     e.paste_plain_text("\nnext\nlast");
     assert_eq!(texts(&e), ["done", "next", "last"]);
@@ -466,7 +632,11 @@ fn multi_line_plain_text_follows_the_enter_rules_in_one_step() {
     assert_eq!(kinds(&e), vec![BlockKind::Quote, BlockKind::Quote]);
 
     // Over a selection, on a void block, and into a code block.
-    let mut e = ed(vec![para("abcd"), Block::new(BlockKind::Divider), kb(BlockKind::code(), "fn x")]);
+    let mut e = ed(vec![
+        para("abcd"),
+        Block::new(BlockKind::Divider),
+        kb(BlockKind::code(), "fn x"),
+    ]);
     e.set_selection(Selection::new(p(0, 1), p(0, 3)));
     e.insert_text("1\n2");
     assert_eq!(texts(&e), ["a1", "2d", "", "fn x"]);
@@ -502,7 +672,14 @@ fn pasting_many_lines_is_one_splice_and_one_undo_step() {
     assert!(e.paste_plain_text(&plain));
     assert_eq!(e.document().block_count(), 5000);
     let c = e.take_changes().unwrap();
-    assert_eq!(c.blocks, Some(BlockSplice { start: 1000, old_len: 1, new_len: 3001 }));
+    assert_eq!(
+        c.blocks,
+        Some(BlockSplice {
+            start: 1000,
+            old_len: 1,
+            new_len: 3001
+        })
+    );
     let after = ids(&e);
     assert_eq!(before[..1000], after[..1000]);
     assert_eq!(before[1001..], after[4001..]);
@@ -519,7 +696,11 @@ fn pasting_many_lines_is_one_splice_and_one_undo_step() {
 
 #[test]
 fn todo_checkbox_click_keeps_the_selection() {
-    let mut e = ed(vec![para("text"), kb(BlockKind::todo(), "task"), kb(BlockKind::BulletItem, "b")]);
+    let mut e = ed(vec![
+        para("text"),
+        kb(BlockKind::todo(), "task"),
+        kb(BlockKind::BulletItem, "b"),
+    ]);
     e.set_selection(Selection::new(p(0, 1), p(0, 3)));
     let sel = e.selection();
     e.toggle_bold();
@@ -538,7 +719,11 @@ fn todo_checkbox_click_keeps_the_selection() {
 
 #[test]
 fn block_range_and_selected_text() {
-    let mut e = ed(vec![para("héllo"), Block::new(BlockKind::Divider), para("wörld")]);
+    let mut e = ed(vec![
+        para("héllo"),
+        Block::new(BlockKind::Divider),
+        para("wörld"),
+    ]);
     assert_eq!(e.document().block_range(0), TextRange::in_block(0, 0, 6));
     assert_eq!(e.document().block_range(1), TextRange::in_block(1, 0, 0));
     assert_eq!(e.document().block_range(99), TextRange::in_block(2, 0, 6));
@@ -574,7 +759,10 @@ fn linewise_and_grouped_operations_undo_as_one_step() {
     assert!(e.insert_blocks_at(2, &reg));
     assert_eq!(texts(&e), ["Title", "two", "one", "three"]);
     assert_eq!(e.selection(), Selection::caret(p(2, 0)));
-    assert_eq!(e.document().numbered_ordinals(0..4), [None, Some(1), Some(2), None]);
+    assert_eq!(
+        e.document().numbered_ordinals(0..4),
+        [None, Some(1), Some(2), None]
+    );
     // "cw"-like change: delete a range and type, with caret moves in between.
     e.grouped(|e| {
         e.delete_range(TextRange::in_block(3, 0, 5));
@@ -607,7 +795,11 @@ fn ime_composition_is_one_undo_step_and_keeps_utf16_in_sync() {
     let b = &e.document().blocks()[0];
     let caret = b.utf16_to_offset(3);
     assert_eq!(caret, 5);
-    assert_eq!(b.utf16_to_offset(2), 1, "inside the surrogate pair rounds down");
+    assert_eq!(
+        b.utf16_to_offset(2),
+        1,
+        "inside the surrogate pair rounds down"
+    );
     e.set_caret(p(0, caret));
     e.toggle_bold();
     // Marked text grows and changes, then is committed.
@@ -618,7 +810,10 @@ fn ime_composition_is_one_undo_step_and_keeps_utf16_in_sync() {
         marked = TextRange::new(marked.start, e.selection().head);
         assert_eq!(e.document().text_in(marked), text);
         let b = &e.document().blocks()[0];
-        assert_eq!(b.offset_to_utf16(marked.end.offset) - b.offset_to_utf16(marked.start.offset), text.encode_utf16().count());
+        assert_eq!(
+            b.offset_to_utf16(marked.end.offset) - b.offset_to_utf16(marked.start.offset),
+            text.encode_utf16().count()
+        );
     }
     e.end_undo_group();
     let b = &e.document().blocks()[0];
@@ -633,8 +828,15 @@ fn ime_composition_is_one_undo_step_and_keeps_utf16_in_sync() {
 
 #[test]
 fn typing_over_a_selection_continues_the_replaced_formatting() {
-    let bold = InlineAttrs { bold: true, ..Default::default() };
-    let link = InlineAttrs { link: Some("https://example.com".into()), italic: true, ..Default::default() };
+    let bold = InlineAttrs {
+        bold: true,
+        ..Default::default()
+    };
+    let link = InlineAttrs {
+        link: Some("https://example.com".into()),
+        italic: true,
+        ..Default::default()
+    };
     let build = || {
         ed(vec![
             para("plain ")
@@ -672,23 +874,37 @@ fn typing_over_a_selection_continues_the_replaced_formatting() {
     let mut e = build();
     e.select_range(TextRange::in_block(0, 15, 21));
     typ(&mut e, "text");
-    assert!(spans(&e).contains(&("text".to_string(), false, true, false)), "{:?}", spans(&e));
+    assert!(
+        spans(&e).contains(&("text".to_string(), false, true, false)),
+        "{:?}",
+        spans(&e)
+    );
     // ... replacing part of it stays inside the link.
     let mut e = build();
     e.select_range(TextRange::in_block(0, 16, 20));
     typ(&mut e, "oo");
-    assert!(spans(&e).contains(&("lood".to_string(), false, true, true)), "{:?}", spans(&e));
+    assert!(
+        spans(&e).contains(&("lood".to_string(), false, true, true)),
+        "{:?}",
+        spans(&e)
+    );
     // The same for comment anchors: only strictly inside.
     let mut e = build();
     e.select_range(TextRange::in_block(0, 6, 10));
     let id = e.add_comment("note", "me", 1).unwrap();
     e.select_range(TextRange::in_block(0, 7, 9));
     typ(&mut e, "x");
-    assert_eq!(e.document().comment_ranges(id), [TextRange::in_block(0, 6, 9)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        [TextRange::in_block(0, 6, 9)]
+    );
     e.select_range(TextRange::in_block(0, 6, 9));
     typ(&mut e, "y");
     assert!(e.document().is_orphaned(id));
-    assert!(e.document().blocks()[0].attrs_at(6).unwrap().bold, "formatting still continues");
+    assert!(
+        e.document().blocks()[0].attrs_at(6).unwrap().bold,
+        "formatting still continues"
+    );
     e.undo();
     assert!(!e.document().is_orphaned(id));
     // Whole block selected: the first character's formatting carries on.

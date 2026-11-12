@@ -28,10 +28,18 @@ fn p(b: usize, o: usize) -> Position {
     Position::new(b, o)
 }
 fn texts(e: &EditorState) -> Vec<String> {
-    e.document().blocks().iter().map(|b| b.text().to_string()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.text().to_string())
+        .collect()
 }
 fn kinds(e: &EditorState) -> Vec<BlockKind> {
-    e.document().blocks().iter().map(|b| b.kind().clone()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.kind().clone())
+        .collect()
 }
 fn typ(e: &mut EditorState, s: &str) {
     for c in s.chars() {
@@ -72,7 +80,10 @@ fn undo_count(e: &mut EditorState) -> usize {
 }
 fn styled(e: &EditorState, block: usize, f: impl Fn(&InlineAttrs) -> bool) -> String {
     let b = &e.document().blocks()[block];
-    b.text_spans().filter(|(_, _, a)| f(a)).map(|(_, t, _)| t).collect()
+    b.text_spans()
+        .filter(|(_, _, a)| f(a))
+        .map(|(_, t, _)| t)
+        .collect()
 }
 
 // ----- graphemes and UTF-16 ------------------------------------------------------------
@@ -149,9 +160,17 @@ fn utf16_offsets_on_astral_and_combining_text() {
     }
     assert_eq!(b.offset_to_utf16(t.len()), u);
     assert_eq!(b.utf16_to_offset(u), t.len());
-    assert_eq!(b.utf16_to_offset(1), 0, "inside a surrogate pair rounds down");
+    assert_eq!(
+        b.utf16_to_offset(1),
+        0,
+        "inside a surrogate pair rounds down"
+    );
     assert_eq!(b.utf16_to_offset(10_000), t.len());
-    assert_eq!(b.offset_to_utf16(2), 0, "inside a UTF-8 sequence rounds down");
+    assert_eq!(
+        b.offset_to_utf16(2),
+        0,
+        "inside a UTF-8 sequence rounds down"
+    );
     let r = text::utf8_range_to_utf16(&t, 4..t.len());
     assert_eq!(text::utf16_range_to_utf8(&t, r), 4..t.len());
 }
@@ -168,7 +187,10 @@ fn typing_combining_marks_and_zwj_keeps_the_caret_on_a_boundary() {
     e.set_caret(p(0, 4));
     e.insert_text("\u{200D}");
     e.check_invariants().unwrap();
-    assert!(text::is_grapheme_boundary(e.document().blocks()[0].text(), caret(&e).offset));
+    assert!(text::is_grapheme_boundary(
+        e.document().blocks()[0].text(),
+        caret(&e).offset
+    ));
 }
 
 // ----- undo / redo ------------------------------------------------------------------
@@ -184,7 +206,8 @@ fn typing_groups_break_at_words_movement_kind_and_toggles() {
     e.backspace();
     typ(&mut e, "x");
     assert_eq!(texts(&e), ["one twothrx"]);
-    let steps: Vec<String> = std::iter::from_fn(|| e.undo().then(|| texts(&e)[0].clone())).collect();
+    let steps: Vec<String> =
+        std::iter::from_fn(|| e.undo().then(|| texts(&e)[0].clone())).collect();
     assert_eq!(steps, ["one twothr", "one twothree", "one two", "one ", ""]);
 }
 
@@ -249,7 +272,14 @@ fn change_reports_are_local() {
     e.set_caret(p(20, 3));
     e.insert_text("x");
     let c = e.take_changes().unwrap();
-    assert_eq!(c.blocks, Some(BlockSplice { start: 20, old_len: 1, new_len: 1 }));
+    assert_eq!(
+        c.blocks,
+        Some(BlockSplice {
+            start: 20,
+            old_len: 1,
+            new_len: 1
+        })
+    );
     e.insert_paragraph_break();
     e.undo();
     let c = e.take_changes().unwrap();
@@ -308,7 +338,10 @@ fn comments_orphan_on_cut_and_come_back_with_undo() {
     e.undo();
     e.undo();
     assert!(!e.document().is_orphaned(id));
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 3, 5)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 3, 5)]
+    );
 }
 
 #[test]
@@ -319,9 +352,15 @@ fn replace_all_keeps_anchors_on_replaced_text() {
     let n = e.replace_all("cat", SearchOptions::default(), "lion");
     assert_eq!(n, 2);
     assert_eq!(texts(&e), ["lion dog lion"]);
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 9, 13)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 9, 13)]
+    );
     e.undo();
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 8, 11)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 8, 11)]
+    );
 }
 
 #[test]
@@ -346,7 +385,10 @@ fn comment_navigation_and_queries() {
     let mut e = ed(vec![para("ab"), divider(), para(""), para("cd")]);
     e.select_all();
     let id = e.add_comment("x", "me", 1).unwrap();
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::new(p(0, 0), p(3, 2))]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::new(p(0, 0), p(3, 2))]
+    );
 }
 
 #[test]
@@ -403,18 +445,102 @@ fn thread_operations_are_undoable() {
 fn enter_matrix() {
     // (kind, text, caret) -> (kinds after, texts after, caret after)
     let cases: Vec<(BlockKind, &str, usize, Vec<BlockKind>, Vec<&str>, Position)> = vec![
-        (BlockKind::Paragraph, "ab", 1, vec![BlockKind::Paragraph; 2], vec!["a", "b"], p(1, 0)),
-        (BlockKind::heading(2), "ab", 2, vec![BlockKind::heading(2), BlockKind::Paragraph], vec!["ab", ""], p(1, 0)),
-        (BlockKind::heading(2), "ab", 1, vec![BlockKind::heading(2); 2], vec!["a", "b"], p(1, 0)),
-        (BlockKind::heading(2), "ab", 0, vec![BlockKind::Paragraph, BlockKind::heading(2)], vec!["", "ab"], p(1, 0)),
-        (BlockKind::BulletItem, "ab", 2, vec![BlockKind::BulletItem; 2], vec!["ab", ""], p(1, 0)),
-        (BlockKind::TodoItem { checked: true }, "ab", 2, vec![BlockKind::TodoItem { checked: true }, BlockKind::todo()], vec!["ab", ""], p(1, 0)),
-        (BlockKind::NumberedItem, "", 0, vec![BlockKind::Paragraph], vec![""], p(0, 0)),
-        (BlockKind::Quote, "", 0, vec![BlockKind::Paragraph], vec![""], p(0, 0)),
-        (BlockKind::Quote, "q", 1, vec![BlockKind::Quote; 2], vec!["q", ""], p(1, 0)),
-        (BlockKind::code(), "ab", 1, vec![BlockKind::code()], vec!["a\nb"], p(0, 2)),
-        (BlockKind::Divider, "", 0, vec![BlockKind::Divider, BlockKind::Paragraph], vec!["", ""], p(1, 0)),
-        (BlockKind::PageBreak, "", 0, vec![BlockKind::PageBreak, BlockKind::Paragraph], vec!["", ""], p(1, 0)),
+        (
+            BlockKind::Paragraph,
+            "ab",
+            1,
+            vec![BlockKind::Paragraph; 2],
+            vec!["a", "b"],
+            p(1, 0),
+        ),
+        (
+            BlockKind::heading(2),
+            "ab",
+            2,
+            vec![BlockKind::heading(2), BlockKind::Paragraph],
+            vec!["ab", ""],
+            p(1, 0),
+        ),
+        (
+            BlockKind::heading(2),
+            "ab",
+            1,
+            vec![BlockKind::heading(2); 2],
+            vec!["a", "b"],
+            p(1, 0),
+        ),
+        (
+            BlockKind::heading(2),
+            "ab",
+            0,
+            vec![BlockKind::Paragraph, BlockKind::heading(2)],
+            vec!["", "ab"],
+            p(1, 0),
+        ),
+        (
+            BlockKind::BulletItem,
+            "ab",
+            2,
+            vec![BlockKind::BulletItem; 2],
+            vec!["ab", ""],
+            p(1, 0),
+        ),
+        (
+            BlockKind::TodoItem { checked: true },
+            "ab",
+            2,
+            vec![BlockKind::TodoItem { checked: true }, BlockKind::todo()],
+            vec!["ab", ""],
+            p(1, 0),
+        ),
+        (
+            BlockKind::NumberedItem,
+            "",
+            0,
+            vec![BlockKind::Paragraph],
+            vec![""],
+            p(0, 0),
+        ),
+        (
+            BlockKind::Quote,
+            "",
+            0,
+            vec![BlockKind::Paragraph],
+            vec![""],
+            p(0, 0),
+        ),
+        (
+            BlockKind::Quote,
+            "q",
+            1,
+            vec![BlockKind::Quote; 2],
+            vec!["q", ""],
+            p(1, 0),
+        ),
+        (
+            BlockKind::code(),
+            "ab",
+            1,
+            vec![BlockKind::code()],
+            vec!["a\nb"],
+            p(0, 2),
+        ),
+        (
+            BlockKind::Divider,
+            "",
+            0,
+            vec![BlockKind::Divider, BlockKind::Paragraph],
+            vec!["", ""],
+            p(1, 0),
+        ),
+        (
+            BlockKind::PageBreak,
+            "",
+            0,
+            vec![BlockKind::PageBreak, BlockKind::Paragraph],
+            vec!["", ""],
+            p(1, 0),
+        ),
     ];
     for (kind, t, at, want_kinds, want_texts, want_caret) in cases {
         let mut e = ed(vec![kb(kind.clone(), t)]);
@@ -474,10 +600,30 @@ fn code_block_enter_keeps_indent_and_exits_cleanly() {
 #[test]
 fn backspace_matrix_at_block_start() {
     let cases: Vec<(Block, Vec<BlockKind>, Vec<&str>, Position)> = vec![
-        (kb(BlockKind::heading(1), "h"), vec![BlockKind::Paragraph, BlockKind::Paragraph], vec!["p", "h"], p(1, 0)),
-        (kb(BlockKind::Quote, "q"), vec![BlockKind::Paragraph; 2], vec!["p", "q"], p(1, 0)),
-        (kb(BlockKind::todo(), "t"), vec![BlockKind::Paragraph; 2], vec!["p", "t"], p(1, 0)),
-        (kb(BlockKind::code(), "a\nb"), vec![BlockKind::Paragraph; 3], vec!["p", "a", "b"], p(1, 0)),
+        (
+            kb(BlockKind::heading(1), "h"),
+            vec![BlockKind::Paragraph, BlockKind::Paragraph],
+            vec!["p", "h"],
+            p(1, 0),
+        ),
+        (
+            kb(BlockKind::Quote, "q"),
+            vec![BlockKind::Paragraph; 2],
+            vec!["p", "q"],
+            p(1, 0),
+        ),
+        (
+            kb(BlockKind::todo(), "t"),
+            vec![BlockKind::Paragraph; 2],
+            vec!["p", "t"],
+            p(1, 0),
+        ),
+        (
+            kb(BlockKind::code(), "a\nb"),
+            vec![BlockKind::Paragraph; 3],
+            vec!["p", "a", "b"],
+            p(1, 0),
+        ),
         (para("x"), vec![BlockKind::Paragraph], vec!["px"], p(0, 1)),
         (divider(), vec![BlockKind::Paragraph], vec!["p"], p(0, 1)),
     ];
@@ -577,7 +723,11 @@ fn inline_rules_leave_prose_and_code_alone() {
         typ(&mut e, t);
         assert_eq!(texts(&e), [format!("x {t}")], "{t}");
         let b = &e.document().blocks()[0];
-        assert!(b.runs().iter().all(|r| r.attrs.is_plain()), "{t}: {:?}", b.runs());
+        assert!(
+            b.runs().iter().all(|r| r.attrs.is_plain()),
+            "{t}: {:?}",
+            b.runs()
+        );
     }
     // A span never jumps over a delimiter that could close an earlier one:
     // "*a*" typed and undone to the literal text, then " b*".
@@ -586,7 +736,12 @@ fn inline_rules_leave_prose_and_code_alone() {
     e.undo();
     typ(&mut e, " b*");
     assert_eq!(texts(&e), ["*a* b*"]);
-    assert!(e.document().blocks()[0].runs().iter().all(|r| r.attrs.is_plain()));
+    assert!(
+        e.document().blocks()[0]
+            .runs()
+            .iter()
+            .all(|r| r.attrs.is_plain())
+    );
     // Never in code blocks or inline code.
     let mut e = ed(vec![kb(BlockKind::code(), "")]);
     typ(&mut e, "**x** \"q\" -- ... # ");
@@ -690,18 +845,37 @@ fn copy_paste_across_block_kinds() {
     e.set_caret(p(0, 1));
     e.paste(&all);
     assert_eq!(texts(&e), ["[Title", "bold", "item]"]);
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::Paragraph, BlockKind::BulletItem]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Paragraph,
+            BlockKind::BulletItem
+        ]
+    );
     assert!(e.document().blocks()[1].attrs_at(0).unwrap().bold);
     assert_eq!(caret(&e), p(2, 4));
     // Into an empty paragraph: block kinds come along.
     let mut e = ed(vec![para("")]);
     e.paste(&all);
-    assert_eq!(kinds(&e), vec![BlockKind::heading(1), BlockKind::Paragraph, BlockKind::BulletItem]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::heading(1),
+            BlockKind::Paragraph,
+            BlockKind::BulletItem
+        ]
+    );
     // Into a code block: plain text, no formatting.
     let mut e = ed(vec![kb(BlockKind::code(), "")]);
     e.paste(&all);
     assert_eq!(texts(&e), ["Title\nbold\nitem"]);
-    assert!(e.document().blocks()[0].runs().iter().all(|r| r.attrs.is_plain()));
+    assert!(
+        e.document().blocks()[0]
+            .runs()
+            .iter()
+            .all(|r| r.attrs.is_plain())
+    );
     // Inline fragment keeps the target's kind.
     let inline = src.fragment(TextRange::in_block(0, 0, 3));
     let mut e = ed(vec![kb(BlockKind::Quote, "q")]);
@@ -733,7 +907,14 @@ fn select_all_copy_and_delete_include_trailing_void_blocks() {
     assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
     assert_eq!(texts(&e), [""]);
     e.paste(&f);
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::Divider, BlockKind::Paragraph]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Divider,
+            BlockKind::Paragraph
+        ]
+    );
     e.check_invariants().unwrap();
 }
 
@@ -789,13 +970,31 @@ fn numbered_ordinals_with_nesting() {
         n(0), // 1
     ]);
     let want = [
-        Some(1), Some(1), Some(2), None, Some(3), Some(2), None, Some(1), Some(1), Some(2), None, Some(1), Some(3), None, Some(1),
+        Some(1),
+        Some(1),
+        Some(2),
+        None,
+        Some(3),
+        Some(2),
+        None,
+        Some(1),
+        Some(1),
+        Some(2),
+        None,
+        Some(1),
+        Some(3),
+        None,
+        Some(1),
     ];
     for (i, w) in want.iter().enumerate() {
         assert_eq!(d.numbered_ordinal(i), *w, "block {i}");
     }
     for s in 0..want.len() {
-        assert_eq!(d.numbered_ordinals(s..want.len()), want[s..].to_vec(), "from {s}");
+        assert_eq!(
+            d.numbered_ordinals(s..want.len()),
+            want[s..].to_vec(),
+            "from {s}"
+        );
     }
     #[allow(clippy::reversed_empty_ranges)]
     let reversed = 3..1;
@@ -815,7 +1014,17 @@ fn search_multibyte_and_case_folding() {
     ]);
     let any = SearchOptions::default();
     assert_eq!(d.find_all("ünïcödé", any).len(), 3);
-    assert_eq!(d.find_all("ünïcödé", SearchOptions { case_sensitive: true, ..any }).len(), 1);
+    assert_eq!(
+        d.find_all(
+            "ünïcödé",
+            SearchOptions {
+                case_sensitive: true,
+                ..any
+            }
+        )
+        .len(),
+        1
+    );
     // Final sigma folds like sigma.
     assert_eq!(d.find_all("σοφος", any).len(), 2);
     assert_eq!(d.find_all("ΣΟΦΟΣ", any).len(), 2);
@@ -825,13 +1034,30 @@ fn search_multibyte_and_case_folding() {
     // Precomposed and decomposed are different text (no normalisation).
     assert_eq!(d.find_in_block(2, "é", any), vec![4..6]);
     // Whole words in CJK: a run of ideographs is several words.
-    let ww = SearchOptions { whole_word: true, ..any };
+    let ww = SearchOptions {
+        whole_word: true,
+        ..any
+    };
     assert_eq!(d.find_all("中文", ww).len(), 2);
     let d2 = Document::from_blocks(vec![para("don't don snake_case case, Case")]);
-    let m: Vec<String> = d2.find_all("don", ww).iter().map(|r| d2.text_in(*r)).collect();
+    let m: Vec<String> = d2
+        .find_all("don", ww)
+        .iter()
+        .map(|r| d2.text_in(*r))
+        .collect();
     assert_eq!(m, ["don"]);
     assert_eq!(d2.find_all("case", ww).len(), 2);
-    assert_eq!(d2.find_all("case", SearchOptions { whole_word: true, case_sensitive: true }).len(), 1);
+    assert_eq!(
+        d2.find_all(
+            "case",
+            SearchOptions {
+                whole_word: true,
+                case_sensitive: true
+            }
+        )
+        .len(),
+        1
+    );
     assert_eq!(d.find_all("İstanbul", any).len(), 1);
     assert_eq!(d.find_all("istanbul", any).len(), 1);
     for m in d.find_all("i", any) {
@@ -850,12 +1076,18 @@ fn search_multibyte_and_case_folding() {
 
 #[test]
 fn replace_keeps_per_character_formatting_when_lengths_match() {
-    let b = para("a").with_span("b", bold()).with_span("c", InlineAttrs::default());
+    let b = para("a")
+        .with_span("b", bold())
+        .with_span("c", InlineAttrs::default());
     let mut e = ed(vec![b]);
     e.replace_range(TextRange::in_block(0, 0, 3), "ABC");
     assert_eq!(styled(&e, 0, |a| a.bold), "B");
     e.replace_range(TextRange::in_block(0, 0, 3), "wxyz");
-    assert_eq!(styled(&e, 0, |a| a.bold), "", "different length: attrs of the first char");
+    assert_eq!(
+        styled(&e, 0, |a| a.bold),
+        "",
+        "different length: attrs of the first char"
+    );
 }
 
 #[test]
@@ -918,7 +1150,11 @@ fn malformed_json_is_repaired_or_rejected() {
         assert!(Document::from_json(j).is_err(), "{j}");
     }
     // Deep nesting is an error, not a stack overflow.
-    let deep = format!("{{\"blocks\":[{}{}]}}", "[".repeat(10_000), "]".repeat(10_000));
+    let deep = format!(
+        "{{\"blocks\":[{}{}]}}",
+        "[".repeat(10_000),
+        "]".repeat(10_000)
+    );
     assert!(Document::from_json(&deep).is_err() || Document::from_json(&deep).is_ok());
     let d = Document::from_json(r#"{"blocks":[{"type":"code","lang":"   ","text":"x","runs":[{"len":1,"bold":true,"link":"u"}]}]}"#).unwrap();
     assert_eq!(d.blocks()[0].kind(), &BlockKind::code());
@@ -931,7 +1167,10 @@ fn serialization_is_compact_and_versioned() {
     e.select_range(TextRange::in_block(0, 0, 5));
     e.add_comment("c", "", 5);
     let j = e.document().to_json();
-    assert!(j.starts_with(r#"{"format":"the-writer-document","version":1"#), "{j}");
+    assert!(
+        j.starts_with(r#"{"format":"the-writer-document","version":1"#),
+        "{j}"
+    );
     assert!(!j.contains("\"bold\""));
     assert!(!j.contains("\"author\""));
     assert!(!j.contains("\"settings\""));
@@ -945,7 +1184,10 @@ fn serialization_is_compact_and_versioned() {
     s.page.paper = PaperSize::UsLetter;
     let d = Document::new().with_settings(s.clone());
     let j = d.to_json();
-    assert!(j.contains("\"page_view\":true") && j.contains("letter"), "{j}");
+    assert!(
+        j.contains("\"page_view\":true") && j.contains("letter"),
+        "{j}"
+    );
     assert_eq!(Document::from_json(&j).unwrap().settings(), &s);
 }
 
@@ -972,7 +1214,13 @@ fn single_empty_block_every_command() {
     assert!(e.delete_blocks());
     assert_eq!(e.document().block_count(), 1);
     e.check_invariants().unwrap();
-    for m in [Movement::Left, Movement::Right, Movement::WordLeft, Movement::WordRight, Movement::DocEnd] {
+    for m in [
+        Movement::Left,
+        Movement::Right,
+        Movement::WordLeft,
+        Movement::WordRight,
+        Movement::DocEnd,
+    ] {
         e.move_caret(m, true);
         assert_eq!(e.selection(), Selection::caret(p(0, 0)));
     }
@@ -982,7 +1230,12 @@ fn single_empty_block_every_command() {
 
 #[test]
 fn word_movement_matches_macos() {
-    let d = Document::from_blocks(vec![para("Hello, wörld! It's 3.14 o'clock"), para(""), divider(), para("  next")]);
+    let d = Document::from_blocks(vec![
+        para("Hello, wörld! It's 3.14 o'clock"),
+        para(""),
+        divider(),
+        para("  next"),
+    ]);
     let rights: Vec<usize> = {
         let mut v = Vec::new();
         let mut pos = p(0, 0);
@@ -1005,7 +1258,10 @@ fn word_movement_matches_macos() {
     assert_eq!(&t[..rights[3]], "Hello, wörld! It's 3.14");
     // From the end of block 0, option-right skips empty and void blocks.
     assert_eq!(d.moved(p(0, t.len()), Movement::WordRight), p(3, 6));
-    assert_eq!(d.moved(p(3, 2), Movement::WordLeft), p(0, t.len() - "clock".len() - 2));
+    assert_eq!(
+        d.moved(p(3, 2), Movement::WordLeft),
+        p(0, t.len() - "clock".len() - 2)
+    );
 }
 
 #[test]

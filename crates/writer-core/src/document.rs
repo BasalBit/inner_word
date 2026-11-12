@@ -47,7 +47,11 @@ fn shortened_title(text: &str, max: usize) -> String {
         _ => head,
     };
     let head = head.trim_end_matches(|c: char| {
-        c.is_whitespace() || matches!(c, ',' | ';' | ':' | '.' | '-' | '\u{2013}' | '\u{2014}' | '(' | '\u{201c}' | '"')
+        c.is_whitespace()
+            || matches!(
+                c,
+                ',' | ';' | ':' | '.' | '-' | '\u{2013}' | '\u{2014}' | '(' | '\u{201c}' | '"'
+            )
     });
     format!("{head}\u{2026}")
 }
@@ -69,7 +73,19 @@ fn first_sentence_end(text: &str) -> Option<usize> {
         // Marks that come together ("?!", "...") and what closes with them.
         let mut end = i + c.len_utf8();
         while let Some(&(j, next)) = chars.peek() {
-            if matches!(next, '.' | '!' | '?' | '\u{2026}' | '"' | '\'' | ')' | ']' | '\u{201d}' | '\u{2019}' | '\u{00bb}') {
+            if matches!(
+                next,
+                '.' | '!'
+                    | '?'
+                    | '\u{2026}'
+                    | '"'
+                    | '\''
+                    | ')'
+                    | ']'
+                    | '\u{201d}'
+                    | '\u{2019}'
+                    | '\u{00bb}'
+            ) {
                 end = j + next.len_utf8();
                 chars.next();
             } else {
@@ -173,7 +189,12 @@ impl Document {
         }
         // Ids.
         let valid = |id: u64| id != 0 && id < MAX_ID;
-        let max_id = out.iter().map(|b| b.id.0).filter(|&i| valid(i)).max().unwrap_or(0);
+        let max_id = out
+            .iter()
+            .map(|b| b.id.0)
+            .filter(|&i| valid(i))
+            .max()
+            .unwrap_or(0);
         let mut next_block_id = max_id + 1;
         let mut seen = HashSet::with_capacity(out.len());
         for b in &mut out {
@@ -184,7 +205,12 @@ impl Document {
             }
         }
         // Threads.
-        let max_cid = threads.iter().map(|t| t.id.0).filter(|&i| valid(i)).max().unwrap_or(0);
+        let max_cid = threads
+            .iter()
+            .map(|t| t.id.0)
+            .filter(|&i| valid(i))
+            .max()
+            .unwrap_or(0);
         let mut next_comment_id = max_cid + 1;
         let mut comments = BTreeMap::new();
         for mut t in threads {
@@ -410,7 +436,11 @@ impl Document {
             .iter()
             .find(|b| b.kind.heading_level().is_some() && !b.text.trim().is_empty());
         let pick = heading.or_else(|| self.blocks.iter().find(|b| !b.text.trim().is_empty()))?;
-        let line = pick.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let line = pick
+            .text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("");
         // Only the start of the line can end up in a title, so whitespace
         // is collapsed just far enough to have more than the longest title
         // needs: a caller may ask after every keystroke, and the line can
@@ -737,7 +767,12 @@ impl Document {
     /// Replaces `blocks[index..index + remove]` with `insert`, returning the
     /// removed blocks. Blocks without an id get a fresh id, blocks with a zero
     /// revision get a fresh stamp. Keeps the anchor index up to date.
-    pub(crate) fn splice_raw(&mut self, index: usize, remove: usize, mut insert: Vec<Block>) -> Vec<Block> {
+    pub(crate) fn splice_raw(
+        &mut self,
+        index: usize,
+        remove: usize,
+        mut insert: Vec<Block>,
+    ) -> Vec<Block> {
         for b in &mut insert {
             if b.id == BlockId::UNASSIGNED {
                 b.id = self.mint_block_id();
@@ -805,12 +840,12 @@ mod tests {
     #[test]
     fn numbering_rules() {
         let blocks = vec![
-            numbered(0),                  // 1
-            numbered(0),                  // 2
-            numbered(1),                  // 1 (nested)
+            numbered(0),                          // 1
+            numbered(0),                          // 2
+            numbered(1),                          // 1 (nested)
             Block::paragraph("p").with_indent(1), // deeper: does not break outer
-            numbered(1),                  // 1 (restarted by paragraph at its level)
-            numbered(0),                  // 3
+            numbered(1),                          // 1 (restarted by paragraph at its level)
+            numbered(0),                          // 3
             Block::paragraph("break"),
             numbered(0), // 1
             numbered(2), // 1
@@ -903,8 +938,14 @@ mod tests {
         );
         assert_eq!(title("Why not? Because."), "Why not?");
         assert_eq!(title("Stop! Nobody moves."), "Stop!");
-        assert_eq!(title("\u{201c}Go on.\u{201d} She did not."), "\u{201c}Go on.\u{201d}");
-        assert_eq!(title("Wait\u{2026} what was that? Nothing."), "Wait\u{2026}");
+        assert_eq!(
+            title("\u{201c}Go on.\u{201d} She did not."),
+            "\u{201c}Go on.\u{201d}"
+        );
+        assert_eq!(
+            title("Wait\u{2026} what was that? Nothing."),
+            "Wait\u{2026}"
+        );
         // Short text is the title as it is; a lone sentence loses its
         // stop too, so the title does not change when a second one is
         // written after it.
@@ -914,9 +955,18 @@ mod tests {
         assert_eq!(title("And then..."), "And then...");
         assert_eq!(title("Dr."), "Dr.");
         // Abbreviations, initials, numbers and addresses do not end it.
-        assert_eq!(title("Dr. Moreau came at nine. He left at ten."), "Dr. Moreau came at nine");
-        assert_eq!(title("J. R. R. Tolkien wrote it. So?"), "J. R. R. Tolkien wrote it");
-        assert_eq!(title("It costs 3.50 at example.com today. Buy."), "It costs 3.50 at example.com today");
+        assert_eq!(
+            title("Dr. Moreau came at nine. He left at ten."),
+            "Dr. Moreau came at nine"
+        );
+        assert_eq!(
+            title("J. R. R. Tolkien wrote it. So?"),
+            "J. R. R. Tolkien wrote it"
+        );
+        assert_eq!(
+            title("It costs 3.50 at example.com today. Buy."),
+            "It costs 3.50 at example.com today"
+        );
         assert_eq!(title("See e.g. the notes. Then go."), "See e.g. the notes");
         // No sentence end in reach: a cut at a word, with an ellipsis and
         // without the comma or the dash it would end on.
@@ -936,7 +986,10 @@ mod tests {
         let family = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}".repeat(40);
         let t = title(&family);
         assert!(t.chars().count() <= TITLE_TEXT_CHARS);
-        assert!(t.trim_end_matches('\u{2026}').chars().count() % 5 == 0, "{t:?}");
+        assert!(
+            t.trim_end_matches('\u{2026}').chars().count() % 5 == 0,
+            "{t:?}"
+        );
 
         // A heading is kept whole up to the longer limit, then cut the
         // same way.
@@ -968,8 +1021,14 @@ mod tests {
         let r = TextRange::new(Position::new(0, 5), Position::new(1, 0));
         assert_eq!(d.range_in_block(r, 0), Some(5..5));
         assert_eq!(d.range_in_block(r, 1), Some(0..0));
-        assert_eq!(d.range_in_block(TextRange::empty(Position::new(2, 1)), 2), None);
-        assert_eq!(d.range_in_block(TextRange::in_block(2, 1, 3), 2), Some(1..3));
+        assert_eq!(
+            d.range_in_block(TextRange::empty(Position::new(2, 1)), 2),
+            None
+        );
+        assert_eq!(
+            d.range_in_block(TextRange::in_block(2, 1, 3), 2),
+            Some(1..3)
+        );
         assert_eq!(d.range_in_block(TextRange::in_block(2, 1, 3), 9), None);
     }
 
@@ -980,7 +1039,10 @@ mod tests {
             Block::new(BlockKind::Divider),
             Block::paragraph("e\u{301}x"),
         ]);
-        assert_eq!(d.text_in(TextRange::new(Position::new(0, 2), Position::new(2, 3))), "llo\n\ne\u{301}");
+        assert_eq!(
+            d.text_in(TextRange::new(Position::new(0, 2), Position::new(2, 3))),
+            "llo\n\ne\u{301}"
+        );
         assert_eq!(d.plain_text(), "hello\n\ne\u{301}x");
         assert_eq!(d.clamp_position(Position::new(9, 9)), Position::new(2, 4));
         assert_eq!(d.clamp_position(Position::new(1, 3)), Position::new(1, 0));

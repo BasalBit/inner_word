@@ -78,7 +78,10 @@ impl fmt::Display for LoadError {
             LoadError::Json(e) => write!(f, "invalid JSON: {e}"),
             LoadError::NotADocument(e) => write!(f, "not a document: {e}"),
             LoadError::UnsupportedVersion(v) => {
-                write!(f, "document format version {v} is newer than this app supports")
+                write!(
+                    f,
+                    "document format version {v} is newer than this app supports"
+                )
             }
         }
     }
@@ -280,7 +283,10 @@ impl<'a> SettingsOut<'a> {
             page,
             typography,
             page_view: s.page_view,
-            spelling_language: s.spelling_language.as_ref().map(SpellingLanguage::as_setting_str),
+            spelling_language: s
+                .spelling_language
+                .as_ref()
+                .map(SpellingLanguage::as_setting_str),
         })
     }
 }
@@ -341,7 +347,11 @@ impl Serialize for Fragment {
         FragmentOut {
             format: FRAGMENT_FORMAT,
             version: FORMAT_VERSION,
-            blocks: self.blocks.iter().map(|b| BlockOut::new(b, false)).collect(),
+            blocks: self
+                .blocks
+                .iter()
+                .map(|b| BlockOut::new(b, false))
+                .collect(),
         }
         .serialize(serializer)
     }
@@ -608,7 +618,8 @@ fn parse_settings(o: &Map<String, Value>) -> DocumentSettings {
         };
     }
     s.page_view = get_bool(o, "page_view");
-    s.spelling_language = get_str(o, "spelling_language").and_then(SpellingLanguage::from_setting_str);
+    s.spelling_language =
+        get_str(o, "spelling_language").and_then(SpellingLanguage::from_setting_str);
     s.sanitized()
 }
 
@@ -638,7 +649,9 @@ mod tests {
         };
         let blocks = vec![
             Block::with_text(BlockKind::heading(3), "T"),
-            Block::paragraph("plain ").with_span("bold", bold).with_alignment(Alignment::Justify),
+            Block::paragraph("plain ")
+                .with_span("bold", bold)
+                .with_alignment(Alignment::Justify),
             Block::with_text(BlockKind::TodoItem { checked: true }, "do").with_indent(2),
             Block::with_text(
                 BlockKind::CodeBlock {
@@ -724,15 +737,30 @@ mod tests {
         assert_eq!(old.typography.base_size, 19.0);
         // Trimmed; "auto" in any case; the other settings are untouched.
         let s = read(r#"{"page_view":true,"spelling_language":"  fr_CA "}"#);
-        assert_eq!(s.spelling_language, Some(SpellingLanguage::Language("fr_CA".into())));
+        assert_eq!(
+            s.spelling_language,
+            Some(SpellingLanguage::Language("fr_CA".into()))
+        );
         assert!(s.page_view);
         assert_eq!(
             read(r#"{"spelling_language":"Automatic"}"#).spelling_language,
             Some(SpellingLanguage::Automatic)
         );
         // Anything that is not a usable identifier reads as "not set".
-        for bad in [r#""""#, r#""  ""#, r#""en GB""#, "7", "null", "true", r#"["en"]"#, r#"{"id":"en"}"#, r#""<script>""#] {
-            let s = read(&format!(r#"{{"spelling_language":{bad},"page_view":true}}"#));
+        for bad in [
+            r#""""#,
+            r#""  ""#,
+            r#""en GB""#,
+            "7",
+            "null",
+            "true",
+            r#"["en"]"#,
+            r#"{"id":"en"}"#,
+            r#""<script>""#,
+        ] {
+            let s = read(&format!(
+                r#"{{"spelling_language":{bad},"page_view":true}}"#
+            ));
             assert_eq!(s.spelling_language, None, "{bad}");
             assert!(s.page_view, "{bad}");
         }
@@ -794,9 +822,18 @@ mod tests {
 
     #[test]
     fn unrecoverable_inputs() {
-        assert!(matches!(Document::from_json("nope"), Err(LoadError::Json(_))));
-        assert!(matches!(Document::from_json("[]"), Err(LoadError::NotADocument(_))));
-        assert!(matches!(Document::from_json("{}"), Err(LoadError::NotADocument(_))));
+        assert!(matches!(
+            Document::from_json("nope"),
+            Err(LoadError::Json(_))
+        ));
+        assert!(matches!(
+            Document::from_json("[]"),
+            Err(LoadError::NotADocument(_))
+        ));
+        assert!(matches!(
+            Document::from_json("{}"),
+            Err(LoadError::NotADocument(_))
+        ));
         assert!(matches!(
             Document::from_json(r#"{"version": 7, "blocks": []}"#),
             Err(LoadError::UnsupportedVersion(7))
@@ -806,7 +843,12 @@ mod tests {
             Err(LoadError::NotADocument(_))
         ));
         // Empty block list is repaired, not rejected.
-        assert_eq!(Document::from_json(r#"{"blocks": []}"#).unwrap().block_count(), 1);
+        assert_eq!(
+            Document::from_json(r#"{"blocks": []}"#)
+                .unwrap()
+                .block_count(),
+            1
+        );
     }
 
     #[test]

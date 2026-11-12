@@ -185,7 +185,9 @@ pub fn word_end_after(text: &str, offset: usize) -> Option<usize> {
     let mut ls = line_start(text, o);
     loop {
         let le = line_end(text, ls);
-        let found = word_ranges(&text[ls..le]).map(|r| ls + r.end).find(|e| *e > o);
+        let found = word_ranges(&text[ls..le])
+            .map(|r| ls + r.end)
+            .find(|e| *e > o);
         if found.is_some() || le >= text.len() {
             return found;
         }
@@ -270,7 +272,8 @@ pub(crate) fn normalize_char(c: char) -> CharFix {
 
 /// Whether `text` is already normalised (see [`normalize_input`]).
 pub fn is_normalized(text: &str) -> bool {
-    text.chars().all(|c| matches!(normalize_char(c), CharFix::Keep))
+    text.chars()
+        .all(|c| matches!(normalize_char(c), CharFix::Keep))
 }
 
 /// Character classes used for undo grouping and word logic.

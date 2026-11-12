@@ -82,12 +82,23 @@ impl Document {
 
     /// Statistics of the text in `range`.
     pub fn stats_in(&self, range: TextRange) -> Stats {
-        let r = TextRange::new(self.clamp_position(range.start), self.clamp_position(range.end));
+        let r = TextRange::new(
+            self.clamp_position(range.start),
+            self.clamp_position(range.end),
+        );
         let mut s = Stats::default();
         for i in r.start.block..=r.end.block {
             let b = &self.blocks[i];
-            let from = if i == r.start.block { r.start.offset } else { 0 };
-            let to = if i == r.end.block { r.end.offset } else { b.len() };
+            let from = if i == r.start.block {
+                r.start.offset
+            } else {
+                0
+            };
+            let to = if i == r.end.block {
+                r.end.offset
+            } else {
+                b.len()
+            };
             if from < to {
                 s += Stats::of_text(&b.text[from..to]);
             }

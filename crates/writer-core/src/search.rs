@@ -80,7 +80,8 @@ fn word_bounds(text: &str) -> Vec<usize> {
 fn acceptable(text: &str, r: &Range<usize>, bounds: Option<&[usize]>) -> bool {
     text::is_grapheme_boundary(text, r.start)
         && text::is_grapheme_boundary(text, r.end)
-        && bounds.is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok())
+        && bounds
+            .is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok())
 }
 
 /// All non-overlapping matches of `query` in `text`, left to right. The
@@ -119,7 +120,9 @@ pub(crate) fn find_in_text(text: &str, query: &str, opts: SearchOptions) -> Vec<
         let mut from = 0;
         while let Some(i) = lower[from..].find(&q) {
             let r = from + i..from + i + q.len();
-            if bounds.is_none_or(|b| b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok()) {
+            if bounds.is_none_or(|b| {
+                b.binary_search(&r.start).is_ok() && b.binary_search(&r.end).is_ok()
+            }) {
                 from = r.end;
                 out.push(r);
             } else {
@@ -169,7 +172,12 @@ impl Document {
     /// The matches inside block `index` only (byte ranges). With the change
     /// report of [`EditorState::take_changes`](crate::EditorState::take_changes)
     /// the UI can keep a match list current without searching everything.
-    pub fn find_in_block(&self, index: usize, query: &str, opts: SearchOptions) -> Vec<Range<usize>> {
+    pub fn find_in_block(
+        &self,
+        index: usize,
+        query: &str,
+        opts: SearchOptions,
+    ) -> Vec<Range<usize>> {
         self.blocks
             .get(index)
             .map(|b| find_in_text(&b.text, query, opts))
@@ -220,12 +228,29 @@ mod tests {
         assert!(m.is_empty()); // no full case folding of ß
         let m = find_in_text("aaaa", "aa", SearchOptions::default());
         assert_eq!(m, vec![0..2, 2..4]);
-        let m = find_in_text("中文中文", "文", SearchOptions { case_sensitive: true, whole_word: false });
+        let m = find_in_text(
+            "中文中文",
+            "文",
+            SearchOptions {
+                case_sensitive: true,
+                whole_word: false,
+            },
+        );
         assert_eq!(m, vec![3..6, 9..12]);
         // Never split a grapheme cluster.
         let m = find_in_text("a\u{301} a", "a", SearchOptions::default());
         assert_eq!(m, vec![4..5]);
         let fam = "\u{1F469}\u{200D}\u{1F467}";
-        assert!(find_in_text(fam, "\u{1F469}", SearchOptions { case_sensitive: true, whole_word: false }).is_empty());
+        assert!(
+            find_in_text(
+                fam,
+                "\u{1F469}",
+                SearchOptions {
+                    case_sensitive: true,
+                    whole_word: false
+                }
+            )
+            .is_empty()
+        );
     }
 }

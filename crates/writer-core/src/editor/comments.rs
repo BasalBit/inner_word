@@ -84,7 +84,8 @@ impl EditorState {
             author: author.trim().to_string(),
             created_at: now,
         };
-        self.modify_thread(id, |t| t.replies.push(reply)).then_some(rid)
+        self.modify_thread(id, |t| t.replies.push(reply))
+            .then_some(rid)
     }
 
     /// Replaces the body of a reply.

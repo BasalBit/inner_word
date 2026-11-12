@@ -174,10 +174,10 @@ mod history;
 mod movement;
 mod position;
 mod runs;
+mod search;
 pub mod serial;
 mod settings;
 mod stats;
-mod search;
 pub mod text;
 
 pub use attrs::{CommentId, Highlight, InlineAttrs, InlineStyle, Rgb};

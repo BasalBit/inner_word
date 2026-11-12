@@ -214,7 +214,12 @@ impl EditorState {
     }
 
     /// Inserts already-normalised single-block text; returns the end position.
-    pub(crate) fn insert_in_block(&mut self, pos: Position, text: &str, attrs: &InlineAttrs) -> Position {
+    pub(crate) fn insert_in_block(
+        &mut self,
+        pos: Position,
+        text: &str,
+        attrs: &InlineAttrs,
+    ) -> Position {
         if text.is_empty() {
             return pos;
         }
@@ -320,7 +325,10 @@ impl EditorState {
             return;
         }
         let ls = text::line_start(t, o);
-        let indent: String = t[ls..o].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let indent: String = t[ls..o]
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
         let ins = format!("\n{indent}");
         let attrs = inherited_attrs(b, o);
         let p = self.insert_in_block(pos, &ins, &attrs);
@@ -469,7 +477,9 @@ impl EditorState {
         self.splice(index, 1, Vec::new());
         let n = self.doc.blocks.len();
         let p = match dir {
-            Dir::Backward if index > 0 => Position::new(index - 1, self.doc.blocks[index - 1].len()),
+            Dir::Backward if index > 0 => {
+                Position::new(index - 1, self.doc.blocks[index - 1].len())
+            }
             Dir::Backward => Position::ZERO,
             Dir::Forward if index < n => Position::new(index, 0),
             Dir::Forward => Position::new(n - 1, self.doc.blocks[n - 1].len()),
@@ -566,7 +576,9 @@ impl EditorState {
         let pos = self.selection.head;
         let b = &self.doc.blocks[pos.block];
         if b.is_void() {
-            return self.edit(EditKind::Other, |ed| ed.remove_void(pos.block, Dir::Forward));
+            return self.edit(EditKind::Other, |ed| {
+                ed.remove_void(pos.block, Dir::Forward)
+            });
         }
         if pos.offset < b.len() {
             let end = text::next_grapheme_boundary(&b.text, pos.offset);

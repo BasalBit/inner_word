@@ -131,7 +131,10 @@ impl Document {
             .and_then(|a| a.link.clone())
             .or_else(|| b.attrs_at(pos.offset).and_then(|a| a.link.clone()))?;
         // Find the run containing a char with this url adjacent to pos.
-        let spans: Vec<_> = b.spans().map(|(r, a)| (r, a.link.as_deref() == Some(&url))).collect();
+        let spans: Vec<_> = b
+            .spans()
+            .map(|(r, a)| (r, a.link.as_deref() == Some(&url)))
+            .collect();
         let idx = spans.iter().position(|(r, m)| {
             *m && ((r.start < pos.offset && pos.offset <= r.end) || r.start == pos.offset)
         })?;
@@ -251,7 +254,10 @@ impl EditorState {
 
     /// Sets (or clears) the font family. Empty names clear.
     pub fn set_font_family(&mut self, family: Option<&str>) -> bool {
-        let family = family.map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
+        let family = family
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string);
         if self.selection.is_collapsed() {
             self.change_pending(|a| a.font = family.clone());
             return false;

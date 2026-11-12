@@ -186,7 +186,10 @@ mod tests {
         assert_eq!(f.to_plain_text(), "tle\nbo");
         let f = d.fragment(TextRange::new(Position::new(1, 0), Position::new(2, 0)));
         assert_eq!(f.to_plain_text(), "body\n");
-        assert!(f.blocks()[1].is_void(), "a range ending on a void block includes it");
+        assert!(
+            f.blocks()[1].is_void(),
+            "a range ending on a void block includes it"
+        );
         let lines = d.block_fragment(2..3);
         assert_eq!(lines.blocks().len(), 1);
         assert!(lines.blocks()[0].is_void());

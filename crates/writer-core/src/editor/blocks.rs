@@ -2,7 +2,9 @@
 
 use std::ops::Range;
 
-use crate::block::{Alignment, Block, BlockId, BlockKind, MAX_INDENT, TEXT_SIZE_SCALE, sanitize_text_size};
+use crate::block::{
+    Alignment, Block, BlockId, BlockKind, MAX_INDENT, TEXT_SIZE_SCALE, sanitize_text_size,
+};
 use crate::fragment::Fragment;
 use crate::history::EditKind;
 use crate::position::{Position, Selection};
@@ -58,15 +60,27 @@ fn sibling_of(b: &Block) -> Block {
 
 /// The next size on [`TEXT_SIZE_SCALE`] in the direction of `steps`.
 fn stepped_size(current: f32, steps: i32) -> f32 {
-    let steps = steps.clamp(-(TEXT_SIZE_SCALE.len() as i32), TEXT_SIZE_SCALE.len() as i32);
+    let steps = steps.clamp(
+        -(TEXT_SIZE_SCALE.len() as i32),
+        TEXT_SIZE_SCALE.len() as i32,
+    );
     let mut v = current;
     if steps > 0 {
         for _ in 0..steps {
-            v = TEXT_SIZE_SCALE.iter().copied().find(|s| *s > v + 0.01).unwrap_or(v);
+            v = TEXT_SIZE_SCALE
+                .iter()
+                .copied()
+                .find(|s| *s > v + 0.01)
+                .unwrap_or(v);
         }
     } else {
         for _ in 0..steps.unsigned_abs() {
-            v = TEXT_SIZE_SCALE.iter().rev().copied().find(|s| *s < v - 0.01).unwrap_or(v);
+            v = TEXT_SIZE_SCALE
+                .iter()
+                .rev()
+                .copied()
+                .find(|s| *s < v - 0.01)
+                .unwrap_or(v);
         }
     }
     v
@@ -106,7 +120,10 @@ impl EditorState {
 
     /// Sets the language of every touched code block.
     pub fn set_code_language(&mut self, language: Option<&str>) -> bool {
-        let lang = language.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
+        let lang = language
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string);
         let targets: Vec<usize> = self
             .touched_blocks()
             .filter(|&i| self.doc.blocks[i].kind.is_code())
@@ -284,7 +301,11 @@ impl EditorState {
                 let default = typo.size_for(&b.kind);
                 let cur = b.text_size.unwrap_or(default);
                 let next = stepped_size(cur, steps);
-                let new = if (next - default).abs() < 0.01 { None } else { Some(next) };
+                let new = if (next - default).abs() < 0.01 {
+                    None
+                } else {
+                    Some(next)
+                };
                 ed.update_block(i, |b| b.set_text_size(new));
             }
         })

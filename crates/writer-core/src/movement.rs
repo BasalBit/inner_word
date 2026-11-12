@@ -146,7 +146,10 @@ mod tests {
         let d = doc();
         let p = |b, o| Position::new(b, o);
         assert_eq!(d.moved(p(0, 0), Movement::WordRight), p(0, 5));
-        assert_eq!(d.moved(p(0, 5), Movement::WordRight), p(0, d.blocks()[0].len()));
+        assert_eq!(
+            d.moved(p(0, 5), Movement::WordRight),
+            p(0, d.blocks()[0].len())
+        );
         // From the end of block 0 it skips the divider and the blank block.
         let len0 = d.blocks()[0].len();
         assert_eq!(d.moved(p(0, len0), Movement::WordRight), p(3, 4));

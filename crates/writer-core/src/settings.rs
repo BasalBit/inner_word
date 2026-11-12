@@ -135,7 +135,13 @@ impl PageSetup {
         let paper = self.paper.sanitized();
         let mut s = PageSetup { paper, ..self };
         let (w, h) = s.page_size();
-        let fix = |v: f32| if v.is_finite() { v.max(0.0) } else { POINTS_PER_INCH };
+        let fix = |v: f32| {
+            if v.is_finite() {
+                v.max(0.0)
+            } else {
+                POINTS_PER_INCH
+            }
+        };
         let mut m = Margins {
             top: fix(self.margins.top),
             right: fix(self.margins.right),
@@ -229,7 +235,9 @@ impl Typography {
     /// The text size in points `block` is shown at: its override, else
     /// [`Typography::size_for`] its kind.
     pub fn size_of(&self, block: &Block) -> f32 {
-        block.text_size().unwrap_or_else(|| self.size_for(block.kind()))
+        block
+            .text_size()
+            .unwrap_or_else(|| self.size_for(block.kind()))
     }
 
     /// Clamps values into usable ranges and replaces an empty font name.
@@ -293,7 +301,9 @@ impl SpellingLanguage {
         let well_formed = !id.is_empty()
             && id.len() <= Self::MAX_IDENTIFIER_LEN
             && id.as_bytes()[0].is_ascii_alphabetic()
-            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
         well_formed.then(|| SpellingLanguage::Language(id.to_string()))
     }
 
@@ -378,7 +388,10 @@ mod tests {
         // document tightens them too.
         t.line_height = 2.0;
         assert_eq!(t.line_height_for(&BlockKind::Quote), 2.0);
-        assert_eq!(t.line_height_for(&BlockKind::heading(2)), HEADING_MAX_LINE_HEIGHT);
+        assert_eq!(
+            t.line_height_for(&BlockKind::heading(2)),
+            HEADING_MAX_LINE_HEIGHT
+        );
         t.line_height = 1.1;
         assert_eq!(t.line_height_for(&BlockKind::heading(2)), 1.1);
     }
@@ -386,18 +399,40 @@ mod tests {
     #[test]
     fn spelling_language_identifiers() {
         use SpellingLanguage::{Automatic, Language};
-        assert_eq!(SpellingLanguage::language("en_GB"), Some(Language("en_GB".into())));
-        assert_eq!(SpellingLanguage::language("  pt-BR \n"), Some(Language("pt-BR".into())));
-        assert_eq!(SpellingLanguage::language("de"), Some(Language("de".into())));
+        assert_eq!(
+            SpellingLanguage::language("en_GB"),
+            Some(Language("en_GB".into()))
+        );
+        assert_eq!(
+            SpellingLanguage::language("  pt-BR \n"),
+            Some(Language("pt-BR".into()))
+        );
+        assert_eq!(
+            SpellingLanguage::language("de"),
+            Some(Language("de".into()))
+        );
         assert_eq!(SpellingLanguage::language("auto"), Some(Automatic));
         assert_eq!(SpellingLanguage::language(" Automatic "), Some(Automatic));
-        for bad in ["", "   ", "en GB", "en/GB", "1en", "_en", "é", "en\u{0}", "x".repeat(41).as_str()] {
+        for bad in [
+            "",
+            "   ",
+            "en GB",
+            "en/GB",
+            "1en",
+            "_en",
+            "é",
+            "en\u{0}",
+            "x".repeat(41).as_str(),
+        ] {
             assert_eq!(SpellingLanguage::language(bad), None, "{bad:?}");
         }
         assert!(SpellingLanguage::language(&"x".repeat(40)).is_some());
         // The one-string form goes there and back.
         for l in [Automatic, Language("en_AU".into())] {
-            assert_eq!(SpellingLanguage::from_setting_str(l.as_setting_str()), Some(l.clone()));
+            assert_eq!(
+                SpellingLanguage::from_setting_str(l.as_setting_str()),
+                Some(l.clone())
+            );
             assert_eq!(l.is_automatic(), l.identifier().is_none());
         }
         assert_eq!(Language("fr".into()).identifier(), Some("fr"));
@@ -416,10 +451,20 @@ mod tests {
         assert_eq!(auto.clone().sanitized(), auto);
         // A hand-built identifier that cannot be one is dropped; one that
         // only needs trimming is kept; "auto" is the automatic choice.
-        assert_eq!(with(Some(SpellingLanguage::Language("no such".into()))).sanitized(), with(None));
-        assert_eq!(with(Some(SpellingLanguage::Language(" de ".into()))).sanitized().spelling_language,
-            Some(SpellingLanguage::Language("de".into())));
-        assert_eq!(with(Some(SpellingLanguage::Language("AUTO".into()))).sanitized(), auto);
+        assert_eq!(
+            with(Some(SpellingLanguage::Language("no such".into()))).sanitized(),
+            with(None)
+        );
+        assert_eq!(
+            with(Some(SpellingLanguage::Language(" de ".into())))
+                .sanitized()
+                .spelling_language,
+            Some(SpellingLanguage::Language("de".into()))
+        );
+        assert_eq!(
+            with(Some(SpellingLanguage::Language("AUTO".into()))).sanitized(),
+            auto
+        );
         // Sanitising is a fixed point.
         let s = with(Some(SpellingLanguage::Language(" de ".into()))).sanitized();
         assert_eq!(s.clone().sanitized(), s);
@@ -467,7 +512,13 @@ mod tests {
         assert_eq!(t.size_for(&BlockKind::Paragraph), 17.0);
         assert_eq!(t.size_for(&BlockKind::heading(1)), 34.0);
         assert!(t.size_for(&BlockKind::heading(2)) > t.size_for(&BlockKind::heading(3)));
-        assert_eq!(t.size_of(&Block::with_text(BlockKind::heading(1), "x")), 34.0);
-        assert_eq!(t.size_of(&Block::paragraph("x").with_text_size(Some(22.0))), 22.0);
+        assert_eq!(
+            t.size_of(&Block::with_text(BlockKind::heading(1), "x")),
+            34.0
+        );
+        assert_eq!(
+            t.size_of(&Block::paragraph("x").with_text_size(Some(22.0))),
+            22.0
+        );
     }
 }

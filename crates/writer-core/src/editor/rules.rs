@@ -274,7 +274,8 @@ impl EditorState {
                 let lead = t[..start].trim_end_matches(['*', '_', '~', '=', '`']);
                 let opening = char_before(t, start) != Some(own_open)
                     && lead.chars().next_back().is_none_or(|c| {
-                        c.is_whitespace() || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c)
+                        c.is_whitespace()
+                            || "([{<\u{201C}\u{2018}\u{AB}\u{2014}\u{2013}-/".contains(c)
                     });
                 let rep = match (ch, opening) {
                     ('"', true) => "\u{201C}",

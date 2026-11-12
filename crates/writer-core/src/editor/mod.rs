@@ -16,16 +16,16 @@ use std::ops::Range;
 
 pub use format::{Choice, FormatState, LinkInfo, Toggle};
 
+use crate::attrs::CommentId;
+use crate::attrs::InlineAttrs;
 use crate::block::{Block, BlockId};
 use crate::comments::CommentThread;
-use crate::attrs::CommentId;
 use crate::document::Document;
 use crate::history::{EditKind, Entry, History, Op, push_op};
 use crate::movement::Movement;
 use crate::position::{Position, Selection, TextRange};
 use crate::settings::{DocumentSettings, SpellingLanguage};
 use crate::stats::Stats;
-use crate::attrs::InlineAttrs;
 use crate::text::{self, CharClass};
 
 /// Switches for automatic text transformations while typing.
@@ -291,7 +291,11 @@ impl EditorState {
                 Movement::Left => Selection::caret(sel.start()),
                 Movement::Right => Selection::caret(sel.end()),
                 m => {
-                    let from = if m.is_backward() { sel.start() } else { sel.end() };
+                    let from = if m.is_backward() {
+                        sel.start()
+                    } else {
+                        sel.end()
+                    };
                     Selection::caret(self.doc.moved(from, m))
                 }
             }
@@ -520,7 +524,10 @@ impl EditorState {
     // ----- transaction machinery (crate-private) ---------------------------------
 
     fn normalized(&self, s: Selection) -> Selection {
-        Selection::new(self.doc.clamp_position(s.anchor), self.doc.clamp_position(s.head))
+        Selection::new(
+            self.doc.clamp_position(s.anchor),
+            self.doc.clamp_position(s.head),
+        )
     }
 
     /// Runs `f` as one transaction of `kind` (or as part of the enclosing
@@ -744,8 +751,16 @@ impl EditorState {
             if b.is_void() || (!include_code && b.kind.is_code()) {
                 continue;
             }
-            let from = if i == r.start.block { r.start.offset } else { 0 };
-            let to = if i == r.end.block { r.end.offset } else { b.len() };
+            let from = if i == r.start.block {
+                r.start.offset
+            } else {
+                0
+            };
+            let to = if i == r.end.block {
+                r.end.offset
+            } else {
+                b.len()
+            };
             if from < to {
                 out.push((i, from..to));
             }

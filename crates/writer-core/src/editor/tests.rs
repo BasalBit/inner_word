@@ -26,11 +26,19 @@ fn p(b: usize, o: usize) -> Position {
 }
 
 fn texts(e: &EditorState) -> Vec<String> {
-    e.document().blocks().iter().map(|b| b.text().to_string()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.text().to_string())
+        .collect()
 }
 
 fn kinds(e: &EditorState) -> Vec<BlockKind> {
-    e.document().blocks().iter().map(|b| b.kind().clone()).collect()
+    e.document()
+        .blocks()
+        .iter()
+        .map(|b| b.kind().clone())
+        .collect()
 }
 
 fn typ(e: &mut EditorState, s: &str) {
@@ -45,7 +53,11 @@ fn check(e: &EditorState) {
 }
 
 fn caret(e: &EditorState) -> Position {
-    assert!(e.selection().is_collapsed(), "expected a caret, got {:?}", e.selection());
+    assert!(
+        e.selection().is_collapsed(),
+        "expected a caret, got {:?}",
+        e.selection()
+    );
     e.selection().head
 }
 
@@ -179,7 +191,11 @@ fn inherits_attributes_but_not_links_or_comments_at_edges() {
         link: Some("https://a.b".into()),
         ..Default::default()
     };
-    let mut e = ed(vec![para("x").with_span("link", link).with_span("y", InlineAttrs::default())]);
+    let mut e = ed(vec![
+        para("x")
+            .with_span("link", link)
+            .with_span("y", InlineAttrs::default()),
+    ]);
     // After the link: no link.
     e.set_caret(p(0, 5));
     e.insert_text("Z");
@@ -187,9 +203,20 @@ fn inherits_attributes_but_not_links_or_comments_at_edges() {
     // Strictly inside: link continues.
     e.set_caret(p(0, 3));
     e.insert_text("Q");
-    assert_eq!(e.document().blocks()[0].attrs_at(3).unwrap().link.as_deref(), Some("https://a.b"));
+    assert_eq!(
+        e.document().blocks()[0]
+            .attrs_at(3)
+            .unwrap()
+            .link
+            .as_deref(),
+        Some("https://a.b")
+    );
     // Bold is inherited from the preceding char.
-    let mut e = ed(vec![para("").with_span("bold", bold()).with_span(" plain", InlineAttrs::default())]);
+    let mut e = ed(vec![
+        para("")
+            .with_span("bold", bold())
+            .with_span(" plain", InlineAttrs::default()),
+    ]);
     e.set_caret(p(0, 4));
     e.insert_text("!");
     assert!(e.document().blocks()[0].attrs_at(4).unwrap().bold);
@@ -212,7 +239,10 @@ fn pending_attributes() {
     assert!(b.attrs_at(1).unwrap().bold && b.attrs_at(2).unwrap().bold);
     e.toggle_bold();
     e.move_caret(Movement::Left, false);
-    assert!(e.pending_attrs().is_none(), "moving drops pending attributes");
+    assert!(
+        e.pending_attrs().is_none(),
+        "moving drops pending attributes"
+    );
     e.set_highlight(Some(Highlight::Green));
     e.set_text_color(Some(Rgb::new(9, 9, 9)));
     e.set_font_family(Some("Menlo"));
@@ -323,7 +353,9 @@ fn enter_heading_rules() {
 
 #[test]
 fn enter_list_rules() {
-    let mut e = ed(vec![kb(BlockKind::TodoItem { checked: true }, "task").with_indent(2)]);
+    let mut e = ed(vec![
+        kb(BlockKind::TodoItem { checked: true }, "task").with_indent(2),
+    ]);
     e.set_caret(p(0, 4));
     e.insert_paragraph_break();
     assert_eq!(kinds(&e)[1], BlockKind::TodoItem { checked: false });
@@ -419,7 +451,10 @@ fn backspace_graphemes() {
 #[test]
 fn backspace_at_block_start_rules() {
     // Indented list item outdents, then becomes a paragraph.
-    let mut e = ed(vec![para("p"), kb(BlockKind::BulletItem, "item").with_indent(1)]);
+    let mut e = ed(vec![
+        para("p"),
+        kb(BlockKind::BulletItem, "item").with_indent(1),
+    ]);
     e.set_caret(p(1, 0));
     e.backspace();
     assert_eq!(e.document().blocks()[1].indent(), 0);
@@ -429,7 +464,11 @@ fn backspace_at_block_start_rules() {
     assert_eq!(texts(&e), ["pitem"]);
     assert_eq!(caret(&e), p(0, 1));
     // Heading and quote become paragraphs.
-    for k in [BlockKind::heading(3), BlockKind::Quote, BlockKind::NumberedItem] {
+    for k in [
+        BlockKind::heading(3),
+        BlockKind::Quote,
+        BlockKind::NumberedItem,
+    ] {
         let mut e = ed(vec![kb(k, "x")]);
         e.backspace();
         assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
@@ -483,7 +522,12 @@ fn caret_on_void_block() {
 
 #[test]
 fn delete_forward_merges() {
-    let mut e = ed(vec![kb(BlockKind::heading(1), "ab"), para("cd"), Block::new(BlockKind::Divider), para("e")]);
+    let mut e = ed(vec![
+        kb(BlockKind::heading(1), "ab"),
+        para("cd"),
+        Block::new(BlockKind::Divider),
+        para("e"),
+    ]);
     e.set_caret(p(0, 2));
     e.delete_forward();
     assert_eq!(texts(&e), ["abcd", "", "e"]);
@@ -566,12 +610,21 @@ fn delete_selection_across_blocks() {
     assert_eq!(texts(&e), ["Hquote"]);
     assert_eq!(kinds(&e), vec![BlockKind::heading(1)]);
     // Void blocks at either end of the range are part of it.
-    let mut e = ed(vec![Block::new(BlockKind::Divider), para("ab"), Block::new(BlockKind::PageBreak)]);
+    let mut e = ed(vec![
+        Block::new(BlockKind::Divider),
+        para("ab"),
+        Block::new(BlockKind::PageBreak),
+    ]);
     e.set_selection(Selection::new(p(0, 0), p(1, 1)));
     e.delete_selection();
     assert_eq!(texts(&e), ["b", ""]);
     assert_eq!(kinds(&e)[0], BlockKind::Paragraph);
-    let mut e = ed(vec![para("ab"), para("cd"), Block::new(BlockKind::PageBreak), para("z")]);
+    let mut e = ed(vec![
+        para("ab"),
+        para("cd"),
+        Block::new(BlockKind::PageBreak),
+        para("z"),
+    ]);
     e.set_selection(Selection::new(p(0, 1), p(2, 0)));
     e.delete_selection();
     assert_eq!(texts(&e), ["a", "z"]);
@@ -585,18 +638,32 @@ fn delete_selection_across_blocks() {
     assert_eq!(e.document().blocks()[0].id(), id0);
     check(&e);
     // Only void blocks selected: the document keeps one empty paragraph.
-    let mut e = ed(vec![Block::new(BlockKind::Divider), para("ab"), Block::new(BlockKind::PageBreak)]);
+    let mut e = ed(vec![
+        Block::new(BlockKind::Divider),
+        para("ab"),
+        Block::new(BlockKind::PageBreak),
+    ]);
     e.select_all();
     e.delete_selection();
     assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
     assert_eq!(texts(&e), [""]);
     check(&e);
-    let mut e = ed(vec![para("a"), Block::new(BlockKind::Divider), para("b"), Block::new(BlockKind::PageBreak), para("c")]);
+    let mut e = ed(vec![
+        para("a"),
+        Block::new(BlockKind::Divider),
+        para("b"),
+        Block::new(BlockKind::PageBreak),
+        para("c"),
+    ]);
     e.set_selection(Selection::new(p(1, 0), p(3, 0)));
     e.delete_selection();
     assert_eq!(texts(&e), ["a", "c"]);
     assert_eq!(caret(&e), p(1, 0));
-    let mut e = ed(vec![para("a"), Block::new(BlockKind::Divider), Block::new(BlockKind::PageBreak)]);
+    let mut e = ed(vec![
+        para("a"),
+        Block::new(BlockKind::Divider),
+        Block::new(BlockKind::PageBreak),
+    ]);
     e.set_selection(Selection::new(p(1, 0), p(2, 0)));
     e.delete_selection();
     assert_eq!(texts(&e), ["a"]);
@@ -640,7 +707,11 @@ fn movement_and_extension() {
 
 #[test]
 fn toggle_styles_over_selection() {
-    let mut e = ed(vec![para("ab").with_span("cd", bold()), kb(BlockKind::code(), "code"), para("ef")]);
+    let mut e = ed(vec![
+        para("ab").with_span("cd", bold()),
+        kb(BlockKind::code(), "code"),
+        para("ef"),
+    ]);
     e.set_selection(Selection::new(p(0, 0), p(0, 4)));
     assert_eq!(e.format_state().bold, Toggle::Mixed);
     assert!(e.toggle_bold());
@@ -691,7 +762,10 @@ fn highlight_color_font() {
     let mut e = ed(vec![para("hello")]);
     e.set_selection(Selection::new(p(0, 1), p(0, 3)));
     e.toggle_highlight(Highlight::Yellow);
-    assert_eq!(e.format_state().highlight, Choice::Same(Some(Highlight::Yellow)));
+    assert_eq!(
+        e.format_state().highlight,
+        Choice::Same(Some(Highlight::Yellow))
+    );
     e.toggle_highlight(Highlight::Yellow);
     assert_eq!(e.format_state().highlight, Choice::Same(None));
     e.set_text_color(Some(Rgb::new(255, 0, 0)));
@@ -716,8 +790,14 @@ fn links() {
     // Bold inside the link does not split the link range.
     e.set_selection(Selection::new(p(0, 9), p(0, 10)));
     e.toggle_bold();
-    assert_eq!(e.document().link_at(p(0, 12)).unwrap().range, TextRange::in_block(0, 8, 12));
-    assert_eq!(e.document().link_at(p(0, 8)).unwrap().range, TextRange::in_block(0, 8, 12));
+    assert_eq!(
+        e.document().link_at(p(0, 12)).unwrap().range,
+        TextRange::in_block(0, 8, 12)
+    );
+    assert_eq!(
+        e.document().link_at(p(0, 8)).unwrap().range,
+        TextRange::in_block(0, 8, 12)
+    );
     assert!(e.document().link_at(p(0, 7)).is_none());
     // Collapsed caret inside: edit the whole link.
     e.set_caret(p(0, 10));
@@ -733,7 +813,10 @@ fn links() {
     e.set_caret(p(0, 2));
     assert!(e.insert_link("site", "https://s"));
     assert_eq!(texts(&e), ["a site b"]);
-    assert_eq!(e.document().link_at(p(0, 4)).unwrap().range, TextRange::in_block(0, 2, 6));
+    assert_eq!(
+        e.document().link_at(p(0, 4)).unwrap().range,
+        TextRange::in_block(0, 2, 6)
+    );
     typ(&mut e, "x");
     assert_eq!(e.document().blocks()[0].attrs_at(6).unwrap().link, None);
 }
@@ -763,7 +846,10 @@ fn set_block_kind_toggles() {
     let mut e = ed(vec![para("a"), para("b"), Block::new(BlockKind::Divider)]);
     e.set_selection(Selection::new(p(0, 0), p(2, 0)));
     assert!(e.set_block_kind(BlockKind::BulletItem));
-    assert_eq!(kinds(&e)[..2], [BlockKind::BulletItem, BlockKind::BulletItem]);
+    assert_eq!(
+        kinds(&e)[..2],
+        [BlockKind::BulletItem, BlockKind::BulletItem]
+    );
     assert_eq!(kinds(&e)[2], BlockKind::Divider);
     assert!(e.set_block_kind(BlockKind::BulletItem));
     assert_eq!(kinds(&e)[..2], [BlockKind::Paragraph, BlockKind::Paragraph]);
@@ -777,7 +863,11 @@ fn set_block_kind_toggles() {
 
 #[test]
 fn code_block_conversion_merges_and_splits() {
-    let mut e = ed(vec![para("let a;"), para("").with_span("let b;", bold()), para("tail")]);
+    let mut e = ed(vec![
+        para("let a;"),
+        para("").with_span("let b;", bold()),
+        para("tail"),
+    ]);
     e.set_selection(Selection::new(p(0, 4), p(1, 3)));
     e.set_block_kind(BlockKind::code());
     assert_eq!(texts(&e), ["let a;\nlet b;", "tail"]);
@@ -804,10 +894,20 @@ fn code_block_conversion_merges_and_splits() {
 
 #[test]
 fn todo_alignment_size_indent() {
-    let mut e = ed(vec![kb(BlockKind::todo(), "a"), kb(BlockKind::TodoItem { checked: true }, "b"), para("c")]);
+    let mut e = ed(vec![
+        kb(BlockKind::todo(), "a"),
+        kb(BlockKind::TodoItem { checked: true }, "b"),
+        para("c"),
+    ]);
     e.select_all();
     assert!(e.toggle_todo_checked());
-    assert_eq!(kinds(&e)[..2], [BlockKind::TodoItem { checked: true }, BlockKind::TodoItem { checked: true }]);
+    assert_eq!(
+        kinds(&e)[..2],
+        [
+            BlockKind::TodoItem { checked: true },
+            BlockKind::TodoItem { checked: true }
+        ]
+    );
     e.toggle_todo_checked();
     assert_eq!(kinds(&e)[1], BlockKind::todo());
     e.set_caret(p(2, 0));
@@ -824,7 +924,10 @@ fn todo_alignment_size_indent() {
     e.step_text_size(-2);
     assert_eq!(e.document().blocks()[2].text_size(), Some(15.0));
     e.set_text_size(Some(1000.0));
-    assert_eq!(e.document().blocks()[2].text_size(), Some(crate::MAX_TEXT_SIZE));
+    assert_eq!(
+        e.document().blocks()[2].text_size(),
+        Some(crate::MAX_TEXT_SIZE)
+    );
     e.reset_text_size();
     assert_eq!(e.document().blocks()[2].text_size(), None);
     for _ in 0..12 {
@@ -891,10 +994,21 @@ fn insert_void_and_empty_blocks() {
     let mut e = ed(vec![para("text"), para("")]);
     e.set_caret(p(0, 2));
     e.insert_divider();
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::Divider, BlockKind::Paragraph]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Divider,
+            BlockKind::Paragraph
+        ]
+    );
     assert_eq!(caret(&e), p(2, 0), "reuses the empty paragraph");
     e.insert_page_break();
-    assert_eq!(kinds(&e)[2], BlockKind::PageBreak, "empty paragraph becomes the break");
+    assert_eq!(
+        kinds(&e)[2],
+        BlockKind::PageBreak,
+        "empty paragraph becomes the break"
+    );
     assert_eq!(kinds(&e)[3], BlockKind::Paragraph);
     assert_eq!(caret(&e), p(3, 0));
     let mut e = ed(vec![kb(BlockKind::BulletItem, "x").with_indent(1)]);
@@ -935,7 +1049,11 @@ fn block_input_rules() {
         assert_eq!(kinds(&e), vec![kind.clone()], "input {input:?}");
         assert_eq!(texts(&e), [""], "input {input:?}");
         e.undo();
-        assert_eq!(texts(&e), [*input], "one undo restores the typed text for {input:?}");
+        assert_eq!(
+            texts(&e),
+            [*input],
+            "one undo restores the typed text for {input:?}"
+        );
         assert_eq!(kinds(&e), vec![BlockKind::Paragraph]);
     }
     for input in ["####### ", "a# ", "1.5 ", "[y] ", "-- "] {
@@ -971,7 +1089,10 @@ fn block_input_rules() {
 
 fn styled(e: &EditorState, block: usize, f: impl Fn(&InlineAttrs) -> bool) -> String {
     let b = &e.document().blocks()[block];
-    b.text_spans().filter(|(_, _, a)| f(a)).map(|(_, t, _)| t).collect()
+    b.text_spans()
+        .filter(|(_, _, a)| f(a))
+        .map(|(_, t, _)| t)
+        .collect()
 }
 
 #[test]
@@ -1021,7 +1142,10 @@ fn inline_rules_leave_prose_alone() {
         });
         typ(&mut e, input);
         assert_eq!(texts(&e), [format!("p{input}")], "input {input:?}");
-        assert!(e.document().blocks()[0].runs().len() <= 1, "no styling for {input:?}");
+        assert!(
+            e.document().blocks()[0].runs().len() <= 1,
+            "no styling for {input:?}"
+        );
     }
     // Never inside code blocks or inline code.
     let mut e = ed(vec![kb(BlockKind::code(), "")]);
@@ -1041,7 +1165,10 @@ fn inline_rules_leave_prose_alone() {
 fn smart_punctuation() {
     let mut e = EditorState::default();
     typ(&mut e, "\"Hi,\" she said -- it's 'fine'...");
-    assert_eq!(texts(&e), ["\u{201C}Hi,\u{201D} she said \u{2014} it\u{2019}s \u{2018}fine\u{2019}\u{2026}"]);
+    assert_eq!(
+        texts(&e),
+        ["\u{201C}Hi,\u{201D} she said \u{2014} it\u{2019}s \u{2018}fine\u{2019}\u{2026}"]
+    );
     // Undo restores the literal character.
     let mut e = EditorState::default();
     typ(&mut e, "\"");
@@ -1089,7 +1216,11 @@ fn copy_cut_paste_inline() {
 
 #[test]
 fn paste_multi_block() {
-    let src = ed(vec![para("alpha"), kb(BlockKind::BulletItem, "beta"), kb(BlockKind::heading(2), "gamma")]);
+    let src = ed(vec![
+        para("alpha"),
+        kb(BlockKind::BulletItem, "beta"),
+        kb(BlockKind::heading(2), "gamma"),
+    ]);
     let mut src = src;
     src.set_selection(Selection::new(p(0, 2), p(2, 3)));
     let f = src.copy();
@@ -1101,7 +1232,14 @@ fn paste_multi_block() {
     e.paste(&f);
     check(&e);
     assert_eq!(texts(&e), ["Xpha", "beta", "gamY"]);
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::BulletItem, BlockKind::heading(2)]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::BulletItem,
+            BlockKind::heading(2)
+        ]
+    );
     assert_eq!(e.document().blocks()[0].id(), id);
     assert_eq!(caret(&e), p(2, 3));
     e.undo();
@@ -1116,7 +1254,10 @@ fn paste_multi_block() {
     // Into a code block: plain text.
     let mut e = ed(vec![kb(BlockKind::code(), "c")]);
     e.set_caret(p(0, 1));
-    let f = Fragment::new(vec![kb(BlockKind::heading(1), "a"), para("").with_span("b", bold())]);
+    let f = Fragment::new(vec![
+        kb(BlockKind::heading(1), "a"),
+        para("").with_span("b", bold()),
+    ]);
     e.paste(&f);
     assert_eq!(texts(&e), ["ca\nb"]);
     check(&e);
@@ -1125,7 +1266,14 @@ fn paste_multi_block() {
     let mut e = ed(vec![para("ab")]);
     e.set_caret(p(0, 1));
     e.paste(&f);
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::Divider, BlockKind::Paragraph]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Divider,
+            BlockKind::Paragraph
+        ]
+    );
     assert_eq!(texts(&e), ["ax", "", "b"]);
     assert_eq!(caret(&e), p(2, 0));
     // A lone void fragment at the end of a block.
@@ -1133,7 +1281,14 @@ fn paste_multi_block() {
     let mut e = ed(vec![para("ab")]);
     e.set_caret(p(0, 2));
     e.paste(&f);
-    assert_eq!(kinds(&e), vec![BlockKind::Paragraph, BlockKind::PageBreak, BlockKind::Paragraph]);
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::PageBreak,
+            BlockKind::Paragraph
+        ]
+    );
     check(&e);
 }
 
@@ -1168,7 +1323,10 @@ fn fragments_drop_comment_anchors() {
     assert!(f.blocks()[0].comment_ids().is_empty());
     e.set_caret(e.document().end());
     e.paste(&f);
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 0, 14)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 0, 14)]
+    );
     e.duplicate_blocks();
     assert_eq!(e.document().comment_ranges(id).len(), 1);
     check(&e);
@@ -1181,19 +1339,31 @@ fn comment_anchors_follow_edits() {
     let mut e = ed(vec![para("one two three")]);
     e.set_selection(Selection::new(p(0, 4), p(0, 7)));
     let id = e.add_comment("why two?", "ann", 100).unwrap();
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 4, 7)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 4, 7)]
+    );
     assert_eq!(e.document().comment(id).unwrap().author, "ann");
     // Typing before shifts the anchor; typing inside extends it.
     e.set_caret(p(0, 0));
     typ(&mut e, "X");
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 5, 8)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 5, 8)]
+    );
     e.set_caret(p(0, 6));
     typ(&mut e, "w");
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 5, 9)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 5, 9)]
+    );
     // Typing at the edge does not extend it.
     e.set_caret(p(0, 9));
     typ(&mut e, "!");
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 5, 9)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 5, 9)]
+    );
     // Split in the middle: one range across the block boundary.
     e.set_caret(p(0, 7));
     e.insert_paragraph_break();
@@ -1206,7 +1376,10 @@ fn comment_anchors_follow_edits() {
     assert!(e.document().comments_at(p(1, 4)).is_empty());
     // Merge back.
     e.backspace();
-    assert_eq!(e.document().comment_ranges(id), vec![TextRange::in_block(0, 5, 9)]);
+    assert_eq!(
+        e.document().comment_ranges(id),
+        vec![TextRange::in_block(0, 5, 9)]
+    );
     // Delete all anchored text: orphaned, undo restores.
     e.set_selection(Selection::new(p(0, 4), p(0, 10)));
     e.delete_selection();
@@ -1254,7 +1427,13 @@ fn comment_thread_operations() {
     let before = e.document().clone();
     assert!(e.delete_comment(c1));
     assert!(e.document().comment(c1).is_none());
-    assert!(e.document().blocks()[0].attrs_at(0).unwrap().comments.is_empty());
+    assert!(
+        e.document().blocks()[0]
+            .attrs_at(0)
+            .unwrap()
+            .comments
+            .is_empty()
+    );
     check(&e);
     e.undo();
     assert_eq!(e.document(), &before);
@@ -1277,14 +1456,25 @@ fn change_tracking_reports_local_ranges() {
     let mut e = ed(vec![para("a"), para("b"), para("c"), para("d")]);
     assert_eq!(e.revision(), 0);
     let stamps = |e: &EditorState| -> Vec<(BlockId, u64)> {
-        e.document().blocks().iter().map(|b| (b.id(), b.revision())).collect()
+        e.document()
+            .blocks()
+            .iter()
+            .map(|b| (b.id(), b.revision()))
+            .collect()
     };
     let s0 = stamps(&e);
     e.set_caret(p(2, 1));
     typ(&mut e, "x");
     assert_eq!(e.revision(), 1);
     let c = e.take_changes().unwrap();
-    assert_eq!(c.blocks, Some(BlockSplice { start: 2, old_len: 1, new_len: 1 }));
+    assert_eq!(
+        c.blocks,
+        Some(BlockSplice {
+            start: 2,
+            old_len: 1,
+            new_len: 1
+        })
+    );
     assert!(e.take_changes().is_none());
     let s1 = stamps(&e);
     assert_eq!(s0[0], s1[0]);
@@ -1297,10 +1487,24 @@ fn change_tracking_reports_local_ranges() {
     let c = e.take_changes().unwrap();
     assert_eq!(c.revision, 3);
     // Split of 2 into 2..4 then edit of 0: union 0..3 old -> 0..4 new.
-    assert_eq!(c.blocks, Some(BlockSplice { start: 0, old_len: 3, new_len: 4 }));
+    assert_eq!(
+        c.blocks,
+        Some(BlockSplice {
+            start: 0,
+            old_len: 3,
+            new_len: 4
+        })
+    );
     e.undo();
     let c = e.last_change().unwrap();
-    assert_eq!(c.blocks, Some(BlockSplice { start: 0, old_len: 1, new_len: 1 }));
+    assert_eq!(
+        c.blocks,
+        Some(BlockSplice {
+            start: 0,
+            old_len: 1,
+            new_len: 1
+        })
+    );
     assert_eq!(e.revision(), 4);
     // Undo restores the exact stamp of the restored version.
     e.undo();
@@ -1317,12 +1521,41 @@ fn change_tracking_reports_local_ranges() {
 
 #[test]
 fn splice_composition() {
-    let a = BlockSplice { start: 5, old_len: 1, new_len: 3 };
-    let b = BlockSplice { start: 2, old_len: 2, new_len: 0 };
+    let a = BlockSplice {
+        start: 5,
+        old_len: 1,
+        new_len: 3,
+    };
+    let b = BlockSplice {
+        start: 2,
+        old_len: 2,
+        new_len: 0,
+    };
     let c = BlockSplice::then(a, b);
-    assert_eq!(c, BlockSplice { start: 2, old_len: 4, new_len: 4 });
-    let d = BlockSplice::then(a, BlockSplice { start: 20, old_len: 1, new_len: 1 });
-    assert_eq!(d, BlockSplice { start: 5, old_len: 14, new_len: 16 });
+    assert_eq!(
+        c,
+        BlockSplice {
+            start: 2,
+            old_len: 4,
+            new_len: 4
+        }
+    );
+    let d = BlockSplice::then(
+        a,
+        BlockSplice {
+            start: 20,
+            old_len: 1,
+            new_len: 1,
+        },
+    );
+    assert_eq!(
+        d,
+        BlockSplice {
+            start: 5,
+            old_len: 14,
+            new_len: 16
+        }
+    );
 }
 
 // ----- search and replace ------------------------------------------------------------------
@@ -1342,7 +1575,11 @@ fn replace_one_and_all() {
     e.set_caret(p(1, 9));
     assert_eq!(e.replace_all("cat", opts, "lion"), 3);
     assert_eq!(texts(&e), ["lion dog lion", "concat lion"]);
-    assert_eq!(caret(&e), p(1, 7), "caret inside a match moves to its start");
+    assert_eq!(
+        caret(&e),
+        p(1, 7),
+        "caret inside a match moves to its start"
+    );
     e.undo();
     assert_eq!(texts(&e), ["cat dog cat", "concat cat"]);
     assert_eq!(e.replace_all("zzz", opts, "x"), 0);
@@ -1421,7 +1658,11 @@ fn utf16_round_trip_on_blocks() {
 
 #[test]
 fn void_blocks_at_document_edges() {
-    let mut e = ed(vec![Block::new(BlockKind::Divider), para("mid"), Block::new(BlockKind::PageBreak)]);
+    let mut e = ed(vec![
+        Block::new(BlockKind::Divider),
+        para("mid"),
+        Block::new(BlockKind::PageBreak),
+    ]);
     e.move_caret(Movement::Left, false);
     assert_eq!(caret(&e), p(0, 0));
     e.move_caret(Movement::DocEnd, false);
@@ -1465,7 +1706,10 @@ fn large_document_edits_are_local() {
     eprintln!("10k blocks: 651 edits + 50 undos took {elapsed:?}");
     let c = e.take_changes().unwrap();
     let s = c.blocks.unwrap();
-    assert!(s.start >= 5_000 && s.old_len <= 2 && s.new_len <= 2, "{s:?}");
+    assert!(
+        s.start >= 5_000 && s.old_len <= 2 && s.new_len <= 2,
+        "{s:?}"
+    );
     // Generous bound that still catches whole-document work per keystroke.
     assert!(elapsed.as_secs_f64() < 5.0, "took {elapsed:?}");
     let t1 = std::time::Instant::now();
@@ -1474,7 +1718,10 @@ fn large_document_edits_are_local() {
     let first = t1.elapsed();
     let t2 = std::time::Instant::now();
     let _ = e.stats();
-    eprintln!("10k blocks: stats first {first:?}, cached {:?}", t2.elapsed());
+    eprintln!(
+        "10k blocks: stats first {first:?}, cached {:?}",
+        t2.elapsed()
+    );
     assert!(t1.elapsed().as_secs_f64() < 10.0);
 }
 
@@ -1498,9 +1745,18 @@ fn extreme_inputs_do_not_panic() {
     e.replace_range(TextRange::new(far, far), "tail");
     let d = e.document();
     assert!(d.numbered_ordinals(usize::MAX..0).is_empty());
-    let _ = d.text_in(TextRange { start: far, end: Position::ZERO });
-    let _ = d.stats_in(TextRange { start: far, end: Position::ZERO });
-    let _ = d.fragment(TextRange { start: far, end: Position::ZERO });
+    let _ = d.text_in(TextRange {
+        start: far,
+        end: Position::ZERO,
+    });
+    let _ = d.stats_in(TextRange {
+        start: far,
+        end: Position::ZERO,
+    });
+    let _ = d.fragment(TextRange {
+        start: far,
+        end: Position::ZERO,
+    });
     let _ = d.position_from_flat(usize::MAX);
     let _ = d.flat_offset(far);
     let _ = d.link_at(far);
@@ -1572,7 +1828,14 @@ fn spelling_language_is_a_settings_change() {
     assert_eq!(c.blocks, None);
     assert!(!c.comments);
     assert_eq!(e.undo_depth(), depth);
-    assert_eq!(e.document().blocks().iter().map(|b| b.revision()).collect::<Vec<_>>(), stamps);
+    assert_eq!(
+        e.document()
+            .blocks()
+            .iter()
+            .map(|b| b.revision())
+            .collect::<Vec<_>>(),
+        stamps
+    );
     assert_eq!(
         e.document().settings().spelling_language,
         Some(SpellingLanguage::Language("en_GB".into()))
@@ -1599,7 +1862,10 @@ fn spelling_language_is_a_settings_change() {
     e.undo();
     let s = e.document().settings();
     assert!(s.page_view);
-    assert_eq!(s.spelling_language, Some(SpellingLanguage::Language("de".into())));
+    assert_eq!(
+        s.spelling_language,
+        Some(SpellingLanguage::Language("de".into()))
+    );
     e.document().check_invariants().unwrap();
     // It survives a save and a load.
     let back = Document::from_json(&e.document().to_json()).unwrap();

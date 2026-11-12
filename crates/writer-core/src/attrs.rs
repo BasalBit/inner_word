@@ -239,11 +239,19 @@ impl InlineAttrs {
     pub(crate) fn sanitize(&mut self) {
         if let Some(f) = &self.font {
             let t = f.trim();
-            self.font = if t.is_empty() { None } else { Some(t.to_string()) };
+            self.font = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
         }
         if let Some(l) = &self.link {
             let t = l.trim();
-            self.link = if t.is_empty() { None } else { Some(t.to_string()) };
+            self.link = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
         }
     }
 }

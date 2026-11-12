@@ -55,7 +55,14 @@ impl CommentThread {
 
     /// The next free reply id.
     pub(crate) fn next_reply_id(&self) -> ReplyId {
-        ReplyId(self.replies.iter().map(|r| r.id.0).max().unwrap_or(0).saturating_add(1))
+        ReplyId(
+            self.replies
+                .iter()
+                .map(|r| r.id.0)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        )
     }
 
     /// Makes reply ids unique and non-zero.

@@ -465,7 +465,12 @@ impl Block {
         let offset = text::floor_char_boundary(&self.text, offset);
         self.text.insert_str(offset, text);
         if self.kind.is_code() {
-            runs::insert(&mut self.runs, offset, text.len(), &attrs.code_block_subset());
+            runs::insert(
+                &mut self.runs,
+                offset,
+                text.len(),
+                &attrs.code_block_subset(),
+            );
         } else {
             runs::insert(&mut self.runs, offset, text.len(), attrs);
         }
@@ -520,7 +525,9 @@ impl Block {
             let mut piece = Block::new(BlockKind::Paragraph);
             piece.text = rep.to_string();
             for ((i, _), c) in old.char_indices().zip(rep.chars()) {
-                let attrs = runs::attrs_at(&self.runs, s + i).cloned().unwrap_or_default();
+                let attrs = runs::attrs_at(&self.runs, s + i)
+                    .cloned()
+                    .unwrap_or_default();
                 match piece.runs.last_mut() {
                     Some(last) if last.attrs == attrs => last.len += c.len_utf8(),
                     _ => piece.runs.push(Run {
@@ -658,7 +665,10 @@ impl Block {
     /// Checks the block invariants.
     pub(crate) fn check(&self) -> Result<(), String> {
         if !text::is_normalized(&self.text) {
-            return Err(format!("block {}: text contains control characters", self.id));
+            return Err(format!(
+                "block {}: text contains control characters",
+                self.id
+            ));
         }
         if !runs::is_normalized(&self.runs, self.text.len()) {
             return Err(format!("block {}: runs are not normalised", self.id));
@@ -667,10 +677,19 @@ impl Block {
         for r in &self.runs {
             pos += r.len;
             if !self.text.is_char_boundary(pos) {
-                return Err(format!("block {}: run boundary {pos} inside a char", self.id));
+                return Err(format!(
+                    "block {}: run boundary {pos} inside a char",
+                    self.id
+                ));
             }
-            if r.attrs.font.as_deref().is_some_and(|f| f.trim().is_empty() || f.trim() != f)
-                || r.attrs.link.as_deref().is_some_and(|l| l.trim().is_empty() || l.trim() != l)
+            if r.attrs
+                .font
+                .as_deref()
+                .is_some_and(|f| f.trim().is_empty() || f.trim() != f)
+                || r.attrs
+                    .link
+                    .as_deref()
+                    .is_some_and(|l| l.trim().is_empty() || l.trim() != l)
             {
                 return Err(format!("block {}: unsanitised font or link", self.id));
             }
@@ -678,7 +697,11 @@ impl Block {
         if self.kind.is_void() && !self.text.is_empty() {
             return Err(format!("block {}: void block has text", self.id));
         }
-        if self.kind.is_code() && self.runs.iter().any(|r| r.attrs != r.attrs.code_block_subset())
+        if self.kind.is_code()
+            && self
+                .runs
+                .iter()
+                .any(|r| r.attrs != r.attrs.code_block_subset())
         {
             return Err(format!("block {}: code block carries formatting", self.id));
         }
@@ -720,7 +743,9 @@ pub(crate) fn rebuild(text: &str, src_runs: &[Run]) -> (String, Vec<Run>) {
         if *run_idx < src_runs.len() {
             src_runs[*run_idx].attrs.clone()
         } else {
-            src_runs.last().map_or_else(|| fallback.clone(), |r| r.attrs.clone())
+            src_runs
+                .last()
+                .map_or_else(|| fallback.clone(), |r| r.attrs.clone())
         }
     };
     let mut chars = text.char_indices().peekable();
@@ -764,7 +789,9 @@ mod tests {
             bold: true,
             ..Default::default()
         };
-        let b = Block::paragraph("x").with_span("yz", bold.clone()).with_indent(99);
+        let b = Block::paragraph("x")
+            .with_span("yz", bold.clone())
+            .with_indent(99);
         assert_eq!(b.runs().len(), 2);
         assert_eq!(b.indent(), MAX_INDENT);
         let c = Block::with_text(BlockKind::code(), "fn").with_span("()", bold);

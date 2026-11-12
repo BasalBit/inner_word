@@ -270,6 +270,39 @@ mod welcome {
                 .any(|block| { block.text_spans().any(|(_, _, attrs)| attrs.code) })
         );
     }
+
+    /// What 0.6.0 brought is in the welcome document, and the rule of
+    /// before (agents change things only while the app is closed) is not.
+    #[test]
+    fn the_welcome_document_says_what_is_so_since_0_6_0() {
+        let text = welcome_document().plain_text();
+        for words in [
+            // The zoom, its keys and the sizes of its menu.
+            "⌘+ and ⌘- show the text larger or smaller without changing it",
+            "⇧⌘0 goes back to 100 %",
+            "Fit Width",
+            "Fit Page",
+            "Life Size, the size of the paper itself",
+            "a pinch on the trackpad",
+            // The fonts in the settings.
+            "the font rows there open a list of every font on this Mac",
+            // Agents while the app is open, the note and the switch.
+            "They can read and change things at any time.",
+            "a note at the bottom that says who changed what and has an Undo button",
+            "Agents can make changes while The Writer is open",
+        ] {
+            assert!(text.contains(words), "the welcome text lacks {words:?}");
+        }
+        for words in [
+            "only change things while The Writer is closed",
+            "is refused",
+        ] {
+            assert!(
+                !text.contains(words),
+                "the welcome text still says {words:?}"
+            );
+        }
+    }
 }
 
 mod session {

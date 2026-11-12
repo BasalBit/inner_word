@@ -20,7 +20,7 @@
 //! | `cmd-alt-h` | highlight layer on every "the" / clear it |
 //! | `cmd-alt-u` | popup at the caret / hide it |
 //! | `cmd-alt-i` | intercept keys: `x` is swallowed while on |
-//! | `cmd-alt-n` | squeeze the editor into a narrow strip (page view scales down) |
+//! | `cmd-alt-n` | squeeze the editor into a narrow strip (a sheet wider than it scrolls sideways) |
 //! | `cmd-alt-l` | page setup: A4, A4 landscape, US Letter with narrow margins |
 //! | `cmd-alt-x` | print the frame timings collected since the last print |
 //! | `cmd-alt-down` / `cmd-alt-up` | scroll by 120 pixels |

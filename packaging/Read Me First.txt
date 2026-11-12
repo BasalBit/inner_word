@@ -111,6 +111,43 @@ mouse alone, and The Writer > Reset All Keyboard Shortcuts... puts every key
 back.
 
 
+Zoom, and the size of a page
+----------------------------
+
+The text can be shown larger or smaller without changing it: sizes stay what
+they are, nothing counts as edited, and an export is the same. By default
+Command-+ zooms in, Command-- zooms out and Shift-Command-0 goes back to
+100 % (like every key, these can be changed under Keyboard Shortcuts). With
+the mouse: the percentage at the bottom right of the window opens the list of
+sizes, and Command with the scroll wheel or a pinch on the trackpad zooms
+around the pointer. The View menu has all of it. The window around the text
+does not zoom.
+
+Page view (by default Option-Command-P) shows the text on sheets of paper. At
+100 % one point of the document is one point of the screen, as in Pages and
+TextEdit; on today's displays that is about half the size of real paper. So
+a page you have not zoomed yet opens as large as the paper itself, or as wide
+as the window when that is narrower. "Life Size" in the zoom list is the size
+of the paper on the display the window is on, "Fit Width" fills the window
+and "Fit Page" shows one whole sheet. A sheet that is wider than the window
+scrolls sideways with two fingers, or with Shift and the scroll wheel. The
+flowing column and page view each remember their own zoom, and the same
+words stand on the same pages at every zoom.
+
+
+Fonts
+-----
+
+The settings (by default Command-,) have two font rows: "Font" under "New
+documents" and under "This document". Return, Space or a click on the row
+opens a list of every font on your Mac, each name in its own face; type to
+narrow it down. The Left and Right arrows step through the fonts without
+opening the list. A document written on another Mac keeps a font that is
+missing here: the row says that it is not on this Mac, and another face
+stands in for it until you choose one. For part of a text, select it and
+pick a font with Command-T (by default) or Format > Font... .
+
+
 Spelling
 --------
 

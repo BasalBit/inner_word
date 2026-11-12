@@ -164,7 +164,15 @@ pub fn welcome_document() -> Document {
         heading(2, "Pages, comments and Vim"),
         bullet(
             "{k:⌥⌘P} switches between the flowing column and page view. Paper size and the \
-             defaults for new documents are in Settings, {k:⌘,}.",
+             defaults for new documents are in Settings, {k:⌘,}; the font rows there open a \
+             list of every font on this Mac.",
+        ),
+        bullet(
+            "{k:⌘+} and {k:⌘-} show the text larger or smaller without changing it, and \
+             {k:⇧⌘0} goes back to 100 %. The percentage at the bottom right of the window \
+             has the other sizes: {b:Fit Width}, {b:Fit Page}, and {b:Life Size}, the size \
+             of the paper itself, which is what a page opens at when the window has the \
+             room. {k:⌘} with the scroll wheel and a pinch on the trackpad zoom too.",
         ),
         bullet(
             "{k:⌥⌘M} adds a comment to the selected text, {k:⌥⌘]} and {k:⌥⌘[} step through \
@@ -204,13 +212,17 @@ pub fn welcome_document() -> Document {
             "The AI agents that run on this Mac can work with your library through a small \
              command line tool that comes inside The Writer: find and read your documents, \
              write and edit them, file them in folders, leave comments for you to go through. \
-             They can read at any time. They can only change things while The Writer is \
-             closed, and a version of a document is kept before one of them changes it.",
+             They can read and change things at any time. While The Writer is open a change \
+             appears in the window as it is made, with a note at the bottom that says who \
+             changed what and has an {b:Undo} button. A version of a document is kept before \
+             one of them changes its text.",
         ),
         bullet(
             "{b:Agents} in the command palette, or {k:⌥⌘A}, shows where the tool is, installs \
              the skill that tells your agents about it, and lists the command that connects \
-             each of them to The Writer. Nothing is installed until you press a button there.",
+             each of them to The Writer. Nothing is installed until you press a button there. \
+             The switch {b:Agents can make changes while The Writer is open} is there too: \
+             off, they only read while the app is open.",
         ),
         heading(2, "Take your words elsewhere"),
         paragraph(

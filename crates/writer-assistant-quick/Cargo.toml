@@ -20,6 +20,10 @@ writer-editor.workspace = true
 # formatted text.
 writer-export.workspace = true
 writer-ui.workspace = true
+# The engine: the backend interface, ChatSession, the fake backend.
+writer-assistant.workspace = true
+# The shared chat components: message list, composer, pickers, notices.
+writer-assistant-ui.workspace = true
 
 [dev-dependencies]
 # Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
@@ -27,6 +31,8 @@ gpui = { workspace = true, features = ["test-support"] }
 # The Vim cases: a real VimMode attached to the editor under the popover.
 writer-vim-mode.workspace = true
 writer-vim.workspace = true
+# Opening the quick chat closes the format bar and the popup tools.
+writer-editor-tools.workspace = true
 
 [[test]]
 name = "main"

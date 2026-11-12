@@ -2,7 +2,9 @@
 //! test binary for the whole crate (see the workspace rules on GPUI
 //! binaries).
 
+mod answers;
 mod apply;
 mod capture;
+mod chat;
 mod place;
 mod support;

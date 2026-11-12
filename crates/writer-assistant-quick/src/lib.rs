@@ -1,18 +1,101 @@
 //! The quick chat of The Writer's assistant: a small popover at the
 //! selection or the caret, for a word, a sentence or a paragraph.
 //!
-//! This first part of the crate is what the popover does to the text and
-//! where it stands; the popover itself builds on `writer-assistant` (the
-//! engine) and `writer-assistant-ui` (the shared chat components).
+//! The engine is `writer-assistant` (no GPUI, nothing in it assumes a
+//! particular agent); the message list, the composer, the pickers and the
+//! notices are the shared components of `writer-assistant-ui`. This crate
+//! is the popover around them and what it does to the text.
+//!
+//! # What it is
+//!
+//! - It opens at the selection, or at the caret when nothing is selected,
+//!   and stays inside the editor's viewport, beside the text it was opened
+//!   on, while the text scrolls ([`place`]).
+//! - What the assistant is given is exactly the selected text, captured
+//!   when the popover opens ([`Capture`]), and what the user types. With
+//!   no selection it is the question alone. The document, its title and
+//!   the library are never sent, and the quick chat has no tools.
+//! - The keyboard is in the composer as soon as it opens. `enter` sends,
+//!   the answer streams in above the composer, and the conversation goes
+//!   on in the popover, which grows to a limit and then scrolls.
+//! - Each answer has Replace Selection (the captured text, wherever the
+//!   caret is now; not offered once that text has changed), Insert Below
+//!   and Copy ([`apply`], [`QuickAction`]). After Replace or Insert the
+//!   popover closes and the text that changed is selected; one `cmd-z`
+//!   takes it back.
+//! - `escape` stops an answer that is being written, and closes the
+//!   popover otherwise. A press outside closes it, and so does the
+//!   keyboard going anywhere else in the window. Closing ends the
+//!   conversation; opening again starts a fresh one.
+//!
+//! # Mounting it (the app)
+//!
+//! ```ignore
+//! // Once at startup, after writer_ui::init, writer_editor::init, the
+//! // editor tools and writer_assistant_ui::init:
+//! writer_assistant_quick::init(cx);
+//!
+//! // Per editor, kept for as long as the editor lives. `backend` is the
+//! // app's engine: an `Arc<dyn writer_assistant::Backend>`.
+//! let quick = cx.new(|cx| QuickChat::new(editor.clone(), backend.clone(), window, cx));
+//! quick.update(cx, |quick, cx| {
+//!     quick.set_selection(remembered_model_and_effort, cx);
+//!     quick.set_privacy_notice(!notice_was_acknowledged, cx);
+//! });
+//! cx.subscribe_in(&quick, window, |this, _, event: &QuickChatEvent, window, cx| match event {
+//!     QuickChatEvent::SelectionChanged(selection) => this.remember_quick_selection(selection, cx),
+//!     QuickChatEvent::PrivacyNoticeAcknowledged => this.remember_notice_acknowledged(cx),
+//!     QuickChatEvent::AvailabilityChanged(found) => this.assistant_found(found.clone(), cx),
+//!     _ => {}
+//! })
+//! .detach();
+//!
+//! // In the workspace's render, anywhere AFTER the editor (it takes no
+//! // room; it has to be prepainted after the editor to follow its
+//! // scrolling in the same frame) and inside the element that tracks the
+//! // workspace's focus:
+//! root.child(editor_tools.clone()).child(quick.clone())
+//!
+//! // The app's own action for it (a key, the text menu, the format bar):
+//! .on_action(cx.listener(|this, _: &AskAssistant, window, cx| {
+//!     this.quick.update(cx, |quick, cx| quick.toggle(window, cx));
+//! }))
+//! ```
+//!
+//! The window needs a `writer_ui::ToastLayer` (or `ContextMenuLayer`) for
+//! the menus of the pickers, as every window of the app has.
+//!
+//! Opening takes the keyboard from the text, which is what closes the
+//! format bar and any popup tool of `writer-editor-tools` (they close when
+//! the text loses the keyboard). Nothing here depends on that crate.
+//!
+//! # Modules
 //!
 //! | Module | Contents |
 //! |---|---|
+//! | [`popover`] | [`QuickChat`]: the entity, its events, what it shows |
+//! | [`actions`] | the keys while the keyboard is in the popover |
 //! | [`capture`] | the selection as it was when the chat opened, and where it is now |
 //! | [`apply`] | Replace Selection and Insert Below: an answer (Markdown) into the text, one undo step |
 //! | [`place`] | where the popover goes: beside its text, inside the editor's viewport |
 
+pub mod actions;
 pub mod apply;
 pub mod capture;
+mod layer;
 pub mod place;
+pub mod popover;
 
+pub use actions::{EDITOR_FLAG, InsertBelow, KEY_CONTEXT, key_bindings};
 pub use capture::Capture;
+pub use popover::{Drawn, QuickAction, QuickChat, QuickChatEvent, QuickNotice, ReplaceState};
+
+/// Installs the key bindings of the popover.
+///
+/// Call once at startup, after `writer_ui::init`, `writer_editor::init`,
+/// the editor tools and `writer_assistant_ui::init`: the keys of the
+/// chat's editors (`cmd-enter`, `cmd-shift-enter`) are the editor's own
+/// otherwise, and of two bindings at the same depth the later one wins.
+pub fn init(cx: &mut gpui::App) {
+    cx.bind_keys(actions::key_bindings());
+}

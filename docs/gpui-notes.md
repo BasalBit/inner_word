@@ -649,6 +649,42 @@ Source: `$G/src/interactive.rs`, `$G/src/elements/div.rs`.
 - Cursor: `.cursor(CursorStyle::IBeam)` / `window.set_cursor_style(style, &hitbox)`.
   Styles: Arrow, IBeam, PointingHand, ClosedHand, OpenHand, Crosshair, ResizeLeftRight, …
 
+Wheel, pinch and drawing at a scale (from the zoom of the text, 0.6.0):
+
+- **`ScrollWheelEvent` is AppKit's event, unchanged** (`$G/src/platform/mac/events.rs`):
+  `delta` is `scrollingDeltaX/Y`, `ScrollDelta::Pixels` for a trackpad and
+  `ScrollDelta::Lines` for a wheel (`delta.pixel_delta(line_height)` turns either into
+  pixels), `modifiers` are the keys held. GPUI does nothing with shift: where a wheel that
+  only goes up and down should go sideways with shift, the element does it (macOS turns
+  the wheel of most mice itself and then `delta.x` is set). Two fingers never move
+  straight, so an element that scrolls both ways gets a little of the other direction
+  with every event: drop the small part (`writer-editor`, `mouse.rs`, `sideways_intent`).
+  `cmd` with the wheel is `event.modifiers.platform` (source + tested with
+  `simulate_event`).
+- **There is no magnify (pinch) event in gpui 0.2.2**, and none for rotate or smart
+  magnify: `PlatformInput` has keys, mouse buttons, moves, scroll and file drops only
+  (source). AppKit hands an app every event it is about to dispatch through
+  `+[NSEvent addLocalMonitorForEventsMatchingMask:handler:]`; a monitor for
+  `NSEventMaskMagnify` (`1 << 30`) that returns the event sees pinches and nothing else
+  (`writer-app`, `pinch.rs`: the block is made with the `block` crate, the version gpui
+  itself depends on; it only reads `magnification`, `locationInWindow` and the window
+  number into a channel, because GPUI must not be entered from inside AppKit's dispatch).
+  Installing it works in a scripted run (app); **what a real pinch does was not seen**
+  (nothing can pinch but fingers).
+- **Text can be painted at another size than it was shaped at**:
+  `window.paint_glyph(origin, font_id, glyph_id, font_size, color)` (and `paint_emoji`)
+  take any size, so a row shaped at 17 px is drawn at 150 % by painting each glyph of
+  `ShapedRun::glyphs` at its `position` times 1.5 with `font_size` times 1.5
+  (`writer-editor`, `paint.rs`). Nothing is shaped again and the line breaks cannot move;
+  seen in the app at 50 % to 400 % (app). `ShapedLine::paint` itself has no scale.
+- **How large a display is**: `window.display(cx)` gives the `PlatformDisplay` (`id()`,
+  `bounds()` in logical pixels); `u32::from(display.id())` is the `CGDirectDisplayID`, and
+  `CGDisplayScreenSize(id)` (CoreGraphics, a plain C call) gives the glass in millimetres,
+  zero when the display does not say. Pixels to the inch over 72 is the scale at which a
+  point is a real point (`writer-app`, `zoom.rs`: 127.5 and 177 % on this Mac's built-in
+  display at its default scaling, 151 and 210 % at "More Space"). The test platform's
+  display has no size.
+
 ## State and async
 
 Source: `$G/src/app/context.rs`, `$G/src/app/async_context.rs`, `$G/src/executor.rs`, `$G/src/global.rs`.

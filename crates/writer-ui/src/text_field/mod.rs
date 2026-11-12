@@ -284,6 +284,7 @@ pub struct TextField {
     appearance: FieldAppearance,
     text_size: Pixels,
     list_navigation: bool,
+    submit_to_parent: bool,
     consume_escape: bool,
     disabled: bool,
     menu_items: Option<MenuItems>,
@@ -347,6 +348,7 @@ impl TextField {
             appearance: FieldAppearance::default(),
             text_size: UI_TEXT_BASE,
             list_navigation: false,
+            submit_to_parent: false,
             consume_escape: false,
             disabled: false,
             menu_items: None,
@@ -466,6 +468,17 @@ impl TextField {
     /// are not handled by the field and go to the parent's bindings.
     pub fn set_list_navigation(&mut self, on: bool) {
         self.list_navigation = on;
+    }
+
+    /// When on, the key of [`Submit`] is not the field's: no
+    /// [`TextFieldEvent::Submitted`], the key goes on to the parent's
+    /// bindings, as the navigation keys do with
+    /// [`TextField::set_list_navigation`]. For the query field of a list
+    /// (the [`crate::picker::Picker`]): what takes a row there is the
+    /// list's own "confirm", which has a binding of its own, so that
+    /// binding alone says which key it is.
+    pub fn set_submit_to_parent(&mut self, on: bool) {
+        self.submit_to_parent = on;
     }
 
     pub fn set_consume_escape(&mut self, consume: bool) {
@@ -865,7 +878,11 @@ impl TextField {
 
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
         self.history.break_group();
-        cx.emit(TextFieldEvent::Submitted);
+        if self.submit_to_parent {
+            cx.propagate();
+        } else {
+            cx.emit(TextFieldEvent::Submitted);
+        }
     }
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {

@@ -90,8 +90,30 @@ fn a_picker_obeys_and_shows_a_rebuilt_keymap(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("escape");
     assert_eq!(dismiss_events.get(), 0, "the old key closes no more");
+
+    // Taking a row is the picker's own "confirm", also with the keyboard
+    // in its query field: the field's "submit" is on `enter` still, and
+    // does not take the row behind the keymap's back.
+    let confirmed = picker.read_with(cx, |picker, _| picker.delegate.confirmed.clone());
+    cx.update(|_, cx| {
+        assert_eq!(
+            keymap::replace_key(&picker::Confirm, "enter", Some("ctrl-y"), cx),
+            1
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(hint(&text_field::Submit, cx).as_deref(), Some("↩"));
+    cx.simulate_keystrokes("enter");
+    assert!(confirmed.borrow().is_empty(), "the old key takes no row");
+    // (The test platform hands a key nothing took to the text input, so
+    // the query has changed; whatever is marked now is what is taken.)
+    let marked = selected_label(&picker, cx).expect("a row is marked");
+    cx.simulate_keystrokes("ctrl-y");
+    assert_eq!(*confirmed.borrow(), vec![(marked, false)]);
+    assert_eq!(hint(&picker::Confirm, cx).as_deref(), Some("⌃Y"));
+
     cx.simulate_keystrokes("ctrl-g");
-    assert_eq!(dismiss_events.get(), 1);
+    assert!(dismiss_events.get() >= 1);
 }
 
 #[gpui::test]

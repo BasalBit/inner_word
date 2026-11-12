@@ -69,7 +69,9 @@
 //! In the `"Picker"` key context: `up` / `ctrl-p`, `down` / `ctrl-n`,
 //! `pageup`, `pagedown`, `home` / `cmd-up`, `end` / `cmd-down`, `enter`,
 //! `cmd-enter` (secondary confirm), `escape`. The query field passes the
-//! navigation keys through (see [`TextField::set_list_navigation`]).
+//! navigation keys through (see [`TextField::set_list_navigation`]), and
+//! `enter` too ([`TextField::set_submit_to_parent`]): every key of the
+//! picker is a binding in `"Picker"` and nothing else.
 
 use std::ops::Range;
 
@@ -313,21 +315,18 @@ impl<D: PickerDelegate> Picker<D> {
                     PickerPresentation::Popup => UI_TEXT_BASE,
                 });
             field.set_list_navigation(true);
+            // `enter` in the field is the picker's "confirm" (a binding of
+            // its own), not the field's "submit": the keymap can give the
+            // two different keys, and in a list the list's key decides.
+            field.set_submit_to_parent(true);
             field
         });
-        let subscription =
-            cx.subscribe_in(
-                &field,
-                window,
-                |this, field, event, window, cx| match event {
-                    TextFieldEvent::Changed => {
-                        let query = field.read(cx).text().to_string();
-                        this.run_query(&query, window, cx);
-                    }
-                    TextFieldEvent::Submitted => this.confirm(false, window, cx),
-                    _ => {}
-                },
-            );
+        let subscription = cx.subscribe_in(&field, window, |this, field, event, window, cx| {
+            if *event == TextFieldEvent::Changed {
+                let query = field.read(cx).text().to_string();
+                this.run_query(&query, window, cx);
+            }
+        });
         let mut picker = Self {
             delegate,
             presentation,

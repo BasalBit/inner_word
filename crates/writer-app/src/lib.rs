@@ -44,7 +44,7 @@
 //! | [`signals`] | `SIGTERM`, `SIGHUP` and `SIGINT` quit the way `cmd-q` does, saving first |
 //! | [`press_and_hold`] | held keys repeat while Vim mode is on (the `ApplePressAndHoldEnabled` user default) |
 //! | [`spelling`] | which spell service the workspaces use, the languages, the language picker |
-//! | [`zoom`] | the zoom of the text: its commands and keys, how it is stored, how large the display is (life size) |
+//! | [`zoom`], [`pinch`] | the zoom of the text: its commands and keys, how it is stored, how large the display is (life size); a pinch on the trackpad, which AppKit has to be asked for |
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
 pub mod actions;
@@ -63,6 +63,7 @@ pub mod library_search;
 pub mod live;
 pub mod menus;
 pub mod palette;
+pub mod pinch;
 pub mod press_and_hold;
 pub mod quick_open;
 pub mod screenshot;

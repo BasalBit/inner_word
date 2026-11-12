@@ -1400,3 +1400,32 @@ fn the_page_fit_step_counts_what_the_lines_of_a_page_hold(cx: &mut TestAppContex
     set_zoom(&workspace, Zoom::Percent(200), cx);
     assert_eq!(measure(cx), report);
 }
+
+// ----- the pinch ------------------------------------------------------------------------
+
+#[test]
+fn a_pinch_is_a_factor_at_a_place() {
+    use writer_app::pinch::{Pinch, combined};
+
+    // The change of magnification an event carries is what the zoom is
+    // multiplied by, less one; nonsense multiplies by one, and no single
+    // event more than doubles or halves.
+    assert_eq!(Pinch::factor(0.), 1.);
+    assert!((Pinch::factor(0.05) - 1.05).abs() < 1e-6);
+    assert!((Pinch::factor(-0.2) - 0.8).abs() < 1e-6);
+    assert_eq!(Pinch::factor(7.), 2.);
+    assert_eq!(Pinch::factor(-3.), 0.5);
+    assert_eq!(Pinch::factor(f32::NAN), 1.);
+    assert_eq!(Pinch::factor(f32::INFINITY), 1.);
+    // Events that arrived together are one pinch, at the last place.
+    let at = |magnification: f32, x: f32| Pinch {
+        window: 7,
+        magnification,
+        x,
+        y: 300.,
+    };
+    assert_eq!(combined(&[]), None);
+    let (factor, x, y) = combined(&[at(0.1, 100.), at(0.1, 104.), at(-0.05, 108.)]).unwrap();
+    assert!((factor - 1.1 * 1.1 * 0.95).abs() < 1e-5, "{factor}");
+    assert_eq!((x, y), (108., 300.));
+}

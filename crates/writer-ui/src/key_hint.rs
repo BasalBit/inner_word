@@ -11,6 +11,9 @@
 //!
 //! // as seen from a focus handle (respects key contexts such as "Editor")
 //! KeyHint::for_action_in(&ToggleBold, &editor_focus, window);
+//! // the same, falling back to the keymap-wide binding: for a control of
+//! // a panel whose key applies in that panel
+//! KeyHint::for_action_at(&OpenContextMenu, &list_focus, window, cx);
 //!
 //! // from a binding or a keystroke string
 //! KeyHint::from_binding(&binding);
@@ -194,12 +197,66 @@ impl KeyHint {
             .map(|binding| Self::from_binding(&binding))
     }
 
-    /// The highest-precedence binding for `action` from the currently focused
-    /// element.
+    /// GPUI's own answer for "the binding of `action` from the currently
+    /// focused element" (`Window::highest_precedence_binding_for_action`).
+    ///
+    /// In gpui 0.2.2 that answer is only right while a frame is being
+    /// built, for the element being built: it is taken from the key context
+    /// stack the frame's dispatch tree was built with, which is empty once
+    /// the frame is finished. Asked from an event handler or a tooltip it
+    /// finds bindings without a key context and no others. Use
+    /// [`KeyHint::for_action_here`] for where the keyboard is, or
+    /// [`KeyHint::for_action_in`] for a focus handle.
     pub fn for_action_focused(action: &dyn Action, window: &Window) -> Option<Self> {
         window
             .highest_precedence_binding_for_action(action)
             .map(|binding| Self::from_binding(&binding))
+    }
+
+    /// The key to show for `action` on a control that belongs to the place
+    /// `focus` is in (a panel's own list, a chat's own composer): the
+    /// binding that fires when `focus` has the keyboard
+    /// ([`KeyHint::for_action_in`]), and only where that place has none, or
+    /// was not drawn yet, the keymap-wide one ([`KeyHint::for_action`]).
+    ///
+    /// An action can be bound in several key contexts, and each of those
+    /// bindings can be given another key (the context menu in the library,
+    /// in the comment list, in a text field). The keymap-wide answer is the
+    /// binding added last, which is some place's and not necessarily this
+    /// one's; so a control that knows where its key applies asks there.
+    pub fn for_action_at(
+        action: &dyn Action,
+        focus: &FocusHandle,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Self> {
+        Self::for_action_in(action, focus, window).or_else(|| Self::for_action(action, cx))
+    }
+
+    /// The key to show for `action` where the keyboard is now: the binding
+    /// of it that fires from the focused element (the one added last, when
+    /// several do), else the keymap-wide one ([`KeyHint::for_action`]).
+    /// What [`crate::Tooltip::for_action`] shows.
+    ///
+    /// The place is the key context stack of the focused element as of the
+    /// last frame (`Window::context_stack`), and a binding counts when its
+    /// key, pressed there, runs this action and not a nearer binding's.
+    /// (Not [`KeyHint::for_action_focused`]: see there.)
+    pub fn for_action_here(action: &dyn Action, window: &Window, cx: &App) -> Option<Self> {
+        let stack = window.context_stack();
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        keymap
+            .bindings_for_action(action)
+            .rev()
+            .find(|binding| {
+                let (found, _) = keymap.bindings_for_input(binding.keystrokes(), &stack);
+                found
+                    .first()
+                    .is_some_and(|first| first.action().partial_eq(action))
+            })
+            .map(Self::from_binding)
+            .or_else(|| Self::for_action(action, cx))
     }
 
     pub fn keystrokes(&self) -> &[Keystroke] {

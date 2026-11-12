@@ -2,14 +2,14 @@
 //! keymap and binding it again with other keystrokes. The widgets obey and
 //! show the new keys at once, and nothing in them still knows the old ones.
 
-use gpui::{Action, TestAppContext, VisualTestContext, point, px};
+use gpui::{Action, KeyBinding, TestAppContext, VisualTestContext, point, px};
 use writer_ui::{
     ContextMenu, ContextMenuItem, KeyHint, TextFieldEvent,
     context_menu::{self, OpenContextMenu},
     keymap, picker, text_field,
 };
 
-use super::{DOCS, Names, field_window, picker_window, selected_label};
+use super::{DOCS, Names, field_window, picker_window, root_window, selected_label};
 
 fn hint(action: &dyn Action, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| KeyHint::for_action(action, cx).map(|hint| hint.text()))
@@ -266,4 +266,58 @@ fn a_key_is_asked_of_the_keymap_where_the_keyboard_is(cx: &mut TestAppContext) {
             cx
         ));
     });
+}
+
+/// An action bound in two places, each with a key that can be changed by
+/// itself: a control that belongs to one place names that place's key, not
+/// the binding that happens to have been added last.
+#[gpui::test]
+fn a_hint_is_asked_in_the_place_it_applies(cx: &mut TestAppContext) {
+    let (root, cx) = root_window(cx);
+    cx.update(|_, cx| {
+        cx.bind_keys([
+            KeyBinding::new("ctrl-enter", OpenContextMenu, Some("Editor")),
+            KeyBinding::new("ctrl-enter", OpenContextMenu, Some("Elsewhere")),
+        ])
+    });
+    cx.run_until_parked();
+    let at = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let focus = root.read(cx).editor_focus.clone();
+            (
+                KeyHint::for_action_at(&OpenContextMenu, &focus, window, cx).map(|k| k.text()),
+                KeyHint::for_action_here(&OpenContextMenu, window, cx).map(|k| k.text()),
+                KeyHint::for_action(&OpenContextMenu, cx).map(|k| k.text()),
+            )
+        })
+    };
+    let key = |text: &str| Some(text.to_string());
+    assert_eq!(at(cx), (key("⌃↩"), key("⌃↩"), key("⌃↩")));
+
+    // The other place gets another key: nothing changes here.
+    cx.update(|_, cx| {
+        let bindings: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
+        cx.clear_key_bindings();
+        cx.bind_keys(bindings.into_iter().map(|binding| {
+            let elsewhere = binding
+                .predicate()
+                .is_some_and(|predicate| predicate.to_string() == "Elsewhere");
+            if elsewhere {
+                KeyBinding::new("ctrl-m", OpenContextMenu, Some("Elsewhere"))
+            } else {
+                binding
+            }
+        }));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        at(cx),
+        (key("⌃↩"), key("⌃↩"), key("⌃M")),
+        "the keymap-wide answer is the other place's key"
+    );
+
+    // A place without a binding of the action falls back to the keymap.
+    cx.update(|_, cx| keymap::replace_key(&OpenContextMenu, "ctrl-enter", None, cx));
+    cx.run_until_parked();
+    assert_eq!(at(cx), (key("⌃M"), key("⌃M"), key("⌃M")));
 }

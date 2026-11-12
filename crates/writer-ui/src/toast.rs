@@ -305,7 +305,7 @@ pub fn show_toast(toast: Toast, cx: &mut App) -> Option<ToastId> {
 }
 
 impl Render for ToastLayer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.entries.is_empty() {
             // The layer is mounted over the whole window content by every
             // root view, which makes it the host of the context menu too.
@@ -331,10 +331,13 @@ impl Render for ToastLayer {
                     ToastKind::Error => Some(Icon::new(IconName::Alert).color(colors.danger)),
                 };
                 let action = entry.toast.action.as_ref().map(|action| {
+                    // The key that does the same from where the keyboard
+                    // is now (an action can be bound in several places,
+                    // each with a key of its own).
                     let hint = action
                         .action
                         .as_ref()
-                        .and_then(|action| KeyHint::for_action(action.as_ref(), cx));
+                        .and_then(|action| KeyHint::for_action_here(action.as_ref(), window, cx));
                     div()
                         .id("toast-action")
                         .debug_selector(|| format!("toast-action-{}", id.0))

@@ -74,8 +74,7 @@ impl Tooltip {
         let title = title.into();
         let action = action.boxed_clone();
         move |window, cx| {
-            let hint = KeyHint::for_action_focused(action.as_ref(), window)
-                .or_else(|| KeyHint::for_action(action.as_ref(), cx));
+            let hint = KeyHint::for_action_here(action.as_ref(), window, cx);
             let tooltip = Tooltip::new(title.clone()).key_hint(hint);
             cx.new(|_| tooltip).into()
         }

@@ -738,6 +738,16 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
 - **Shift plus a digit or punctuation** reaches GPUI as the shifted character without the
   shift flag (`cmd-shift-7` is `cmd-&` on a US keyboard). Bind both spellings, the readable
   one last so key hints show it (see `crates/writer-editor/src/actions.rs`).
+- **The plus key is the one exception, and it is shown as "⌘+" everywhere.** Shift with `=`
+  is the key of "Zoom in", which a Mac writes "⌘+" in every menu. Its normal form is
+  `cmd-shift-=` like every other pair, but its glyphs are the character without the shift
+  (`writer_keymap::Keystroke::glyphs` and `writer_ui::key_hint::format_keystroke`, the two
+  writers of a key, both; never "⇧⌘="), and of its two spellings the character is bound
+  last (`Keystroke::spellings`: `cmd-shift-=`, then `cmd-+`), because the last one is what
+  the menu bar is given and AppKit draws the character as "⌘+". So the list of shortcuts,
+  the hints and the menu bar read the same, for the default and for a key the user gives a
+  command (`a_key_reads_the_same_in_the_menu_bar_the_hints_and_the_list`). The list's
+  search finds a key by the shifted character too ("⌘+", `cmd-&`).
 - **A binding without a context ranks like the deepest context**, not like the shallowest:
   it beats every binding of an outer context on the same key, and among bindings at the
   focused element's own level the one added later wins. `writer_app::init` therefore adds

@@ -2110,6 +2110,132 @@ fn the_menu_bar_shows_the_keys_the_user_chose(cx: &mut TestAppContext) {
     });
 }
 
+/// What the menu bar draws beside an item for `binding`: AppKit writes the
+/// modifiers it is handed and the character of the key, so shift with `=`
+/// is "⇧⌘=" and the character `+` is "⌘+". `None` for a key with a name
+/// (AppKit has glyphs of its own for those) and for a sequence.
+fn drawn_in_the_menu_bar(binding: &KeyBinding) -> Option<String> {
+    let [keystroke] = binding.keystrokes() else {
+        return None;
+    };
+    let keystroke = keystroke.inner();
+    if keystroke.key.chars().count() != 1 {
+        return None;
+    }
+    let mut drawn = String::new();
+    for (held, glyph) in [
+        (keystroke.modifiers.control, '⌃'),
+        (keystroke.modifiers.alt, '⌥'),
+        (keystroke.modifiers.shift, '⇧'),
+        (keystroke.modifiers.platform, '⌘'),
+    ] {
+        if held {
+            drawn.push(glyph);
+        }
+    }
+    drawn.push_str(&keystroke.key.to_uppercase());
+    Some(drawn)
+}
+
+/// A key reads the same wherever it is shown: beside the item of the menu
+/// bar, in the hints (the palette, the menus of the window) and as a chip
+/// of its row in the list of keyboard shortcuts. 0.6.0 showed "Zoom In ⌘+"
+/// in the menus and "⌘=" and "⇧⌘=" in the list, so whoever looked the key
+/// up did not find the one the menu shows.
+#[gpui::test]
+fn a_key_reads_the_same_in_the_menu_bar_the_hints_and_the_list(cx: &mut TestAppContext) {
+    use writer_app::zoom;
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let check = |vcx: &mut VisualTestContext| {
+        vcx.update(|_, cx| {
+            let rows = collect_shortcuts(cx);
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let mut compared = 0;
+            for (name, action) in menus::menu_actions(&menus::app_menus()) {
+                let Some(drawn) = menus::native_menu_binding(&keymap, action.as_ref())
+                    .and_then(drawn_in_the_menu_bar)
+                else {
+                    continue;
+                };
+                let chips: Vec<String> = rows
+                    .iter()
+                    .filter(|row| row.action().partial_eq(action.as_ref()))
+                    .flat_map(|row| row.all_keys.iter())
+                    .map(|key| writer_app::shortcuts::key_text(&key.keys))
+                    .collect();
+                if chips.is_empty() {
+                    // The window's own items (Hide, Minimize) are rows by
+                    // their actions; an item without a row has no chip.
+                    continue;
+                }
+                assert!(
+                    chips.contains(&drawn),
+                    "{name}: the menu bar draws {drawn}, the list shows {chips:?}"
+                );
+                compared += 1;
+            }
+            compared
+        })
+    };
+    assert!(check(vcx) > 60, "{}", check(vcx));
+
+    // The key this is about, by name.
+    let zoom_in = vcx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        menus::native_menu_binding(&keymap, &zoom::ZoomIn).and_then(drawn_in_the_menu_bar)
+    });
+    assert_eq!(zoom_in.as_deref(), Some("⌘+"));
+    assert_eq!(hint(&zoom::ZoomIn, vcx).as_deref(), Some("⌘+"));
+    let chips = |title: &str, place: Place, vcx: &mut VisualTestContext| -> Vec<String> {
+        vcx.update(|_, cx| {
+            collect_shortcuts(cx)
+                .into_iter()
+                .find(|row| row.title.as_ref() == title && row.place == place)
+                .unwrap_or_else(|| panic!("{title} is not listed"))
+                .all_keys
+                .iter()
+                .map(|key| writer_app::shortcuts::key_text(&key.keys))
+                .collect()
+        })
+    };
+    // The row keeps its two keys in their order (a change of the row does
+    // what it did); the second reads as the menu writes it.
+    assert_eq!(
+        row_keys("Zoom in", Place::Anywhere, vcx),
+        ["cmd-=", "cmd-shift-="]
+    );
+    assert_eq!(chips("Zoom in", Place::Anywhere, vcx), ["⌘=", "⌘+"]);
+    // The other keys made with shift and punctuation read as they did, in
+    // the list and in the menu bar alike.
+    assert_eq!(chips("Actual size", Place::Anywhere, vcx), ["⇧⌘0"]);
+    assert_eq!(chips("Numbered list", Place::Text, vcx), ["⇧⌘7"]);
+    assert_eq!(
+        menu_key(&zoom::ActualSize, vcx).as_deref(),
+        Some("cmd-shift-0")
+    );
+
+    // A key the user gives a command is no different: the plus key on
+    // "Bold" reads "⌘+" in all three places, and the plus key on a real
+    // keyboard (which reports the character) runs it.
+    change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-shift-="));
+        keymap.remove_key(&Target::new("zoom::ZoomIn", None), &key("cmd-shift-="));
+    });
+    assert!(check(vcx) > 60);
+    let action = writer_editor::actions::ToggleBold;
+    assert_eq!(menu_key(&action, vcx).as_deref(), Some("cmd-+"));
+    assert_eq!(hint(&action, vcx).as_deref(), Some("⌘+"));
+    assert_eq!(chips("Bold", Place::Text, vcx), ["⌘+"]);
+    assert_eq!(runs("cmd-+", vcx).as_deref(), Some("editor::ToggleBold"));
+    assert_eq!(
+        runs("cmd-shift-=", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(chips("Zoom in", Place::Anywhere, vcx), ["⌘="]);
+}
+
 /// The steps of a scripted run: a key set without the list, and what the
 /// state line says.
 #[gpui::test]

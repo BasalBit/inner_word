@@ -198,6 +198,17 @@ pub(crate) fn parse_key_query(query: &str) -> Option<KeyQuery> {
                 return None;
             }
         }
+        // A shifted character is shift with its key, which is how the keys of
+        // the list are held: "⌘+" finds the key of "Zoom in" (shift with
+        // `=`), `cmd-&` the key shown as "⇧⌘7".
+        if let Some(typed) = key.as_deref()
+            && typed.chars().count() == 1
+            && let Ok(stroke) = writer_keymap::Keystroke::parse(typed)
+            && stroke.modifiers().shift
+        {
+            modifiers.shift = true;
+            key = Some(stroke.key().to_string());
+        }
         let plausible = match &key {
             None => named_modifier,
             Some(key) => {
@@ -915,6 +926,24 @@ mod tests {
         assert_eq!(titles(&entries, "g g")[0], "First row");
         assert_eq!(titles(&entries, "opt-up"), vec!["Move block up"]);
         assert_eq!(titles(&entries, "⌥↑"), vec!["Move block up"]);
+    }
+
+    /// A key is found as it is shown and as a keyboard sends it: the
+    /// shifted character means shift with its key.
+    #[test]
+    fn a_shifted_character_finds_shift_with_its_key() {
+        let entries = listing();
+        for query in ["cmd-&", "⌘&", "cmd-shift-7", "⇧⌘7"] {
+            assert_eq!(titles(&entries, query), vec!["Numbered list"], "{query}");
+        }
+        let plus = parse_key_query("⌘+").expect("a key");
+        let keys = KeySequence::parse("cmd-shift-=").unwrap();
+        assert_eq!(key_rank(&plus, &keys), 3);
+        assert_eq!(key_rank(&parse_key_query("cmd-+").unwrap(), &keys), 3);
+        assert_eq!(key_rank(&parse_key_query("⇧⌘=").unwrap(), &keys), 3);
+        // The key without shift is another key.
+        assert_eq!(key_rank(&parse_key_query("⌘=").unwrap(), &keys), 0);
+        assert_eq!(key_rank(&plus, &KeySequence::parse("cmd-=").unwrap()), 0);
     }
 
     #[test]

@@ -101,13 +101,22 @@ pub fn format_keystroke(keystroke: &Keystroke) -> String {
     if m.alt {
         out.push('⌥');
     }
-    if m.shift {
+    // The plus key (shift with `=`) is written as macOS writes it beside
+    // "Zoom In": the character, without the shift that makes it. A real
+    // keyboard reports it as `+` without the shift flag, which reads "⌘+"
+    // by itself; both spellings are one key and are shown as one.
+    let plus = m.shift && keystroke.key == "=";
+    if m.shift && !plus {
         out.push('⇧');
     }
     if m.platform {
         out.push('⌘');
     }
-    out.push_str(&key_glyph(&keystroke.key));
+    if plus {
+        out.push('+');
+    } else {
+        out.push_str(&key_glyph(&keystroke.key));
+    }
     out
 }
 
@@ -400,5 +409,18 @@ mod tests {
         assert_eq!(fmt("ctrl-x ctrl-s"), "⌃X ⌃S");
         assert!(KeyHint::parse("cmd-opt-s").is_none());
         assert!(KeyHint::parse("").is_none());
+    }
+
+    /// The key of "Zoom In" reads "⌘+" in both of its spellings, as the
+    /// menu bar draws it; no other shifted character is written so.
+    #[test]
+    fn the_plus_key_is_written_as_the_mac_writes_it() {
+        assert_eq!(fmt("cmd-+"), "⌘+");
+        assert_eq!(fmt("cmd-shift-="), "⌘+");
+        assert_eq!(fmt("cmd-="), "⌘=");
+        assert_eq!(fmt("cmd-alt-shift-="), "⌥⌘+");
+        assert_eq!(fmt("cmd-shift-7"), "⇧⌘7");
+        assert_eq!(fmt("cmd-shift-0"), "⇧⌘0");
+        assert_eq!(fmt("cmd-shift--"), "⇧⌘-");
     }
 }

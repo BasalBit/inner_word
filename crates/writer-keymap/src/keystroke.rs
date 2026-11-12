@@ -70,6 +70,13 @@
 //! (`["cmd-&", "cmd-shift-7"]`). A key without such a pair has one
 //! spelling.
 //!
+//! **The plus key is the exception in how it is shown.** Shift with `=` is
+//! the key of "Zoom In", and a Mac writes it "⌘+" in every menu. So its
+//! glyphs are the character without the shift ("⌘+", never "⇧⌘="), and of
+//! its two spellings the character comes last (`["cmd-shift-=", "cmd-+"]`),
+//! which is the one the menu bar is given and draws the same way. Its
+//! normal form is `cmd-shift-=` like that of every other pair.
+//!
 //! The pairs are those of the US layout (`1 !`, `2 @`, ... `/ ?`, 21 of
 //! them), which is what the app's defaults assume too. On another layout
 //! the label can be off (a key recorded as `cmd-&` is shown as shift with
@@ -653,14 +660,28 @@ impl Keystroke {
         if self.modifiers.alt {
             out.push('\u{2325}');
         }
-        if self.modifiers.shift {
+        // The plus key is written as macOS writes it beside "Zoom In": "⌘+", the
+        // character, without the shift that makes it.
+        let plus = self.is_plus();
+        if self.modifiers.shift && !plus {
             out.push('\u{21e7}');
         }
         if self.modifiers.command {
             out.push('\u{2318}');
         }
-        out.push_str(&key_glyph(&self.key));
+        if plus {
+            out.push('+');
+        } else {
+            out.push_str(&key_glyph(&self.key));
+        }
         out
+    }
+
+    /// Whether this is the plus key: shift with `=`. It is the one shifted character
+    /// the app shows as the character ("⌘+" and not "⇧⌘="), because that is what a Mac
+    /// shows for it in every menu.
+    fn is_plus(&self) -> bool {
+        self.modifiers.shift && self.key == "="
     }
 
     /// Every spelling that has to be bound for this key to work, each one
@@ -668,6 +689,10 @@ impl Keystroke {
     /// character a keyboard sends, then the readable form
     /// (`["cmd-&", "cmd-shift-7"]`); for every other key the one normal
     /// form. Bind them in this order: key hints show the last.
+    ///
+    /// The plus key is the other way round (`["cmd-shift-=", "cmd-+"]`): the last
+    /// spelling is also the one the menu bar is given, and macOS draws that one as
+    /// "⌘+", which is how the key is shown everywhere ([`Keystroke::glyphs`]).
     pub fn spellings(&self) -> Vec<String> {
         let readable = self.to_string();
         if self.modifiers.shift
@@ -675,7 +700,12 @@ impl Keystroke {
         {
             let mut modifiers = self.modifiers;
             modifiers.shift = false;
-            return vec![write(modifiers, &sent.to_string()), readable];
+            let sent = write(modifiers, &sent.to_string());
+            return if self.is_plus() {
+                vec![readable, sent]
+            } else {
+                vec![sent, readable]
+            };
         }
         vec![readable]
     }
@@ -987,6 +1017,12 @@ mod tests {
             assert_eq!(readable, sent, "{plain} {shifted}");
             assert_eq!(readable.key(), plain.to_string());
             assert!(readable.modifiers().shift);
+            if shifted == '+' {
+                // The plus key: the character last, which is what the menu bar draws
+                // as "⌘+".
+                assert_eq!(readable.spellings(), vec!["cmd-shift-=", "cmd-+"]);
+                continue;
+            }
             assert_eq!(
                 readable.spellings(),
                 vec![format!("cmd-{shifted}"), format!("cmd-shift-{plain}")]
@@ -1151,6 +1187,25 @@ mod tests {
         assert_eq!(glyphs("cmd-backspace"), "⌘⌫");
         assert_eq!(glyphs("shift-pagedown"), "⇧⇟");
         assert_eq!(key("cmd-shift-7").glyphs(), "⇧⌘7");
+    }
+
+    /// The key of "Zoom In" is shown as a Mac shows it, "⌘+", in both of its spellings;
+    /// the same key without shift is "⌘=". No other shifted character is written so.
+    #[test]
+    fn the_plus_key_is_written_as_the_mac_writes_it() {
+        let glyphs = |text: &str| KeySequence::parse(text).unwrap().glyphs();
+        assert_eq!(glyphs("cmd-+"), "⌘+");
+        assert_eq!(glyphs("cmd-shift-="), "⌘+");
+        assert_eq!(glyphs("cmd-="), "⌘=");
+        assert_eq!(glyphs("cmd-alt-+"), "⌥⌘+");
+        assert_eq!(glyphs("ctrl-shift-="), "⌃+");
+        assert_eq!(glyphs("cmd-k cmd-+"), "⌘K ⌘+");
+        assert_eq!(glyphs("cmd-_"), "⇧⌘-");
+        assert_eq!(glyphs("cmd-)"), "⇧⌘0");
+        // It stays one key with two spellings, the character last.
+        assert_eq!(key("cmd-+"), key("cmd-shift-="));
+        assert_eq!(key("cmd-+").to_string(), "cmd-shift-=");
+        assert_eq!(key("cmd-+").spellings(), vec!["cmd-shift-=", "cmd-+"]);
     }
 
     #[test]

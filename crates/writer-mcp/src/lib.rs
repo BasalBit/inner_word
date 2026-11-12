@@ -3,7 +3,9 @@
 //! `writer mcp` runs [`serve_stdio`]: an MCP server on standard input and output that
 //! offers the operations of the command layer (`writer-agent`) as tools. It works on the
 //! library directly and needs no running app; while the app is open the tools that read
-//! work and the tools that change something answer with a tool error that says so.
+//! work as they do, and a tool that changes something has its change carried out by the app
+//! (`writer_agent::live`), where the user sees it at once. When the app does not make the
+//! change, the tool answers with a tool error that says which case it is and what to do.
 //!
 //! * [`protocol`]: the wire protocol, written from the specification
 //!   (modelcontextprotocol.io, revision 2026-07-28 and the handshake revisions before
@@ -51,8 +53,10 @@ Start with list_library or search_library. To change part of a text use edit_doc
 text), replace_section or append_to_document rather than replace_document; to review a text without changing \
 it, use add_comment. Before every change the text as it was is kept as a version (list_versions, \
 restore_version), deleting means the trash, and dry_run reports what a tool would do. While The Writer is \
-open, tools that read still work and tools that change something are refused: ask the user to quit the app, \
-then call the tool again.";
+open, a change is carried out by the app itself: it appears in the user's window at once and they can undo \
+it there, so say what you changed. A change fails with the error app_is_open only when the app did not make \
+it (the user switched changes by agents off, or the app is an older version, or it did not answer); the \
+message says which and what to do, and tools that read work all the same.";
 
 /// The identity of this server.
 pub fn server_info() -> ServerInfo {

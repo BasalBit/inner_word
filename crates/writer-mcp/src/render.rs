@@ -93,9 +93,14 @@ fn nothing_to_do(written: &Written) -> Option<&'static str> {
 /// What a write says about itself, after everything else.
 fn written_suffix(written: &Written, out: &mut String) {
     if written.dry_run && written.app_is_open {
-        out.push_str(
-            "\nThe Writer is open: the real run will be refused until the user quits the app.",
-        );
+        out.push_str(if written.app_takes_changes {
+            "\nThe Writer is open: the real run will be carried out by the app, where the user sees \
+             the change at once."
+        } else {
+            "\nThe Writer is open and takes no changes from agents (they are switched off in its \
+             Agents panel, or it is a version before 0.6.0): the real run will be refused until \
+             that is changed or the user quits the app."
+        });
     }
 }
 
@@ -118,9 +123,18 @@ pub fn status(status: &LibraryStatus) -> String {
             .app_pid
             .map(|pid| format!(" (process {pid})"))
             .unwrap_or_default();
-        out.push_str(&format!(
-            "The Writer is open{pid}: reading works, every change is refused until the user quits the app.\n"
-        ));
+        out.push_str(&if status.app_takes_changes {
+            format!(
+                "The Writer is open{pid}: reading works, and a change is carried out by the app, \
+                 where the user sees it at once and can undo it.\n"
+            )
+        } else {
+            format!(
+                "The Writer is open{pid} and takes no changes from agents (they are switched off \
+                 in its Agents panel, or it is a version before 0.6.0): reading works, every \
+                 change is refused until that is changed or the user quits the app.\n"
+            )
+        });
     } else {
         out.push_str("The Writer is not running: reading and writing both work.\n");
     }

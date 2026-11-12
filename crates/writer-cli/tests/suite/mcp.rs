@@ -28,7 +28,17 @@ fn the_handshake_the_tool_list_and_a_clean_exit() {
         json!({ "tools": { "listChanged": false } })
     );
     let instructions = hello["instructions"].as_str().unwrap();
-    assert!(instructions.contains("quit the app"), "{instructions}");
+    // The model is told the rule: while the app is open, the app makes the change and
+    // the user sees it.
+    assert!(
+        instructions.contains(
+            "While The Writer is open, a change is carried out by the app itself: it appears \
+             in the user's window at once and they can undo it there, so say what you changed."
+        ),
+        "{instructions}"
+    );
+    assert!(instructions.contains("app_is_open"), "{instructions}");
+    assert!(!instructions.contains("are refused"), "{instructions}");
 
     assert_eq!(client.request("ping", json!({}))["result"], json!({}));
 

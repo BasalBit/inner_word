@@ -17,3 +17,5 @@ serde_json.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 writer-store.workspace = true
+# The app's end of the channel, for the thread that stands in for the app in the tests.
+writer-agent.workspace = true

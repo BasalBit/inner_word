@@ -1,10 +1,11 @@
 //! The headless command layer of The Writer: everything an agent can do to a library,
-//! without the app.
+//! with the app closed or open.
 //!
 //! The `writer` command line tool and its MCP server are front ends of this crate. It works
 //! on the library directly (the SQLite file the app uses, through `writer-store`), on the
 //! rich document model (`writer-core`) and with the exporters and the Markdown importer
-//! (`writer-export`). No GPUI, no window, no running app.
+//! (`writer-export`). No GPUI, no window. The app does not have to run; while it does, it
+//! is the one that makes the changes ([`live`]).
 //!
 //! # The shape of the API
 //!
@@ -29,12 +30,20 @@
 //!
 //! # The rules
 //!
-//! **Reading always works; writing needs the app to be closed.** The app keeps the open
-//! document in memory and saves all of it, so anything written behind its back would be
-//! lost or would overwrite the writer's work. The app holds the lock of its data directory
-//! while it runs (`writer_store::instance_lock`); every operation that writes takes that
-//! lock for its duration and fails with [`Error::AppIsOpen`] when the app has it. Nothing
-//! is written in that case. Reading opens the database read-only and takes no lock.
+//! **Reading always works; while the app is open, a change is carried out by the app.**
+//! The app keeps the open document in memory, with text that is not saved yet, and its own
+//! picture of the library: anything written underneath it would be lost or would overwrite
+//! the writer's work. The app holds the lock of its data directory while it runs
+//! (`writer_store::instance_lock`). An operation that writes takes that lock for its
+//! duration and writes; when the app has it, the operation is handed to the app, which
+//! carries it out between two key presses, shows it in its window and answers with the
+//! result the direct write would have given ([`live`]). The front ends know nothing of
+//! this. When the app does not make the change (its owner switched that off, it is a
+//! version before 0.6.0, it does not answer) the operation fails with
+//! [`Error::AppIsOpen`], whose [`Refusal`] says which it was and whether anything may
+//! have been changed. Reading opens the database read-only and takes no lock; the app is
+//! asked first to save what is not saved yet, so that the text read is the text on
+//! screen.
 //!
 //! **Nothing an agent does is final.** Before the text of a document is changed, or a
 //! comment deleted, a version of the document as it was is kept and labelled ("Before an
@@ -46,9 +55,9 @@
 //! is refused with [`Error::ConfirmationRequired`] unless the request says `permanently`.
 //!
 //! **Every write can be tried first.** With [`WriteOptions::dry_run`] an operation works
-//! out and reports exactly what it would do, and changes nothing. A dry run only reads, so
-//! it also works while the app is open ([`Written::app_is_open`] then says that the real
-//! run would be refused).
+//! out and reports exactly what it would do, and changes nothing. A dry run only reads
+//! ([`Written::app_is_open`] and [`Written::app_takes_changes`] say who would carry the
+//! real run out, and whether it would be refused).
 //!
 //! **Documents are written the way the app writes them.** The stored title follows the
 //! text (first heading, else first line, else "Untitled") unless somebody chose one, the

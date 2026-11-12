@@ -388,11 +388,17 @@ impl Error {
             Error::NotUnique { occurrences, .. } => (Vec::new(), occurrences.clone()),
             _ => (Vec::new(), Vec::new()),
         };
+        let refusal = match self {
+            Error::AppIsOpen { why, .. } => Some(why.clone()),
+            _ => None,
+        };
         ErrorReport {
             code: self.code().to_string(),
             message: self.to_string(),
             candidates,
             occurrences,
+            nothing_changed: refusal.as_ref().map(Refusal::nothing_changed),
+            refusal,
         }
     }
 
@@ -483,7 +489,6 @@ fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
         pid.map(|pid| format!(" (process {pid})"))
             .unwrap_or_default()
     );
-    const READING: &str = "Reading works while it is open: list, search, get, export.";
     let seconds = |seconds: &u64| {
         if *seconds == 1 {
             "1 second".to_string()
@@ -491,40 +496,46 @@ fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
             format!("{seconds} seconds")
         }
     };
+    // The words are for both front ends: they name no command and no tool. What is said
+    // last is what to do next.
+    const BUSY: &str = "it is busy: a dialog is open in it, or it is in the middle of \
+                        something long";
+    const LATER: &str = "Try again in a moment; if it stays like this, ask the user to look at \
+                         The Writer or to quit it.";
+    const OTHER_TOOL: &str = "Use the writer tool that is inside that app (The \
+                              Writer.app/Contents/MacOS/writer), or ask the user to quit The \
+                              Writer; then try again.";
     match why {
         Refusal::SwitchedOff => format!(
             "{open} and changes by agents while it is open are switched off there, so \
              nothing was changed. Ask the user to switch on \u{201c}Agents can make changes \
-             while The Writer is open\u{201d} in the Agents panel of the app, or to quit \
-             The Writer, and run this again. {READING}"
+             while The Writer is open\u{201d} in the Agents panel of the app (The Writer > \
+             Agents\u{2026}), or to quit The Writer; then try again."
         ),
         Refusal::Composing => format!(
             "{open} and the writer is in the middle of typing a character (text is being \
-             composed with an input method), so nothing was changed. Run this again in a \
-             few seconds."
+             composed with an input method), so nothing was changed. Try again in a few \
+             seconds."
         ),
         Refusal::CouldNotSave { message } => format!(
             "{open} and could not save the open document before the change ({message}), so \
-             nothing was changed. Tell the user: the app has text it cannot save."
+             nothing was changed. Tell the user that The Writer has text it cannot save; \
+             try again when that is solved."
         ),
         Refusal::Quitting => {
-            format!("{open} and is quitting, so nothing was changed. Run this again in a moment.")
+            format!("{open} and is quitting, so nothing was changed. Try again in a moment.")
         }
         Refusal::NoLibrary => format!(
             "{open} but shows no window with this library, so nothing was changed. Ask the \
-             user to quit The Writer and run this again."
+             user to quit The Writer; then try again."
         ),
         Refusal::TooLate | Refusal::NoAnswer { seconds: 0 } => format!(
-            "{open} and did not get to this change in time (it is busy: a dialog of the \
-             system is open, or a long task runs), so nothing was changed. Run this again \
-             in a moment; if it stays like this, ask the user to look at the app or to \
-             quit it."
+            "{open} and did not get to this change in time ({BUSY}), so nothing was \
+             changed. {LATER}"
         ),
         Refusal::NoAnswer { seconds: waited } => format!(
-            "{open} and did not get to this change within {} (it is busy: a dialog of the \
-             system is open, or a long task runs), so nothing was changed. Run this again \
-             in a moment; if it stays like this, ask the user to look at the app or to \
-             quit it.",
+            "{open} and did not get to this change within {} ({BUSY}), so nothing was \
+             changed. {LATER}",
             seconds(waited)
         ),
         Refusal::Unanswered { seconds: waited } => format!(
@@ -537,26 +548,23 @@ fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
              change was made is not known: read the document again before you repeat it."
         ),
         Refusal::OldVersion => format!(
-            "{open} in a version that takes no changes from agents while it runs (before \
-             0.6.0), so nothing was changed. Ask the user to quit The Writer, or to update \
-             it, and run this again. {READING}"
+            "{open} and does not take changes from agents while it runs (it is a version \
+             before 0.6.0, or it could not open its channel), so nothing was changed. Ask \
+             the user to quit The Writer, or to update it; then try again."
         ),
         Refusal::NotListening => format!(
             "{open} but does not answer where it listens for changes, so nothing was \
-             changed. Run this again in a moment; if it stays like this, ask the user to \
-             quit The Writer and open it again."
+             changed. Try again in a moment; if it stays like this, ask the user to quit \
+             The Writer and to open it again."
         ),
         Refusal::Protocol { app, tool } => format!(
             "{open} in a version this tool cannot hand a change to (the app speaks version \
              {app} of their channel, this tool version {tool}), so nothing was changed. \
-             Use the writer tool inside that app (The Writer.app/Contents/MacOS/writer), \
-             or ask the user to quit The Writer and run this again."
+             {OTHER_TOOL}"
         ),
         Refusal::Unknown => format!(
             "{open} and did not make the change, for a reason this version of the tool \
-             does not know; nothing was changed. Use the writer tool inside that app (The \
-             Writer.app/Contents/MacOS/writer), or ask the user to quit The Writer and run \
-             this again."
+             does not know; nothing was changed. {OTHER_TOOL}"
         ),
     }
 }
@@ -574,6 +582,14 @@ pub struct ErrorReport {
     /// For `"not_unique"`: the first places where the text occurs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub occurrences: Vec<Occurrence>,
+    /// For `"app_is_open"`: why the app did not make the change
+    /// (`{"why": "switched_off"}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+    /// For `"app_is_open"`: whether it is certain that nothing was changed. False when
+    /// the app took the change up and its answer did not arrive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nothing_changed: Option<bool>,
 }
 
 /// Shorthand for `Result<T, Error>`.
@@ -772,13 +788,20 @@ mod tests {
                 why.nothing_changed(),
                 "{message}"
             );
-            let next = [
-                "Run this again",
-                "run this again",
-                "read the document again",
-                "Tell the user",
-            ];
+            let next = ["Try again", "try again", "read the document again"];
             assert!(next.iter().any(|word| message.contains(word)), "{message}");
+            // The words serve the command line and the MCP server: no command of the
+            // one, no tool of the other.
+            for word in ["Run this", "run this", "writer get", "read_document", "--"] {
+                assert!(!message.contains(word), "{word} in: {message}");
+            }
+            // As data: the reason, and whether anything may have changed.
+            let report = error.report();
+            assert_eq!(report.refusal.as_ref(), Some(&why));
+            assert_eq!(report.nothing_changed, Some(why.nothing_changed()));
+            let json = serde_json::to_value(&report).unwrap();
+            assert_eq!(json["code"], "app_is_open");
+            assert!(json["refusal"]["why"].is_string(), "{json}");
             // The reason travels as data, and comes back as it was.
             let json = serde_json::to_string(&why).unwrap();
             assert_eq!(

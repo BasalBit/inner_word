@@ -221,14 +221,32 @@ impl Sandbox {
         )
     }
 
-    /// Holds the lock of the library the way the running app does, until the returned
-    /// value is dropped.
-    pub fn open_the_app(&self) -> writer_store::instance_lock::InstanceLock {
-        use writer_store::instance_lock::{Acquired, HolderKind, acquire_as};
-        match acquire_as(&self.library(), HolderKind::App).expect("the lock file can be made") {
+    /// Holds the lock of the library the way an app does that takes no changes from tools
+    /// (every version before 0.6.0: it listens nowhere), until the returned value is
+    /// dropped. The app has been running for a while: the tools give one that has only
+    /// just taken the lock a few seconds to say where it listens.
+    pub fn open_an_app_that_takes_no_changes(&self) -> writer_store::instance_lock::InstanceLock {
+        use writer_store::instance_lock::{Acquired, HolderKind, LOCK_FILE_NAME, acquire_as};
+        let lock = match acquire_as(&self.library(), HolderKind::App)
+            .expect("the lock file can be made")
+        {
             Acquired::Lock(lock) => lock,
             Acquired::Taken(copy) => panic!("the library of the test is locked already: {copy:?}"),
-        }
+        };
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(self.library().join(LOCK_FILE_NAME))
+            .and_then(|file| file.set_modified(an_hour_ago))
+            .expect("the lock file can be dated");
+        lock
+    }
+
+    /// Opens the library the way the running app does, until the returned value is
+    /// dropped: a thread of the test holds the lock, listens where the tools look for
+    /// the app, and carries out what they ask.
+    pub fn open_the_app(&self) -> LiveApp {
+        LiveApp::open(&self.library())
     }
 
     /// Starts `writer mcp` and gives a client that talks to it over its pipes.
@@ -246,6 +264,104 @@ impl Sandbox {
             stdin: Some(stdin),
             stdout,
             next_id: 1,
+        }
+    }
+}
+
+/// What stands in for the running app: it holds the lock of the library, listens on the
+/// socket the lock file names, and carries every request out on a connection of its own,
+/// one after the other, with the code the app runs on its main thread
+/// (`writer_agent::live::execute`). What the real app adds (saving the open document
+/// first, its window, the note to the writer) is tested with the app.
+pub struct LiveApp {
+    closer: writer_agent::live::Closer,
+    thread: Option<std::thread::JoinHandle<()>>,
+    served: std::sync::mpsc::Receiver<Served>,
+    database: PathBuf,
+    _lock: writer_store::instance_lock::InstanceLock,
+}
+
+/// One request the stand-in for the app carried out.
+#[derive(Debug)]
+pub struct Served {
+    /// The name of the operation (`"edit"`, `"flush"`).
+    pub name: &'static str,
+    /// Who asked (`--author`).
+    pub author: Option<String>,
+    /// How many things it changed in the library.
+    pub changes: usize,
+    /// Whether the answer was the result of the operation (and not a failure or a
+    /// refusal).
+    pub done: bool,
+}
+
+impl LiveApp {
+    fn open(data_dir: &Path) -> LiveApp {
+        use writer_agent::live::{self, Listener};
+        let lock = writer_store::instance_lock::acquire(data_dir)
+            .expect("the lock file can be made")
+            .lock()
+            .expect("nobody else has the library of the test");
+        let database = data_dir.join(writer_store::DATABASE_FILE_NAME);
+        let mut store = writer_store::Store::open(&database).expect("the library opens");
+        let listener = Listener::bind(data_dir).expect("the app listens");
+        let closer = listener.closer();
+        let (tell, served) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            while let Some(incoming) = listener.accept() {
+                if !incoming.begin() {
+                    continue;
+                }
+                let request = incoming.request();
+                let executed = live::execute(&mut store, request);
+                tell.send(Served {
+                    name: request.name(),
+                    author: request.author().map(str::to_string),
+                    changes: executed.changes.len(),
+                    done: executed.answer.is_done(),
+                })
+                .ok();
+                incoming.answer(executed.answer).ok();
+            }
+        });
+        LiveApp {
+            closer,
+            thread: Some(thread),
+            served,
+            database,
+            _lock: lock,
+        }
+    }
+
+    /// Everything served since the last look.
+    pub fn served(&self) -> Vec<Served> {
+        self.served.try_iter().collect()
+    }
+
+    /// The names of the changes served since the last look (without the requests to
+    /// save that every read sends).
+    pub fn changes(&self) -> Vec<&'static str> {
+        self.served()
+            .into_iter()
+            .map(|served| served.name)
+            .filter(|name| *name != "flush")
+            .collect()
+    }
+
+    /// Presses the owner's switch "Agents can make changes while The Writer is open".
+    pub fn set_switch(&self, on: bool) {
+        let mut store = writer_store::Store::open(&self.database).expect("the library opens");
+        store
+            .set_setting(writer_agent::live::CHANGES_SETTING, &on)
+            .expect("the setting is written");
+    }
+}
+
+impl Drop for LiveApp {
+    fn drop(&mut self) {
+        self.closer.close();
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
         }
     }
 }

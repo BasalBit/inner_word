@@ -1,5 +1,6 @@
-//! Comments, history, export, and the one rule: while the app is open, read but do not
-//! write.
+//! Comments, history, export, and the rule of an app that takes no changes from tools
+//! (every version before 0.6.0): while it is open, read but do not write. What an app
+//! that takes changes does is in `live.rs`.
 
 use serde_json::json;
 
@@ -379,8 +380,9 @@ fn export_writes_a_document_or_a_folder_to_a_file() {
     );
 }
 
+/// An app from before 0.6.0 holds the lock of the library and listens nowhere.
 #[test]
-fn while_the_app_is_open_reading_works_and_every_change_is_refused() {
+fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_change_is_refused() {
     let sandbox = library();
     sandbox.ok(&[
         "comment",
@@ -396,16 +398,18 @@ fn while_the_app_is_open_reading_works_and_every_change_is_refused() {
     let before = sandbox.ok(&["get", "doc:1"]);
     let versions_before = sandbox.ok(&["history", "doc:1"]);
 
-    let app = sandbox.open_the_app();
+    let app = sandbox.open_an_app_that_takes_no_changes();
 
     // Everything that reads.
     let status = sandbox.json(&["status"]);
     assert_eq!(status["app_is_open"], true);
+    assert_eq!(status["app_takes_changes"], false);
     assert_eq!(status["app_pid"], std::process::id());
+    let said = sandbox.ok(&["status"]);
+    assert!(said.contains("The Writer is open (process "), "{said}");
     assert!(
-        sandbox
-            .ok(&["status"])
-            .contains("The Writer is open (process ")
+        said.contains("takes no changes from agents") && said.contains("every change is refused"),
+        "{said}"
     );
     assert!(sandbox.ok(&["list"]).contains("Chapter 1  doc:1"));
     assert!(sandbox.ok(&["search", "keeper"]).contains("doc:1"));
@@ -474,13 +478,26 @@ fn while_the_app_is_open_reading_works_and_every_change_is_refused() {
             "{args:?}: {message}"
         );
         assert!(
-            message.contains("so nothing was changed. Ask the user to quit The Writer"),
+            message.contains(
+                "does not take changes from agents while it runs (it is a version before \
+                 0.6.0, or it could not open its channel), so nothing was changed. Ask the \
+                 user to quit The Writer, or to update it; then try again.\n"
+            ),
+            "{args:?}: {message}"
+        );
+        assert!(
+            message.ends_with(
+                "and so does every command with --dry-run. \"writer status\" says whether \
+                 the app takes changes.\n"
+            ),
             "{args:?}: {message}"
         );
     }
     let run = sandbox.run(&["append", "doc:1", "--content", "x", "--json"]);
     assert_eq!(run.code, 5);
     assert_eq!(run.error()["code"], "app_is_open");
+    assert_eq!(run.error()["refusal"]["why"], "old_version");
+    assert_eq!(run.error()["nothing_changed"], true);
 
     // A dry run only reads, so it works, and says that the real run would be refused.
     let dry = sandbox.ok(&[
@@ -498,14 +515,15 @@ fn while_the_app_is_open_reading_works_and_every_change_is_refused() {
     );
     assert!(
         dry.ends_with(
-            "The Writer is open: the real run will be refused until the user quits the app.\n"
+            "The Writer is open and takes no changes from agents (they are switched off in its \
+             Agents panel, or it is a version before 0.6.0): the real run will be refused \
+             until that is changed or the user quits the app.\n"
         ),
         "{dry}"
     );
-    assert_eq!(
-        sandbox.json(&["trash", "doc:1", "--dry-run"])["app_is_open"],
-        true
-    );
+    let dry = sandbox.json(&["trash", "doc:1", "--dry-run"]);
+    assert_eq!(dry["app_is_open"], true);
+    assert_eq!(dry["app_takes_changes"], false);
 
     // Nothing of all that changed the library.
     assert_eq!(sandbox.ok(&["get", "doc:1"]), before);
@@ -719,11 +737,13 @@ fn the_tools_of_the_server_do_what_the_commands_do() {
     );
     assert_eq!(exists["code"], "file_exists");
 
-    // The app opens: tools that read go on working, a tool that writes answers with an
-    // ordinary tool error that tells the model what to tell the user.
-    let app = sandbox.open_the_app();
+    // An app that takes no changes opens (a version before 0.6.0): tools that read go on
+    // working, a tool that writes answers with an ordinary tool error that tells the
+    // model what to tell the user.
+    let app = sandbox.open_an_app_that_takes_no_changes();
     let (_, status) = client.call_ok("library_status", json!({}));
     assert_eq!(status["app_is_open"], true);
+    assert_eq!(status["app_takes_changes"], false);
     let (read, _) = client.call_ok("read_document", json!({ "document": 1 }));
     assert_eq!(read, CHAPTER);
     let (refused, error) = client.call_error(
@@ -732,18 +752,21 @@ fn the_tools_of_the_server_do_what_the_commands_do() {
     );
     assert_eq!(error["code"], "app_is_open");
     assert!(
-        refused.starts_with("The Writer is open, so nothing was changed."),
+        refused.starts_with("The Writer is open (process "),
         "{refused}"
     );
     assert!(
-        refused.contains("Tell the user that The Writer has to be quit"),
+        refused.contains(
+            "so nothing was changed. Ask the user to quit The Writer, or to update it; then \
+             try again. Everything that only reads (list_library, search_library, \
+             read_document, list_comments, export) works while the app is open"
+        ),
         "{refused}"
     );
-    assert!(refused.contains("call this tool again"), "{refused}");
     let (dry, dry_data) =
         client.call_ok("trash_document", json!({ "document": 1, "dry_run": true }));
     assert!(
-        dry.contains("The Writer is open: the real run will be refused"),
+        dry.contains("the real run will be refused until that is changed or the user quits"),
         "{dry}"
     );
     assert_eq!(dry_data["app_is_open"], true);

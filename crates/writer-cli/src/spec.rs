@@ -89,7 +89,7 @@ pub struct Spec {
     pub positionals: &'static [Positional],
     pub options: &'static [Opt],
     pub content: Content,
-    /// Whether it changes the library (and so is refused while the app is open).
+    /// Whether it changes the library (and so is carried out by the app while that is open).
     pub writes: bool,
     /// Whether `--dry-run` does something for it.
     pub dry_run: bool,
@@ -287,8 +287,9 @@ its page and type settings) or about a folder (id, path, what is in it).",
     Spec {
         summary: "Where the library is, and whether The Writer is open",
         about: "Prints the data directory, how many documents and folders the library has, and whether \
-the app has it open right now. While it does, the commands that read work and every change is \
-refused.",
+the app has it open right now. While it does, the commands that read work, and a change is carried \
+out by the app, where the user sees it at once; the status says when the app takes no changes \
+(they are switched off in its Agents panel, or it is a version before 0.6.0).",
         examples: &["writer status", "writer status --json"],
         ..reading("status", Group::Library)
     },

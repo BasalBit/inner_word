@@ -29,7 +29,7 @@ pub fn overview() -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "writer {VERSION}: the library of The Writer for agents and scripts. It works on the\n\
-library itself; the app does not have to be running.\n\n\
+library itself; the app does not have to be running, and may be.\n\n\
 Usage: writer <command> [arguments] [options]      writer <command> --help\n"
     ));
     let width = COMMANDS
@@ -74,9 +74,10 @@ Usage: writer <command> [arguments] [options]      writer <command> --help\n"
     out.push('\n');
     out.push_str(ADDRESSING);
     out.push_str(
-        "\n\nWhile The Writer is open, reading works and every change is refused (exit code 5):\n\
-ask the user to quit the app, then run the command again. Text is given with --content,\n\
---file <path> or --stdin. Nothing is lost: the trash and the versions bring things back.\n\n",
+        "\n\nWhile The Writer is open, a change is carried out by the app: the user sees it in the\n\
+window at once and can undo it. When the app does not make it, the command ends with\n\
+exit code 5 and says why and what to do. Text is given with --content, --file <path> or\n\
+--stdin. Nothing is lost: the trash and the versions bring things back.\n\n",
     );
     out.push_str(&exit_codes());
     out
@@ -89,7 +90,7 @@ fn meaning(kind: ErrorKind) -> &'static str {
         ErrorKind::Invalid => "wrong command line or request",
         ErrorKind::NotFound => "not found",
         ErrorKind::Ambiguous => "a name fits several items",
-        ErrorKind::AppIsOpen => "The Writer is open",
+        ErrorKind::AppIsOpen => "The Writer is open and did not make the change",
         ErrorKind::NoMatch => "the text is not in the document",
         ErrorKind::NotUnique => "the text occurs several times",
         ErrorKind::ConfirmationRequired => "needs --permanently",
@@ -217,8 +218,10 @@ when that is a pipe or a file.\n",
     }
     if spec.writes {
         out.push_str(
-            "\nThis command changes the library: it is refused while The Writer is open (exit\n\
-code 5; ask the user to quit the app first).\n",
+            "\nThis command changes the library. While The Writer is open the app makes the change\n\
+and shows it to the user at once. Exit code 5: the app is open and did not make it (the\n\
+message says why: changes by agents are switched off in the app, or it is a version\n\
+before 0.6.0, or it did not answer).\n",
         );
     }
     if spec
@@ -358,7 +361,8 @@ mod tests {
             overview.contains("\n  --json           Print"),
             "the options are indented"
         );
-        assert!(overview.contains("5 The Writer is open"));
+        assert!(overview.contains("5 The Writer is open and did not make the change"));
+        assert!(overview.contains("While The Writer is open, a change is carried out by the app"));
         assert!(overview.contains("13 the document cannot be read."));
         assert!(overview.is_ascii(), "the overview is plain ASCII");
     }

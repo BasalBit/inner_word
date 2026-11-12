@@ -1,8 +1,9 @@
 //! `writer`: the library of The Writer from the command line, for agents and scripts.
 //!
 //! The tool works on the library directly, through the command layer (`writer-agent`); the
-//! app does not have to be running, and while it is, everything that reads still works and
-//! every change is refused. It ships inside the app bundle
+//! app does not have to be running. While it is, everything that reads works as it does,
+//! and a change is handed to the app, which makes it and shows it (`writer_agent::live`;
+//! nothing in this crate knows of it). It ships inside the app bundle
 //! (`The Writer.app/Contents/MacOS/writer`) and is called by its full path.
 //!
 //! * [`spec`] is the table of commands; [`parse`] reads a command line against it and
@@ -24,7 +25,7 @@
 //! | 2 | the command line or the request is wrong |
 //! | 3 | not found |
 //! | 4 | a name fits several items (the message lists them with their ids) |
-//! | 5 | The Writer is open: nothing was changed |
+//! | 5 | The Writer is open and did not make the change (the message says why) |
 //! | 6 | the text to replace or to comment on is not in the document |
 //! | 7 | that text occurs several times |
 //! | 8 | erasing for good needs `--permanently` |
@@ -150,6 +151,11 @@ fn print(text: &str) -> ExitCode {
 /// command line has to know the option to type next.
 fn hint(kind: ErrorKind) -> Option<&'static str> {
     match kind {
+        ErrorKind::AppIsOpen => Some(
+            "Reading works while The Writer is open (list, search, get, find, comments, \
+             history, export), and so does every command with --dry-run. \"writer status\" \
+             says whether the app takes changes.",
+        ),
         ErrorKind::LibraryNotFound => Some("Here that option is --library <dir>."),
         ErrorKind::NoMatch => Some(
             "\"writer find <document> <text>\" shows where a text stands; \"writer get \

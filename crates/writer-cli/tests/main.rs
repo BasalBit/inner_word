@@ -8,6 +8,7 @@ mod suite {
     mod documents;
     mod guard;
     mod items;
+    mod live;
     mod mcp;
     mod output;
     mod review;

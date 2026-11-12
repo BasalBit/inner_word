@@ -502,8 +502,9 @@ fn operations() -> Vec<Operation> {
             "library_status",
             "Library status",
             "Where the library of The Writer is, how much is in it, and whether the app is open right now. \
-While the app is open the tools that read still work and every tool that changes something is refused; \
-check here when in doubt.",
+While the app is open a change is carried out by the app, where the user sees it at once and can undo it; \
+the status says when the app takes no changes (the user switched that off, or it is an older version). \
+Check here when in doubt.",
             reads(vec![], &[]),
             library_status as Run,
         ),
@@ -1383,15 +1384,16 @@ fn tool_text(text: &str) -> String {
     )
 }
 
+/// What a model is told besides the message when the app is open and did not make a
+/// change: the command layer's message says which case it is and what to do, in words for
+/// both front ends; this names the tools that go on working.
+const WHILE_OPEN: &str = "Everything that only reads (list_library, search_library, read_document, \
+list_comments, export) works while the app is open, and so does any tool with dry_run.";
+
 /// The message of a failure as a model should read it in a tool result.
 fn tool_error_text(failure: &Failure) -> String {
     match failure.kind {
-        ErrorKind::AppIsOpen => "The Writer is open, so nothing was changed. The app keeps the open document in \
-memory, and a change made behind its back would be lost or would overwrite the user's work. Tell the user \
-that The Writer has to be quit (Cmd-Q) for this change, and call this tool again once they have done so. \
-Everything that only reads (list_library, search_library, read_document, list_comments, export) works while \
-the app is open, and so does any tool with dry_run."
-            .to_string(),
+        ErrorKind::AppIsOpen => format!("{} {WHILE_OPEN}", failure.message),
         _ => failure.message.clone(),
     }
 }
@@ -1587,18 +1589,49 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_while_the_app_is_open_tells_the_model_what_to_tell_the_user() {
-        let failure = Failure::from(Error::AppIsOpen {
-            pid: Some(7),
-            data_dir: "/tmp/x".into(),
-            why: writer_agent::Refusal::OldVersion,
-        });
-        assert_eq!(failure.kind, ErrorKind::AppIsOpen);
-        assert_eq!(failure.data["code"], "app_is_open");
-        let text = tool_error_text(&failure);
-        assert!(text.contains("Tell the user"), "{text}");
-        assert!(text.contains("quit"), "{text}");
-        assert!(text.contains("call this tool again"), "{text}");
+    fn the_refusal_while_the_app_is_open_tells_the_model_which_case_it_is_and_what_to_do() {
+        use writer_agent::Refusal;
+        let failure = |why: Refusal| {
+            Failure::from(Error::AppIsOpen {
+                pid: Some(7),
+                data_dir: "/tmp/x".into(),
+                why,
+            })
+        };
+        // The owner switched changes off: the model is told where the switch is.
+        let off = failure(Refusal::SwitchedOff);
+        assert_eq!(off.kind, ErrorKind::AppIsOpen);
+        assert_eq!(off.data["code"], "app_is_open");
+        assert_eq!(off.data["refusal"]["why"], "switched_off");
+        assert_eq!(off.data["nothing_changed"], true);
+        let text = tool_error_text(&off);
+        assert!(text.starts_with("The Writer is open (process 7)"), "{text}");
+        assert!(text.contains("switched off"), "{text}");
+        assert!(text.contains("Ask the user to switch on"), "{text}");
+        assert!(text.contains("try again"), "{text}");
+        assert!(text.ends_with(WHILE_OPEN), "{text}");
+        // An app from before 0.6.0: the user has to quit it, or update it.
+        let old = tool_error_text(&failure(Refusal::OldVersion));
+        assert!(old.contains("Ask the user to quit The Writer"), "{old}");
+        assert!(old.contains("nothing was changed"), "{old}");
+        // An answer that did not arrive: nobody is told that nothing was changed.
+        let lost = failure(Refusal::AnswerLost);
+        assert_eq!(lost.data["nothing_changed"], false);
+        assert_eq!(lost.data["refusal"]["why"], "answer_lost");
+        let text = tool_error_text(&lost);
+        assert!(!text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("read the document again"), "{text}");
+        // The tools the text names are tools of this server.
+        let names = Toolbox::new(Library::at("/tmp/x")).operation_names();
+        for tool in [
+            "list_library",
+            "search_library",
+            "read_document",
+            "list_comments",
+            "export",
+        ] {
+            assert!(WHILE_OPEN.contains(tool) && names.contains(&tool), "{tool}");
+        }
         let other = Failure::invalid("no");
         assert_eq!(tool_error_text(&other), "no");
     }

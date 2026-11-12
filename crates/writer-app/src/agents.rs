@@ -61,7 +61,7 @@ pub const AGENT_HOME_ENV: &str = "THE_WRITER_AGENT_HOME";
 pub const HINT_ENV: &str = "THE_WRITER_AGENTS_HINT";
 
 /// What the one-time hint says. Its button opens the panel.
-pub const HINT: &str = "Agents on this Mac can now read and edit your library.";
+pub const HINT: &str = "New: the AI agents on this Mac can work with your library.";
 
 /// The label of the hint's button.
 pub const HINT_BUTTON: &str = "Agents";
@@ -310,6 +310,8 @@ pub struct Report {
     pub headline: String,
     /// What was done to each path, one line each ("Wrote ~/...").
     pub lines: Vec<String>,
+    /// What to know next: when the agent notices the skill.
+    pub note: Option<String>,
     /// Every file and folder that was created, written or removed.
     pub paths: Vec<PathBuf>,
 }
@@ -320,6 +322,7 @@ impl Report {
             ok: false,
             headline: headline.into(),
             lines: Vec::new(),
+            note: None,
             paths: Vec::new(),
         }
     }
@@ -516,6 +519,7 @@ fn report(environment: &Environment, batch: &Batch, headline: String) -> Report 
         ok: batch.is_ok(),
         headline,
         lines,
+        note: None,
         paths: batch.changed_paths(),
     }
 }
@@ -569,12 +573,12 @@ pub fn install_skill(environment: &Environment, skill: &SkillTarget) -> Report {
                 if others.len() == 1 { "has" } else { "have" },
             ));
         }
-        if let Some(pickup) = agent.agent().skills.pickup {
-            headline.push(' ');
-            headline.push_str(pickup);
-        }
     }
-    report(environment, &batch, headline)
+    let mut report = report(environment, &batch, headline);
+    if report.ok && batch.touched_the_disk() {
+        report.note = agent.agent().skills.pickup.map(str::to_string);
+    }
+    report
 }
 
 /// Removes the skill of one agent (from every folder that agent reads; the
@@ -591,12 +595,14 @@ pub fn remove_skill(environment: &Environment, skill: &SkillTarget) -> Report {
                 ok: true,
                 headline: "Removed the left-over copy of the skill.".to_string(),
                 lines,
+                note: None,
                 paths: done.removed,
             },
             Err(_) => Report {
                 ok: false,
                 headline: "The left-over copy of the skill could not be removed.".to_string(),
                 lines,
+                note: None,
                 paths: Vec::new(),
             },
         };
@@ -611,7 +617,20 @@ pub fn remove_skill(environment: &Environment, skill: &SkillTarget) -> Report {
         format!("Removed the skill for {name}.")
     };
     if batch.is_ok() && batch.touched_the_disk() {
-        let others = others_in(&batch, agent);
+        // The others that read a folder the skill was in, and do not find
+        // it in another folder they read.
+        let spec = SkillSpec::new(&environment.tool).ok();
+        let still_has = |id: AgentId| {
+            spec.as_ref().is_some_and(|spec| {
+                setup::agent_status(machine, id, spec)
+                    .skill
+                    .is_some_and(|skill| skill.state.is_installed())
+            })
+        };
+        let others: Vec<AgentId> = others_in(&batch, agent)
+            .into_iter()
+            .filter(|id| !still_has(*id))
+            .collect();
         if !others.is_empty() {
             headline.push_str(&format!(
                 " {} read the same folder and no longer {} it either.",

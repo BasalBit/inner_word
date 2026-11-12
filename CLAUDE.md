@@ -9,7 +9,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 |---|---|---|
 | `crates/writer-core` | pure Rust | Document model, headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
 | `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string. |
-| `crates/writer-export` | pure Rust | Markdown and DOCX exporters over `writer-core`. |
+| `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
 | `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), input, and the seams the crates below plug into. |
@@ -18,14 +18,21 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker. Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel. Mounts everything above. |
+| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, comments, history, export, trash) over `writer-store`, `writer-core` and `writer-export`, with the app-is-open rule and the safety net (a version before every change) inside it. |
+| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream. |
+| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts, and `writer mcp`, the MCP server. Ships inside the app bundle at `Contents/MacOS/writer`. |
+| `crates/writer-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`writer agents ...`) and by the app (the Agents panel). |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
 Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export}`,
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
-`library → {store, ui}`, `export → core`. Never the reverse. Every internal crate has an
+`library → {store, ui}`, `export → core`, `cli → {agent, mcp, agent-setup}`,
+`agent → {store, core, export}`, `app → agent-setup`. Never the reverse. None of the agent
+crates depends on GPUI, and the app does not depend on `writer-agent` or `writer-cli`: the
+tool is a separate program beside it. Every internal crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
 
 ## Build and test
@@ -36,7 +43,9 @@ cargo run -p writer-app              # run the app
 cargo test -p <crate>                # per-crate tests (GPUI crates)
 CARGO_TARGET_DIR=target-pure cargo test -p writer-core   # pure crates use target-pure
 THE_WRITER_DATA_DIR=/some/tmp cargo run -p writer-app   # run against a throwaway library
-scripts/bundle.sh                    # release .app + .dmg in dist/
+CARGO_TARGET_DIR=target-pure cargo build -p writer-cli   # the `writer` tool (target-pure/debug/writer)
+cargo build -p writer-cli            # the same beside a debug app (target/debug/writer), where the Agents panel looks for it
+scripts/bundle.sh                    # release .app (the app and the tool) + .dmg in dist/
 ```
 
 The real library lives in `~/Library/Application Support/The Writer/`. Tests and manual
@@ -62,7 +71,8 @@ a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
 it), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-Vim, tool, the format bar, comments, spelling, status bar), `dump`, `log:<text>`, `quit`, and for measuring
+Vim, tool, the format bar, comments, spelling, status bar, and the Agents panel while it is
+open), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
 the text on screen was checked for spelling), `savecost[:<rounds>]` (every part of a
 synchronous save, timed), `limitcost[:<rounds>]` (the character-limit count),
@@ -80,11 +90,15 @@ behaviour is tested headlessly with the test context's `simulate_*` calls.
 
 **One running copy per data directory.** A launch takes an exclusive lock on
 `instance.lock` in its data directory and keeps it until the process ends
-(`crates/writer-app/src/single_instance.rs`). A second launch on the same directory does
-not open the library: it shows a window that says another copy has it (and prints the same
-to stderr), with a button that brings the other copy to the front. So two scripted runs
+(`crates/writer-app/src/single_instance.rs`, over `writer_store::instance_lock`, the one
+implementation the app and the `writer` tool share). A second launch on the same directory
+does not open the library: it shows a window that says another copy has it (and prints the
+same to stderr), with a button that brings the other copy to the front. So two scripted runs
 must not share a `THE_WRITER_DATA_DIR`; the second one's `state` step fails with "the window
 does not show a workspace". A build from before the guard takes no lock and is not seen.
+The `writer` tool takes the same lock for the moment of each write (its line in the lock
+file ends in ` tool`): a launch that finds the lock held by a tool waits up to three
+seconds for it (`single_instance::TOOL_PATIENCE`) before it says the library is in use.
 
 A scripted run stays in the background and draws its own frames, so it works while the
 window is covered. Do not script anything that writes the system clipboard (copy, cut,
@@ -121,7 +135,9 @@ menus of the title, the status bar, the text and the library rows, modals);
 (a document row, a folder row, the empty library, a selection, a link, a comment thread, a
 text field, the title, a status bar item), clicks an item of each menu, and holds the format
 bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from coming back;
-`tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker.
+`tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker;
+`tests/suite/agents.rs` holds the Agents panel against a temporary home directory;
+`tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -132,11 +148,68 @@ workspace, and without one there is no checker at all. A scripted run of the rea
 does use the system checker: do not choose "Learn Spelling" there except on an invented
 word that is unlearned again in the same run.
 
+## Agents
+
+The AI agents on the user's Mac (Claude Code, Codex, Gemini CLI, Cursor and the others in
+`writer_agent_setup::AGENTS`) work with the library through `writer`, a command line tool
+built only from the crates without GPUI. It does not need the app to be running.
+
+- **Where it is.** In the bundle at `The Writer.app/Contents/MacOS/writer`, beside the
+  app's executable, built from the same commit by `scripts/bundle.sh` and signed with the
+  bundle. Agents call it by its absolute path; nothing is added to `PATH`. A debug app
+  looks for it at `target/debug/writer` (`cargo build -p writer-cli`).
+- **The one rule.** Agents can read at any time (list, search, get, info, history,
+  export). They can change things only while the app is closed: while the app holds the
+  lock of the data directory every write is refused with exit code 5 and a message that
+  says to quit The Writer first. There is no merging. `crates/writer-agent` enforces it.
+- **The safety net** is in `writer-agent` too: a version snapshot before an agent changes a
+  document (labelled, so the version history tells them apart), deletion means the trash,
+  `--dry-run` says what would change. Permanent deletion is in the CLI behind a flag and
+  not in MCP.
+- **Which library.** The user's real one by default (`writer_store::data_dir`), another
+  with `--library <dir>` or `THE_WRITER_DATA_DIR`. **Every test and every command you run
+  must name a temporary library**; the tool pointed at nothing is pointed at the user's
+  documents.
+- **`writer mcp`** is the same binary as an MCP server over stdio (`crates/writer-mcp` is
+  the protocol, `crates/writer-cli` the tools).
+- **The skill and the MCP commands** are `crates/writer-agent-setup`: the table of agents
+  (how each is detected, where it reads skills, how an MCP server is added, every fact with
+  its source and the day it was read), the text of the skill, installing and removing it.
+  The tool has it as `writer agents ...`, the app as the Agents panel.
+- **The Agents panel** (`cmd-opt-a`, "Agents" in the palette, The Writer > Agents… in the
+  menu bar; `crates/writer-app/src/agents.rs` and `agents_view.rs`): the path of the tool
+  with a copy button; every agent found that reads skills with the folder and the state of
+  the skill, install / update / remove per agent and install for all, with a report of
+  every path written; the command or configuration entry that adds the MCP server to each
+  agent, with a copy button and a link to its documentation. The app never edits an
+  agent's configuration, and writes into an agent's skills folder only when a button is
+  pressed. Keys in the panel: `up` / `down`, `enter` (the row's first button), `backspace`
+  (remove the skill), `cmd-c` (copy what the row shows), `o` (documentation), `escape`.
+- **Which Mac the panel sees** is `agents::Environment`, an app global. `main` sets it to
+  this Mac. A scripted run has none (the panel lists nothing) unless
+  `THE_WRITER_AGENT_HOME=<dir>` names a home directory: then that directory is the whole
+  machine (`Machine::isolated`), and copy buttons still leave the clipboard alone. Tests
+  call `agents::set_environment(Environment::isolated(temp_home, tool))`. **Never run the
+  panel's install buttons, `writer agents install`, or an agent's own `mcp add` against the
+  real home directory** (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.agents`, ...): looking
+  at which of them exist is fine, writing there is the user's decision.
+- **The hint.** Once per library the app shows a toast that agents can work with the
+  library, with a button that opens the panel (`agents.hint_shown` in the settings). Only
+  the real app shows it; a scripted run does with `THE_WRITER_AGENTS_HINT=1`.
+- **A launch shows the library as it is.** Agents change the library while the app is
+  closed, so nothing remembered across launches is trusted without a check: the caret and
+  scroll position carry a stamp of the text they were taken on
+  (`crates/writer-app/src/view_memory.rs`), and a document that was rewritten opens at its
+  start and says so; the last open document, the selection and the open folders of the
+  sidebar are dropped when what they name was trashed or deleted
+  (`tests/suite/launch.rs`, one test per kind of change).
+
 ## Working rules
 
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
-  `writer-store`, `writer-export`, `writer-vim`) build and test with
+  `writer-store`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
+  `writer-agent-setup`) build and test with
   `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
@@ -260,6 +333,7 @@ Global (work anywhere in the window):
 | `cmd-/` | Keyboard shortcuts overlay |
 | `cmd-opt-p` | Turn page view on or off |
 | `cmd-opt-v` | Turn Vim mode on or off |
+| `cmd-opt-a` | Agents panel (the command line tool, the skill, the MCP server) |
 | `cmd-opt-c` | Show or hide comments |
 | `cmd-opt-m` | Add comment on selection (or on the word at the caret) |
 | `cmd-opt-]` / `cmd-opt-[` | Next / previous comment |

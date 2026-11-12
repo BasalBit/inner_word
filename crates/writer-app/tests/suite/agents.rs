@@ -530,6 +530,12 @@ fn the_skill_is_installed_and_removed_from_the_keyboard(cx: &mut TestAppContext)
             file.clone(),
         ]
     );
+    // And when the agent will notice it, as its documentation says.
+    assert_eq!(
+        report.note.as_deref(),
+        AgentId::ClaudeCode.agent().skills.pickup
+    );
+    assert!(report.note.is_some());
     assert_stays_in(&home, &view, vcx);
     assert!(vcx.debug_bounds("agents-report").is_some());
     assert_eq!(
@@ -692,6 +698,35 @@ fn install_for_all_and_the_buttons_work_with_the_mouse(cx: &mut TestAppContext) 
     );
     vcx.run_until_parked();
     assert!(panel(&workspace, vcx).is_none());
+}
+
+#[gpui::test]
+fn removing_names_only_the_agents_that_lose_the_skill(cx: &mut TestAppContext) {
+    // Cursor reads the shared folder and Claude's folder.
+    let home = Home::with_agents();
+    std::fs::create_dir_all(home.path().join(".cursor")).unwrap();
+    assert!(agents::install_skill_for_all(&home.environment()).ok);
+    let (workspace, vcx) = workspace_with(&home, cx);
+    let view = open_panel(&workspace, vcx);
+    let row = skill_row(&view, AgentId::Codex, vcx);
+    select(&view, row, vcx);
+    vcx.simulate_keystrokes("backspace");
+    vcx.run_until_parked();
+    assert!(!home.skill_file(".agents/skills").exists());
+    let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
+    // Cursor still finds the skill in ~/.claude/skills.
+    assert_eq!(
+        report.headline,
+        "Removed the skill for Codex. Gemini CLI read the same folder and no longer has it either."
+    );
+    assert_eq!(
+        skill_state(&view, AgentId::Cursor, vcx),
+        SkillState::Current
+    );
+    assert_eq!(
+        skill_state(&view, AgentId::GeminiCli, vcx),
+        SkillState::NotInstalled
+    );
 }
 
 #[gpui::test]
@@ -1199,4 +1234,36 @@ fn the_tool_is_looked_for_beside_the_executable() {
         ))
         .is_none()
     );
+}
+
+/// Wrapped text in a row once made the row thousands of pixels tall (every
+/// configuration entry, which has several lines): no row is taller than
+/// its text needs.
+#[gpui::test]
+fn no_row_is_taller_than_its_text(cx: &mut TestAppContext) {
+    let home = Home::with_agents();
+    // A skill row with a long explanation under it, too.
+    let theirs = home.path().join(".claude/skills/the-writer/SKILL.md");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    std::fs::write(&theirs, "Mine.\n").unwrap();
+    let (workspace, vcx) = workspace_with(&home, cx);
+    let view = open_panel(&workspace, vcx);
+    let rows = view.read_with(vcx, |view, _| view.rows().to_vec());
+    for (ix, row) in rows.iter().enumerate() {
+        select(&view, ix, vcx);
+        let bounds = vcx
+            .debug_bounds(Box::leak(format!("agents-row-{ix}").into_boxed_str()))
+            .unwrap_or_else(|| panic!("row {ix} is not drawn"));
+        let lines = view.read_with(vcx, |view, _| {
+            view.copy_text(*row).map_or(1, |text| text.lines().count())
+        });
+        // Generous: three lines of explanation, the text itself with every
+        // line wrapped once, and the padding.
+        let limit = 80. + 2. * 17. * lines as f32;
+        assert!(
+            f32::from(bounds.size.height) < limit,
+            "row {ix} ({row:?}) is {:?} tall",
+            bounds.size.height
+        );
+    }
 }

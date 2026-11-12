@@ -37,7 +37,7 @@ use gpui::{
     MouseButton, ScrollHandle, SharedString, Window, actions, div, prelude::*, px,
 };
 use writer_ui::{
-    Button, ButtonSize, Icon, IconName, KeyHint, Toast,
+    Button, ButtonSize, Icon, IconName, Toast,
     theme::{
         ActiveTheme, RADIUS_LG, RADIUS_MD, SPACE_2, SPACE_3, SPACE_4, UI_TEXT_BASE, UI_TEXT_LG,
         UI_TEXT_SM, UI_TEXT_XS,
@@ -461,17 +461,8 @@ impl AgentsView {
         row: Row,
         deed: Deed,
         position: usize,
-        selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let hint = selected
-            .then(|| match deed {
-                deed if self.primary(row) == Some(deed) => KeyHint::parse("enter"),
-                Deed::Remove => KeyHint::parse("backspace"),
-                Deed::Documentation => KeyHint::parse("o"),
-                _ => None,
-            })
-            .flatten();
         let name = match deed {
             Deed::Copy => "copy",
             Deed::InstallAll => "install-all",
@@ -482,7 +473,6 @@ impl AgentsView {
         };
         let button = Button::new(("agents-button", row_ix * 4 + position), deed.label(row))
             .size(ButtonSize::Compact)
-            .key_hint(hint)
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                 this.select(row_ix, cx);
                 this.perform(row, deed, cx);
@@ -503,14 +493,16 @@ impl AgentsView {
             .into_iter()
             .enumerate()
             .map(|(position, deed)| {
-                self.render_button(row_ix, row, deed, position, selected, cx)
+                self.render_button(row_ix, row, deed, position, cx)
                     .into_any_element()
             })
             .collect();
+        // The content of a row is a block, not a flex column: wrapped text in
+        // a flex column inside a flex row is measured at no width at all and
+        // comes out thousands of pixels tall (seen with every multi-line
+        // configuration entry).
         let code = |text: SharedString| {
             div()
-                .w_full()
-                .min_w_0()
                 .px(SPACE_2)
                 .py(px(5.))
                 .rounded(RADIUS_MD)
@@ -533,17 +525,12 @@ impl AgentsView {
         let content = match row {
             Row::Tool => {
                 let path: SharedString = self.model.tool.to_string_lossy().into_owned().into();
-                let mut column = div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(code(path));
+                let mut column = div().flex_1().min_w_0().child(code(path));
                 if !self.model.tool_found {
                     column = column.child(
                         div()
                             .debug_selector(|| "agents-tool-missing".into())
+                            .mt(px(4.))
                             .flex()
                             .items_center()
                             .gap(px(6.))
@@ -559,6 +546,8 @@ impl AgentsView {
                 } else if let Some(warning) = agents::temporary_place(&self.model.tool) {
                     column = column.child(
                         div()
+                            .debug_selector(|| "agents-tool-temporary".into())
+                            .mt(px(4.))
                             .text_size(UI_TEXT_SM)
                             .line_height(px(16.))
                             .text_color(colors.danger)
@@ -586,9 +575,6 @@ impl AgentsView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(1.))
                     .child(
                         div()
                             .flex()
@@ -605,6 +591,7 @@ impl AgentsView {
                     )
                     .child(
                         div()
+                            .mt(px(1.))
                             .truncate()
                             .font_family(mono.clone())
                             .text_size(px(11.5))
@@ -612,16 +599,21 @@ impl AgentsView {
                             .text_color(colors.muted)
                             .child(skill.directory_display.clone()),
                     )
-                    .children(skill.detail.clone().map(|detail| muted(detail.into())))
+                    .children(
+                        skill
+                            .detail
+                            .clone()
+                            .map(|detail| muted(detail.into()).mt(px(1.))),
+                    )
                     .into_any_element()
             }
             Row::Mcp(ix, form) => {
                 let agent = &self.model.mcp[ix];
-                let column = div().flex_1().min_w_0().flex().flex_col().gap(px(4.));
+                let column = div().flex_1().min_w_0();
                 match form {
                     McpForm::Command => column
                         .child(muted("Run in a terminal:".into()))
-                        .child(code(agent.command.clone().unwrap_or_default().into()))
+                        .child(code(agent.command.clone().unwrap_or_default().into()).mt(px(4.)))
                         .into_any_element(),
                     McpForm::Config => {
                         let config = agent.config.as_ref();
@@ -630,12 +622,15 @@ impl AgentsView {
                             .unwrap_or_default();
                         column
                             .child(muted(place.into()))
-                            .child(code(
-                                config
-                                    .map(|config| config.text.clone())
-                                    .unwrap_or_default()
-                                    .into(),
-                            ))
+                            .child(
+                                code(
+                                    config
+                                        .map(|config| config.text.clone())
+                                        .unwrap_or_default()
+                                        .into(),
+                                )
+                                .mt(px(4.)),
+                            )
                             .into_any_element()
                     }
                 }
@@ -697,17 +692,23 @@ impl AgentsView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
                         .child(report.headline.clone())
                         .children(report.lines.iter().map(|line| {
                             div()
+                                .mt(px(2.))
                                 .font_family(mono.clone())
                                 .text_size(px(11.5))
                                 .line_height(px(16.))
                                 .text_color(colors.muted)
                                 .child(line.clone())
+                        }))
+                        .children(report.note.clone().map(|note| {
+                            div()
+                                .mt(px(4.))
+                                .text_size(UI_TEXT_SM)
+                                .line_height(px(16.))
+                                .text_color(colors.muted)
+                                .child(note)
                         })),
                 )
                 .into_any_element(),

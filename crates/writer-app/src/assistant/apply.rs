@@ -3,8 +3,8 @@
 //! The assistant advises and the user applies: an answer changes the
 //! document only when one of its buttons is pressed. Everything here is one
 //! undo step, and an answer's Markdown becomes formatted text on the way in
-//! (a heading is a heading, `**bold**` is bold), exactly as "paste" of
-//! Markdown read by the importer would.
+//! (a heading is a heading, `**bold**` is bold), read by the Markdown
+//! importer. Where it goes is in [`insert_at_caret`].
 //!
 //! | Function | Used for |
 //! |---|---|

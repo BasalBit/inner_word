@@ -205,6 +205,9 @@ pub fn guard(
 /// What would happen if `target` got the key `key`: in the place of its
 /// key `replacing`, or as one more key (`None`). Nothing is changed.
 ///
+/// The guard rails do not apply to a key the command has by default: a
+/// default that was taken away can always be given back.
+///
 /// The holders are those in the keymap that would result, so a key the
 /// user already took from a command is not held by it, and the key being
 /// replaced is not in the way.
@@ -227,9 +230,13 @@ pub fn check(
         verdict.refusal = Some(Refusal::UnknownCommand);
         return verdict;
     }
-    let (refusal, warnings) = guard(places, &target.context, key);
-    verdict.refusal = refusal;
-    verdict.warnings = warnings;
+    // A key the command has by default is never refused: giving it back
+    // after it was taken away is always possible.
+    if !defaults.default_keys(target).contains(key) {
+        let (refusal, warnings) = guard(places, &target.context, key);
+        verdict.refusal = refusal;
+        verdict.warnings = warnings;
+    }
 
     let has = changes.keys_of(defaults, target);
     if has.contains(key) {
@@ -474,6 +481,39 @@ mod tests {
             ask("editor::ToggleBold", Some("Editor"), "cmd-k b").refusal,
             None
         );
+    }
+
+    #[test]
+    fn a_default_key_can_always_be_given_back() {
+        // The library's field confirms with enter, a key a text is edited
+        // with; a place could have a bare character by default too.
+        let binding = |action: &str, context: Option<&str>, keys: &str| {
+            DefaultBinding::new(action, None, context, keys).unwrap()
+        };
+        let defaults = Defaults::from_bindings([
+            binding("field::Confirm", Some("TextField"), "enter"),
+            binding("field::Space", Some("TextField"), "space"),
+        ]);
+        let confirm = Target::new("field::Confirm", Some("TextField"));
+        let space = Target::new("field::Space", Some("TextField"));
+        let mut changes = Changes::new();
+        changes.remove_key(&defaults, &confirm, &key("enter"));
+        changes.remove_key(&defaults, &space, &key("space"));
+        for (target, text) in [(&confirm, "enter"), (&space, "space")] {
+            let verdict = check(&defaults, &changes, &places(), target, &key(text), None);
+            assert_eq!(verdict.kind(), VerdictKind::Fine, "{text}");
+            assert!(verdict.warnings.is_empty(), "{text}");
+        }
+        // Another command does not get that key there.
+        let verdict = check(
+            &defaults,
+            &changes,
+            &places(),
+            &confirm,
+            &key("space"),
+            None,
+        );
+        assert_eq!(verdict.refusal, Some(Refusal::TypesText));
     }
 
     #[test]

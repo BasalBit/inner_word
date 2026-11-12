@@ -232,6 +232,184 @@ fn gpui_s_own_writing_of_a_key_is_read() {
     assert_eq!(stroke.spellings(), vec!["cmd-alt-:", "cmd-alt-shift-;"]);
 }
 
+/// Every key context predicate the tree binds keys in, as it is written
+/// in the sources (crates/*/src, at version 0.4.0).
+const CONTEXTS: [&str; 30] = [
+    "AgentsView",
+    "AssistantComposer",
+    "AssistantContext",
+    "AssistantHeader",
+    "AssistantMessages",
+    "AssistantPanel",
+    "Button",
+    "CommentComposer",
+    "CommentThreads && !confirming && !composing",
+    "CommentThreads && confirming",
+    "ConfirmDialog",
+    "Editor",
+    "Editor && assistant",
+    "Editor && assistant_quick",
+    "Editor && assistant_side",
+    "EditorTools",
+    "FindBar",
+    "FindBar > TextField",
+    "LibraryPanel",
+    "LibraryPanel && !TextField",
+    "LibraryPanel && mode == trash && !TextField",
+    "LibraryPanel && mode == tree && !TextField",
+    "LinkPopover",
+    "Pane",
+    "Picker",
+    "SegmentedControl",
+    "SettingsRow",
+    "SettingsView",
+    "TextField",
+    "VersionHistory",
+];
+
+/// What GPUI's `Display` prints for a predicate parsed from `text`, for
+/// the shapes the tree uses: "and" in parentheses, nested to the left.
+fn gpui_print(text: &str) -> String {
+    let mut parts = text.split(" && ");
+    let mut printed = parts.next().unwrap().to_string();
+    for part in parts {
+        printed = format!("({printed} && {part})");
+    }
+    printed
+}
+
+#[test]
+fn every_context_of_the_tree_is_one_context_however_it_is_spelled() {
+    assert_eq!(gpui_print("a && b == c && !d"), "((a && b == c) && !d)");
+    for written in CONTEXTS {
+        let context = Context::parse(written);
+        // The canonical text is what the sources write.
+        assert_eq!(context.text(), Some(written));
+        // What GPUI prints for it is the same context.
+        assert_eq!(Context::parse(&gpui_print(written)), context, "{written}");
+        assert!(!context.names().is_empty(), "{written}");
+    }
+    // Different texts are different contexts.
+    for (ix, one) in CONTEXTS.iter().enumerate() {
+        for other in &CONTEXTS[ix + 1..] {
+            assert_ne!(Context::parse(one), Context::parse(other));
+        }
+    }
+}
+
+#[test]
+fn the_idle_and_the_confirming_comment_list_are_different_places() {
+    let places = Places::new();
+    let relation = places.relation(
+        &Context::parse("CommentThreads && !confirming && !composing"),
+        &Context::parse("CommentThreads && confirming"),
+    );
+    assert_eq!(relation.extent, writer_keymap::Extent::Apart);
+    let relation = places.relation(
+        &Context::parse("Editor && assistant_quick"),
+        &Context::parse("Editor && assistant"),
+    );
+    assert_eq!(relation.extent, writer_keymap::Extent::Overlapping);
+}
+
+/// A small generator of texts, the same on every run.
+struct Texts(u64);
+
+impl Texts {
+    fn next(&mut self, alphabet: &[&str], max: usize) -> String {
+        let mut step = || {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        };
+        let len = (step() % (max as u64 + 1)) as usize;
+        (0..len)
+            .map(|_| alphabet[(step() % alphabet.len() as u64) as usize])
+            .collect()
+    }
+}
+
+#[test]
+fn no_text_makes_the_readers_panic() {
+    let mut texts = Texts(0x9E37_79B9_7F4A_7C15);
+    let key_parts = [
+        "cmd", "ctrl", "alt", "shift", "fn", "-", "-", "-", ">", "a", "B", "7", "&", " ", "enter",
+        "é", "opt", "space", "", "\t", "\u{0}",
+    ];
+    let context_parts = [
+        "Editor",
+        "TextField",
+        " ",
+        " ",
+        "&&",
+        "||",
+        "==",
+        "!=",
+        "!",
+        "(",
+        ")",
+        ">",
+        "mode",
+        "é",
+        "&",
+        "|",
+        "=",
+        "-",
+        "_",
+    ];
+    let json_parts = [
+        "{",
+        "}",
+        "[",
+        "]",
+        ":",
+        ",",
+        "\"",
+        "format",
+        "the-writer-shortcuts",
+        "version",
+        "1",
+        "shortcuts",
+        "changes",
+        "command",
+        "keys",
+        "default",
+        "context",
+        "null",
+        "cmd-b",
+        " ",
+        "\n",
+        "editor::ToggleBold",
+        "Editor",
+    ];
+    let keymap = keymap();
+    for _ in 0..4000 {
+        let text = texts.next(&key_parts, 6);
+        if let Ok(sequence) = KeySequence::parse(&text) {
+            // What is read is written as something that reads the same.
+            assert_eq!(key(&sequence.to_string()), sequence, "{text:?}");
+            for spelling in sequence.spellings() {
+                assert_eq!(key(&spelling), sequence, "{text:?} as {spelling:?}");
+                assert!(
+                    gpui_parse_all(&spelling).is_some(),
+                    "{text:?} as {spelling:?}"
+                );
+            }
+        }
+        let text = texts.next(&context_parts, 8);
+        let context = Context::parse(&text);
+        if let Some(canonical) = context.text() {
+            assert_eq!(Context::parse(canonical), context, "{text:?}");
+        }
+        let _ = places().is_typing(&context);
+        let _ = places().relation(&context, &Context::parse("Editor"));
+        let text = texts.next(&json_parts, 24);
+        let _ = keymap.plan_import(&text);
+        let _ = Changes::from_stored(&text);
+    }
+}
+
 // ---------------------------------------------------------------------
 // A keymap like the app's, in miniature
 // ---------------------------------------------------------------------

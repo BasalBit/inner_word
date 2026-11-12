@@ -720,9 +720,11 @@ fn read_entry(
         None => defaults.default_keys(&target),
     };
 
-    // The guard rails, for the keys the entry gives the command.
+    // The guard rails, for the keys the entry gives the command (not
+    // for a key it has by default, then or now).
+    let default_now = defaults.default_keys(&target);
     for key in &keys {
-        if default.contains(key) {
+        if default.contains(key) || default_now.contains(key) {
             continue;
         }
         if let (Some(refusal), _) = guard(places, &target.context, key) {

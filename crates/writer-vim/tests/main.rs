@@ -18,6 +18,7 @@ mod review;
 mod rich;
 mod scroll;
 mod search;
+mod spell;
 mod textobjects;
 mod undo;
 mod vimdiff;

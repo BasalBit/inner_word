@@ -24,11 +24,11 @@ use std::ops::Range;
 
 use writer_core::{
     Block, BlockKind, Document, EditorOptions, EditorState, Fragment, InlineAttrs, Movement,
-    Position, Selection, text,
+    Position, Selection, TextRange, text,
 };
 use writer_vim::{
     Effect, GoalColumn, HostRequest, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll,
-    ScrollAlign, Viewport, Vim, VimHost, VimOptions,
+    ScrollAlign, SpellCommand, SpellOff, Viewport, Vim, VimHost, VimOptions,
 };
 
 // ----- the mock host -------------------------------------------------------------------------
@@ -54,6 +54,15 @@ pub struct MockHost {
     /// runs to the next multiple of eight) instead of characters, as Vim
     /// does; for the comparison with a real Vim.
     pub cells: bool,
+    /// The spell checker: `None` is a host without one (the trait's
+    /// defaults answer), `Some` a checker for which exactly these words are
+    /// misspelled, wherever they stand outside code blocks.
+    pub misspelled: Option<Vec<String>>,
+    /// The spelling commands the engine handed over, in order.
+    pub spell_commands: Vec<SpellCommand>,
+    /// Every question the engine asked about misspelled words: from where,
+    /// and whether forward.
+    pub spell_questions: Vec<(Position, bool)>,
 }
 
 /// The terminal width of a grapheme that starts at cell `col`.
@@ -84,7 +93,39 @@ impl MockHost {
             clipboard: None,
             scrolls: Vec::new(),
             cells: false,
+            misspelled: None,
+            spell_commands: Vec::new(),
+            spell_questions: Vec::new(),
         }
+    }
+
+    /// Every misspelled word of the document, in order: the fixed list the
+    /// spell checker of this host marks.
+    pub fn misspellings(&self, doc: &Document) -> Vec<TextRange> {
+        let Some(words) = &self.misspelled else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for (index, block) in doc.blocks().iter().enumerate() {
+            if matches!(block.kind(), BlockKind::CodeBlock { .. }) {
+                continue;
+            }
+            let t = block.text();
+            let mut start = None;
+            for (o, ch) in t.char_indices().chain([(t.len(), ' ')]) {
+                match (start, ch.is_alphanumeric()) {
+                    (None, true) => start = Some(o),
+                    (Some(s), false) => {
+                        if words.iter().any(|w| w == &t[s..o]) {
+                            found.push(TextRange::in_block(index, s, o));
+                        }
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        found
     }
 
     pub fn rows(&self, doc: &Document) -> Vec<Row> {
@@ -261,6 +302,36 @@ impl VimHost for MockHost {
 
     fn clipboard_write(&mut self, content: &RegisterContent) {
         self.clipboard = Some(content.clone());
+    }
+
+    fn misspelling_from(
+        &mut self,
+        state: &EditorState,
+        from: Position,
+        forward: bool,
+    ) -> Result<Option<TextRange>, SpellOff> {
+        if self.misspelled.is_none() {
+            return Err(SpellOff);
+        }
+        self.spell_questions.push((from, forward));
+        let all = self.misspellings(state.document());
+        Ok(if forward {
+            all.iter().find(|r| r.start > from).or(all.first()).copied()
+        } else {
+            all.iter()
+                .rev()
+                .find(|r| r.start < from)
+                .or(all.last())
+                .copied()
+        })
+    }
+
+    fn spell_command(&mut self, _: &EditorState, command: SpellCommand) -> Result<(), SpellOff> {
+        if self.misspelled.is_none() {
+            return Err(SpellOff);
+        }
+        self.spell_commands.push(command);
+        Ok(())
     }
 }
 
@@ -789,6 +860,7 @@ pub struct Case {
     pub message: Option<&'static str>,
     pub bell: Option<bool>,
     pub strict_words: bool,
+    pub misspelled: Option<&'static [&'static str]>,
 }
 
 /// A case that ends in Normal mode.
@@ -807,6 +879,7 @@ pub const fn c(start: &'static str, keys: &'static str, expect: &'static str) ->
         message: None,
         bell: None,
         strict_words: false,
+        misspelled: None,
     }
 }
 
@@ -886,6 +959,13 @@ impl Case {
         self
     }
 
+    /// A host with a spell checker for which exactly these words are
+    /// misspelled.
+    pub const fn misspelled(mut self, words: &'static [&'static str]) -> Case {
+        self.misspelled = Some(words);
+        self
+    }
+
     pub fn run(&self) -> Result<(), String> {
         let options = VimOptions {
             apostrophe_in_words: !self.strict_words,
@@ -897,6 +977,9 @@ impl Case {
         }
         if let Some(t) = self.clip {
             s.host.clipboard = Some(RegisterContent::from_plain_text(t));
+        }
+        if let Some(words) = self.misspelled {
+            s.host.misspelled = Some(words.iter().map(|w| w.to_string()).collect());
         }
         s.clear_effects();
         s.keys(self.keys);

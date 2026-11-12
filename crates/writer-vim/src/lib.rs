@@ -222,7 +222,11 @@
 //!   `zb`). A [`Scroll::Rows`] request counts visual rows, of whatever
 //!   height: the caret moves by the same number of rows;
 //! - the system clipboard: [`VimHost::clipboard_read`],
-//!   [`VimHost::clipboard_write`] (registers `+` and `*`).
+//!   [`VimHost::clipboard_write`] (registers `+` and `*`);
+//! - the spell checker: [`VimHost::misspelling_from`] (for `]s` and `[s`)
+//!   and [`VimHost::spell_command`] (for `z=`, `zg`, `zug`). Both have
+//!   default implementations for a host without a spell checker: the keys
+//!   then report `E756: Spell checking is off`. See "Spelling" below.
 //!
 //! The layout methods receive the editor state, so the host object does
 //! not have to borrow the editor: it needs the layout cache, not the
@@ -290,6 +294,23 @@
 //! - Text put inside a block takes that block's kind; whole lines keep
 //!   their own.
 //!
+//! ## Spelling
+//!
+//! The engine has no dictionary. `]s` and `[s` are motions like any other
+//! (counts, operators, Visual mode, `.`), but where they go is the host's
+//! answer: [`VimHost::misspelling_from`] names the misspelled word after
+//! or before a position, wrapping around the document, and the engine
+//! walks `count` of them ([`walk_misspellings`]). `z=`, `zg` and `zug`
+//! are handed over whole as a [`SpellCommand`] with the position of the
+//! Vim cursor; like a scroll, the host may carry them out after the call
+//! and reports the result itself.
+//!
+//! A host that cannot ask its spell checker during a call into the engine
+//! asks before it: [`Vim::spell_lookahead`] says for the key about to be
+//! handled which misspellings the engine will ask for (or that a
+//! [`SpellCommand`] is coming), and the questions are exactly those of
+//! [`walk_misspellings`] with the same arguments.
+//!
 //! # Supported commands
 //!
 //! Counts work everywhere Vim takes them, before and after an operator
@@ -298,7 +319,12 @@
 //! - **Motions:** `h` `l` `j` `k`, arrows, space, backspace, `w` `W` `b`
 //!   `B` `e` `E` `ge` `gE`, `0` `^` `$` `g_` `|`, `g0` `g^` `g$`, `gg` `G`
 //!   `N%`, `+` `-` `_` enter, `{` `}` `(` `)`, `f` `F` `t` `T` `;` `,`,
-//!   `%`, `H` `M` `L`, `*` `#` `g*` `g#`, `n` `N`, `/` `?`, `'x` `` `x ``.
+//!   `%`, `H` `M` `L`, `*` `#` `g*` `g#`, `n` `N`, `/` `?`, `'x` `` `x ``,
+//!   `]s` `[s` (the next and previous misspelled word, with the host's
+//!   spell checker; `]S` and `[S` are the same).
+//! - **Spelling:** `z=` (the host offers its suggestions; `1z=` takes the
+//!   first without asking), `zg` (the word is good), `zug` (undo that).
+//!   `zw` and `zuw` report that they are not supported.
 //! - **Operators:** `d` `c` `y` `>` `<` `gu` `gU` `g~` with any motion or
 //!   text object, and doubled (`dd`, `cc`, `yy`, `>>`, `<<`, `guu`, `gUU`,
 //!   `g~~`). Text objects: `iw` `aw` `iW` `aW` `is` `as` `ip` `ap`, `i"`
@@ -386,7 +412,11 @@ mod search;
 mod textobj;
 
 pub use effect::{CaretShape, CommandLine, Effect, HostRequest, Mode, Outcome, SearchPattern};
+pub use engine::SpellLookahead;
 pub use engine::{Vim, VimOptions};
-pub use host::{GoalColumn, Scroll, ScrollAlign, Viewport, VimHost};
+pub use host::{
+    GoalColumn, Scroll, ScrollAlign, SpellCommand, SpellJump, SpellOff, Viewport, VimHost,
+    walk_misspellings,
+};
 pub use key::{Key, KeyCode};
 pub use register::RegisterContent;

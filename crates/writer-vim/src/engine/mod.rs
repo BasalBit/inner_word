@@ -69,6 +69,9 @@ impl Default for VimOptions {
     }
 }
 
+/// What a spelling command says when the host has no spell checker.
+pub(crate) const SPELL_OFF: &str = "E756: Spell checking is off";
+
 /// Mutable access to the editor and the host for the length of one call.
 pub(crate) struct Cx<'a> {
     pub ed: &'a mut EditorState,
@@ -119,6 +122,31 @@ pub(crate) enum Await {
     Jump { exact: bool },
     /// After `i` or `a` with an operator pending or in Visual mode.
     Object { around: bool },
+    /// After `]` or `[`.
+    Bracket { forward: bool },
+    /// After `zu`.
+    ZU,
+}
+
+/// What the next key will ask the host's spell checker, as
+/// [`Vim::spell_lookahead`] foresees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpellLookahead {
+    /// The key completes `]s` or `[s` (or repeats a change made with one):
+    /// the engine will walk `count` misspelled words from `from` through
+    /// [`VimHost::misspelling_from`], exactly as
+    /// [`walk_misspellings`](crate::walk_misspellings) does.
+    Misspellings {
+        /// Where the walk starts: the Vim cursor.
+        from: Position,
+        /// `]s` rather than `[s`.
+        forward: bool,
+        /// The count of the command, at least 1.
+        count: usize,
+    },
+    /// The key completes `z=`, `zg` or `zug`: the engine will hand the host
+    /// a [`SpellCommand`](crate::SpellCommand).
+    Command,
 }
 
 /// The command being typed.
@@ -442,6 +470,49 @@ impl Vim {
                     CaretShape::Block
                 }
             }
+        }
+    }
+
+    /// What handling `key` next would ask the host's spell checker, if
+    /// anything. For a host that has to prepare its answers before the call
+    /// (see [`walk_misspellings`](crate::walk_misspellings)); a host that
+    /// can answer [`VimHost::misspelling_from`] at any time has no use for
+    /// this. It may foresee a question that is then not asked (a repeated
+    /// change that fails before its motion), never the other way round, as
+    /// long as the editor is as the engine last saw it.
+    pub fn spell_lookahead(&self, key: Key, ed: &EditorState) -> Option<SpellLookahead> {
+        if self.cmdline.is_some() || matches!(self.base, Base::Insert | Base::Replace) {
+            return None;
+        }
+        let c = key.plain_char()?;
+        match self.pending.awaiting {
+            Some(Await::Bracket { forward }) if matches!(c, 's' | 'S') => {
+                Some(SpellLookahead::Misspellings {
+                    from: self.caret(ed),
+                    forward,
+                    count: self.pending.count1(),
+                })
+            }
+            Some(Await::Z) if matches!(c, '=' | 'g') => Some(SpellLookahead::Command),
+            Some(Await::ZU) if c == 'g' => Some(SpellLookahead::Command),
+            None if c == '.' && self.pending.operator.is_none() => {
+                // A repeated `d]s`: the motion is among the recorded keys.
+                let rec = self.last_change.as_ref()?;
+                let forward = rec.keys.windows(2).find_map(|pair| {
+                    let forward = match pair[0].plain_char()? {
+                        ']' => true,
+                        '[' => false,
+                        _ => return None,
+                    };
+                    matches!(pair[1].plain_char()?, 's' | 'S').then_some(forward)
+                })?;
+                Some(SpellLookahead::Misspellings {
+                    from: self.caret(ed),
+                    forward,
+                    count: self.pending.count_opt().or(rec.count).unwrap_or(1).max(1),
+                })
+            }
+            _ => None,
         }
     }
 

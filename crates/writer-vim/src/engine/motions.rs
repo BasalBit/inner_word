@@ -3,7 +3,7 @@
 use writer_core::{EditorState, Position, TextRange};
 
 use crate::buf::{self, Lines};
-use crate::host::{GoalColumn, Viewport, VimHost};
+use crate::host::{self, GoalColumn, Viewport, VimHost};
 use crate::motion;
 use crate::search;
 use crate::textobj::Target;
@@ -71,6 +71,11 @@ pub(crate) enum Motion {
     },
     MarkLine(char),
     MarkExact(char),
+    /// `]s`, `[s`: the next or previous misspelled word, as the host's
+    /// spell checker marks them.
+    Misspelling {
+        forward: bool,
+    },
 }
 
 /// How an operator turns a motion into a range.
@@ -592,6 +597,41 @@ impl Vim {
                     return None;
                 };
                 jump(p, Exclusive)
+            }
+            Motion::Misspelling { forward } => {
+                let mut off = false;
+                let found = host::walk_misspellings(origin, forward, n, |p| {
+                    match cx.host.misspelling_from(cx.ed, p, forward) {
+                        // A stale answer must not carry the caret outside
+                        // the text.
+                        Ok(range) => range.map(|r| {
+                            writer_core::TextRange::new(
+                                doc.clamp_position(r.start),
+                                doc.clamp_position(r.end),
+                            )
+                        }),
+                        Err(host::SpellOff) => {
+                            off = true;
+                            None
+                        }
+                    }
+                });
+                let Some(found) = found else {
+                    if off {
+                        self.error(super::SPELL_OFF);
+                    } else {
+                        self.message("No misspelled words");
+                    }
+                    return None;
+                };
+                if found.wrapped {
+                    self.message(if forward {
+                        "search hit BOTTOM, continuing at TOP"
+                    } else {
+                        "search hit TOP, continuing at BOTTOM"
+                    });
+                }
+                out(found.range.start, Exclusive)
             }
         })
     }

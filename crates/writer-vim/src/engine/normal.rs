@@ -4,7 +4,7 @@ use writer_core::{Position, Selection, TextRange};
 
 use crate::buf::{self, Class, Lines};
 use crate::effect::{Effect, HostRequest};
-use crate::host::{GoalColumn, Scroll, ScrollAlign, Viewport};
+use crate::host::{GoalColumn, Scroll, ScrollAlign, SpellCommand, SpellOff, Viewport};
 use crate::key::{Key, KeyCode};
 use crate::motion;
 use crate::register::{self, RegisterContent};
@@ -19,6 +19,17 @@ use super::{
     Await, Base, ChangeRecord, Cx, FindSpec, Operator, Pending, SavedVisual, Vim, VisualRepeat,
     VisualState,
 };
+
+/// The spelling commands behind `z`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpellKey {
+    /// `z=`
+    Suggest,
+    /// `zg`
+    Good,
+    /// `zug`
+    UndoGood,
+}
 
 /// A key reduced to what the command tables look at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,6 +427,12 @@ impl Vim {
                 });
                 return true;
             }
+            Tok::Ch(']') | Tok::Ch('[') => {
+                self.pending.awaiting = Some(Await::Bracket {
+                    forward: t == Tok::Ch(']'),
+                });
+                return true;
+            }
             Tok::Ch('/') | Tok::Ch('?') => {
                 self.open_cmdline(
                     cx,
@@ -795,6 +812,8 @@ impl Vim {
                     | Motion::FirstLine
                     | Motion::LastLine
                     | Motion::Percent
+                    // The only misspelled word is the one the caret is on.
+                    | Motion::Misspelling { .. }
             )
         {
             self.bell();
@@ -886,6 +905,54 @@ impl Vim {
         self.move_cursor(cx, p);
         self.goal = None;
         self.finish_command(cx, false);
+    }
+
+    // ----- spelling -------------------------------------------------------------------------
+
+    /// `z=`, `zg`, `zug`: the host's spell checker does the work.
+    fn spell_command(&mut self, cx: &mut Cx, key: SpellKey) {
+        let pick = self.pending.count_opt();
+        if key == SpellKey::Suggest && pick.is_some() && !self.writable() {
+            self.fail();
+            return;
+        }
+        // In Visual mode the command is for the word the cursor is on.
+        let at = self.cursor(cx);
+        if self.is_visual() {
+            self.exit_visual(cx);
+        }
+        let command = if key == SpellKey::Suggest {
+            SpellCommand::Suggest { at, pick }
+        } else {
+            let word = match self.word_under(cx, at, false) {
+                Some((word, true, _)) => word,
+                _ => {
+                    self.error("E348: No string under cursor");
+                    self.fail();
+                    return;
+                }
+            };
+            if key == SpellKey::Good {
+                SpellCommand::MarkGood { at, word }
+            } else {
+                SpellCommand::UndoMarkGood { at, word }
+            }
+        };
+        match cx.host.spell_command(cx.ed, command) {
+            Ok(()) => self.finish_command(cx, false),
+            Err(SpellOff) => {
+                self.error(super::SPELL_OFF);
+                self.fail();
+            }
+        }
+    }
+
+    /// `zw`, `zuw`: the host's word list has no wrong words.
+    fn spell_unsupported(&mut self, keys: &str) {
+        self.error(format!(
+            "{keys} is not supported: a word cannot be marked as wrong"
+        ));
+        self.fail();
     }
 
     // ----- arguments ------------------------------------------------------------------------
@@ -993,6 +1060,23 @@ impl Vim {
                         .push(Effect::Request(HostRequest::Close { force: true }));
                     self.finish_command(cx, false);
                 }
+                _ => self.fail(),
+            },
+            Await::Bracket { forward } => match t {
+                // (`]S` skips rare words in Vim; the host marks only one
+                // kind.)
+                Tok::Ch('s' | 'S') => self.run_motion(cx, Motion::Misspelling { forward }),
+                _ => self.fail(),
+            },
+            Await::Z if matches!(t, Tok::Ch('=' | 'g' | 'w' | 'u')) && op.is_none() => match t {
+                Tok::Ch('=') => self.spell_command(cx, SpellKey::Suggest),
+                Tok::Ch('g') => self.spell_command(cx, SpellKey::Good),
+                Tok::Ch('u') => self.pending.awaiting = Some(Await::ZU),
+                _ => self.spell_unsupported("zw"),
+            },
+            Await::ZU => match t {
+                Tok::Ch('g') => self.spell_command(cx, SpellKey::UndoGood),
+                Tok::Ch('w') => self.spell_unsupported("zuw"),
                 _ => self.fail(),
             },
             Await::Z => {

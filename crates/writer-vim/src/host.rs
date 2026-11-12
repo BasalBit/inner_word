@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use writer_core::{EditorState, Position};
+use writer_core::{EditorState, Position, TextRange};
 
 use crate::register::RegisterContent;
 
@@ -57,8 +57,104 @@ pub enum Scroll {
     },
 }
 
-/// Everything only the user interface knows: wrapped rows, the viewport and
-/// the system clipboard.
+/// The host has no spell checker, or spell checking is switched off. The
+/// engine reports `E756: Spell checking is off` and the command fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpellOff;
+
+/// A spelling command that the host carries out (`z=`, `zg`, `zug`). The
+/// engine only knows where the Vim cursor is; the word list, the
+/// suggestions and the menu are the host's.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SpellCommand {
+    /// `z=`: offer the suggestions for the misspelled word at `at` (a menu,
+    /// a list). With a count (`1z=`, `3z=`) `pick` is that count: replace
+    /// the word with the suggestion of that number (1 is the first)
+    /// without asking. The replacement is the host's edit: one undo step,
+    /// the caret at the start of the word.
+    Suggest {
+        /// The Vim cursor (in Visual mode the cursor end of the selection;
+        /// Visual mode has ended by the time the host is asked).
+        at: Position,
+        /// The number of the suggestion to take, from 1.
+        pick: Option<usize>,
+    },
+    /// `zg`: the word at `at` is spelled correctly; remember it.
+    MarkGood {
+        /// The Vim cursor.
+        at: Position,
+        /// The word under the cursor as the engine sees it (letters,
+        /// digits and, with
+        /// [`VimOptions::apostrophe_in_words`](crate::VimOptions::apostrophe_in_words),
+        /// apostrophes inside it); the first one after the cursor when it
+        /// is on a blank. A host with its own idea of the misspelled word
+        /// at `at` may prefer that.
+        word: String,
+    },
+    /// `zug`: undo `zg` for the word at `at`.
+    UndoMarkGood {
+        /// The Vim cursor.
+        at: Position,
+        /// The word under the cursor, as for [`SpellCommand::MarkGood`].
+        word: String,
+    },
+}
+
+/// Where `]s` or `[s` with a count ends: see [`walk_misspellings`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpellJump {
+    /// The misspelled word reached.
+    pub range: TextRange,
+    /// Whether the way there passed the end (or, backwards, the start) of
+    /// the document.
+    pub wrapped: bool,
+}
+
+/// Walks `count` misspelled words from `from`, the way the engine does for
+/// `]s` and `[s`: `next(p)` is asked for the misspelled word after (before)
+/// `p`, first with `from` and then with the start of each answer. A walk
+/// that comes back to the first word it found has seen every misspelled
+/// word, so a count larger than their number costs one round and no more.
+/// `None` when `next` has no answer.
+///
+/// The questions depend only on `from`, `count` and the answers. A host
+/// that cannot answer [`VimHost::misspelling_from`] while the engine runs
+/// (its spell checker lives behind a lock the engine call holds) can
+/// therefore run the same walk before the call, with
+/// [`Vim::spell_lookahead`](crate::Vim::spell_lookahead) telling it when,
+/// record the questions and answers, and replay them during the call.
+pub fn walk_misspellings(
+    from: Position,
+    forward: bool,
+    count: usize,
+    mut next: impl FnMut(Position) -> Option<TextRange>,
+) -> Option<SpellJump> {
+    let count = count.max(1);
+    let mut found: Vec<TextRange> = Vec::new();
+    let mut wrapped = false;
+    let mut p = from;
+    for step in 0..count {
+        let range = next(p)?;
+        wrapped |= if forward {
+            range.start <= p
+        } else {
+            range.start >= p
+        };
+        if step > 0 && range.start == found[0].start {
+            // Once around: the rest of the count is a position in the round.
+            return Some(SpellJump {
+                range: found[(count - 1) % found.len()],
+                wrapped: true,
+            });
+        }
+        found.push(range);
+        p = range.start;
+    }
+    found.last().map(|&range| SpellJump { range, wrapped })
+}
+
+/// Everything only the user interface knows: wrapped rows, the viewport,
+/// the system clipboard and the spell checker.
 ///
 /// Every layout method receives the editor state as it is at the time of
 /// the call, so an implementation does not need to hold a reference to it:
@@ -124,4 +220,37 @@ pub trait VimHost {
     /// Writes the `+` / `*` register to the system clipboard. Use
     /// [`RegisterContent::to_plain_text`] for the plain-text flavour.
     fn clipboard_write(&mut self, content: &RegisterContent);
+
+    /// The misspelled word that `]s` (`forward`) or `[s` goes to from
+    /// `from`: forward, the first one that starts after `from`; backward,
+    /// the last one that starts before `from` (which is the word the cursor
+    /// is in, when it is past its first character). The search wraps around
+    /// the document, so with a single misspelled word the answer is that
+    /// word from anywhere. `Ok(None)` when nothing is marked as misspelled.
+    ///
+    /// The engine asks once per step of a count (see [`walk_misspellings`]).
+    /// The default has no spell checker.
+    fn misspelling_from(
+        &mut self,
+        state: &EditorState,
+        from: Position,
+        forward: bool,
+    ) -> Result<Option<TextRange>, SpellOff> {
+        let _ = (state, from, forward);
+        Err(SpellOff)
+    }
+
+    /// Carries out `z=`, `zg` or `zug`. Like a scroll, the command may be
+    /// carried out after the engine returns (it usually has to be: it edits
+    /// the document or opens a menu), and the host reports what came of it
+    /// itself ("no suggestions", the word that was learned). `Err` only
+    /// says that there is no spell checker to ask. The default has none.
+    fn spell_command(
+        &mut self,
+        state: &EditorState,
+        command: SpellCommand,
+    ) -> Result<(), SpellOff> {
+        let _ = (state, command);
+        Err(SpellOff)
+    }
 }

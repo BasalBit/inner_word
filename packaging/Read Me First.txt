@@ -90,8 +90,10 @@ The rows you changed are marked and show what the default was; "Changed
 Only" lists just those. A single command goes back to its default from its
 row, everything with Reset All (also in The Writer menu, in case a change
 went wrong). Export writes all keys to a file you can read, edit, keep or
-take to another Mac; Import reads such a file and shows what it would
-change before anything changes. Your keys are stored with your library.
+take to another Mac (the keys of the assistant are in it too, also on a
+Mac that has no assistant); Import reads such a file and shows what it
+would change before anything changes, and says what is wrong with an entry
+it cannot take. Your keys are stored with your library.
 
 A few keys are not shortcuts and stay as they are: the keys of Vim mode; the
 "/" that opens the insert menu while you type, and Tab, which takes its marked

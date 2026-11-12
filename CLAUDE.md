@@ -18,8 +18,8 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict, the shortcuts file (export, and an import plan). |
-| `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
+| `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
+| `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
 | `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
@@ -664,7 +664,8 @@ width, and the row comes out thousands of pixels tall. Make the growing child a 
 
 Every key that is a GPUI binding can be changed by the user, in one place: "Keyboard
 shortcuts" (`cmd-/`, the palette, The Writer > Keyboard Shortcuts… and Help in the menu bar,
-the last row of the settings). Three crates: `writer-keymap` knows what a change is,
+the row "Keyboard shortcuts" of the settings, in their section "Keyboard" above "This
+document"). Three crates: `writer-keymap` knows what a change is,
 `writer-keymap-ui` is the list, `writer-app` has the keymap and does what the list asks.
 
 - **What a change is.** For a command in a key context (`writer_keymap::Target`:
@@ -683,7 +684,48 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
   comment list) has a row in each. The rows are generated (`shortcuts::collect_shortcuts`)
   from what is installed: the commands of the palette in their categories, then the keys
   without a command (moving the caret, the keys of a text field, of the dialogs and of the
-  list itself), named after their actions.
+  list itself; the menu bar's Hide, Hide Others and Minimize), named after their actions
+  (`shortcuts::KEY_GROUPS`, `KEY_TITLES`). **Every key context of the keymap is in exactly
+  one row** (`tests/suite/keybindings.rs`,
+  `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
+  is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
+  list has 345 rows (344 commands in places and the `/` of the insert menu, which is no
+  binding) and the shortcuts file 370 entries, one for each key context: 13 rows stand for
+  several key contexts, 26 more than there are rows. Without the assistant: 315 rows, and
+  the same 370 entries.
+- **A place name is a promise.** Two rows under one place name ("In the library") are in
+  the same place to whoever reads the list: a key of the one given to the other is "taken"
+  and never "used in another place", in the question about a key and in the plan of an
+  import alike. The key contexts alone do not say that (the library binds the arrows
+  wherever the keyboard is in it and `r` only in the tree while nothing is typed: the two
+  overlap, and by the contexts the arrow's command would "keep the key in the rest of its
+  place", which is the filter field). So the keymap is told the rows and their place names
+  with every change (`keymap::refresh_listed`, `shortcuts::listed_rows`,
+  `writer_keymap::Row`), and judges by them: under one name, the command that loses where
+  both apply has lost its key. Key contexts that never have the keyboard together have
+  place names of their own, also inside one panel ("Confirming in the comment list", "In
+  a question of keyboard shortcuts", "In a chat's conversation", "In the header of the
+  side chat", "In the context row of the side chat", "On a button or a switch", "On a
+  segmented control", "In a form"); a command of the assistant that works anywhere in a
+  chat keeps one row "In the assistant's chats". The tools around the text bind their
+  commands (find, the link, the format menu) on a key context of their own and are listed
+  "In the text": `keymap::places` says so (`Places::around`), and a command of the text on
+  one of their keys has taken it (0.5.0 offered to keep both for Underline on the key of
+  "Add or edit link"). `two_rows_under_one_place_name_are_in_the_same_place` holds every
+  pair of rows of the real keymap against the promise, and every verdict of "another
+  place" against two different names: a new key context needs its lines in
+  `keymap::places` and a place name in `shortcuts::Place::of_predicate` that keeps it.
+- **A part of the app that is not shown.** While the assistant is not shown its commands
+  are no rows, and their keys count for nothing in what the list says: the keymap is told
+  which commands are not there (`writer_keymap::Absent`, set by `keymap::refresh_listed`
+  from `commands::set_category_hidden`), so their keys are free for every other command,
+  no row is warned about them and an import counts no collision with them. Nothing of
+  theirs is changed: the bindings stay in the keymap (they do nothing, and a key of the
+  user's on the same key runs: the assistant's handlers are on the window only while it is
+  shown), and the user's changes to them stay stored. When the assistant is shown again
+  the list as it is then says what collides (the warning on the row). An open list follows
+  when the assistant is found or switched off behind it
+  (`Workspace::shortcuts_rows_changed`).
 - **Not changeable**, and the list says so in three lines above its rows
   (`shortcuts::MENUS_NOTE`, `workspace::NOT_CHANGEABLE_NOTE`, `workspace::ALSO_FIXED_NOTE`) and
   the read-me in a paragraph. The whole list of keys that are not bindings:
@@ -716,24 +758,49 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
   way round nothing is eaten: a bare character is refused as a shortcut where text is
   typed, and the one key that is let through to the editor although Vim has a command on
   it is the key of the text's context menu.
-- **What the user is told counts rows.** "3 keys changed" in the list, the row of the
-  settings, both questions of "reset all", the preview of an import and its toast count a
-  command that is bound in several key contexts of one place once
+- **What the user is told counts commands.** A command is a row of the list, never a
+  single key: Italic with two keys of the user's is one, Underline left without a key is
+  one, and a command bound in several key contexts of one place is one
   (`Listing::changed_commands`, `Listing::commands_among`,
-  `workspace::changed_command_count`); `keymap::changed_count` counts key contexts and is
-  for tests.
+  `workspace::changed_command_count`). One wording, with "1 command" and "4 commands"
+  (`workspace::commands_counted`): the header of the list ("No key changed", "4 commands
+  changed", and "1 more not shown now" for a changed command of a part that is hidden),
+  the row of the settings ("4 commands have keys of your own."), both questions of "reset
+  all" (the list's and the system dialog's say the same sentence: "4 commands go back to
+  the default keys. Every change you made is removed."), the preview of an import and its
+  toast ("Imported the keys of 5 commands"). The state line of a scripted run keeps
+  `changed=N`. `keymap::changed_count` counts key contexts and is for tests.
 - **One toast about the shortcuts at a time** (`Workspace::say_about_shortcuts`): the list
   stays open under the toast that offers Undo, the list leaves room for one toast under
   itself (`ROOM_BELOW` in `writer-keymap-ui/src/render.rs`), and a second one would lie
-  over the choices of a question.
+  over the choices of a question. A toast that names a file names it with
+  `export::short_path` (the home directory as `~`, a long path shortened in the middle,
+  the file name whole), and no toast draws its message past its edge: at most three lines,
+  then an ellipsis (`writer_ui::toast`, `MESSAGE_LINES`; `docs/gpui-notes.md` says why
+  GPUI's own line clamp does not do that).
 - **Guard rails** (`writer_keymap::check`, asked by the list before anything changes): a
   bare character or shift with one is refused where text is typed; a key macOS keeps
   (`cmd-tab`, `cmd-alt-escape`, ...) is refused, one it uses unless switched off
   (`cmd-space`, the screenshots) is warned about. A key another command has in the same
   place is "taken": the user takes it from that command or cancels. The same key in
   another place is allowed, and the list says who keeps it where both apply ("Keep Both").
-  What a place is, the app tells in `keymap::places` (which key context can lie inside
-  which, where text is typed). A new key context of a crate goes in there.
+  What a place is, the app tells: in `keymap::places` (which key context can lie inside
+  which, which is only around another, where text is typed) and with the rows of the list
+  and their place names ("A place name is a promise"). A new key context of a crate goes
+  into both. The one spot where `keymap::places` is not exact is written there ("What is
+  not exact": the library's keys "wherever the keyboard is in it" against a key of the
+  window, in the filter field).
+- **What the list says about a key** (`writer-keymap-ui/src/words.rs`, `verdict_words`):
+  the question has a heading that says the most important thing about the key, with a mark
+  for how it is to be read (`mark=` in the state line), in this order: it cannot be used;
+  it is taken; macOS uses it; Vim mode sees it first; it would not work everywhere
+  (another command keeps it where both apply); it is used for typing; it types a special
+  character; it is also the key of another command; it is free. A heading never says
+  "free" above a sentence that warns, and under a warning the marked choice is "Press
+  Another Key", so `enter` does not take a key the user was just warned about. A command
+  bound in several key contexts of one place is named once. The field above the list
+  searches by name, place or key: words that stand together come first, one typing mistake
+  is forgiven when nothing else matches, and a whole key (`cmd-b`, `⌘B`) finds that key.
 - **Nobody is locked out.** The list works with the pointer alone, and "Reset All Keyboard
   Shortcuts…" is in the menu bar and the palette, where it asks in a system dialog that no
   key of the app can break.
@@ -748,9 +815,21 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
 - **The file.** Export (the list's "Export…", the palette, the menu bar; the save panel
   suggests "The Writer Shortcuts.json") writes every command in every place with its
   title, where it applies, its default keys and its keys: a list of all keys a person can
-  read and edit. Import reads such a file and shows a preview in the list: how many
-  commands change, what is skipped and why (a command this version does not have, a key
-  that cannot be read, a change a guard rail refuses), what would collide. Only what
+  read and edit. **The file holds every command, the assistant's too while the assistant
+  is not shown**, with the same entries in the same order whatever is shown
+  (`workspace::file_catalogue`): a file means the same on every Mac, a change to a key of
+  the assistant is not lost because the assistant was off when the file was written, and
+  two files can be compared. Import reads such a file and shows a preview in the list: how
+  many commands change, what is skipped and why (a command this version does not have, a
+  key that cannot be read, a change a guard rail refuses), what would collide (by the rule
+  the question about a single key judges with: a test holds the two against each other).
+  A key that cannot be read says what is wrong with it, for whoever edited the file by
+  hand (`KeySequence::parse_written`: a word that is no modifier, a name no key has, `+`
+  between the parts, an empty text, modifiers without a key, two keys in one keystroke),
+  and a key that was read is named in a reason as the list shows keys
+  (`KeySequence::glyphs`). A change to a command that is not shown now is taken like any
+  other and named with its place marked ("New chat (in the assistant's chats, not shown
+  now)", `workspace::list_catalogue`). Only what
   differs from the `default` written in the same entry counts as a change. The user
   replaces their own changes with the file's, adds the file's to their own, or cancels.
   After an import and after "reset all" a toast offers Undo ("Undo keyboard shortcuts
@@ -758,7 +837,9 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
 - **Scripted runs.** `keys:cmd-/` opens the list; `type:bold; keys:enter` waits for a key
   on the row, the next `keys:` is the key, `keys:enter` takes the marked choice. `state`
   has `keys=[changed=N]` and, while the list is open, `list=[mode=list|recording|question
-  rows=N changed=N selected="..." keys=[...] default=[...] question="..." choices=[...]]`.
+  rows=N changed=N selected="..." keys=[...] default=[...] clash="..." question="..."
+  mark=... says="..." choices=[...]]` (`clash`: the warning on the selected row; `mark`:
+  how the heading of a question is to be read).
   `shortcut:editor::ToggleBold=cmd-alt-b` gives a command its keys without the list
   (several: `cmd-alt-b|f5`; `none`; `default`; `@In the find bar` for a command listed in
   several places; no guard rail is asked). `shortcuts:import:<path>` reads a file and shows

@@ -894,6 +894,24 @@ for each hidden app). In an active window AppKit asks the key window first, wher
 interceptor takes the key (read from `handle_key_event` in gpui's mac `window.rs`); that
 needs a person at the keyboard.
 
+**`.line_clamp(n).text_ellipsis()` with `n` above 1 does not keep a text inside its box.**
+Read from gpui 0.2.2 (`elements/text.rs`, `text_system/line_layout.rs`): the text is cut,
+with the ellipsis, at `n` times the available width as if every line were full, and the
+wrapping stops after `n - 1` breaks, leaving whatever remains on the last line. A long word
+that goes to the next line whole (a path: `/` is a place to break, `-` and `.` are not)
+leaves the line before it half empty, so the last line is longer than the box and is
+clipped at its edge without an ellipsis (seen in a capture of 0.5.0: the toast after an
+export of the shortcuts). `line_clamp(1)` is exact. For more lines, wrap with GPUI
+(`window.text_system().shape_text(text, size, runs, Some(width), None)`), count
+`wrap_boundaries()`, and when there are too many cut the text at the start of the last
+line that may be drawn (`unwrapped_layout.runs[b.run_ix].glyphs[b.glyph_ix].index` is its
+byte index), shorten that line with an ellipsis until what is shaped fits, and paint the
+`WrappedLine`: `writer_ui::toast` does this in a small element of its own (`Message`,
+measured with `window.request_measured_layout`, which is handed the width the text really
+gets). A measure function is asked several times, also without a width ("how wide would
+you like to be"): once a layout for a width exists, answer that question with it, as
+GPUI's own text does, or the last answer overwrites the layout that is painted.
+
 Two layout facts from the list of keyboard shortcuts: `.truncate()` drew no ellipsis in a
 flex row there, `.line_clamp(1).text_ellipsis()` does (seen in captures). And a toast with
 a button, shown while a modal that fills most of the window's height is open, lies over the

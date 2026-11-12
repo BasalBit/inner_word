@@ -28,7 +28,7 @@ use gpui::{
 use writer_core::BlockKind;
 use writer_library::{DocumentId, Library, SnapshotId, SnapshotMeta};
 use writer_ui::{
-    Button, ButtonSize, Icon, IconName, KeyHint,
+    Button, ButtonSize, Icon, IconName,
     theme::{
         ActiveTheme, RADIUS_LG, RADIUS_MD, SPACE_2, SPACE_3, SPACE_4, UI_TEXT_BASE, UI_TEXT_LG,
         UI_TEXT_SM, UI_TEXT_XS,
@@ -75,10 +75,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("home", SelectFirst, c),
         KeyBinding::new("cmd-down", SelectLast, c),
         KeyBinding::new("end", SelectLast, c),
-        KeyBinding::new("space", ScrollPreviewDown, c),
+        // The key a hint shows is the one bound last: space.
         KeyBinding::new("pagedown", ScrollPreviewDown, c),
-        KeyBinding::new("shift-space", ScrollPreviewUp, c),
+        KeyBinding::new("space", ScrollPreviewDown, c),
         KeyBinding::new("pageup", ScrollPreviewUp, c),
+        KeyBinding::new("shift-space", ScrollPreviewUp, c),
         KeyBinding::new("enter", Restore, c),
     ]
 }
@@ -590,14 +591,16 @@ impl Render for VersionHistory {
             (f32::from(window.viewport_size().height) * 0.80 - 150.).clamp(160., 520.);
         let count = self.versions.len();
 
-        let hint = |keys: &'static str, what: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(div().text_color(colors.ink).child(keys))
-                .child(what)
-        };
+        // The footer names the keys as the keymap has them.
+        let choose_hint = crate::controls::footer_hint(
+            &[&SelectPrevious, &SelectNext],
+            KEY_CONTEXT,
+            "Choose",
+            cx,
+        );
+        let scroll_hint =
+            crate::controls::footer_hint(&[&ScrollPreviewDown], KEY_CONTEXT, "Scroll the text", cx);
+        let close_hint = crate::controls::close_hint(cx);
 
         let close = crate::controls::close_control(
             cx.listener(|_, _: &gpui::ClickEvent, _, cx| cx.emit(DismissEvent)),
@@ -608,7 +611,7 @@ impl Render for VersionHistory {
             Button::new("restore-version", "Restore This Version")
                 .primary()
                 .size(ButtonSize::Compact)
-                .key_hint(KeyHint::parse("enter"))
+                .key_hint(crate::keymap::hint_in(&Restore, KEY_CONTEXT, cx))
                 .on_click(
                     cx.listener(|this, _: &gpui::ClickEvent, window, cx| this.restore(window, cx)),
                 )
@@ -738,10 +741,9 @@ impl Render for VersionHistory {
                     .text_size(UI_TEXT_XS)
                     .text_color(colors.muted)
                     .when(count > 0, |el| {
-                        el.child(hint("\u{2191} \u{2193}", "Choose"))
-                            .child(hint("Space", "Scroll the text"))
+                        el.children(choose_hint).children(scroll_hint)
                     })
-                    .child(hint("Esc", "Close"))
+                    .children(close_hint)
                     .child(div().flex_1())
                     .children(restore.map(|button| {
                         div()

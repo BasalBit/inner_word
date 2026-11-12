@@ -23,8 +23,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    Action, App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate, Keymap,
+    Action, App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate, KeyContext,
+    Keymap,
 };
+use writer_ui::KeyHint;
 
 use crate::menus;
 
@@ -71,6 +73,48 @@ pub fn keys_of(binding: &KeyBinding) -> String {
 /// The key context of a binding as text (`None`: it has none).
 pub fn context_of(binding: &KeyBinding) -> Option<String> {
     binding.predicate().map(|predicate| predicate.to_string())
+}
+
+/// The key the app shows for `action` in one place of the window: where
+/// the key contexts `place` hold (one name, or several from the outside in:
+/// `"FindBar > TextField"`). Among the bindings of the action that apply
+/// there, one bound for a key context comes before one that works anywhere,
+/// and the one bound last before the others, as everywhere a key is shown.
+/// `None` when the action has no key there (the user may have taken it
+/// away): whatever names the key then leaves it out.
+///
+/// For the texts that name a key outside a list of commands: the footer
+/// of a modal, a tooltip, a sentence. They are drawn from the keymap each
+/// time, so they follow a change at once.
+pub fn hint_in(action: &dyn Action, place: &str, cx: &App) -> Option<KeyHint> {
+    let stack: Vec<KeyContext> = place
+        .split('>')
+        .filter_map(|name| KeyContext::parse(name.trim()).ok())
+        .collect();
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let mut anywhere = None;
+    let mut here = None;
+    for binding in keymap.bindings_for_action(action) {
+        match binding.predicate() {
+            None => anywhere = Some(binding),
+            Some(predicate) if predicate.depth_of(&stack).is_some() => here = Some(binding),
+            Some(_) => {}
+        }
+    }
+    here.or(anywhere).map(KeyHint::from_binding)
+}
+
+/// The keys of several actions in one place, as one text: `"↑ ↓"` for
+/// "previous" and "next". An action without a key there is left out;
+/// `None` when none of them has one.
+pub fn keys_text_in(actions: &[&dyn Action], place: &str, cx: &App) -> Option<String> {
+    let keys: Vec<String> = actions
+        .iter()
+        .filter_map(|action| hint_in(*action, place, cx))
+        .map(|hint| hint.text())
+        .collect();
+    (!keys.is_empty()).then(|| keys.join(" "))
 }
 
 /// `binding` on other keys: the same action, key context, meta index and

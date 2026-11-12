@@ -1752,13 +1752,9 @@ impl Render for SettingsView {
             cx,
         );
 
-        let hint = |keys: &'static str, what: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(div().text_color(colors.ink).child(keys))
-                .child(what)
+        // The footer names the keys as the keymap has them.
+        let hint = |actions: &[&dyn gpui::Action], place: &str, what: &'static str| {
+            crate::controls::footer_hint(actions, place, what, cx)
         };
 
         div()
@@ -1820,10 +1816,10 @@ impl Render for SettingsView {
                     .border_color(colors.hairline)
                     .text_size(UI_TEXT_XS)
                     .text_color(colors.muted)
-                    .child(hint("↑ ↓", "Move"))
-                    .child(hint("← →", "Change"))
-                    .child(hint("Space", space_hint))
-                    .child(hint("Esc", "Close")),
+                    .children(hint(&[&FocusPrevious, &FocusNext], KEY_CONTEXT, "Move"))
+                    .children(hint(&[&Decrease, &Increase], ROW_KEY_CONTEXT, "Change"))
+                    .children(hint(&[&Activate], ROW_KEY_CONTEXT, space_hint))
+                    .children(crate::controls::close_hint(cx)),
             )
     }
 }

@@ -924,13 +924,9 @@ impl Render for AgentsView {
             cx.listener(|_, _: &gpui::ClickEvent, _, cx| cx.emit(DismissEvent)),
             cx,
         );
-        let hint = |keys: &'static str, what: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(div().text_color(colors.ink).child(keys))
-                .child(what)
+        // The footer names the keys as the keymap has them.
+        let hint = |actions: &[&dyn gpui::Action], what: &'static str| {
+            crate::controls::footer_hint(actions, KEY_CONTEXT, what, cx)
         };
         // What the keys do on the selected row.
         let selected = self.selected_row();
@@ -1026,12 +1022,14 @@ impl Render for AgentsView {
                     .border_color(colors.hairline)
                     .text_size(UI_TEXT_XS)
                     .text_color(colors.muted)
-                    .child(hint("↑ ↓", "Choose"))
-                    .children(primary.map(|label| hint("↩", label)))
-                    .when(removes, |el| el.child(hint("⌫", "Remove")))
-                    .when(documents, |el| el.child(hint("O", "Documentation")))
-                    .when(copies, |el| el.child(hint("⌘C", "Copy")))
-                    .child(hint("Esc", "Close")),
+                    .children(hint(&[&SelectPrevious, &SelectNext], "Choose"))
+                    .children(primary.and_then(|label| hint(&[&Activate], label)))
+                    .when(removes, |el| el.children(hint(&[&RemoveSkill], "Remove")))
+                    .when(documents, |el| {
+                        el.children(hint(&[&OpenDocumentation], "Documentation"))
+                    })
+                    .when(copies, |el| el.children(hint(&[&CopyRow], "Copy")))
+                    .children(crate::controls::close_hint(cx)),
             )
     }
 }

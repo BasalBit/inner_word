@@ -346,13 +346,21 @@ impl Render for ErrorView {
                             Some(way_out) => row
                                 .child(
                                     Button::new("quit", "Quit This Copy")
-                                        .key_hint(KeyHint::parse("escape"))
+                                        .key_hint(crate::keymap::hint_in(
+                                            &Quit,
+                                            ERROR_WINDOW_KEY_CONTEXT,
+                                            cx,
+                                        ))
                                         .on_click(|_, _, cx| cx.quit()),
                                 )
                                 .child(
                                     Button::new("way-out", way_out.label.clone())
                                         .primary()
-                                        .key_hint(KeyHint::parse("enter"))
+                                        .key_hint(crate::keymap::hint_in(
+                                            &AcceptMessage,
+                                            ERROR_WINDOW_KEY_CONTEXT,
+                                            cx,
+                                        ))
                                         .on_click(move |_, window, cx| (way_out.run)(window, cx)),
                                 ),
                         }

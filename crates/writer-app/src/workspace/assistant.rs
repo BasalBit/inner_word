@@ -8,9 +8,13 @@
 //! installs Claude Code, a test the fake, and without one there is no
 //! assistant at all), the engine's program is installed on this Mac, and
 //! the setting "Assistant" is on. Whether it is installed is found out in
-//! the background, at launch and whenever the settings are opened; until
-//! the first answer is in, the assistant is not shown, and the app never
-//! waits for it.
+//! the background, at launch and whenever the settings are opened, and the
+//! app never waits for it. Until the first answer of a launch is in, the
+//! answer of the last launch stands (`assistant.engine_seen`): on a Mac
+//! where the engine was there yesterday the keys work from the first
+//! moment, and the side chat that was open is open, without the window
+//! jumping when the answer arrives. On a Mac where it was never found the
+//! assistant is not shown until it is.
 //!
 //! While it is not shown, nothing of it is: its keys do nothing, its
 //! commands are not in the palette or the shortcuts overlay
@@ -327,14 +331,37 @@ impl Workspace {
         let (installed, availability, catalog) = match &self.assistant.host {
             Some(host) => {
                 let host = host.read(cx);
+                let seen_before = self
+                    .library
+                    .read(cx)
+                    .setting_or(keys::ASSISTANT_ENGINE_SEEN, false);
+                let installed = match host.availability() {
+                    Some(availability) => availability.is_installed(),
+                    // Not looked yet in this launch: as it was found last.
+                    None => seen_before,
+                };
                 (
-                    host.is_installed(),
+                    installed,
                     host.availability().cloned(),
                     Some(host.catalog().clone()),
                 )
             }
             None => (false, None, None),
         };
+        // What this look found is what the next launch starts from.
+        if availability.is_some() {
+            let seen_before = self
+                .library
+                .read(cx)
+                .setting_or(keys::ASSISTANT_ENGINE_SEEN, false);
+            if seen_before != installed {
+                self.library
+                    .update(cx, |library, cx| {
+                        library.set_setting(keys::ASSISTANT_ENGINE_SEEN, &installed, cx)
+                    })
+                    .ok();
+            }
+        }
         let shown = installed && self.settings.assistant.enabled;
         self.assistant.shown = shown;
         crate::commands::set_category_hidden(CATEGORY_ASSISTANT, !shown, cx);

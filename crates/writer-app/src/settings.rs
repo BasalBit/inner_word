@@ -100,6 +100,10 @@ pub mod keys {
     /// `bool`: the notice that what is asked goes to the engine's provider
     /// has been read and accepted. Shown once, before the first message.
     pub const ASSISTANT_NOTICE_ACCEPTED: &str = "assistant.notice_accepted";
+    /// `bool`: the assistant's engine was installed when it was last
+    /// looked for. At the next launch the assistant is shown at once on
+    /// the strength of it, until the look of that launch has answered.
+    pub const ASSISTANT_ENGINE_SEEN: &str = "assistant.engine_seen";
     /// `bool`: the side chat is open beside the text.
     pub const ASSISTANT_PANEL_OPEN: &str = "assistant.panel_open";
     /// `number`: the width of the side chat in pixels.

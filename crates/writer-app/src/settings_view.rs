@@ -677,7 +677,18 @@ impl SettingsView {
     /// Whether the app has an engine for the assistant and it is installed
     /// on this Mac, as far as is known.
     fn assistant_installed(&self, cx: &App) -> bool {
-        crate::assistant::host(cx).is_some_and(|host| host.read(cx).is_installed())
+        let Some(host) = crate::assistant::host(cx) else {
+            return false;
+        };
+        match host.read(cx).availability() {
+            Some(availability) => availability.is_installed(),
+            // Not looked yet in this launch: as it was found last, so
+            // that the section does not come and go while the look runs.
+            None => self
+                .library
+                .read(cx)
+                .setting_or(keys::ASSISTANT_ENGINE_SEEN, false),
+        }
     }
 
     /// The line that stands in for the assistant's section while its
@@ -787,7 +798,10 @@ impl SettingsView {
                     return "".into();
                 };
                 let host = host.read(cx);
-                if host.is_signed_out() {
+                if host.availability().is_none() {
+                    // Still looking.
+                    host.status_line().into()
+                } else if host.is_signed_out() {
                     format!("{}. {}", host.status_line(), host.info().sign_in_help).into()
                 } else {
                     format!("Runs on {}.", host.status_line()).into()

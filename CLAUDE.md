@@ -182,7 +182,9 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
 
 - **Whether it is there** (`crates/writer-app/src/assistant/host.rs`,
   `workspace/assistant.rs`). The engine is looked for in the background, at launch and
-  each time the settings are opened; the app never waits for it. Not installed: nothing of
+  each time the settings are opened; the app never waits for it. Until the look of a
+  launch has answered, the answer of the last launch stands (`assistant.engine_seen`), so
+  the keys work from the first moment where the engine was found before. Not installed: nothing of
   the assistant is shown (no key does anything, no command in the palette or the
   shortcuts overlay, no item in the menu bar, the text menu or the format bar, no panel),
   except one line in the settings that says what it needs. Installed and not signed in:
@@ -239,7 +241,7 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   engine's name for the choice, `@default` for the engine's own default, absent for what
   the engine suggests for that chat), and what the app remembers by itself:
   `assistant.panel_open`, `assistant.panel_width`, `comments.panel_width`,
-  `right_panel.choice`, `assistant.notice_accepted`.
+  `right_panel.choice`, `assistant.notice_accepted`, `assistant.engine_seen`.
 - **Scripted runs and screenshots**: `THE_WRITER_ASSISTANT_FAKE=ready` (or `signed-out`,
   `missing`) gives a scripted run the fake engine, which starts no program;
   `THE_WRITER_ASSISTANT_FAKE_REPLIES=<file>` scripts its answers (answers separated by a

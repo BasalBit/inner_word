@@ -1978,3 +1978,78 @@ fn the_shortcuts_overlay_lists_the_assistant_only_while_it_is_shown(cx: &mut Tes
         "{rows:?}"
     );
 }
+
+/// Opens a workspace over `library` and says what it was like the moment
+/// it was made, before the look for the engine could answer: whether the
+/// engine had been asked, whether the assistant was shown, and what was
+/// in the slot at the right.
+fn launch<'a>(
+    library: &Entity<Library>,
+    cx: &'a mut VisualTestContext,
+) -> (
+    Entity<Workspace>,
+    (bool, bool, Option<RightPanel>),
+    &'a mut VisualTestContext,
+) {
+    let at_once = std::rc::Rc::new(std::cell::Cell::new((false, false, None)));
+    let (library, seen) = (library.clone(), at_once.clone());
+    let (workspace, cx) = cx.add_window_view(move |window, cx| {
+        window.activate_window();
+        let workspace = Workspace::new(library, window, cx);
+        let asked = workspace
+            .assistant_host()
+            .is_some_and(|host| host.read(cx).availability().is_some());
+        seen.set((
+            asked,
+            workspace.assistant_shown(),
+            workspace.right_panel_shown(),
+        ));
+        workspace
+    });
+    cx.run_until_parked();
+    (workspace, at_once.get(), cx)
+}
+
+#[gpui::test]
+fn a_launch_shows_the_assistant_at_once_where_it_was_found_before(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    assert!(workspace.read_with(vcx, |w, _| w.assistant_shown()));
+    assert!(library.read_with(vcx, |library, _| {
+        library.setting_or(keys::ASSISTANT_ENGINE_SEEN, false)
+    }));
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    drop(workspace);
+
+    // The next launch, with an engine that has not been asked anything
+    // yet. Before the look of this launch has answered: shown, and the
+    // side chat open as it was left.
+    let fresh = FakeBackend::new();
+    install(&fresh, vcx);
+    let (workspace, at_once, vcx) = launch(&library, vcx);
+    assert_eq!(at_once, (false, true, Some(RightPanel::Assistant)));
+    // The look has answered: still there.
+    assert_eq!(fresh.availability_checks(), 1);
+    assert!(workspace.read_with(vcx, |w, _| w.assistant_shown()));
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    drop(workspace);
+
+    // The program was removed since: shown for the moment of the look,
+    // then gone, and the launch after that does not show it at all.
+    let gone = FakeBackend::not_installed();
+    install(&gone, vcx);
+    let (workspace, at_once, vcx) = launch(&library, vcx);
+    assert_eq!(at_once, (false, true, Some(RightPanel::Assistant)));
+    assert!(!workspace.read_with(vcx, |w, _| w.assistant_shown()));
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(!library.read_with(vcx, |library, _| {
+        library.setting_or(keys::ASSISTANT_ENGINE_SEEN, true)
+    }));
+    drop(workspace);
+    let again = FakeBackend::not_installed();
+    install(&again, vcx);
+    let (workspace, at_once, vcx) = launch(&library, vcx);
+    assert_eq!(at_once, (false, false, None));
+    assert!(!workspace.read_with(vcx, |w, _| w.assistant_shown()));
+}

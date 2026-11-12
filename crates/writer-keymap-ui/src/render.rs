@@ -1084,6 +1084,13 @@ impl KeymapView {
     }
 }
 
+/// What the panel leaves free under itself, where the window has it: a
+/// host says what an import or a reset did in a toast at the bottom of the
+/// window (with its Undo), while the list stays open, and that toast must
+/// not lie over the choices of the next question. Room for one toast of
+/// two lines and its distance from the edge.
+const ROOM_BELOW: f32 = 112.;
+
 impl Render for KeymapView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -1098,8 +1105,13 @@ impl Render for KeymapView {
         } else {
             150.
         };
-        let room =
-            f32::from(window.viewport_size().height) * 0.86 - 48. - 36. - 32. - 16. - band_room;
+        let room = f32::from(window.viewport_size().height) * 0.88
+            - ROOM_BELOW
+            - 48.
+            - 36.
+            - 32.
+            - 16.
+            - band_room;
         self.visible_rows = ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(4, 20) as usize;
 
         let preview = match &self.mode {

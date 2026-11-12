@@ -25,7 +25,7 @@ use crate::{
     record,
     request::Request,
     search::search,
-    words::{Line, Names},
+    words::{Line, Names, Tone},
 };
 
 /// How long a held key is waited for when no release is reported: a little
@@ -962,7 +962,7 @@ impl KeymapView {
         if !self.can_reset_all() {
             return false;
         }
-        let changed = self.listing.keymap.effective().changed().count();
+        let changed = self.listing.changed_commands();
         self.ask(Question::about_reset(changed), window, cx);
         true
     }
@@ -1076,9 +1076,22 @@ impl KeymapView {
         cx: &mut Context<Self>,
     ) {
         let verdict = self.listing.keymap.check(&target, &key, replacing.as_ref());
+        // What the keymap cannot know: something of the host's may take
+        // the key before any binding sees it.
+        let taken_first = if verdict.is_allowed() {
+            self.listing.taken_first_warnings(&target, &key)
+        } else {
+            Vec::new()
+        };
         let names = self.names();
         let title = names.title(&target);
-        let question = Question::about_key(target, replacing, verdict, &title, &names);
+        let mut question = Question::about_key(target, replacing, verdict, &title, &names);
+        question
+            .lines
+            .extend(taken_first.into_iter().map(|warning| Line {
+                tone: Tone::Warning,
+                text: warning.to_string(),
+            }));
         self.ask(question, window, cx);
     }
 

@@ -506,3 +506,106 @@ fn every_choice_of_the_question_works_from_the_keys(cx: &mut TestAppContext) {
     press(cx, "cmd-alt-u enter");
     assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-alt-u"]);
 }
+
+/// What the keymap cannot know: something of the host's (Vim mode in the
+/// text) may take a key before any binding sees it. The host says where
+/// and which keys it leaves alone, and the question about any other key
+/// for a command there says so.
+#[gpui::test]
+fn the_question_says_when_something_of_the_host_sees_the_key_first(cx: &mut TestAppContext) {
+    fn leaves(key: &KeySequence) -> bool {
+        key.first().modifiers().command
+    }
+    let warning = "Something else sees this key first.";
+    let (host, view, cx) = open(cx);
+    let listing = host
+        .read_with(cx, |host, _| host.listing())
+        .takes_keys_first(["Editor"], leaves, warning);
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    cx.run_until_parked();
+    let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| {
+        select(&view, target, cx);
+        press(cx, "enter");
+        press(cx, keys);
+        let lines = view.read_with(cx, |view, _| view.question_lines());
+        press(cx, "escape");
+        lines
+    };
+
+    // A command of that place, a key that is not left alone: the sentence
+    // is there, after what the keymap says, as a warning.
+    let lines = ask(&bold(), "ctrl-y", cx);
+    let last = lines.last().expect("the question says something");
+    assert_eq!((last.tone, last.text.as_str()), (Tone::Warning, warning));
+    assert!(lines.len() > 1, "what the keymap says comes first");
+    // A command that works anywhere is concerned too.
+    let lines = ask(&version_history(), "ctrl-y", cx);
+    assert!(lines.iter().any(|line| line.text == warning));
+    // A key that is left to the keymap: nothing.
+    let lines = ask(&bold(), "cmd-alt-y", cx);
+    assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
+    // A key that is refused anyway: only the refusal.
+    let lines = ask(&bold(), "y", cx);
+    assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
+    // A command of another place: nothing.
+    let elsewhere = host.read_with(cx, |host, _| {
+        host.keymap
+            .defaults()
+            .targets()
+            .iter()
+            .find(|target| {
+                target
+                    .context
+                    .text()
+                    .is_some_and(|context| context != "Editor")
+            })
+            .cloned()
+            .expect("the host has a command outside the text")
+    });
+    let listed = view.read_with(cx, |view, _| view.row_of(&elsewhere).is_some());
+    if listed {
+        let lines = ask(&elsewhere, "ctrl-y", cx);
+        assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
+    }
+}
+
+/// A command the keymap holds in several key contexts of one place is one
+/// command where the user is told how many are theirs: the question of
+/// "reset all" counts as the list does.
+#[gpui::test]
+fn a_command_in_several_key_contexts_is_counted_once(cx: &mut TestAppContext) {
+    use writer_keymap::Catalogue;
+    let (host, view, cx) = open(cx);
+    // Two targets that are one command to the user: one row, one name.
+    let mut listing = host.read_with(cx, |host, _| host.listing());
+    assert!(
+        listing
+            .keymap
+            .replace_key(&bold(), &key("cmd-b"), key("f5"))
+    );
+    assert!(
+        listing
+            .keymap
+            .replace_key(&italic(), &key("cmd-i"), key("f5"))
+    );
+    listing.rows.retain(|row| row.target != italic());
+    let mut catalogue = Catalogue::new();
+    catalogue.add(bold(), "Emphasis", "In the text");
+    catalogue.add(italic(), "Emphasis", "In the text");
+    for row in listing.rows.iter_mut().filter(|row| row.target == bold()) {
+        row.title = "Emphasis".into();
+    }
+    let listing = listing.catalogue(catalogue);
+    assert_eq!(listing.keymap.effective().changed().count(), 2);
+    assert_eq!(listing.changed_commands(), 1);
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.changed_count()), 1);
+    assert!(view.update_in(cx, |view, window, cx| view.reset_all(window, cx)));
+    cx.run_until_parked();
+    assert!(
+        says(&view, cx).starts_with("1 command goes back"),
+        "{}",
+        says(&view, cx)
+    );
+}

@@ -142,6 +142,33 @@ pub struct Listing {
     /// Lines shown above the list while nothing is searched for (that
     /// every command is also in a menu; what cannot be changed here).
     pub notes: Vec<SharedString>,
+    /// What sees keys before the keymap does right now (Vim mode in the
+    /// text), so that the question about a key can say so.
+    pub takers: Vec<TakesKeysFirst>,
+}
+
+/// Something of the host's that sees the keys of a place before the keymap
+/// does, and takes those it has a use for: Vim mode in the text. The
+/// keymap as data knows nothing of it, so a key that is free there can
+/// still be one that never runs. The view cannot tell which keys those
+/// are; it says, for a key that could be one, that this can happen.
+#[derive(Clone, Debug)]
+pub struct TakesKeysFirst {
+    /// The key contexts it sits in, as the keymap writes them (`Editor`).
+    /// A command that works anywhere is concerned too.
+    pub contexts: Vec<SharedString>,
+    /// Whether it certainly leaves `key` to the keymap (Vim leaves every
+    /// key with ⌘ in it): nothing is said about such a key.
+    pub leaves: fn(&KeySequence) -> bool,
+    /// What the question about any other key says, as a sentence.
+    pub warning: SharedString,
+}
+
+impl PartialEq for TakesKeysFirst {
+    /// By what is said and where: two functions cannot be compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.contexts == other.contexts && self.warning == other.warning
+    }
 }
 
 impl Listing {
@@ -152,7 +179,42 @@ impl Listing {
             rows,
             catalogue: Catalogue::new(),
             notes: Vec::new(),
+            takers: Vec::new(),
         }
+    }
+
+    /// Says that something sees the keys of `contexts` before the keymap
+    /// does (see [`TakesKeysFirst`]), except those `leaves` says it
+    /// leaves alone; `warning` is what the question about any other key
+    /// then says, for a command in one of those contexts or one that
+    /// works anywhere.
+    pub fn takes_keys_first<C: Into<SharedString>>(
+        mut self,
+        contexts: impl IntoIterator<Item = C>,
+        leaves: fn(&KeySequence) -> bool,
+        warning: impl Into<SharedString>,
+    ) -> Self {
+        self.takers.push(TakesKeysFirst {
+            contexts: contexts.into_iter().map(Into::into).collect(),
+            leaves,
+            warning: warning.into(),
+        });
+        self
+    }
+
+    /// What to say about `key` for `target` because something may take
+    /// the key before the keymap sees it ([`Listing::takes_keys_first`]).
+    pub fn taken_first_warnings(&self, target: &Target, key: &KeySequence) -> Vec<SharedString> {
+        let context = target.context.text();
+        self.takers
+            .iter()
+            .filter(|taker| !(taker.leaves)(key))
+            .filter(|taker| match context {
+                None => true,
+                Some(context) => taker.contexts.iter().any(|name| name.as_ref() == context),
+            })
+            .map(|taker| taker.warning.clone())
+            .collect()
     }
 
     /// Names for the commands that are not rows.
@@ -165,6 +227,36 @@ impl Listing {
     pub fn note(mut self, note: impl Into<SharedString>) -> Self {
         self.notes.push(note.into());
         self
+    }
+
+    /// How many commands have other keys than their defaults, as a person
+    /// counts them: a command the keymap holds in several key contexts of
+    /// one place (the chats of the assistant bind theirs in four) is one
+    /// command with one key, as it is one row of the list. Commands are
+    /// told apart by their name and place in the catalogue, so a command
+    /// that is not listed right now is counted too.
+    pub fn changed_commands(&self) -> usize {
+        let effective = self.keymap.effective();
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        let mut unnamed = 0;
+        for changed in effective.changed() {
+            let named = self
+                .rows
+                .iter()
+                .find(|row| row.target == changed.target)
+                .map(|row| (row.title.as_ref(), row.place.as_ref()))
+                .or_else(|| {
+                    self.catalogue
+                        .info(&changed.target)
+                        .map(|info| (info.title.as_str(), info.place.as_str()))
+                });
+            match named {
+                Some(name) if !seen.contains(&name) => seen.push(name),
+                Some(_) => {}
+                None => unnamed += 1,
+            }
+        }
+        seen.len() + unnamed
     }
 }
 

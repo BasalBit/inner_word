@@ -114,6 +114,7 @@ pub struct Button {
     selected: bool,
     focus_handle: Option<FocusHandle>,
     tab_index: isize,
+    pointer_only: bool,
     on_click: Option<ClickHandler>,
     full_width: bool,
     tooltip: Option<SharedString>,
@@ -133,6 +134,7 @@ impl Button {
             selected: false,
             focus_handle: None,
             tab_index: 0,
+            pointer_only: false,
             on_click: None,
             full_width: false,
             tooltip: None,
@@ -212,6 +214,15 @@ impl Button {
     /// Tab order among siblings (default 0 = document order).
     pub fn tab_index(mut self, index: isize) -> Self {
         self.tab_index = index;
+        self
+    }
+
+    /// Makes the button a control for the pointer only: it is no tab stop
+    /// and a click does not give it the keyboard, which stays where it is
+    /// (in the query field of a list whose keys do the same as the
+    /// button). Without effect together with [`Button::track_focus`].
+    pub fn pointer_only(mut self) -> Self {
+        self.pointer_only = true;
         self
     }
 
@@ -319,7 +330,7 @@ impl RenderOnce for Button {
             .map(|el| match &self.focus_handle {
                 Some(handle) => el.track_focus(handle),
                 // Disabled buttons are skipped by tab navigation.
-                None if disabled => el,
+                None if disabled || self.pointer_only => el,
                 None => el.tab_index(self.tab_index),
             })
             .flex()

@@ -115,8 +115,10 @@ They do it through a command line tool that comes inside the app:
 Agents can read at any time. They can only change things while The Writer is
 closed: while the app is open the tool says so and changes nothing, so an
 agent never writes into a document you are working on. Before an agent
-changes a document a version of it is kept (File > Version History brings it
-back), and what an agent deletes goes to the trash.
+changes the text of a document a version of it is kept: File > Version
+History lists it with its reason ("Before an edit by Claude") and brings it
+back. What an agent deletes goes to the trash. Comments an agent leaves show
+up in the comments of the document under the agent's name.
 
 The Writer > Agents... (Option-Command-A) shows the tool, installs the skill
 that tells your agents about it, and lists the command that adds The

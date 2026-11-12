@@ -195,6 +195,12 @@ is the element-level primitive (prepaint only).
 Tooltips: `.id(..).tooltip(|window, cx| cx.new(|_| TooltipView).into())` (returns `AnyView`;
 tested compile/render). `hoverable_tooltip` keeps it open while hovered.
 
+**Wrapped text in a flex column inside a flex row** (seen in the Agents panel, tested): text
+that wraps, or has several lines, inside a `flex_col()` container that is itself the
+`flex_1()` child of a flex row is measured at no width, and the row comes out thousands of
+pixels tall. Make the growing child a plain block `div()` and space its children with
+margins (`crates/writer-app/src/agents_view.rs`, `render_row`).
+
 Animation (tested render): `el.with_animation("id", Animation::new(Duration).repeat().with_easing(ease_in_out), |el, delta: f32| el.opacity(delta))`.
 Easings: `linear, quadratic, ease_in_out, ease_out_quint(), bounce(f), pulsating_between(a,b)`.
 For a caret blink, prefer a timer task + `cx.notify()` (see State).
@@ -743,7 +749,17 @@ folders and documents in an empty library; without it a fresh library gets the w
 document), `THE_WRITER_EXPORT_DIR=<dir>` (file exports are written there under the suggested
 name; the native save panel cannot be driven), `THE_WRITER_AUTOMATION_FOREGROUND=1`
 (activate the app; **do not use it while someone is at the machine**, their typing lands in
-the window).
+the window), `THE_WRITER_AGENT_HOME=<dir>` (the Agents panel of a scripted run sees that
+directory as the whole machine: agents are found by what is in it, the skill is installed
+into it; without the variable the panel lists nothing), `THE_WRITER_AGENTS_HINT=1` (the
+one-time toast about agents, which a scripted run otherwise leaves out). While the Agents
+panel is open the `state` line ends with `agents=[tool=... found=... skills=[...] mcp=N
+rows=N selected=... report=[...]]`.
+
+A library the `writer` tool made is a library like any other: build one with the tool
+(`THE_WRITER_DATA_DIR=$QA/data target/debug/writer create ...`), then start the app on the
+same directory to look at it. Not both at once: while the app runs it has the lock and the
+tool only reads.
 
 Ready-to-run (from the repo root; `timeout` is not installed, so wait in a loop):
 

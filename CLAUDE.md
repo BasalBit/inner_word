@@ -165,10 +165,27 @@ built only from the crates without GPUI. It does not need the app to be running.
   export). They can change things only while the app is closed: while the app holds the
   lock of the data directory every write is refused with exit code 5 and a message that
   says to quit The Writer first. There is no merging. `crates/writer-agent` enforces it.
-- **The safety net** is in `writer-agent` too: a version snapshot before an agent changes a
-  document (labelled, so the version history tells them apart), deletion means the trash,
-  `--dry-run` says what would change. Permanent deletion is in the CLI behind a flag and
-  not in MCP.
+- **The safety net** is in `writer-agent` too: a version snapshot before an agent changes
+  the text of a document or deletes a comment (labelled "Before an edit by Claude" with the
+  `--author` given; the app's version history shows the label in the row, read through
+  `Store::snapshot_labels`), deletion means the trash, `--dry-run` says what would change
+  (and "would change nothing" when that is so, `Written::would_change`). Adding, answering,
+  resolving and reopening a comment keep no version. Permanent deletion is in the CLI
+  behind a flag and not in MCP.
+- **An edit keeps what it does not change.** `edit` matches the old text against the plain
+  text of the document (then as Markdown), and compares the old and the new text word by
+  word: the words they share are not replaced, so words an agent quotes around its change
+  keep the formatting, the link and the comment each has; only the words that differ take
+  the formatting of what they replace (`writer-agent/src/rewrite.rs`,
+  `formatting_to_take`).
+- **Who says what.** `writer-agent` words its errors for both front ends and names fields
+  ("occurrence", "permanently"). The command line adds the option to type next
+  (`writer-cli/src/main.rs`, `hint`: `--occurrence`, `--all`, `--overwrite`,
+  `--permanently`, `writer find`), the MCP server names the tool (`writer-mcp/src/tools.rs`,
+  `tool_text`: `restore_version` where the shared text says `writer history restore`). The
+  skill's list of exit codes is tested against the help of the built tool
+  (`writer-agent-setup/tests/skill_against_binary.rs`): a new exit code fails that test
+  until the skill explains it.
 - **Which library.** The user's real one by default (`writer_store::data_dir`), another
   with `--library <dir>` or `THE_WRITER_DATA_DIR`. **Every test and every command you run
   must name a temporary library**; the tool pointed at nothing is pointed at the user's
@@ -195,7 +212,14 @@ built only from the crates without GPUI. It does not need the app to be running.
   call `agents::set_environment(Environment::isolated(temp_home, tool))`. **Never run the
   panel's install buttons, `writer agents install`, or an agent's own `mcp add` against the
   real home directory** (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.agents`, ...): looking
-  at which of them exist is fine, writing there is the user's decision.
+  at which of them exist is fine, writing there is the user's decision. **Setting `HOME`
+  to a temporary directory does not make an agent's own command safe**: Claude Code and
+  Codex follow it, OpenCode 1.19.5 does not and writes to the real
+  `~/.config/opencode/opencode.jsonc` whatever `HOME` says (found the hard way while
+  0.3.0 was verified; the entry was taken out again). Check the syntax of an agent's
+  command with its `--help` and nothing else. The `writer` tool itself does follow `HOME`
+  (`writer agents install` with a temporary `HOME` writes only there; the tests of
+  `writer-cli` guard it).
 - **The hint.** Once per library the app shows a toast that agents can work with the
   library, with a button that opens the panel (`agents.hint_shown` in the settings). Only
   the real app shows it; a scripted run does with `THE_WRITER_AGENTS_HINT=1`.

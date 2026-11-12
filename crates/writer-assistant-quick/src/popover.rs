@@ -1295,7 +1295,12 @@ impl QuickChat {
     }
 
     /// The popover as an element, for the room `plan` gives it.
-    fn render_popover(&mut self, plan: Plan, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_popover(
+        &mut self,
+        plan: Plan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(open) = &self.open else {
             return div().into_any_element();
         };
@@ -1388,7 +1393,7 @@ impl QuickChat {
                             "quick-chat-close",
                             IconName::Close,
                             "Close",
-                            Self::close_key(cx),
+                            self.close_key(window, cx),
                             false,
                             false,
                             &colors,
@@ -1508,10 +1513,11 @@ impl QuickChat {
 
 impl QuickChat {
     /// The key that closes the chat, as the keymap has it now (`escape`
-    /// unless the keymap was changed). The close control names it in its
-    /// tooltip.
-    pub fn close_key(cx: &App) -> Option<KeyHint> {
-        KeyHint::for_action(&DismissChat, cx)
+    /// unless the keymap was changed), asked where the popover is: the
+    /// action is the one the side chat closes on too, bound once for each
+    /// chat. The close control names it in its tooltip.
+    pub fn close_key(&self, window: &Window, cx: &App) -> Option<KeyHint> {
+        KeyHint::for_action_at(&DismissChat, &self.focus_handle, window, cx)
     }
 }
 

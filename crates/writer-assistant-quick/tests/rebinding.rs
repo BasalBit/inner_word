@@ -4,7 +4,7 @@
 //! obeys and shows the new keys at once.
 
 use gpui::{Action, TestAppContext, VisualTestContext};
-use writer_assistant_quick::{InsertBelow, QuickChat};
+use writer_assistant_quick::InsertBelow;
 use writer_assistant_ui::{Composer, DismissChat};
 use writer_core::TextRange;
 use writer_editor::actions::Newline;
@@ -37,8 +37,11 @@ fn opened(cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
 #[gpui::test]
 fn the_key_that_closes_the_chat(cx: &mut TestAppContext) {
     let (fx, cx) = opened(cx);
-    let close_key =
-        |cx: &mut VisualTestContext| cx.update(|_, cx| QuickChat::close_key(cx).map(|k| k.text()));
+    let close_key = |cx: &mut VisualTestContext| {
+        fx.quick.update_in(cx, |quick, window, cx| {
+            quick.close_key(window, cx).map(|key| key.text())
+        })
+    };
     assert_eq!(close_key(cx).as_deref(), Some("Esc"));
 
     // "Close the chat" is bound in the popover here, and by the shared

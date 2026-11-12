@@ -2485,6 +2485,15 @@ fn the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment(cx: &mu
         assert_eq!(composer.size.width, example.size.width, "the composer");
         assert_eq!(notice.size.width, example.size.width, "the notice");
         assert_eq!(composer.left(), example.left());
+        // The Send control stands at the end of the composer, not in the
+        // middle of it.
+        let send = vcx
+            .debug_bounds("assistant-send")
+            .expect("the Send control");
+        assert!(
+            composer.right() - send.right() < gpui::px(12.),
+            "{composer:?} {send:?}"
+        );
         // And the notice is as tall as its lines, not more.
         assert!(notice.size.height < gpui::px(220.), "{:?}", notice.size);
     }

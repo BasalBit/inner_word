@@ -217,7 +217,10 @@ built only from the crates without GPUI. It does not need the app to be running.
   Codex follow it, OpenCode 1.19.5 does not and writes to the real
   `~/.config/opencode/opencode.jsonc` whatever `HOME` says (found the hard way while
   0.3.0 was verified; the entry was taken out again). Check the syntax of an agent's
-  command with its `--help` and nothing else. The `writer` tool itself does follow `HOME`
+  command with its `--help` and nothing else. (What that accident showed: OpenCode 1.19.5
+  writes a server directly under `"mcp"`, where the documentation of OpenCode 2 and the
+  panel's entry have `"mcp": {"servers": ...}`; the panel says so and leads with the
+  command, which writes the form the installed version reads.) The `writer` tool itself does follow `HOME`
   (`writer agents install` with a temporary `HOME` writes only there; the tests of
   `writer-cli` guard it).
 - **The hint.** Once per library the app shows a toast that agents can work with the

@@ -18,7 +18,10 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel. Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
+| `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
+| `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
 | `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, comments, history, export, trash) over `writer-store`, `writer-core` and `writer-export`, with the app-is-open rule and the safety net (a version before every change) inside it. |
 | `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream. |
 | `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts, and `writer mcp`, the MCP server. Ships inside the app bundle at `Contents/MacOS/writer`. |
@@ -26,7 +29,10 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
-Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export}`,
+Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export,
+assistant-quick, assistant-ui, assistant}`, `assistant-quick → {assistant-ui, assistant,
+editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant → mcp` (for
+the list of its read-only tools; no GPUI),
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
 `library → {store, ui}`, `export → core`, `cli → {agent, mcp, agent-setup}`,
@@ -58,6 +64,7 @@ recipe in `docs/gpui-notes.md`):
 ```bash
 # THE_WRITER_SEED_DEMO=1: a few folders and documents in an empty library (optional)
 # THE_WRITER_EXPORT_DIR:  file exports are written there, without the save panel (optional)
+# THE_WRITER_ASSISTANT_FAKE=ready: the assistant on the fake engine (optional, see "The assistant")
 THE_WRITER_DATA_DIR=/some/tmp \
 THE_WRITER_SEED_DEMO=1 \
 THE_WRITER_EXPORT_DIR=/some/tmp/out \
@@ -70,10 +77,13 @@ a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `
 `choose:<label>` (chooses that item of the open context menu, as a click would),
 `bar` (shows the format bar over the selection, as a selection made with the mouse does;
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
-it), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
+it), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
+assistant: hold its events back and let them through, for a capture of an answer half
+written), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-Vim, tool, the format bar, comments, spelling, status bar, and the Agents panel while it is
-open), `dump`, `log:<text>`, `quit`, and for measuring
+Vim, tool, the format bar, comments, spelling, status bar, the Agents panel while it is
+open, and in a run with an engine the assistant: whether it is shown, the quick chat while
+it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
 the text on screen was checked for spelling), `savecost[:<rounds>]` (every part of a
 synchronous save, timed), `limitcost[:<rounds>]` (the character-limit count),
@@ -138,7 +148,8 @@ text field, the title, a status bar item), clicks an item of each menu, and hold
 bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from coming back;
 `tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker;
 `tests/suite/agents.rs` holds the Agents panel against a temporary home directory;
-`tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it.
+`tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it;
+`tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -148,6 +159,95 @@ the app was given a spell service: `main` installs the system one
 workspace, and without one there is no checker at all. A scripted run of the real binary
 does use the system checker: do not choose "Learn Spelling" there except on an invented
 word that is unlearned again in the same run.
+
+**Tests never call the real Claude Code** (every message spends the user's own allowance,
+and its answers are not the same twice). A workspace has an assistant only when the app
+was given an engine: `main` installs Claude Code (`writer_app::assistant::use_claude_code`),
+a test installs `writer_assistant::FakeBackend` with `writer_app::assistant::set_backend`
+before it opens a workspace, and without one there is no assistant at all. The engine
+crate's own tests of the Claude Code backend run a stand-in program that replays recorded
+output, never `claude`. A scripted run of the real binary never gets Claude Code either:
+it gets the fake engine when `THE_WRITER_ASSISTANT_FAKE` asks for it, and no assistant
+otherwise. A real call is made only where a task says so in so many words: a one-line
+prompt, the cheapest model at low effort, session persistence off, never in a loop and
+never from a test that runs by default.
+
+## The assistant
+
+An optional writing assistant inside the app, in two chats, running on a terminal agent
+the user has installed and signed in to. Claude Code is the first (and for now the only)
+engine; others will follow, so nothing outside `writer_assistant::claude` may assume it.
+The assistant advises and the user applies: an answer changes a document only when one of
+its buttons is pressed. Every message spends the user's own plan in the engine.
+
+- **Whether it is there** (`crates/writer-app/src/assistant/host.rs`,
+  `workspace/assistant.rs`). The engine is looked for in the background, at launch and
+  each time the settings are opened; the app never waits for it. Not installed: nothing of
+  the assistant is shown (no key does anything, no command in the palette or the
+  shortcuts overlay, no item in the menu bar, the text menu or the format bar, no panel),
+  except one line in the settings that says what it needs. Installed and not signed in:
+  it is shown and says how to sign in. `Workspace::assistant_shown` is the one answer; the
+  commands of the category "Assistant" are hidden with `commands::set_category_hidden`,
+  the menu bar is rebuilt by `menus::set_assistant_shown`.
+- **The quick chat** (`cmd-j`, "Ask the assistant" in the palette, "Ask the Assistant" in
+  the text menu and on the format bar, Edit in the menu bar;
+  `writer_assistant_quick::QuickChat`): a popover at the selection, or at the caret. It
+  sends the selected text and the question, and with nothing selected the question alone:
+  never the document, its title or the library, and it has no tools. Each answer has
+  Replace Selection, Insert Below and Copy. `escape` closes it and ends its conversation.
+- **The side chat** (`cmd-3`, "Go to assistant" and "Show or hide assistant" in the
+  palette, View in the menu bar; `writer_assistant_ui::AssistantPanel`): a panel at the
+  right. With every message it sends the open document as it is in the editor at that
+  moment (not as it was last saved), its title and its path in the library, and names the
+  documents and folders the user added with "Add" (chips; `cmd-shift-a`). It reads them,
+  and the rest of the library, through the library's own MCP server with only the
+  read-only tools allowed (`workspace::library_tool_server`: the bundled `writer` beside
+  the app's executable, `--library <data directory> mcp`; reading works while the app has
+  the library open). Each answer has Insert at Caret, Replace Selection and Copy; the
+  workspace applies them as one undo step, the answer's Markdown becoming formatted text
+  (`assistant/apply.rs`: one paragraph is running text and joins the block it goes into,
+  anything else goes in as whole blocks and is never merged into the text around it).
+- **The slot at the right is shared with the comments, one at a time**
+  (`workspace/right_panel.rs`). A panel is there when it has something to show (comments:
+  the document has a thread or one is being written; side chat: the user has it open).
+  With both there the slot shows the one used last under two tabs, "Comments" and
+  "Assistant"; `cmd-2` and the comment commands bring the comments forward, `cmd-3` and
+  the side chat's commands the side chat. Each panel has a width of its own, changed by
+  dragging the left edge of the slot (double click: the default) and remembered.
+- **Conversations** (`assistant/conversations.rs`): the side chat has one per document.
+  Switching documents switches it; it is stored in the library's settings
+  (`assistant.conversation.<document id>`, the recent end: 80 messages, 120,000
+  characters), comes back after a relaunch, and is removed with the document (also at
+  launch, for a document the tool deleted while the app was closed; a conversation is
+  never handed to a later document that got the same id). "Clear" removes the messages,
+  "New Chat" also what was added.
+- **Model and effort** are chosen in each chat from two small pickers and remembered per
+  chat; the settings show the same four choices. The app stores them as the engine names
+  them (`assistant/choices.rs`) and knows no engine's models.
+- **Privacy**: nothing is sent before the user sends a message. Until the first message
+  both chats show a note that the text goes to the engine's vendor through the user's own
+  sign-in; it is acknowledged once per library (`assistant.notice_accepted`).
+- **Errors** (not signed in, the usage limit with the time it resets, the program missing
+  or crashed, no network) are worded by the engine (`AssistantError::text`) and shown in
+  the chat with what to do.
+- **Isolation** is the engine's: the agent runs in a neutral directory with the app's own
+  system prompt, without the user's project instructions, hooks, skills, MCP servers or
+  built-in file and shell tools, and leaves nothing in the user's session history.
+- **Settings** (in the library, like the others; section "Assistant" of the settings):
+  `assistant.enabled` (bool, on by default: the switch), `assistant.quick.model`,
+  `assistant.quick.effort`, `assistant.side.model`, `assistant.side.effort` (strings: the
+  engine's name for the choice, `@default` for the engine's own default, absent for what
+  the engine suggests for that chat), and what the app remembers by itself:
+  `assistant.panel_open`, `assistant.panel_width`, `comments.panel_width`,
+  `right_panel.choice`, `assistant.notice_accepted`.
+- **Scripted runs and screenshots**: `THE_WRITER_ASSISTANT_FAKE=ready` (or `signed-out`,
+  `missing`) gives a scripted run the fake engine, which starts no program;
+  `THE_WRITER_ASSISTANT_FAKE_REPLIES=<file>` scripts its answers (answers separated by a
+  line of `====`; leading lines `!tool <name> <words>` and `!error <kind>`; grammar in
+  `crates/writer-app/src/assistant/fake.rs`). `keys:cmd-j; type:Another word?; keys:enter`
+  asks in the quick chat, `keys:cmd-3` goes to the side chat, `keys:cmd-shift-a; type:Part
+  one; keys:enter` adds a folder there. Do not script "Copy" (it is the user's clipboard;
+  the side chat's Copy leaves it alone in a scripted run, the quick chat's does not).
 
 ## Agents
 
@@ -239,7 +339,7 @@ built only from the crates without GPUI. It does not need the app to be running.
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
   `writer-store`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
-  `writer-agent-setup`) build and test with
+  `writer-agent-setup`, `writer-assistant`) build and test with
   `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
@@ -352,7 +452,8 @@ Global (work anywhere in the window):
 | `cmd-shift-p` | Command palette |
 | `cmd-p` | Quick open document |
 | `cmd-n` / `cmd-shift-n` | New document / new folder |
-| `cmd-0` / `cmd-1` / `cmd-2` | Go to library / text / comments |
+| `cmd-0` / `cmd-1` / `cmd-2` / `cmd-3` | Go to library / text / comments / the assistant's side chat (opens it; only while the assistant is shown) |
+| `cmd-j` | Ask the assistant about the selection, in a small chat at the selection (a plain question with nothing selected; only while the assistant is shown) |
 | `cmd-opt-s` | Show or hide the library sidebar |
 | `cmd-opt-right` / `cmd-opt-left` | Widen / narrow the library sidebar |
 | `cmd-shift-f` | Search the whole library |
@@ -368,6 +469,15 @@ Global (work anywhere in the window):
 | `cmd-opt-m` | Add comment on selection (or on the word at the caret) |
 | `cmd-opt-]` / `cmd-opt-[` | Next / previous comment |
 | `cmd-w` / `cmd-q` | Close the window / quit |
+
+In the assistant's chats (both; the shortcuts overlay lists them under "In the assistant's
+chats"): `enter` sends, `shift-enter` is a new line, `cmd-.` stops the answer, `escape`
+stops it or leaves the chat, `tab` / `shift-tab` move between the composer, the
+conversation and (side chat) the context row and the header, `cmd-shift-m` / `cmd-opt-e`
+open the model and effort pickers, `cmd-shift-c` copies the answer, `cmd-shift-enter`
+replaces the selection with it, `cmd-enter` inserts it (below the selection in the quick
+chat, at the caret from the side chat). In the side chat also `cmd-opt-n` (new chat),
+`cmd-opt-k` (clear) and `cmd-shift-a` (add a document or a folder as context).
 
 `cmd-opt-c` has a second meaning in one place: inside the find bar it switches "case
 sensitive" (the bar shows the hint), and `cmd-opt-w` "whole word".
@@ -467,7 +577,9 @@ width, and the row comes out thousands of pixels tall. Make the growing child a 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
 - **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: File, Edit (with
-  Spelling), Format (with Turn Into and Align), Insert, View (with Theme), Help. Every item
+  Spelling), Format (with Turn Into and Align), Insert, View (with Theme), Help. While the
+  assistant is shown it has its items too (Edit > Ask the Assistant…; View > Show or Hide
+  Assistant, Go to Assistant, New Chat, Clear Chat), and none of them otherwise. Every item
   is an existing action; it is enabled when the action has a handler on the way from the
   keyboard. GPUI's menu items carry no state, so the check mark of "Check Spelling While
   Typing" is set on the native item (`menus::set_check_mark`, only in the real app).
@@ -478,14 +590,16 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   comment threads in `writer-comments`, the Vim chip in `writer-vim-mode`, text fields in
   `writer-ui`. Each offers a hook through which the app adds its items
   (`Workspace::extend_the_menus_of_other_crates`: Add Comment and Go to Comment in the text
-  menu, Export and Version History on library rows). The text menu has a second hook for
+  menu, and Ask the Assistant while the assistant is shown; Export and Version History on
+  library rows). The text menu has a second hook for
   what goes first (`EditorTools::set_text_menu_leading_extension`): the spell checker's
   suggestions on a marked word.
 - **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),
-  the app's "Add Comment" (`EditorTools::set_format_bar_extension`, set beside the text
-  menu's hook) and "more" (the format menu). Each button runs what its key runs and keeps
+  the app's "Add Comment" and, while the assistant is shown, "Ask the Assistant"
+  (`EditorTools::set_format_bar_extension`, set beside the text menu's hook) and "more"
+  (the format menu). Each button runs what its key runs and keeps
   the selection and the bar. `editor.format_bar` (the "Format bar" switch in the settings)
   turns it off through `EditorTools::set_format_bar_enabled`. It is not a `ToolKind`.
 - **The app's own menus** (`crates/writer-app/src/workspace/menus.rs`): the title above the

@@ -102,6 +102,38 @@ open this one. The preview does not take part in that check, so the two
 could otherwise have your library open together.
 
 
+The assistant
+-------------
+
+If Claude Code is installed on your Mac and you are signed in to it, The
+Writer has an assistant that runs on it. Without Claude Code there is no
+assistant, and nothing of it is shown; the settings say so in one line.
+
+Command-J asks about the text you have selected, in a small chat right at
+the selection: another word, a tighter sentence, a paragraph in another
+tone. With nothing selected it is a plain question. Command-3 opens a
+longer chat beside the text, which knows the whole document as it is now;
+with "Add" you give it other documents and folders of your library to look
+things up in. Each document keeps its own conversation.
+
+The assistant advises and you apply. Every answer has buttons that put it
+into the text (Replace Selection, Insert Below, Insert at Caret) or copy it,
+and Command-Z takes it back. It never changes a document by itself.
+
+What you ask goes to Anthropic through your own Claude Code sign-in, and
+every message counts against your Claude Code plan. The small chat sends
+your question and the selected text. The longer chat sends your messages,
+the open document and what the assistant reads from your library. Nothing
+is sent before you send a message. The Writer does not use your coding
+setup in Claude Code (project instructions, hooks, skills, other tools) and
+leaves nothing in its history.
+
+The model and the effort are chosen in each chat. The switch that turns the
+assistant off is in the settings (Command-,) under "Assistant". If a chat
+says you are not signed in: open Terminal, run "claude" and sign in there,
+then press Check Again.
+
+
 Agents
 ------
 

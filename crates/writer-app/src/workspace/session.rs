@@ -144,6 +144,9 @@ impl Workspace {
     /// was open last, else the most recently edited one.
     pub(crate) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reconcile_title_flags(cx);
+        // The same for the side chat's conversations: one whose document
+        // was deleted while the app was closed is dropped.
+        crate::assistant::conversations::forget_missing(&self.library, cx);
         let welcome_created: bool = self
             .library
             .read(cx)
@@ -312,6 +315,7 @@ impl Workspace {
                 cx,
             );
         }
+        self.assistant_document_changed(window, cx);
         cx.emit(WorkspaceEvent::DocumentOpened(id));
         cx.notify();
         true
@@ -408,6 +412,7 @@ impl Workspace {
             window.focus(&self.focus_handle);
         }
         self.update_window_title(window);
+        self.assistant_document_changed(window, cx);
         cx.emit(WorkspaceEvent::DocumentClosed);
         cx.notify();
     }

@@ -105,6 +105,16 @@ fn unparsed(binding: &gpui::KeyBinding) -> String {
 #[gpui::test]
 fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
     init(cx);
+    // The whole map, with the items of the assistant (which the menu bar
+    // only has on a Mac where the assistant's engine is installed; its
+    // commands are listed only then too).
+    cx.update(|cx| {
+        writer_app::commands::set_category_hidden(
+            writer_app::actions::CATEGORY_ASSISTANT,
+            false,
+            cx,
+        )
+    });
     let all = menus::app_menus();
     let names: Vec<String> = all.iter().map(|menu| menu.name.to_string()).collect();
     assert_eq!(

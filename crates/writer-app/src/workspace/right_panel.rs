@@ -28,9 +28,10 @@
 //! [`super::panel_layout`].
 
 use gpui::{
-    AnyElement, AnyView, App, ClickEvent, Context, CursorStyle, FocusHandle, MouseButton,
+    AnyElement, AnyView, App, ClickEvent, Context, CursorStyle, Entity, MouseButton,
     MouseMoveEvent, MouseUpEvent, Window, div, prelude::*, px,
 };
+use writer_assistant_ui::AssistantPanel;
 use writer_comments as comments;
 use writer_ui::{
     KeyHint, Tooltip,
@@ -128,9 +129,8 @@ pub(crate) struct RightSlot {
     pub shown: Option<RightPanel>,
     /// Whether both are there (the strip of tabs is drawn).
     pub tabs: bool,
-    /// The side chat, while the assistant is available: its view and where
-    /// its keyboard focus lives.
-    pub assistant: Option<(AnyView, FocusHandle)>,
+    /// The side chat, while the assistant is shown.
+    pub assistant: Option<Entity<AssistantPanel>>,
     /// Whether the user has the side chat open.
     pub assistant_open: bool,
     /// The widths of the two panels.
@@ -222,15 +222,18 @@ impl Workspace {
         self.right.tabs = tabs;
         let view: Option<AnyView> = match shown {
             Some(RightPanel::Comments) => Some(self.comments.clone().into()),
-            Some(RightPanel::Assistant) => {
-                self.right.assistant.as_ref().map(|(view, _)| view.clone())
-            }
+            Some(RightPanel::Assistant) => self
+                .right
+                .assistant
+                .as_ref()
+                .map(|panel| panel.clone().into()),
             None => None,
         };
         if let Some(panel) = shown {
             self.right_panel_width = px(self.right.width(panel));
         }
         self.set_right_panel(view, cx);
+        self.assistant_panel_shown_changed(cx);
     }
 
     /// Brings `panel` to the front of the slot and remembers the choice.
@@ -281,7 +284,7 @@ impl Workspace {
         self.right
             .assistant
             .as_ref()
-            .is_some_and(|(_, focus)| focus.contains_focused(window, cx))
+            .is_some_and(|panel| panel.read(cx).contains_focus(window, cx))
     }
 
     /// Notes which of the two panels the keyboard is in: that one is the
@@ -453,8 +456,8 @@ impl Workspace {
                     comments.update(cx, |comments, cx| comments.focus_panel(window, cx));
                 }
                 RightPanel::Assistant => {
-                    if let Some((_, focus)) = &self.right.assistant {
-                        window.focus(focus);
+                    if let Some(panel) = self.right.assistant.clone() {
+                        panel.update(cx, |panel, cx| panel.focus(window, cx));
                     }
                 }
             }

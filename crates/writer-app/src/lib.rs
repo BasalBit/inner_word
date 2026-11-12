@@ -107,6 +107,10 @@ pub fn init(cx: &mut App) {
     writer_comments::init(cx);
     writer_vim_mode::init(cx);
     writer_editor_tools::init(cx);
+    // The chats of the assistant have editors of their own (the composer,
+    // the answers): their keys come after the editor's and the tools'.
+    writer_assistant_ui::init(cx);
+    writer_assistant_quick::init(cx);
 
     register_commands(cx);
 
@@ -157,6 +161,10 @@ fn register_commands(cx: &mut App) {
     // The assistant's commands are listed only while the assistant is
     // shown: hidden until a workspace learns that its engine is there.
     commands::register(actions::assistant_commands(), cx);
+    commands::register(
+        commands::in_sentence_case(writer_assistant_ui::commands()),
+        cx,
+    );
     commands::set_category_hidden(actions::CATEGORY_ASSISTANT, true, cx);
     commands::register(
         writer_vim_mode::commands()

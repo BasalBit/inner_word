@@ -190,6 +190,19 @@ impl Host {
         }));
     }
 
+    /// Takes what one of the chats found when it looked for the engine
+    /// itself ("Check Again" under a note that says the user is not signed
+    /// in): the same as the answer of a check.
+    pub fn found(&mut self, availability: Availability, cx: &mut Context<Self>) {
+        if self.availability.as_ref() == Some(&availability) {
+            return;
+        }
+        self.availability = Some(availability);
+        self.catalog = self.backend.catalog();
+        cx.emit(HostEvent::Checked);
+        cx.notify();
+    }
+
     /// The line the settings show about the engine: its name, its version
     /// and the account, or what is missing.
     pub fn status_line(&self) -> String {

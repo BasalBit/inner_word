@@ -18,6 +18,7 @@
 //! | [`EditorTools`] (format menu, insert menu, link popover, font picker, find bar) | the editor area: it wraps the editor | itself; recent fonts are stored from the `FontLibrary` global |
 //! | [`CommentsPanel`] | the right panel slot, while it has something to show; it shares the slot with the assistant's side chat, one at a time (`right_panel.rs`) | `on_comments_event`: the slot, the visibility setting, the "show resolved" setting |
 //! | [`VimMode`] with its status item and command line | status bar (left), a strip under the editor | `apply_vim_setting` (the `editor.vim_mode` setting) and `on_vim_event` (`:w`, `:q`, named commands) |
+//! | The assistant's two chats (only when the app has an engine for it, see [`crate::assistant`]): `writer_assistant_quick::QuickChat` and `writer_assistant_ui::AssistantPanel` | a popover over the editor area; the right panel slot, shared with the comments | `assistant.rs`: whether the assistant is shown, the open document, the conversations, the answers applied to the text |
 //! | [`writer_spell::SpellChecker`] (only when the app has a spell service, see [`crate::spelling`]) | wavy underlines in the text, the top of the text context menu | `apply_spelling`: the `spelling.*` settings and the open document's own language |
 //!
 //! The slots themselves are public, so another view can be plugged in the
@@ -100,7 +101,8 @@ use crate::{
     window::StoredBounds,
 };
 
-pub use menus::{Anchors, MenuKind};
+pub use assistant::{library_attachments, library_tool_server};
+pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
     counted, group_digits, limit_label, panel_layout,
@@ -381,7 +383,7 @@ impl Workspace {
 
         let saver = saver::Saver::new(library.read(cx));
         let right = right_panel::RightSlot::load(library.read(cx));
-        let assistant = assistant::AssistantState::new(cx);
+        let assistant = assistant::AssistantState::new(&editor, &library, &settings, window, cx);
         let mut this = Self {
             library,
             editor,
@@ -1439,6 +1441,7 @@ impl Workspace {
                 self.library
                     .update(cx, |library, cx| library.remove_setting(&key, cx))
                     .ok();
+                self.forget_assistant_conversation(*id, cx);
             }
             _ => {}
         }

@@ -38,6 +38,7 @@
 //! return in it show no key (see [`menu_key_bindings`]).
 
 use gpui::{Action, App, KeyBinding, KeyContext, Keymap, Menu, MenuItem, OsAction, SystemMenuType};
+use writer_assistant_ui as assistant;
 use writer_comments as comments;
 use writer_editor::actions as editor;
 use writer_editor_tools::actions as tools;
@@ -118,9 +119,11 @@ fn add_assistant_items(menus: &mut [Menu]) {
                     })
                     .unwrap_or(menu.items.len());
                 menu.items
-                    .insert(end, MenuItem::action("New Chat", NewAssistantChat));
-                menu.items
-                    .insert(end + 1, MenuItem::action("Clear Chat", ClearAssistantChat));
+                    .insert(end, MenuItem::action("New Chat", assistant::NewChat));
+                menu.items.insert(
+                    end + 1,
+                    MenuItem::action("Clear Chat", assistant::ClearChat),
+                );
                 menu.items.insert(end + 2, MenuItem::separator());
             }
             _ => {}

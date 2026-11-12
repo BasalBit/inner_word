@@ -13,6 +13,7 @@ use writer_ui::{
     },
 };
 
+use writer_assistant_ui as assistant;
 use writer_comments as comments;
 use writer_editor::actions as editor;
 use writer_spell::actions as spell;
@@ -793,6 +794,8 @@ impl Render for Workspace {
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
         self.note_right_panel_focus(window, cx);
+        self.follow_the_text(cx);
+        self.close_a_hidden_quick_chat(window, cx);
         let layout = self.side_panels(window, cx);
         // Where the title and the status bar items are is noted again as
         // they are drawn.
@@ -817,6 +820,7 @@ impl Render for Workspace {
         let tips = !writer_ui::ContextMenu::is_open(window, cx);
         let titlebar = self.render_titlebar(layout.sidebar.is_some(), tips, cx);
         let editor_area = self.render_editor_area(cx);
+        let editor_area = self.with_quick_chat(editor_area);
         let status_bar = self.render_status_bar(tips, cx);
         let picker_close = self.render_picker_close(window, cx);
         let sidebar = layout.sidebar.map(|width| self.render_sidebar(width, cx));
@@ -884,6 +888,36 @@ impl Render for Workspace {
             for action in on_words {
                 root = root.on_boxed_action(action, cx.listener(spell_action));
             }
+        }
+        // The assistant's keys and commands, only while it is shown: the
+        // menu bar greys its items out without them, and the keys do
+        // nothing.
+        if self.assistant.shown {
+            root = root
+                .on_action(cx.listener(Self::on_ask_assistant))
+                .on_action(cx.listener(Self::on_focus_assistant))
+                .on_action(cx.listener(Self::on_toggle_assistant));
+            // The side chat's own commands reach it wherever the keyboard
+            // is (the chat crate sees to that); chosen while the side chat
+            // is closed or behind the comments, they bring it first.
+            root = root
+                .capture_action(cx.listener(|this, _: &assistant::NewChat, window, cx| {
+                    this.bring_the_side_chat_for_its_command(window, cx)
+                }))
+                .capture_action(cx.listener(|this, _: &assistant::ClearChat, window, cx| {
+                    this.bring_the_side_chat_for_its_command(window, cx)
+                }))
+                .capture_action(cx.listener(|this, _: &assistant::ChooseModel, window, cx| {
+                    this.bring_the_side_chat_for_its_command(window, cx)
+                }))
+                .capture_action(
+                    cx.listener(|this, _: &assistant::ChooseEffort, window, cx| {
+                        this.bring_the_side_chat_for_its_command(window, cx)
+                    }),
+                )
+                .capture_action(cx.listener(|this, _: &assistant::AddContext, window, cx| {
+                    this.bring_the_side_chat_for_its_command(window, cx)
+                }));
         }
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))

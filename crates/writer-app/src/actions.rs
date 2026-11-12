@@ -119,10 +119,6 @@ actions!(
         FocusAssistant,
         /// Show or hide the assistant's side chat.
         ToggleAssistant,
-        /// Start a new chat about the open document in the side chat.
-        NewAssistantChat,
-        /// Clear the side chat's conversation about the open document.
-        ClearAssistantChat,
     ]
 );
 
@@ -375,9 +371,11 @@ pub fn spelling_commands() -> Vec<CommandDescriptor> {
     ]
 }
 
-/// The assistant's commands: the quick chat at the selection and the side
-/// chat beside the text. In the registry they are in a category of their
-/// own, which is hidden while the assistant is not shown.
+/// The app's commands for the assistant: the quick chat at the selection
+/// and going to, showing and hiding the side chat beside the text. The
+/// side chat's own commands (new chat, clear chat, the pickers, the
+/// answer's actions) are `writer_assistant_ui::commands`, in the same
+/// category, which is hidden while the assistant is not shown.
 pub fn assistant_commands() -> Vec<CommandDescriptor> {
     vec![
         CommandDescriptor::new("Ask the assistant", CATEGORY_ASSISTANT, AskAssistant).keywords([
@@ -407,22 +405,5 @@ pub fn assistant_commands() -> Vec<CommandDescriptor> {
             ToggleAssistant,
         )
         .keywords(["ai", "side chat", "toggle", "panel", "close", "claude"]),
-        CommandDescriptor::new("New chat", CATEGORY_ASSISTANT, NewAssistantChat).keywords([
-            "ai",
-            "side chat",
-            "start",
-            "fresh",
-            "conversation",
-            "assistant",
-        ]),
-        CommandDescriptor::new("Clear chat", CATEGORY_ASSISTANT, ClearAssistantChat).keywords([
-            "ai",
-            "side chat",
-            "empty",
-            "delete",
-            "forget",
-            "conversation",
-            "assistant",
-        ]),
     ]
 }

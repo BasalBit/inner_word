@@ -11,9 +11,9 @@
 //! | The page indicator | click turns page view off; right-click | page view, orientation, document settings |
 //! | The character-limit indicator | click or right-click | the network to count against, off |
 //! | The Vim mode chip | click or right-click (the Vim crate's own menu) | plus "Settings…" from here |
-//! | The text | right-click or `ctrl-enter` (the editor tools' menu) | plus "Add Comment" and "Go to Comment" from here |
+//! | The text | right-click or `ctrl-enter` (the editor tools' menu) | plus "Add Comment" and "Go to Comment" from here, and "Ask the Assistant" while the assistant is shown |
 //! | A word marked as misspelled | the same menu | led by the suggestions, "Learn Spelling" and "Ignore Spelling" (the spell checker's rows, put first from here) |
-//! | A selection made with the mouse | by itself (the editor tools' format bar) | plus an "Add Comment" button from here |
+//! | A selection made with the mouse | by itself (the editor tools' format bar) | plus an "Add Comment" button from here, and "Ask the Assistant" while the assistant is shown |
 //! | A row of the library | right-click, `ctrl-enter` or its "more" button (the panel's menu) | plus "Export…" and "Version History…" from here |
 //!
 //! The menus are [`writer_ui::ContextMenu`]s. An item that is a command is
@@ -37,6 +37,9 @@ use crate::{
     settings_view::SettingRow,
     welcome,
 };
+
+/// What the text menu and the format bar call the quick chat.
+pub const ASK_THE_ASSISTANT: &str = "Ask the Assistant";
 
 /// The menus of the workspace itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -265,7 +268,11 @@ impl Workspace {
         // menu is, and dimmed when there is nothing to anchor a comment to
         // (the comments panel knows: a selection, or the word at the
         // caret, in a document that can be changed).
+        // And the assistant, while it is shown: "Ask the Assistant" opens
+        // the quick chat on the selection (or at the caret, for a plain
+        // question).
         let panel = self.comments.downgrade();
+        let workspace = cx.weak_entity();
         self.tools.update(cx, |tools, _| {
             tools.set_text_menu_extension(move |request, _, cx| {
                 let Some(panel) = panel.upgrade() else {
@@ -281,6 +288,12 @@ impl Workspace {
                         "Go to Comment",
                         comments::GoToThread::new(thread),
                     ));
+                }
+                let assistant = workspace
+                    .upgrade()
+                    .is_some_and(|workspace| workspace.read(cx).assistant_shown());
+                if assistant {
+                    items.push(ContextMenuItem::action(ASK_THE_ASSISTANT, AskAssistant));
                 }
                 items
             });
@@ -304,17 +317,30 @@ impl Workspace {
         // The format bar over a selection made with the mouse: the same
         // "Add Comment", as a button between "turn into" and "more". The
         // composer then takes the keyboard and the bar goes by itself.
+        // Beside it, while the assistant is shown: "Ask the Assistant",
+        // which opens the quick chat on that selection.
         let panel = self.comments.downgrade();
+        let workspace = cx.weak_entity();
         self.tools.update(cx, |tools, _| {
             tools.set_format_bar_extension(move |_, cx| {
                 let Some(panel) = panel.upgrade() else {
                     return Vec::new();
                 };
-                vec![
+                let mut buttons = vec![
                     FormatBarButton::action("Add Comment", comments::AddComment)
                         .icon(IconName::Comment)
                         .disabled(!panel.read(cx).can_add_comment(cx)),
-                ]
+                ];
+                let assistant = workspace
+                    .upgrade()
+                    .is_some_and(|workspace| workspace.read(cx).assistant_shown());
+                if assistant {
+                    buttons.push(
+                        FormatBarButton::action(ASK_THE_ASSISTANT, AskAssistant)
+                            .icon(IconName::Sparkle),
+                    );
+                }
+                buttons
             });
         });
 

@@ -170,9 +170,10 @@ fn installing_the_engine_brings_the_assistant_when_the_settings_are_opened(
     assert!(vcx.update(|_, cx| menus::assistant_shown(cx)));
 }
 
-/// How many commands the assistant has in the palette while it is shown.
+/// How many commands the assistant has in the palette while it is shown:
+/// the app's own and the side chat's.
 fn commands_of_the_assistant() -> usize {
-    writer_app::actions::assistant_commands().len()
+    writer_app::actions::assistant_commands().len() + writer_assistant_ui::commands().len()
 }
 
 #[gpui::test]

@@ -30,16 +30,26 @@ pub const MAX_RETRIES: &str = "4";
 
 /// Variables of the app's own environment that must not reach the program: they mark
 /// a process as started from inside a Claude Code session (when the app itself was
-/// started from one), or they overrule the model and effort the user chose here.
-const REMOVED_ENV: [&str; 8] = [
+/// started from one), they hand it that session's own channels (its bridge, its
+/// messaging socket and the token for it), or they overrule the model and effort the
+/// user chose here. An app started from the Finder has none of them; one started from
+/// a terminal that Claude Code runs has them all.
+const REMOVED_ENV: [&str; 15] = [
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_EXECPATH",
     "CLAUDE_CODE_SSE_PORT",
     "CLAUDE_CODE_EFFORT_LEVEL",
     "CLAUDE_CODE_SAFE_MODE",
     "CLAUDE_CODE_SIMPLE",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
 ];
 
 /// The variables every process of the assistant is started with, and what each does.

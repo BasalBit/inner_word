@@ -88,7 +88,14 @@ fn the_program_is_started_with_our_prompt_and_nothing_of_the_users_setup() {
         "CLAUDE_CODE_ENTRYPOINT",
         "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_EXECPATH",
         "CLAUDE_CODE_EFFORT_LEVEL",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
     ] {
         assert!(env.get(name).is_none(), "{name} reached the program");
     }

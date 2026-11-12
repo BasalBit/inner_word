@@ -2,10 +2,10 @@
 //! it the way the app stores it, the title rule, the version kept before a change, and
 //! what a change did.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use writer_core::{BlockId, CommentId, Document, DocumentSettings, Orientation, PaperSize};
+use writer_core::{BlockId, CommentId, Document, DocumentSettings, Orientation, PaperSize, Stats};
 use writer_store::{DocumentContent, DocumentId, DocumentMeta, SnapshotMeta, Store};
 
 use crate::error::{Error, Result, quoted_excerpt};
@@ -143,7 +143,13 @@ impl Form {
     /// The stored form of `document`. With `title` that title is kept; without it the
     /// title comes from the text.
     pub(crate) fn of(document: &Document, title: Option<&str>) -> Form {
-        let stats = document.stats();
+        Form::counted(document, title, document.stats())
+    }
+
+    /// [`Form::of`] for a document whose words and characters are already counted
+    /// (`stats` must be what `document.stats()` gives: counting a book takes as long as
+    /// reading it from the library does).
+    pub(crate) fn counted(document: &Document, title: Option<&str>, stats: Stats) -> Form {
         Form {
             json: document.to_json(),
             title: match title {
@@ -166,6 +172,46 @@ impl Form {
             char_count: self.characters,
         }
     }
+}
+
+/// The counts of `after`, a later state of `before`, from the counts of `before`
+/// (`counted`, what `before.stats()` gives): only the blocks whose text is not the same
+/// in both are counted, the ones that are gone taken off and the ones that are new or
+/// read differently put on. The counts of a document are the sums of the counts of its
+/// blocks, so this is what `after.stats()` gives, in the time the changed blocks take
+/// instead of the whole book.
+pub(crate) fn stats_after(before: &Document, counted: Stats, after: &Document) -> Stats {
+    let old: HashMap<BlockId, &str> = before
+        .blocks()
+        .iter()
+        .map(|block| (block.id(), block.text()))
+        .collect();
+    let mut same: HashSet<BlockId> = HashSet::new();
+    let mut added = Stats::default();
+    for block in after.blocks() {
+        if old.get(&block.id()) == Some(&block.text()) {
+            same.insert(block.id());
+        } else {
+            added += Stats::of_text(block.text());
+        }
+    }
+    let mut removed = Stats::default();
+    for block in before.blocks() {
+        if !same.contains(&block.id()) {
+            removed += Stats::of_text(block.text());
+        }
+    }
+    let stats = Stats {
+        words: counted.words + added.words - removed.words,
+        characters: counted.characters + added.characters - removed.characters,
+        characters_no_spaces: counted.characters_no_spaces + added.characters_no_spaces
+            - removed.characters_no_spaces,
+        paragraphs: counted.paragraphs + added.paragraphs - removed.paragraphs,
+        reading_minutes: 0,
+    } + Stats::default();
+    // Every change every test makes is counted both ways.
+    debug_assert_eq!(stats, after.stats());
+    stats
 }
 
 /// Why a version is kept: the start of its label.
@@ -385,5 +431,84 @@ impl Delta {
             })
             .collect();
         delta
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use writer_core::{Block, BlockKind, EditorState, Fragment, Position, Selection, TextRange};
+
+    use super::*;
+
+    /// The counts after a change, worked out from the counts before it, are the counts
+    /// of the changed document counted whole: for text put in, taken out, replaced and
+    /// moved, and for a document that did not change.
+    #[test]
+    fn the_counts_after_a_change_are_those_of_the_whole_document() {
+        let before = Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "The Salt Road"),
+            Block::paragraph("The keeper could not swim. It was not a secret."),
+            Block::new(BlockKind::Divider),
+            Block::paragraph("   "),
+            Block::paragraph("中文 e\u{301} and a family \u{1F469}\u{200D}\u{1F467}"),
+            Block::paragraph("The last one."),
+        ]);
+        let counted = before.stats();
+        let check = |change: &dyn Fn(&mut EditorState)| {
+            let mut editor = EditorState::new(before.clone());
+            change(&mut editor);
+            let after = editor.into_document();
+            assert_eq!(stats_after(&before, counted, &after), after.stats());
+            after
+        };
+        // Nothing.
+        let same = check(&|_| {});
+        assert_eq!(same.stats(), counted);
+        // New blocks, at the end and in the middle.
+        let more = check(&|editor| {
+            let new = Fragment::new(vec![
+                Block::paragraph("One more paragraph."),
+                Block::paragraph("And another, with seven words in it."),
+            ]);
+            editor.insert_blocks_at(6, &new);
+            editor.insert_blocks_at(2, &new);
+        });
+        assert_eq!(more.stats().words, counted.words + 2 * 10);
+        // A word replaced inside a block, and one made of other characters.
+        let edited = check(&|editor| {
+            editor.replace_range(
+                TextRange::new(Position::new(1, 4), Position::new(1, 10)),
+                "lighthouse keeper of the rock",
+            );
+            editor.replace_range(
+                TextRange::new(Position::new(4, 0), Position::new(4, 6)),
+                "x",
+            );
+        });
+        assert_ne!(edited.stats(), counted);
+        // Blocks taken out, the first and the last among them.
+        let fewer = check(&|editor| {
+            editor.set_selection(Selection::new(Position::new(4, 0), Position::new(5, 3)));
+            editor.delete_blocks();
+            editor.set_selection(Selection::caret(Position::new(0, 0)));
+            editor.delete_blocks();
+        });
+        assert_eq!(fewer.block_count(), 3);
+        // Blocks in another order count the same.
+        let moved = check(&|editor| {
+            editor.set_selection(Selection::caret(Position::new(5, 0)));
+            editor.move_blocks_up();
+            editor.move_blocks_up();
+        });
+        assert_eq!(moved.stats(), counted);
+        // Everything replaced by one paragraph.
+        check(&|editor| {
+            editor.select_all();
+            editor.insert_text("Only this.");
+        });
+        // And a document that shares no block with the one before.
+        let other = Document::from_blocks(vec![Block::paragraph("Something else entirely.")]);
+        assert_eq!(stats_after(&before, counted, &other), other.stats());
+        assert_eq!(stats_after(&other, other.stats(), &before), counted);
     }
 }

@@ -91,9 +91,9 @@ pub(crate) fn restore_version(
     let restored = content::parse(&meta, &snapshot.content)?;
     let changed = loaded.document != restored;
     let words_before = loaded.document.stats().words as u64;
-    let words_after = restored.stats().words as u64;
     let kept_title = loaded.custom_title.then(|| loaded.meta.title.clone());
     let form = Form::of(&restored, kept_title.as_deref());
+    let words_after = form.words;
     let restored_version = version_info(&snapshot.meta, store.snapshot_label(snapshot.meta.id)?);
     let mut after = writer_store::DocumentMeta {
         title: form.title.clone(),

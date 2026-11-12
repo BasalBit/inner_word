@@ -456,7 +456,10 @@ fn finish_change(
     let before = &loaded.document;
     let changed = *before != after;
     let delta = Delta::between(before, &after);
-    let (stats_before, stats_after) = (before.stats(), after.stats());
+    // Counting a book takes as long as reading it from the library: it is counted
+    // once, and the changed text from there.
+    let stats_before = before.stats();
+    let stats_after = content::stats_after(before, stats_before, &after);
     let detached = thread_infos(&after)
         .into_iter()
         .filter(|thread| delta.detached.iter().any(|id| id.0 == thread.id))
@@ -465,7 +468,7 @@ fn finish_change(
     let (meta, snapshot) = if !changed {
         (loaded.meta.clone(), None)
     } else if session.dry_run {
-        let form = Form::of(&after, kept_title.as_deref());
+        let form = Form::counted(&after, kept_title.as_deref(), stats_after);
         (
             DocumentMeta {
                 title: form.title,
@@ -480,7 +483,7 @@ fn finish_change(
         let id = loaded.meta.id;
         let version = content::keep_version(session.store, id, &loaded.raw, &label)?;
         session.note(Change::VersionKept { document: id });
-        let form = Form::of(&after, kept_title.as_deref());
+        let form = Form::counted(&after, kept_title.as_deref(), stats_after);
         let meta = session.store.save_document(id, &form.content())?;
         session.note(Change::DocumentText { id });
         if !delta.detached.is_empty() {

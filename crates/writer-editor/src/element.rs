@@ -175,7 +175,11 @@ impl Editor {
         } else if compact {
             LayoutEnv {
                 text_system: window.text_system().clone(),
-                style: LayoutStyle::new(theme, &settings.typography, true, false, 1.),
+                style: if self.config.mode.is_formatted_compact() {
+                    LayoutStyle::formatted_compact(theme, &settings.typography)
+                } else {
+                    LayoutStyle::new(theme, &settings.typography, true, false, 1.)
+                },
                 viewport,
                 column_left: viewport.left(),
                 column_width: viewport.size.width,

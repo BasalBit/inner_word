@@ -207,8 +207,11 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // A compact editor is a field among others: `tab` reaches it.
-        let focus_handle = cx.focus_handle().tab_stop(config.mode.is_compact());
+        // A compact editor is a field among others: `tab` reaches it. A
+        // formatted one is a view of text, not a field.
+        let focus_handle = cx
+            .focus_handle()
+            .tab_stop(config.mode.is_compact() && !config.mode.is_formatted_compact());
         let interceptors = Interceptors::default();
         let mut state = EditorState::new(document);
         state.set_options(options_of(&config));

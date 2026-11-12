@@ -49,6 +49,7 @@
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
+//! | A view of rich text in a panel (an answer of the assistant) | [`CompactOptions::formatted`] with [`EditorConfig::read_only`]: sized like a small input, set with the typography of its document, headings at [`FORMATTED_HEADING_SCALE`] |
 //!
 //! ## Mutation
 //!
@@ -189,7 +190,7 @@ mod tests;
 pub use commands::{
     CATEGORY_BLOCK, CATEGORY_EDIT, CATEGORY_FORMAT, CATEGORY_INSERT, CATEGORY_LAYOUT, commands,
 };
-pub use config::{CaretStyle, CompactOptions, EditorConfig, EditorMode};
+pub use config::{CaretStyle, CompactOptions, EditorConfig, EditorMode, FORMATTED_HEADING_SCALE};
 pub use editor::Editor;
 #[doc(hidden)]
 pub use editor::FramePerf;

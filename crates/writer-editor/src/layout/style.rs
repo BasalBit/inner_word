@@ -17,6 +17,8 @@ use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, Rgba, TextRun, px};
 use writer_core::{Block, BlockKind, InlineAttrs, Typography};
 use writer_ui::theme::{self, HighlightColor, Theme, ThemeColors};
 
+use crate::config::FORMATTED_HEADING_SCALE;
+
 /// Horizontal step of one indent level, in points.
 pub(crate) const INDENT_STEP: f32 = 24.;
 /// Space left of a list item's text for its marker.
@@ -47,6 +49,9 @@ pub(crate) struct LayoutStyle {
     pub(crate) scale: f32,
     /// Page view: text sits on the page colour instead of the canvas.
     pub(crate) paged: bool,
+    /// A formatted compact editor (`CompactOptions::formatted`): headings
+    /// at `FORMATTED_HEADING_SCALE` instead of the document's own scale.
+    pub(crate) small_headings: bool,
 }
 
 /// Sizes and spacing of one block, in layout pixels.
@@ -185,6 +190,17 @@ impl LayoutStyle {
                 1.
             },
             paged,
+            small_headings: false,
+        }
+    }
+
+    /// The style of a formatted compact editor: the document's typography
+    /// as in the document editor (fonts, sizes, spacing, inline code),
+    /// with headings scaled for a small surface.
+    pub(crate) fn formatted_compact(theme: &Theme, typography: &Typography) -> Self {
+        Self {
+            small_headings: true,
+            ..Self::new(theme, typography, false, false, 1.)
         }
     }
 
@@ -197,6 +213,7 @@ impl LayoutStyle {
             && self.typography == other.typography
             && self.scale == other.scale
             && self.paged == other.paged
+            && self.small_headings == other.small_headings
     }
 
     /// Document points to layout pixels.
@@ -251,6 +268,12 @@ impl LayoutStyle {
         let heading = kind.heading_level().filter(|_| !self.compact);
         let font_points = if self.compact {
             self.base_points()
+        } else if let Some(level) = heading.filter(|_| self.small_headings) {
+            // A size the block carries itself still wins.
+            block.text_size().unwrap_or_else(|| {
+                let factor = FORMATTED_HEADING_SCALE[usize::from(level.clamp(1, 6)) - 1];
+                (self.base_points() * factor).round()
+            })
         } else {
             self.typography.size_of(block)
         };

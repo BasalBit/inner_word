@@ -23,13 +23,32 @@ pub struct CompactOptions {
     /// `enter` emits [`crate::EditorEvent::Submitted`] instead of starting a
     /// new paragraph; `shift-enter` still inserts a line break.
     pub submit_on_enter: bool,
+    /// Show the document's formatting: a view of rich text that sizes
+    /// itself like a compact editor (as wide as its container, as tall as
+    /// its content up to [`CompactOptions::max_height`], no column, no
+    /// background of its own). Headings, lists, quotes, code and inline
+    /// formatting are drawn as in the document editor, with the body font,
+    /// the text size, the line height and the paragraph spacing of the
+    /// document's own typography (`DocumentSettings::typography`); headings
+    /// are scaled down to suit a small surface (see
+    /// [`FORMATTED_HEADING_SCALE`]). Meant for read-only text (an answer of
+    /// the assistant): the editing commands stay those of a compact editor,
+    /// and the editor is not a tab stop. Off by default.
+    pub formatted: bool,
 }
+
+/// The text size of headings 1 to 6 in a formatted compact editor
+/// ([`CompactOptions::formatted`]), as multiples of the body size. A panel
+/// is narrower than a page: the document's own scale (2.0 for a first
+/// heading) would leave three words to a line.
+pub const FORMATTED_HEADING_SCALE: [f32; 6] = [1.4, 1.25, 1.12, 1.0, 1.0, 0.92];
 
 impl Default for CompactOptions {
     fn default() -> Self {
         Self {
             max_height: px(160.),
             submit_on_enter: true,
+            formatted: false,
         }
     }
 }
@@ -44,6 +63,13 @@ impl CompactOptions {
     /// Sets whether `enter` submits.
     pub fn submit_on_enter(mut self, submit_on_enter: bool) -> Self {
         self.submit_on_enter = submit_on_enter;
+        self
+    }
+
+    /// Sets whether the document's formatting is shown (see
+    /// [`CompactOptions::formatted`]).
+    pub fn formatted(mut self, formatted: bool) -> Self {
+        self.formatted = formatted;
         self
     }
 }
@@ -73,6 +99,12 @@ impl EditorMode {
             EditorMode::Compact(options) => Some(options),
             EditorMode::Full => None,
         }
+    }
+
+    /// Whether this is a compact editor that shows the document's
+    /// formatting ([`CompactOptions::formatted`]).
+    pub fn is_formatted_compact(&self) -> bool {
+        matches!(self, EditorMode::Compact(options) if options.formatted)
     }
 }
 

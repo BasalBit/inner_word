@@ -552,6 +552,127 @@ fn compact_mode_grows_and_submits(cx: &mut TestAppContext) {
     });
 }
 
+/// A formatted compact editor is a view of rich text: sized like a compact
+/// editor, set like the document editor, headings scaled down.
+#[gpui::test]
+fn formatted_compact_mode_shows_the_formatting(cx: &mut TestAppContext) {
+    use writer_core::{BlockKind, DocumentSettings, Typography};
+
+    setup(cx);
+    let typography = Typography {
+        base_size: 14.,
+        line_height: 1.5,
+        paragraph_spacing: 8.,
+        ..Typography::default()
+    };
+    let document = || {
+        Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "A heading"),
+            Block::paragraph("First paragraph"),
+            Block::paragraph("Second paragraph"),
+        ])
+        .with_settings(DocumentSettings {
+            typography: typography.clone(),
+            ..DocumentSettings::default()
+        })
+    };
+    let row = |editor: &crate::Editor, block: usize| {
+        editor
+            .position_bounds(Position::new(block, 0))
+            .expect("laid out")
+    };
+
+    let plain = EditorConfig::compact(CompactOptions::default().max_height(px(4000.)));
+    let (plain_editor, plain_cx) = open(document(), plain, cx);
+    plain_cx.run_until_parked();
+    let (plain_height, plain_heading, plain_paragraph) =
+        plain_editor.read_with(plain_cx, |e, _| {
+            (
+                e.viewport_bounds().unwrap().size.height,
+                row(e, 0).size.height,
+                row(e, 1).size.height,
+            )
+        });
+    assert_eq!(
+        plain_heading, plain_paragraph,
+        "a plain compact editor sets a heading like any line"
+    );
+    plain_editor.read_with(plain_cx, |editor, cx| {
+        assert!(gpui::Focusable::focus_handle(editor, cx).tab_stop);
+    });
+
+    let formatted = EditorConfig::compact(
+        CompactOptions::default()
+            .max_height(px(4000.))
+            .formatted(true),
+    )
+    .read_only(true);
+    assert!(formatted.mode.is_formatted_compact());
+    assert!(
+        !EditorConfig::compact(CompactOptions::default())
+            .mode
+            .is_formatted_compact()
+    );
+    let (editor, cx) = open(document(), formatted, cx);
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, cx| {
+        let heading = row(editor, 0);
+        let first = row(editor, 1);
+        let second = row(editor, 2);
+        // The typography of the document: 14 × 1.5 = 21.
+        assert_eq!(first.size.height, px(21.));
+        // The heading: 14 × 1.4 = 20 (rounded), at the heading line height 1.3.
+        assert_eq!(heading.size.height, px(26.));
+        // The document editor would set it at twice the body size.
+        assert!(heading.size.height < px(28. * 1.3));
+        // Paragraph spacing between the two paragraphs.
+        assert_eq!(second.top() - first.bottom(), px(8.));
+        // As tall as its content, which is more than the plain lines.
+        let height = editor.viewport_bounds().unwrap().size.height;
+        assert!(height > plain_height, "{height:?} > {plain_height:?}");
+        assert!(height < px(200.), "sized by the content, not the window");
+        // A view, not a field.
+        assert!(!gpui::Focusable::focus_handle(editor, cx).tab_stop);
+    });
+
+    // Read-only: typing changes nothing, selecting and copying work.
+    cx.simulate_input("x");
+    cx.simulate_keystrokes("cmd-a cmd-c");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.plain_text(),
+            "A heading\nFirst paragraph\nSecond paragraph"
+        );
+        assert!(!editor.selection().is_collapsed());
+    });
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(
+        copied.as_deref(),
+        Some("A heading\nFirst paragraph\nSecond paragraph")
+    );
+
+    // A heading that carries a size of its own keeps it.
+    editor.update(cx, |editor, cx| {
+        editor.set_document(
+            Document::from_blocks(vec![
+                Block::with_text(BlockKind::heading(2), "Sized").with_text_size(Some(30.)),
+                Block::with_text(BlockKind::heading(2), "Scaled"),
+            ])
+            .with_settings(DocumentSettings {
+                typography: typography.clone(),
+                ..DocumentSettings::default()
+            }),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(row(editor, 0).size.height, px(39.), "30 × 1.3");
+        // 14 × 1.25 = 17.5, rounded to 18; 18 × 1.3 = 23.4, rounded to 23.
+        assert_eq!(row(editor, 1).size.height, px(23.));
+    });
+}
+
 #[gpui::test]
 fn caret_blinks_and_follows_focus_and_the_window(cx: &mut TestAppContext) {
     use std::time::Duration;

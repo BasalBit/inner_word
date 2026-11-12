@@ -189,6 +189,8 @@ impl Question {
             plan,
             mode: ImportMode::Merge,
             rows: Vec::new(),
+            changing: 0,
+            colliding: 0,
             selected: None,
             scroll: UniformListScrollHandle::new(),
         };
@@ -229,7 +231,12 @@ impl Question {
 
     fn refresh_import_lines(&mut self) {
         if let Subject::Import(preview) = &self.subject {
-            self.lines = words::import_summary(&preview.plan, preview.plan.outcome(preview.mode));
+            self.lines = words::import_summary(
+                &preview.plan,
+                preview.plan.outcome(preview.mode),
+                preview.changing,
+                preview.colliding,
+            );
         }
     }
 }
@@ -281,6 +288,11 @@ pub(crate) struct Preview {
     /// The way of importing whose outcome the rows show.
     pub mode: ImportMode,
     pub rows: Vec<PreviewRow>,
+    /// How many commands get other keys, and how many collisions would be
+    /// left, as the rows show them: a command that the file changes in
+    /// several key contexts of one place, the same way, is one row.
+    pub changing: usize,
+    pub colliding: usize,
     pub selected: Option<usize>,
     pub scroll: UniformListScrollHandle,
 }
@@ -290,30 +302,43 @@ impl Preview {
     pub fn rebuild(&mut self, names: &Names) {
         let outcome = self.plan.outcome(self.mode);
         let mut rows = Vec::new();
-        if !outcome.differences.is_empty() {
-            rows.push(PreviewRow::Header(format!(
-                "Keys that change ({})",
-                outcome.differences.len()
-            )));
-            for difference in &outcome.differences {
-                rows.push(PreviewRow::Change {
-                    title: names.title(&difference.target),
-                    place: names.place(&difference.target),
-                    before: glyph_list(&difference.before),
-                    after: glyph_list(&difference.after),
-                });
+        // A command bound in several key contexts of one place is in the
+        // file once for each; where they change the same way they are one
+        // row here, as they are one row of the list.
+        let mut changes: Vec<PreviewRow> = Vec::new();
+        for difference in &outcome.differences {
+            let row = PreviewRow::Change {
+                title: names.title(&difference.target),
+                place: names.place(&difference.target),
+                before: glyph_list(&difference.before),
+                after: glyph_list(&difference.after),
+            };
+            if !changes.contains(&row) {
+                changes.push(row);
             }
         }
-        if !outcome.conflicts.is_empty() {
+        let mut collisions: Vec<PreviewRow> = Vec::new();
+        for collision in &outcome.conflicts {
+            let row = PreviewRow::Collision(words::collision_text(collision, names));
+            if !collisions.contains(&row) {
+                collisions.push(row);
+            }
+        }
+        self.changing = changes.len();
+        self.colliding = collisions.len();
+        if !changes.is_empty() {
+            rows.push(PreviewRow::Header(format!(
+                "Keys that change ({})",
+                changes.len()
+            )));
+            rows.extend(changes);
+        }
+        if !collisions.is_empty() {
             rows.push(PreviewRow::Header(format!(
                 "Collisions it would leave ({})",
-                outcome.conflicts.len()
+                collisions.len()
             )));
-            for collision in &outcome.conflicts {
-                rows.push(PreviewRow::Collision(words::collision_text(
-                    collision, names,
-                )));
-            }
+            rows.extend(collisions);
         }
         if !self.plan.skipped.is_empty() {
             rows.push(PreviewRow::Header(format!(

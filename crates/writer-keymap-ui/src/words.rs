@@ -332,11 +332,17 @@ pub(crate) fn take_label<'a>(
     }
 }
 
-/// What an import would do, in a few sentences above its list.
-pub(crate) fn import_summary(plan: &ImportPlan, outcome: &ImportOutcome) -> Vec<Line> {
+/// What an import would do, in a few sentences above its list. `changing`
+/// and `colliding`: how many commands get other keys and how many
+/// collisions are left, as the list under the sentences shows them.
+pub(crate) fn import_summary(
+    plan: &ImportPlan,
+    outcome: &ImportOutcome,
+    changing: usize,
+    colliding: usize,
+) -> Vec<Line> {
     let mut lines = Vec::new();
-    let changing = outcome.differences.len();
-    if changing == 0 {
+    if outcome.differences.is_empty() {
         lines.push(Line::new(
             Tone::Plain,
             if plan.changes.is_empty() {
@@ -356,7 +362,7 @@ pub(crate) fn import_summary(plan: &ImportPlan, outcome: &ImportOutcome) -> Vec<
         ));
     }
     if !outcome.conflicts.is_empty() {
-        let n = outcome.conflicts.len();
+        let n = colliding;
         lines.push(Line::new(
             Tone::Warning,
             format!(

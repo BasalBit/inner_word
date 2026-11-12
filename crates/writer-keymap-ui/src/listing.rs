@@ -230,24 +230,30 @@ impl Listing {
     }
 
     /// How many commands have other keys than their defaults, as a person
-    /// counts them: a command the keymap holds in several key contexts of
-    /// one place (the chats of the assistant bind theirs in four) is one
-    /// command with one key, as it is one row of the list. Commands are
-    /// told apart by their name and place in the catalogue, so a command
-    /// that is not listed right now is counted too.
+    /// counts them ([`Listing::commands_among`]).
     pub fn changed_commands(&self) -> usize {
         let effective = self.keymap.effective();
+        self.commands_among(effective.changed().map(|changed| &changed.target))
+    }
+
+    /// How many commands `targets` are, as a person counts them: a command
+    /// the keymap holds in several key contexts of one place (the chats of
+    /// the assistant bind theirs in four) is one command with one key, as
+    /// it is one row of the list. Commands are told apart by their name
+    /// and place, of their row or in the catalogue, so a command that is
+    /// not listed right now is counted too.
+    pub fn commands_among<'a>(&self, targets: impl IntoIterator<Item = &'a Target>) -> usize {
         let mut seen: Vec<(&str, &str)> = Vec::new();
         let mut unnamed = 0;
-        for changed in effective.changed() {
+        for target in targets {
             let named = self
                 .rows
                 .iter()
-                .find(|row| row.target == changed.target)
+                .find(|row| row.target == *target)
                 .map(|row| (row.title.as_ref(), row.place.as_ref()))
                 .or_else(|| {
                     self.catalogue
-                        .info(&changed.target)
+                        .info(target)
                         .map(|info| (info.title.as_str(), info.place.as_str()))
                 });
             match named {

@@ -26,6 +26,9 @@
 //!     workspace.set_editor_strip("vim-command-line", Some(command_line.into()), cx);
 //! });
 //!
+//! // the spelling keys (`]s`, `z=`, `zg`): see `VimSpelling`
+//! vim.update(cx, |vim, _| vim.set_spelling(Some(Rc::new(CheckerHooks(checker.clone())))));
+//!
 //! // on and off (a setting, cmd-alt-v)
 //! vim.update(cx, |vim, cx| vim.set_attached(settings.vim_mode, cx));
 //!
@@ -158,6 +161,26 @@
 //! waiting for its argument) is dropped. Insert and Visual mode stay, and
 //! an open command line keeps its text and goes on when the focus returns.
 //!
+//! # Spelling
+//!
+//! `]s` and `[s` go to the next and previous misspelled word (with counts,
+//! after an operator, in Visual mode, wrapping around the document), `z=`
+//! opens the suggestions for the word under the cursor, `1z=` takes the
+//! first suggestion at once, `zg` learns the word and `zug` unlearns it.
+//! Neither the engine nor this crate has a spell checker: the application
+//! connects its own with [`VimMode::set_spelling`], as an implementation
+//! of [`VimSpelling`] (its documentation has the snippet). Until then, and
+//! while the checker says it is off for the editor, the keys report
+//! `E756: Spell checking is off` in the status. What a command did is a
+//! status message too (`Learned spelling: Hasanaj`,
+//! `Sorry, only 2 suggestions`, `No misspelled word under the cursor`).
+//!
+//! A replacement made with `{count}z=` is one undo step (`u` takes it
+//! back) and leaves the cursor on the start of the word. In Visual mode
+//! the commands are for the word the cursor is on, and Visual mode ends.
+//! `z=` opens its menu in the window the key was pressed in; fed through
+//! [`VimMode::feed_keys`] it has none and says so.
+//!
 //! # Rows and the editor seam
 //!
 //! `j`, `k`, `gj`, `gk`, `g0`, `g$`, `H`, `M`, `L` and the scroll commands
@@ -226,6 +249,7 @@ mod host;
 mod input;
 mod mode;
 mod search;
+mod spell;
 mod status;
 mod views;
 
@@ -233,6 +257,7 @@ use gpui::{App, actions};
 use writer_ui::CommandDescriptor;
 
 pub use mode::{KEY_CONTEXT_MODE, SEARCH_LAYER, VimMode};
+pub use spell::{VimSpelling, VimSuggestions};
 pub use status::{VimEvent, VimMessage, VimStatus};
 pub use views::{VimCommandLine, VimStatusItem};
 /// The engine types that appear in this crate's API.

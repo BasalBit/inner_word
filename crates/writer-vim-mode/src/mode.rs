@@ -2,20 +2,23 @@
 
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-use gpui::{App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, Task, WeakEntity};
+use gpui::{
+    App, Context, Entity, EventEmitter, Global, Keystroke, Subscription, Task, WeakEntity, Window,
+};
 use writer_core::{EditorState, Position, Selection, TextRange};
 use writer_editor::{
     Autoscroll, CaretStyle, Editor, EditorEvent, HighlightStyle, InterceptPriority, KeyDisposition,
 };
 use writer_ui::theme::{ActiveTheme, GlobalTheme};
 use writer_vim::{
-    CaretShape, Effect, Key, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, Vim, VimHost,
-    VimOptions,
+    CaretShape, Effect, Key, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, SpellCommand,
+    Vim, VimHost, VimOptions,
 };
 
 use crate::{
     host::{EditorHost, read_clipboard, write_clipboard},
     search::SearchMatches,
+    spell::VimSpelling,
     status::{VimEvent, VimMessage, VimStatus},
 };
 
@@ -46,7 +49,7 @@ struct SavedEditor {
 }
 
 /// One call into the engine.
-enum Call<'a> {
+pub(crate) enum Call<'a> {
     Key(Key),
     TextInserted(&'a str),
     TextReplaced(TextRange, &'a str),
@@ -121,7 +124,7 @@ pub(crate) fn target_for_global_action(cx: &mut App) -> Option<Entity<VimMode>> 
 /// }).detach();
 /// ```
 pub struct VimMode {
-    editor: Entity<Editor>,
+    pub(crate) editor: Entity<Editor>,
     vim: Vim,
     /// The options as the host set them; the engine gets them with
     /// `read_only` also following the editor.
@@ -138,6 +141,10 @@ pub struct VimMode {
     /// looked: a change report that finds them unchanged needs no sync.
     seen: Option<(u64, Selection)>,
     layout_fallbacks: usize,
+    /// The spell checker behind `]s`, `z=` and friends, once the
+    /// application has connected one (see the `spell` module).
+    pub(crate) spelling: Option<Rc<dyn VimSpelling>>,
+    pub(crate) spell_misses: usize,
     /// The marked text of a dead key or an input method while the command
     /// line or a command waiting for a character has the keyboard (see the
     /// `input` module). It is in neither the document nor the command
@@ -178,6 +185,8 @@ impl VimMode {
             bell: None,
             seen: None,
             layout_fallbacks: 0,
+            spelling: None,
+            spell_misses: 0,
             composition: None,
             input_ready: Rc::default(),
             _subscriptions: subscriptions,
@@ -247,9 +256,9 @@ impl VimMode {
         let handle = cx.weak_entity();
         self.keys = Some(editor.intercept_keys(
             InterceptPriority::MODAL,
-            move |keystroke, _, cx| {
+            move |keystroke, window, cx| {
                 handle
-                    .update(cx, |this, cx| this.on_key(keystroke, cx))
+                    .update(cx, |this, cx| this.on_key(keystroke, window, cx))
                     .unwrap_or(KeyDisposition::Pass)
             },
         ));
@@ -372,7 +381,12 @@ impl VimMode {
     // ----- keys ------------------------------------------------------------------------
 
     /// One key of the focused editor, before its bindings and text input.
-    fn on_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> KeyDisposition {
+    fn on_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> KeyDisposition {
         if !self.attached {
             return KeyDisposition::Pass;
         }
@@ -462,7 +476,7 @@ impl VimMode {
         let Some(key) = key_from_keystroke(keystroke, wants_literal_key(&self.vim)) else {
             return KeyDisposition::Pass;
         };
-        let outcome = self.engine_call(Call::Key(key), cx);
+        let outcome = self.engine_call_in(Call::Key(key), Some(window), cx);
         let consumed = outcome.consumed;
         self.apply(outcome, consumed, cx);
         if consumed {
@@ -615,7 +629,41 @@ impl VimMode {
     /// to the Vim cursor, the view follows it or the explicit scroll
     /// requests, and the clipboard is written.
     fn engine_call(&mut self, call: Call, cx: &mut App) -> Outcome {
+        self.engine_call_in(call, None, cx)
+    }
+
+    /// [`VimMode::engine_call`] for a key pressed in `window`: a spelling
+    /// command of the engine (`z=`) may open a menu there.
+    fn engine_call_in(
+        &mut self,
+        call: Call,
+        mut window: Option<&mut Window>,
+        cx: &mut App,
+    ) -> Outcome {
+        let (mut outcome, commands) = self.engine_call_inner(call, cx);
+        for command in commands {
+            self.run_spell_command(command, &mut outcome, window.as_deref_mut(), cx);
+        }
+        outcome
+    }
+
+    /// The call itself; returns the spelling commands it left to carry
+    /// out (see the `spell` module).
+    pub(crate) fn engine_call_inner(
+        &mut self,
+        call: Call,
+        cx: &mut App,
+    ) -> (Outcome, Vec<SpellCommand>) {
         self.sync_options(cx);
+        // What the spell checker answers has to be asked before the editor
+        // is lent to the engine.
+        let spelling = match &call {
+            Call::Key(key) => self
+                .vim
+                .spell_lookahead(*key, self.editor.read(cx).state())
+                .and_then(|lookahead| self.prepare_spelling(lookahead, cx)),
+            _ => None,
+        };
         let clipboard = self
             .wants_clipboard(&call)
             .then(|| read_clipboard(cx))
@@ -623,7 +671,7 @@ impl VimMode {
         let detaching = matches!(call, Call::Detach);
         let follows_caret = call.follows_caret();
         let vim = &mut self.vim;
-        let (outcome, clipboard_write, fallbacks) = self.editor.update(cx, |editor, cx| {
+        let (outcome, clipboard_write, fallbacks, spell) = self.editor.update(cx, |editor, cx| {
             let before = (
                 editor.state().revision(),
                 editor.selection(),
@@ -631,12 +679,20 @@ impl VimMode {
             );
             // No autoscroll by the edit itself: it would aim at the
             // selection head, and the Vim cursor is known only afterwards.
-            let (outcome, scrolls, clipboard_write, fallbacks) = editor.edit_with_rows(
+            let (outcome, scrolls, clipboard_write, fallbacks, spell) = editor.edit_with_rows(
                 Autoscroll::None,
                 |state, rows| {
-                    let mut host = EditorHost::new(clipboard).with_rows(rows);
+                    let mut host = EditorHost::new(clipboard)
+                        .with_rows(rows)
+                        .with_spelling(spelling);
                     let outcome = call.run(vim, state, &mut host);
-                    (outcome, host.scrolls, host.clipboard_write, host.fallbacks)
+                    (
+                        outcome,
+                        host.scrolls,
+                        host.clipboard_write,
+                        host.fallbacks,
+                        host.spell,
+                    )
                 },
                 cx,
             );
@@ -656,15 +712,16 @@ impl VimMode {
             } else if follows_caret && (outcome.consumed || before != after) {
                 editor.scroll_to_caret(Autoscroll::Fit, cx);
             }
-            (outcome, clipboard_write, fallbacks)
+            (outcome, clipboard_write, fallbacks, spell)
         });
         self.layout_fallbacks += fallbacks;
+        self.spell_misses += spell.misses;
         if let Some(content) = clipboard_write {
             write_clipboard(&content, cx);
         }
         let editor = self.editor.read(cx);
         self.seen = Some((editor.state().revision(), editor.selection()));
-        outcome
+        (outcome, spell.commands)
     }
 
     /// Puts the editor's caret where the Vim cursor is, in the engine's

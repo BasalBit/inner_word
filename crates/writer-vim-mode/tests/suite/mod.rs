@@ -8,6 +8,7 @@ mod platform_input;
 mod rows;
 mod seams;
 mod search;
+mod spelling;
 mod typing;
 
 use std::{cell::RefCell, rc::Rc};

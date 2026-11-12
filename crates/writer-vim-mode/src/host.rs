@@ -11,15 +11,20 @@
 //! has not been drawn yet) is answered from hard lines, one row per line,
 //! and counted in [`EditorHost::fallbacks`].
 //!
-//! Scroll requests and clipboard writes are collected and carried out by
-//! the caller after the engine returns, as the host trait allows.
+//! Scroll requests, clipboard writes and spelling commands are collected
+//! and carried out by the caller after the engine returns, as the host
+//! trait allows. The spell checker cannot be asked during the call either
+//! (it works on the editor, which is lent out): its answers are fetched
+//! before the call, see the `spell` module.
 
 use std::ops::Range;
 
 use gpui::{App, ClipboardItem, px};
-use writer_core::{Document, EditorState, Fragment, Position, text};
+use writer_core::{Document, EditorState, Fragment, Position, TextRange, text};
 use writer_editor::RowOracle;
-use writer_vim::{GoalColumn, RegisterContent, Scroll, Viewport, VimHost};
+use writer_vim::{GoalColumn, RegisterContent, Scroll, SpellCommand, SpellOff, Viewport, VimHost};
+
+use crate::spell::{SpellAnswers, SpellHost};
 
 /// A goal x far to the right of any row: the end of the row.
 const END_OF_ROW_X: f32 = 1.0e7;
@@ -39,6 +44,9 @@ pub(crate) struct EditorHost<'a> {
     pub(crate) scrolls: Vec<Scroll>,
     /// Layout questions answered without the editor's layout.
     pub(crate) fallbacks: usize,
+    /// The spell checker's prepared answers and the spelling commands of
+    /// the call (see the `spell` module).
+    pub(crate) spell: SpellHost,
 }
 
 impl<'a> EditorHost<'a> {
@@ -52,7 +60,15 @@ impl<'a> EditorHost<'a> {
             clipboard_write: None,
             scrolls: Vec::new(),
             fallbacks: 0,
+            spell: SpellHost::default(),
         }
+    }
+
+    /// What the spell checker answers during this call; `None` while spell
+    /// checking is off.
+    pub(crate) fn with_spelling(mut self, answers: Option<SpellAnswers>) -> Self {
+        self.spell.answers = answers;
+        self
     }
 
     /// Lets the host answer layout questions from the editor's layout.
@@ -130,6 +146,19 @@ impl VimHost for EditorHost<'_> {
         // Later reads in the same call see what was just written.
         self.clipboard = Some(content.clone());
         self.clipboard_write = Some(content.clone());
+    }
+
+    fn misspelling_from(
+        &mut self,
+        _: &EditorState,
+        from: Position,
+        forward: bool,
+    ) -> Result<Option<TextRange>, SpellOff> {
+        self.spell.misspelling_from(from, forward)
+    }
+
+    fn spell_command(&mut self, _: &EditorState, command: SpellCommand) -> Result<(), SpellOff> {
+        self.spell.command(command)
     }
 }
 

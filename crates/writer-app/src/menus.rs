@@ -31,11 +31,22 @@
 //! So the keys the menu bar should show are bound once more, in
 //! [`MENU_KEY_CONTEXT`]: a context no element of the app ever has, which
 //! holds in GPUI's made-up one. These bindings are added before all others
-//! ([`menu_key_bindings`], first in `crate::init`), so GPUI finds them
-//! first for the menu, they never run, and key hints (which show the
-//! binding added last) never show them. A test holds every item's key to
-//! a key that really runs its action. Three items whose only key has
-//! return in it show no key (see [`menu_key_bindings`]).
+//! (`crate::keymap` installs them first, whenever it installs the keymap),
+//! so GPUI finds them first for the menu, they never run, and key hints
+//! (which show the binding added last) never show them. They are computed
+//! from the keymap that is installed ([`menu_key_bindings`]), so an item
+//! shows the key the user gave its command, and none when the user took
+//! the key away. A test holds every item's key to a key that really runs
+//! its action. An item whose command has only keys with return or tab in
+//! them shows no key (with the default keys there are three).
+//!
+//! The key beside an item is more than a label: AppKit runs an enabled
+//! item when its key is pressed and GPUI has no binding for that key where
+//! the keyboard is. A key the user took from a command must therefore
+//! leave its menu item too, which is why the menu bar is built again after
+//! every change of the keymap.
+
+use std::rc::Rc;
 
 use gpui::{Action, App, KeyBinding, KeyContext, Keymap, Menu, MenuItem, OsAction, SystemMenuType};
 use writer_assistant_ui as assistant;
@@ -348,38 +359,118 @@ pub fn menu_actions(menus: &[Menu]) -> Vec<(String, Box<dyn Action>)> {
 }
 
 /// The bindings that give menu items the key the rest of the app shows
-/// for their action (see the [module docs](self)). They never run. Add
-/// them before every other binding.
-pub fn menu_key_bindings() -> Vec<KeyBinding> {
-    fn key(keystroke: &str, action: impl Action) -> KeyBinding {
-        KeyBinding::new(keystroke, action, Some(MENU_KEY_CONTEXT))
+/// for their action (see the [module docs](self)), computed from `keymap`:
+/// the bindings that run, the defaults with the user's changes. They never
+/// run themselves. Add them before every other binding.
+///
+/// An item shows the key the list of keyboard shortcuts shows for its
+/// command ([`shown_binding`]). Where GPUI's own rule
+/// ([`native_menu_binding`]) already picks that key, nothing is added;
+/// where it picks another one, the right key is bound once more in
+/// [`MENU_KEY_CONTEXT`]. And where the command has keys but none the menu
+/// bar can draw ([`menu_can_show`]: a key with return or tab in it, which
+/// GPUI hands AppKit as the word), a sequence of two keys is bound, which
+/// gets no key in the menu at all: better than a wrong one. With the
+/// default keys that is "Page Break", "Line Break" and "Tick or Untick
+/// To-do". A command the user left without a key has no binding and shows
+/// none.
+pub fn menu_key_bindings(keymap: &Keymap) -> Vec<KeyBinding> {
+    let context: Rc<gpui::KeyBindingContextPredicate> = Rc::new(
+        gpui::KeyBindingContextPredicate::parse(MENU_KEY_CONTEXT).expect("a valid key context"),
+    );
+    let mut bindings = Vec::new();
+    let mut seen: Vec<Box<dyn Action>> = Vec::new();
+    for (_, action) in menu_actions(&app_menus()) {
+        // "Link…" is in two menus.
+        if seen.iter().any(|seen| seen.partial_eq(action.as_ref())) {
+            continue;
+        }
+        let Some(native) = native_menu_binding(keymap, action.as_ref()) else {
+            // No key at all: the item shows none.
+            seen.push(action);
+            continue;
+        };
+        let keys = match shown_binding(keymap, action.as_ref()) {
+            // GPUI finds the right key by itself.
+            Some(shown) if shown.keystrokes() == native.keystrokes() => None,
+            Some(shown) => Some(crate::keymap::keys_of(shown)),
+            // Nothing the menu bar can draw, and GPUI would draw it.
+            None if native.keystrokes().len() == 1 => {
+                let key = crate::keymap::keys_of(native);
+                Some(format!("{key} {key}"))
+            }
+            None => None,
+        };
+        if let Some(binding) = keys.and_then(|keys| {
+            crate::keymap::bind(&keys, action.as_ref(), Some(context.clone()), None, None)
+        }) {
+            bindings.push(binding);
+        }
+        seen.push(action);
     }
-    vec![
-        // The find bar's own key for this (shift-enter) comes first in the
-        // keymap.
-        key("cmd-shift-g", tools::FindPrevious),
-        // The spelling the keyboard really sends (cmd-:) comes first in the
-        // keymap.
-        key("cmd-shift-;", spell::PreviousMisspelling),
-        // Shift with a digit or punctuation is bound in two spellings (the
-        // character a keyboard really sends, and the readable one): the
-        // menu shows the readable one, like the rest of the app.
-        key("cmd-shift-7", editor::ToggleNumberedList),
-        key("cmd-shift-8", editor::ToggleBulletList),
-        key("cmd-shift-9", editor::ToggleTodoList),
-        key("cmd-shift-'", editor::ToggleCodeBlock),
-        key("cmd-shift-.", editor::IncreaseTextSize),
-        key("cmd-shift-,", editor::DecreaseTextSize),
-        // Keys with return in them. GPUI hands AppKit the word "enter"
-        // where AppKit wants a return character, and a binding cannot be
-        // written with one. A sequence of two keys gets no key in the menu
-        // at all, which is better than a wrong one: these three items show
-        // none. (Indent and Outdent show their second keys, cmd-] and
-        // cmd-[, instead of tab.)
-        key("cmd-enter cmd-enter", editor::InsertPageBreak),
-        key("shift-enter shift-enter", editor::InsertSoftBreak),
-        key("cmd-shift-enter cmd-shift-enter", editor::ToggleTodoChecked),
-    ]
+    bindings
+}
+
+/// Whether `binding` exists only to give a menu bar item its key.
+pub fn is_menu_key_binding(binding: &KeyBinding) -> bool {
+    binding
+        .predicate()
+        .is_some_and(|predicate| predicate.to_string() == MENU_KEY_CONTEXT)
+}
+
+/// Whether the menu bar can draw the key of `binding`: one keystroke
+/// whose key is a character or one of the keys GPUI knows AppKit's
+/// character for (`key_to_native` in GPUI's `platform/mac/events.rs`).
+/// Return and tab are not among them.
+pub fn menu_can_show(binding: &KeyBinding) -> bool {
+    let [keystroke] = binding.keystrokes() else {
+        return false;
+    };
+    let key = keystroke.key();
+    key.chars().count() == 1
+        || matches!(
+            key,
+            "space"
+                | "backspace"
+                | "escape"
+                | "up"
+                | "down"
+                | "left"
+                | "right"
+                | "pageup"
+                | "pagedown"
+                | "home"
+                | "end"
+                | "delete"
+                | "insert"
+        )
+        || key
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| (1..=35).contains(&number))
+}
+
+/// The binding whose key the menu bar item of `action` is to show: among
+/// the bindings of the place the list of keyboard shortcuts names the
+/// command under (the widest it is bound in), the one the app prefers (the
+/// one bound last) that the menu bar can draw. "Indent" is `tab` in the
+/// list and `cmd-]` here.
+pub fn shown_binding<'a>(keymap: &'a Keymap, action: &'a dyn Action) -> Option<&'a KeyBinding> {
+    use crate::shortcuts::Place;
+    let place_of = |binding: &KeyBinding| {
+        let predicate = binding.predicate().map(|predicate| predicate.to_string());
+        Place::of_predicate(predicate.as_deref())
+    };
+    let real = || {
+        keymap
+            .bindings_for_action(action)
+            .filter(|binding| !is_menu_key_binding(binding))
+    };
+    let widest = real().map(place_of).min()?;
+    real()
+        .rev()
+        .filter(|binding| place_of(binding) == widest)
+        .find(|binding| menu_can_show(binding))
 }
 
 /// The context GPUI evaluates key contexts in when it looks for the key of

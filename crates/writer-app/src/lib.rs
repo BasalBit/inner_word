@@ -53,6 +53,7 @@ pub mod commands;
 pub mod controls;
 pub mod document_io;
 pub mod export;
+pub mod keymap;
 pub mod library_search;
 pub mod menus;
 pub mod palette;
@@ -100,8 +101,6 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 pub fn init(cx: &mut App) {
     writer_ui::theme::init(writer_ui::ThemeMode::System, cx);
 
-    // First of all: the bindings that only give menu items their key.
-    cx.bind_keys(menus::menu_key_bindings());
     cx.bind_keys(actions::key_bindings());
     writer_ui::init(cx);
     writer_editor::init(cx);
@@ -117,6 +116,11 @@ pub fn init(cx: &mut App) {
     // the answers): their keys come after the editor's and the tools'.
     writer_assistant_ui::init(cx);
     writer_assistant_quick::init(cx);
+
+    // Every crate has bound its keys: they are the defaults from here on,
+    // and the keymap that runs is the one `keymap` installs (the defaults
+    // with the user's changes, behind the menu bar's own bindings).
+    keymap::take_defaults(cx);
 
     register_commands(cx);
 

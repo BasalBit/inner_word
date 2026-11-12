@@ -277,10 +277,7 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let menu_only = |binding: &gpui::KeyBinding| {
-            binding.predicate().map(|predicate| predicate.to_string())
-                == Some(menus::MENU_KEY_CONTEXT.to_string())
-        };
+        let menu_only = menus::is_menu_key_binding;
         for binding in keymap.bindings().filter(|binding| menu_only(binding)) {
             // A binding that only gives a menu item its key belongs to a
             // menu item.
@@ -293,10 +290,9 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
             );
         }
         for (name, action) in &actions {
-            let real: Vec<String> = keymap
+            let real: Vec<&gpui::KeyBinding> = keymap
                 .bindings_for_action(action.as_ref())
                 .filter(|binding| !menu_only(binding))
-                .map(unparsed)
                 .collect();
             let native = menus::native_menu_binding(&keymap, action.as_ref());
             let Some(shown_everywhere) = real.last() else {
@@ -304,25 +300,47 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
                 continue;
             };
             let native = native.unwrap_or_else(|| panic!("{name} shows no binding"));
+            let keys: Vec<String> = real.iter().map(|binding| unparsed(binding)).collect();
             if native.keystrokes().len() > 1 {
-                // No key in the menu: only where the one key has return
-                // in it, which the menu bar cannot be given.
+                // No key in the menu: only where the keys the app shows
+                // for the command are ones the menu bar cannot be given
+                // (return is in them).
                 assert!(
-                    real.iter().all(|key| key.contains("enter")),
-                    "{name} shows no key although it has {real:?}"
+                    menus::shown_binding(&keymap, action.as_ref()).is_none(),
+                    "{name} shows no key although it has {keys:?}"
+                );
+                assert!(
+                    unparsed(shown_everywhere).contains("enter"),
+                    "{name} shows no key although the app shows {}",
+                    unparsed(shown_everywhere)
                 );
                 continue;
             }
             let key = unparsed(native);
             assert!(
-                !key.contains("enter") && !key.ends_with("tab"),
+                !key.contains("enter") && !key.ends_with("tab") && menus::menu_can_show(native),
                 "{name} shows {key}, which the menu bar cannot draw"
             );
             assert!(
-                real.contains(&key),
-                "{name} shows {key}; its keys are {real:?} (the app shows {shown_everywhere})"
+                keys.contains(&key),
+                "{name} shows {key}; its keys are {keys:?} (the app shows {})",
+                unparsed(shown_everywhere)
             );
         }
+        // With the default keys, three items show none.
+        let without: Vec<&str> = actions
+            .iter()
+            .filter(|(_, action)| {
+                menus::native_menu_binding(&keymap, action.as_ref())
+                    .is_some_and(|binding| binding.keystrokes().len() > 1)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            without,
+            ["Tick or Untick To-do", "Page Break", "Line Break"],
+            "the items whose only key has return in it"
+        );
         // The reported one: "Find Previous" showed shift-enter.
         let find_previous = writer_editor_tools::actions::FindPrevious;
         assert_eq!(

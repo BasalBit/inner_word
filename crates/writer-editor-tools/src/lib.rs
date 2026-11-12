@@ -40,7 +40,7 @@
 //! | Font picker | `cmd-t` | Document default, recent, all families. `enter` applies to the selection or to the text typed next, `cmd-enter` sets the document's body font. |
 //! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `cmd-alt-f` in the bar shows or hides the replace row, `escape` (in the bar or in the document) closes and leaves the current match selected. |
 //!
-//! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
+//! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. What the host puts first (spelling suggestions) leads the menu, see [`EditorTools::set_text_menu_leading_extension`]. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
 //!
 //! | Format bar | a selection made with the mouse | Comes up by itself a moment after a drag, a double or triple click or a `shift`-click, over the selection: bold, italic, underline, strikethrough, inline code (showing the state of the selection), highlight, text colour, link, "turn into", the host's buttons, and "more" (the format menu). Never takes the keyboard; a button keeps the selection and the bar. Goes on `escape`, a keyboard selection, typing, a press elsewhere. See [`EditorTools::set_format_bar_enabled`] and the `format_bar` module docs. |
 //!
@@ -90,7 +90,9 @@
 //!   editor asks for it (`EditorEvent::ContextMenuRequested`) and this
 //!   view opens it; add the app's own items with
 //!   [`EditorTools::set_text_menu_extension`] ("Add Comment" for a
-//!   selection, "Go to Comment" on commented text). The menu never takes
+//!   selection, "Go to Comment" on commented text) and what belongs at
+//!   the very top with [`EditorTools::set_text_menu_leading_extension`]
+//!   (spelling suggestions on a marked word). The menu never takes
 //!   the keyboard: the editor keeps it, and an action item is dispatched
 //!   from the editor outwards as its key binding is.
 //! - **The format bar** is on by default; connect a setting to

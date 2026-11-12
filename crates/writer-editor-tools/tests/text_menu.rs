@@ -749,6 +749,69 @@ fn the_host_adds_its_items_for_the_request(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_host_puts_items_first_behind_a_separator(cx: &mut TestAppContext) {
+    setup(cx);
+    let (tools, editor, cx) = open_with_menus(document(), cx);
+
+    // What the app does for a misspelled word: suggestions first, as in
+    // every Mac app. Here "brave" stands for the marked word.
+    let chosen: Rc<RefCell<Vec<String>>> = Rc::default();
+    let requests: Rc<RefCell<Vec<ContextMenuRequest>>> = Rc::default();
+    tools.update(cx, |tools, _| {
+        let (chosen, requests) = (chosen.clone(), requests.clone());
+        tools.set_text_menu_leading_extension(move |request, _window, _cx| {
+            requests.borrow_mut().push(request.clone());
+            let on_brave = request.document_position.block == HELLO
+                && (6..=11).contains(&request.document_position.offset);
+            if !on_brave {
+                return Vec::new();
+            }
+            let suggestion = |word: &'static str| {
+                let chosen = chosen.clone();
+                ContextMenuItem::new(word, move |_, _| chosen.borrow_mut().push(word.into()))
+            };
+            vec![
+                suggestion("bravo"),
+                suggestion("braver"),
+                ContextMenuItem::separator(),
+                suggestion("Learn Spelling"),
+            ]
+        });
+        tools.set_text_menu_extension(|_, _, _| vec![ContextMenuItem::new("Last", |_, _| {})]);
+    });
+
+    // On the word: the host's items lead, then a separator, then the
+    // menu's own, then what the host appends.
+    right_click(&editor, HELLO, 8, cx);
+    let all = labels(&tools, cx);
+    assert_eq!(
+        all[..6],
+        ["bravo", "braver", "-", "Learn Spelling", "-", "Cut"]
+    );
+    assert_eq!(all[all.len() - 3..], ["Select All", "-", "Last"]);
+    choose("braver", cx);
+    assert_eq!(*chosen.borrow(), ["braver"]);
+    assert_eq!(active(&tools, cx), None);
+
+    // Elsewhere nothing is put first and no separator is left behind.
+    right_click(&editor, EMPTY, 0, cx);
+    assert_eq!(labels(&tools, cx).first().map(String::as_str), Some("Cut"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    // From the keyboard the first of the host's items is the marked row,
+    // and enter chooses it.
+    select(&editor, TextRange::in_block(HELLO, 8, 8), cx);
+    cx.simulate_keystrokes("shift-f10");
+    cx.run_until_parked();
+    assert_eq!(labels(&tools, cx)[0], "bravo");
+    assert!(requests.borrow().last().unwrap().from_keyboard);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(*chosen.borrow(), ["braver", "bravo"]);
+}
+
+#[gpui::test]
 fn the_keyboard_opens_the_same_menu_at_the_caret(cx: &mut TestAppContext) {
     setup(cx);
     let (tools, editor, cx) = open_with_menus(document(), cx);

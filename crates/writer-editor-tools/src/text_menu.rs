@@ -22,6 +22,10 @@
 //! 6. Find in Document, Select All;
 //! 7. what the host adds ([`EditorTools::set_text_menu_extension`]).
 //!
+//! Before all of them, behind a separator, come the items the host puts
+//! first ([`EditorTools::set_text_menu_leading_extension`]): the place of
+//! spelling suggestions in every Mac app.
+//!
 //! The menu itself is `writer_ui::ContextMenu`, the app's one menu widget:
 //! it never takes the keyboard, so the editor keeps it, an action row
 //! arrives where its key would, and closing the menu needs no focus
@@ -219,6 +223,27 @@ impl EditorTools {
         self.text_menu_extension = Some(Rc::new(extension));
     }
 
+    /// Lets the host put items of its own at the very top of the text
+    /// context menu: the place of what belongs to the word under the
+    /// pointer before anything else (spelling suggestions, Learn Spelling,
+    /// Ignore Spelling).
+    ///
+    /// `extension` is called each time the menu is about to open, under
+    /// the same conditions as [`EditorTools::set_text_menu_extension`]
+    /// (outside any update of this view, with the selection already what
+    /// the menu acts on and the keyboard in the text). The items it
+    /// returns are shown before the menu's own, followed by a separator;
+    /// an empty list adds nothing and leaves the menu as it was. Opened
+    /// from the keyboard, the first of them is the marked row.
+    ///
+    /// The format bar is not affected.
+    pub fn set_text_menu_leading_extension(
+        &mut self,
+        extension: impl Fn(&ContextMenuRequest, &mut Window, &mut App) -> Vec<ContextMenuItem> + 'static,
+    ) {
+        self.text_menu_leading_extension = Some(Rc::new(extension));
+    }
+
     /// Whether the text context menu is open.
     pub fn text_menu_open(&self) -> bool {
         self.text_menu.is_some()
@@ -237,7 +262,8 @@ impl EditorTools {
 
     /// Opens the text context menu for `request` (the editor's
     /// `EditorEvent::ContextMenuRequested` does this): this crate's items
-    /// from [`EditorTools::text_menu_items`], then the host's. A
+    /// from [`EditorTools::text_menu_items`], then the host's (and before
+    /// them what the host puts first). A
     /// right-click opens it at the pointer; `ctrl-enter` drops it down
     /// from the caret with the first item marked. An open popup tool
     /// closes; the find bar stays.
@@ -255,6 +281,7 @@ impl EditorTools {
         self.dismiss_format_bar(cx);
         let mut items = self.text_menu_items(&request, cx);
         let extension = self.text_menu_extension.clone();
+        let leading = self.text_menu_leading_extension.clone();
         let caret = self.editor.read(cx).caret_bounds();
         let anchor = match caret {
             Some(caret) if request.from_keyboard => MenuAnchor::Below(caret),
@@ -262,6 +289,14 @@ impl EditorTools {
         };
         let this = cx.weak_entity();
         window.defer(cx, move |window, cx| {
+            if let Some(leading) = leading {
+                let mut first = leading(&request, window, cx);
+                if !first.is_empty() {
+                    first.push(ContextMenuItem::separator());
+                    first.append(&mut items);
+                    items = first;
+                }
+            }
             if let Some(extension) = extension {
                 let extra = extension(&request, window, cx);
                 if !extra.is_empty() {

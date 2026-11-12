@@ -130,6 +130,8 @@ pub struct EditorTools {
     pub(crate) text_menu: Option<OpenTextMenu>,
     /// The host's items for the text context menu.
     pub(crate) text_menu_extension: Option<TextMenuExtension>,
+    /// What the host puts at the top of the text menu.
+    pub(crate) text_menu_leading_extension: Option<TextMenuExtension>,
     /// The floating format bar.
     pub(crate) format_bar: FormatBar,
     /// This view, for the handlers of menu items.
@@ -179,6 +181,7 @@ impl EditorTools {
             slash_typed: false,
             text_menu: None,
             text_menu_extension: None,
+            text_menu_leading_extension: None,
             format_bar: FormatBar::default(),
             this: cx.weak_entity(),
             _subscriptions: subscriptions,

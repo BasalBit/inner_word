@@ -6,6 +6,7 @@ mod mouse;
 mod navigation;
 mod pure;
 mod random;
+mod rebinding;
 mod support;
 mod threads;
 mod visibility;

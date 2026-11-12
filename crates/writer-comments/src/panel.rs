@@ -21,9 +21,10 @@ use writer_editor::{
     Autoscroll, CompactOptions, Editor, EditorConfig, EditorEvent, InterceptPriority,
     KeyDisposition,
 };
-use writer_ui::{Toast, toast::show_toast};
+use writer_ui::{Toast, keymap, toast::show_toast};
 
 use crate::{
+    actions::{CancelComment, SubmitComment},
     threads::{ThreadEntry, collect_threads, quote},
     time,
     track::RangeTracker,
@@ -306,31 +307,29 @@ impl CommentsPanel {
                     _ => {}
                 },
             ),
-            // `cmd-enter` and `escape` in the composer. The editor binds
-            // `cmd-enter` itself (page break, a no-op in compact mode), and
-            // an interceptor runs before its bindings whatever the order in
-            // which the crates installed their keys. (`tab` needs no
-            // interceptor: a compact editor does not indent, and the
-            // composer binds the key at the editor's level, see
-            // `actions::key_bindings`.)
+            // The keys of "save the comment" and "discard it" in the
+            // composer (`cmd-enter` and `escape` unless the keymap says
+            // otherwise). The editor binds `cmd-enter` itself (page break,
+            // a no-op in compact mode), and an interceptor runs before its
+            // bindings whatever the order in which the crates installed
+            // their keys. Which keys they are is asked of the keymap each
+            // time one arrives: the bindings of the two actions in
+            // `actions::key_bindings` are what is listed, shown beside the
+            // buttons and changed by the user, so they are also what is
+            // obeyed. (`tab` needs no interceptor: a compact editor does
+            // not indent, and the composer binds the key at the editor's
+            // level.)
             composer
                 .read(cx)
                 .intercept_keys(InterceptPriority::DEFAULT, move |key, window, cx| {
-                    let modifiers = key.modifiers;
-                    let only_cmd = modifiers.platform
-                        && !modifiers.alt
-                        && !modifiers.control
-                        && !modifiers.shift;
-                    match key.key.as_str() {
-                        "enter" if only_cmd => {
-                            panel.update(cx, |panel, cx| panel.submit(window, cx)).ok();
-                            KeyDisposition::Consumed
-                        }
-                        "escape" if !modifiers.modified() => {
-                            panel.update(cx, |panel, cx| panel.cancel(window, cx)).ok();
-                            KeyDisposition::Consumed
-                        }
-                        _ => KeyDisposition::Pass,
+                    if keymap::keystroke_runs(key, &SubmitComment, window, cx) {
+                        panel.update(cx, |panel, cx| panel.submit(window, cx)).ok();
+                        KeyDisposition::Consumed
+                    } else if keymap::keystroke_runs(key, &CancelComment, window, cx) {
+                        panel.update(cx, |panel, cx| panel.cancel(window, cx)).ok();
+                        KeyDisposition::Consumed
+                    } else {
+                        KeyDisposition::Pass
                     }
                 }),
         ];

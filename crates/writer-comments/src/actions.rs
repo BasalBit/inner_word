@@ -175,8 +175,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", ConfirmDelete, confirming),
         KeyBinding::new("escape", CancelDelete, confirming),
         // The composer. `enter` submits through the compact editor's own
-        // submit-on-enter; these two are also caught by a key interceptor on
-        // the composer, because the editor binds `cmd-enter` itself.
+        // submit-on-enter (the key of the editor's "new paragraph"). The
+        // keys of these two are also taken by a key interceptor on the
+        // composer, because the editor binds `cmd-enter` itself; the
+        // interceptor asks the keymap which keys they are, so a key given
+        // to one of them here is the key that is obeyed.
         KeyBinding::new("cmd-enter", SubmitComment, composer),
         KeyBinding::new("escape", CancelComment, composer),
         // A comment is plain text, so `tab` is free: it leads to the thread

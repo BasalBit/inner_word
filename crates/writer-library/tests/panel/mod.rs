@@ -19,6 +19,7 @@ use super::{content, library_from};
 use LibraryItem::{Document, Folder};
 
 mod mouse_paths;
+mod rebinding;
 
 const START: i64 = 1_700_000_000_000;
 

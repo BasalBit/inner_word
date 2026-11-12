@@ -48,14 +48,19 @@ impl Render for Tip {
 }
 
 /// The key that applies what a field of the tools holds (the address in
-/// the link field, the row marked in a menu with a filter field, the text
-/// in the replace field): whatever the keymap binds a text field's submit
-/// to. The fields of the tools take that key themselves, so no binding of
-/// this crate says it, and none is written here either: the keymap can be
-/// rebuilt with other keys.
+/// the link field, the text in the replace field): whatever the keymap
+/// binds a text field's submit to. The fields of the tools take that key
+/// themselves, so no binding of this crate says it, and none is written
+/// here either: the keymap can be rebuilt with other keys.
 pub(crate) fn apply_hint(cx: &App) -> Option<KeyHint> {
     KeyHint::for_action(&text_field::Submit, cx)
-        .or_else(|| KeyHint::for_action(&picker::Confirm, cx))
+}
+
+/// The key that takes the marked row of a menu with a filter field (the
+/// font picker's "Apply"): the key of a list's confirm. The filter field
+/// leaves that key to the list.
+pub(crate) fn take_hint(cx: &App) -> Option<KeyHint> {
+    KeyHint::for_action(&picker::Confirm, cx)
 }
 
 /// The key that closes the open tool: the one of [`CloseTool`], which

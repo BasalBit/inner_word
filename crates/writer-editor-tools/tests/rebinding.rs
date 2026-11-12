@@ -212,6 +212,16 @@ fn the_font_picker_names_the_keys_as_they_are(cx: &mut TestAppContext) {
     cx.update(|_, cx| keymap::replace_key(&picker::SecondaryConfirm, "cmd-alt-d", None, cx));
     cx.run_until_parked();
     assert_eq!(footer(cx), [pair("Apply", "↩")]);
+
+    // "Apply" is the list's confirm, also with the keyboard in the filter
+    // field: the field's submit (still `enter`) does not take a row.
+    assert_eq!(rebind(&picker::Confirm, "enter", "ctrl-y", cx), 1);
+    assert_eq!(footer(cx), [pair("Apply", "⌃Y")]);
+    cx.simulate_input("Georg");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(active(&tools, cx), Some(ToolKind::Font), "the old key");
+    cx.simulate_keystrokes("backspace ctrl-y");
+    assert_eq!(active(&tools, cx), None);
 }
 
 #[gpui::test]

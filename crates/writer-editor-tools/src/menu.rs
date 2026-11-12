@@ -139,13 +139,17 @@ impl Menu {
                     .with_text_size(UI_TEXT_BASE)
                     .consume_escape();
                 field.set_list_navigation(true);
+                // Taking a row is the list's own "confirm" (a binding in
+                // the list's key context, handled below), not the field's
+                // "submit": the keymap can give the two different keys.
+                field.set_submit_to_parent(true);
                 field
             });
             subscriptions.push(cx.subscribe(
                 &field,
-                |this: &mut Self, _, event: &TextFieldEvent, cx| match event {
+                |_: &mut Self, _, event: &TextFieldEvent, cx| match event {
                     TextFieldEvent::Changed => cx.emit(MenuEvent::QueryChanged),
-                    TextFieldEvent::Submitted => this.confirm(false, cx),
+                    TextFieldEvent::Submitted => {}
                     TextFieldEvent::Cancelled => cx.emit(MenuEvent::Dismissed),
                     TextFieldEvent::Blurred => cx.emit(MenuEvent::Blurred),
                     TextFieldEvent::Focused => {}

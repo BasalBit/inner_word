@@ -22,7 +22,7 @@ use writer_ui::{ContextMenu, ContextMenuItem, KeyHint, fuzzy};
 
 use crate::{
     menu::{FooterKey, Mark, Menu, MenuEntry, MenuItem, MenuOptions},
-    tip::{apply_hint, secondary_hint},
+    tip::{secondary_hint, take_hint},
     tools::{EditorTools, PopupTool},
 };
 
@@ -260,7 +260,7 @@ impl EditorTools {
                     marks: true,
                     empty_text: "No matching font".into(),
                     footer: vec![
-                        (apply_hint as FooterKey, "Apply".into()),
+                        (take_hint as FooterKey, "Apply".into()),
                         (secondary_hint as FooterKey, "Set as document font".into()),
                     ],
                 },
@@ -362,7 +362,7 @@ impl EditorTools {
                         "Apply to the Selection"
                     },
                     false,
-                    apply_hint(cx),
+                    take_hint(cx),
                 ),
                 item("Set as Document Font", true, secondary_hint(cx)),
             ],

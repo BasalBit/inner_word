@@ -1,5 +1,6 @@
 //! The headless editing engine.
 
+mod adopt;
 mod blocks;
 mod clipboard;
 mod comments;
@@ -14,6 +15,7 @@ mod tests;
 use std::collections::HashMap;
 use std::ops::Range;
 
+pub use adopt::Adopted;
 pub use format::{Choice, FormatState, LinkInfo, Toggle};
 
 use crate::attrs::CommentId;

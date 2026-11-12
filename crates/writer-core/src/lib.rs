@@ -188,7 +188,7 @@ pub use block::{
 pub use comments::{CommentThread, Reply, ReplyId, Timestamp};
 pub use document::{Document, TITLE_MAX_CHARS, TITLE_SENTENCE_CHARS, TITLE_TEXT_CHARS};
 pub use editor::{
-    BlockSplice, Change, Choice, EditorOptions, EditorState, FormatState, LinkInfo, Toggle,
+    Adopted, BlockSplice, Change, Choice, EditorOptions, EditorState, FormatState, LinkInfo, Toggle,
 };
 pub use fragment::Fragment;
 pub use history::{DEFAULT_UNDO_LIMIT, UNDO_BYTE_BUDGET};

@@ -7,7 +7,7 @@
 //! keyboard the same things are done with the keys the tooltips name, or
 //! by moving to the control (the header and the context row are places the
 //! keyboard can be, see [`crate::AssistantPanel`]), where `focused` draws
-//! the ring.
+//! the mark of the keyboard ([`keyboard_mark`]).
 //!
 //! A control only draws itself. The caller attaches the click handler.
 

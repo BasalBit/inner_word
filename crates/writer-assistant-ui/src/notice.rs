@@ -135,7 +135,7 @@ pub struct NoticeRow {
 }
 
 /// Draws `notice`. `name` is the debug selector of the row; its button is
-/// `<name>-action`. `focused` draws the keyboard's ring around the button.
+/// `<name>-action`. `focused` draws the mark of the keyboard on the button.
 pub fn notice_row(
     name: impl Into<SharedString>,
     notice: &Notice,

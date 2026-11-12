@@ -101,7 +101,7 @@ impl Render for AssistantPanel {
         let header = self.render_header(area == Some(PanelArea::Header), &colors, cx);
         let context = self.render_context_row(area == Some(PanelArea::Context), &colors, cx);
         let notices = self.render_notices(&colors, cx);
-        let picker = self.render_picker(window, cx);
+        let picker = self.render_picker(cx);
 
         div()
             .id("assistant-panel")
@@ -523,13 +523,12 @@ impl AssistantPanel {
     }
 
     /// The picker over the library, floating under "Add".
-    fn render_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_picker(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picker = self.picker.clone()?;
         let position = match self.add_bounds.get() {
             Some(bounds) => point(bounds.left(), bounds.bottom() + px(4.)),
             None => point(px(8.), HEADER_HEIGHT + px(40.)),
         };
-        let _ = window;
         Some(
             deferred(
                 anchored()

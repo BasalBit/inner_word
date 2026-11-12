@@ -46,7 +46,7 @@ pub mod plain;
 
 use std::fmt;
 
-use writer_core::{Document, Fragment};
+use writer_core::{Block, Document, Fragment};
 
 pub use markdown::{
     MarkdownFrontMatter, MarkdownImportOptions, MarkdownLeadingHeading, MarkdownSoftBreaks,
@@ -90,6 +90,16 @@ impl Imported {
             self.document.to_fragment()
         } else {
             Fragment::default()
+        }
+    }
+
+    /// The imported blocks, in the document: none when the text held
+    /// nothing (where [`Imported::document`] has its one empty paragraph).
+    pub fn blocks(&self) -> &[Block] {
+        if self.has_content {
+            self.document.blocks()
+        } else {
+            &[]
         }
     }
 

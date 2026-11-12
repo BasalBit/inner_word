@@ -60,9 +60,20 @@
 //! - Lists inside a quote, quotes inside a quote and nesting beyond nine
 //!   levels are flattened as [`ImportWarningKind`] describes.
 //!
-//! Two lists that Markdown keeps apart but the document would run together
-//! (a second numbered list directly after the first) get an empty
-//! paragraph between them, which is how one keeps them apart in the app.
+//! # What is put into the document's own form
+//!
+//! - Two lists of one sort in a row, or two quotes in a row, are one list
+//!   or one quote to the document. Where Markdown has two, an empty
+//!   paragraph goes between them, which is how one keeps them apart in
+//!   the app.
+//! - A bullet or numbered item without text that is followed by a
+//!   paragraph of its own is an item with that text (`-` and, on the next
+//!   line, indented text).
+//! - White space at the ends of a line is dropped, as a renderer would;
+//!   inside a line it is kept, tabs and no-break spaces included.
+//! - Characters a document cannot hold (control characters) are dropped,
+//!   and a U+FEFF that opens the text is taken for the byte order mark it
+//!   would be in a file.
 //!
 //! # Round trips
 //!
@@ -71,7 +82,14 @@
 //! normalises (white space at the edges of lines, empty paragraphs, the
 //! colour of a highlight, anything the export options leave out).
 //! Importing any Markdown and exporting it gives Markdown that imports and
-//! exports to itself.
+//! exports to itself. The tests hold both over generated documents and
+//! generated Markdown.
+//!
+//! The parser is [pulldown-cmark](https://docs.rs/pulldown-cmark), the
+//! one the exporter's output is checked against. Bare addresses in text
+//! (`https://example.com` without angle brackets) are text, as in
+//! CommonMark; GitHub's alert quotes, definition lists and math are not
+//! read as such and stay as typed.
 //!
 //! ```
 //! use writer_core::BlockKind;

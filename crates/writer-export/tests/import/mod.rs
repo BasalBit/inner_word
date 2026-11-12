@@ -99,6 +99,7 @@ fn import_with(markdown: &str, options: &MarkdownImportOptions) -> Imported {
         imported.fragment().blocks().is_empty(),
         "{markdown:?}"
     );
+    assert_eq!(imported.blocks().len(), imported.fragment().blocks().len());
     imported
 }
 
@@ -925,6 +926,11 @@ fn hostile_shapes_do_not_hang_or_panic() {
         let a = import(case);
         let b = import_with(case, &equals);
         let took = start.elapsed();
+        println!(
+            "{:?}... ({} bytes): {took:?}",
+            &case[..12.min(case.len())],
+            case.len()
+        );
         assert!(
             took.as_secs() < 20,
             "{:?}... took {took:?}",
@@ -1335,6 +1341,117 @@ fn exported_documents_come_back() {
             fail(&format!("exported again:\n{again}"));
         }
     }
+}
+
+/// The other ways the exporter can be asked to write: each comes back
+/// with everything that way of writing keeps.
+#[test]
+fn every_export_option_comes_back() {
+    let variants = [
+        MarkdownOptions::strict(),
+        MarkdownOptions {
+            page_break: MarkdownPageBreak::Html,
+            ..Default::default()
+        },
+        MarkdownOptions {
+            highlight: MarkdownHighlight::Equals,
+            ..Default::default()
+        },
+        MarkdownOptions {
+            underline_html: false,
+            highlight: MarkdownHighlight::Drop,
+            page_break: MarkdownPageBreak::Omit,
+            ..full_options()
+        },
+    ];
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let doc = clean_document(&mut rng);
+        let options = &variants[(seed % 4) as usize];
+        let equals = options.highlight == MarkdownHighlight::Equals;
+        if equals && doc.plain_text().contains("==") {
+            // Equals signs that are text cannot be told from the
+            // delimiters in that way of writing.
+            continue;
+        }
+        let markdown = to_markdown(&ExportSource::from(&doc), options);
+        let imported = import_with(
+            &markdown,
+            &MarkdownImportOptions {
+                highlight_equals: equals,
+                ..Default::default()
+            },
+        );
+        // With the equals signs the comparison takes the highlight as
+        // written; the exporter's own comparison knows it only as HTML.
+        let compare = MarkdownOptions {
+            highlight: if equals {
+                MarkdownHighlight::Html
+            } else {
+                options.highlight
+            },
+            ..options.clone()
+        };
+        let want = expected(&doc, &compare);
+        let got = expected(&imported.document, &compare);
+        assert!(
+            want == got && imported.warnings.is_empty(),
+            "seed {seed}: warnings {:?}\n--- markdown ---\n{markdown}\n--- want ---\n{want:#?}\n--- got ---\n{got:#?}",
+            imported.warnings
+        );
+        let again = to_markdown(&ExportSource::from(&imported.document), options);
+        assert_eq!(again, markdown, "seed {seed}");
+    }
+}
+
+/// Comments are not read back, but their text does not get into the way.
+#[test]
+fn exported_comments() {
+    let doc = commented();
+    let html = MarkdownOptions {
+        comments: MarkdownComments::HtmlComments,
+        ..Default::default()
+    };
+    let imported = import(&to_markdown(&ExportSource::from(&doc), &html));
+    assert_eq!(
+        describe(&imported),
+        [
+            "p: The quick brown fox.",
+            "code: let x = 1;",
+            "p: Last words"
+        ]
+    );
+    assert_eq!(
+        imported
+            .warnings
+            .iter()
+            .map(|w| (w.kind, w.line))
+            .collect::<Vec<_>>(),
+        [
+            (ImportWarningKind::HtmlComment, 1),
+            (ImportWarningKind::HtmlComment, 7),
+            (ImportWarningKind::HtmlComment, 9)
+        ]
+    );
+    let notes = MarkdownOptions {
+        comments: MarkdownComments::Footnotes,
+        ..Default::default()
+    };
+    let imported = import(&to_markdown(&ExportSource::from(&doc), &notes));
+    let got = describe(&imported);
+    assert_eq!(got[0], "p: The quick[^1] brown fox.");
+    assert_eq!(got[1], "code: let x = 1;");
+    assert_eq!(got[3], "p: Last[^3] words");
+    assert!(
+        got[4].starts_with("p: [^1]: [B|Ada (resolved):] Is it"),
+        "{got:?}"
+    );
+    assert!(
+        imported
+            .warnings
+            .iter()
+            .all(|w| w.kind == ImportWarningKind::Footnote)
+    );
 }
 
 /// The same for documents as hostile as the exporter's own tests make

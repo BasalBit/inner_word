@@ -1,0 +1,110 @@
+//! Spell checking for The Writer.
+//!
+//! Two layers:
+//!
+//! - **The service** ([`SpellService`]): what a spell checker can be asked.
+//!   [`SystemSpellService`] answers with the Mac's own checker
+//!   (`NSSpellChecker`: its languages, its learned words, shared with
+//!   every other app); [`FakeSpellService`] answers from word lists, for
+//!   tests in every crate.
+//! - **The checker** ([`SpellChecker`]): a GPUI entity that attaches to a
+//!   `writer_editor::Editor` and keeps its spelling marks current, offers
+//!   the rows for the text context menu, the actions and the queries the
+//!   Vim keys need.
+//!
+//! # Setup
+//!
+//! ```ignore
+//! // once at startup, after writer_editor::init
+//! writer_spell::init(cx);
+//!
+//! // one service for the app (main thread)
+//! let service: Rc<dyn SpellService> = Rc::new(SystemSpellService::new());
+//!
+//! // per editor (the app keeps one editor and replaces its document)
+//! let spell = cx.new(|cx| SpellChecker::new(editor.clone(), service.clone(), cx));
+//! spell.update(cx, |spell, cx| {
+//!     spell.set_language(SpellLanguage::from_setting(&stored), cx);
+//!     spell.set_enabled(check_while_typing, cx);
+//! });
+//!
+//! // the actions: on an element around the editor (or the workspace root)
+//! writer_spell::handle_actions(div().size_full(), &spell).child(tools.clone())
+//!
+//! // the top of the text context menu
+//! tools.update(cx, |tools, cx| tools.set_text_menu_leading_extension(move |request, _window, cx| {
+//!     spell.update(cx, |spell, cx| spell.context_menu_items(request, cx))
+//! }, cx));
+//!
+//! // the palette
+//! let commands = writer_spell::commands();
+//! ```
+
+pub mod actions;
+mod checker;
+mod fake;
+mod service;
+mod system;
+
+pub use checker::{
+    IGNORE_SPELLING, LEARN_SPELLING, MAX_SUGGESTIONS, NO_GUESSES, SpellChecker, SpellEvent,
+    UNLEARN_SPELLING, handle_actions,
+};
+pub use fake::{FAKE_LANGUAGE, FakeSpellService};
+pub use service::{
+    LanguageInfo, SpellCheck, SpellDocument, SpellLanguage, SpellService, language_choices,
+    language_name,
+};
+pub use system::SystemSpellService;
+
+use writer_ui::CommandDescriptor;
+
+/// The category of the spelling commands in the palette.
+pub const CATEGORY_SPELLING: &str = "Spelling";
+
+/// Installs the key bindings of the spelling actions (in the editor's key
+/// context). Call once at startup, after `writer_editor::init`.
+pub fn init(cx: &mut gpui::App) {
+    cx.bind_keys(actions::key_bindings());
+}
+
+/// The spelling commands for the command palette, the shortcuts overlay
+/// and the menu bar. They act on the editor that has the keyboard, through
+/// the handlers [`handle_actions`] installs.
+pub fn commands() -> Vec<CommandDescriptor> {
+    use actions::*;
+    vec![
+        CommandDescriptor::new("Next Misspelling", CATEGORY_SPELLING, NextMisspelling)
+            .keywords(["spell", "typo", "mistake", "error"]),
+        CommandDescriptor::new(
+            "Previous Misspelling",
+            CATEGORY_SPELLING,
+            PreviousMisspelling,
+        )
+        .keywords(["spell", "typo", "mistake", "error"]),
+        CommandDescriptor::new(
+            "Show Spelling Suggestions",
+            CATEGORY_SPELLING,
+            ShowSuggestions,
+        )
+        .keywords(["spell", "correct", "guess", "replace"]),
+        CommandDescriptor::new("Learn Spelling", CATEGORY_SPELLING, LearnSpelling).keywords([
+            "dictionary",
+            "add word",
+            "remember",
+        ]),
+        CommandDescriptor::new("Unlearn Spelling", CATEGORY_SPELLING, UnlearnSpelling).keywords([
+            "dictionary",
+            "remove word",
+            "forget",
+        ]),
+        CommandDescriptor::new("Ignore Spelling", CATEGORY_SPELLING, IgnoreSpelling)
+            .keywords(["skip", "this document"]),
+        CommandDescriptor::new(
+            "Check Spelling While Typing",
+            CATEGORY_SPELLING,
+            ToggleSpellChecking,
+        )
+        .keywords(["spell", "checker", "on", "off", "toggle", "underline"]),
+    ]
+}

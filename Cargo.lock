@@ -6954,6 +6954,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-spell"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "objc",
+ "raw-window-handle",
+ "writer-core",
+ "writer-editor",
+ "writer-ui",
+]
+
+[[package]]
 name = "writer-store"
 version = "0.1.0"
 dependencies = [

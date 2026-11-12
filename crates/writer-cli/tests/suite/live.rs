@@ -225,6 +225,9 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
         let result = sandbox.json(&args);
         assert_eq!(result["changed"], true, "{args:?}: {result}");
         assert_eq!(result["dry_run"], false, "{args:?}: {result}");
+        // The app made the change, and the result says so (as the status did).
+        assert_eq!(result["app_is_open"], true, "{args:?}: {result}");
+        assert_eq!(result["app_takes_changes"], true, "{args:?}: {result}");
         // (A command that takes a document or a folder looks first which of the two it
         // is: a read, for which the app is asked to save.)
         let served: Vec<_> = app
@@ -333,7 +336,10 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
     // The app quits: the tool writes by itself again.
     drop(app);
     assert_eq!(sandbox.json(&["status"])["app_is_open"], false);
-    sandbox.ok(&["append", "doc:1", "--content", "After the app."]);
+    let alone = sandbox.json(&["append", "doc:1", "--content", "After the app."]);
+    assert_eq!(alone["changed"], true);
+    assert_eq!(alone["app_is_open"], false, "nobody but the tool wrote");
+    assert_eq!(alone["app_takes_changes"], false);
     assert!(sandbox.ok(&["get", "doc:1"]).ends_with("After the app.\n"));
 }
 
@@ -462,6 +468,9 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
     for (tool, arguments, operation) in &calls {
         let (text, data) = client.call_ok(tool, arguments.clone());
         assert_eq!(data["changed"], true, "{tool}: {text}");
+        // The app made the change, and the result says so.
+        assert_eq!(data["app_is_open"], true, "{tool}: {data}");
+        assert_eq!(data["app_takes_changes"], true, "{tool}: {data}");
         let served: Vec<_> = app
             .served()
             .into_iter()
@@ -548,11 +557,14 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
     // The app quits; the same server, still running, writes by itself.
     app.served();
     drop(app);
-    let (appended, _) = client.call_ok(
+    let (appended, alone) = client.call_ok(
         "append_to_document",
         json!({ "document": 1, "markdown": "More." }),
     );
     assert!(appended.starts_with("Appended to doc:1"), "{appended}");
+    assert_eq!(alone["changed"], true);
+    assert_eq!(alone["app_is_open"], false, "nobody but the server wrote");
+    assert_eq!(alone["app_takes_changes"], false);
     client.close();
 }
 

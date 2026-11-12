@@ -449,7 +449,7 @@ pub struct WriteOptions {
     /// Work out and report what the operation would do, and change nothing. A dry run
     /// needs no access to write. While the app is open it says so
     /// ([`Written::app_is_open`]), and whether the app would make the change
-    /// ([`Written::app_takes_changes`]).
+    /// ([`Written::app_takes_changes`]), as the result of the real run does.
     pub dry_run: bool,
     /// The name of whoever makes the change (the agent's name, "Claude" for example). It
     /// labels the version that is kept of a document before its text is changed ("Before
@@ -484,14 +484,16 @@ pub struct Written {
     /// Whether the library was changed. False for a dry run, and for a request that asked
     /// for what is already so (the same text, the same name, the same place).
     pub changed: bool,
-    /// Only in a dry run: the app has the library open, so the real run is carried out by
-    /// the app, where the writer sees it at once (when [`Written::app_takes_changes`]).
+    /// Whether the app has the library open. After a real run: the app carried the
+    /// change out, where the writer saw it at once and can undo it (false: the app was
+    /// closed and the tool wrote to the library itself). In a dry run: the real run would
+    /// be carried out by the app (when [`Written::app_takes_changes`]).
     #[serde(default)]
     pub app_is_open: bool,
-    /// Only in a dry run while the app is open: whether the app takes changes from
-    /// agents. When it does not (its owner switched that off, or it is a version before
-    /// 0.6.0) the real run would be refused with
-    /// [`Error::AppIsOpen`](crate::Error::AppIsOpen).
+    /// While the app is open: whether it takes changes from agents. After a real run by
+    /// the app it is true, because the app made the change. In a dry run it can be false
+    /// (its owner switched that off, or it is a version before 0.6.0): the real run
+    /// would then be refused with [`Error::AppIsOpen`](crate::Error::AppIsOpen).
     #[serde(default)]
     pub app_takes_changes: bool,
     /// Whether the request has anything to do: what `changed` is after a real run, and

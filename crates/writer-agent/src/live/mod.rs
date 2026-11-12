@@ -661,12 +661,11 @@ pub fn execute(store: &mut Store, request: &Request) -> Executed {
     // of a tool's own dry run is.
     let guarded = options.dry_run && store.set_query_only(true).is_ok();
     let mut session = Session::writing(store, clock);
-    if options.dry_run {
-        // What the result of a dry run says about the app: it is open, here.
-        session.dry_run = true;
-        session.app_is_open = true;
-        session.app_takes_changes = allowed;
-    }
+    // What every result says about the app: it is open, here, and it is the one that
+    // makes the change (or, with the switch off, would refuse the real run of a dry run).
+    session.dry_run = options.dry_run;
+    session.app_is_open = true;
+    session.app_takes_changes = allowed;
     // Whatever goes wrong in an operation must not take the app down with it: the
     // writer's window is not the agent's to lose. A transaction that was open when an
     // operation panicked is rolled back as its guard is dropped.

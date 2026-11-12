@@ -298,7 +298,9 @@ fn a_change_made_while_the_app_is_open_is_carried_out_by_the_app() {
         "a change does not wait for the app's lock: {:?}",
         started.elapsed()
     );
-    assert!(edited.written.changed && !edited.written.app_is_open);
+    // The result says who made the change: the app, which is open and takes changes.
+    assert!(edited.written.changed && !edited.written.dry_run);
+    assert!(edited.written.app_is_open && edited.written.app_takes_changes);
     assert_eq!(edited.replacements, 1);
     let kept = edited.snapshot.expect("the text as it was is kept");
     assert_eq!(kept.label.as_deref(), Some("Before an edit by Claude"));
@@ -339,12 +341,84 @@ fn a_change_made_while_the_app_is_open_is_carried_out_by_the_app() {
     assert!(!fx.library.app_is_open());
     let status = fx.library.status().unwrap();
     assert!(!status.app_is_open && !status.app_takes_changes);
-    fx.library
+    let direct = fx
+        .library
         .edit(&edit(&fx.library, chapter.id, "before dawn", "at noon"))
         .unwrap();
+    assert!(direct.written.changed);
+    assert!(!direct.written.app_is_open && !direct.written.app_takes_changes);
     assert_eq!(
         fx.markdown(chapter.id),
         "# Chapter 1\n\nThe *Maren* left at noon.\n"
+    );
+}
+
+/// An app of 0.6.0 answered a real run with `"app_is_open": false, "app_takes_changes":
+/// false` in the result, although it had made the change. A tool of today that is
+/// answered so says what is true all the same: it handed the change to the app.
+#[test]
+fn a_result_from_an_app_of_0_6_0_says_that_the_app_made_the_change() {
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    // What 0.6.0 answered, as its `execute` wrote it: carried out here by a tool, whose
+    // direct write says "no app" as that version said of every real run.
+    let as_0_6_0 = fx
+        .library
+        .edit(&edit(&fx.library, chapter.id, "Text", "Words"))
+        .unwrap();
+    let mut result = serde_json::to_value(&as_0_6_0).unwrap();
+    assert_eq!(result["app_is_open"], false);
+    assert_eq!(result["app_takes_changes"], false);
+    result.as_object_mut().unwrap().remove("would_change");
+    let line = format!(
+        "{}\n",
+        serde_json::json!({"version": 1, "answer": "done", "result": result})
+    );
+    let app = RawApp::open(&fx, move |_| line.clone().into_bytes());
+    let edited = fx
+        .library
+        .edit(&edit(&fx.library, chapter.id, "Text", "Words"))
+        .unwrap();
+    assert!(edited.written.changed);
+    assert!(edited.written.app_is_open && edited.written.app_takes_changes);
+    let json = serde_json::to_value(&edited).unwrap();
+    assert_eq!(json["app_is_open"], true);
+    assert_eq!(json["app_takes_changes"], true);
+    drop(app);
+}
+
+/// The other way round: what an app of today answers is read by a tool of 0.6.0. The
+/// result of a real run has every key that version reads about the write, with the kind
+/// of value it had then (that tool prints the two fields as the app wrote them, so with
+/// an app of today it says what is true too).
+#[test]
+fn a_result_from_an_app_of_today_is_one_a_tool_of_0_6_0_reads() {
+    /// `Written` as 0.6.0 had it, inside a result as that version read one: fields it
+    /// does not know are passed over.
+    #[derive(serde::Deserialize)]
+    struct WrittenThen {
+        dry_run: bool,
+        changed: bool,
+        app_is_open: bool,
+        app_takes_changes: bool,
+        would_change: bool,
+    }
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    let mut store = Store::open(fx.library.database_path()).unwrap();
+    let request = Request::new(
+        Operation::Edit(edit(&fx.library, chapter.id, "Text", "Words")),
+        Duration::from_secs(1),
+    );
+    let Answer::Done { result } = live::execute(&mut store, &request).answer else {
+        panic!("not done");
+    };
+    let then: WrittenThen =
+        serde_json::from_value(result.clone()).unwrap_or_else(|error| panic!("{error}: {result}"));
+    assert!(then.changed && !then.dry_run && then.would_change);
+    assert!(
+        then.app_is_open && then.app_takes_changes,
+        "the app says so itself"
     );
 }
 
@@ -761,8 +835,20 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
         let written = run(&direct.library);
         app.names();
         let carried_out = run(&through.library);
+        // The one thing in which the two results differ is who made the change.
+        let by_the_app = written
+            .replace("\"app_is_open\": false", "\"app_is_open\": true")
+            .replace(
+                "\"app_takes_changes\": false",
+                "\"app_takes_changes\": true",
+            );
         assert_eq!(
-            carried_out, written,
+            written.starts_with("ok "),
+            by_the_app != written,
+            "step {number} ({name}): every result says whether the app made the change"
+        );
+        assert_eq!(
+            carried_out, by_the_app,
             "step {number} ({name}): the app gave another result than a direct write"
         );
         assert_eq!(
@@ -2188,9 +2274,16 @@ fn a_dry_run_carried_out_by_the_app_writes_nothing() {
 
     // The connection writes again afterwards: the real run goes through.
     let done = live::execute(&mut store, &request(claude()));
-    assert!(done.answer.is_done());
     assert_eq!(done.changes.len(), 2);
     assert_ne!(fx.dump(), before);
+    // The result of the real run says who made the change, as the dry run said who would.
+    let Answer::Done { result } = done.answer else {
+        panic!("{:?}", done.answer);
+    };
+    assert_eq!(result["dry_run"], false);
+    assert_eq!(result["changed"], true);
+    assert_eq!(result["app_is_open"], true);
+    assert_eq!(result["app_takes_changes"], true);
     // Saving and saying hello change nothing and say whether changes are taken.
     for operation in [Operation::Flush, Operation::Hello] {
         let asked = Request::new(operation, Duration::from_secs(1));

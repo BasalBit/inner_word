@@ -284,7 +284,14 @@ impl Library {
                 },
             };
             match live::client::change(&channel.path, &operation(), self.app_patience) {
-                live::client::Sent::Done(value) => {
+                live::client::Sent::Done(mut value) => {
+                    // The app made the change, so the result says that the app is open
+                    // and takes changes. An app of 0.6.0 left both at false in the
+                    // result of a real run; the tool knows better than that answer.
+                    if let Some(result) = value.as_object_mut() {
+                        result.insert("app_is_open".into(), true.into());
+                        result.insert("app_takes_changes".into(), true.into());
+                    }
                     return serde_json::from_value(value).map_err(|error| Error::InApp {
                         kind: crate::error::ErrorKind::Failed,
                         message: format!(
@@ -414,9 +421,10 @@ pub(crate) struct Session<'a> {
     pub(crate) store: &'a mut Store,
     /// Nothing may be written: this is the dry run of a write.
     pub(crate) dry_run: bool,
-    /// For a dry run: the app has the library open.
+    /// The app has the library open: it is the app that carries this operation out, or,
+    /// for a dry run by the tool, that would carry the real run out.
     pub(crate) app_is_open: bool,
-    /// For a dry run while the app is open: the app takes changes from agents.
+    /// While the app is open: the app takes changes from agents.
     pub(crate) app_takes_changes: bool,
     /// The clock for what the operation stamps itself (a comment, a planned item).
     pub(crate) clock: Clock,
@@ -425,7 +433,8 @@ pub(crate) struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    /// A session that writes to `store`.
+    /// A session in which the tool itself writes to `store`: no app has the library
+    /// open.
     pub(crate) fn writing(store: &'a mut Store, clock: Clock) -> Session<'a> {
         Session {
             store,
@@ -438,13 +447,15 @@ impl<'a> Session<'a> {
     }
 
     /// What a result says about the write: `changed` is whether the operation had
-    /// anything to do.
+    /// anything to do. Who made the change (or would make it) is said for a real run as
+    /// for a dry run: a result that says "the app is not open" after the app carried the
+    /// change out would be read as a fact.
     pub(crate) fn written(&self, changed: bool) -> Written {
         Written {
             dry_run: self.dry_run,
             changed: changed && !self.dry_run,
-            app_is_open: self.dry_run && self.app_is_open,
-            app_takes_changes: self.dry_run && self.app_is_open && self.app_takes_changes,
+            app_is_open: self.app_is_open,
+            app_takes_changes: self.app_is_open && self.app_takes_changes,
             would_change: changed,
         }
     }

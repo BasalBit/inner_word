@@ -57,7 +57,8 @@
 //! **Every write can be tried first.** With [`WriteOptions::dry_run`] an operation works
 //! out and reports exactly what it would do, and changes nothing. A dry run only reads
 //! ([`Written::app_is_open`] and [`Written::app_takes_changes`] say who would carry the
-//! real run out, and whether it would be refused).
+//! real run out, and whether it would be refused; in the result of a real run they say
+//! who did).
 //!
 //! **Documents are written the way the app writes them.** The stored title follows the
 //! text (first heading, else first line, else "Untitled") unless somebody chose one, the

@@ -673,18 +673,19 @@ pub(crate) struct PlannedWave {
     pub(crate) thickness: Pixels,
 }
 
-/// How thick the wave is drawn under text of `font_size`.
-pub(crate) fn wave_thickness(font_size: Pixels) -> Pixels {
-    if f32::from(font_size) >= 26. {
-        px(1.5)
-    } else {
-        px(1.)
-    }
-}
+/// How thick the line of the wave is: the same under every text, small or
+/// large, plain or bold, so the marks of a page look like one kind of
+/// thing. GPUI derives the shape from it: the wave is nine times as long
+/// as it is thick and swings 0.8 of it to either side.
+pub(crate) const WAVE_THICKNESS: Pixels = px(1.);
 
-/// How far under the baseline the band of the wave starts.
-pub(crate) fn wave_offset(_font_size: Pixels, _descent: Pixels) -> Pixels {
-    px(1.)
+/// How far under the baseline the band of the wave starts: one pixel under
+/// body text (the wave then touches the feet of the letters without
+/// running through them, and crosses descenders where a native text
+/// view's dots do), a little more under large type, whose baseline is a
+/// heavier line.
+pub(crate) fn wave_offset(font_size: Pixels) -> Pixels {
+    px((f32::from(font_size) * 0.06).round().clamp(1., 3.))
 }
 
 impl Editor {
@@ -827,6 +828,8 @@ impl Editor {
 }
 
 #[cfg(test)]
+// A list of one range is what these tests mean by `[2..5]`.
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 
@@ -916,8 +919,9 @@ mod tests {
     #[test]
     fn results_are_normalized() {
         let text = "é abc déf";
+        let backwards = Range { start: 10, end: 8 };
         assert_eq!(
-            normalized([7..9, 3..6, 4..5, 0..1, 9..9, 6..99, 12..11, 6..7], text),
+            normalized([7..9, 3..6, 4..5, 0..1, 9..9, 6..99, backwards, 6..7], text),
             [3..7]
         );
         assert_eq!(normalized([0..2, 3..6], text), [0..2, 3..6]);

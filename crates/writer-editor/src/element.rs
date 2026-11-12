@@ -416,11 +416,32 @@ impl Editor {
                 if self.spelling.visible && !block_layout.void {
                     let marks = self.spelling.ranges_at(document, index);
                     if !marks.is_empty() {
-                        let thickness = spelling::wave_thickness(block_layout.font_size);
-                        let top = block_layout.baseline
-                            + spelling::wave_offset(block_layout.font_size, block_layout.descent);
+                        let thickness = spelling::WAVE_THICKNESS;
+                        let top =
+                            block_layout.baseline + spelling::wave_offset(block_layout.font_size);
                         for range in marks {
-                            for rect in placed.rects(range.clone(), rows.clone()) {
+                            for (row, rect) in placed.row_rects(range.clone(), rows.clone()) {
+                                let row_bytes = &block_layout.rows[row].range;
+                                let rect = if range.end > row_bytes.end {
+                                    // The mark goes on in the next row: no
+                                    // wave under the space the row was
+                                    // broken at.
+                                    let start = range.start.max(row_bytes.start);
+                                    let kept = block
+                                        .text()
+                                        .get(start..row_bytes.end)
+                                        .map_or(0, |piece| piece.trim_end().len());
+                                    match placed
+                                        .rects(start..start + kept, row..row + 1)
+                                        .first()
+                                        .filter(|_| kept > 0)
+                                    {
+                                        Some(rect) => *rect,
+                                        None => continue,
+                                    }
+                                } else {
+                                    rect
+                                };
                                 let rect = shifted(rect, origin);
                                 plan.spelling.push(PlannedWave {
                                     origin: point(rect.left(), snap(rect.top() + top)),

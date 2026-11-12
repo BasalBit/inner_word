@@ -2,6 +2,9 @@
 //! the queries answer, where the waves are drawn, what the context menu
 //! request carries, and what all of it costs in a book.
 
+// A list of one range is what these tests mean by `[2..5]`.
+#![allow(clippy::single_range_in_vec_init)]
+
 use std::{ops::Range, time::Instant};
 
 use gpui::{TestAppContext, VisualTestContext, px};
@@ -901,7 +904,7 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
                 (0, 2..5),
                 (1, 6..9),
                 (1, 19..23),
-                (2, wrapped.start..wrapped.start + 4),
+                (2, wrapped.start..wrapped.start + 3),
                 (2, wrapped.start + 4..wrapped.end),
             ];
             for (band, (block, range)) in bands.iter().zip(expected) {
@@ -911,7 +914,8 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
                 assert_eq!(rows.len(), 1);
                 let row = rows[0];
                 // Exactly as wide as the word, and where the word is. (The
-                // trailing space of a wrapped row is not part of a mark.)
+                // space a row was broken at gets no wave: the first half
+                // of the wrapped mark is "ord", not "ord ".)
                 assert_eq!(band.left(), row.left(), "block {block} {range:?}");
                 assert!(
                     (band.size.width - row.size.width).abs() < px(0.01),
@@ -924,19 +928,21 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
                     (block_layout, row.top())
                 };
                 let baseline = row_top + layout.baseline;
-                assert!(band.top() >= baseline, "the wave starts under the baseline");
+                // One pixel under body text, two under a first heading
+                // (34 px), to the half pixel.
+                let offset = band.top() - baseline;
+                let expected = if block == 0 { px(2.) } else { px(1.) };
                 assert!(
-                    band.top() <= baseline + px(2.5),
-                    "and close to it: {band:?} {baseline:?}"
+                    (offset - expected).abs() <= px(0.25),
+                    "just under the baseline: {band:?} {baseline:?}"
                 );
                 assert_eq!(band.top(), snap(band.top()), "on a device pixel");
                 assert!(
                     band.bottom() <= row.bottom(),
                     "inside the row: {band:?} in {row:?}"
                 );
-                // As thick as the text is large, and nothing else.
-                let thickness = band.size.height / 3.;
-                assert_eq!(thickness, if block == 0 { px(1.5) } else { px(1.) });
+                // The same line under every text size.
+                assert_eq!(band.size.height, px(3.));
             }
             // The two halves of the wrapped mark are on two rows.
             assert!(bands[4].top() > bands[3].bottom());

@@ -26,6 +26,9 @@
 //! | `cmd-alt-down` / `cmd-alt-up` | scroll by 120 pixels |
 //! | `cmd-alt-e` | replace every "the" by "THE" (and back), keeping the highlight layer up to date as a find bar does |
 //! | `cmd-alt-m` | move the caret to the middle of the document |
+//! | `cmd-alt-s` | spelling marks on / off: a stand-in checker marks a few "misspelled" words and keeps the marks up to date as a checker would |
+//! | `cmd-alt-;` / `cmd-alt-shift-;` | select the next / the previous marked word |
+//! | `cmd-alt-w` | draw the spelling marks / hide them (they are kept) |
 //! | `cmd-1` / `cmd-2` | focus the editor / the compact composer |
 //! | `cmd-q` | quit |
 //!
@@ -41,6 +44,12 @@
 //! `THE_WRITER_DEMO_BLOB=<bytes>`: a paragraph without spaces), and
 //! `THE_WRITER_DEMO_PAGE_VIEW=1` starts in page view; the demo then prints
 //! how long opening and the background layout took.
+//! `THE_WRITER_DEMO_SPELLING=1` starts with the stand-in checker on and,
+//! unless another document was asked for, opens a document made for
+//! looking at the marks (body text, headings, bold and italic, a link, a
+//! mark across a wrapped row, descenders, text sizes);
+//! `THE_WRITER_DEMO_SPELLING=fox,river,the lazy` marks those words instead
+//! of the built-in list (the way to fill a generated book with marks).
 //!
 //! Visual QA (see `docs/gpui-notes.md`): build, then run the binary with
 //! `THE_WRITER_AUTOMATION`, e.g.
@@ -99,6 +108,10 @@ actions!(
         ScrollUp,
         ReplaceAll,
         GoToMiddle,
+        ToggleSpelling,
+        NextSpelling,
+        PreviousSpelling,
+        ToggleSpellingDrawn,
         FocusEditor,
         FocusComposer,
         Quit,
@@ -228,6 +241,165 @@ fn sample_document() -> Document {
     state.into_document()
 }
 
+/// What the stand-in checker marks when no list is given.
+const STAND_IN_MISSPELLINGS: [&str; 12] = [
+    "teh",
+    "wrld",
+    "mispelled",
+    "typograpy",
+    "recieve",
+    "adress",
+    "gypjqy",
+    "accomodation",
+    "wraps around",
+    "naïve",
+    "Qypgj",
+    "Éy",
+];
+
+/// The words `THE_WRITER_DEMO_SPELLING` asks the stand-in checker to mark:
+/// `None` when it is not set, the built-in list for `1`.
+fn spelling_words_from_env() -> Option<Vec<String>> {
+    let value = std::env::var("THE_WRITER_DEMO_SPELLING").ok()?;
+    let words: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty() && *word != "1")
+        .map(str::to_string)
+        .collect();
+    Some(if words.is_empty() {
+        STAND_IN_MISSPELLINGS
+            .iter()
+            .map(|word| word.to_string())
+            .collect()
+    } else {
+        words
+    })
+}
+
+/// The stand-in checker: the byte ranges of every whole-word occurrence of
+/// one of `words` in `text`.
+fn stand_in_check(text: &str, words: &[String]) -> Vec<std::ops::Range<usize>> {
+    let mut found = Vec::new();
+    for word in words {
+        for (start, _) in text.match_indices(word.as_str()) {
+            let end = start + word.len();
+            let before = text[..start].chars().next_back();
+            let after = text[end..].chars().next();
+            if !before.is_some_and(char::is_alphanumeric)
+                && !after.is_some_and(char::is_alphanumeric)
+            {
+                found.push(start..end);
+            }
+        }
+    }
+    found
+}
+
+/// A document for looking at spelling marks: every place a wavy underline
+/// has to look right.
+fn spelling_document() -> Document {
+    let plain = InlineAttrs::default;
+    let style = |style: InlineStyle| InlineAttrs::default().with(style);
+    let blocks = vec![
+        Block::with_text(BlockKind::heading(1), "A mispelled heading, Qypgj"),
+        Block::paragraph(
+            "Body text with teh usual mistakes: a wrld of typograpy, a word full of descenders \
+             (gypjqy, and Qypgj next to plain gypsy quay), an accent above (Éy), and an adress \
+             at the end.",
+        ),
+        Block::new(BlockKind::Paragraph)
+            .with_span("Formatted: ", plain())
+            .with_span("bold mispelled gypjqy", style(InlineStyle::Bold))
+            .with_span(", ", plain())
+            .with_span("italic mispelled gypjqy", style(InlineStyle::Italic))
+            .with_span(", ", plain())
+            .with_span(
+                "bold italic typograpy",
+                style(InlineStyle::Bold).with(InlineStyle::Italic),
+            )
+            .with_span(", ", plain())
+            .with_span("underlined mispelled gypjqy", style(InlineStyle::Underline))
+            .with_span(", ", plain())
+            .with_span("struck mispelled", style(InlineStyle::Strikethrough))
+            .with_span(", ", plain())
+            .with_span(
+                "highlighted mispelled",
+                InlineAttrs {
+                    highlight: Some(Highlight::Yellow),
+                    ..plain()
+                },
+            )
+            .with_span(", ", plain())
+            .with_span(
+                "coloured mispelled",
+                InlineAttrs {
+                    color: Some(Rgb::new(0x2f, 0x6f, 0xb0)),
+                    ..plain()
+                },
+            )
+            .with_span(", ", plain())
+            .with_span(
+                "Helvetica mispelled gypjqy",
+                InlineAttrs {
+                    font: Some("Helvetica Neue".into()),
+                    ..plain()
+                },
+            )
+            .with_span(", and ", plain())
+            .with_span(
+                "a link with a mispelled gypjqy word",
+                InlineAttrs {
+                    link: Some("https://example.com".into()),
+                    ..plain()
+                },
+            )
+            .with_span(".", plain()),
+        Block::paragraph(
+            "A mark across a wrapped row: this phrase wraps around and wraps around and wraps \
+             around and wraps around and wraps around and wraps around and wraps around and \
+             wraps around and wraps around and wraps around and wraps around and wraps around \
+             and wraps around and wraps around and wraps around until one of them does.",
+        ),
+        Block::paragraph(
+            "Two rows of marks, one right above the other: teh teh teh teh teh teh teh teh teh \
+             teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh \
+             teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh teh.",
+        ),
+        Block::with_text(BlockKind::heading(2), "Heading 2, mispelled gypjqy"),
+        Block::with_text(BlockKind::heading(3), "Heading 3, mispelled gypjqy"),
+        Block::with_text(BlockKind::heading(4), "Heading 4, mispelled gypjqy"),
+        Block::with_text(BlockKind::BulletItem, "A bullet with a mispelled word"),
+        Block::with_text(BlockKind::todo(), "A to-do to recieve an adress"),
+        Block::with_text(
+            BlockKind::Quote,
+            "A quote with a mispelled word and teh wrld in it.",
+        ),
+        Block::paragraph("Small text, mispelled gypjqy, teh wrld.").with_text_size(Some(11.)),
+        Block::paragraph("Large text, mispelled gypjqy.").with_text_size(Some(28.)),
+        Block::paragraph("Very large, mispelled Qypgj.").with_text_size(Some(48.)),
+        Block::paragraph("Centred mispelled paragraph.").with_alignment(Alignment::Center),
+        Block::paragraph(
+            "Justified: teh words are spread, the marks are as wide as each mispelled word is \
+             after the spreading, and the wrld goes on over more than one row of typograpy.",
+        )
+        .with_alignment(Alignment::Justify),
+        Block::paragraph("Unicode: a naïve café, 日本語, and teh end."),
+    ];
+    let mut state = EditorState::new(Document::from_blocks(blocks));
+    if let Some(range) = state
+        .document()
+        .find_all("a wrld of typograpy", SearchOptions::default())
+        .first()
+        .copied()
+    {
+        state.select_range(range);
+        state.add_comment("A comment over two marked words.", "Demo", 0);
+    }
+    state.set_caret(Position::ZERO);
+    state.into_document()
+}
+
 /// A generated book: chapters with headings, paragraphs of one to a dozen
 /// sentences, a few lists. About 150 bytes per block.
 fn book(blocks: usize) -> Document {
@@ -309,9 +481,12 @@ fn initial_document() -> Document {
                 one_block(BlockKind::Paragraph, bytes, true)
             } else if let Some(bytes) = number("THE_WRITER_DEMO_CODE") {
                 one_block(BlockKind::code(), bytes, false)
+            } else if let Some(blocks) = number("THE_WRITER_DEMO_BLOCKS") {
+                book(blocks.max(1))
+            } else if std::env::var_os("THE_WRITER_DEMO_SPELLING").is_some() {
+                spelling_document()
             } else {
-                number("THE_WRITER_DEMO_BLOCKS")
-                    .map_or_else(sample_document, |blocks| book(blocks.max(1)))
+                sample_document()
             }
         }
     };
@@ -365,6 +540,8 @@ struct Demo {
     interceptor: Option<Subscription>,
     /// The editor is squeezed into a narrow strip.
     narrow: bool,
+    /// The words the stand-in spell checker marks, while it is on.
+    spelling: Option<Vec<String>>,
     last_event: SharedString,
     submitted: Vec<String>,
     /// When the demo started, for the timings it prints.
@@ -405,6 +582,13 @@ impl Demo {
                 {
                     eprintln!("[event] {request:?}");
                 }
+                // The stand-in checker looks at what an edit changed, as
+                // a real one does (which waits for a pause first).
+                if let EditorEvent::Edited { change } = event
+                    && let Some(splice) = change.blocks
+                {
+                    this.check_spelling(splice.new_range(), cx);
+                }
                 this.last_event = match event {
                     EditorEvent::Edited { change } => {
                         format!("Edited (revision {})", change.revision).into()
@@ -430,13 +614,14 @@ impl Demo {
                 cx.notify();
             }),
         ];
-        Self {
+        let demo = Self {
             focus_handle: cx.focus_handle(),
             editor,
             composer,
             popup: cx.new(|_| PopupCard),
             interceptor: None,
             narrow: false,
+            spelling: spelling_words_from_env(),
             last_event: "none".into(),
             submitted: Vec::new(),
             opened,
@@ -445,7 +630,109 @@ impl Demo {
             frames: Vec::new(),
             frames_seen: 0,
             _subscriptions: subscriptions,
+        };
+        if let Some(words) = demo.spelling.clone() {
+            // The whole document at once, in two steps that are timed apart:
+            // what the stand-in checker costs, and what handing its results
+            // to the editor costs.
+            let started = Instant::now();
+            let results: Vec<_> = demo
+                .editor
+                .read(cx)
+                .document()
+                .blocks()
+                .iter()
+                .map(|block| {
+                    let ranges = if block.kind().is_code() {
+                        Vec::new()
+                    } else {
+                        stand_in_check(block.text(), &words)
+                    };
+                    (block.id(), block.revision(), ranges)
+                })
+                .collect();
+            let checked = started.elapsed();
+            let blocks = results.len();
+            let started = Instant::now();
+            demo.editor.update(cx, |editor, cx| {
+                for (id, revision, ranges) in results {
+                    editor.set_spelling_marks(id, revision, ranges, cx);
+                }
+            });
+            eprintln!(
+                "[demo] spelling: {blocks} blocks checked by the stand-in in {checked:?}, \
+                 {} marks handed to the editor in {:?}",
+                demo.editor.read(cx).spelling_mark_count(),
+                started.elapsed()
+            );
         }
+        demo
+    }
+
+    /// The stand-in checker: sets the marks of `blocks`.
+    fn check_spelling(&mut self, blocks: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        let Some(words) = &self.spelling else {
+            return;
+        };
+        self.editor.update(cx, |editor, cx| {
+            for index in blocks {
+                let Some(block) = editor.document().block(index) else {
+                    break;
+                };
+                let (id, revision) = (block.id(), block.revision());
+                let ranges = if block.kind().is_code() {
+                    Vec::new()
+                } else {
+                    stand_in_check(block.text(), words)
+                };
+                editor.set_spelling_marks(id, revision, ranges, cx);
+            }
+        });
+    }
+
+    fn toggle_spelling(&mut self, _: &ToggleSpelling, _: &mut Window, cx: &mut Context<Self>) {
+        if self.spelling.take().is_some() {
+            self.editor
+                .update(cx, |editor, cx| editor.clear_spelling_marks(cx));
+        } else {
+            self.spelling = Some(
+                STAND_IN_MISSPELLINGS
+                    .iter()
+                    .map(|word| word.to_string())
+                    .collect(),
+            );
+            let blocks = self.editor.read(cx).document().block_count();
+            self.check_spelling(0..blocks, cx);
+        }
+        cx.notify();
+    }
+
+    fn next_spelling(&mut self, _: &NextSpelling, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            if let Some(mark) = editor.next_spelling_mark(editor.selection().range().end) {
+                editor.edit(|state| state.select_range(mark), cx);
+            }
+        });
+    }
+
+    fn previous_spelling(&mut self, _: &PreviousSpelling, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            if let Some(mark) = editor.previous_spelling_mark(editor.selection().range().start) {
+                editor.edit(|state| state.select_range(mark), cx);
+            }
+        });
+    }
+
+    fn toggle_spelling_drawn(
+        &mut self,
+        _: &ToggleSpellingDrawn,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |editor, cx| {
+            let visible = editor.spelling_marks_visible();
+            editor.set_spelling_marks_visible(!visible, cx);
+        });
     }
 
     fn toggle_theme(&mut self, _: &ToggleTheme, _: &mut Window, cx: &mut Context<Self>) {
@@ -777,6 +1064,9 @@ impl Demo {
         if editor.is_read_only() {
             status.push_str("  |  read-only");
         }
+        if self.spelling.is_some() {
+            status.push_str(&format!("  |  {} misspelled", editor.spelling_mark_count()));
+        }
         if self.interceptor.is_some() {
             status.push_str("  |  intercepting x");
         }
@@ -816,6 +1106,10 @@ impl Render for Demo {
             .on_action(cx.listener(Self::scroll_up))
             .on_action(cx.listener(Self::replace_all))
             .on_action(cx.listener(Self::go_to_middle))
+            .on_action(cx.listener(Self::toggle_spelling))
+            .on_action(cx.listener(Self::next_spelling))
+            .on_action(cx.listener(Self::previous_spelling))
+            .on_action(cx.listener(Self::toggle_spelling_drawn))
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::focus_composer))
             .size_full()
@@ -910,6 +1204,10 @@ fn main() {
                 KeyBinding::new("cmd-alt-up", ScrollUp, None),
                 KeyBinding::new("cmd-alt-e", ReplaceAll, None),
                 KeyBinding::new("cmd-alt-m", GoToMiddle, None),
+                KeyBinding::new("cmd-alt-s", ToggleSpelling, None),
+                KeyBinding::new("cmd-alt-;", NextSpelling, None),
+                KeyBinding::new("cmd-alt-shift-;", PreviousSpelling, None),
+                KeyBinding::new("cmd-alt-w", ToggleSpellingDrawn, None),
                 KeyBinding::new("cmd-1", FocusEditor, None),
                 KeyBinding::new("cmd-2", FocusComposer, None),
                 KeyBinding::new("cmd-q", Quit, None),

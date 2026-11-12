@@ -27,6 +27,7 @@
 //! | `shortcuts:<what>`    | the keyboard shortcuts: `shortcuts:import:<path>` reads a shortcuts file and shows what it would change in the list (as choosing it in the open panel does), `shortcuts:press:<label>` presses a control of the open list by its label (`Import…`, `Export…`, `Reset All…`, `Changed Only`, `Close`, or a choice of its open question: `Replace My Changes`, `Use ⌥⌘B`, `Cancel`), `shortcuts:reset` puts every key back without asking, `shortcuts:undo` undoes the last import or reset |
 //! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
 //! | `agents:<n>[:<ms>]`   | waits until agents have made `n` changes through this app since it opened (the `writer` tool, run from outside while the script waits), for at most `ms` milliseconds (10000 unless given); fails when they did not come |
+//! | `agents:on`, `agents:off` | sets the switch "Agents can make changes while The Writer is open", as its button in the Agents panel does |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
@@ -135,6 +136,8 @@ pub enum Step {
     Bar(Option<String>),
     /// Wait for this many changes by agents, at most this long.
     Agents(usize, Duration),
+    /// Set the switch "Agents can make changes while The Writer is open".
+    AgentsSwitch(bool),
     Shortcut {
         /// The name of the command's action.
         action: String,
@@ -161,6 +164,8 @@ pub enum Step {
     Stall(Duration),
     /// What the zoom of the text is to become (`Workspace::zoom_step`).
     Zoom(String),
+    /// Lay a text out on a page and say what the page holds.
+    PageFit(crate::workspace::PageFit),
     Quit,
 }
 
@@ -321,6 +326,8 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             Step::MenuKey(unescape(arg))
         }
         "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
+        "agents" if arg.trim() == "on" => Step::AgentsSwitch(true),
+        "agents" if arg.trim() == "off" => Step::AgentsSwitch(false),
         "agents" => {
             let (count, patience) = match arg.split_once(':') {
                 Some((count, patience)) => (
@@ -457,6 +464,7 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 .collect::<Result<Vec<_>>>()?;
             Step::KeyCost(keys)
         }
+        "pagefit" => Step::PageFit(crate::workspace::PageFit::parse(arg)?),
         "zoom" => {
             if arg.is_empty() {
                 bail!("expected a zoom: in, out, actual, fit, page, life, a percentage");
@@ -788,6 +796,15 @@ async fn execute(
                     .await;
             }
         }
+        Step::AgentsSwitch(on) => {
+            workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                workspace.set_agents_may_change(on, cx);
+            })?;
+            eprintln!(
+                "[automation] agents can {} while The Writer is open",
+                if on { "make changes" } else { "only read" }
+            );
+        }
         Step::State => {
             let state = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
                 describe_state(workspace, window, cx)
@@ -875,6 +892,19 @@ async fn execute(
             for line in measure_keys(keys, window, view, cx).await? {
                 eprintln!("[automation] keycost: {line}");
             }
+        }
+        Step::PageFit(fit) => {
+            let text = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
+                workspace.open_page_fit(&fit, window, cx)
+            })??;
+            // The page is laid out by the frame that draws it.
+            frame_pause(window, view, cx).await;
+            let report = workspace_handle(window, cx)?
+                .update(cx, |workspace, _, cx| workspace.report_page_fit(&text, cx))??;
+            for line in report {
+                eprintln!("[automation] pagefit: {line}");
+            }
+            frame_pause(window, view, cx).await;
         }
         Step::Zoom(what) => {
             workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {

@@ -1320,3 +1320,83 @@ fn the_pages_do_not_depend_on_the_zoom(cx: &mut TestAppContext) {
         assert_eq!(w.save_state(), Some(SaveState::Saved))
     });
 }
+
+// ----- the measurement of a page ----------------------------------------------------------
+
+#[gpui::test]
+fn the_page_fit_step_counts_what_the_lines_of_a_page_hold(cx: &mut TestAppContext) {
+    use writer_app::workspace::{PageFit, characters_per_row};
+    use writer_core::PaperSize;
+
+    // What a script writes.
+    let fit = PageFit::parse("Times New Roman | 12 | 1.5 | A4 | /some/text.txt").unwrap();
+    assert_eq!(fit.font, "Times New Roman");
+    assert_eq!((fit.size, fit.line_height), (12., 1.5));
+    assert_eq!(fit.paper, PaperSize::A4);
+    assert_eq!(
+        PageFit::parse("Arial|11|1.15|letter|t.txt").unwrap().paper,
+        PaperSize::UsLetter
+    );
+    for wrong in [
+        "Arial|11|1.15|a4",
+        "Arial|big|1|a4|t",
+        "Arial|11|1|a3|t",
+        "",
+    ] {
+        assert!(PageFit::parse(wrong).is_err(), "{wrong:?}");
+    }
+    // Characters per full row: the space a row ends in counts, the last
+    // row does not, and a character is a character whatever its bytes.
+    let text = "aaaa bbbb cccc ééé dd";
+    let starts = [0, 5, 10, 15];
+    assert_eq!(&text[15..], "ééé dd");
+    assert_eq!(characters_per_row(text, &starts), (4, 5., 5, 5));
+    assert_eq!(characters_per_row("ééé ddd e", &[0, 7]), (2, 4., 4, 4));
+    assert_eq!(characters_per_row("short", &[0]), (1, 5., 5, 5));
+
+    // The step itself, with the font of the test platform: every glyph is
+    // 0.6 of the size wide, so a line of 12 pt type on A4 with 2.54 cm
+    // margins (451.3 pt) has room for 62 characters (and the space a line
+    // ends in may hang over the edge: 63), and a page (697.9 pt) for 38
+    // lines of 18 pt.
+    init(cx);
+    let library = library(cx);
+    let (workspace, cx) = open_workspace(&library, cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("text.txt");
+    let sentence = "The harbor was a plain grey fact and the boats came by road every spring. ";
+    std::fs::write(&path, sentence.repeat(60)).unwrap();
+    let fit = PageFit::parse(&format!("Charter|12|1.5|a4|{}", path.display())).unwrap();
+    let measure = |cx: &mut VisualTestContext| {
+        let text = workspace
+            .update_in(cx, |w, window, cx| w.open_page_fit(&fit, window, cx))
+            .expect("the document is made");
+        cx.run_until_parked();
+        workspace
+            .update(cx, |w, cx| w.report_page_fit(&text, cx))
+            .expect("the text is laid out")
+    };
+    let report = measure(cx);
+    assert!(
+        report[0].contains("Charter 12 pt, line spacing 1.5 (18.00 pt a line), A4")
+            && report[0].contains("451.3 x 697.9 pt"),
+        "{report:?}"
+    );
+    assert!(
+        report[1].contains("is 73 rows; a full row holds 61.6 characters (58 to 63)"),
+        "{report:?}"
+    );
+    assert!(
+        report[2].starts_with("38 rows on the first page"),
+        "{report:?}"
+    );
+    // The document is in page view at those settings, and the zoom the
+    // page is drawn at is not part of any of it.
+    workspace.read_with(cx, |w, cx| {
+        let editor = w.editor().read(cx);
+        assert!(editor.page_view());
+        assert_eq!(editor.document().settings().typography.base_size, 12.);
+    });
+    set_zoom(&workspace, Zoom::Percent(200), cx);
+    assert_eq!(measure(cx), report);
+}

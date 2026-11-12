@@ -66,6 +66,7 @@ mod fonts;
 mod live;
 mod measure;
 mod menus;
+mod page_probe;
 mod render;
 mod right_panel;
 mod saver;
@@ -108,6 +109,7 @@ use crate::{
 pub use assistant::{library_attachments, library_tool_server};
 pub use live::{AgentChanges, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence};
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
+pub use page_probe::{PageFit, characters_per_row};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
     counted, group_digits, limit_label, panel_layout,

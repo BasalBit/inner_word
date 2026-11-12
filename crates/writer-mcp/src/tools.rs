@@ -1345,12 +1345,42 @@ impl ToolHost for Toolbox {
             .iter()
             .find(|operation| operation.listed && operation.name == name)?;
         Some(match self.run_operation(operation, arguments, client) {
-            Ok(reply) => ToolOutput::ok(reply.text, reply.data),
+            Ok(reply) => ToolOutput::ok(tool_text(&reply.text), reply.data),
             Err(failure) => {
                 ToolOutput::error(tool_error_text(&failure), json!({ "error": failure.data }))
             }
         })
     }
+}
+
+/// The text of a result as a model should read it in a tool result. The texts are the
+/// ones the command line prints, and where they say how a change is taken back they name
+/// a command of the command line; a model that works through this server has the tool of
+/// that name instead.
+fn tool_text(text: &str) -> String {
+    const HISTORY: &str = "\"writer history restore ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(HISTORY) {
+        let after = &rest[at + HISTORY.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && after[digits..].starts_with('"') {
+            out.push_str(&rest[..at]);
+            out.push_str(&format!(
+                "restore_version with version {}",
+                &after[..digits]
+            ));
+            rest = &after[digits + 1..];
+        } else {
+            out.push_str(&rest[..at + HISTORY.len()]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out.replace(
+        "\"writer restore <id>\" brings one back",
+        "restore_document or restore_folder brings one back",
+    )
 }
 
 /// The message of a failure as a model should read it in a tool result.
@@ -1369,6 +1399,39 @@ the app is open, and so does any tool with dry_run."
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_result_names_tools_where_the_command_line_names_commands() {
+        assert_eq!(
+            tool_text(
+                "Edited doc:1.\nThe text as it was is kept as version 12 (Before an edit by Claude); \
+                 \"writer history restore 12\" brings it back.\n"
+            ),
+            "Edited doc:1.\nThe text as it was is kept as version 12 (Before an edit by Claude); \
+             restore_version with version 12 brings it back.\n"
+        );
+        assert_eq!(
+            tool_text(
+                "1 item in the trash:\ndoc:2  Notes\n\"writer restore <id>\" brings one back.\n"
+            ),
+            "1 item in the trash:\ndoc:2  Notes\nrestore_document or restore_folder brings one back.\n"
+        );
+        // The text of a document is the text of a document.
+        let text = "She typed \"writer history restore\" and \"writer history restore x\".";
+        assert_eq!(tool_text(text), text);
+        // No result of a tool names a command of the command line.
+        for line in include_str!("render.rs").lines() {
+            let said = line.trim_start();
+            if said.starts_with("//") || !said.contains("\\\"writer ") {
+                continue;
+            }
+            let shown = said.replace("\\\"", "\"").replace("{}", "7");
+            assert!(
+                !tool_text(&shown).contains("\"writer "),
+                "a result still names a command of the command line: {said}"
+            );
+        }
+    }
 
     fn toolbox() -> (tempfile::TempDir, Toolbox) {
         let dir = tempfile::tempdir().unwrap();

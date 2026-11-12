@@ -550,7 +550,7 @@ fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), headers.len(), "{headers:?}");
-    // The first line says that the menus offer the same, the second what
+    // The first line says that the menus offer the same, the next two what
     // cannot be changed here; then the places.
     assert_eq!(
         headers.first().map(String::as_str),
@@ -562,6 +562,10 @@ fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     );
     assert_eq!(
         headers.get(2).map(String::as_str),
+        Some(writer_app::workspace::ALSO_FIXED_NOTE)
+    );
+    assert_eq!(
+        headers.get(3).map(String::as_str),
         Some("Anywhere \u{b7} File")
     );
     // Nothing is left without a place.

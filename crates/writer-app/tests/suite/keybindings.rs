@@ -2220,3 +2220,226 @@ fn a_script_sets_keys_and_reads_the_state(cx: &mut TestAppContext) {
     assert!(line.contains("list=[mode=question"), "{line}");
     assert!(line.contains("choices=[*Use ⌥⌘9"), "{line}");
 }
+
+// ----- what the check of the whole thing found --------------------------------------
+
+/// Wherever the user is told how many keys are theirs, a command that is
+/// bound in several key contexts of one place is one command, as it is one
+/// row of the list. (The list said "1 key changed" and the question of
+/// "reset all" in the same list "2 commands go back".)
+#[gpui::test]
+fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) {
+    use writer_app::automation::describe_state;
+    use writer_app::settings_view::{SettingRow, SettingsView};
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let target = vcx.update(|_, cx| {
+        let row = collect_shortcuts(cx)
+            .into_iter()
+            .find(|shortcut| shortcut.action_name() == "editor_tools::ToggleWholeWord")
+            .expect("whole word is listed");
+        assert_eq!(row.targets.len(), 2, "the bar binds it twice");
+        row.target.clone().expect("a binding")
+    });
+    let view = open_list_at(&workspace, &target, vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-alt-y");
+    choose(&view, Choice::UseKey, vcx);
+    // Two key contexts were changed ...
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 2);
+    // ... which is one row, and one command to the user.
+    assert_eq!(view.read_with(vcx, |view, _| view.changed_count()), 1);
+    assert_eq!(
+        vcx.update(|_, cx| writer_app::workspace::changed_command_count(cx)),
+        1
+    );
+    // The question of "reset all", in the list.
+    press(vcx, "cmd-shift-d");
+    let (_, says, _) = question(&view, vcx);
+    assert!(says.starts_with("1 command goes back"), "{says}");
+    choose(&view, Choice::Cancel, vcx);
+    // The state line of a scripted run.
+    let line = workspace.update_in(vcx, |workspace, window, cx| {
+        describe_state(workspace, window, cx)
+    });
+    assert!(line.contains("keys=[changed=1 list=["), "{line}");
+    press(vcx, "escape");
+    // The row of the settings.
+    press(vcx, "cmd-,");
+    let settings = workspace
+        .read_with(vcx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<SettingsView>()
+        })
+        .expect("the settings are open");
+    let says = settings.read_with(vcx, |settings, cx| {
+        settings
+            .description(SettingRow::KeyboardShortcuts, false, cx)
+            .to_string()
+    });
+    assert!(
+        says.ends_with("One command has a key of your own."),
+        "{says}"
+    );
+    press(vcx, "escape");
+    // The system dialog of the menu bar's "reset all".
+    vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
+    vcx.run_until_parked();
+    let (_, detail) = vcx.pending_prompt().expect("the dialog is shown");
+    assert_eq!(detail, "One command has another key than its default.");
+    vcx.simulate_prompt_answer("Cancel");
+    vcx.run_until_parked();
+}
+
+/// With Vim mode on, Vim sees the keys of the text before any binding
+/// does. The keymap knows nothing of that, so the list says it where a
+/// key is chosen: for a key Vim may take (not one with ⌘, a function key
+/// or an option chord, which Vim leaves alone), for a command of the text
+/// or one that works anywhere, and only while Vim mode is on.
+#[gpui::test]
+fn with_vim_mode_on_the_list_says_that_vim_sees_a_key_first(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let vim_says = "Vim mode is on";
+    let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| -> String {
+        let view = open_list_at(&workspace, target, cx);
+        press(cx, "enter");
+        press(cx, keys);
+        let (_, says, _) = question(&view, cx);
+        choose(&view, Choice::Cancel, cx);
+        press(cx, "escape");
+        says
+    };
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    let library_row = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .into_iter()
+            .find(|shortcut| shortcut.place == Place::Library && shortcut.target.is_some())
+            .and_then(|shortcut| shortcut.target)
+            .expect("the library has a key")
+    });
+
+    // Vim mode off: nothing about it.
+    assert!(!ask(&bold(), "ctrl-y", vcx).contains(vim_says));
+
+    workspace.update(vcx, |workspace, cx| workspace.toggle_vim_mode(cx));
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |workspace, cx| workspace.vim().read(cx).is_attached()));
+    // A key of the text that Vim has a command on, and one of the window.
+    let says = ask(&bold(), "ctrl-y", vcx);
+    assert!(says.contains(vim_says), "{says}");
+    assert!(says.contains("the shortcut does not run"), "{says}");
+    assert!(ask(&history, "ctrl-y", vcx).contains(vim_says));
+    // Keys Vim leaves to the keymap.
+    for keys in ["cmd-alt-b", "f5", "alt-b"] {
+        let says = ask(&bold(), keys, vcx);
+        assert!(!says.contains(vim_says), "{keys}: {says}");
+    }
+    // A place Vim is not in.
+    let says = ask(&library_row, "ctrl-y", vcx);
+    assert!(!says.contains(vim_says), "{says}");
+    // And what it says is so: in Normal mode the key never reaches the
+    // command it was given to, while a key Vim leaves alone does.
+    change(&workspace, vcx, |keymap| {
+        keymap.set_keys(&history, &[key("ctrl-y"), key("f5")])
+    });
+    assert!(editor_focused(&workspace, vcx));
+    press(vcx, "ctrl-y");
+    assert!(!has_modal(&workspace, vcx), "Vim took ctrl-y");
+    press(vcx, "f5");
+    assert!(has_modal(&workspace, vcx), "f5 opens the version history");
+}
+
+/// The worst a file can do: it takes every key away, the keys of the list
+/// and of its questions included. Nothing of the keyboard works then; the
+/// pointer alone opens the list from the menu bar, puts everything back,
+/// and the keys are there again.
+#[gpui::test]
+fn every_key_taken_away_is_put_back_with_the_pointer_alone(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("The Writer Shortcuts.json");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let defaults = installed(vcx);
+    let click = |selector: &'static str, cx: &mut VisualTestContext| {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("nothing is drawn as {selector:?}"));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+
+    // The exported file, with every key taken out by hand.
+    let mut exported = export_to(&file, vcx);
+    for entry in exported["shortcuts"].as_array_mut().unwrap() {
+        entry["keys"] = serde_json::json!([]);
+    }
+    std::fs::write(&file, serde_json::to_string_pretty(&exported).unwrap()).unwrap();
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    let (_, says, _) = question(&view, vcx);
+    assert!(says.contains("commands get other keys"), "{says}");
+    choose(&view, Choice::ImportMerge, vcx);
+    // One toast says it (the one about the export made way for it): a
+    // stack of them would lie over the lower part of the list.
+    assert_eq!(
+        toasts(&workspace, vcx).len(),
+        1,
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+    // Nothing is left but the two keys of the message window that stands
+    // in when the library cannot be opened, which are nobody's to change.
+    let left = |cx: &mut VisualTestContext| -> Vec<(String, String, Option<String>)> {
+        installed(cx)
+            .into_iter()
+            .filter(|(_, _, context)| context.as_deref() != Some("ErrorWindow"))
+            .collect()
+    };
+    assert!(left(vcx).is_empty(), "a binding is left: {:?}", left(vcx));
+
+    // The list is open and has no key: escape still closes it (it is not
+    // a binding there), and no key opens it again.
+    assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
+    press(vcx, "down");
+    press(vcx, "cmd-shift-d");
+    assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
+    press(vcx, "escape");
+    assert!(!has_modal(&workspace, vcx));
+    press(vcx, "cmd-/");
+    press(vcx, "cmd-shift-p");
+    assert!(!has_modal(&workspace, vcx), "no key does anything");
+
+    // The menu bar still has the list (an item of the menu bar is its
+    // action), and in the list the pointer does the rest.
+    vcx.dispatch_action(writer_app::actions::ShowShortcuts);
+    vcx.run_until_parked();
+    let view = list(&workspace, vcx);
+    click("keymap-reset-all", vcx);
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    // The key that chooses is gone too: the choice is clicked.
+    press(vcx, "enter");
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    click("keymap-choice-0", vcx);
+    assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
+    assert_eq!(installed(vcx), defaults, "every key is back");
+    click("keymap-close", vcx);
+    assert!(!has_modal(&workspace, vcx));
+    assert_eq!(
+        runs("cmd-/", vcx).as_deref(),
+        Some("workspace::ShowShortcuts")
+    );
+
+    // The same from the menu bar's "Reset All Keyboard Shortcuts…", which
+    // asks in a dialog of the system.
+    press_toast_button(&workspace, "Undo", vcx);
+    assert!(left(vcx).is_empty());
+    vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
+    vcx.run_until_parked();
+    assert!(vcx.has_pending_prompt());
+    vcx.simulate_prompt_answer("Reset All");
+    vcx.run_until_parked();
+    assert_eq!(installed(vcx), defaults);
+}

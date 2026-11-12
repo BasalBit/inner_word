@@ -117,8 +117,8 @@ pub use session::{
 };
 pub(crate) use session::{Session, display_title as session_title};
 pub use shortcuts::{
-    NOT_CHANGEABLE_NOTE, catalogue as shortcuts_catalogue, choose_import_file_beforehand,
-    listing as shortcuts_listing,
+    ALSO_FIXED_NOTE, NOT_CHANGEABLE_NOTE, VIM_TAKES_KEYS_FIRST, catalogue as shortcuts_catalogue,
+    changed_command_count, choose_import_file_beforehand, listing as shortcuts_listing,
 };
 pub use spelling::CHECK_SPELLING_MENU_ITEM;
 

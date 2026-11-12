@@ -301,7 +301,11 @@ pub fn changes(cx: &App) -> Changes {
         .unwrap_or_default()
 }
 
-/// How many commands have other keys than their defaults.
+/// How many commands in a key context have other keys than their
+/// defaults. A command bound in several key contexts of one place counts
+/// once for each: what the user is told is
+/// [`crate::workspace::changed_command_count`], which counts as the list
+/// does.
 pub fn changed_count(cx: &App) -> usize {
     effective(cx).map_or(0, |effective| effective.changed().count())
 }

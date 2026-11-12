@@ -57,6 +57,35 @@ use crate::{
 pub const NOT_CHANGEABLE_NOTE: &str = "Not here, because they are not shortcuts: the keys of Vim mode, and the / that opens the \
      insert menu";
 
+/// The rest of what stays as it is, in a line of its own: the keys an open
+/// right-click menu reads itself (it has no key context a binding could
+/// apply in, and its way out must not depend on the keymap), the insert
+/// menu's own completion key, and what the pointer does with a key held.
+pub const ALSO_FIXED_NOTE: &str = "Also fixed: the keys inside a right-click menu, ⇥ in the insert menu, and clicks with ⌘, ⇧ or ⌃";
+
+/// What the question about a key says while Vim mode is on, for a key
+/// that would work in the text and that Vim does not certainly leave alone
+/// ([`vim_leaves`]): Vim sees the keys of the text before any shortcut
+/// does and keeps the ones it has a command on.
+pub const VIM_TAKES_KEYS_FIRST: &str = "Vim mode is on, and in the text Vim sees this key before any shortcut does. Where Vim \
+     has a command on it (in Normal and Visual mode it has one on many keys), the shortcut \
+     does not run.";
+
+/// Whether Vim mode leaves `key` to the keymap in every mode: a key with
+/// ⌘ or fn in it, a function key, and ⌥ with a key (the engine has no
+/// command on an option chord). Read from `VimMode::on_key`.
+fn vim_leaves(key: &writer_keymap::KeySequence) -> bool {
+    let first = key.first();
+    let modifiers = first.modifiers();
+    let name = first.key();
+    let function_key = name.len() > 1
+        && name.starts_with('f')
+        && name[1..]
+            .chars()
+            .all(|character| character.is_ascii_digit());
+    modifiers.command || modifiers.function || function_key || (modifiers.alt && !modifiers.control)
+}
+
 /// How long the toast that offers Undo stays.
 const UNDO_TOAST: Duration = Duration::from_secs(12);
 
@@ -73,6 +102,9 @@ pub(crate) struct ShortcutsState {
     /// The stored value could not be read: it is left alone until the
     /// user changes a key, and the user is told once.
     unread: Option<String>,
+    /// The toast that says what the last export, import, reset or undo
+    /// did, while it is shown.
+    toast: Option<writer_ui::toast::ToastId>,
 }
 
 impl ShortcutsState {
@@ -187,8 +219,19 @@ pub fn listing(cx: &App) -> Option<Listing> {
         Listing::new(model, rows)
             .catalogue(catalogue(&shortcuts, cx))
             .note(shortcuts::MENUS_NOTE)
-            .note(NOT_CHANGEABLE_NOTE),
+            .note(NOT_CHANGEABLE_NOTE)
+            .note(ALSO_FIXED_NOTE),
     )
+}
+
+/// How many commands have other keys than their defaults, as a person
+/// counts them and as the list shows them: a command that is bound in
+/// several key contexts of one place is one row there, and one command
+/// here ([`keymap::changed_count`] counts every key context). What the
+/// settings, the question of "reset all" and the state line of a scripted
+/// run say.
+pub fn changed_command_count(cx: &App) -> usize {
+    listing(cx).map_or(0, |listing| listing.changed_commands())
 }
 
 /// Every key context the row of `target` stands for (see the [module
@@ -303,6 +346,21 @@ impl Workspace {
         }
     }
 
+    /// Says what was done to the keyboard shortcuts, in the place of what
+    /// was said about them last. One toast at a time: the list stays open
+    /// under these, a stack of them would lie over its lower part, and of
+    /// two toasts with "Undo" only the later one would say what its button
+    /// undoes.
+    fn say_about_shortcuts(&mut self, toast: Toast, cx: &mut Context<Self>) {
+        let last = self.shortcuts.toast.take();
+        self.shortcuts.toast = Some(self.toast_layer.update(cx, |layer, cx| {
+            if let Some(last) = last {
+                layer.dismiss(last, cx);
+            }
+            layer.push(toast, cx)
+        }));
+    }
+
     /// Says once that the stored shortcuts could not be read (called when
     /// the workspace is built).
     pub(crate) fn report_unread_shortcuts(&mut self, cx: &mut Context<Self>) {
@@ -316,9 +374,10 @@ impl Workspace {
         }
     }
 
-    /// How many commands have other keys than their defaults.
+    /// How many commands have other keys than their defaults, as the list
+    /// counts them ([`changed_command_count`]).
     pub fn changed_key_count(&self, cx: &App) -> usize {
-        keymap::changed_count(cx)
+        changed_command_count(cx)
     }
 
     // ----- the list --------------------------------------------------------------
@@ -347,7 +406,7 @@ impl Workspace {
         if let Some(list) = self.shortcuts_list(cx) {
             return Some(list);
         }
-        let listing = listing(cx)?;
+        let listing = self.shortcuts_listing(cx)?;
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 KeymapView::new(listing, window, cx)
@@ -364,9 +423,27 @@ impl Workspace {
         let Some(list) = self.shortcuts_list(cx) else {
             return;
         };
-        if let Some(listing) = listing(cx) {
+        if let Some(listing) = self.shortcuts_listing(cx) {
             list.update(cx, |list, cx| list.set_listing(listing, window, cx));
         }
+    }
+
+    /// [`listing`] as this window's list shows it: with what it says about
+    /// a key while Vim mode is on ([`VIM_TAKES_KEYS_FIRST`]).
+    fn shortcuts_listing(&self, cx: &App) -> Option<Listing> {
+        let listing = listing(cx)?;
+        Some(if self.vim.read(cx).is_attached() {
+            listing.takes_keys_first(
+                [
+                    writer_editor::actions::KEY_CONTEXT,
+                    writer_editor_tools::actions::KEY_CONTEXT,
+                ],
+                vim_leaves,
+                VIM_TAKES_KEYS_FIRST,
+            )
+        } else {
+            listing
+        })
     }
 
     /// What the list asks for.
@@ -427,7 +504,7 @@ impl Workspace {
         let changed = self.changed_key_count(cx);
         let stored = !keymap::changes(cx).is_empty();
         if changed == 0 && !stored {
-            self.show_toast(
+            self.say_about_shortcuts(
                 Toast::new("Every keyboard shortcut is the default already"),
                 cx,
             );
@@ -470,7 +547,7 @@ impl Workspace {
             return;
         }
         self.shortcuts.undo = Some(before);
-        self.show_toast(
+        self.say_about_shortcuts(
             Toast::new("Every keyboard shortcut is back to its default")
                 .success()
                 .action("Undo", UndoShortcutsChange)
@@ -485,12 +562,12 @@ impl Workspace {
         match self.shortcuts.undo.take() {
             Some(before) => {
                 self.set_key_changes(before, window, cx);
-                self.show_toast(
+                self.say_about_shortcuts(
                     Toast::new("The keyboard shortcuts are as they were before").success(),
                     cx,
                 );
             }
-            None => self.show_toast(
+            None => self.say_about_shortcuts(
                 Toast::new("No import or reset of the keyboard shortcuts to undo"),
                 cx,
             ),
@@ -563,7 +640,7 @@ impl Workspace {
                             })
                             .ok();
                     }
-                    this.show_toast(
+                    this.say_about_shortcuts(
                         Toast::new(format!(
                             "Exported the keyboard shortcuts to {}",
                             crate::export::display_path(&path)
@@ -653,7 +730,12 @@ impl Workspace {
         let bytes = match read {
             Ok(bytes) => bytes,
             Err(error) => {
-                self.toast_error(format!("Could not read {shown}: {error}"), cx);
+                // The name, not the path: a toast has two lines, and the
+                // reason has to be on them.
+                self.toast_error(
+                    format!("Could not read \u{201c}{name}\u{201d}: {error}"),
+                    cx,
+                );
                 return;
             }
         };
@@ -683,7 +765,7 @@ impl Workspace {
         let carried = plan.carry_out(mode);
         let before = self.set_key_changes(carried.changes, window, cx);
         if before == keymap::changes(cx) {
-            self.show_toast(Toast::new("The import changed no keyboard shortcut"), cx);
+            self.say_about_shortcuts(Toast::new("The import changed no keyboard shortcut"), cx);
             return;
         }
         self.shortcuts.undo = Some(before);
@@ -691,7 +773,7 @@ impl Workspace {
             1 => "Imported the keys of one command".to_string(),
             count => format!("Imported the keys of {count} commands"),
         };
-        self.show_toast(
+        self.say_about_shortcuts(
             Toast::new(what)
                 .success()
                 .action("Undo", UndoShortcutsChange)

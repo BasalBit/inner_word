@@ -841,7 +841,7 @@ impl SettingsView {
             SettingRow::SpellingLanguage => {
                 format!("{}{}", row.description(), whole_list_sentence(cx)).into()
             }
-            SettingRow::KeyboardShortcuts => match crate::keymap::changed_count(cx) {
+            SettingRow::KeyboardShortcuts => match crate::workspace::changed_command_count(cx) {
                 0 => row.description().into(),
                 1 => format!("{} One command has a key of your own.", row.description()).into(),
                 count => format!(

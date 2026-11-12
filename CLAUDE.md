@@ -161,18 +161,22 @@ THE_WRITER_AUTOMATION="wait:5000; keyscost:15; keys:cmd-/; wait:1000; keyscost:1
 ```
 
 What a change by an agent costs while a book is open (the main thread is held for all of
-it; **measured for 0.6.0 in the debug build only**, with the debug tool: 2.5 s for an
-append to a book of 10,000 blocks and 660,000 words, of which the change in the library is
-2.1 s, bringing the window up to date 0.4 s and saving unsaved typing first 0.2 s; a
-comment 1.4 s; a short document is not noticeable. The release build has not been
-measured yet: do it with this line and the release tool, and write the numbers here):
+it; measured for 0.6.0 in the release build, with the release tool, on a book of 10,000
+blocks and 660,000 words in one document: an append 173 ms, a one-word edit in the middle
+179 ms, a comment 108 ms, each the median of five; about 100 ms more when there is unsaved
+typing to save first. Of an append the change in the library is 153 ms (writing the
+document with its search index 80, counting its words 28, the version kept before it 10,
+reading it 10), bringing the window up to date 14 ms. The tool takes 20 to 30 ms on top
+to start and to ask. It grows with the document: a chapter of 5,000 words 4 to 6 ms, a
+novel of 100,000 words in one document about 40 ms. In the debug build the append to the
+book is 2.5 s):
 
 ```bash
 THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
 # when the log says "book ready", from a second terminal, with the same temporary library:
 #   writer --library <dir> recent                # the id of the book
 #   time writer --library <dir> append doc:<id> --content "One more paragraph." --author Claude
-# state: live=[... cost=[save 0.1 ms, change 2103.1 ms, window 379.4 ms]]   (debug)
+# state: live=[... cost=[save 6.2 ms, change 153.3 ms, window 14.4 ms]]   (release)
 ```
 
 What spell checking costs in a book (measured for 0.2.0: the text on screen is checked

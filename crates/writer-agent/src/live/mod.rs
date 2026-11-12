@@ -58,8 +58,8 @@
 //!
 //! ```no_run
 //! use writer_agent::live::{self, Listener};
-//! # fn store() -> writer_store::Store { unimplemented!() }
-//! # let data_dir = std::path::Path::new("/tmp/x");
+//! # fn store() -> writer_store::Store { writer_store::Store::open_in_memory().unwrap() }
+//! # let data_dir = std::path::Path::new("a data directory");
 //! // After taking the lock of the data directory:
 //! let listener = Listener::bind(data_dir)?;
 //! let closer = listener.closer(); // for the quit hook: closer.close()

@@ -2326,14 +2326,18 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
 fn with_vim_mode_on_the_list_says_that_vim_sees_a_key_first(cx: &mut TestAppContext) {
     let (_library, workspace, vcx) = workspace_in_the_text(cx);
     let vim_says = "Vim mode is on";
-    let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| -> String {
+    // The heading and the sentences of the question about `keys`.
+    let ask_whole = |target: &Target, keys: &str, cx: &mut VisualTestContext| {
         let view = open_list_at(&workspace, target, cx);
         press(cx, "enter");
         press(cx, keys);
-        let (_, says, _) = question(&view, cx);
+        let (title, says, _) = question(&view, cx);
         choose(&view, Choice::Cancel, cx);
         press(cx, "escape");
-        says
+        (title, says)
+    };
+    let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| -> String {
+        ask_whole(target, keys, cx).1
     };
     let history = Target::new("workspace::ShowVersionHistory", None);
     let library_row = vcx.update(|_, cx| {
@@ -2351,10 +2355,15 @@ fn with_vim_mode_on_the_list_says_that_vim_sees_a_key_first(cx: &mut TestAppCont
     vcx.run_until_parked();
     assert!(workspace.read_with(vcx, |workspace, cx| workspace.vim().read(cx).is_attached()));
     // A key of the text that Vim has a command on, and one of the window.
-    let says = ask(&bold(), "ctrl-y", vcx);
+    // The heading names who sees the key first, not only that it may not
+    // run.
+    let (title, says) = ask_whole(&bold(), "ctrl-y", vcx);
+    assert_eq!(title, "⌃Y: Vim mode sees it first");
     assert!(says.contains(vim_says), "{says}");
     assert!(says.contains("the shortcut does not run"), "{says}");
-    assert!(ask(&history, "ctrl-y", vcx).contains(vim_says));
+    let (title, says) = ask_whole(&history, "ctrl-y", vcx);
+    assert_eq!(title, "⌃Y: Vim mode sees it first");
+    assert!(says.contains(vim_says), "{says}");
     // Keys Vim leaves to the keymap.
     for keys in ["cmd-alt-b", "f5", "alt-b"] {
         let says = ask(&bold(), keys, vcx);

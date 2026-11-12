@@ -63,6 +63,10 @@ pub const NOT_CHANGEABLE_NOTE: &str = "Not here, because they are not shortcuts:
 /// menu's own completion key, and what the pointer does with a key held.
 pub const ALSO_FIXED_NOTE: &str = "Also fixed: the keys inside a right-click menu, ⇥ in the insert menu, and clicks with ⌘, ⇧ or ⌃";
 
+/// What the heading of that question calls what sees the key first:
+/// "⌃Y: Vim mode sees it first".
+pub const VIM_MODE_NAME: &str = "Vim mode";
+
 /// What the question about a key says while Vim mode is on, for a key
 /// that would work in the text and that Vim does not certainly leave alone
 /// ([`vim_leaves`]): Vim sees the keys of the text before any shortcut
@@ -535,7 +539,8 @@ impl Workspace {
     fn shortcuts_listing(&self, cx: &App) -> Option<Listing> {
         let listing = listing(cx)?;
         Some(if self.vim.read(cx).is_attached() {
-            listing.takes_keys_first(
+            listing.sees_keys_first(
+                VIM_MODE_NAME,
                 [
                     writer_editor::actions::KEY_CONTEXT,
                     writer_editor_tools::actions::KEY_CONTEXT,

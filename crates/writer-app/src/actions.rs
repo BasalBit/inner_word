@@ -107,6 +107,8 @@ actions!(
         RevealInLibrary,
         /// Open the welcome document; it is written again when it is gone.
         OpenWelcomeDocument,
+        /// Choose the language the open document's spelling is checked in.
+        ChooseSpellingLanguage,
     ]
 );
 
@@ -308,5 +310,27 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["toast", "message", "clear"]),
         CommandDescriptor::new("About The Writer", CATEGORY_APP, About).keywords(["version"]),
         CommandDescriptor::new("Quit The Writer", CATEGORY_APP, Quit).keywords(["exit"]),
+    ]
+}
+
+/// The app's own spelling command, listed after the checker's
+/// (`writer_spell::commands`) in their category: the picker for the
+/// language of the open document.
+pub fn spelling_commands() -> Vec<CommandDescriptor> {
+    vec![
+        CommandDescriptor::new(
+            "Spelling language",
+            writer_spell::CATEGORY_SPELLING,
+            ChooseSpellingLanguage,
+        )
+        .keywords([
+            "spell",
+            "dictionary",
+            "proofing",
+            "english",
+            "automatic",
+            "detect",
+            "this document",
+        ]),
     ]
 }

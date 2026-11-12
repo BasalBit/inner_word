@@ -12,6 +12,7 @@
 //! | The character-limit indicator | click or right-click | the network to count against, off |
 //! | The Vim mode chip | click or right-click (the Vim crate's own menu) | plus "Settings…" from here |
 //! | The text | right-click or `ctrl-enter` (the editor tools' menu) | plus "Add Comment" and "Go to Comment" from here |
+//! | A word marked as misspelled | the same menu | led by the suggestions, "Learn Spelling" and "Ignore Spelling" (the spell checker's rows, put first from here) |
 //! | A selection made with the mouse | by itself (the editor tools' format bar) | plus an "Add Comment" button from here |
 //! | A row of the library | right-click, `ctrl-enter` or its "more" button (the panel's menu) | plus "Export…" and "Version History…" from here |
 //!
@@ -284,6 +285,21 @@ impl Workspace {
                 items
             });
         });
+
+        // The text, on a word marked as misspelled: the suggestions, Learn
+        // Spelling and Ignore Spelling lead the menu, as in every Mac app.
+        // The checker composes them; with nothing marked under the pointer
+        // (or the caret, for the keyboard) it has none.
+        if let Some(spell) = &self.spell {
+            let spell = spell.downgrade();
+            self.tools.update(cx, |tools, _| {
+                tools.set_text_menu_leading_extension(move |request, _, cx| {
+                    spell
+                        .update(cx, |spell, cx| spell.context_menu_items(request, cx))
+                        .unwrap_or_default()
+                });
+            });
+        }
 
         // The format bar over a selection made with the mouse: the same
         // "Add Comment", as a button between "turn into" and "more". The

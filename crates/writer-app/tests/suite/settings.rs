@@ -76,6 +76,16 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("right");
     assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).format_bar_enabled()));
 
+    // Spelling: a switch (on unless switched off) and the language.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::CheckSpelling));
+    assert!(workspace.read_with(vcx, |w, _| w.settings().check_spelling));
+    vcx.simulate_keystrokes("space");
+    assert!(!workspace.read_with(vcx, |w, _| w.settings().check_spelling));
+    vcx.simulate_keystrokes("space down");
+    assert!(workspace.read_with(vcx, |w, _| w.settings().check_spelling));
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::SpellingLanguage));
+
     // The author name is a text field inside the list.
     vcx.simulate_keystrokes("down");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::Author));
@@ -423,11 +433,18 @@ fn this_document_section_changes_the_open_document(cx: &mut TestAppContext) {
         Some(SettingRow::DocumentParagraphSpacing)
     );
     assert_eq!(document(vcx).typography.paragraph_spacing, 13.);
+    // The language the document's spelling is checked in comes last.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(
+        focused_row(&view, vcx),
+        Some(SettingRow::DocumentSpellingLanguage)
+    );
+    assert_eq!(document(vcx).spelling_language, None);
     // The list ends here.
     vcx.simulate_keystrokes("down");
     assert_eq!(
         focused_row(&view, vcx),
-        Some(SettingRow::DocumentParagraphSpacing)
+        Some(SettingRow::DocumentSpellingLanguage)
     );
 
     // The defaults for new documents were not touched.

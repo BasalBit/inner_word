@@ -29,6 +29,11 @@ fn main() {
         .with_assets(writer_ui::assets::Assets)
         .run(move |cx: &mut App| {
             writer_app::init(cx);
+            // The Mac's own spell checker, and the check mark of "Check
+            // Spelling While Typing" in the real menu bar. Only here: tests
+            // install a fake service and have no menu bar.
+            writer_app::spelling::use_system_service(cx);
+            writer_app::menus::manage_check_marks(cx);
             // kill, a closed terminal and ctrl-c quit like cmd-q: the open
             // document is saved first.
             writer_app::signals::quit_on_termination_signals(cx);

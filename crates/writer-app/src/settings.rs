@@ -9,7 +9,7 @@
 //! [`crate::WorkspaceEvent::SettingsChanged`].
 
 use gpui::App;
-use writer_core::{DocumentSettings, PaperSize};
+use writer_core::{DocumentSettings, PaperSize, SpellingLanguage};
 use writer_export::SocialNetwork;
 use writer_library::Library;
 use writer_ui::ThemeMode;
@@ -27,6 +27,13 @@ pub mod keys {
     /// `bool`: the format bar that comes up over a selection made with the
     /// mouse.
     pub const FORMAT_BAR: &str = "editor.format_bar";
+    /// `bool`: misspelled words are marked as they are written.
+    pub const CHECK_SPELLING: &str = "spelling.check_while_typing";
+    /// `"auto"` (the checker detects the language of each paragraph) or the
+    /// identifier of one of the system's spelling languages (`"en_GB"`).
+    /// A document can override it with a language of its own
+    /// (`writer_core::DocumentSettings::spelling_language`).
+    pub const SPELLING_LANGUAGE: &str = "spelling.language";
     /// `bool`: comment tints in the text and the comments panel.
     pub const COMMENTS_VISIBLE: &str = "editor.comments_visible";
     /// `string`: the author name written on new comments.
@@ -76,12 +83,14 @@ pub mod keys {
 
     /// The keys behind [`super::Settings`]: a change to one of them is a
     /// change of the user settings.
-    pub const USER_SETTINGS: [&str; 18] = [
+    pub const USER_SETTINGS: [&str; 20] = [
         THEME,
         VIM_MODE,
         INPUT_RULES,
         SMART_PUNCTUATION,
         FORMAT_BAR,
+        CHECK_SPELLING,
+        SPELLING_LANGUAGE,
         COMMENTS_VISIBLE,
         COMMENT_AUTHOR,
         NEW_DOCUMENT_FONT,
@@ -210,6 +219,11 @@ pub struct Settings {
     pub smart_punctuation: bool,
     /// The format bar over a selection made with the mouse.
     pub format_bar: bool,
+    /// Misspelled words are marked as they are written.
+    pub check_spelling: bool,
+    /// The language spelling is checked in, unless the open document names
+    /// its own: automatic detection, or one of the system's languages.
+    pub spelling_language: SpellingLanguage,
     /// Comment tints in the text and the comments panel.
     pub comments_visible: bool,
     /// Author name written on new comments.
@@ -247,6 +261,8 @@ impl Default for Settings {
             input_rules: true,
             smart_punctuation: true,
             format_bar: true,
+            check_spelling: true,
+            spelling_language: SpellingLanguage::Automatic,
             comments_visible: true,
             comment_author: default_author(),
             new_document_font: typography.body_font,
@@ -324,6 +340,7 @@ impl Settings {
         let limit: String = library.setting_or(keys::CHARACTER_LIMIT, "off".to_string());
         let author: String = library.setting_or(keys::COMMENT_AUTHOR, String::new());
         let font: String = library.setting_or(keys::NEW_DOCUMENT_FONT, String::new());
+        let language: String = library.setting_or(keys::SPELLING_LANGUAGE, String::new());
         Self {
             theme: ThemeMode::parse(&theme).unwrap_or(defaults.theme),
             vim_mode: library.setting_or(keys::VIM_MODE, defaults.vim_mode),
@@ -331,6 +348,9 @@ impl Settings {
             smart_punctuation: library
                 .setting_or(keys::SMART_PUNCTUATION, defaults.smart_punctuation),
             format_bar: library.setting_or(keys::FORMAT_BAR, defaults.format_bar),
+            check_spelling: library.setting_or(keys::CHECK_SPELLING, defaults.check_spelling),
+            spelling_language: SpellingLanguage::from_setting_str(&language)
+                .unwrap_or(defaults.spelling_language),
             comments_visible: library.setting_or(keys::COMMENTS_VISIBLE, defaults.comments_visible),
             comment_author: if author.trim().is_empty() {
                 defaults.comment_author

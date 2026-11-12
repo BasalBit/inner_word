@@ -15,6 +15,7 @@ use writer_ui::{
 
 use writer_comments as comments;
 use writer_editor::actions as editor;
+use writer_spell::actions as spell;
 
 use super::{EditCommand, KEY_CONTEXT, MenuKind, SaveState, Workspace};
 use crate::{
@@ -866,6 +867,27 @@ impl Render for Workspace {
                 );
             }
         }
+        // The spelling commands: the switch always, the ones that act on a
+        // word while there is a text and a checker for it.
+        let spell_action =
+            |this: &mut Self,
+             action: &dyn gpui::Action,
+             window: &mut Window,
+             cx: &mut Context<Self>| { this.on_spell_action(action, window, cx) };
+        root = root.on_boxed_action(&spell::ToggleSpellChecking, cx.listener(spell_action));
+        if self.session.is_some() && self.spell.is_some() {
+            let on_words: [&dyn gpui::Action; 6] = [
+                &spell::NextMisspelling,
+                &spell::PreviousMisspelling,
+                &spell::ShowSuggestions,
+                &spell::LearnSpelling,
+                &spell::UnlearnSpelling,
+                &spell::IgnoreSpelling,
+            ];
+            for action in on_words {
+                root = root.on_boxed_action(action, cx.listener(spell_action));
+            }
+        }
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))
@@ -904,6 +926,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_rename_document))
             .on_action(cx.listener(Self::on_reveal_in_library))
             .on_action(cx.listener(Self::on_open_welcome))
+            .on_action(cx.listener(Self::on_choose_spelling_language))
             // The Edit menu's standard items reach a focused text field as
             // the field's own actions (see `edit_where_the_keyboard_is`).
             .capture_action(cx.listener(|this, _: &editor::Undo, window, cx| {

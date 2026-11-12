@@ -18,6 +18,7 @@
 //! | [`EditorTools`] (format menu, insert menu, link popover, font picker, find bar) | the editor area: it wraps the editor | itself; recent fonts are stored from the `FontLibrary` global |
 //! | [`CommentsPanel`] | the right panel slot, while it has something to show | `on_comments_event`: the slot, the visibility setting, the "show resolved" setting |
 //! | [`VimMode`] with its status item and command line | status bar (left), a strip under the editor | `apply_vim_setting` (the `editor.vim_mode` setting) and `on_vim_event` (`:w`, `:q`, named commands) |
+//! | [`writer_spell::SpellChecker`] (only when the app has a spell service, see [`crate::spelling`]) | wavy underlines in the text, the top of the text context menu | `apply_spelling`: the `spelling.*` settings and the open document's own language |
 //!
 //! The slots themselves are public, so another view can be plugged in the
 //! same way:
@@ -63,6 +64,7 @@ mod menus;
 mod render;
 mod saver;
 mod session;
+mod spelling;
 
 use std::time::Duration;
 
@@ -106,6 +108,7 @@ pub use session::{
     first_occurrence,
 };
 pub(crate) use session::{Session, display_title as session_title};
+pub use spelling::CHECK_SPELLING_MENU_ITEM;
 
 /// The key context of the workspace root element.
 pub const KEY_CONTEXT: &str = "Workspace";
@@ -157,6 +160,10 @@ pub struct Workspace {
     pub(crate) tools: Entity<EditorTools>,
     pub(crate) comments: Entity<CommentsPanel>,
     pub(crate) vim: Entity<VimMode>,
+    /// The spell checker of the editor; `None` without a spell service.
+    pub(crate) spell: Option<Entity<writer_spell::SpellChecker>>,
+    /// What the open settings modal asks for (the language picker).
+    settings_subscription: Option<Subscription>,
     pub(crate) modal_layer: Entity<ModalLayer>,
     pub(crate) toast_layer: Entity<ToastLayer>,
     pub(crate) focus_handle: FocusHandle,
@@ -287,8 +294,14 @@ impl Workspace {
             status
         });
         let vim_command_line = cx.new(|cx| VimCommandLine::new(vim.clone(), cx));
+        // The spell checker, when the app has a spell service: `main`
+        // installs the Mac's own, a test installs a fake, and without one
+        // nothing is checked.
+        let spell = crate::spelling::service(cx).map(|service| {
+            cx.new(|cx| writer_spell::SpellChecker::new(editor.clone(), service, cx))
+        });
 
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe_in(&editor, window, Self::on_editor_event),
             cx.subscribe_in(&library, window, Self::on_library_event),
             cx.subscribe_in(&panel, window, Self::on_panel_event),
@@ -322,6 +335,9 @@ impl Workspace {
                 async {}
             }),
         ];
+        if let Some(spell) = &spell {
+            subscriptions.push(cx.subscribe_in(spell, window, Self::on_spell_event));
+        }
         // A library command that puts the keyboard in the sidebar while the
         // sidebar is not drawn (closed, or stepped aside in a narrow
         // window) asks for it to be shown.
@@ -358,6 +374,8 @@ impl Workspace {
             tools,
             comments,
             vim,
+            spell,
+            settings_subscription: None,
             modal_layer,
             toast_layer,
             focus_handle: cx.focus_handle(),
@@ -386,6 +404,7 @@ impl Workspace {
         this.restore_session(window, cx);
         this.sync_comments_panel(cx);
         this.apply_vim_setting(cx);
+        this.apply_spelling(cx);
         this.focus_editor(window, cx);
         this
     }
@@ -814,6 +833,11 @@ impl Workspace {
                 tools.set_format_bar_enabled(new.format_bar, cx)
             });
         }
+        if old.check_spelling != new.check_spelling
+            || old.spelling_language != new.spelling_language
+        {
+            self.apply_spelling(cx);
+        }
         if old.comment_author != new.comment_author {
             let author = new.comment_author.clone();
             self.comments
@@ -1022,6 +1046,12 @@ impl Workspace {
                 }
             });
         });
+        // The modal asks the workspace for the language picker.
+        self.settings_subscription = self
+            .modal_layer
+            .read(cx)
+            .active::<SettingsView>()
+            .map(|view| cx.subscribe_in(&view, window, Self::on_settings_event));
     }
 
     // ----- view toggles ----------------------------------------------------------
@@ -1214,7 +1244,17 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorEvent::Edited { .. } | EditorEvent::SettingsChanged => self.mark_dirty(cx),
+            EditorEvent::Edited { .. } => self.mark_dirty(cx),
+            EditorEvent::SettingsChanged => {
+                self.mark_dirty(cx);
+                // The document's own spelling language may be what changed.
+                self.apply_spelling(cx);
+            }
+            // Another document, with a language of its own or without.
+            EditorEvent::DocumentReplaced => {
+                self.apply_spelling(cx);
+                cx.notify();
+            }
             _ => cx.notify(),
         }
     }

@@ -30,6 +30,7 @@ writer-editor-tools.workspace = true
 writer-vim-mode.workspace = true
 writer-comments.workspace = true
 writer-library.workspace = true
+writer-spell.workspace = true
 writer-export.workspace = true
 # localtime_r for the times in the version history.
 libc.workspace = true

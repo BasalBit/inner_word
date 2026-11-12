@@ -41,6 +41,7 @@ use gpui::{Action, App, KeyBinding, KeyContext, Keymap, Menu, MenuItem, OsAction
 use writer_comments as comments;
 use writer_editor::actions as editor;
 use writer_editor_tools::actions as tools;
+use writer_spell::actions as spell;
 
 use crate::actions::*;
 
@@ -105,6 +106,28 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Find and Replace…", tools::FindAndReplace),
                 MenuItem::action("Find Next", tools::FindNext),
                 MenuItem::action("Find Previous", tools::FindPrevious),
+                MenuItem::separator(),
+                MenuItem::submenu(Menu {
+                    name: "Spelling".into(),
+                    items: vec![
+                        // Carries a check mark while the setting is on
+                        // (`set_check_mark`, from `Workspace::apply_spelling`).
+                        MenuItem::action(
+                            crate::workspace::CHECK_SPELLING_MENU_ITEM,
+                            spell::ToggleSpellChecking,
+                        ),
+                        MenuItem::separator(),
+                        MenuItem::action("Next Misspelling", spell::NextMisspelling),
+                        MenuItem::action("Previous Misspelling", spell::PreviousMisspelling),
+                        MenuItem::action("Show Suggestions", spell::ShowSuggestions),
+                        MenuItem::separator(),
+                        MenuItem::action("Learn Spelling", spell::LearnSpelling),
+                        MenuItem::action("Unlearn Spelling", spell::UnlearnSpelling),
+                        MenuItem::action("Ignore Spelling", spell::IgnoreSpelling),
+                        MenuItem::separator(),
+                        MenuItem::action("Spelling Language…", ChooseSpellingLanguage),
+                    ],
+                }),
             ],
         },
         Menu {
@@ -254,6 +277,9 @@ pub fn menu_key_bindings() -> Vec<KeyBinding> {
         // The find bar's own key for this (shift-enter) comes first in the
         // keymap.
         key("cmd-shift-g", tools::FindPrevious),
+        // The spelling the keyboard really sends (cmd-:) comes first in the
+        // keymap.
+        key("cmd-shift-;", spell::PreviousMisspelling),
         // Shift with a digit or punctuation is bound in two spellings (the
         // character a keyboard really sends, and the readable one): the
         // menu shows the readable one, like the rest of the app.
@@ -311,4 +337,124 @@ pub fn native_menu_binding<'a>(
 /// shortcuts in the menus are read from the keymap at this moment.
 pub fn install(cx: &mut App) {
     cx.set_menus(app_menus());
+    // A new menu bar has new items: their check marks go on again.
+    apply_check_marks(cx);
 }
+
+// ----- check marks -------------------------------------------------------------
+
+/// The check marks of the menu bar. GPUI's menu items have no state of
+/// their own, so the app sets the state of the native item itself (see
+/// [`set_check_mark`]).
+#[derive(Default)]
+struct CheckMarks {
+    /// Whether this process has a real menu bar to mark: only the app
+    /// itself ([`manage_check_marks`]), never a test.
+    native: bool,
+    /// What every marked item should show, by its title.
+    marks: Vec<(String, bool)>,
+}
+
+impl gpui::Global for CheckMarks {}
+
+/// From now on [`set_check_mark`] reaches the native menu bar. Called by
+/// `main`; tests keep the bookkeeping only (there is no menu bar to mark,
+/// and a test must not start an `NSApplication`).
+pub fn manage_check_marks(cx: &mut App) {
+    cx.default_global::<CheckMarks>().native = true;
+    apply_check_marks(cx);
+}
+
+/// Shows or removes the check mark beside the menu bar item titled
+/// `title` ("Check Spelling While Typing"). The mark is kept and put back
+/// when the menu bar is built again ([`install`]).
+pub fn set_check_mark(title: &str, on: bool, cx: &mut App) {
+    let marks = cx.default_global::<CheckMarks>();
+    match marks.marks.iter_mut().find(|(name, _)| name == title) {
+        Some(mark) if mark.1 == on => return,
+        Some(mark) => mark.1 = on,
+        None => marks.marks.push((title.to_string(), on)),
+    }
+    apply_check_marks(cx);
+}
+
+/// Whether the menu bar item titled `title` is to show a check mark
+/// (`None`: nobody has said).
+pub fn check_mark(title: &str, cx: &App) -> Option<bool> {
+    cx.try_global::<CheckMarks>()?
+        .marks
+        .iter()
+        .find(|(name, _)| name == title)
+        .map(|(_, on)| *on)
+}
+
+fn apply_check_marks(cx: &mut App) {
+    let Some(marks) = cx.try_global::<CheckMarks>() else {
+        return;
+    };
+    if !marks.native {
+        return;
+    }
+    for (title, on) in &marks.marks {
+        set_native_state(title, *on);
+    }
+}
+
+/// Finds the item titled `title` in the main menu (submenus included) and
+/// sets its state.
+#[cfg(target_os = "macos")]
+// objc 0.2's msg_send! expands to a `cfg(feature = "cargo-clippy")` check.
+#[allow(unexpected_cfgs)]
+fn set_native_state(title: &str, on: bool) {
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+    use std::{ffi::CStr, os::raw::c_char};
+
+    /// SAFETY: `menu` is a live `NSMenu` (or nil); only AppKit accessors
+    /// are called, on the main thread, and nothing is kept.
+    unsafe fn walk(menu: *mut Object, title: &str, on: bool) {
+        if menu.is_null() {
+            return;
+        }
+        unsafe {
+            let count: isize = msg_send![menu, numberOfItems];
+            for ix in 0..count {
+                let item: *mut Object = msg_send![menu, itemAtIndex: ix];
+                if item.is_null() {
+                    continue;
+                }
+                let submenu: *mut Object = msg_send![item, submenu];
+                if !submenu.is_null() {
+                    walk(submenu, title, on);
+                    continue;
+                }
+                let name: *mut Object = msg_send![item, title];
+                if name.is_null() {
+                    continue;
+                }
+                let utf8: *const c_char = msg_send![name, UTF8String];
+                if utf8.is_null() {
+                    continue;
+                }
+                if CStr::from_ptr(utf8).to_bytes() == title.as_bytes() {
+                    // NSControlStateValueOn / Off.
+                    let state: isize = if on { 1 } else { 0 };
+                    let _: () = msg_send![item, setState: state];
+                }
+            }
+        }
+    }
+
+    // SAFETY: called on the main thread of a process that runs an
+    // NSApplication (`manage_check_marks` is only called by `main`).
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let menu: *mut Object = msg_send![app, mainMenu];
+        walk(menu, title, on);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_state(_title: &str, _on: bool) {}

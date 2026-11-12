@@ -37,6 +37,7 @@
 //! | [`single_instance`] | one running copy per library: the lock of the data directory |
 //! | [`signals`] | `SIGTERM`, `SIGHUP` and `SIGINT` quit the way `cmd-q` does, saving first |
 //! | [`press_and_hold`] | held keys repeat while Vim mode is on (the `ApplePressAndHoldEnabled` user default) |
+//! | [`spelling`] | which spell service the workspaces use, the languages, the language picker |
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
 pub mod actions;
@@ -57,6 +58,7 @@ pub mod settings_view;
 pub mod shortcuts;
 pub mod signals;
 pub mod single_instance;
+pub mod spelling;
 pub mod version_history;
 pub mod welcome;
 pub mod window;
@@ -91,6 +93,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(actions::key_bindings());
     writer_ui::init(cx);
     writer_editor::init(cx);
+    writer_spell::init(cx);
     writer_library::init(cx);
     cx.bind_keys(settings_view::key_bindings());
     cx.bind_keys(version_history::key_bindings());
@@ -139,6 +142,10 @@ fn register_commands(cx: &mut App) {
         commands::in_sentence_case(writer_editor_tools::commands()),
         cx,
     );
+    // Spelling: the checker's commands, then the app's "Spelling language"
+    // in the same category.
+    commands::register(commands::in_sentence_case(writer_spell::commands()), cx);
+    commands::register(actions::spelling_commands(), cx);
     commands::register(writer_comments::commands(), cx);
     commands::register(
         writer_vim_mode::commands()

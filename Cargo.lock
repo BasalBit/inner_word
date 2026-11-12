@@ -6878,6 +6878,7 @@ dependencies = [
  "writer-editor-tools",
  "writer-export",
  "writer-library",
+ "writer-spell",
  "writer-ui",
  "writer-vim-mode",
 ]

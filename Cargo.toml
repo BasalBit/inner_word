@@ -19,6 +19,7 @@ writer-editor-tools = { path = "crates/writer-editor-tools" }
 writer-vim-mode = { path = "crates/writer-vim-mode" }
 writer-comments = { path = "crates/writer-comments" }
 writer-library = { path = "crates/writer-library" }
+writer-spell = { path = "crates/writer-spell" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

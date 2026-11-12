@@ -6,6 +6,12 @@
 //! `escape` closes. A row with a text field is typed into. The mouse works
 //! on every control too.
 //!
+//! The two spelling-language rows have a long list behind them (every
+//! language the Mac can check): `left` / `right` step through it, the
+//! user's preferred languages first, and `enter`, `space` or a click on the
+//! row opens the searchable list ([`crate::spelling::LanguagePicker`]),
+//! which comes back here.
+//!
 //! The app's settings are written to the library at once; the workspace
 //! applies them live (see [`crate::settings`]).
 //!
@@ -13,8 +19,9 @@
 //!
 //! With a document open the list ends with a section for that document
 //! alone: page view, paper (A4, US Letter or a custom size), orientation,
-//! the four margins, the body font, text size, line height and paragraph
-//! spacing. These are part of the document ([`writer_core::DocumentSettings`]):
+//! the four margins, the body font, text size, line height, paragraph
+//! spacing and the language its spelling is checked in (its own, or the
+//! app's). These are part of the document ([`writer_core::DocumentSettings`]):
 //! they are changed through the editor, saved with the text and exported
 //! with it. Lengths are typed in millimetres, or in inches on US Letter;
 //! another unit can be named (`20mm`, `0.75in`, `2cm`, `36pt`). The palette
@@ -39,9 +46,12 @@ use writer_ui::{
     },
 };
 
-use crate::settings::{
-    self, LINE_HEIGHTS, LengthUnit, Paper, Settings, TEXT_SIZES, character_limit_name,
-    format_length, keys, parse_length,
+use crate::{
+    settings::{
+        self, LINE_HEIGHTS, LengthUnit, Paper, Settings, TEXT_SIZES, character_limit_name,
+        format_length, keys, parse_length,
+    },
+    spelling::{self, LanguageTarget},
 };
 
 actions!(
@@ -104,6 +114,10 @@ pub enum SettingRow {
     SmartPunctuation,
     /// The format bar over a selection made with the mouse.
     FormatBar,
+    /// Misspelled words are marked as they are written.
+    CheckSpelling,
+    /// The language spelling is checked in.
+    SpellingLanguage,
     /// Author name for comments.
     Author,
     /// Font of new documents.
@@ -150,16 +164,20 @@ pub enum SettingRow {
     DocumentLineHeight,
     /// This document: the space after a paragraph.
     DocumentParagraphSpacing,
+    /// This document: the language its spelling is checked in.
+    DocumentSpellingLanguage,
 }
 
 impl SettingRow {
     /// The rows about the app, in order. They are always listed.
-    pub const APP: [SettingRow; 15] = [
+    pub const APP: [SettingRow; 17] = [
         SettingRow::Theme,
         SettingRow::VimMode,
         SettingRow::MarkdownShortcuts,
         SettingRow::SmartPunctuation,
         SettingRow::FormatBar,
+        SettingRow::CheckSpelling,
+        SettingRow::SpellingLanguage,
         SettingRow::Author,
         SettingRow::Font,
         SettingRow::TextSize,
@@ -175,7 +193,7 @@ impl SettingRow {
     /// The rows about the open document, in order. Listed while a document
     /// is open; the two sizes of a custom sheet only while the paper is
     /// custom.
-    pub const DOCUMENT: [SettingRow; 13] = [
+    pub const DOCUMENT: [SettingRow; 14] = [
         SettingRow::DocumentPageView,
         SettingRow::DocumentPaper,
         SettingRow::DocumentPaperWidth,
@@ -189,6 +207,7 @@ impl SettingRow {
         SettingRow::DocumentTextSize,
         SettingRow::DocumentLineHeight,
         SettingRow::DocumentParagraphSpacing,
+        SettingRow::DocumentSpellingLanguage,
     ];
 
     /// The rows that are typed into as a length.
@@ -213,6 +232,8 @@ impl SettingRow {
             | SettingRow::MarkdownShortcuts
             | SettingRow::SmartPunctuation
             | SettingRow::FormatBar
+            | SettingRow::CheckSpelling
+            | SettingRow::SpellingLanguage
             | SettingRow::Author => "Writing",
             SettingRow::Font
             | SettingRow::TextSize
@@ -234,6 +255,8 @@ impl SettingRow {
             SettingRow::MarkdownShortcuts => "Markdown shortcuts",
             SettingRow::SmartPunctuation => "Smart punctuation",
             SettingRow::FormatBar => "Format bar",
+            SettingRow::CheckSpelling => "Check spelling while typing",
+            SettingRow::SpellingLanguage => "Spelling language",
             SettingRow::Author => "Name on comments",
             SettingRow::Font => "Font",
             SettingRow::TextSize => "Text size",
@@ -257,6 +280,7 @@ impl SettingRow {
             SettingRow::DocumentTextSize => "Text size",
             SettingRow::DocumentLineHeight => "Line spacing",
             SettingRow::DocumentParagraphSpacing => "Paragraph spacing",
+            SettingRow::DocumentSpellingLanguage => "Spelling language",
         }
     }
 
@@ -267,6 +291,12 @@ impl SettingRow {
             SettingRow::MarkdownShortcuts => "Typing # , - , > or **bold** formats as you go.",
             SettingRow::SmartPunctuation => "Curly quotes, dashes and ellipses.",
             SettingRow::FormatBar => "Comes up over text selected with the mouse.",
+            SettingRow::CheckSpelling => {
+                "Marks misspelled words. Right-click a marked word to correct it."
+            }
+            SettingRow::SpellingLanguage => {
+                "Automatic detects the language of each paragraph. Enter opens the whole list."
+            }
             SettingRow::Author => "Written on the comments you add.",
             SettingRow::Font => "Body text of a new document.",
             SettingRow::TextSize => "In points.",
@@ -291,6 +321,9 @@ impl SettingRow {
             SettingRow::DocumentTextSize => "Body text, in points. Headings scale with it.",
             SettingRow::DocumentLineHeight => "As a multiple of the text size.",
             SettingRow::DocumentParagraphSpacing => "Space after each paragraph, in points.",
+            SettingRow::DocumentSpellingLanguage => {
+                "This document's own language, or the app's. Enter opens the whole list."
+            }
         }
     }
 }
@@ -340,6 +373,16 @@ pub struct SettingsView {
 }
 
 impl EventEmitter<DismissEvent> for SettingsView {}
+
+/// What the settings modal asks of the workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsEvent {
+    /// Open the searchable list of spelling languages for the app's
+    /// setting or for the open document, and come back to its row.
+    ChooseLanguage(LanguageTarget),
+}
+
+impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl Focusable for SettingsView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -592,6 +635,20 @@ impl SettingsView {
                         .into()
                 }
             }
+            SettingRow::DocumentSpellingLanguage => {
+                let follows = self
+                    .document_settings(cx)
+                    .is_some_and(|settings| settings.spelling_language.is_none());
+                if follows {
+                    format!(
+                        "The app's setting applies: {}. Enter opens the whole list.",
+                        spelling::language_label(&self.settings.spelling_language, cx)
+                    )
+                    .into()
+                } else {
+                    row.description().into()
+                }
+            }
             row if SettingRow::LENGTHS.contains(&row) && focused => {
                 let unit = self
                     .document_settings(cx)
@@ -722,6 +779,18 @@ impl SettingsView {
             SettingRow::MarkdownShortcuts => Control::Switch(settings.input_rules),
             SettingRow::SmartPunctuation => Control::Switch(settings.smart_punctuation),
             SettingRow::FormatBar => Control::Switch(settings.format_bar),
+            SettingRow::CheckSpelling => Control::Switch(settings.check_spelling),
+            SettingRow::SpellingLanguage => {
+                let options = spelling::app_language_options(&settings.spelling_language, cx);
+                Control::Stepper {
+                    value: spelling::language_label(&settings.spelling_language, cx).into(),
+                    index: options
+                        .iter()
+                        .position(|option| *option == settings.spelling_language)
+                        .unwrap_or(0),
+                    count: options.len(),
+                }
+            }
             SettingRow::Author => Control::Field { unit: None },
             SettingRow::Font => {
                 let index = self
@@ -836,6 +905,21 @@ impl SettingsView {
                     count: step_index(DOCUMENT_PARAGRAPH_SPACING_MAX, 0., 1.) + 1,
                 }
             }
+            SettingRow::DocumentSpellingLanguage => {
+                let current = document.spelling_language.as_ref();
+                let options = spelling::document_language_options(current, cx);
+                Control::Stepper {
+                    value: match current {
+                        None => spelling::FOLLOW_APP_LABEL.into(),
+                        Some(language) => spelling::language_label(language, cx).into(),
+                    },
+                    index: options
+                        .iter()
+                        .position(|option| option.as_ref() == current)
+                        .unwrap_or(0),
+                    count: options.len(),
+                }
+            }
         }
     }
 
@@ -854,6 +938,13 @@ impl SettingsView {
             SettingRow::MarkdownShortcuts => self.write(keys::INPUT_RULES, &(index != 0), cx),
             SettingRow::SmartPunctuation => self.write(keys::SMART_PUNCTUATION, &(index != 0), cx),
             SettingRow::FormatBar => self.write(keys::FORMAT_BAR, &(index != 0), cx),
+            SettingRow::CheckSpelling => self.write(keys::CHECK_SPELLING, &(index != 0), cx),
+            SettingRow::SpellingLanguage => {
+                let options = spelling::app_language_options(&self.settings.spelling_language, cx);
+                if let Some(language) = options.get(index) {
+                    self.write(keys::SPELLING_LANGUAGE, language.as_setting_str(), cx);
+                }
+            }
             SettingRow::Author => {}
             SettingRow::Font => {
                 if let Some(font) = self.fonts.get(index).cloned() {
@@ -945,6 +1036,15 @@ impl SettingsView {
                     );
                 }
             }
+            SettingRow::DocumentSpellingLanguage => {
+                let current = self
+                    .document_settings(cx)
+                    .and_then(|settings| settings.spelling_language);
+                let options = spelling::document_language_options(current.as_ref(), cx);
+                if let Some(language) = options.get(index).cloned() {
+                    self.change_document(|settings| settings.spelling_language = language, cx);
+                }
+            }
             // Typed, not chosen.
             SettingRow::DocumentPaperWidth
             | SettingRow::DocumentPaperHeight
@@ -979,6 +1079,11 @@ impl SettingsView {
     /// `space` / `enter`: flips a switch, steps a choice forward and wraps
     /// around at the end.
     pub fn activate(&mut self, row: SettingRow, cx: &mut Context<Self>) {
+        if let Some(target) = Self::language_target(row) {
+            // A long list: the searchable picker, which comes back here.
+            cx.emit(SettingsEvent::ChooseLanguage(target));
+            return;
+        }
         match self.control(row, cx) {
             Control::Switch(on) => self.choose(row, usize::from(!on), cx),
             Control::Segments { options, selected } => {
@@ -988,6 +1093,15 @@ impl SettingsView {
                 self.choose(row, (index + 1) % count.max(1), cx)
             }
             Control::Field { .. } => {}
+        }
+    }
+
+    /// Whose language the row chooses, for the two spelling-language rows.
+    fn language_target(row: SettingRow) -> Option<LanguageTarget> {
+        match row {
+            SettingRow::SpellingLanguage => Some(LanguageTarget::App),
+            SettingRow::DocumentSpellingLanguage => Some(LanguageTarget::Document),
+            _ => None,
         }
     }
 

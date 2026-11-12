@@ -27,7 +27,7 @@
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
@@ -643,6 +643,7 @@ pub fn describe_state(
         }
         None => "none".to_string(),
     };
+    let spelling = workspace.describe_spelling(cx);
     let menu = match writer_ui::ContextMenu::current(window, cx) {
         Some(menu) => menu.read(cx).labels().join(" | "),
         None => "none".to_string(),
@@ -650,7 +651,8 @@ pub fn describe_state(
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
          modal={} menu=[{menu}] sidebar={} page_view={} \
-         vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] words={:?} characters={:?} \
+         vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
+         words={:?} characters={:?} \
          page={:?} \
          limit={:?}",
         workspace.open_document_id().map(|id| id.0),

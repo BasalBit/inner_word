@@ -589,6 +589,16 @@ impl Focusable for LibraryPanel {
 }
 
 impl LibraryPanel {
+    /// The key that opens the menu of a row, as the "more" controls of the rows name it:
+    /// the binding of the shared `writer_ui::context_menu::OpenContextMenu` that fires in
+    /// the panel, as the keymap has it now. (The comment list, the text fields and the
+    /// chats bind the same action, each with a key of its own.)
+    pub fn context_menu_key(&self, window: &Window, cx: &App) -> Option<writer_ui::KeyHint> {
+        writer_ui::KeyHint::for_action_at(&OpenContextMenu, &self.focus_handle, window, cx)
+    }
+}
+
+impl LibraryPanel {
     /// Creates the panel over `library`. It follows the library's events by itself. The
     /// expanded folders, the selection and the row detail are restored from the settings
     /// ([`EXPANDED_FOLDERS_SETTING`], [`SELECTED_ITEM_SETTING`], [`ROW_DETAIL_SETTING`]) and

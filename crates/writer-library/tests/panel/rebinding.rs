@@ -123,3 +123,54 @@ fn the_trash_view_wins_its_keys_after_a_rebuild(cx: &mut TestAppContext) {
     assert!(trash(cx).is_empty());
     assert_eq!(hint(&RestoreSelected, cx).as_deref(), Some("⌃R"));
 }
+
+/// The key that opens the menu of a row is the binding of an action the comment list, the
+/// text fields and the chats bind too, each in its own place and with a key that can be
+/// changed by itself. The "more" control of a row names the panel's key, not the binding
+/// added last.
+#[gpui::test]
+fn the_more_control_names_the_key_of_the_panel(cx: &mut TestAppContext) {
+    use writer_ui::context_menu::OpenContextMenu;
+
+    let (f, cx) = fixture(cx);
+    // Another place binds the action after the library did, as the comments and the chats
+    // do in the app.
+    cx.update(|_, cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "ctrl-m",
+            OpenContextMenu,
+            Some("Elsewhere"),
+        )])
+    });
+    cx.simulate_keystrokes("down");
+    let shown = |cx: &mut VisualTestContext| {
+        f.panel.update_in(cx, |panel, window, cx| {
+            panel.context_menu_key(window, cx).map(|key| key.text())
+        })
+    };
+    assert_eq!(hint(&OpenContextMenu, cx).as_deref(), Some("⌃M"));
+    assert_eq!(shown(cx).as_deref(), Some("⌃↩"), "the panel's own key");
+
+    // The panel's key is changed, and only the panel's.
+    let changed = cx.update(|_, cx| {
+        keymap::replace_key_in(
+            &OpenContextMenu,
+            Some("LibraryPanel && !TextField"),
+            "ctrl-enter",
+            Some("ctrl-o"),
+            cx,
+        )
+    });
+    assert_eq!(changed, 1);
+    cx.run_until_parked();
+    assert_eq!(shown(cx).as_deref(), Some("⌃O"));
+    let menu_open = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| writer_ui::ContextMenu::is_open(window, cx))
+    };
+    cx.simulate_keystrokes("ctrl-enter");
+    assert!(!menu_open(cx), "the old key opens no menu");
+    cx.simulate_keystrokes("ctrl-o");
+    assert!(menu_open(cx));
+    cx.simulate_keystrokes("ctrl-o");
+    assert!(!menu_open(cx), "the key that opened it closes it");
+}

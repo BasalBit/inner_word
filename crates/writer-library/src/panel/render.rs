@@ -8,7 +8,6 @@ use gpui::{
     MouseButton, MouseDownEvent, Pixels, Window, anchored, canvas, deferred, div, point,
     prelude::*, px, uniform_list,
 };
-use writer_ui::context_menu::OpenContextMenu;
 use writer_ui::theme::{
     ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
 };
@@ -566,7 +565,9 @@ impl LibraryPanel {
         let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let panel_focused = self.focus_handle.contains_focused(window, cx);
         let now = self.library.read(cx).clock().now_ms();
-        let menu_hint = KeyHint::for_action(&OpenContextMenu, cx);
+        // Asked in the panel's own place: the action is the shared one that the comment
+        // list, the text fields and the chats bind too, each with a key of its own.
+        let menu_hint = self.context_menu_key(window, cx);
         // The width of a row as of the last layout, to judge how much of a name fits.
         let row_width = self
             .scroll
@@ -1006,7 +1007,9 @@ impl LibraryPanel {
         let colors = cx.theme().colors;
         let (hover, rest) = (hover_fill(&colors), rest_fill(&colors));
         let panel_focused = self.focus_handle.contains_focused(window, cx);
-        let menu_hint = KeyHint::for_action(&OpenContextMenu, cx);
+        // Asked in the panel's own place: the action is the shared one that the comment
+        // list, the text fields and the chats bind too, each with a key of its own.
+        let menu_hint = self.context_menu_key(window, cx);
         let mut elements = Vec::with_capacity(range.len());
         for ix in range {
             let Some(row) = self.trash_rows.get(ix) else {

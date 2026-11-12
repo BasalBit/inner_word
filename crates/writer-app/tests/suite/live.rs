@@ -1966,3 +1966,155 @@ fn a_script_waits_for_agents_and_sets_the_switch() {
     assert!(Script::parse("agents:many").is_err());
     assert!(Script::parse("agents:1:soon").is_err());
 }
+
+// ----- the view, Vim, an app without a library -----------------------------------------
+
+#[gpui::test]
+fn the_view_stays_on_its_text_when_an_agent_writes_above_it(cx: &mut TestAppContext) {
+    let (dir, lock, library) = library_on_disk(cx);
+    let long = Document::from_blocks(
+        std::iter::once(Block::with_text(BlockKind::heading(1), "Long"))
+            .chain((1..400).map(|ix| Block::paragraph(&format!("Paragraph number {ix}."))))
+            .collect(),
+    );
+    let id = add_document(&library, None, &long, cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    // The writer is somewhere in the middle.
+    set_caret(&desk, 250, 4, cx);
+    let editor = desk
+        .workspace
+        .read_with(cx, |workspace, _| workspace.editor().clone());
+    let top = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| {
+            let view = editor.view_state();
+            (view.scroll_block, view.scroll_offset)
+        })
+    };
+    let (block, offset) = top(cx);
+    assert!(block > 100, "the view followed the caret: {block}");
+
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.insert(&InsertRequest {
+            document: id.into(),
+            markdown: "One more at the top.\n\nAnd another.".into(),
+            position: agent::InsertPosition::Start,
+            write: claude(),
+            ..InsertRequest::default()
+        })
+    })
+    .unwrap();
+
+    // The same paragraph is at the top of the view, and the caret is in
+    // the paragraph it was in: both moved down by the two new ones.
+    assert_eq!(top(cx), (block + 2, offset));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().block_count(), 402);
+        assert_eq!(editor.selection(), Selection::caret(Position::new(252, 4)));
+        assert_eq!(
+            editor.document().blocks()[252].text(),
+            "Paragraph number 250."
+        );
+    });
+    // "Go to the last change by an agent" is the way there.
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show_agent_change(window, cx)
+    });
+    assert_eq!(selection(&desk, cx), Selection::caret(Position::new(0, 0)));
+}
+
+#[gpui::test]
+fn with_vim_mode_on_the_change_is_one_undo_in_normal_mode(cx: &mut TestAppContext) {
+    let (desk, id, cx) = desk_with_notes(cx);
+    desk.workspace
+        .update(cx, |workspace, cx| workspace.toggle_vim_mode(cx));
+    cx.run_until_parked();
+    // The writer is in the middle of an insert: "i", some text, no escape.
+    cx.simulate_keystrokes("i");
+    cx.simulate_input("Mine. ");
+    let mode = |desk: &Desk, cx: &mut VisualTestContext| {
+        desk.workspace.read_with(cx, |workspace, cx| {
+            workspace.vim().read(cx).status().mode_label().to_string()
+        })
+    };
+    let inserting = mode(&desk, cx);
+
+    let tool = desk.tool();
+    ask(cx, move || tool.edit(&edit(id, "is short", "is long"))).unwrap();
+    assert_eq!(mode(&desk, cx), inserting, "the mode is the writer's");
+    assert_eq!(
+        editor_text(&desk.workspace, cx),
+        "Mine. Notes\nThe first paragraph is long.\nThe second paragraph is the last."
+    );
+    // The insert goes on where it was.
+    cx.simulate_input("Still mine. ");
+    assert!(editor_text(&desk.workspace, cx).starts_with("Mine. Still mine. Notes"));
+    // Back in Normal mode, "u" takes steps out one by one: the agent's
+    // change is one of them and never half of the writer's insert.
+    cx.simulate_keystrokes("escape u");
+    let after_one = editor_text(&desk.workspace, cx);
+    cx.simulate_keystrokes("u");
+    let after_two = editor_text(&desk.workspace, cx);
+    cx.simulate_keystrokes("u");
+    let after_three = editor_text(&desk.workspace, cx);
+    assert_eq!(
+        after_three,
+        notes().plain_text(),
+        "{after_one:?} {after_two:?}"
+    );
+    assert!(
+        after_one.contains("is long") && after_one.starts_with("Mine. Notes"),
+        "{after_one:?}"
+    );
+    assert!(
+        after_two.contains("is short") && after_two.starts_with("Mine. Notes"),
+        "{after_two:?}"
+    );
+}
+
+#[gpui::test]
+fn an_app_without_a_library_tells_the_tool_so(cx: &mut TestAppContext) {
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let _lock = match single_instance::acquire(dir.path()).unwrap() {
+        Acquired::Lock(lock) => lock,
+        Acquired::Taken(copy) => panic!("taken: {copy:?}"),
+    };
+    // The app holds the lock and shows its "cannot open the library"
+    // window: no workspace, and a channel that only says why.
+    let socket = cx
+        .update(|cx| live::open_without_library(dir.path(), cx))
+        .unwrap();
+    assert!(socket.exists());
+    assert!(!cx.update(|cx| live::is_open(cx)), "nothing takes changes");
+
+    let tool = agent::Library::at(dir.path());
+    let refused = std::thread::spawn(move || {
+        tool.create_document(&CreateDocumentRequest {
+            markdown: "Text.".into(),
+            write: claude(),
+            ..CreateDocumentRequest::default()
+        })
+    })
+    .join()
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(refused.exit_code(), 5);
+    assert!(
+        matches!(
+            &refused,
+            agent::Error::AppIsOpen {
+                why: Refusal::NoLibrary,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        refused.to_string().contains("no window with this library"),
+        "{refused}"
+    );
+
+    cx.update(live::close);
+    assert!(!socket.exists());
+}

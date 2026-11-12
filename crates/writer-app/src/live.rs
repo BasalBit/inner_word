@@ -324,9 +324,54 @@ pub fn open_at_launch(data_dir: &Path, window: WindowHandle<Workspace>, cx: &mut
     }
 }
 
+/// The channel of an app that holds the lock of a data directory and has no
+/// window with its library (it shows the window that says the library
+/// cannot be opened): every request is refused with the reason.
+struct NoLibrary {
+    closer: Closer,
+    _quit: Subscription,
+}
+
+impl Global for NoLibrary {}
+
+/// Opens the channel for an app that has the lock of `data_dir` and could
+/// not open the library in it. A tool that asks for a change is told that
+/// The Writer shows no window with this library and that the app has to
+/// be quit, instead of taking it for a version from before the channel.
+/// A read is not held up: its request to save first is refused at once.
+pub fn open_without_library(data_dir: &Path, cx: &mut App) -> std::io::Result<PathBuf> {
+    close(cx);
+    let listener = Listener::bind(data_dir)?;
+    let closer = listener.closer();
+    let socket = listener.path().to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("the-writer-agents".to_string())
+        .spawn(move || {
+            while let Some(incoming) = listener.accept() {
+                refuse(incoming, Refusal::NoLibrary);
+            }
+        });
+    if let Err(error) = spawned {
+        closer.close();
+        return Err(error);
+    }
+    let quit = cx.on_app_quit(|cx| {
+        close(cx);
+        async {}
+    });
+    cx.set_global(NoLibrary {
+        closer,
+        _quit: quit,
+    });
+    Ok(socket)
+}
+
 /// Closes the channel: the socket goes away, and every request that waits
 /// is answered "The Writer is quitting". Does nothing without a channel.
 pub fn close(cx: &mut App) {
+    if cx.has_global::<NoLibrary>() {
+        cx.remove_global::<NoLibrary>().closer.close();
+    }
     if !cx.has_global::<Channel>() {
         return;
     }

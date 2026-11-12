@@ -1319,6 +1319,9 @@ impl Workspace {
             }
             // Another document, with a language of its own or without.
             EditorEvent::DocumentReplaced => {
+                // And with an undo history of its own: no step of it is
+                // an agent's.
+                self.forget_agent_steps(cx);
                 self.apply_spelling(cx);
                 cx.notify();
             }

@@ -588,18 +588,39 @@ impl Workspace {
             return true;
         }
         self.live.as_stored = None;
-        let buried = self
+        let buried = self.live.last.as_ref().is_some_and(
+            |last| matches!(last.undo, Some(Undo::Text { revision: at, .. }) if at != revision),
+        );
+        if buried {
+            self.withdraw_text_undo(cx);
+        }
+        false
+    }
+
+    /// The editor holds another text (another document was opened, the
+    /// open one was closed, a version was restored): its undo history is a
+    /// new one, and its revisions start again. Nothing that was noted
+    /// about the text that was there holds for this one.
+    pub(crate) fn forget_agent_steps(&mut self, cx: &mut Context<Self>) {
+        self.live.as_stored = None;
+        self.withdraw_text_undo(cx);
+    }
+
+    /// The last changes of an agent are no longer the newest steps of the
+    /// open document's undo history: the note stops offering to undo them.
+    fn withdraw_text_undo(&mut self, cx: &mut Context<Self>) {
+        let Some(last) = self
             .live
             .last
             .as_mut()
-            .filter(|last| matches!(last.undo, Some(Undo::Text { .. })));
-        if let Some(last) = buried {
-            last.undo = None;
-            if self.agent_note_is_up(cx) {
-                self.show_agent_note(cx);
-            }
+            .filter(|last| matches!(last.undo, Some(Undo::Text { .. })))
+        else {
+            return;
+        };
+        last.undo = None;
+        if self.agent_note_is_up(cx) {
+            self.show_agent_note(cx);
         }
-        false
     }
 
     // ----- the note -------------------------------------------------------------------

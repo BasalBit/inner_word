@@ -2130,3 +2130,54 @@ fn an_app_without_a_library_tells_the_tool_so(cx: &mut TestAppContext) {
     cx.update(live::close);
     assert!(!socket.exists());
 }
+
+#[gpui::test]
+fn what_was_noted_about_a_text_does_not_hold_for_the_next_one(cx: &mut TestAppContext) {
+    let (desk, open, other, cx) = desk_with_two(cx);
+    // An agent changes the open document: the note offers Undo, and the
+    // editor holds what the library holds.
+    let tool = desk.tool();
+    ask(cx, move || tool.edit(&edit(open, "is short", "is long"))).unwrap();
+    assert_eq!(
+        desk.workspace
+            .read_with(cx, |workspace, cx| workspace.agent_change_offer(cx)),
+        Some(Offer::Undo)
+    );
+
+    // The writer opens another document. The note is about a document
+    // that is not the open one now: it offers to open it.
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        assert!(workspace.open_document(other, true, window, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        notes_shown(&desk, cx),
+        [(
+            "Claude changed \u{201c}Notes\u{201d}".to_string(),
+            Some("Open".to_string())
+        )]
+    );
+    // Every edit in the other document is the writer's and is saved, also
+    // the one that brings its text to the revision the first one was at.
+    for round in 0..6 {
+        type_text(&desk.workspace, &format!("{round} "), cx);
+        assert_eq!(
+            save_state(&desk, cx),
+            Some(SaveState::Edited),
+            "edit {round}"
+        );
+        desk.workspace.update(cx, |workspace, cx| {
+            assert!(workspace.flush(cx));
+        });
+        assert_eq!(save_state(&desk, cx), Some(SaveState::Saved));
+        // And "undo the last change by an agent" takes none of them out.
+        let undone = desk
+            .workspace
+            .update(cx, |workspace, cx| workspace.undo_agent_change(cx));
+        assert!(!undone, "edit {round}");
+    }
+    assert_eq!(stored(&desk, other, cx), "0 1 2 3 4 5 Other\nText.");
+    assert_eq!(editor_text(&desk.workspace, cx), "0 1 2 3 4 5 Other\nText.");
+    // The agent's change is where it was made.
+    assert!(stored(&desk, open, cx).contains("is long"));
+}

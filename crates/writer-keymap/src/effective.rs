@@ -22,7 +22,9 @@
 //!   replaced it, so key hints and the menu bar keep showing that one and
 //!   not the second key.
 //! - **A key given to a target without defaults** goes to the very front
-//!   of the keymap, in the order of the stored changes. A binding there
+//!   of the keymap, in the order those targets were handed over
+//!   ([`Defaults::keyless`]), so the order in which the user made the
+//!   changes never shows in the keymap. A binding there
 //!   loses every tie: where the key is also bound to something else at the
 //!   same depth, the binding that was there before keeps it. So a key
 //!   given to a command of the palette never takes a key away from a place
@@ -186,7 +188,6 @@ pub fn apply(defaults: &Defaults, changes: &Changes) -> Effective {
     // nothing.
     let mut inactive = Vec::new();
     let mut resolved: HashMap<Target, Resolved> = HashMap::new();
-    let mut order: Vec<Target> = Vec::new();
     for slot in changes.slots() {
         let entry = match slot {
             Slot::Entry(entry) => entry,
@@ -225,7 +226,6 @@ pub fn apply(defaults: &Defaults, changes: &Changes) -> Effective {
                 },
             });
         }
-        order.push(target.clone());
         resolved.insert(target, state);
     }
 
@@ -247,9 +247,9 @@ pub fn apply(defaults: &Defaults, changes: &Changes) -> Effective {
     };
 
     // Keys given to targets without defaults: at the front.
-    for target in &order {
-        if defaults.keys_of(target).is_empty() {
-            bindings.extend(added(target, &resolved[target], None));
+    for target in defaults.keyless() {
+        if let Some(state) = resolved.get(target) {
+            bindings.extend(added(target, state, None));
         }
     }
 

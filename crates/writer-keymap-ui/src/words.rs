@@ -5,7 +5,7 @@
 
 use writer_keymap::{
     Catalogue, Collision, Holder, ImportOutcome, ImportPlan, KeySequence, Overlap, Refusal, Target,
-    Verdict, VerdictKind, Warning,
+    Verdict, Warning,
 };
 
 use crate::{keys::glyphs, listing::Entry};
@@ -72,6 +72,23 @@ impl Names<'_> {
         humanize_action_name(&target.command.action)
     }
 
+    /// What the command with the action called `action` is called here,
+    /// wherever it applies; `None` for an action this version has no
+    /// command for.
+    pub fn title_of_action(&self, action: &str) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|entry| entry.row.target.command.action == action)
+            .map(|entry| entry.row.title.to_string())
+            .or_else(|| {
+                self.catalogue
+                    .entries()
+                    .iter()
+                    .find(|info| info.target.command.action == action)
+                    .map(|info| info.title.clone())
+            })
+    }
+
     /// Where `target` applies, in words as they stand in a sentence: "in
     /// the text", "anywhere".
     pub fn place(&self, target: &Target) -> String {
@@ -93,10 +110,18 @@ impl Names<'_> {
     }
 }
 
-fn lower_first(text: &str) -> String {
+pub(crate) fn lower_first(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+pub(crate) fn upper_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
 }
@@ -133,25 +158,108 @@ pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
     }
 }
 
-/// The verdict in a few words, above its sentences: "⌥⌘B is free".
-pub(crate) fn verdict_title(verdict: &Verdict) -> String {
-    let key = glyphs(&verdict.key);
-    match verdict.kind() {
-        VerdictKind::Fine => format!("{key} is free"),
-        VerdictKind::UsedElsewhere => format!("{key} is also used in another place"),
-        VerdictKind::Taken => format!("{key} is taken"),
-        VerdictKind::Refused => format!("{key} cannot be used"),
+/// Something of the host's that sees a key before the keymap does: what it
+/// is called, when the host said, and its sentence.
+pub(crate) struct SeenFirst {
+    pub name: Option<String>,
+    pub warning: String,
+}
+
+/// What the view says about a key that was pressed for a command: a
+/// heading, how the heading is to be read (its mark), and the sentences
+/// under it.
+pub(crate) struct VerdictWords {
+    pub title: String,
+    pub tone: Tone,
+    pub lines: Vec<Line>,
+}
+
+impl VerdictWords {
+    /// Whether a sentence warns that the key, once given, may not do what
+    /// was asked of it, or costs something no choice names: then the
+    /// choice that gives it is not the one a bare confirmation takes.
+    pub fn warns(&self) -> bool {
+        self.lines.iter().any(|line| line.tone == Tone::Warning)
     }
 }
 
-/// The verdict on giving the command called `command` the key, sentence
-/// by sentence: the refusal alone when it is refused; otherwise who has
-/// the key where it would apply, who has it elsewhere, and the warnings.
-pub(crate) fn verdict_lines(verdict: &Verdict, command: &str, names: &Names) -> Vec<Line> {
-    let key = glyphs(&verdict.key);
-    if let Some(refusal) = &verdict.refusal {
-        return vec![Line::new(Tone::Stop, refusal_text(refusal, &key, command))];
+/// "another command", "2 other commands": the commands of `holders`, each
+/// name once.
+fn other_commands<'a>(holders: impl IntoIterator<Item = &'a Holder>, names: &Names) -> String {
+    let mut titles: Vec<String> = Vec::new();
+    for holder in holders {
+        let title = names.title(&holder.target);
+        if !titles.contains(&title) {
+            titles.push(title);
+        }
     }
+    match titles.len() {
+        0 | 1 => "another command".to_string(),
+        n => format!("{n} other commands"),
+    }
+}
+
+/// The verdict on giving `target` the key, as the view says it. The
+/// heading says the most important thing about the key and the first
+/// sentence is about the same thing; what matters less follows:
+///
+/// 1. the key cannot be given (the reason alone);
+/// 2. it is taken: another command has it in the same place;
+/// 3. it may not run: macOS uses it, or something of the host's
+///    (`seen_first`) sees it before any shortcut does;
+/// 4. it would not work everywhere: another command keeps it where both
+///    apply;
+/// 5. it costs something in a text: a key text is edited with, a
+///    character typed with option;
+/// 6. another command has it where both apply, and this one gets it
+///    there;
+/// 7. it is free: nobody has it, or only commands in places of their own.
+///
+/// A heading never says "free", and is never marked as good, above a
+/// sentence that warns.
+pub(crate) fn verdict_words(
+    verdict: &Verdict,
+    target: &Target,
+    seen_first: &[SeenFirst],
+    names: &Names,
+) -> VerdictWords {
+    let key = glyphs(&verdict.key);
+    let command = names.title(target);
+    if let Some(refusal) = &verdict.refusal {
+        let (title, tone) = match refusal {
+            Refusal::SystemKeeps(_) => (format!("macOS keeps {key}"), Tone::Stop),
+            Refusal::AlreadyHasKey => (
+                format!("\u{201c}{command}\u{201d} has {key} already"),
+                Tone::Plain,
+            ),
+            _ => (format!("{key} cannot be used"), Tone::Stop),
+        };
+        return VerdictWords {
+            title,
+            tone,
+            lines: vec![Line::new(tone, refusal_text(refusal, &key))],
+        };
+    }
+
+    let keeps: Vec<&Holder> = overlapping(verdict)
+        .filter(|holder| holder.overlap == Overlap::HolderWinsThere)
+        .collect();
+    let yields: Vec<&Holder> = overlapping(verdict)
+        .filter(|holder| holder.overlap != Overlap::HolderWinsThere)
+        .collect();
+    let apart: Vec<&Holder> = verdict
+        .elsewhere
+        .iter()
+        .filter(|holder| holder.overlap == Overlap::Apart)
+        .collect();
+    let system = verdict.warnings.iter().find_map(|warning| match warning {
+        Warning::SystemUses(system) => Some(system),
+        _ => None,
+    });
+    let editing = verdict.warnings.contains(&Warning::EditingKey);
+    let special = verdict.warnings.contains(&Warning::SpecialCharacter);
+
+    // The sentences, the most important first.
     let mut lines = Vec::new();
     for holder in &verdict.taken {
         lines.push(Line::new(
@@ -159,49 +267,103 @@ pub(crate) fn verdict_lines(verdict: &Verdict, command: &str, names: &Names) -> 
             holder_text(holder, &verdict.key, names),
         ));
     }
+    for warning in &verdict.warnings {
+        if matches!(warning, Warning::SystemUses(_)) {
+            lines.push(Line::new(Tone::Warning, warning_text(warning, &key)));
+        }
+    }
+    for seen in seen_first {
+        lines.push(Line::new(Tone::Warning, seen.warning.clone()));
+    }
+    for holder in &keeps {
+        lines.push(Line::new(
+            Tone::Warning,
+            holder_text(holder, &verdict.key, names),
+        ));
+    }
+    for warning in &verdict.warnings {
+        if !matches!(warning, Warning::SystemUses(_)) {
+            lines.push(Line::new(Tone::Warning, warning_text(warning, &key)));
+        }
+    }
     // The commands that share the key where both can apply, one by one;
     // those in places of their own in one sentence (`escape` and the arrows
     // are keys of many places).
-    for holder in overlapping(verdict) {
+    for holder in &yields {
         lines.push(Line::new(
             Tone::Plain,
             holder_text(holder, &verdict.key, names),
         ));
     }
-    let apart: Vec<&Holder> = verdict
-        .elsewhere
-        .iter()
-        .filter(|holder| holder.overlap == Overlap::Apart)
-        .collect();
     if !apart.is_empty() {
         lines.push(Line::new(
             Tone::Plain,
             apart_text(&apart, &verdict.key, names),
         ));
     }
-    for warning in &verdict.warnings {
-        lines.push(Line::new(Tone::Warning, warning_text(warning, &key)));
-    }
-    if lines.is_empty() {
+
+    let (title, tone) = if !verdict.taken.is_empty() {
+        (format!("{key} is taken"), Tone::Stop)
+    } else if system.is_some() {
+        (format!("macOS uses {key}"), Tone::Warning)
+    } else if let Some(seen) = seen_first.first() {
+        (
+            match &seen.name {
+                Some(name) => format!("{key}: {name} sees it first"),
+                None => format!("{key} may not run"),
+            },
+            Tone::Warning,
+        )
+    } else if !keeps.is_empty() {
+        (format!("{key} would not work everywhere"), Tone::Warning)
+    } else if editing {
+        (format!("{key} is used for typing"), Tone::Warning)
+    } else if special {
+        (format!("{key} types a special character"), Tone::Warning)
+    } else if !yields.is_empty() {
+        (
+            format!(
+                "{key} is also the key of {}",
+                other_commands(yields.iter().copied(), names)
+            ),
+            Tone::Plain,
+        )
+    } else if !apart.is_empty() {
+        // Free where this command applies. The place is named unless that
+        // says nothing ("anywhere") or the other command's place goes by
+        // the same name.
+        let place = names.place(target);
+        let named_twice = apart
+            .iter()
+            .any(|holder| names.place(&holder.target) == place);
+        if place == "anywhere" || named_twice {
+            (format!("{key} is free here"), Tone::Good)
+        } else {
+            (format!("{key} is free {place}"), Tone::Good)
+        }
+    } else {
         lines.push(Line::new(
             Tone::Good,
             format!("No other command has {key} where \u{201c}{command}\u{201d} applies."),
         ));
-    }
-    lines
+        (format!("{key} is free"), Tone::Good)
+    };
+    VerdictWords { title, tone, lines }
 }
 
-fn refusal_text(refusal: &Refusal, key: &str, command: &str) -> String {
+/// Why the key cannot be given. The heading has said what is the matter;
+/// the sentence says why, or what follows.
+fn refusal_text(refusal: &Refusal, key: &str) -> String {
     match refusal {
         Refusal::TypesText => format!(
             "{key} types a character, and text is typed where this command applies: the \
              character could no longer be typed there. Hold \u{2318}, \u{2303} or \u{2325} with it."
         ),
         Refusal::SystemKeeps(system) => format!(
-            "macOS keeps {key} for itself: it {}. The key never reaches The Writer.",
+            "In macOS {key} {}, and no setting changes that: the key never reaches The Writer.",
             system.what
         ),
-        Refusal::AlreadyHasKey => format!("\u{201c}{command}\u{201d} has {key} already."),
+        Refusal::AlreadyHasKey => "Nothing would change.".to_string(),
         Refusal::UnknownCommand => "This version cannot give this command a key.".to_string(),
     }
 }
@@ -209,16 +371,17 @@ fn refusal_text(refusal: &Refusal, key: &str, command: &str) -> String {
 fn warning_text(warning: &Warning, key: &str) -> String {
     match warning {
         Warning::SpecialCharacter => format!(
-            "On a Mac keyboard {key} types a special character or starts an accent. Text is \
-             typed where this command applies, and that character could no longer be typed there."
+            "On a Mac keyboard, Option with a key types a special character or starts an \
+             accent. Text is typed where this command applies: as a shortcut, {key} could no \
+             longer type its character there."
         ),
         Warning::EditingKey => format!(
-            "{key} is a key that text is edited with. Text is typed where this command \
-             applies, and there the key would run the command instead."
+            "Text is typed where this command applies. As a shortcut, {key} would run the \
+             command there instead of what it does in a text."
         ),
         Warning::SystemUses(system) => format!(
-            "macOS uses {key} itself: it {}. Unless that is switched off in System Settings, \
-             the shortcut may not run.",
+            "In macOS {key} {}. Unless that is switched off in System Settings, the shortcut \
+             may not run.",
             system.what
         ),
     }
@@ -302,9 +465,9 @@ fn apart_text(holders: &[&Holder], proposed: &KeySequence, names: &Names) -> Str
         ([one], 0) => one.clone(),
         ([one, two], 0) => format!("{one} and of {two}"),
         (some, more) => format!(
-            "{} and of {} more",
+            "{} and of {}",
             some.join(", of "),
-            count(more, "command", "commands")
+            count(more, "more command", "more commands")
         ),
     };
     if total == 1 {
@@ -312,6 +475,56 @@ fn apart_text(holders: &[&Holder], proposed: &KeySequence, names: &Names) -> Str
     } else {
         format!("{key} is also the key of {list}. Those are different places: all of them work.")
     }
+}
+
+/// What the line under the query says about the user's changes. What is
+/// counted is commands (rows of the list), never single keys: a command
+/// with two keys of the user's is one, a command left without a key is
+/// one. `hidden`: how many more are changed that the list has no row for
+/// (the commands of a part of the app that is not there right now), so
+/// that the line agrees with what "Reset All" says it puts back.
+pub(crate) fn changed_summary(changed: usize, hidden: usize) -> String {
+    match (changed, hidden) {
+        (0, 0) => "No key changed".to_string(),
+        (changed, 0) => format!("{} changed", count(changed, "command", "commands")),
+        (0, hidden) => format!(
+            "{} changed, not shown now",
+            count(hidden, "command", "commands")
+        ),
+        (changed, hidden) => format!(
+            "{} changed, {hidden} more not shown now",
+            count(changed, "command", "commands")
+        ),
+    }
+}
+
+/// What the view says under "Press the new key ..." while it waits for
+/// one: that every key counts, and how to leave without a change, with
+/// the pointer and from the keyboard alone. `cancel` is the key that
+/// cancels a question, as the keymap has it now (`None` when the user
+/// took it away), and `is_escape` whether that is Esc alone.
+///
+/// From the keyboard the way out always leads through the question about
+/// a key, since no key leaves the waiting itself: with Esc as the key
+/// that cancels, Esc pressed twice does it.
+pub(crate) fn waiting_help(cancel: Option<&str>, is_escape: bool) -> String {
+    let way_out = match cancel {
+        Some(_) if is_escape => {
+            "press Esc twice (the first is taken as the key, the second cancels it)".to_string()
+        }
+        Some(key) => format!("press any key and then {key}"),
+        None => "press any key and choose Cancel in the question that follows".to_string(),
+    };
+    format!(
+        "Every key counts, Esc and Return included. To leave without a change: click Cancel, \
+         or {way_out}."
+    )
+}
+
+/// What stands above the rows of a search that found nothing as it was
+/// written, only names one typing mistake away.
+pub(crate) fn close_matches_note(query: &str) -> String {
+    format!("Nothing matches \u{201c}{query}\u{201d} as written. One letter away:")
 }
 
 /// "Take It from “Italic”", "Take It from 2 Commands".
@@ -429,11 +642,14 @@ pub(crate) fn collision_text(collision: &Collision, names: &Names) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use writer_keymap::{DefaultBinding, Defaults, Keymap, Places};
 
-    fn keymap() -> Keymap {
+    /// A small keymap with every kind of neighbour: commands of the
+    /// window, of the text (inside the window), and of the find bar's
+    /// field (a place of its own).
+    pub(crate) fn keymap() -> Keymap {
         let binding = |action: &str, context: Option<&str>, keys: &str| {
             DefaultBinding::new(action, None, context, keys).unwrap()
         };
@@ -442,11 +658,14 @@ mod tests {
             binding("comments::Toggle", None, "cmd-alt-c"),
             binding("editor::ToggleBold", Some("Editor"), "cmd-b"),
             binding("editor::ToggleItalic", Some("Editor"), "cmd-i"),
+            binding("editor::Complete", Some("Editor"), "cmd-space"),
             binding(
                 "tools::CaseSensitive",
                 Some("FindBar > TextField"),
                 "cmd-alt-c",
             ),
+            binding("tools::FindNext", Some("FindBar > TextField"), "cmd-g"),
+            binding("tools::FindPrevious", Some("FindBar > TextField"), "f3"),
         ]);
         Keymap::new(
             defaults,
@@ -458,48 +677,62 @@ mod tests {
         )
     }
 
-    fn names_of(catalogue: &Catalogue) -> Names<'_> {
+    pub(crate) fn names_of(catalogue: &Catalogue) -> Names<'_> {
         Names {
             entries: &[],
             catalogue,
         }
     }
 
-    fn catalogue() -> Catalogue {
+    pub(crate) fn catalogue() -> Catalogue {
         let mut catalogue = Catalogue::new();
-        catalogue.add(
-            Target::new("editor::ToggleBold", Some("Editor")),
-            "Bold",
-            "In the text",
-        );
-        catalogue.add(
-            Target::new("editor::ToggleItalic", Some("Editor")),
-            "Italic",
-            "In the text",
-        );
-        catalogue.add(
-            Target::new("app::QuickOpen", None),
-            "Quick open",
-            "Anywhere",
-        );
+        for (action, context, title, place) in [
+            ("editor::ToggleBold", Some("Editor"), "Bold", "In the text"),
+            (
+                "editor::ToggleItalic",
+                Some("Editor"),
+                "Italic",
+                "In the text",
+            ),
+            (
+                "editor::Complete",
+                Some("Editor"),
+                "Complete",
+                "In the text",
+            ),
+            ("app::QuickOpen", None, "Quick open", "Anywhere"),
+            (
+                "comments::Toggle",
+                None,
+                "Show or hide comments",
+                "Anywhere",
+            ),
+            (
+                "tools::CaseSensitive",
+                Some("FindBar > TextField"),
+                "Case sensitive",
+                "In the find bar",
+            ),
+            (
+                "tools::FindNext",
+                Some("FindBar > TextField"),
+                "Find next",
+                "In the find bar",
+            ),
+            (
+                "tools::FindPrevious",
+                Some("FindBar > TextField"),
+                "Find previous",
+                "In the find bar",
+            ),
+        ] {
+            catalogue.add(Target::new(action, context), title, place);
+        }
         catalogue
     }
 
-    fn key(text: &str) -> KeySequence {
+    pub(crate) fn key(text: &str) -> KeySequence {
         KeySequence::parse(text).unwrap()
-    }
-
-    #[test]
-    fn a_free_key_is_said_to_be_free() {
-        let keymap = keymap();
-        let bold = Target::new("editor::ToggleBold", Some("Editor"));
-        let verdict = keymap.check(&bold, &key("cmd-alt-b"), Some(&key("cmd-b")));
-        assert_eq!(verdict_title(&verdict), "⌥⌘B is free");
-        let catalogue = catalogue();
-        let lines = verdict_lines(&verdict, "Bold", &names_of(&catalogue));
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].tone, Tone::Good);
-        assert!(lines[0].text.contains("“Bold”"), "{}", lines[0].text);
     }
 
     #[test]
@@ -507,46 +740,51 @@ mod tests {
         let keymap = keymap();
         let bold = Target::new("editor::ToggleBold", Some("Editor"));
         let verdict = keymap.check(&bold, &key("cmd-i"), Some(&key("cmd-b")));
-        assert_eq!(verdict_title(&verdict), "⌘I is taken");
         let catalogue = catalogue();
         let names = names_of(&catalogue);
-        let lines = verdict_lines(&verdict, "Bold", &names);
-        assert_eq!(lines[0].tone, Tone::Stop);
+        let says = verdict_words(&verdict, &bold, &[], &names);
+        assert_eq!(says.title, "⌘I is taken");
+        assert_eq!(says.lines[0].tone, Tone::Stop);
         assert_eq!(
-            lines[0].text,
+            says.lines[0].text,
             "⌘I is the key of “Italic” in the text. Only one of the two can have it there."
         );
         assert_eq!(take_label(&verdict.taken, &names), "Take It from “Italic”");
     }
 
     #[test]
-    fn a_character_is_refused_with_the_reason() {
-        let keymap = keymap();
-        let bold = Target::new("editor::ToggleBold", Some("Editor"));
-        let verdict = keymap.check(&bold, &key("b"), None);
-        assert_eq!(verdict_title(&verdict), "B cannot be used");
+    fn commands_in_places_of_their_own_are_named_in_one_sentence() {
         let catalogue = catalogue();
-        let lines = verdict_lines(&verdict, "Bold", &names_of(&catalogue));
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].tone, Tone::Stop);
-        assert!(
-            lines[0].text.starts_with("B types a character"),
-            "{}",
-            lines[0].text
+        let names = names_of(&catalogue);
+        let holder = |action: &str, context: Option<&str>| Holder {
+            target: Target::new(action, context),
+            keys: key("f3"),
+            origin: writer_keymap::Origin::Default,
+            overlap: Overlap::Apart,
+        };
+        let one = holder("tools::FindNext", Some("FindBar > TextField"));
+        let two = holder("app::QuickOpen", None);
+        let three = holder("editor::ToggleItalic", Some("Editor"));
+        let four = holder("comments::Toggle", None);
+        assert_eq!(
+            apart_text(&[&one], &key("f3"), &names),
+            "F3 is also the key of “Find next” in the find bar. That is a different place: both work."
         );
-    }
-
-    #[test]
-    fn a_key_macos_keeps_is_refused_with_what_it_does() {
-        let keymap = keymap();
-        let bold = Target::new("editor::ToggleBold", Some("Editor"));
-        let verdict = keymap.check(&bold, &key("cmd-tab"), None);
-        let catalogue = catalogue();
-        let lines = verdict_lines(&verdict, "Bold", &names_of(&catalogue));
+        assert_eq!(
+            apart_text(&[&one, &two], &key("f3"), &names),
+            "F3 is also the key of “Find next” in the find bar and of “Quick open” anywhere. \
+             Those are different places: all of them work."
+        );
+        // More than two: the rest is counted, one or several.
         assert!(
-            lines[0].text.starts_with("macOS keeps ⌘⇥ for itself"),
+            apart_text(&[&one, &two, &three], &key("f3"), &names)
+                .contains("of “Quick open” anywhere and of 1 more command."),
             "{}",
-            lines[0].text
+            apart_text(&[&one, &two, &three], &key("f3"), &names)
+        );
+        assert!(
+            apart_text(&[&one, &two, &three, &four], &key("f3"), &names)
+                .contains("and of 2 more commands."),
         );
     }
 
@@ -563,6 +801,34 @@ mod tests {
             "in Editor"
         );
         assert_eq!(names.place(&Target::new("app::Quit", None)), "anywhere");
+    }
+
+    #[test]
+    fn the_header_counts_commands() {
+        assert_eq!(changed_summary(0, 0), "No key changed");
+        assert_eq!(changed_summary(1, 0), "1 command changed");
+        assert_eq!(changed_summary(4, 0), "4 commands changed");
+        // Changed commands the list has no row for right now.
+        assert_eq!(
+            changed_summary(4, 1),
+            "4 commands changed, 1 more not shown now"
+        );
+        assert_eq!(changed_summary(0, 1), "1 command changed, not shown now");
+        assert_eq!(changed_summary(0, 2), "2 commands changed, not shown now");
+    }
+
+    #[test]
+    fn waiting_for_a_key_says_how_to_leave() {
+        assert_eq!(
+            waiting_help(Some("Esc"), true),
+            "Every key counts, Esc and Return included. To leave without a change: click \
+             Cancel, or press Esc twice (the first is taken as the key, the second cancels it)."
+        );
+        assert!(waiting_help(Some("F1"), false).ends_with("or press any key and then F1."));
+        assert!(
+            waiting_help(None, false)
+                .ends_with("or press any key and choose Cancel in the question that follows.")
+        );
     }
 
     #[test]

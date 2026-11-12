@@ -17,6 +17,22 @@ fn choices(view: &Entity<KeymapView>, cx: &mut VisualTestContext) -> Vec<String>
     })
 }
 
+fn title(view: &Entity<KeymapView>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |view, _| view.question_title().unwrap_or_default())
+}
+
+fn mark(view: &Entity<KeymapView>, cx: &mut VisualTestContext) -> Tone {
+    view.read_with(cx, |view, _| {
+        view.question_mark().expect("a question is open")
+    })
+}
+
+fn marked(view: &Entity<KeymapView>, cx: &mut VisualTestContext) -> Choice {
+    view.read_with(cx, |view, _| {
+        view.marked_choice().expect("a question is open")
+    })
+}
+
 fn says(view: &Entity<KeymapView>, cx: &mut VisualTestContext) -> String {
     view.read_with(cx, |view, _| {
         view.question_lines()
@@ -323,17 +339,23 @@ fn a_key_that_would_stop_typing_is_refused_with_the_reason(cx: &mut TestAppConte
     // `backspace` goes back to waiting as well.
     press(cx, "backspace");
     assert_eq!(mode(&view, cx), ModeKind::Recording);
-    // A key macOS keeps for itself.
+    // A key macOS keeps for itself: the heading says who has it, the
+    // sentence what it does there.
     press(cx, "cmd-tab");
+    assert_eq!(title(&view, cx), "macOS keeps ⌘⇥");
+    assert_eq!(mark(&view, cx), Tone::Stop);
     assert!(
-        says(&view, cx).starts_with("macOS keeps ⌘⇥ for itself"),
+        says(&view, cx).starts_with("In macOS ⌘⇥ switches between apps"),
         "{}",
         says(&view, cx)
     );
     assert_eq!(choices(&view, cx), vec!["Press Another Key", "Cancel"]);
-    // The key the command has already.
+    // The key the command has already: not "cannot be used", it is used.
     press(cx, "backspace cmd-b");
-    assert_eq!(says(&view, cx), "“Bold” has ⌘B already.");
+    assert_eq!(title(&view, cx), "“Bold” has ⌘B already");
+    assert_eq!(mark(&view, cx), Tone::Plain);
+    assert_eq!(says(&view, cx), "Nothing would change.");
+    assert_eq!(choices(&view, cx), vec!["Press Another Key", "Cancel"]);
     press(cx, "escape");
     assert!(requests(&host, cx).is_empty());
     assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
@@ -415,10 +437,13 @@ fn a_key_of_an_overlapping_place_can_be_kept_by_both_or_taken(cx: &mut TestAppCo
     select(&view, &bold(), cx);
     press(cx, "enter cmd-alt-c");
     view.read_with(cx, |view, _| {
+        // Not "in another place": the heading says what is the matter,
+        // the sentence under it where the other command applies.
         assert_eq!(
             view.question_title().as_deref(),
-            Some("⌥⌘C is also used in another place")
+            Some("⌥⌘C is also the key of another command")
         );
+        assert_eq!(view.question_mark(), Some(Tone::Plain));
         assert_eq!(view.marked_choice(), Some(Choice::KeepBoth));
     });
     assert_eq!(
@@ -458,24 +483,164 @@ fn a_key_of_an_overlapping_place_can_be_kept_by_both_or_taken(cx: &mut TestAppCo
     assert!(keys_of(&host, &comments, cx).is_empty());
 }
 
+/// A warning does not stand in the way, and it is not passed over
+/// either: the heading says it (never "is free", never a tick), and the
+/// key that confirms does not give the key. Giving it takes one step.
 #[gpui::test]
-fn warnings_are_said_and_do_not_stand_in_the_way(cx: &mut TestAppContext) {
+fn a_warning_is_the_heading_and_confirming_does_not_pass_it_over(cx: &mut TestAppContext) {
     let (host, view, cx) = open(cx);
     select(&view, &bold(), cx);
     // Option with a character types a special character on a Mac.
     press(cx, "enter alt-b");
+    assert_eq!(title(&view, cx), "⌥B types a special character");
+    assert_eq!(mark(&view, cx), Tone::Warning);
     view.read_with(cx, |view, _| {
         let lines = view.question_lines();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.tone == Tone::Warning && line.text.contains("special character")),
-            "{lines:?}"
-        );
-        assert_eq!(view.marked_choice(), Some(Choice::UseKey));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].tone, Tone::Warning);
+        assert!(lines[0].text.contains("special character"), "{lines:?}");
     });
+    assert_eq!(
+        choices(&view, cx),
+        vec!["Use ⌥B", "Press Another Key", "Cancel"]
+    );
+    assert_eq!(marked(&view, cx), Choice::PressAnotherKey);
+    // The mark is drawn beside the heading.
+    assert!(cx.debug_bounds("keymap-question-mark").is_some());
+    let line = describe(&view, cx);
+    assert!(
+        line.contains(
+            "question=\"⌥B types a special character\" mark=warning says=\"On a Mac keyboard"
+        ),
+        "{line}"
+    );
+    assert!(
+        line.contains("choices=[Use ⌥B | *Press Another Key | Cancel]"),
+        "{line}"
+    );
+
+    // Confirming goes back to waiting; nothing was given.
+    press(cx, "enter");
+    assert_eq!(mode(&view, cx), ModeKind::Recording);
+    assert!(requests(&host, cx).is_empty());
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+
+    // One step to the left, and it is given all the same.
+    press(cx, "alt-b left");
+    assert_eq!(marked(&view, cx), Choice::UseKey);
     press(cx, "enter");
     assert_eq!(keys_of(&host, &bold(), cx), vec!["alt-b"]);
+}
+
+/// A key macOS uses unless that was switched off (the picture of 0.5.0:
+/// "⌘Space is free" above "the shortcut may not run").
+#[gpui::test]
+fn a_key_macos_uses_is_not_called_free(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    select(&view, &bold(), cx);
+    press(cx, "enter cmd-space");
+    assert_eq!(title(&view, cx), "macOS uses ⌘Space");
+    assert_eq!(mark(&view, cx), Tone::Warning);
+    assert_eq!(
+        says(&view, cx),
+        "In macOS ⌘Space opens Spotlight. Unless that is switched off in System Settings, the \
+         shortcut may not run."
+    );
+    assert_eq!(
+        choices(&view, cx),
+        vec!["Use ⌘Space", "Press Another Key", "Cancel"]
+    );
+    assert_eq!(marked(&view, cx), Choice::PressAnotherKey);
+    press(cx, "enter");
+    assert_eq!(mode(&view, cx), ModeKind::Recording);
+    assert!(requests(&host, cx).is_empty());
+    // With the pointer, on the button that says it.
+    press(cx, "cmd-space");
+    click(cx, "keymap-choice-0");
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-space"]);
+}
+
+/// Return and Esc are recorded like any key. Somebody who presses Return
+/// again to "confirm" must not end up with Return as the key of Bold: a
+/// key text is edited with is warned about, and the marked choice is not
+/// the one that gives it.
+#[gpui::test]
+fn return_pressed_again_does_not_give_return_to_the_command(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    select(&view, &bold(), cx);
+    press(cx, "enter enter");
+    assert_eq!(mode(&view, cx), ModeKind::Question);
+    assert!(title(&view, cx).starts_with("↩ "), "{}", title(&view, cx));
+    assert_ne!(mark(&view, cx), Tone::Good);
+    assert!(
+        says(&view, cx).contains("As a shortcut, ↩ would run the command"),
+        "{}",
+        says(&view, cx)
+    );
+    assert_eq!(marked(&view, cx), Choice::PressAnotherKey);
+    // Again and again: waiting, question, waiting. Nothing is given.
+    press(cx, "enter enter enter enter");
+    assert!(requests(&host, cx).is_empty());
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+    press(cx, "escape escape");
+    assert_eq!(mode(&view, cx), ModeKind::List);
+}
+
+/// A command of the window given a key the text has for something of its
+/// own: in the text the other command keeps the key, so the new one would
+/// not work there.
+#[gpui::test]
+fn a_key_that_would_not_work_everywhere_says_so(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    select(&view, &version_history(), cx);
+    press(cx, "enter cmd-b");
+    assert_eq!(title(&view, cx), "⌘B would not work everywhere");
+    assert_eq!(mark(&view, cx), Tone::Warning);
+    let text = says(&view, cx);
+    assert!(
+        text.contains("“Bold” in the text. Where both apply “Bold” keeps it"),
+        "{text}"
+    );
+    assert_eq!(
+        choices(&view, cx),
+        vec![
+            "Keep Both",
+            "Take It from “Bold”",
+            "Press Another Key",
+            "Cancel"
+        ]
+    );
+    assert_eq!(marked(&view, cx), Choice::PressAnotherKey);
+    // Both ways of giving it are there for whoever wants them.
+    press(cx, "left left");
+    assert_eq!(marked(&view, cx), Choice::KeepBoth);
+    press(cx, "enter");
+    assert_eq!(keys_of(&host, &version_history(), cx), vec!["cmd-b"]);
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+}
+
+/// A key that only commands in places of their own have is free where
+/// this command applies, and the heading says where.
+#[gpui::test]
+fn a_key_used_only_in_other_places_is_free_here(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    select(&view, &bold(), cx);
+    // The view's own Export has ⌘E, in the list of keyboard shortcuts.
+    press(cx, "enter cmd-e");
+    assert_eq!(title(&view, cx), "⌘E is free in the text");
+    assert_eq!(mark(&view, cx), Tone::Good);
+    let text = says(&view, cx);
+    assert!(
+        text.contains("“Export” in keyboard shortcuts") && text.ends_with("both work."),
+        "{text}"
+    );
+    assert_eq!(
+        choices(&view, cx),
+        vec!["Use ⌘E", "Press Another Key", "Cancel"]
+    );
+    assert_eq!(marked(&view, cx), Choice::UseKey);
+    press(cx, "enter");
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-e"]);
 }
 
 #[gpui::test]
@@ -508,44 +673,66 @@ fn every_choice_of_the_question_works_from_the_keys(cx: &mut TestAppContext) {
 }
 
 /// What the keymap cannot know: something of the host's (Vim mode in the
-/// text) may take a key before any binding sees it. The host says where
-/// and which keys it leaves alone, and the question about any other key
-/// for a command there says so.
+/// text) may take a key before any binding sees it. The host says what it
+/// is called, where it is and which keys it leaves alone; the question
+/// about any other key for a command there has it as its heading (the
+/// picture of 0.5.0: "⌃Y is free" with a tick above the note), and the
+/// key that confirms does not give the key.
 #[gpui::test]
 fn the_question_says_when_something_of_the_host_sees_the_key_first(cx: &mut TestAppContext) {
     fn leaves(key: &KeySequence) -> bool {
         key.first().modifiers().command
     }
-    let warning = "Something else sees this key first.";
+    let warning = "In the text it sees this key before any shortcut does.";
     let (host, view, cx) = open(cx);
     let listing = host
         .read_with(cx, |host, _| host.listing())
-        .takes_keys_first(["Editor"], leaves, warning);
+        .sees_keys_first("Vim mode", ["Editor"], leaves, warning);
     view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
     cx.run_until_parked();
     let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| {
         select(&view, target, cx);
         press(cx, "enter");
         press(cx, keys);
-        let lines = view.read_with(cx, |view, _| view.question_lines());
+        let asked = view.read_with(cx, |view, _| {
+            (
+                view.question_title().unwrap(),
+                view.question_mark().unwrap(),
+                view.question_lines(),
+                view.marked_choice().unwrap(),
+            )
+        });
         press(cx, "escape");
-        lines
+        asked
     };
 
-    // A command of that place, a key that is not left alone: the sentence
-    // is there, after what the keymap says, as a warning.
-    let lines = ask(&bold(), "ctrl-y", cx);
-    let last = lines.last().expect("the question says something");
-    assert_eq!((last.tone, last.text.as_str()), (Tone::Warning, warning));
-    assert!(lines.len() > 1, "what the keymap says comes first");
+    // A command of that place, a key that is not left alone.
+    let (title, mark, lines, marked) = ask(&bold(), "ctrl-y", cx);
+    assert_eq!(title, "⌃Y: Vim mode sees it first");
+    assert_eq!(mark, Tone::Warning);
+    // The host's sentence and nothing above it: no "No other command has
+    // ⌃Y" with a tick.
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(
+        (lines[0].tone, lines[0].text.as_str()),
+        (Tone::Warning, warning)
+    );
+    assert_eq!(marked, Choice::PressAnotherKey);
     // A command that works anywhere is concerned too.
-    let lines = ask(&version_history(), "ctrl-y", cx);
+    let (title, _, lines, marked) = ask(&version_history(), "ctrl-y", cx);
+    assert_eq!(title, "⌃Y: Vim mode sees it first");
     assert!(lines.iter().any(|line| line.text == warning));
-    // A key that is left to the keymap: nothing.
-    let lines = ask(&bold(), "cmd-alt-y", cx);
+    assert_eq!(marked, Choice::PressAnotherKey);
+    // A key that is left to the keymap: free, with its tick, and confirmed
+    // at once.
+    let (title, mark, lines, marked) = ask(&bold(), "cmd-alt-y", cx);
+    assert_eq!(title, "⌥⌘Y is free");
+    assert_eq!(mark, Tone::Good);
     assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
+    assert_eq!(marked, Choice::UseKey);
     // A key that is refused anyway: only the refusal.
-    let lines = ask(&bold(), "y", cx);
+    let (title, _, lines, _) = ask(&bold(), "y", cx);
+    assert_eq!(title, "Y cannot be used");
     assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
     // A command of another place: nothing.
     let elsewhere = host.read_with(cx, |host, _| {
@@ -564,9 +751,36 @@ fn the_question_says_when_something_of_the_host_sees_the_key_first(cx: &mut Test
     });
     let listed = view.read_with(cx, |view, _| view.row_of(&elsewhere).is_some());
     if listed {
-        let lines = ask(&elsewhere, "ctrl-y", cx);
+        let (title, _, lines, _) = ask(&elsewhere, "ctrl-y", cx);
+        assert!(!title.contains("Vim"), "{title}");
         assert!(lines.iter().all(|line| line.text != warning), "{lines:?}");
     }
+
+    // Confirming does not give such a key; the choice that does is there.
+    select(&view, &bold(), cx);
+    press(cx, "enter ctrl-y enter");
+    assert_eq!(mode(&view, cx), ModeKind::Recording);
+    assert!(requests(&host, cx).is_empty());
+    press(cx, "ctrl-y");
+    assert!(view.update_in(cx, |view, window, cx| view.choose(
+        Choice::UseKey,
+        window,
+        cx
+    )));
+    cx.run_until_parked();
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["ctrl-y"]);
+
+    // A host that does not say what it is called: the heading says what
+    // may happen.
+    let listing = host
+        .read_with(cx, |host, _| host.listing())
+        .takes_keys_first(["Editor"], leaves, warning);
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    cx.run_until_parked();
+    let (title, mark, _, marked) = ask(&italic(), "ctrl-t", cx);
+    assert_eq!(title, "⌃T may not run");
+    assert_eq!(mark, Tone::Warning);
+    assert_eq!(marked, Choice::PressAnotherKey);
 }
 
 /// A command the keymap holds in several key contexts of one place is one

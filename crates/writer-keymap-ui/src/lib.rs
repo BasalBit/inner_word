@@ -51,17 +51,34 @@
 //! no key ends the waiting instead of being recorded, so `escape` and
 //! `enter` can be given to a command like any other key. (A modifier held
 //! alone is not a key yet; the view shows it and goes on waiting.) The
-//! pointer leaves the waiting with its Cancel control. The key reaches the
+//! pointer leaves the waiting with its Cancel control; from the keyboard
+//! the way out leads through the question about the key (with the default
+//! keys: `escape` twice), and the view says so while it waits, with the
+//! key the keymap has for it ([`KeymapView::waiting_says`]). The key reaches the
 //! view before anything else sees it (one `App::intercept_keystrokes`
 //! callback, installed by [`init`]): no binding of the app runs, the menu
 //! bar does not get it, nothing is typed.
 //!
-//! Then the view says what the key would do, in the words of
-//! [`writer_keymap::Verdict`]: free; refused, with the reason; taken, by
-//! which command. The user chooses with the keys of the
+//! Then the view says what the key would do, from
+//! [`writer_keymap::Verdict`] and from what the host said sees keys before
+//! the keymap does ([`Listing::sees_keys_first`]: Vim mode). A heading
+//! with a mark says the most important thing about the key, the sentences
+//! under it say why and what follows: free (a tick); taken, by which
+//! command, or refused, with the reason (a stop sign); and with a warning
+//! sign, never "free" and never a tick, a key that may not run or costs
+//! something (macOS uses it, Vim mode sees it first, another command keeps
+//! it where both apply, text is edited with it, it types a special
+//! character). The user chooses with the keys of the
 //! [`CHOICES_KEY_CONTEXT`] or the pointer: use it, take it from the
 //! command that has it, keep both where the two are in different places,
 //! press another key, or cancel.
+//!
+//! **The marked choice** (the one [`Choose`] takes) gives the command the
+//! key only when no sentence warns: "Use" for a free key, "Take It from
+//! ..." for a taken one (the button says what it costs), "Keep Both" where
+//! this command gets the key. Under a warning it is "Press Another Key":
+//! giving the key then takes a deliberate step, so nobody ends up with
+//! Return as the key of a command by pressing Return twice.
 //!
 //! A key that is held down repeats, and GPUI does not tell an interceptor
 //! which key presses are repeats. So the view takes three keys to be still
@@ -85,6 +102,17 @@
 //! of its keys in the same place (an import can leave that), with the
 //! sentence in the hints. Stored changes that do nothing in this version
 //! are counted in a line above the list; "Reset All" removes them too.
+//! The line under the query counts the changed commands (never single
+//! keys): "No key changed", "1 command changed", "4 commands changed".
+//!
+//! # Searching
+//!
+//! By name, by place and by key at once (`search.rs`): the words of the
+//! query have to stand in the name as they are written, letters together
+//! (one typing mistake is forgiven when nothing else matches, and the
+//! list says so); a key written whole (`cmd-b`, `⌘B`) finds the rows that
+//! have exactly that key, and the keys that only begin with it only when
+//! there is none.
 //!
 //! # Keys
 //!
@@ -128,9 +156,15 @@
 //! position in the list as drawn), `keymap-key-<n>-<k>` (a key of that
 //! row), `keymap-add-<n>`, `keymap-more-<n>`, `keymap-import`,
 //! `keymap-export`, `keymap-reset-all`, `keymap-changed-only`,
-//! `keymap-close`, `keymap-record-cancel`, `keymap-choice-<n>`,
-//! `keymap-preview-row-<n>`, `keymap-preview-detail`, `keymap-clash-<n>`
-//! (the warning sign of a row), `keymap-panel`, `keymap-band`.
+//! `keymap-close`, `keymap-changed` (the count of changed commands),
+//! `keymap-record-cancel`, `keymap-record-help`, `keymap-question-title`,
+//! `keymap-question-mark` (the sign beside the heading of a question),
+//! `keymap-choice-<n>`, `keymap-preview-rows` (the part of the import
+//! preview that scrolls), `keymap-preview-row-<n>`,
+//! `keymap-preview-name-<n>` and `keymap-preview-reason-<n>` (the two
+//! parts of a skipped entry's row), `keymap-preview-detail`,
+//! `keymap-clash-<n>` (the warning sign of a row), `keymap-panel`,
+//! `keymap-band`.
 
 mod keys;
 mod listing;

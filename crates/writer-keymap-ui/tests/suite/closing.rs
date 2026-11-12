@@ -228,3 +228,98 @@ fn everything_is_put_back_from_the_keys_after_a_confirmation(cx: &mut TestAppCon
     assert_eq!(view.read_with(cx, |view, _| view.changed_count()), 0);
     assert!(!view.read_with(cx, |view, _| view.can_reset_all()));
 }
+
+/// While the view waits for a key it says that every key counts and how
+/// to leave without a change: with the pointer, and from the keyboard
+/// alone. What it says about the keyboard is read from the keymap, and it
+/// is true.
+#[gpui::test]
+fn waiting_for_a_key_says_how_to_leave_and_it_is_so(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    let waiting = |cx: &mut VisualTestContext| view.read_with(cx, |view, cx| view.waiting_says(cx));
+    let mode = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.mode());
+    assert_eq!(waiting(cx), None, "not waiting yet");
+
+    select(&view, &bold(), cx);
+    press(cx, "enter");
+    assert_eq!(
+        waiting(cx).as_deref(),
+        Some(
+            "Every key counts, Esc and Return included. To leave without a change: click \
+             Cancel, or press Esc twice (the first is taken as the key, the second cancels it)."
+        )
+    );
+    assert!(cx.debug_bounds("keymap-record-help").is_some());
+    // Every key counts: Return and Esc are asked about, not obeyed.
+    press(cx, "enter");
+    assert_eq!(mode(cx), ModeKind::Question);
+    assert!(
+        view.read_with(cx, |view, _| view.question_title().unwrap())
+            .starts_with("↩ ")
+    );
+    press(cx, "backspace");
+    assert_eq!(mode(cx), ModeKind::Recording);
+    // With the pointer: Cancel.
+    click(cx, "keymap-record-cancel");
+    assert_eq!(mode(cx), ModeKind::List);
+    // From the keyboard alone: Esc twice.
+    press(cx, "enter");
+    assert_eq!(mode(cx), ModeKind::Recording);
+    press(cx, "escape");
+    assert_eq!(mode(cx), ModeKind::Question, "the first Esc is asked about");
+    press(cx, "escape");
+    assert_eq!(mode(cx), ModeKind::List, "the second cancels");
+    assert!(requests(&host, cx).is_empty(), "nothing was changed");
+    assert!(host.read_with(cx, |host, cx| host.is_open(cx)));
+
+    // The key that cancels a question is the user's to change: the
+    // sentence names the key it is now.
+    let cancel = Target::new(
+        "keymap_view::Cancel",
+        Some(writer_keymap_ui::CHOICES_KEY_CONTEXT),
+    );
+    select(&view, &cancel, cx);
+    press(cx, "enter f1 enter");
+    assert_eq!(keys_of(&host, &cancel, cx), vec!["f1"]);
+    select(&view, &bold(), cx);
+    press(cx, "enter");
+    let says = waiting(cx).unwrap();
+    assert!(
+        says.ends_with("click Cancel, or press any key and then F1."),
+        "{says}"
+    );
+    press(cx, "f9");
+    assert_eq!(mode(cx), ModeKind::Question);
+    press(cx, "f1");
+    assert_eq!(mode(cx), ModeKind::List);
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+
+    // With no key for it at all, the way leads through the question's
+    // choices, which the keys still reach.
+    select(&view, &cancel, cx);
+    press(cx, "cmd-backspace");
+    assert!(keys_of(&host, &cancel, cx).is_empty());
+    select(&view, &bold(), cx);
+    press(cx, "enter");
+    let says = waiting(cx).unwrap();
+    assert!(
+        says.ends_with(
+            "click Cancel, or press any key and choose Cancel in the question that follows."
+        ),
+        "{says}"
+    );
+    // Any key (a free one: "Use" is marked), then to "Cancel" and take it.
+    press(cx, "f9");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.marked_choice()),
+        Some(writer_keymap_ui::Choice::UseKey)
+    );
+    press(cx, "right right");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.marked_choice()),
+        Some(writer_keymap_ui::Choice::Cancel)
+    );
+    press(cx, "enter");
+    assert_eq!(mode(cx), ModeKind::List);
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+}

@@ -66,7 +66,7 @@ fn the_preview_says_what_changes_what_is_skipped_and_why(cx: &mut TestAppContext
         ]
     );
     let rows = rows(&view, cx);
-    assert_eq!(rows[0], "Keys that change (2)");
+    assert_eq!(rows[0], "Commands that get other keys (2)");
     assert_eq!(rows[1], "Bold (in the text): ⌘B → ⌥⌘B");
     assert_eq!(rows[2], "Version history (anywhere): none → ⌥⌘H");
     assert_eq!(rows[3], "Entries that are skipped (3)");
@@ -148,7 +148,7 @@ fn with_changes_of_ones_own_there_are_three_choices(cx: &mut TestAppContext) {
         Some(Choice::ImportMerge)
     );
     let adding = rows(&view, cx);
-    assert_eq!(adding[0], "Keys that change (2)");
+    assert_eq!(adding[0], "Commands that get other keys (2)");
     assert!(
         adding.contains(&"Bold (in the text): F5 → ⌥⌘B".to_string()),
         "{adding:?}"
@@ -165,7 +165,7 @@ fn with_changes_of_ones_own_there_are_three_choices(cx: &mut TestAppContext) {
         Some(Choice::ImportReplace)
     );
     let replacing = rows(&view, cx);
-    assert_eq!(replacing[0], "Keys that change (3)");
+    assert_eq!(replacing[0], "Commands that get other keys (3)");
     assert!(
         replacing.contains(&"Italic (in the text): ⌥⌘I → ⌘I".to_string()),
         "{replacing:?}"
@@ -233,7 +233,7 @@ fn the_three_choices_work_with_the_pointer(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.marked_choice()),
         Some(Choice::ImportReplace)
     );
-    assert_eq!(rows(&view, cx)[0], "Keys that change (3)");
+    assert_eq!(rows(&view, cx)[0], "Commands that get other keys (3)");
     // A click on a row of the preview selects it.
     click(cx, "keymap-preview-row-2");
     assert_eq!(mode(&view, cx), ModeKind::Question);
@@ -398,7 +398,7 @@ fn a_file_that_changes_very_many_keys_stays_readable(cx: &mut TestAppContext) {
     assert!(changed > 60, "{changed}");
     press(cx, "cmd-i");
     let rows = rows(&view, cx);
-    assert_eq!(rows[0], format!("Keys that change ({changed})"));
+    assert_eq!(rows[0], format!("Commands that get other keys ({changed})"));
     assert_eq!(rows.len(), changed + 1);
     // The panel stays inside the window, and the choices stay in it.
     let window = cx.update(|window, _| window.viewport_size());
@@ -406,20 +406,274 @@ fn a_file_that_changes_very_many_keys_stays_readable(cx: &mut TestAppContext) {
     assert!(panel.size.height < window.height, "{:?}", panel.size.height);
     let choice = bounds(cx, "keymap-choice-0");
     assert!(choice.bottom() < panel.bottom());
-    // Only some rows are drawn; each has the one height.
+    // A row of one line has the one height; the rows scroll inside the
+    // panel, and the last one is out of sight.
     let first = bounds(cx, "keymap-preview-row-1");
     assert_eq!(first.size.height, px(28.));
-    assert!(
-        cx.debug_bounds(selector(format!("keymap-preview-row-{changed}")))
-            .is_none()
-    );
+    let last = selector(format!("keymap-preview-row-{changed}"));
+    assert!(in_view(cx, "keymap-preview-row-1"));
+    assert!(!in_view(cx, last));
     // The keys reach the last row.
     press(cx, "end");
-    assert!(
-        cx.debug_bounds(selector(format!("keymap-preview-row-{changed}")))
-            .is_some()
-    );
-    press(cx, "home pagedown pageup");
+    assert!(in_view(cx, last));
+    assert!(!in_view(cx, "keymap-preview-row-1"));
+    press(cx, "home");
+    assert!(in_view(cx, "keymap-preview-row-1"));
+    press(cx, "pagedown pageup");
     press(cx, "enter");
     assert_eq!(view.read_with(cx, |view, _| view.changed_count()), changed);
+}
+
+/// Whether what is drawn under `selector` lies inside the part of the
+/// preview that shows its rows (and not above or below it, scrolled away).
+fn in_view(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    let rows = bounds(cx, "keymap-preview-rows");
+    let row = bounds(cx, selector);
+    row.top() >= rows.top() && row.bottom() <= rows.bottom()
+}
+
+/// A skipped entry is read in its row, without selecting it: what the
+/// command is called first, then the reason, which wraps instead of being
+/// cut off at the edge. The name the file has for the action is not in the
+/// row (it is under the rows, for whoever edits the file), except for a
+/// command this version does not have: there it is all there is to go by.
+/// (The picture of 0.5.0: "Entry 51 (Inline code, editor::ToggleInlineCode):
+/// a key cannot be read: "hyper-e" has more than one key (…".)
+#[gpui::test]
+fn a_skipped_entry_is_read_in_its_row(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    host.update(cx, |host, _| {
+        let exported = host.keymap.export(&host.listing().catalogue, "0.5.0");
+        let mut file = host::serde_json_lite::parse(&exported);
+        file.set_keys("demo::Bold", &["cmd-alt-b"]);
+        file.set_keys("demo::Italic", &["hyper-i"]);
+        file.set_keys("demo::Underline", &["u"]);
+        file.push_entry("demo::SmallCaps", "Small caps", &["cmd-alt-k"]);
+        host.import_file = Some(("Mine.json".into(), file.to_text()));
+    });
+    press(cx, "cmd-i");
+    let rows = rows(&view, cx);
+    assert_eq!(rows[0], "Commands that get other keys (1)");
+    assert_eq!(rows[2], "Entries that are skipped (3)");
+    // The command's name first, then the reason in the keymap's words;
+    // keys as the list writes them.
+    assert!(
+        rows[3].starts_with("Italic: a key cannot be read: \"hyper-i\""),
+        "{}",
+        rows[3]
+    );
+    assert_eq!(
+        rows[4],
+        "Underline: U is a character, and text is typed where the command applies"
+    );
+    assert_eq!(
+        rows[5],
+        "Small caps (demo::SmallCaps): this version does not have the command"
+    );
+    // No number of an entry and no name of an action in the rows of the
+    // commands this version has.
+    for row in &rows[3..5] {
+        assert!(!row.contains("demo::") && !row.contains("Entry"), "{row}");
+    }
+
+    // How the file names it stands under the rows while the row is
+    // selected, for a change and for a skipped entry alike.
+    assert_eq!(
+        view.read_with(cx, |view, _| view.preview_detail())
+            .as_deref(),
+        Some("In the file: \"demo::Bold\" in \"Editor\"")
+    );
+    press(cx, "down");
+    let detail = view.read_with(cx, |view, _| view.preview_detail().unwrap());
+    assert!(
+        detail.starts_with("In the file: entry ") && detail.ends_with(", \"demo::Italic\""),
+        "{detail}"
+    );
+    assert!(cx.debug_bounds("keymap-preview-detail").is_some());
+
+    // On screen: the name at the left, the reason beside it. A long
+    // reason takes more than one line and ends inside the row; a short one
+    // leaves the row at its one-line height.
+    let panel = bounds(cx, "keymap-panel");
+    let long = bounds(cx, "keymap-preview-row-3");
+    let name = bounds(cx, "keymap-preview-name-3");
+    let reason = bounds(cx, "keymap-preview-reason-3");
+    assert!(name.left() >= long.left() && name.right() <= reason.left());
+    assert!(reason.right() <= long.right() && long.right() <= panel.right());
+    assert!(
+        reason.size.height >= px(36.),
+        "the reason wraps: {:?}",
+        reason.size
+    );
+    assert!(reason.top() >= long.top() && reason.bottom() <= long.bottom());
+    assert!(long.size.height > px(28.), "{:?}", long.size.height);
+    let unknown = bounds(cx, "keymap-preview-row-5");
+    assert_eq!(unknown.size.height, px(28.));
+    assert_eq!(bounds(cx, "keymap-preview-reason-5").size.height, px(18.));
+    // Rows one under the other, none over another.
+    let short = bounds(cx, "keymap-preview-row-4");
+    assert_eq!(short.top(), long.bottom());
+    assert_eq!(unknown.top(), short.bottom());
+}
+
+/// A file with many rows of each kind: 20 commands that change, 10
+/// collisions, 15 skipped entries. The rows scroll, the choices stay where
+/// they are and in view, nothing reaches past the panel; also in the
+/// smallest window the app has.
+#[gpui::test]
+fn a_preview_with_many_rows_of_each_kind_scrolls_and_keeps_its_choices(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    host.update(cx, |host, _| {
+        let exported = host.keymap.export(&host.listing().catalogue, "0.5.0");
+        let mut file = host::serde_json_lite::parse(&exported);
+        // 9 commands on keys of their own.
+        for (ix, command) in [
+            "demo::Bold",
+            "demo::NumberedList",
+            "demo::NewDocument",
+            "demo::QuickOpen",
+            "demo::Quit",
+            "demo::ToggleComments",
+            "demo::OpenContextMenu",
+            "demo::CaseSensitive",
+            "demo::VersionHistory",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            file.set_keys(command, &[format!("ctrl-alt-cmd-f{}", ix + 1).as_str()]);
+        }
+        // 11 more that share keys in one place: three keys with three
+        // commands each (three pairs a key), one with two.
+        for (key, commands) in [
+            (
+                "ctrl-alt-cmd-f10",
+                &["SelectPageUp", "SelectPageDown", "SelectFirst"][..],
+            ),
+            ("ctrl-alt-cmd-f11", &["SelectLast", "ChangeKey", "AddKey"]),
+            (
+                "ctrl-alt-cmd-f12",
+                &["RemoveKey", "UseDefault", "RunCommand"],
+            ),
+            ("ctrl-alt-cmd-f13", &["NextKey", "PreviousKey"]),
+        ] {
+            for command in commands {
+                file.set_keys(&format!("keymap_view::{command}"), &[key]);
+            }
+        }
+        // 15 entries that cannot be applied, for every kind of reason.
+        file.set_keys("demo::Italic", &["hyper-i"]);
+        file.set_keys("demo::Underline", &["u"]);
+        file.set_keys("demo::Find", &["cmd-"]);
+        file.set_keys("demo::MoveBlockUp", &["cmd-tab"]);
+        for ix in 1..=11 {
+            file.push_entry(
+                &format!("demo::Gone{ix}"),
+                &format!("A command of another version, number {ix}"),
+                &["cmd-g"],
+            );
+        }
+        host.import_file = Some(("Everything.json".into(), file.to_text()));
+    });
+    press(cx, "cmd-i");
+    let rows = rows(&view, cx);
+    let headings: Vec<&String> = rows
+        .iter()
+        .filter(|row| {
+            row.starts_with("Commands that")
+                || row.starts_with("Collisions")
+                || row.starts_with("Entries")
+        })
+        .collect();
+    assert_eq!(
+        headings,
+        [
+            "Commands that get other keys (20)",
+            "Collisions it would leave (10)",
+            "Entries that are skipped (15)"
+        ]
+    );
+    assert_eq!(rows.len(), 3 + 20 + 10 + 15);
+    let last = rows.len() - 1;
+    let first_skipped = 2 + 20 + 10 + 1;
+    assert!(rows[first_skipped].starts_with("Italic: "), "{rows:?}");
+
+    let check = |cx: &mut VisualTestContext| {
+        let window = cx.update(|window, _| window.viewport_size());
+        let panel = bounds(cx, "keymap-panel");
+        assert!(panel.left() >= px(0.) && panel.right() <= window.width);
+        assert!(
+            panel.top() >= px(0.) && panel.bottom() <= window.height,
+            "the panel ends at {:?} in a window of {:?}",
+            panel.bottom(),
+            window.height
+        );
+        // The part with the rows is inside the panel and scrolls.
+        let list = bounds(cx, "keymap-preview-rows");
+        assert!(list.top() > panel.top() && list.bottom() < panel.bottom());
+        assert!(list.left() >= panel.left() && list.right() <= panel.right());
+        // The choices are under it, whole, inside the panel.
+        let choices: Vec<_> = (0..2)
+            .map(|ix| bounds(cx, selector(format!("keymap-choice-{ix}"))))
+            .collect();
+        for choice in &choices {
+            assert!(choice.top() >= list.bottom(), "{choice:?} under {list:?}");
+            assert!(choice.bottom() <= panel.bottom() && choice.right() <= panel.right());
+            assert!(choice.left() >= panel.left());
+        }
+        // From the top: the first rows are in view, the last is not.
+        press(cx, "home");
+        assert!(in_view(cx, "keymap-preview-row-1"));
+        assert!(!in_view(cx, selector(format!("keymap-preview-row-{last}"))));
+        // No row is wider than the part that shows it, and a skipped
+        // entry's reason ends inside its row: nothing is cut off at the
+        // right edge.
+        for ix in 0..=last {
+            let row = bounds(cx, selector(format!("keymap-preview-row-{ix}")));
+            assert!(
+                row.left() >= list.left() && row.right() <= list.right(),
+                "row {ix}: {row:?} in {list:?}"
+            );
+            if ix >= first_skipped {
+                let reason = bounds(cx, selector(format!("keymap-preview-reason-{ix}")));
+                let name = bounds(cx, selector(format!("keymap-preview-name-{ix}")));
+                assert!(reason.right() <= row.right(), "row {ix}: {reason:?}");
+                assert!(name.right() <= reason.left(), "row {ix}: {name:?}");
+                assert!(reason.size.width >= px(200.), "row {ix}: {reason:?}");
+                assert!(
+                    reason.top() >= row.top() && reason.bottom() <= row.bottom(),
+                    "row {ix}: {reason:?} in {row:?}"
+                );
+            }
+        }
+        // Row by row to the end: the selected row is in view each time
+        // (the first of the collisions, the first skipped entry, the
+        // last), and the choices have not moved.
+        for ix in 1..=last {
+            let selected_is_shown = in_view(cx, selector(format!("keymap-preview-row-{ix}")));
+            let heading = ix == 21 || ix == 32;
+            if !heading {
+                assert!(selected_is_shown, "row {ix} is selected and in view");
+                press(cx, "down");
+            }
+        }
+        assert!(in_view(cx, selector(format!("keymap-preview-row-{last}"))));
+        assert!(!in_view(cx, "keymap-preview-row-1"));
+        for (ix, before) in choices.iter().enumerate() {
+            let now = bounds(cx, selector(format!("keymap-choice-{ix}")));
+            assert_eq!(now, *before, "choice {ix} stayed where it was");
+        }
+        // And back up by pages.
+        press(cx, "pageup pageup pageup pageup pageup pageup pageup");
+        assert!(in_view(cx, "keymap-preview-row-1"));
+    };
+    check(cx);
+    // The smallest window the app has.
+    cx.simulate_resize(gpui::size(px(640.), px(480.)));
+    cx.run_until_parked();
+    check(cx);
+    // Nothing was applied by looking.
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-b"]);
+    press(cx, "escape");
+    assert_eq!(mode(&view, cx), ModeKind::List);
 }

@@ -369,7 +369,7 @@ fn changes_kept_from_another_version_are_said_and_can_be_removed(cx: &mut TestAp
         assert_eq!(headings[0], host::NOTE);
         assert_eq!(
             headings[1],
-            "1 change made in another version is kept, without effect in this one"
+            "1 change made in another version of The Writer is kept; it does nothing in this one"
         );
         assert_eq!(view.changed_count(), 0);
         // It is something Reset All removes.
@@ -386,4 +386,177 @@ fn changes_kept_from_another_version_are_said_and_can_be_removed(cx: &mut TestAp
         assert!(!view.can_reset_all());
         assert_eq!(view.headings()[1], "Anywhere \u{b7} View");
     });
+}
+
+/// The line under the query counts commands, not keys: a command with two
+/// keys of the user's is one, a command left without a key is one. (The
+/// released list said "4 keys changed" for four commands with five keys
+/// between them.)
+#[gpui::test]
+fn the_header_counts_the_commands_that_were_changed(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    let header = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.changed_text());
+    assert_eq!(header(cx), "No key changed");
+    assert!(cx.debug_bounds("keymap-changed").is_some());
+
+    select(&view, &bold(), cx);
+    press(cx, "enter cmd-alt-b enter");
+    assert_eq!(header(cx), "1 command changed");
+    // A second key for the same command: still one command.
+    press(cx, "cmd-enter f5 enter");
+    assert_eq!(keys_of(&host, &bold(), cx), vec!["cmd-alt-b", "f5"]);
+    assert_eq!(header(cx), "1 command changed");
+    // A command left without a key is one more.
+    select(&view, &italic(), cx);
+    press(cx, "cmd-backspace");
+    assert_eq!(header(cx), "2 commands changed");
+    // A command that had no key and got one.
+    select(&view, &version_history(), cx);
+    press(cx, "enter f6 enter");
+    assert_eq!(header(cx), "3 commands changed");
+    // The state line of a scripted run keeps its word.
+    assert!(describe(&view, cx).contains(" changed=3 "));
+
+    // A changed command the list has no row for right now (the commands
+    // of a part of the app that is not there) is said beside the number,
+    // as "Reset All" counts it too.
+    let mut listing = host.read_with(cx, |host, _| host.listing());
+    listing.rows.retain(|row| row.target != italic());
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    cx.run_until_parked();
+    assert_eq!(header(cx), "2 commands changed, 1 more not shown now");
+    press(cx, "cmd-shift-d");
+    assert!(
+        view.read_with(cx, |view, _| view.question_lines()[0].text.clone())
+            .starts_with("3 commands go back to the default keys."),
+    );
+}
+
+/// A name is found by the words of the query standing in it, letters
+/// together. (The released list found "Insert menu" for "italic", by an i
+/// here and a t there, and marked those letters.)
+#[gpui::test]
+fn a_search_by_name_finds_words_not_scattered_letters(cx: &mut TestAppContext) {
+    let (_, view, cx) = open(cx);
+    let search = |query: &str, cx: &mut VisualTestContext| -> Vec<(String, String)> {
+        view.update(cx, |view, cx| view.set_query(query, cx));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            view.listed()
+                .into_iter()
+                .map(|(_, title)| title)
+                .zip(view.marked_letters())
+                .collect()
+        })
+    };
+    let pair = |title: &str, marked: &str| (title.to_string(), marked.to_string());
+
+    assert_eq!(search("italic", cx), vec![pair("Italic", "Italic")]);
+    assert_eq!(search("ital", cx), vec![pair("Italic", "Ital")]);
+    // "Insert menu" is there for its own words, and only those are marked.
+    assert_eq!(
+        search("insert menu", cx),
+        vec![pair("Insert menu", "Insertmenu")]
+    );
+    // Titles first; after them the rows of a place with the word in its
+    // name ("In a list or menu"), with nothing of their titles marked.
+    let found = search("menu", cx);
+    assert_eq!(
+        found[..2],
+        [pair("Context menu", "menu"), pair("Insert menu", "menu")]
+    );
+    for (title, marked) in &found {
+        let in_title = title.to_lowercase().contains("menu");
+        assert_eq!(marked, if in_title { "menu" } else { "" }, "{title}");
+    }
+    let first_by_place = found.iter().position(|(_, marked)| marked.is_empty());
+    let last_by_title = found.iter().rposition(|(_, marked)| !marked.is_empty());
+    assert!(first_by_place > last_by_title, "{found:?}");
+    // The start of a word before the inside of one; and "or" inside
+    // "Format" or "shortcuts" is no reason to list a whole place.
+    let found = search("or", cx);
+    assert_eq!(found[0], pair("Show or hide comments", "or"));
+    let inside: Vec<&(String, String)> = found[1..]
+        .iter()
+        .take_while(|(_, marked)| marked == "or")
+        .collect();
+    assert!(inside.len() >= 4, "{found:?}");
+    for (title, _) in &inside {
+        assert!(title.to_lowercase().contains("or"), "{title}");
+    }
+    for (title, marked) in &found[1 + inside.len()..] {
+        // What is left is found by a word of its place ("In a list or
+        // menu").
+        assert_eq!(marked, "", "{title}");
+    }
+    assert!(
+        !found.iter().any(|(title, _)| title == "Bold"),
+        "Bold is under Format, which only has \"or\" inside: {found:?}"
+    );
+    assert!(
+        !found.iter().any(|(title, _)| title == "Change key"),
+        "nor do the rows of keyboard shortcuts: {found:?}"
+    );
+    // Letters that are all there, in order, but not together: nothing.
+    assert!(search("itlc", cx).is_empty());
+    assert!(search("nmbl", cx).is_empty());
+    // Found by its place: nothing of the title is marked.
+    assert_eq!(search("find bar", cx), vec![pair("Case sensitive", "")]);
+    // Found by its key: nothing marked either.
+    assert_eq!(search("cmd-b", cx), vec![pair("Bold", "")]);
+
+    // One typing mistake, when nothing matches as written: found, and the
+    // list says that it is a near miss.
+    assert_eq!(search("itlaic", cx), vec![pair("Italic", "Italic")]);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.headings()),
+        vec!["Nothing matches “itlaic” as written. One letter away:"]
+    );
+    assert_eq!(search("undrline", cx), vec![pair("Underline", "Undrline")]);
+    // As written, no such line.
+    search("italic", cx);
+    assert!(view.read_with(cx, |view, _| view.headings()).is_empty());
+    // Two mistakes are not forgiven.
+    assert!(search("itlakc", cx).is_empty());
+    assert!(view.read_with(cx, |view, _| view.headings()).is_empty());
+}
+
+/// Somebody who writes a whole key means that key. (The released list
+/// showed six ⌘⌫ rows after Bold for "cmd-b", because "backspace" begins
+/// with a b.)
+#[gpui::test]
+fn a_whole_key_lists_the_rows_that_have_exactly_that_key(cx: &mut TestAppContext) {
+    let (host, view, cx) = open(cx);
+    let search = |query: &str, cx: &mut VisualTestContext| -> Vec<String> {
+        view.update(cx, |view, cx| view.set_query(query, cx));
+        cx.run_until_parked();
+        let listed = view.read_with(cx, |view, _| view.listed());
+        listed
+            .into_iter()
+            .map(|(target, title)| {
+                let keys = keys_of(&host, &target, cx);
+                format!("{title} [{}]", keys.join(", "))
+            })
+            .collect()
+    };
+    // The host has ⌘⌫ twice (the view's "Remove key", the text field's
+    // "Delete to line start" or the like): none of them for "cmd-b".
+    let with_backspace = search("cmd-backspace", cx);
+    assert!(with_backspace.len() >= 2, "{with_backspace:?}");
+    for query in ["cmd-b", "⌘B", "command+b"] {
+        assert_eq!(search(query, cx), vec!["Bold [cmd-b]"], "{query}");
+    }
+    // A key nobody has: now the keys that begin with it are of interest.
+    let found = search("cmd-ba", cx);
+    assert_eq!(found, with_backspace);
+    // ⌘E is the view's Export; ⌘↩ ("enter" begins with an e) is not
+    // listed with it.
+    let found = search("cmd-e", cx);
+    assert_eq!(found, vec!["Export [cmd-e]"]);
+    // No row has ⌘H: then what begins with it (⌘↖, "home").
+    let found = search("cmd-h", cx);
+    assert!(
+        found.iter().all(|row| row.contains("cmd-home")),
+        "{found:?}"
+    );
 }

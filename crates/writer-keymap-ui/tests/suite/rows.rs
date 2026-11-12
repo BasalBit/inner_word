@@ -298,3 +298,107 @@ fn a_row_that_cannot_be_changed_says_why(cx: &mut TestAppContext) {
         assert!(menu.read(cx).items()[1].is_disabled());
     });
 }
+
+/// The menu of a row opens under the row's "more" control at the right,
+/// where it covers the least of the rows below: from the keys and from a
+/// click on the control. (In the released list it opened at the left edge
+/// of the row and lay over the names of the rows under it.) A right-click
+/// opens it at the pointer, as everywhere.
+#[gpui::test]
+fn the_rows_menu_opens_under_the_more_control(cx: &mut TestAppContext) {
+    use writer_ui::context_menu::MenuAnchor;
+    let (_, view, cx) = open(cx);
+    select(&view, &bold(), cx);
+    let row = view.read_with(cx, |view, _| view.row_of(&bold()).unwrap());
+    let more = bounds(cx, selector(format!("keymap-more-{row}")));
+    let row_bounds = bounds(cx, selector(format!("keymap-row-{row}")));
+    // The control is at the right end of the row.
+    assert!(more.left() > row_bounds.left() + (row_bounds.size.width / 2.));
+
+    let menu_at = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let menu = ContextMenu::current(window, cx).expect("the menu is open");
+            (menu.read(cx).anchor(), menu.read(cx).bounds())
+        })
+    };
+    // From the keys.
+    press(cx, "ctrl-enter");
+    let (anchor, drawn) = menu_at(cx);
+    assert_eq!(anchor, MenuAnchor::Below(more));
+    let drawn = drawn.expect("the menu is drawn");
+    assert_eq!(drawn.left(), more.left(), "its left edge at the control's");
+    assert!(drawn.top() >= more.bottom(), "under the control");
+    // The names of the rows below are not under it.
+    assert!(drawn.left() > row_bounds.left() + (row_bounds.size.width / 2.));
+    press(cx, "escape");
+
+    // From a click on the control: the same place.
+    click(cx, selector(format!("keymap-more-{row}")));
+    let (anchor, _) = menu_at(cx);
+    assert_eq!(anchor, MenuAnchor::Below(more));
+    press(cx, "escape");
+
+    // A right-click on the row: at the pointer.
+    let at = row_bounds.center();
+    right_click(cx, selector(format!("keymap-row-{row}")));
+    let (anchor, _) = menu_at(cx);
+    assert_eq!(anchor, MenuAnchor::Point(at));
+    press(cx, "escape");
+
+    // Another row, selected with the keys: its control, not the last one's.
+    press(cx, "down");
+    let next = view.read_with(cx, |view, _| {
+        let target = view.selected_target().cloned().unwrap();
+        view.row_of(&target).unwrap()
+    });
+    assert_ne!(next, row);
+    let more = bounds(cx, selector(format!("keymap-more-{next}")));
+    press(cx, "ctrl-enter");
+    let (anchor, _) = menu_at(cx);
+    assert_eq!(anchor, MenuAnchor::Below(more));
+}
+
+/// In the menu of a row with several keys, the items of the key that the
+/// keys of the list act on show those keys; the other key's items show
+/// none. (All four were without a key in the released list.)
+#[gpui::test]
+fn the_menu_of_a_row_with_two_keys_says_which_key_the_keys_act_on(cx: &mut TestAppContext) {
+    let (_, view, cx) = open(cx);
+    select(&view, &context_menu(), cx);
+    let hints = |cx: &mut VisualTestContext| -> Vec<(String, Option<String>)> {
+        cx.update(|window, cx| {
+            let menu = ContextMenu::current(window, cx).expect("the menu is open");
+            menu.read(cx)
+                .items()
+                .iter()
+                .filter(|item| !item.is_separator())
+                .map(|item| {
+                    (
+                        item.title().to_string(),
+                        item.explicit_key_hint().map(|hint| hint.text()),
+                    )
+                })
+                .collect()
+        })
+    };
+    let hint_of = |label: &str, cx: &mut VisualTestContext| {
+        hints(cx)
+            .into_iter()
+            .find(|(title, _)| title == label)
+            .unwrap_or_else(|| panic!("{label} is in the menu"))
+            .1
+    };
+    // The keys act on the key the app shows for the command: ⌃↩.
+    press(cx, "ctrl-enter");
+    assert_eq!(hint_of("Change ⌃↩…", cx).as_deref(), Some("↩"));
+    assert_eq!(hint_of("Remove ⌃↩", cx).as_deref(), Some("⌘⌫"));
+    assert_eq!(hint_of("Change ⇧F10…", cx), None);
+    assert_eq!(hint_of("Remove ⇧F10", cx), None);
+    press(cx, "escape");
+    // After tab they act on the other one.
+    press(cx, "tab ctrl-enter");
+    assert_eq!(hint_of("Change ⇧F10…", cx).as_deref(), Some("↩"));
+    assert_eq!(hint_of("Remove ⇧F10", cx).as_deref(), Some("⌘⌫"));
+    assert_eq!(hint_of("Change ⌃↩…", cx), None);
+    assert_eq!(hint_of("Remove ⌃↩", cx), None);
+}

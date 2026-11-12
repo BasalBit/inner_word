@@ -9,18 +9,22 @@
 //! so no row is taller than its text. The sentences of the band do wrap;
 //! they are plain blocks inside a flex column whose width is the panel's
 //! (wrapped text inside a growing child of a flex *row* is measured at no
-//! width, see `docs/gpui-notes.md`).
+//! width, see `docs/gpui-notes.md`). The rows of the import preview are
+//! as tall as their text (a collision, the reason an entry is skipped):
+//! they are the children of one scrolling block, not a `uniform_list`,
+//! and what wraps in them is again a plain block that is a direct child
+//! of the row's flex row.
 
-use std::ops::Range;
+use std::{cell::Cell, ops::Range, rc::Rc};
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, Hsla, KeyDownEvent, KeyUpEvent,
+    AnyElement, App, Bounds, ClickEvent, Context, FontWeight, Hsla, KeyDownEvent, KeyUpEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, Pixels, ScrollStrategy, SharedString,
     Stateful, Window, canvas, div, prelude::*, px, uniform_list,
 };
 use writer_ui::{
     Button, ButtonSize, Divider, HighlightedLabel, Icon, IconName, KeyHint, KeyLabel, Tooltip,
-    context_menu::OpenContextMenu,
+    context_menu::{MenuAnchor, OpenContextMenu},
     theme::{
         ActiveTheme, RADIUS_LG, RADIUS_MD, RADIUS_SM, ThemeColors, UI_TEXT_BASE, UI_TEXT_LG,
         UI_TEXT_SM, UI_TEXT_XS,
@@ -35,7 +39,7 @@ use crate::{
     keys::{self, glyphs, hint_in, modifier_glyphs},
     question::{Choice, Preview, PreviewRow, Question, Subject},
     view::{DisplayRow, KeymapView, Mode, default_label, stack_of},
-    words::{Line, Tone, count},
+    words::{Line, Tone},
 };
 
 /// The width of the panel.
@@ -283,9 +287,26 @@ impl KeymapView {
                         ),
                 )
             })
-            .child(
+            .child({
+                // Where the control is drawn: the row's menu opens under
+                // it, at the right, where it covers the least of the rows
+                // below. The selected row's is the one the keys use.
+                let more_at: Rc<Cell<Option<Bounds<Pixels>>>> = if selected {
+                    self.more_bounds.clone()
+                } else {
+                    Rc::default()
+                };
+                let drawn_at = more_at.clone();
                 div()
                     .debug_selector(move || format!("keymap-more-{ix}"))
+                    .relative()
+                    .child(
+                        canvas(move |at, _, _| drawn_at.set(Some(at)), |_, _, _, _| {})
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    )
                     .child(
                         Button::icon_only(("keymap-more", ix), IconName::More)
                             .size(ButtonSize::Compact)
@@ -295,10 +316,14 @@ impl KeymapView {
                             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 this.click_row(ix, window, cx);
-                                this.open_row_menu(Some(event.position()), window, cx);
+                                let anchor = match more_at.get() {
+                                    Some(control) => MenuAnchor::Below(control),
+                                    None => MenuAnchor::Point(event.position()),
+                                };
+                                this.open_row_menu_at(anchor, false, window, cx);
                             })),
-                    ),
-            );
+                    )
+            });
 
         // A search shows no headings: the row says where it belongs.
         let detail: Option<SharedString> = (!browsing).then(|| entry.row.heading.clone());
@@ -432,6 +457,18 @@ impl KeymapView {
         self.change_key(window, cx);
     }
 
+    /// The sentence under "Press the new key ...": every key counts, and
+    /// how to leave without a change. The key it names is the one the
+    /// keymap has for cancelling a question right now.
+    pub(crate) fn waiting_help(&self, cx: &App) -> String {
+        let cancel = hint_in(&Cancel, &CHOICES_STACK, cx);
+        let is_escape = cancel.as_ref().is_some_and(|hint| {
+            matches!(hint.keystrokes(), [only] if only.key == "escape" && !only.modifiers.modified())
+        });
+        let text = cancel.map(|hint| hint.text());
+        crate::words::waiting_help(text.as_deref(), is_escape)
+    }
+
     fn leave_for_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.mode, Mode::List) {
             self.back_to_list(window, cx);
@@ -504,6 +541,7 @@ impl KeymapView {
             .px(px(14.))
             .child(
                 div()
+                    .debug_selector(|| "keymap-changed".into())
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -516,11 +554,7 @@ impl KeymapView {
                             .rounded_full()
                             .when(changed > 0, |el| el.bg(colors.accent)),
                     )
-                    .child(if changed == 0 {
-                        "No key changed".to_string()
-                    } else {
-                        format!("{} changed", count(changed, "key", "keys"))
-                    }),
+                    .child(self.changed_text()),
             )
             .child(
                 div().debug_selector(|| "keymap-changed-only".into()).child(
@@ -577,11 +611,11 @@ impl KeymapView {
         let rows = self.rows.len();
         if rows == 0 {
             let text = if self.changed_only && self.browsing(cx) {
-                "No key differs from its default"
+                "Every command has its default keys"
             } else if self.changed_only {
                 "No changed shortcut matches"
             } else {
-                "No shortcuts match"
+                "No shortcut matches"
             };
             return div()
                 .py(px(20.))
@@ -608,32 +642,73 @@ impl KeymapView {
             .into_any_element()
     }
 
-    /// The sentences of a question, each a block that wraps.
-    fn render_lines(lines: &[Line], colors: &ThemeColors) -> impl IntoElement {
+    /// The sign of a tone, so that it does not hang on the colour alone.
+    fn sign(tone: Tone, colors: &ThemeColors) -> Option<(IconName, Hsla)> {
+        match tone {
+            Tone::Stop => Some((IconName::Alert, colors.danger)),
+            Tone::Warning => Some((IconName::Alert, colors.muted)),
+            Tone::Good => Some((IconName::Check, colors.success)),
+            Tone::Plain => None,
+        }
+    }
+
+    /// The heading of a question with its mark: what is the matter with
+    /// the key, at a glance.
+    fn render_title(title: SharedString, tone: Tone, colors: &ThemeColors) -> impl IntoElement {
+        div()
+            .debug_selector(|| "keymap-question-title".into())
+            .flex()
+            .items_start()
+            .gap(px(6.))
+            .when_some(Self::sign(tone, colors), |el, (icon, color)| {
+                el.child(
+                    div()
+                        .debug_selector(|| "keymap-question-mark".into())
+                        .flex_none()
+                        .pt(px(2.))
+                        .child(Icon::new(icon).size(px(14.)).color(color)),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.ink)
+                    .child(title),
+            )
+    }
+
+    /// The sentences of a question, each a block that wraps. `under` is
+    /// the tone of the heading they stand under: a sentence of the same
+    /// tone carries no sign of its own (the heading's mark speaks for it),
+    /// and all of them start where the heading's words start.
+    fn render_lines(lines: &[Line], under: Tone, colors: &ThemeColors) -> impl IntoElement {
+        let indented = under != Tone::Plain;
         div()
             .flex()
             .flex_col()
             .gap(px(4.))
             .children(lines.iter().map(|line| {
-                // A sign beside what stands in the way and what is worth
-                // reading, so the tone does not hang on the colour alone.
-                let sign = match line.tone {
-                    Tone::Stop => Some((IconName::Alert, colors.danger)),
-                    Tone::Warning => Some((IconName::Alert, colors.muted)),
-                    Tone::Good => Some((IconName::Check, colors.success)),
-                    Tone::Plain => None,
+                let sign = if line.tone == under {
+                    None
+                } else {
+                    Self::sign(line.tone, colors)
                 };
                 div()
                     .flex()
                     .items_start()
                     .gap(px(6.))
-                    .when_some(sign, |el, (icon, color)| {
-                        el.child(
+                    .map(|el| match sign {
+                        Some((icon, color)) => el.child(
                             div()
                                 .flex_none()
                                 .pt(px(2.))
                                 .child(Icon::new(icon).size(px(14.)).color(color)),
-                        )
+                        ),
+                        // The width of a sign, so the words line up.
+                        None if indented => el.child(div().flex_none().w(px(14.))),
+                        None => el,
                     })
                     // A plain block: wrapped text in a flex column that is
                     // the growing child of a row is measured at no width.
@@ -723,29 +798,28 @@ impl KeymapView {
                         )
                         .child(
                             div()
+                                .debug_selector(|| "keymap-record-help".into())
                                 .text_size(UI_TEXT_SM)
                                 .line_height(px(17.))
                                 .text_color(colors.muted)
-                                .child(
-                                    "The next key you press is taken, whatever it is, Esc and \u{21a9} \
-                                     too. To leave without a key: Cancel, or any key and then \
-                                     Esc. A modifier held alone is not a key yet.",
-                                ),
+                                .child(self.waiting_help(cx)),
                         )
                         .when_some(recording.problem.clone(), |el, problem| {
                             el.child(div().text_color(colors.danger).child(problem))
                         })
                         .child(
                             div().flex().justify_end().child(
-                                div().debug_selector(|| "keymap-record-cancel".into()).child(
-                                    Button::new("keymap-record-cancel", "Cancel")
-                                        .pointer_only()
-                                        .on_click(cx.listener(
-                                            |this, _: &ClickEvent, window, cx| {
-                                                this.cancel(window, cx)
-                                            },
-                                        )),
-                                ),
+                                div()
+                                    .debug_selector(|| "keymap-record-cancel".into())
+                                    .child(
+                                        Button::new("keymap-record-cancel", "Cancel")
+                                            .pointer_only()
+                                            .on_click(cx.listener(
+                                                |this, _: &ClickEvent, window, cx| {
+                                                    this.cancel(window, cx)
+                                                },
+                                            )),
+                                    ),
                             ),
                         )
                         .into_any_element(),
@@ -759,13 +833,16 @@ impl KeymapView {
                     band.track_focus(&self.choices_focus)
                         .key_context(CHOICES_KEY_CONTEXT)
                         .when(!preview, |el| {
-                            el.child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.ink)
-                                    .child(question.title.clone()),
-                            )
-                            .child(Self::render_lines(&question.lines, &colors))
+                            el.child(Self::render_title(
+                                question.title.clone(),
+                                question.tone,
+                                &colors,
+                            ))
+                            .child(Self::render_lines(
+                                &question.lines,
+                                question.tone,
+                                &colors,
+                            ))
                         })
                         .child(self.render_choices(question, cx))
                         .into_any_element(),
@@ -778,30 +855,28 @@ impl KeymapView {
     // The import preview
     // ---------------------------------------------------------------------
 
-    fn render_preview_rows(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    /// The rows of the preview, one element each, in order (the scroll
+    /// handle finds a row by its position among them). A heading and a
+    /// change are one line; a collision and a skipped entry are as tall as
+    /// their text, which wraps.
+    fn render_preview_rows(&self, preview: &Preview, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let colors = cx.theme().colors;
-        let Some(preview) = self.preview_mut() else {
-            return Vec::new();
-        };
         let selected = preview.selected;
-        let rows: Vec<PreviewRow> = preview.rows[range.clone()].to_vec();
-        range
-            .zip(rows)
+        preview
+            .rows
+            .iter()
+            .cloned()
+            .enumerate()
             .map(|(ix, row)| {
                 let outer = div()
                     .id(("keymap-preview-row", ix))
                     .debug_selector(move || format!("keymap-preview-row-{ix}"))
-                    .h(PREVIEW_ROW_HEIGHT)
                     .w_full()
-                    .px(px(4.))
-                    .flex();
+                    .px(px(4.));
                 if let PreviewRow::Header(text) = row {
                     return outer
+                        .h(PREVIEW_ROW_HEIGHT)
+                        .flex()
                         .items_end()
                         .pb(px(4.))
                         .child(
@@ -816,14 +891,16 @@ impl KeymapView {
                         .into_any_element();
                 }
                 let marked = selected == Some(ix);
+                // One line of text makes the row `PREVIEW_ROW_HEIGHT` tall.
                 let inner = div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
+                    .w_full()
+                    .min_h(PREVIEW_ROW_HEIGHT)
                     .px(px(8.))
+                    .py(px(5.))
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap(px(8.))
+                    .line_height(px(18.))
                     .rounded(RADIUS_MD)
                     .when(marked, |el| el.bg(colors.accent_subtle))
                     .when(!marked, |el| el.hover(|style| style.bg(colors.hover)));
@@ -833,11 +910,12 @@ impl KeymapView {
                         place,
                         before,
                         after,
+                        ..
                     } => inner
                         .child(
                             div()
                                 .flex_none()
-                                .max_w(px(260.))
+                                .max_w(px(340.))
                                 .line_clamp(1)
                                 .text_ellipsis()
                                 .child(title),
@@ -875,12 +953,48 @@ impl KeymapView {
                                 .whitespace_nowrap()
                                 .child(after),
                         ),
-                    PreviewRow::Collision(text) | PreviewRow::Skipped(text) => inner.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().min_w_0().line_clamp(1).text_ellipsis().child(text)),
-                    ),
+                    // A plain block that wraps (see the layout notes of
+                    // this file).
+                    PreviewRow::Collision { text, .. } => {
+                        inner.child(div().flex_1().min_w_0().child(text))
+                    }
+                    // What the command is called first, then why its entry
+                    // is skipped: the reason wraps beside the name, so it
+                    // is read without selecting the row.
+                    PreviewRow::Skipped(skipped) => {
+                        let reason = skipped.reason_shown();
+                        inner
+                            .child(
+                                div()
+                                    .debug_selector(move || format!("keymap-preview-name-{ix}"))
+                                    .flex_none()
+                                    .max_w(px(260.))
+                                    .line_clamp(1)
+                                    .text_ellipsis()
+                                    .child(skipped.title),
+                            )
+                            .when_some(skipped.place, |el, place| {
+                                el.child(
+                                    div()
+                                        .flex_none()
+                                        .max_w(px(160.))
+                                        .text_size(UI_TEXT_SM)
+                                        .text_color(colors.muted)
+                                        .line_clamp(1)
+                                        .text_ellipsis()
+                                        .child(place),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .debug_selector(move || format!("keymap-preview-reason-{ix}"))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(UI_TEXT_SM)
+                                    .text_color(colors.muted)
+                                    .child(reason),
+                            )
+                    }
                     PreviewRow::Header(_) => inner,
                 };
                 outer
@@ -905,11 +1019,12 @@ impl KeymapView {
     ) -> AnyElement {
         let colors = cx.theme().colors;
         let rows = preview.rows.len();
-        let visible = rows.min(self.visible_rows.saturating_sub(1).max(4));
+        // As tall as its rows, up to this; then it scrolls.
+        let room = PREVIEW_ROW_HEIGHT * self.visible_rows.saturating_sub(1).max(4) as f32;
         let detail = preview
             .selected
             .and_then(|selected| preview.rows.get(selected))
-            .map(|row| row.text());
+            .and_then(|row| row.detail());
         div()
             .flex()
             .flex_col()
@@ -949,38 +1064,41 @@ impl KeymapView {
                     .flex_col()
                     .px(px(14.))
                     .py(px(10.))
-                    .child(Self::render_lines(&question.lines, &colors)),
+                    .child(Self::render_lines(&question.lines, Tone::Plain, &colors)),
             )
             .when(rows > 0, |el| {
                 el.child(Divider::horizontal()).child(
                     div().py(px(4.)).child(
-                        uniform_list(
-                            "keymap-preview",
-                            rows,
-                            cx.processor(|this, range, window, cx| {
-                                this.render_preview_rows(range, window, cx)
-                            }),
-                        )
-                        .track_scroll(preview.scroll.clone())
-                        .h(PREVIEW_ROW_HEIGHT * visible as f32)
-                        .w_full(),
+                        div()
+                            .id("keymap-preview")
+                            .debug_selector(|| "keymap-preview-rows".into())
+                            .max_h(room)
+                            .overflow_y_scroll()
+                            .track_scroll(&preview.scroll)
+                            .children(self.render_preview_rows(preview, cx)),
                     ),
                 )
             })
-            // The selected row in full: a row of the list is one line.
+            // How the file names the selected row, for whoever edits it:
+            // one line, cut off rather than wrapped, so the choices under
+            // it do not move while the rows are looked through.
             .when_some(detail, |el, detail| {
                 el.child(Divider::horizontal()).child(
                     div()
                         .debug_selector(|| "keymap-preview-detail".into())
                         .flex()
-                        .flex_col()
+                        .flex_none()
+                        .items_center()
+                        .h(px(32.))
                         .px(px(14.))
-                        .py(px(8.))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .text_size(UI_TEXT_SM)
-                                .line_height(px(17.))
                                 .text_color(colors.muted)
+                                .line_clamp(1)
+                                .text_ellipsis()
                                 .child(detail),
                         ),
                 )
@@ -1097,6 +1215,11 @@ impl Render for KeymapView {
         let colors = theme.colors;
         let shadow = theme.shadow_overlay();
         let font = theme.fonts.ui.clone();
+
+        // Where the selected row is drawn is found out again with every
+        // frame: a row that scrolled out of view is drawn nowhere.
+        self.selected_bounds.set(None);
+        self.more_bounds.set(None);
 
         // As many rows as the window has room for under the modal's top
         // margin, with the band when it is shown.

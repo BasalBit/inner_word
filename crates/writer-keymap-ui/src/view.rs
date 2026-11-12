@@ -14,7 +14,8 @@ use gpui::{
 };
 use writer_keymap::{ImportError, ImportMode, ImportPlan, KeySequence, Target};
 use writer_ui::{
-    ContextMenu, ContextMenuItem, FieldAppearance, TextField, TextFieldEvent, theme::UI_TEXT_LG,
+    ContextMenu, ContextMenuItem, FieldAppearance, TextField, TextFieldEvent,
+    context_menu::MenuAnchor, theme::UI_TEXT_LG,
 };
 
 use crate::{
@@ -24,8 +25,8 @@ use crate::{
     question::{Choice, Preview, Question, Subject},
     record,
     request::Request,
-    search::search,
-    words::{Line, Names, Tone},
+    search::{Found, search},
+    words::{Line, Names, SeenFirst, Tone},
 };
 
 /// How long a held key is waited for when no release is reported: a little
@@ -99,8 +100,12 @@ pub struct KeymapView {
     pub(crate) capture_focus: FocusHandle,
     pub(crate) choices_focus: FocusHandle,
     pub(crate) scroll: UniformListScrollHandle,
-    /// Where the selected row was drawn, for a menu opened from the keys.
+    /// Where the selected row was drawn, for a menu opened from the keys
+    /// when its "more" control is not drawn.
     pub(crate) selected_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the "more" control of the selected row was drawn: the row's
+    /// menu opens under it.
+    pub(crate) more_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// How many rows the list shows before it scrolls.
     pub(crate) visible_rows: usize,
     window_id: WindowId,
@@ -166,6 +171,7 @@ impl KeymapView {
             choices_focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             selected_bounds: Rc::new(Cell::new(None)),
+            more_bounds: Rc::new(Cell::new(None)),
             visible_rows: 12,
             window_id,
             last_key: None,
@@ -279,6 +285,26 @@ impl KeymapView {
         self.entries.iter().filter(|entry| entry.changed).count()
     }
 
+    /// What the line under the query says about the user's changes: "No
+    /// key changed", "1 command changed", "4 commands changed".
+    ///
+    /// The number is that of the rows the user changed. Commands that are
+    /// changed and have no row right now are said beside it ("4 commands
+    /// changed, 1 more not shown now"), so the line agrees with what
+    /// "Reset All" says it puts back.
+    pub fn changed_text(&self) -> String {
+        let listed = self.changed_count();
+        let hidden = self.listing.changed_commands().saturating_sub(listed);
+        crate::words::changed_summary(listed, hidden)
+    }
+
+    /// What the view says while it waits for a key, under its heading:
+    /// that every key counts and how to leave without a change. `None`
+    /// while it is not waiting.
+    pub fn waiting_says(&self, cx: &App) -> Option<String> {
+        matches!(self.mode, Mode::Recording(_)).then(|| self.waiting_help(cx))
+    }
+
     /// The commands the list shows now, in order, with their headings left
     /// out: the target and the title of each.
     pub fn listed(&self) -> Vec<(Target, String)> {
@@ -288,6 +314,28 @@ impl KeymapView {
                 DisplayRow::Command { entry, .. } => {
                     let row = &self.entries[*entry].row;
                     Some((row.target.clone(), row.title.to_string()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The letters of each listed command's title that the search marks,
+    /// in the order of [`KeymapView::listed`]: the letters that matched
+    /// the query, as texts ("Ital" of "Italic"; nothing for a row found by
+    /// its key or its place).
+    pub fn marked_letters(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter_map(|row| match row {
+                DisplayRow::Command { entry, positions } => {
+                    let title = &self.entries[*entry].row.title;
+                    Some(
+                        positions
+                            .iter()
+                            .filter_map(|at| title[*at..].chars().next())
+                            .collect(),
+                    )
                 }
                 _ => None,
             })
@@ -353,6 +401,16 @@ impl KeymapView {
         }
     }
 
+    /// How the title of the open question is to be read: the mark beside
+    /// it (a tick, a warning sign, a stop sign, or none for
+    /// [`Tone::Plain`]).
+    pub fn question_mark(&self) -> Option<Tone> {
+        match &self.mode {
+            Mode::Asking(question) => Some(question.tone),
+            _ => None,
+        }
+    }
+
     /// The sentences of the open question.
     pub fn question_lines(&self) -> Vec<Line> {
         match &self.mode {
@@ -381,7 +439,26 @@ impl KeymapView {
         }
     }
 
-    /// The rows of the import preview as sentences, headings included.
+    /// What stands under the rows of the import preview for the selected
+    /// row: how the file names it (`In the file: entry 51,
+    /// "editor::ToggleInlineCode"`), for whoever edits the file.
+    pub fn preview_detail(&self) -> Option<String> {
+        match &self.mode {
+            Mode::Asking(Question {
+                subject: Subject::Import(preview),
+                ..
+            }) => preview
+                .selected
+                .and_then(|selected| preview.rows.get(selected))
+                .and_then(|row| row.detail()),
+            _ => None,
+        }
+    }
+
+    /// The rows of the import preview as sentences, headings included, as
+    /// they read on screen: `Bold (in the text): ⌘B → ⌥⌘B`; for a skipped
+    /// entry what the command is called, then the reason (`Italic: I is a
+    /// character, ...`).
     pub fn preview_rows(&self) -> Vec<String> {
         match &self.mode {
             Mode::Asking(Question {
@@ -463,8 +540,14 @@ impl KeymapView {
                     .map(|line| line.text.as_str())
                     .collect();
                 out.push_str(&format!(
-                    " question={:?} says={:?} choices=[{}]",
+                    " question={:?} mark={} says={:?} choices=[{}]",
                     question.title,
+                    match question.tone {
+                        Tone::Plain => "none",
+                        Tone::Good => "good",
+                        Tone::Warning => "warning",
+                        Tone::Stop => "stop",
+                    },
                     lines.join(" "),
                     choices.join(" | "),
                 ));
@@ -559,7 +642,7 @@ impl KeymapView {
     /// not listed any more).
     fn rebuild_rows(&mut self, keep: Option<&Target>, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        let matches = search(&self.entries, &query, self.changed_only);
+        let Found { matches, close } = search(&self.entries, &query, self.changed_only);
         let mut rows = Vec::with_capacity(matches.len() + 16);
         if query.trim().is_empty() {
             if !self.changed_only {
@@ -579,6 +662,11 @@ impl KeymapView {
                 });
             }
         } else {
+            if close {
+                rows.push(DisplayRow::Note(
+                    crate::words::close_matches_note(query.trim()).into(),
+                ));
+            }
             rows.extend(matches.into_iter().map(|matched| DisplayRow::Command {
                 entry: matched.entry,
                 positions: matched.positions,
@@ -800,11 +888,34 @@ impl KeymapView {
         true
     }
 
-    /// The menu of the selected row: at `position` for the pointer, at the
-    /// row with its first item marked for the keys.
+    /// The menu of the selected row: at `position` for a right-click; for
+    /// the keys under the row's "more" control at the right (where it
+    /// covers the least of the rows below), with its first item marked.
     pub fn open_row_menu(
         &mut self,
         position: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match position {
+            Some(position) => self.open_row_menu_at(MenuAnchor::Point(position), false, window, cx),
+            None => {
+                let anchor = match (self.more_bounds.get(), self.selected_bounds.get()) {
+                    (Some(control), _) => MenuAnchor::Below(control),
+                    (None, Some(row)) => MenuAnchor::Below(row),
+                    (None, None) => MenuAnchor::Point(Point::default()),
+                };
+                self.open_row_menu_at(anchor, true, window, cx)
+            }
+        }
+    }
+
+    /// The menu of the selected row at `anchor`; `marked`: with its first
+    /// item marked, as a menu opened from the keys has it.
+    pub(crate) fn open_row_menu_at(
+        &mut self,
+        anchor: MenuAnchor,
+        marked: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -818,17 +929,9 @@ impl KeymapView {
             return false;
         };
         let items = self.row_menu_items(entry, cx);
-        match position {
-            Some(position) => {
-                ContextMenu::open(position, items, window, cx);
-            }
-            None => {
-                let menu = match self.selected_bounds.get() {
-                    Some(bounds) => ContextMenu::open(bounds, items, window, cx),
-                    None => ContextMenu::open(Point::default(), items, window, cx),
-                };
-                menu.update(cx, |menu, cx| menu.select_first(cx));
-            }
+        let menu = ContextMenu::open(anchor, items, window, cx);
+        if marked {
+            menu.update(cx, |menu, cx| menu.select_first(cx));
         }
         true
     }
@@ -879,18 +982,29 @@ impl KeymapView {
                     items.push(remove("Remove Key".into(), only.keys.clone()).key_hint(take));
                 }
                 several => {
-                    for key in several {
-                        items.push(record(
-                            format!("Change {}\u{2026}", glyphs(&key.keys)),
-                            Some(key.keys.clone()),
-                        ));
+                    // The keys of the list act on one of the keys (the
+                    // one that is marked in the row): its two items show
+                    // them.
+                    let acting = self.selected_key.min(several.len() - 1);
+                    for (k, key) in several.iter().enumerate() {
+                        items.push(
+                            record(
+                                format!("Change {}\u{2026}", glyphs(&key.keys)),
+                                Some(key.keys.clone()),
+                            )
+                            .key_hint(if k == acting {
+                                change.clone()
+                            } else {
+                                None
+                            }),
+                        );
                     }
                     items.push(record("Add Another Key\u{2026}".into(), None).key_hint(add));
-                    for key in several {
-                        items.push(remove(
-                            format!("Remove {}", glyphs(&key.keys)),
-                            key.keys.clone(),
-                        ));
+                    for (k, key) in several.iter().enumerate() {
+                        items.push(
+                            remove(format!("Remove {}", glyphs(&key.keys)), key.keys.clone())
+                                .key_hint(if k == acting { take.clone() } else { None }),
+                        );
                     }
                 }
             }
@@ -1078,20 +1192,19 @@ impl KeymapView {
         let verdict = self.listing.keymap.check(&target, &key, replacing.as_ref());
         // What the keymap cannot know: something of the host's may take
         // the key before any binding sees it.
-        let taken_first = if verdict.is_allowed() {
-            self.listing.taken_first_warnings(&target, &key)
+        let seen_first: Vec<SeenFirst> = if verdict.refusal.is_none() {
+            self.listing
+                .seeing_first(&target, &key)
+                .into_iter()
+                .map(|taker| SeenFirst {
+                    name: taker.name.as_ref().map(|name| name.to_string()),
+                    warning: taker.warning.to_string(),
+                })
+                .collect()
         } else {
             Vec::new()
         };
-        let names = self.names();
-        let title = names.title(&target);
-        let mut question = Question::about_key(target, replacing, verdict, &title, &names);
-        question
-            .lines
-            .extend(taken_first.into_iter().map(|warning| Line {
-                tone: Tone::Warning,
-                text: warning.to_string(),
-            }));
+        let question = Question::about_key(target, replacing, verdict, &seen_first, &self.names());
         self.ask(question, window, cx);
     }
 
@@ -1281,7 +1394,8 @@ impl KeymapView {
         }
     }
 
-    /// Moves the selection of the import preview by `delta` rows.
+    /// Moves the selection of the import preview by `delta` rows, and
+    /// scrolls as far as it takes to show the row.
     pub(crate) fn move_in_preview(&mut self, delta: isize, cx: &mut Context<Self>) {
         if let Some(preview) = self.preview_mut() {
             preview.move_selection(delta);
@@ -1293,14 +1407,7 @@ impl KeymapView {
                 } else {
                     selected
                 };
-                preview.scroll.scroll_to_item(
-                    target,
-                    if delta < 0 {
-                        ScrollStrategy::Top
-                    } else {
-                        ScrollStrategy::Bottom
-                    },
-                );
+                preview.scroll.scroll_to_item(target);
             }
             cx.notify();
         }

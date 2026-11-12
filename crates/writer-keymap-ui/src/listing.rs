@@ -154,20 +154,25 @@ pub struct Listing {
 /// are; it says, for a key that could be one, that this can happen.
 #[derive(Clone, Debug)]
 pub struct TakesKeysFirst {
+    /// What it is called where the heading of the question names it ("Vim
+    /// mode": "⌃Y: Vim mode sees it first"). Without a name the heading
+    /// says that the key may not run.
+    pub name: Option<SharedString>,
     /// The key contexts it sits in, as the keymap writes them (`Editor`).
     /// A command that works anywhere is concerned too.
     pub contexts: Vec<SharedString>,
     /// Whether it certainly leaves `key` to the keymap (Vim leaves every
     /// key with ⌘ in it): nothing is said about such a key.
     pub leaves: fn(&KeySequence) -> bool,
-    /// What the question about any other key says, as a sentence.
+    /// What the question about any other key says under its heading, as a
+    /// sentence: the consequence.
     pub warning: SharedString,
 }
 
 impl PartialEq for TakesKeysFirst {
     /// By what is said and where: two functions cannot be compared.
     fn eq(&self, other: &Self) -> bool {
-        self.contexts == other.contexts && self.warning == other.warning
+        self.name == other.name && self.contexts == other.contexts && self.warning == other.warning
     }
 }
 
@@ -188,6 +193,9 @@ impl Listing {
     /// leaves alone; `warning` is what the question about any other key
     /// then says, for a command in one of those contexts or one that
     /// works anywhere.
+    ///
+    /// The heading of that question cannot say who it is ("⌃Y may not
+    /// run"): prefer [`Listing::sees_keys_first`], which names it.
     pub fn takes_keys_first<C: Into<SharedString>>(
         mut self,
         contexts: impl IntoIterator<Item = C>,
@@ -195,6 +203,7 @@ impl Listing {
         warning: impl Into<SharedString>,
     ) -> Self {
         self.takers.push(TakesKeysFirst {
+            name: None,
             contexts: contexts.into_iter().map(Into::into).collect(),
             leaves,
             warning: warning.into(),
@@ -202,9 +211,29 @@ impl Listing {
         self
     }
 
-    /// What to say about `key` for `target` because something may take
-    /// the key before the keymap sees it ([`Listing::takes_keys_first`]).
-    pub fn taken_first_warnings(&self, target: &Target, key: &KeySequence) -> Vec<SharedString> {
+    /// [`Listing::takes_keys_first`] with what it is called, as the
+    /// heading of the question names it: `name` "Vim mode" gives "⌃Y: Vim
+    /// mode sees it first", with `warning` as the sentence under it.
+    pub fn sees_keys_first<C: Into<SharedString>>(
+        mut self,
+        name: impl Into<SharedString>,
+        contexts: impl IntoIterator<Item = C>,
+        leaves: fn(&KeySequence) -> bool,
+        warning: impl Into<SharedString>,
+    ) -> Self {
+        self.takers.push(TakesKeysFirst {
+            name: Some(name.into()),
+            contexts: contexts.into_iter().map(Into::into).collect(),
+            leaves,
+            warning: warning.into(),
+        });
+        self
+    }
+
+    /// What may take `key` before the keymap sees it, for a command at
+    /// `target` ([`Listing::takes_keys_first`]): in one of its key
+    /// contexts, or anywhere.
+    pub fn seeing_first(&self, target: &Target, key: &KeySequence) -> Vec<&TakesKeysFirst> {
         let context = target.context.text();
         self.takers
             .iter()
@@ -213,6 +242,14 @@ impl Listing {
                 None => true,
                 Some(context) => taker.contexts.iter().any(|name| name.as_ref() == context),
             })
+            .collect()
+    }
+
+    /// What to say about `key` for `target` because something may take
+    /// the key before the keymap sees it ([`Listing::takes_keys_first`]).
+    pub fn taken_first_warnings(&self, target: &Target, key: &KeySequence) -> Vec<SharedString> {
+        self.seeing_first(target, key)
+            .into_iter()
             .map(|taker| taker.warning.clone())
             .collect()
     }
@@ -355,9 +392,10 @@ pub(crate) fn inactive_note(listing: &Listing) -> Option<SharedString> {
     let inactive = listing.keymap.effective().inactive().len();
     (inactive > 0).then(|| {
         format!(
-            "{} made in another version {} kept, without effect in this one",
+            "{} made in another version of The Writer {} kept; {} nothing in this one",
             crate::words::count(inactive, "change", "changes"),
-            if inactive == 1 { "is" } else { "are" }
+            if inactive == 1 { "is" } else { "are" },
+            if inactive == 1 { "it does" } else { "they do" }
         )
         .into()
     })

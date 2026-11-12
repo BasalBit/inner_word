@@ -296,18 +296,16 @@ fn a_hint_is_asked_in_the_place_it_applies(cx: &mut TestAppContext) {
 
     // The other place gets another key: nothing changes here.
     cx.update(|_, cx| {
-        let bindings: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
-        cx.clear_key_bindings();
-        cx.bind_keys(bindings.into_iter().map(|binding| {
-            let elsewhere = binding
-                .predicate()
-                .is_some_and(|predicate| predicate.to_string() == "Elsewhere");
-            if elsewhere {
-                KeyBinding::new("ctrl-m", OpenContextMenu, Some("Elsewhere"))
-            } else {
-                binding
-            }
-        }));
+        assert_eq!(
+            keymap::replace_key_in(
+                &OpenContextMenu,
+                Some("Elsewhere"),
+                "ctrl-enter",
+                Some("ctrl-m"),
+                cx
+            ),
+            1
+        );
     });
     cx.run_until_parked();
     assert_eq!(

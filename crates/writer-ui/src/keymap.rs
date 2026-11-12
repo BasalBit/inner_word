@@ -26,7 +26,10 @@
 //! crate use it to prove that the crate shows and obeys a rebuilt keymap
 //! without a restart.
 
-use gpui::{Action, App, DummyKeyboardMapper, KeyBinding, KeyContext, Keystroke, Window};
+use gpui::{
+    Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, KeyContext,
+    Keystroke, Window,
+};
 
 /// Whether `keystroke`, pressed where the keyboard is now, is a key of
 /// `action`: among the bindings that match in the key contexts of the
@@ -122,6 +125,40 @@ pub fn keystroke_is_bound_to(
 /// When `from` or `to` is not GPUI keystroke syntax (`"cmd-alt-s"`), as
 /// `KeyBinding::new` does.
 pub fn replace_key(action: &dyn Action, from: &str, to: Option<&str>, cx: &mut App) -> usize {
+    rebuild(action, from, to, cx, |_| true)
+}
+
+/// [`replace_key`] for the bindings of `action` in one key context only:
+/// those whose context predicate is `context` (written as for
+/// `KeyBinding::new`: `"LibraryPanel && !TextField"`; `None` for the
+/// bindings without a context). An action can be bound in several places,
+/// and a change of the user's shortcuts is made to one of them.
+///
+/// # Panics
+///
+/// Also when `context` is not a key context predicate.
+pub fn replace_key_in(
+    action: &dyn Action,
+    context: Option<&str>,
+    from: &str,
+    to: Option<&str>,
+    cx: &mut App,
+) -> usize {
+    let context = context.map(|context| {
+        KeyBindingContextPredicate::parse(context).expect("`context` is a predicate")
+    });
+    rebuild(action, from, to, cx, |binding| {
+        binding.predicate().as_deref() == context.as_ref()
+    })
+}
+
+fn rebuild(
+    action: &dyn Action,
+    from: &str,
+    to: Option<&str>,
+    cx: &mut App,
+    in_place: impl Fn(&KeyBinding) -> bool,
+) -> usize {
     let from: Vec<Keystroke> = from
         .split_whitespace()
         .map(|source| Keystroke::parse(source).expect("`from` is a keystroke"))
@@ -130,8 +167,9 @@ pub fn replace_key(action: &dyn Action, from: &str, to: Option<&str>, cx: &mut A
     let mut changed = 0;
     let mut rebuilt = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let is_it =
-            binding.action().partial_eq(action) && binding.match_keystrokes(&from) == Some(false);
+        let is_it = binding.action().partial_eq(action)
+            && binding.match_keystrokes(&from) == Some(false)
+            && in_place(&binding);
         if !is_it {
             rebuilt.push(binding);
             continue;

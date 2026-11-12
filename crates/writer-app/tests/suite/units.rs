@@ -89,6 +89,22 @@ mod automation {
         assert!(Script::parse("book").is_err());
         assert!(Script::parse("book:many").is_err());
         assert!(Script::parse("savecost:often").is_err());
+        assert_eq!(
+            Script::parse("typecost:a b; keycost:pagedown cmd-\\;; stall:1500")
+                .unwrap()
+                .steps,
+            vec![
+                Step::TypeCost("a b".into()),
+                Step::KeyCost(vec![
+                    Keystroke::parse("pagedown").unwrap(),
+                    Keystroke::parse("cmd-;").unwrap(),
+                ]),
+                Step::Stall(Duration::from_millis(1500)),
+            ]
+        );
+        assert!(Script::parse("typecost").is_err());
+        assert!(Script::parse("keycost").is_err());
+        assert!(Script::parse("stall:long").is_err());
     }
 
     #[test]

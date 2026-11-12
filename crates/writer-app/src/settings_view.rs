@@ -1393,6 +1393,16 @@ impl Render for SettingsView {
         let overlay_shadow = theme.shadow_overlay();
         // Leave room for the modal's top offset and a margin below.
         let list_height = (f32::from(window.viewport_size().height) * 0.80 - 150.).max(160.);
+        // What space does on the row the keyboard is on: the two language
+        // rows open their list, every other row switches or steps.
+        let space_hint =
+            if self.handles.iter().any(|(row, handle)| {
+                Self::language_target(*row).is_some() && handle.is_focused(window)
+            }) {
+                "Whole list"
+            } else {
+                "Switch"
+            };
 
         // A scroll position asked for before the list was ever drawn is
         // worked out against a list at the top left of the window (GPUI
@@ -1517,7 +1527,7 @@ impl Render for SettingsView {
                     .text_color(colors.muted)
                     .child(hint("↑ ↓", "Move"))
                     .child(hint("← →", "Change"))
-                    .child(hint("Space", "Switch"))
+                    .child(hint("Space", space_hint))
                     .child(hint("Esc", "Close")),
             )
     }

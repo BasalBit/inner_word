@@ -1132,3 +1132,312 @@ fn without_a_spell_service_nothing_is_checked(cx: &mut TestAppContext) {
     });
     assert_eq!(available, (false, true));
 }
+
+// ----- what the final check of the wave added ------------------------------------
+
+/// The `w:lang` elements of a Word file (styles and text), as written.
+fn docx_languages(path: &std::path::Path) -> Vec<String> {
+    let output = std::process::Command::new("/usr/bin/unzip")
+        .arg("-p")
+        .arg(path)
+        .args(["word/styles.xml", "word/document.xml"])
+        .output()
+        .expect("unzip runs");
+    assert!(output.status.success(), "{path:?} is not a Word file");
+    let xml = String::from_utf8_lossy(&output.stdout).into_owned();
+    xml.match_indices("<w:lang ")
+        .map(|(at, _)| {
+            let end = xml[at..].find("/>").expect("a closed element");
+            xml[at..at + end + 2].to_string()
+        })
+        .collect()
+}
+
+/// Exports the open document as a Word file through the export picker.
+fn export_docx(path: &std::path::Path, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("cmd-shift-s down enter");
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path(), "the save panel opened");
+    let chosen = path.to_path_buf();
+    cx.simulate_new_path_selection(move |_| Some(chosen.clone()));
+    cx.run_until_parked();
+    assert!(path.exists(), "{path:?} was written");
+}
+
+#[gpui::test]
+fn a_fixed_document_language_is_the_proofing_language_of_the_word_file(cx: &mut TestAppContext) {
+    let (app, cx) = open(&["Das Schiff kam heute Morgen im Hafen an"], cx);
+    let workspace = &app.workspace;
+    let out = tempfile::tempdir().unwrap();
+
+    // The document names German: the Word file says so, in the form Word
+    // expects.
+    workspace.update(cx, |w, cx| {
+        w.set_document_spelling_language(Some(fixed("de")), cx)
+    });
+    settle(cx);
+    assert_eq!(language_of(workspace, cx), SpellLanguage::fixed("de"));
+    assert_eq!(marked(workspace, cx), Vec::<String>::new());
+    let german = out.path().join("german.docx");
+    export_docx(&german, cx);
+    assert_eq!(docx_languages(&german), [r#"<w:lang w:val="de-DE"/>"#]);
+
+    // A regional variant keeps its region.
+    workspace.update(cx, |w, cx| {
+        w.set_document_spelling_language(Some(fixed("en_GB")), cx)
+    });
+    settle(cx);
+    let british = out.path().join("british.docx");
+    export_docx(&british, cx);
+    assert_eq!(docx_languages(&british), [r#"<w:lang w:val="en-GB"/>"#]);
+
+    // Automatic names no language, and neither does a document that
+    // follows the app: the file carries none.
+    workspace.update(cx, |w, cx| {
+        w.set_document_spelling_language(Some(SpellingLanguage::Automatic), cx)
+    });
+    settle(cx);
+    let automatic = out.path().join("automatic.docx");
+    export_docx(&automatic, cx);
+    assert_eq!(docx_languages(&automatic), Vec::<String>::new());
+    workspace.update(cx, |w, cx| w.set_document_spelling_language(None, cx));
+    settle(cx);
+    let follows = out.path().join("follows.docx");
+    export_docx(&follows, cx);
+    assert_eq!(docx_languages(&follows), Vec::<String>::new());
+}
+
+#[gpui::test]
+fn the_format_bar_and_the_text_menu_work_on_a_marked_word(cx: &mut TestAppContext) {
+    use gpui::{MouseDownEvent, MouseUpEvent};
+    use writer_editor_tools::FORMAT_BAR_DELAY;
+
+    let (app, cx) = open(&["The harbor was teh plain fact", "Boats and ropes"], cx);
+    let workspace = &app.workspace;
+    assert_eq!(marked(workspace, cx), ["teh"]);
+
+    // A double click on the marked word selects it and brings up the
+    // format bar, as on any other word.
+    let at = in_text(workspace, 0, 16, cx);
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    for click_count in [1, 2] {
+        cx.simulate_event(MouseDownEvent {
+            position: at,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            position: at,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count,
+        });
+    }
+    cx.run_until_parked();
+    cx.executor().advance_clock(FORMAT_BAR_DELAY);
+    cx.run_until_parked();
+    assert_eq!(selected_text(workspace, cx), "teh");
+    let bar_visible = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| w.tools().read(cx).format_bar_visible())
+    };
+    assert!(bar_visible(cx), "the bar is up over the marked word");
+
+    // Bold from the bar: the word is bold, still selected, still marked
+    // once the paragraph has been checked again.
+    let bold = cx
+        .debug_bounds("format-bar-bold")
+        .expect("the bar has a bold button");
+    cx.simulate_mouse_move(bold.center(), None, Modifiers::default());
+    cx.simulate_click(bold.center(), Modifiers::default());
+    cx.run_until_parked();
+    let is_bold = |offset: usize, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            let editor = w.editor().read(cx);
+            let block = editor.document().block(0).unwrap();
+            block
+                .attrs_at(offset)
+                .is_some_and(|attrs| attrs.has_style(InlineStyle::Bold))
+        })
+    };
+    assert!(is_bold(16, cx) && !is_bold(13, cx) && !is_bold(19, cx));
+    assert_eq!(selected_text(workspace, cx), "teh");
+    assert!(bar_visible(cx));
+    settle(cx);
+    assert_eq!(marked(workspace, cx), ["teh"]);
+
+    // A right-click on the selected, marked word: the suggestions lead,
+    // the formatting rows of a selection follow, the app's rows end it.
+    right_click(workspace, 0, 16, cx);
+    let labels = open_menu(cx);
+    assert_eq!(labels[..2], ["the", "ten"], "{labels:?}");
+    for wanted in [
+        LEARN_SPELLING,
+        IGNORE_SPELLING,
+        "Cut",
+        "Bold",
+        "Highlight",
+        "Link",
+        "Turn Into",
+        "Add Comment",
+    ] {
+        assert!(labels.contains(&wanted.to_string()), "{wanted}: {labels:?}");
+    }
+    assert!(!bar_visible(cx), "the menu takes the place of the bar");
+
+    // The suggestion replaces the word and keeps the bold it was given.
+    click_item("the", cx);
+    assert_eq!(text_of(workspace, 0, cx), "The harbor was the plain fact");
+    assert!(is_bold(16, cx) && !is_bold(13, cx) && !is_bold(19, cx));
+    settle(cx);
+    assert_eq!(marked(workspace, cx), Vec::<String>::new());
+
+    // A formatting row of the menu on a marked word that was not
+    // selected first: the usual rows are all there under the spelling
+    // rows, and one of them works.
+    caret_to(workspace, 0, 0, cx);
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+    assert_eq!(marked(workspace, cx), ["teh"]);
+    right_click(workspace, 0, 16, cx);
+    let labels = open_menu(cx);
+    assert_eq!(labels[0], "the", "{labels:?}");
+    assert!(labels.contains(&"Select All".to_string()), "{labels:?}");
+    click_item("Select All", cx);
+    assert_eq!(
+        selected_text(workspace, cx).replace('\n', " "),
+        "The harbor was teh plain fact Boats and ropes"
+    );
+}
+
+#[gpui::test]
+fn a_language_this_mac_does_not_have_is_named_by_its_identifier(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    // Written on another Mac, in a language this one's checker lacks.
+    let document = Document::from_blocks(vec![Block::paragraph("Anija erdhi sot ne port")])
+        .with_settings(writer_core::DocumentSettings {
+            spelling_language: Some(fixed("sq")),
+            ..Default::default()
+        });
+    let (app, cx) = open_in(&library, &document, cx);
+    let workspace = &app.workspace;
+
+    // The document keeps its language, and a checker that does not know
+    // it marks nothing rather than everything.
+    assert_eq!(
+        workspace.read_with(cx, |w, cx| w.document_spelling_language(cx)),
+        Some(fixed("sq"))
+    );
+    assert_eq!(language_of(workspace, cx), SpellLanguage::fixed("sq"));
+    assert_eq!(marked(workspace, cx), Vec::<String>::new());
+    assert_eq!(
+        cx.update(|_, cx| spelling::language_label(&fixed("sq"), cx)),
+        "sq"
+    );
+
+    // The picker lists it, right under Automatic, and opens on it.
+    palette("spelling language", cx);
+    let picker = language_picker(workspace, cx).expect("the language picker is open");
+    let labels = picker.read_with(cx, |picker, _| picker.delegate.labels());
+    assert_eq!(
+        labels[..3],
+        [spelling::FOLLOW_APP_LABEL, spelling::AUTOMATIC_LABEL, "sq"],
+        "{labels:?}"
+    );
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.current_label()),
+        Some("sq".to_string())
+    );
+    // The settings row can step away from it and back.
+    let options = cx.update(|_, cx| spelling::document_language_options(Some(&fixed("sq")), cx));
+    assert_eq!(
+        options[..3],
+        [None, Some(SpellingLanguage::Automatic), Some(fixed("sq"))]
+    );
+
+    // Choosing one of this Mac's languages replaces it; it is then no
+    // longer on offer.
+    cx.simulate_input("german");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    assert_eq!(language_of(workspace, cx), SpellLanguage::fixed("de"));
+    assert_eq!(marked(workspace, cx).len(), 5);
+    palette("spelling language", cx);
+    let picker = language_picker(workspace, cx).expect("the language picker is open");
+    let labels = picker.read_with(cx, |picker, _| picker.delegate.labels());
+    assert!(!labels.contains(&"sq".to_string()), "{labels:?}");
+}
+
+#[gpui::test]
+fn the_comment_composer_is_not_checked(cx: &mut TestAppContext) {
+    let (app, cx) = open(&["The harbor was a plain fact"], cx);
+    let workspace = &app.workspace;
+    assert_eq!(marked(workspace, cx), Vec::<String>::new());
+    app.service.reset_calls();
+
+    // A comment on the first word, written with slips in it.
+    caret_to(workspace, 0, 1, cx);
+    cx.simulate_keystrokes("cmd-alt-m");
+    cx.run_until_parked();
+    let (composing, composer) = workspace.read_with(cx, |w, cx| {
+        let comments = w.comments().read(cx);
+        (comments.is_composing(), comments.composer().clone())
+    });
+    assert!(composing, "the composer is open");
+    cx.simulate_input("teh xqzzy grye ");
+    settle(cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.document().plain_text()),
+        "teh xqzzy grye "
+    );
+
+    // Nothing in the composer is marked, the service was not asked about
+    // its text, and its menu does not lead with suggestions.
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.spelling_mark_count()),
+        0
+    );
+    assert!(
+        app.service
+            .checked_texts()
+            .iter()
+            .all(|text| !text.contains("xqzzy")),
+        "{:?}",
+        app.service.checked_texts()
+    );
+    assert_eq!(marked(workspace, cx), Vec::<String>::new());
+    cx.simulate_keystrokes("left left shift-f10");
+    cx.run_until_parked();
+    if let Some(labels) = menu(cx) {
+        assert!(!labels.contains(&LEARN_SPELLING.to_string()), "{labels:?}");
+        cx.simulate_keystrokes("escape");
+    }
+}
+
+#[gpui::test]
+fn the_palette_takes_a_command_by_its_exact_name(cx: &mut TestAppContext) {
+    use writer_app::palette::CommandPalette;
+
+    let (app, cx) = open(&["The harbor was teh plain fact"], cx);
+    let workspace = &app.workspace;
+    caret_to(workspace, 0, 16, cx);
+    // "Unlearn spelling" was run a moment ago, and its name contains the
+    // name of the command that is typed next.
+    palette("unlearn spelling", cx);
+    cx.simulate_keystrokes("cmd-shift-p");
+    cx.simulate_input("learn spelling");
+    cx.run_until_parked();
+    let listed = workspace
+        .read_with(cx, |w, cx| {
+            w.modal_layer().read(cx).active::<CommandPalette>()
+        })
+        .expect("the palette is open")
+        .read_with(cx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(
+        listed[..2],
+        ["Learn spelling", "Unlearn spelling"],
+        "{listed:?}"
+    );
+}

@@ -32,6 +32,9 @@
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
 //! | `limitcost[:<rounds>]` | times the character-limit count: whole text against block by block |
+//! | `typecost:<text>`     | types the text at a writer's pace (a key every 80 ms) and times every key: its dispatch and the frame after it, and how long the main thread kept a 4 ms timer waiting between the keys |
+//! | `keycost:<keystrokes>` | the same for keystrokes (`keycost:pagedown pagedown`)       |
+//! | `stall:<ms>`          | watches the main thread for that long without pressing anything (after `book:`, during the background pass of the spell checker, while events are posted from outside): how long a 4 ms timer was kept waiting, and what the frames cost |
 //! | `quit`                | quits the app (runs the quit hooks)                          |
 //!
 //! `THE_WRITER_AUTOMATION=@/path/to/script.txt` reads the script from a file.
@@ -74,7 +77,10 @@
 //! cargo run -p writer-app
 //! ```
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use gpui::{AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, px, size};
@@ -130,6 +136,9 @@ pub enum Step {
     Book(usize),
     SaveCost(usize),
     LimitCost(usize),
+    TypeCost(String),
+    KeyCost(Vec<Keystroke>),
+    Stall(Duration),
     Quit,
 }
 
@@ -290,6 +299,26 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         } else {
             arg.parse().context("expected a number of rounds")?
         }),
+        "typecost" => {
+            let text = unescape(arg);
+            if text.is_empty() {
+                bail!("expected text to type");
+            }
+            Step::TypeCost(text)
+        }
+        "keycost" => {
+            if arg.is_empty() {
+                bail!("expected keystrokes");
+            }
+            let keys = arg
+                .split_whitespace()
+                .map(|key| Keystroke::parse(&unescape(key)).map_err(|err| anyhow!("{err}")))
+                .collect::<Result<Vec<_>>>()?;
+            Step::KeyCost(keys)
+        }
+        "stall" => Step::Stall(Duration::from_millis(
+            arg.parse().context("expected milliseconds")?,
+        )),
         "quit" | "exit" => Step::Quit,
         other => bail!("unknown step {other:?}"),
     })
@@ -503,10 +532,42 @@ async fn execute(
             eprintln!("[automation] text: {text:?}");
         }
         Step::Book(blocks) => {
+            let started = Instant::now();
             let title = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
                 workspace.open_generated_book(blocks, window, cx)
             })??;
-            eprintln!("[automation] book: opened {title:?} with {blocks} blocks");
+            let opened = started.elapsed();
+            draw_frame(window, view, cx);
+            let drawn = started.elapsed();
+            eprintln!(
+                "[automation] book: opened {title:?} with {blocks} blocks in {:.1} ms, first frame \
+                 after {:.1} ms",
+                opened.as_secs_f64() * 1000.,
+                drawn.as_secs_f64() * 1000.
+            );
+            // How long until the text on screen has been checked for
+            // spelling: when the marks of what one sees are there.
+            if visible_text_checked(window, cx).is_some() {
+                let limit = Duration::from_secs(3);
+                while visible_text_checked(window, cx) == Some(false) && started.elapsed() < limit {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(1))
+                        .await;
+                }
+                match visible_text_checked(window, cx) {
+                    Some(true) => eprintln!(
+                        "[automation] book: the text on screen was checked for spelling {:.1} ms \
+                         after the document was asked for",
+                        started.elapsed().as_secs_f64() * 1000.
+                    ),
+                    _ => eprintln!(
+                        "[automation] book: the text on screen was not checked for spelling \
+                         within {} s",
+                        limit.as_secs()
+                    ),
+                }
+                draw_frame(window, view, cx);
+            }
             frame_pause(window, view, cx).await;
         }
         Step::SaveCost(rounds) => {
@@ -525,9 +586,237 @@ async fn execute(
                 eprintln!("[automation] limitcost: {line}");
             }
         }
+        Step::TypeCost(text) => {
+            let keys = text.chars().map(keystroke_for_char).collect();
+            for line in measure_keys(keys, window, view, cx).await? {
+                eprintln!("[automation] typecost: {line}");
+            }
+        }
+        Step::KeyCost(keys) => {
+            for line in measure_keys(keys, window, view, cx).await? {
+                eprintln!("[automation] keycost: {line}");
+            }
+        }
+        Step::Stall(duration) => {
+            reset_spelling_cost(window, cx);
+            let mut watch = MainThreadWatch::default();
+            watch.run(duration, window, view, cx).await;
+            for line in watch.report() {
+                eprintln!("[automation] stall: {line}");
+            }
+            eprintln!("[automation] stall: {}", spelling_cost(window, cx));
+        }
         Step::Quit => return Ok(StepOutcome::Quit),
     }
     Ok(StepOutcome::Continue)
+}
+
+/// The pause between two keys of `typecost` and `keycost`: about twelve
+/// keys a second, a fast writer.
+const KEY_PACE: Duration = Duration::from_millis(80);
+/// The timer [`MainThreadWatch`] waits on.
+const WATCH_BEAT: Duration = Duration::from_millis(4);
+/// A frame is drawn at most this often while watching, as a display does.
+const WATCH_FRAME: Duration = Duration::from_millis(16);
+
+fn millis(duration: Duration) -> String {
+    format!("{:.2} ms", duration.as_secs_f64() * 1000.)
+}
+
+/// Median, 95th percentile and maximum of `samples`.
+fn spread(label: &str, samples: &mut [Duration]) -> String {
+    if samples.is_empty() {
+        return format!("{label}: nothing measured");
+    }
+    samples.sort();
+    let at = |part: f64| samples[((samples.len() - 1) as f64 * part).round() as usize];
+    format!(
+        "{label}: median {}, p95 {}, max {} ({} samples)",
+        millis(at(0.5)),
+        millis(at(0.95)),
+        millis(samples[samples.len() - 1]),
+        samples.len()
+    )
+}
+
+/// Watches the main thread from a task that runs on it: the task waits on
+/// a short timer of the background executor again and again, and whatever
+/// it wakes up late by is time the main thread was busy with something
+/// else (a slice of the spell checker, a save, a layout). It also draws
+/// the frames a display would ask for and times them.
+#[derive(Default)]
+struct MainThreadWatch {
+    late: Vec<Duration>,
+    frames: Vec<Duration>,
+    last_frame: Option<Instant>,
+    /// When the long waits happened, in milliseconds since the watch
+    /// began, and how long they were (the first few).
+    long_waits: Vec<(Duration, Duration)>,
+    started: Option<Instant>,
+}
+
+impl MainThreadWatch {
+    async fn run(
+        &mut self,
+        duration: Duration,
+        window: AnyWindowHandle,
+        view: Option<screenshot::NativeView>,
+        cx: &mut AsyncApp,
+    ) {
+        let end = Instant::now() + duration;
+        while Instant::now() < end {
+            let at = Instant::now();
+            cx.background_executor().timer(WATCH_BEAT).await;
+            let late = at.elapsed().saturating_sub(WATCH_BEAT);
+            self.late.push(late);
+            let started = *self.started.get_or_insert(at);
+            if late > Duration::from_millis(16) && self.long_waits.len() < 12 {
+                self.long_waits.push((at - started, late));
+            }
+            if self
+                .last_frame
+                .is_none_or(|last| last.elapsed() >= WATCH_FRAME)
+            {
+                let at = Instant::now();
+                draw_frame(window, view, cx);
+                self.frames.push(at.elapsed());
+                self.last_frame = Some(Instant::now());
+            }
+        }
+    }
+
+    fn report(&mut self) -> Vec<String> {
+        let over = |samples: &[Duration], limit: u64| {
+            samples
+                .iter()
+                .filter(|sample| **sample > Duration::from_millis(limit))
+                .count()
+        };
+        let mut report = Vec::new();
+        if !self.long_waits.is_empty() {
+            let waits: Vec<String> = self
+                .long_waits
+                .iter()
+                .map(|(at, late)| {
+                    format!("{} at {:.0} ms", millis(*late), at.as_secs_f64() * 1000.)
+                })
+                .collect();
+            report.push(format!("waits over 16 ms: {}", waits.join(", ")));
+        }
+        report.splice(
+            0..0,
+            [
+                format!(
+                    "{}; over 8 ms: {}, over 16 ms: {}, over 50 ms: {}",
+                    spread("main thread kept a 4 ms timer waiting", &mut self.late),
+                    over(&self.late, 8),
+                    over(&self.late, 16),
+                    over(&self.late, 50),
+                ),
+                format!(
+                    "{}; over 16 ms: {}",
+                    spread("frames while watching", &mut self.frames),
+                    over(&self.frames, 16),
+                ),
+            ],
+        );
+        report
+    }
+}
+
+/// Presses `keys` one by one at [`KEY_PACE`] and reports what each cost.
+async fn measure_keys(
+    keys: Vec<Keystroke>,
+    window: AnyWindowHandle,
+    view: Option<screenshot::NativeView>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<String>> {
+    reset_spelling_cost(window, cx);
+    let mut dispatch = Vec::new();
+    let mut frame = Vec::new();
+    let mut total = Vec::new();
+    let mut watch = MainThreadWatch::default();
+    for keystroke in keys {
+        let at = Instant::now();
+        window.update(cx, |_, window, cx| {
+            window.dispatch_keystroke(keystroke, cx);
+        })?;
+        let dispatched = at.elapsed();
+        draw_frame(window, view, cx);
+        let drawn = at.elapsed();
+        dispatch.push(dispatched);
+        frame.push(drawn - dispatched);
+        total.push(drawn);
+        watch.last_frame = Some(Instant::now());
+        watch.run(KEY_PACE, window, view, cx).await;
+    }
+    let mut report = vec![
+        spread("key dispatch", &mut dispatch),
+        spread("frame after the key", &mut frame),
+        spread("key to picture", &mut total),
+    ];
+    report.extend(watch.report());
+    report.push(spelling_cost(window, cx));
+    Ok(report)
+}
+
+/// Whether every block on screen has been checked for spelling; `None`
+/// without a checker that is on, or before the text was laid out.
+fn visible_text_checked(window: AnyWindowHandle, cx: &mut AsyncApp) -> Option<bool> {
+    let workspace = workspace_handle(window, cx).ok()?;
+    workspace
+        .update(cx, |workspace, _, cx| {
+            let spell = workspace.spell()?;
+            if !spell.read(cx).is_active(cx) {
+                return None;
+            }
+            let editor = workspace.editor().read(cx);
+            let visible = editor.visible_range()?;
+            Some(
+                editor
+                    .first_unchecked_spelling_block(visible.start.block..visible.end.block + 1)
+                    .is_none(),
+            )
+        })
+        .ok()
+        .flatten()
+}
+
+fn reset_spelling_cost(window: AnyWindowHandle, cx: &mut AsyncApp) {
+    if let Ok(workspace) = workspace_handle(window, cx) {
+        workspace
+            .update(cx, |workspace, _, cx| {
+                if let Some(spell) = workspace.spell().cloned() {
+                    spell.update(cx, |spell, _| spell.reset_slice_stats());
+                }
+            })
+            .ok();
+    }
+}
+
+/// What the spell checker cost the main thread since the last reset.
+fn spelling_cost(window: AnyWindowHandle, cx: &mut AsyncApp) -> String {
+    let cost = workspace_handle(window, cx).and_then(|workspace| {
+        workspace.update(cx, |workspace, _, cx| {
+            workspace.spell().map(|spell| {
+                let spell = spell.read(cx);
+                let (slices, longest) = spell.slice_stats();
+                format!(
+                    "spell checker: {slices} slices, longest {}, over twice the budget: {}, \
+                     blocks still to check: {}, marked words: {}",
+                    millis(longest),
+                    spell.slow_slice_count(),
+                    spell.pending_blocks(cx),
+                    spell.misspelling_count(cx),
+                )
+            })
+        })
+    });
+    match cost {
+        Ok(Some(cost)) => cost,
+        Ok(None) => "spell checker: none".to_string(),
+        Err(error) => format!("spell checker: {error:#}"),
+    }
 }
 
 /// How much of the document the `dump` step prints.

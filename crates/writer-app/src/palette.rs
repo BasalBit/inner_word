@@ -20,6 +20,10 @@ pub type CommandPalette = Picker<PaletteDelegate>;
 const TITLE_BONUS: i32 = 10_000;
 /// A small nudge for commands used recently, to break ties.
 const RECENT_BONUS: i32 = 40;
+/// A command whose whole name was typed comes first, whatever was run
+/// recently: after "Unlearn spelling", the query "learn spelling" must
+/// not run it again.
+const EXACT_BONUS: i32 = 1_000;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
@@ -116,7 +120,16 @@ impl PaletteDelegate {
                     0
                 };
                 if let Some(found) = fuzzy_match(query, &command.title) {
-                    return Some((found.score + TITLE_BONUS + bonus, index, found.positions));
+                    let exact = if command.title.trim().eq_ignore_ascii_case(query.trim()) {
+                        EXACT_BONUS
+                    } else {
+                        0
+                    };
+                    return Some((
+                        found.score + TITLE_BONUS + bonus + exact,
+                        index,
+                        found.positions,
+                    ));
                 }
                 // Category and keywords match by whole query words only: a
                 // loose subsequence over that much text matches nearly

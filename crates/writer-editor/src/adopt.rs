@@ -108,7 +108,7 @@ mod tests {
     fn an_adopted_change_is_one_event_and_one_step_of_undo(cx: &mut TestAppContext) {
         let (editor, cx) = open(paragraphs(3), cx);
         cx.simulate_keystrokes("cmd-down");
-        cx.simulate_input(" typed");
+        cx.simulate_input("typed");
         let events = Rc::new(RefCell::new(Vec::new()));
         cx.update(|_, cx| {
             let events = events.clone();
@@ -144,7 +144,7 @@ mod tests {
         editor.read_with(cx, |editor, _| {
             assert_eq!(
                 editor.document().plain_text(),
-                "Paragraph number 0\nParagraph number 1\nParagraph number 2 typed"
+                "Paragraph number 0\nParagraph number 1\nParagraph number 2typed"
             );
         });
         cx.simulate_keystrokes("cmd-z");

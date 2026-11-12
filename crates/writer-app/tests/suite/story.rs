@@ -389,6 +389,41 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
             }
         }
 
+        // ----- a key of the writer's own ---------------------------------------
+        // The version history has no key. The list of keyboard shortcuts
+        // gives it one: found by name, enter waits for the key, the key
+        // is pressed, enter takes it.
+        let press = |keys: &str, cx: &mut VisualTestContext| {
+            for key in keys.split_whitespace() {
+                cx.simulate_keystrokes(key);
+                cx.simulate_event(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse(key).unwrap(),
+                });
+            }
+            cx.run_until_parked();
+        };
+        press("cmd-/", vcx);
+        vcx.simulate_input("version history");
+        press("enter ctrl-alt-h enter", vcx);
+        assert_eq!(
+            vcx.update(|_, cx| writer_app::keymap::changed_count(cx)),
+            1,
+            "one command has a key of the writer's own"
+        );
+        press("escape", vcx);
+        assert!(editor_focused(&workspace, vcx));
+        press("ctrl-alt-h", vcx);
+        assert!(
+            workspace.read_with(vcx, |w, cx| {
+                w.modal_layer()
+                    .read(cx)
+                    .is_open::<writer_app::version_history::VersionHistory>()
+            }),
+            "the new key opens the version history"
+        );
+        press("escape", vcx);
+        assert!(editor_focused(&workspace, vcx));
+
         // ----- the session ends -----------------------------------------------
         assert!(workspace.update(vcx, |w, cx| w.flush(cx)));
         vcx.update(|window, _| window.remove_window());
@@ -397,6 +432,11 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
     };
 
     // ----- another day: the library is opened again ---------------------------
+    // (A new launch starts from the default keys; the writer's own are in
+    // the library.)
+    cx.update(|cx| {
+        writer_app::keymap::set_changes(Default::default(), cx);
+    });
     let library = cx.new(|_| Library::open(&database).expect("the library opens again"));
     let (tree, stored) = library.read_with(cx, |library, _| {
         (library.tree(), library.document(document_id).unwrap())
@@ -440,4 +480,12 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
     );
     assert_eq!(vim_mode(&workspace, vcx), None);
     assert!(editor_focused(&workspace, vcx));
+    // And the key the writer chose is still theirs.
+    vcx.simulate_keystrokes("ctrl-alt-h");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, cx| {
+        w.modal_layer()
+            .read(cx)
+            .is_open::<writer_app::version_history::VersionHistory>()
+    }));
 }

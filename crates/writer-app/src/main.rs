@@ -128,6 +128,11 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
         Ok(library) => library,
         Err(error) => {
             eprintln!("The Writer: cannot open the library: {error}");
+            // A tool that asks this copy for a change is told why it makes
+            // none (the lock is held, and there is no library to change).
+            if let Some(data_dir) = &locked {
+                writer_app::live::open_without_library(data_dir, cx).ok();
+            }
             let (title, message, detail) = window::library_error_text(&error);
             return match window::open_error_window(title, message, detail, cx) {
                 Ok(handle) => Some(handle.into()),

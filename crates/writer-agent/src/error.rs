@@ -87,7 +87,8 @@ pub enum ErrorKind {
     NotFound,
     /// A name fits several items.
     Ambiguous,
-    /// The app has the library open: nothing was written.
+    /// The app has the library open and did not make the change (it is a version that
+    /// takes none, changes by agents are switched off, it did not answer).
     AppIsOpen,
     /// The text to replace or to comment on does not occur in the document.
     NoMatch,
@@ -208,18 +209,28 @@ pub enum Error {
         /// Everything it fits.
         candidates: Vec<Candidate>,
     },
-    /// The app has the library open, so nothing was written. Reading works while the app
-    /// is open; writing needs the app to be quit first.
-    #[error(
-        "The Writer is open{}, so nothing was changed. Quit The Writer and run this again \
-         (reading works while it is open: list, search, get, export).",
-        .pid.map(|pid| format!(" (process {pid})")).unwrap_or_default()
-    )]
+    /// The app has the library open and did not make the change. While the app is open a
+    /// change is carried out by the app ([`crate::live`]); `why` says what stood in the way
+    /// this time, and the message says what to do about it. Reading works while the app is
+    /// open.
+    #[error("{}", app_is_open_message(*.pid, .why))]
     AppIsOpen {
         /// The app's process id, when the lock file names it.
         pid: Option<u32>,
         /// The data directory it has open.
         data_dir: PathBuf,
+        /// Why the change was not made.
+        why: Refusal,
+    },
+    /// A failure the app reported for an operation it carried out, which does not
+    /// travel as the error it was: its database, a file, a kind of failure from a newer
+    /// version.
+    #[error("{message}")]
+    InApp {
+        /// The kind of failure the app named.
+        kind: ErrorKind,
+        /// What the app said.
+        message: String,
     },
     /// Another tool is writing to the library and did not finish in time.
     #[error(
@@ -355,6 +366,7 @@ impl Error {
             Error::Unreadable { .. } => ErrorKind::Unreadable,
             Error::FileExists { .. } => ErrorKind::FileExists,
             Error::OutdatedLibrary { .. } => ErrorKind::AppIsOpen,
+            Error::InApp { kind, .. } => *kind,
             Error::Io { .. } | Error::Store(_) => ErrorKind::Failed,
         }
     }
@@ -395,6 +407,157 @@ impl Error {
 impl From<writer_store::StoreError> for Error {
     fn from(error: writer_store::StoreError) -> Error {
         Error::Store(error)
+    }
+}
+
+/// Why the app that has the library open did not make a change: the `why` of an
+/// [`Error::AppIsOpen`].
+///
+/// The first group is what the app itself answers ([`crate::live::Answer::refused`]); the
+/// second is what the tool finds out on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "why", rename_all = "snake_case")]
+pub enum Refusal {
+    /// The owner switched "Agents can make changes while The Writer is open" off.
+    SwitchedOff,
+    /// Text is being composed with an input method, and the composition did not end in
+    /// the few seconds the app waits for it. A composition is never broken.
+    Composing,
+    /// The open document could not be saved before the change.
+    CouldNotSave {
+        /// What went wrong.
+        message: String,
+    },
+    /// The app is quitting. The tool waits for it to be gone and writes directly then, so
+    /// this reaches an agent only when the app does not go away.
+    Quitting,
+    /// The app has no window that shows this library (it shows the window that says the
+    /// library cannot be opened).
+    NoLibrary,
+    /// The app got to the request only after the tool had stopped waiting for it, and
+    /// did not carry it out.
+    TooLate,
+
+    /// The app is a version from before the channel existed (before 0.6.0), or could not
+    /// open one: its lock file names none.
+    OldVersion,
+    /// Nobody listens where the app said it does.
+    NotListening,
+    /// The app did not take the request up within this many seconds. Nothing was changed.
+    NoAnswer {
+        /// How long the tool waited.
+        seconds: u64,
+    },
+    /// The app took the request up and no answer came within this many seconds: whether
+    /// the change was made is not known.
+    Unanswered {
+        /// How long the tool waited.
+        seconds: u64,
+    },
+    /// The connection ended before the answer was there, or the answer cannot be read:
+    /// whether the change was made is not known.
+    AnswerLost,
+    /// The app and the tool speak different versions of the channel.
+    Protocol {
+        /// The version of the channel the app speaks.
+        app: u32,
+        /// The version this tool speaks.
+        tool: u32,
+    },
+    /// A reason a newer app gave that this version of the tool does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+impl Refusal {
+    /// Whether it is certain that nothing was changed. False for
+    /// [`Refusal::Unanswered`] and [`Refusal::AnswerLost`].
+    pub fn nothing_changed(&self) -> bool {
+        !matches!(self, Refusal::Unanswered { .. } | Refusal::AnswerLost)
+    }
+}
+
+fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
+    let open = format!(
+        "The Writer is open{}",
+        pid.map(|pid| format!(" (process {pid})"))
+            .unwrap_or_default()
+    );
+    const READING: &str = "Reading works while it is open: list, search, get, export.";
+    let seconds = |seconds: &u64| {
+        if *seconds == 1 {
+            "1 second".to_string()
+        } else {
+            format!("{seconds} seconds")
+        }
+    };
+    match why {
+        Refusal::SwitchedOff => format!(
+            "{open} and changes by agents while it is open are switched off there, so \
+             nothing was changed. Ask the user to switch on \u{201c}Agents can make changes \
+             while The Writer is open\u{201d} in the Agents panel of the app, or to quit \
+             The Writer, and run this again. {READING}"
+        ),
+        Refusal::Composing => format!(
+            "{open} and the writer is in the middle of typing a character (text is being \
+             composed with an input method), so nothing was changed. Run this again in a \
+             few seconds."
+        ),
+        Refusal::CouldNotSave { message } => format!(
+            "{open} and could not save the open document before the change ({message}), so \
+             nothing was changed. Tell the user: the app has text it cannot save."
+        ),
+        Refusal::Quitting => {
+            format!("{open} and is quitting, so nothing was changed. Run this again in a moment.")
+        }
+        Refusal::NoLibrary => format!(
+            "{open} but shows no window with this library, so nothing was changed. Ask the \
+             user to quit The Writer and run this again."
+        ),
+        Refusal::TooLate | Refusal::NoAnswer { seconds: 0 } => format!(
+            "{open} and did not get to this change in time (it is busy: a dialog of the \
+             system is open, or a long task runs), so nothing was changed. Run this again \
+             in a moment; if it stays like this, ask the user to look at the app or to \
+             quit it."
+        ),
+        Refusal::NoAnswer { seconds: waited } => format!(
+            "{open} and did not get to this change within {} (it is busy: a dialog of the \
+             system is open, or a long task runs), so nothing was changed. Run this again \
+             in a moment; if it stays like this, ask the user to look at the app or to \
+             quit it.",
+            seconds(waited)
+        ),
+        Refusal::Unanswered { seconds: waited } => format!(
+            "{open} and took this change up, but did not answer within {}. Whether the \
+             change was made is not known: read the document again before you repeat it.",
+            seconds(waited)
+        ),
+        Refusal::AnswerLost => format!(
+            "{open} and took this change up, but its answer did not arrive. Whether the \
+             change was made is not known: read the document again before you repeat it."
+        ),
+        Refusal::OldVersion => format!(
+            "{open} in a version that takes no changes from agents while it runs (before \
+             0.6.0), so nothing was changed. Ask the user to quit The Writer, or to update \
+             it, and run this again. {READING}"
+        ),
+        Refusal::NotListening => format!(
+            "{open} but does not answer where it listens for changes, so nothing was \
+             changed. Run this again in a moment; if it stays like this, ask the user to \
+             quit The Writer and open it again."
+        ),
+        Refusal::Protocol { app, tool } => format!(
+            "{open} in a version this tool cannot hand a change to (the app speaks version \
+             {app} of their channel, this tool version {tool}), so nothing was changed. \
+             Use the writer tool inside that app (The Writer.app/Contents/MacOS/writer), \
+             or ask the user to quit The Writer and run this again."
+        ),
+        Refusal::Unknown => format!(
+            "{open} and did not make the change, for a reason this version of the tool \
+             does not know; nothing was changed. Use the writer tool inside that app (The \
+             Writer.app/Contents/MacOS/writer), or ask the user to quit The Writer and run \
+             this again."
+        ),
     }
 }
 
@@ -534,11 +697,12 @@ mod tests {
         let open = Error::AppIsOpen {
             pid: Some(42),
             data_dir: PathBuf::from("/tmp/x"),
+            why: Refusal::OldVersion,
         };
         assert_eq!(open.exit_code(), 5);
         assert_eq!(open.code(), "app_is_open");
         let message = open.to_string();
-        assert!(message.contains("Quit The Writer"), "{message}");
+        assert!(message.contains("quit The Writer"), "{message}");
         assert!(message.contains("process 42"), "{message}");
 
         let ambiguous = Error::Ambiguous {
@@ -566,6 +730,80 @@ mod tests {
         assert_eq!(report.code, "ambiguous");
         assert_eq!(report.candidates.len(), 2);
         assert_eq!(report.message, message);
+    }
+
+    /// Every reason the app did not make a change is the same kind of failure, and its
+    /// message says whether anything was changed and what to do next.
+    #[test]
+    fn every_refusal_says_what_happened_and_what_to_do() {
+        let all = [
+            Refusal::SwitchedOff,
+            Refusal::Composing,
+            Refusal::CouldNotSave {
+                message: "the disk is full".into(),
+            },
+            Refusal::Quitting,
+            Refusal::NoLibrary,
+            Refusal::TooLate,
+            Refusal::OldVersion,
+            Refusal::NotListening,
+            Refusal::NoAnswer { seconds: 10 },
+            Refusal::Unanswered { seconds: 13 },
+            Refusal::AnswerLost,
+            Refusal::Protocol { app: 2, tool: 1 },
+            Refusal::Unknown,
+        ];
+        let mut messages = std::collections::BTreeSet::new();
+        for why in all {
+            let error = Error::AppIsOpen {
+                pid: Some(7),
+                data_dir: PathBuf::from("/tmp/x"),
+                why: why.clone(),
+            };
+            assert_eq!(error.kind(), ErrorKind::AppIsOpen, "{why:?}");
+            assert_eq!(error.exit_code(), 5, "{why:?}");
+            let message = error.to_string();
+            assert!(
+                message.starts_with("The Writer is open (process 7)"),
+                "{message}"
+            );
+            assert_eq!(
+                message.contains("nothing was changed"),
+                why.nothing_changed(),
+                "{message}"
+            );
+            let next = [
+                "Run this again",
+                "run this again",
+                "read the document again",
+                "Tell the user",
+            ];
+            assert!(next.iter().any(|word| message.contains(word)), "{message}");
+            // The reason travels as data, and comes back as it was.
+            let json = serde_json::to_string(&why).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Refusal>(&json).unwrap(),
+                why,
+                "{json}"
+            );
+            assert!(messages.insert(message.clone()), "said twice: {message}");
+        }
+        // A reason from a newer app is read as one this tool does not know.
+        assert_eq!(
+            serde_json::from_str::<Refusal>(r#"{"why": "moon_phase", "phase": 3}"#).unwrap(),
+            Refusal::Unknown
+        );
+        let message = Error::AppIsOpen {
+            pid: None,
+            data_dir: PathBuf::from("/tmp/x"),
+            why: Refusal::Unanswered { seconds: 1 },
+        }
+        .to_string();
+        assert!(message.contains("within 1 second."), "{message}");
+        assert!(
+            message.starts_with("The Writer is open and took"),
+            "{message}"
+        );
     }
 
     #[test]

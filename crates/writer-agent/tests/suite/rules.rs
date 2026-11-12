@@ -7,7 +7,7 @@ use writer_agent::{
     AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
     EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest, InsertPosition, InsertRequest,
-    Library, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest,
+    Library, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, Refusal,
     RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest,
     ReplyRequest, RestoreDocumentRequest, RestoreVersionRequest, SearchRequest, Target, TextFormat,
     TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
@@ -308,8 +308,11 @@ fn seeded() -> Fixture {
     fx
 }
 
+/// An app from before 0.6.0 holds the lock and listens nowhere. For it the old rule
+/// holds: reading works, and nothing is written underneath it. (What an app that takes
+/// changes does is in `live.rs`.)
 #[test]
-fn while_the_app_is_open_reading_works_and_every_write_is_refused() {
+fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_refused() {
     let fx = seeded();
     let before = fx.bytes();
     let tree_before = fx.library.tree(&TreeRequest::default()).unwrap();
@@ -322,6 +325,7 @@ fn while_the_app_is_open_reading_works_and_every_write_is_refused() {
     assert!(fx.library.app_is_open());
     let status = fx.library.status().unwrap();
     assert!(status.app_is_open);
+    assert!(!status.app_takes_changes);
     assert_eq!(status.app_pid, Some(std::process::id()));
     assert_eq!(
         (status.documents, status.folders, status.trashed),
@@ -373,11 +377,17 @@ fn while_the_app_is_open_reading_works_and_every_write_is_refused() {
     assert_eq!(results.len(), 22);
     for (name, result) in results {
         match result {
-            Err(error @ Error::AppIsOpen { .. }) => {
+            Err(
+                error @ Error::AppIsOpen {
+                    why: Refusal::OldVersion,
+                    ..
+                },
+            ) => {
                 assert_eq!(error.kind(), ErrorKind::AppIsOpen, "{name}");
                 assert_eq!(error.exit_code(), 5, "{name}");
                 let message = error.to_string();
-                assert!(message.contains("Quit The Writer"), "{name}: {message}");
+                assert!(message.contains("nothing was changed"), "{name}: {message}");
+                assert!(message.contains("quit The Writer"), "{name}: {message}");
                 assert!(
                     message.contains(&format!("process {}", std::process::id())),
                     "{name}: {message}"
@@ -404,6 +414,7 @@ fn while_the_app_is_open_reading_works_and_every_write_is_refused() {
         })
         .unwrap();
     assert!(tried.written.dry_run && tried.written.app_is_open && !tried.written.changed);
+    assert!(!tried.written.app_takes_changes);
     assert_eq!(tried.replacements, 1);
     assert_eq!(fx.bytes(), before);
 

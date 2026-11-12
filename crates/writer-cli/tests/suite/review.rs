@@ -474,7 +474,7 @@ fn while_the_app_is_open_reading_works_and_every_change_is_refused() {
             "{args:?}: {message}"
         );
         assert!(
-            message.contains("so nothing was changed. Quit The Writer and run this again"),
+            message.contains("so nothing was changed. Ask the user to quit The Writer"),
             "{args:?}: {message}"
         );
     }

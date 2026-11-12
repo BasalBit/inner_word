@@ -6,7 +6,8 @@ use writer_core::{CommentId, CommentThread, Document, EditorState, ReplyId, Text
 
 use crate::content::{self, Form, Reason};
 use crate::error::{Error, ItemKind, Result};
-use crate::library::{Library, author_name, author_phrase};
+use crate::library::{Library, Session, author_name, author_phrase};
+use crate::live::Change;
 use crate::matching;
 use crate::resolve::Index;
 use crate::sections::heading_above;
@@ -116,196 +117,206 @@ impl Library {
             threads,
         })
     }
+}
 
-    /// Starts a comment thread on an exact quote of the text. See [`AddCommentRequest`].
-    pub fn add_comment(&self, request: &AddCommentRequest) -> Result<CommentChanged> {
-        if request.body.trim().is_empty() {
-            return Err(Error::invalid("the comment is empty"));
+/// Starts a comment thread on an exact quote of the text. See [`AddCommentRequest`].
+pub(crate) fn add_comment(
+    session: &mut Session<'_>,
+    request: &AddCommentRequest,
+) -> Result<CommentChanged> {
+    if request.body.trim().is_empty() {
+        return Err(Error::invalid("the comment is empty"));
+    }
+    if request.quote.trim().is_empty() {
+        return Err(Error::invalid(
+            "a comment needs the text it is about: quote it exactly",
+        ));
+    }
+    let author = author_name(&request.write);
+    let now = session.clock.now_ms();
+    change_comments(session, &request.document, &request.write, None, |ed| {
+        let matches = matching::find(ed.document(), &request.quote, false)?;
+        let ranges = matching::choose(
+            ed.document(),
+            &request.quote,
+            &matches,
+            false,
+            request.occurrence,
+        )?;
+        ed.select_range(ranges[0]);
+        let id = ed
+            .add_comment(&request.body, &author, now)
+            .ok_or_else(|| Error::invalid("the quoted text is no text a comment can be on"))?;
+        Ok(Step::Kept(id, None))
+    })
+}
+
+/// Adds a reply to a comment thread.
+pub(crate) fn reply(session: &mut Session<'_>, request: &ReplyRequest) -> Result<CommentChanged> {
+    if request.body.trim().is_empty() {
+        return Err(Error::invalid("the reply is empty"));
+    }
+    let author = author_name(&request.write);
+    let now = session.clock.now_ms();
+    change_comments(session, &request.document, &request.write, None, |ed| {
+        let id = CommentId(request.comment);
+        if ed.document().comment(id).is_none() {
+            return Err(no_such_thread(ed.document(), request.comment));
         }
-        if request.quote.trim().is_empty() {
-            return Err(Error::invalid(
-                "a comment needs the text it is about: quote it exactly",
-            ));
+        let reply = ed
+            .add_reply(id, &request.body, &author, now)
+            .ok_or_else(|| Error::invalid("the reply could not be added"))?;
+        Ok(Step::Kept(id, Some(reply.0)))
+    })
+}
+
+/// Marks a comment thread as resolved.
+pub(crate) fn resolve_comment(
+    session: &mut Session<'_>,
+    request: &CommentRequest,
+) -> Result<CommentChanged> {
+    change_comments(session, &request.document, &request.write, None, |ed| {
+        let id = CommentId(request.comment);
+        if ed.document().comment(id).is_none() {
+            return Err(no_such_thread(ed.document(), request.comment));
         }
-        let author = author_name(&request.write);
-        let now = self.clock.now_ms();
-        self.change_comments(&request.document, &request.write, None, |ed| {
-            let matches = matching::find(ed.document(), &request.quote, false)?;
-            let ranges = matching::choose(
-                ed.document(),
-                &request.quote,
-                &matches,
-                false,
-                request.occurrence,
-            )?;
-            ed.select_range(ranges[0]);
-            let id = ed
-                .add_comment(&request.body, &author, now)
-                .ok_or_else(|| Error::invalid("the quoted text is no text a comment can be on"))?;
-            Ok(Step::Kept(id, None))
-        })
-    }
+        ed.resolve_comment(id);
+        Ok(Step::Kept(id, None))
+    })
+}
 
-    /// Adds a reply to a comment thread.
-    pub fn reply(&self, request: &ReplyRequest) -> Result<CommentChanged> {
-        if request.body.trim().is_empty() {
-            return Err(Error::invalid("the reply is empty"));
+/// Opens a resolved comment thread again.
+pub(crate) fn reopen_comment(
+    session: &mut Session<'_>,
+    request: &CommentRequest,
+) -> Result<CommentChanged> {
+    change_comments(session, &request.document, &request.write, None, |ed| {
+        let id = CommentId(request.comment);
+        if ed.document().comment(id).is_none() {
+            return Err(no_such_thread(ed.document(), request.comment));
         }
-        let author = author_name(&request.write);
-        let now = self.clock.now_ms();
-        self.change_comments(&request.document, &request.write, None, |ed| {
-            let id = CommentId(request.comment);
-            if ed.document().comment(id).is_none() {
-                return Err(no_such_thread(ed.document(), request.comment));
-            }
-            let reply = ed
-                .add_reply(id, &request.body, &author, now)
-                .ok_or_else(|| Error::invalid("the reply could not be added"))?;
-            Ok(Step::Kept(id, Some(reply.0)))
-        })
-    }
+        ed.reopen_comment(id);
+        Ok(Step::Kept(id, None))
+    })
+}
 
-    /// Marks a comment thread as resolved.
-    pub fn resolve_comment(&self, request: &CommentRequest) -> Result<CommentChanged> {
-        self.change_comments(&request.document, &request.write, None, |ed| {
+/// Deletes a comment thread, or one reply of it. See [`DeleteCommentRequest`].
+pub(crate) fn delete_comment(
+    session: &mut Session<'_>,
+    request: &DeleteCommentRequest,
+) -> Result<CommentChanged> {
+    change_comments(
+        session,
+        &request.document,
+        &request.write,
+        Some(Reason::CommentDeleted),
+        |ed| {
             let id = CommentId(request.comment);
-            if ed.document().comment(id).is_none() {
+            let Some(was) = one_thread(ed.document(), id) else {
                 return Err(no_such_thread(ed.document(), request.comment));
-            }
-            ed.resolve_comment(id);
-            Ok(Step::Kept(id, None))
-        })
-    }
-
-    /// Opens a resolved comment thread again.
-    pub fn reopen_comment(&self, request: &CommentRequest) -> Result<CommentChanged> {
-        self.change_comments(&request.document, &request.write, None, |ed| {
-            let id = CommentId(request.comment);
-            if ed.document().comment(id).is_none() {
-                return Err(no_such_thread(ed.document(), request.comment));
-            }
-            ed.reopen_comment(id);
-            Ok(Step::Kept(id, None))
-        })
-    }
-
-    /// Deletes a comment thread, or one reply of it. See [`DeleteCommentRequest`].
-    pub fn delete_comment(&self, request: &DeleteCommentRequest) -> Result<CommentChanged> {
-        self.change_comments(
-            &request.document,
-            &request.write,
-            Some(Reason::CommentDeleted),
-            |ed| {
-                let id = CommentId(request.comment);
-                let Some(was) = one_thread(ed.document(), id) else {
-                    return Err(no_such_thread(ed.document(), request.comment));
-                };
-                match request.reply {
-                    Some(reply) => {
-                        if !was.replies.iter().any(|other| other.id == reply) {
-                            return Err(Error::NotFound {
-                                kind: ItemKind::Reply,
-                                reference: format!(
-                                    "with the id {reply} in the comment thread {id}"
-                                ),
-                                hint: Some(if was.replies.is_empty() {
-                                    "The thread has no replies".to_string()
-                                } else {
-                                    format!(
-                                        "Its replies have the ids {}",
-                                        was.replies
-                                            .iter()
-                                            .map(|reply| reply.id.to_string())
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    )
-                                }),
-                            });
-                        }
-                        ed.delete_reply(id, ReplyId(reply));
-                        Ok(Step::Kept(id, Some(reply)))
+            };
+            match request.reply {
+                Some(reply) => {
+                    if !was.replies.iter().any(|other| other.id == reply) {
+                        return Err(Error::NotFound {
+                            kind: ItemKind::Reply,
+                            reference: format!("with the id {reply} in the comment thread {id}"),
+                            hint: Some(if was.replies.is_empty() {
+                                "The thread has no replies".to_string()
+                            } else {
+                                format!(
+                                    "Its replies have the ids {}",
+                                    was.replies
+                                        .iter()
+                                        .map(|reply| reply.id.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            }),
+                        });
                     }
-                    None => {
-                        ed.delete_comment(id);
-                        Ok(Step::Deleted(was))
-                    }
+                    ed.delete_reply(id, ReplyId(reply));
+                    Ok(Step::Kept(id, Some(reply)))
                 }
-            },
-        )
-    }
-
-    /// Runs a change to the comment threads of a document and stores the result. With
-    /// `keep` a version of the document as it was is kept first (something is deleted).
-    fn change_comments(
-        &self,
-        target: &Target,
-        options: &WriteOptions,
-        keep: Option<Reason>,
-        change: impl FnOnce(&mut EditorState) -> Result<Step>,
-    ) -> Result<CommentChanged> {
-        let mut session = self.writer(options)?;
-        let index = Index::load(&session.store)?;
-        let meta = index.live_document(&session.store, target)?;
-        let loaded = content::load(&session.store, &meta)?;
-        let mut ed = EditorState::new(loaded.document.clone());
-        let step = change(&mut ed)?;
-        let after = ed.into_document();
-        let changed = loaded.document != after;
-        let (thread, reply) = match step {
-            Step::Kept(id, reply) => {
-                let mut thread = one_thread(&after, id).ok_or_else(|| {
-                    Error::invalid(format!("the comment thread {id} is gone after the change"))
-                })?;
-                if session.dry_run && changed {
-                    // What would be created has no id yet.
-                    if loaded.document.comment(id).is_none() {
-                        thread.id = 0;
-                    } else if let Some(reply) = reply
-                        && let Some(new) = thread.replies.iter_mut().find(|other| other.id == reply)
-                        && loaded
-                            .document
-                            .comment(id)
-                            .is_some_and(|thread| thread.reply(ReplyId(reply)).is_none())
-                    {
-                        new.id = 0;
-                    }
+                None => {
+                    ed.delete_comment(id);
+                    Ok(Step::Deleted(was))
                 }
-                let reply = reply.map(|reply| {
-                    let is_new = loaded
+            }
+        },
+    )
+}
+
+/// Runs a change to the comment threads of a document and stores the result. With
+/// `keep` a version of the document as it was is kept first (something is deleted).
+fn change_comments(
+    session: &mut Session<'_>,
+    target: &Target,
+    options: &WriteOptions,
+    keep: Option<Reason>,
+    change: impl FnOnce(&mut EditorState) -> Result<Step>,
+) -> Result<CommentChanged> {
+    let index = Index::load(session.store)?;
+    let meta = index.live_document(session.store, target)?;
+    let loaded = content::load(session.store, &meta)?;
+    let mut ed = EditorState::new(loaded.document.clone());
+    let step = change(&mut ed)?;
+    let after = ed.into_document();
+    let changed = loaded.document != after;
+    let (thread, reply) = match step {
+        Step::Kept(id, reply) => {
+            let mut thread = one_thread(&after, id).ok_or_else(|| {
+                Error::invalid(format!("the comment thread {id} is gone after the change"))
+            })?;
+            if session.dry_run && changed {
+                // What would be created has no id yet.
+                if loaded.document.comment(id).is_none() {
+                    thread.id = 0;
+                } else if let Some(reply) = reply
+                    && let Some(new) = thread.replies.iter_mut().find(|other| other.id == reply)
+                    && loaded
                         .document
                         .comment(id)
-                        .is_some_and(|thread| thread.reply(ReplyId(reply)).is_none());
-                    if session.dry_run && is_new { 0 } else { reply }
-                });
-                (thread, reply)
+                        .is_some_and(|thread| thread.reply(ReplyId(reply)).is_none())
+                {
+                    new.id = 0;
+                }
             }
-            Step::Deleted(was) => (was, None),
-        };
-        let mut snapshot: Option<VersionInfo> = None;
-        let mut meta = loaded.meta.clone();
-        if changed && !session.dry_run {
-            let kept_title = loaded.custom_title.then(|| loaded.meta.title.clone());
-            if let Some(reason) = keep {
-                snapshot = Some(content::keep_version(
-                    &mut session.store,
-                    loaded.meta.id,
-                    &loaded.raw,
-                    &reason.label(&author_phrase(options)),
-                )?);
-            }
-            let form = Form::of(&after, kept_title.as_deref());
-            meta = session
-                .store
-                .save_document(loaded.meta.id, &form.content())?;
+            let reply = reply.map(|reply| {
+                let is_new = loaded
+                    .document
+                    .comment(id)
+                    .is_some_and(|thread| thread.reply(ReplyId(reply)).is_none());
+                if session.dry_run && is_new { 0 } else { reply }
+            });
+            (thread, reply)
         }
-        let result = CommentChanged {
-            document: index.document_summary(&session.store, &meta),
-            thread,
-            reply,
-            snapshot,
-            written: session.written(changed),
-        };
-        session.finish()?;
-        Ok(result)
+        Step::Deleted(was) => (was, None),
+    };
+    let mut snapshot: Option<VersionInfo> = None;
+    let mut meta = loaded.meta.clone();
+    if changed && !session.dry_run {
+        let kept_title = loaded.custom_title.then(|| loaded.meta.title.clone());
+        let id = loaded.meta.id;
+        if let Some(reason) = keep {
+            snapshot = Some(content::keep_version(
+                session.store,
+                id,
+                &loaded.raw,
+                &reason.label(&author_phrase(options)),
+            )?);
+            session.note(Change::VersionKept { document: id });
+        }
+        let form = Form::of(&after, kept_title.as_deref());
+        meta = session.store.save_document(id, &form.content())?;
+        session.note(Change::DocumentComments { id });
     }
+    let result = CommentChanged {
+        document: index.document_summary(session.store, &meta),
+        thread,
+        reply,
+        snapshot,
+        written: session.written(changed),
+    };
+    Ok(result)
 }

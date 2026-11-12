@@ -1591,6 +1591,7 @@ mod tests {
         let failure = Failure::from(Error::AppIsOpen {
             pid: Some(7),
             data_dir: "/tmp/x".into(),
+            why: writer_agent::Refusal::OldVersion,
         });
         assert_eq!(failure.kind, ErrorKind::AppIsOpen);
         assert_eq!(failure.data["code"], "app_is_open");

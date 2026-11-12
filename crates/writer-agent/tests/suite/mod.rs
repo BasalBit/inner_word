@@ -3,6 +3,7 @@
 mod browse;
 mod comments;
 mod items;
+mod live;
 mod rules;
 mod text;
 mod versions_export;

@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
 use writer_store::instance_lock::{self, Acquired, HolderKind, InstanceLock};
 use writer_store::{Clock, OpenOptions, ReadOnlyLibrary, Store};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Refusal, Result};
+use crate::live::{self, Change, Operation};
 use crate::types::{LibraryStatus, WriteOptions, Written};
 
 /// The name a comment is signed with, and a version is labelled with, when the request
@@ -16,14 +18,18 @@ pub const DEFAULT_AUTHOR: &str = "Agent";
 /// A library of The Writer, named by its data directory.
 ///
 /// Creating one does nothing on disk. Every operation opens the library, does its work and
-/// closes it again: reading opens the database read-only and takes no lock; writing takes
-/// the lock of the data directory for the duration of the operation and is refused with
-/// [`Error::AppIsOpen`] while the app has it. See the [crate documentation](crate).
+/// closes it again. Reading opens the database read-only and takes no lock; while the app
+/// has the library open it is asked first to save what is not saved yet, so the text read
+/// is the text on screen. Writing takes the lock of the data directory for the duration
+/// of the operation; while the app has it, the operation is handed to the app, which
+/// carries it out and answers ([`crate::live`]). See the [crate documentation](crate).
 #[derive(Clone, Debug)]
 pub struct Library {
     pub(crate) data_dir: PathBuf,
     pub(crate) clock: Clock,
     pub(crate) patience: Duration,
+    pub(crate) app_patience: Duration,
+    pub(crate) save_patience: Duration,
 }
 
 impl Library {
@@ -34,6 +40,8 @@ impl Library {
             data_dir: data_dir.into(),
             clock: Clock::system(),
             patience: Duration::from_secs(10),
+            app_patience: live::ANSWER_PATIENCE,
+            save_patience: live::SAVE_PATIENCE,
         }
     }
 
@@ -56,17 +64,32 @@ impl Library {
     }
 
     /// The same library with another clock for every time stamp it writes (tests use
-    /// [`Clock::manual`]).
+    /// [`Clock::manual`]). A change the app carries out is stamped by the app's clock.
     pub fn with_clock(mut self, clock: Clock) -> Library {
         self.clock = clock;
         self
     }
 
     /// The same library with another limit for how long a write waits for another tool
-    /// that is writing to it right now (10 seconds unless changed). The app is never
-    /// waited for: it holds the library for as long as it runs.
+    /// that is writing to it right now (10 seconds unless changed).
     pub fn with_patience(mut self, patience: Duration) -> Library {
         self.patience = patience;
+        self
+    }
+
+    /// The same library with another limit for how long a change waits for the app that
+    /// has the library open to carry it out ([`live::ANSWER_PATIENCE`], 10 seconds, unless
+    /// changed). Tests of "the app does not answer" make it short.
+    pub fn with_app_patience(mut self, patience: Duration) -> Library {
+        self.app_patience = patience;
+        self
+    }
+
+    /// The same library with another limit for how long a read waits for the app to save
+    /// what is not saved yet ([`live::SAVE_PATIENCE`], one second, unless changed). When
+    /// the app does not answer in time the read goes ahead on what is saved.
+    pub fn with_save_patience(mut self, patience: Duration) -> Library {
+        self.save_patience = patience;
         self
     }
 
@@ -80,31 +103,34 @@ impl Library {
         self.data_dir.join(writer_store::DATABASE_FILE_NAME)
     }
 
-    /// Whether the app has this library open right now, so that writes would be refused.
+    /// Whether the app has this library open right now. A change is then carried out by
+    /// the app ([`LibraryStatus::app_takes_changes`] says whether it takes one).
     pub fn app_is_open(&self) -> bool {
         writer_store::instance_lock::app_is_running(&self.data_dir).unwrap_or(false)
     }
 
-    /// Where the library is, whether it exists, whether the app has it open, and how much
-    /// is in it. Never fails for a library that does not exist: that is one of the
-    /// answers.
+    /// Where the library is, whether it exists, whether the app has it open (and takes
+    /// changes), and how much is in it. Never fails for a library that does not exist:
+    /// that is one of the answers.
     pub fn status(&self) -> Result<LibraryStatus> {
         let database = self.database_path();
         let holder = instance_lock::holder(&self.data_dir).unwrap_or(None);
         let app = holder.as_ref().filter(|copy| copy.kind == HolderKind::App);
+        let asked = self.ask_app_to_save();
         let mut status = LibraryStatus {
             data_dir: self.data_dir.clone(),
             database: database.clone(),
             exists: database.is_file(),
             app_is_open: app.is_some(),
             app_pid: app.and_then(|copy| copy.pid),
+            app_takes_changes: app.is_some() && asked.takes_changes,
             documents: 0,
             folders: 0,
             trashed: 0,
             version: env!("CARGO_PKG_VERSION").to_string(),
         };
         if status.exists {
-            let session = self.reader()?;
+            let session = self.open_reader()?;
             let tree = session.store.library_tree()?;
             fn count(nodes: &[writer_store::FolderNode]) -> (u64, u64) {
                 nodes.iter().fold((0, 0), |(folders, documents), node| {
@@ -120,9 +146,35 @@ impl Library {
         Ok(status)
     }
 
-    /// Opens the library for reading. Fails with [`Error::LibraryNotFound`] when there is
+    /// Opens the library for reading, after asking the app that has it open (if one has)
+    /// to save what is not saved yet. Fails with [`Error::LibraryNotFound`] when there is
     /// none: reading never creates one.
-    pub(crate) fn reader(&self) -> Result<Session> {
+    pub(crate) fn reader(&self) -> Result<Reader> {
+        self.ask_app_to_save();
+        self.open_reader()
+    }
+
+    /// Asks the app that has the library open to save what is not saved yet, and waits
+    /// for it up to [`Library::with_save_patience`]. Says what is known about the app
+    /// afterwards; without an app, or without an answer, nothing was asked or learned.
+    pub(crate) fn ask_app_to_save(&self) -> AppAsked {
+        let Ok(Some(channel)) = instance_lock::app_channel(&self.data_dir) else {
+            // No app, or one that announced no channel: it takes no changes either.
+            return AppAsked {
+                is_open: self.app_is_open(),
+                takes_changes: false,
+            };
+        };
+        let state = live::client::save(&channel.path, self.save_patience);
+        AppAsked {
+            is_open: true,
+            // An app that listens and did not answer in time is taken at its word.
+            takes_changes: state.is_none_or(|state| state.takes_changes),
+        }
+    }
+
+    /// Opens the library for reading as it is on disk.
+    fn open_reader(&self) -> Result<Reader> {
         let path = self.database_path();
         if !path.is_file() {
             return Err(Error::LibraryNotFound { path });
@@ -157,47 +209,110 @@ impl Library {
                 }
             }
         };
-        Ok(Session {
-            store,
-            lock: None,
-            dry_run: true,
-            app_is_open: false,
-        })
+        Ok(Reader { store })
     }
 
-    /// Opens the library for an operation that writes. A real run takes the lock of the
-    /// data directory (and fails with [`Error::AppIsOpen`] when the app has it, with
-    /// [`Error::Busy`] when another tool does not let go in time) and creates the library
-    /// when there is none. A dry run opens it read-only, or an empty library in memory
-    /// when there is none, and notes whether the app is open.
-    pub(crate) fn writer(&self, options: &WriteOptions) -> Result<Session> {
+    /// Carries out an operation that writes: the one way to a library that can be
+    /// written to.
+    ///
+    /// - A **dry run** only reads: the app is asked to save, the library is opened
+    ///   read-only (or, when there is none, an empty one in memory) and `run` works out
+    ///   what it would do.
+    /// - Otherwise the lock of the data directory is taken and `run` writes, creating the
+    ///   library when there is none. When another tool does not let go in time this fails
+    ///   with [`Error::Busy`].
+    /// - While **the app** has the lock, `operation` is sent to it and its answer is the
+    ///   result ([`crate::live`]); when the app takes no change this fails with
+    ///   [`Error::AppIsOpen`], which says why.
+    pub(crate) fn write<T: DeserializeOwned>(
+        &self,
+        options: &WriteOptions,
+        operation: impl Fn() -> Operation,
+        run: impl FnOnce(&mut Session<'_>) -> Result<T>,
+    ) -> Result<T> {
         if options.dry_run {
-            let mut session = if self.database_path().is_file() {
-                self.reader()?
+            let asked = self.ask_app_to_save();
+            let mut store = if self.database_path().is_file() {
+                self.open_reader()?.store
             } else {
-                Session {
-                    store: Store::open_in_memory_with_clock(self.clock.clone())?,
-                    lock: None,
-                    dry_run: true,
-                    app_is_open: false,
-                }
+                Store::open_in_memory_with_clock(self.clock.clone())?
             };
-            session.app_is_open = self.app_is_open();
-            return Ok(session);
+            let mut session = Session {
+                store: &mut store,
+                dry_run: true,
+                app_is_open: asked.is_open,
+                app_takes_changes: asked.is_open && asked.takes_changes,
+                clock: self.clock.clone(),
+                changes: Vec::new(),
+            };
+            return run(&mut session);
         }
-        let lock = self.lock()??;
-        let store = self.open_for_writing()?;
-        Ok(Session {
-            store,
-            lock: Some(lock),
-            dry_run: false,
-            app_is_open: false,
-        })
+        let mut run = Some(run);
+        let mut waited_for_quit = false;
+        loop {
+            let copy = match self.lock()? {
+                Ok(lock) => {
+                    let mut store = self.open_for_writing()?;
+                    let mut session = Session::writing(&mut store, self.clock.clone());
+                    let run = run.take().expect("an operation runs once");
+                    let result = run(&mut session)?;
+                    // Folds the write-ahead log into the database file, then gives the
+                    // lock back.
+                    store.close()?;
+                    drop(lock);
+                    return Ok(result);
+                }
+                Err(Taken::Tool(pid)) => return Err(Error::Busy { pid }),
+                Err(Taken::App(pid)) => pid,
+            };
+            let refuse = |why: Refusal| Error::AppIsOpen {
+                pid: copy,
+                data_dir: self.data_dir.clone(),
+                why,
+            };
+            let channel = instance_lock::app_channel(&self.data_dir).unwrap_or(None);
+            let Some(channel) = channel else {
+                if instance_lock::app_is_running(&self.data_dir).unwrap_or(true) {
+                    return Err(refuse(Refusal::OldVersion));
+                }
+                // It quit between the two looks: the lock is free now.
+                continue;
+            };
+            match live::client::change(&channel.path, &operation(), self.app_patience) {
+                live::client::Sent::Done(value) => {
+                    return serde_json::from_value(value).map_err(|error| Error::InApp {
+                        kind: crate::error::ErrorKind::Failed,
+                        message: format!(
+                            "the answer of The Writer cannot be read ({error}); the change \
+                             was made"
+                        ),
+                    });
+                }
+                live::client::Sent::Failed(error) => return Err(error),
+                live::client::Sent::Refused(Refusal::Quitting) if !waited_for_quit => {
+                    // The app goes away: its lock is free in a moment, and the change is
+                    // written directly then.
+                    waited_for_quit = true;
+                    live::client::wait_for_quit(&self.data_dir, live::QUIT_PATIENCE);
+                }
+                live::client::Sent::Refused(why) => return Err(refuse(why)),
+                live::client::Sent::Gone => {
+                    // Nobody listens where the lock file says: the app is on its way out
+                    // (or in), or it lost its channel.
+                    if waited_for_quit
+                        || !live::client::wait_for_quit(&self.data_dir, live::GONE_PATIENCE)
+                    {
+                        return Err(refuse(Refusal::NotListening));
+                    }
+                    waited_for_quit = true;
+                }
+            }
+        }
     }
 
     /// Takes the lock of the data directory as a tool. The outer error is a failure to
     /// try at all, the inner one says who has it.
-    fn lock(&self) -> Result<Result<InstanceLock>> {
+    fn lock(&self) -> Result<std::result::Result<InstanceLock, Taken>> {
         let acquired =
             instance_lock::acquire_waiting(&self.data_dir, HolderKind::Tool, self.patience)
                 .map_err(|source| Error::Io {
@@ -207,11 +322,8 @@ impl Library {
         Ok(match acquired {
             Acquired::Lock(lock) => Ok(lock),
             Acquired::Taken(copy) => Err(match copy.kind {
-                HolderKind::App => Error::AppIsOpen {
-                    pid: copy.pid,
-                    data_dir: self.data_dir.clone(),
-                },
-                HolderKind::Tool => Error::Busy { pid: copy.pid },
+                HolderKind::App => Taken::App(copy.pid),
+                HolderKind::Tool => Taken::Tool(copy.pid),
             }),
         })
     }
@@ -227,20 +339,57 @@ impl Library {
     }
 }
 
-/// The library, open for one operation.
-pub(crate) struct Session {
-    /// The store. Read-only (or in memory) when `dry_run` is set.
-    pub(crate) store: Store,
-    /// The lock of the data directory, held until the session ends. Declared after the
-    /// store so that the store is closed first.
-    lock: Option<InstanceLock>,
-    /// Nothing may be written: this is a read, or the dry run of a write.
-    pub(crate) dry_run: bool,
-    /// For the dry run of a write: the app has the library open.
-    pub(crate) app_is_open: bool,
+/// Who has the lock of the data directory, with the process id the lock file names.
+enum Taken {
+    App(Option<u32>),
+    Tool(Option<u32>),
 }
 
-impl Session {
+/// What is known about the app after it was asked to save.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct AppAsked {
+    /// The app has the library open.
+    pub(crate) is_open: bool,
+    /// It takes changes from agents (as far as known).
+    pub(crate) takes_changes: bool,
+}
+
+/// The library, open for reading.
+pub(crate) struct Reader {
+    /// The store, read-only.
+    pub(crate) store: Store,
+}
+
+/// The library, open for one operation that writes (or for its dry run).
+pub(crate) struct Session<'a> {
+    /// The store: the tool's own connection, the app's when the app carries the
+    /// operation out, read-only (or in memory) in a dry run by the tool.
+    pub(crate) store: &'a mut Store,
+    /// Nothing may be written: this is the dry run of a write.
+    pub(crate) dry_run: bool,
+    /// For a dry run: the app has the library open.
+    pub(crate) app_is_open: bool,
+    /// For a dry run while the app is open: the app takes changes from agents.
+    pub(crate) app_takes_changes: bool,
+    /// The clock for what the operation stamps itself (a comment, a planned item).
+    pub(crate) clock: Clock,
+    /// What the operation changed so far, for the app ([`crate::live::Change`]).
+    pub(crate) changes: Vec<Change>,
+}
+
+impl<'a> Session<'a> {
+    /// A session that writes to `store`.
+    pub(crate) fn writing(store: &'a mut Store, clock: Clock) -> Session<'a> {
+        Session {
+            store,
+            dry_run: false,
+            app_is_open: false,
+            app_takes_changes: false,
+            clock,
+            changes: Vec::new(),
+        }
+    }
+
     /// What a result says about the write: `changed` is whether the operation had
     /// anything to do.
     pub(crate) fn written(&self, changed: bool) -> Written {
@@ -248,19 +397,16 @@ impl Session {
             dry_run: self.dry_run,
             changed: changed && !self.dry_run,
             app_is_open: self.dry_run && self.app_is_open,
+            app_takes_changes: self.dry_run && self.app_is_open && self.app_takes_changes,
             would_change: changed,
         }
     }
 
-    /// Ends a session that wrote: folds the write-ahead log into the database file and
-    /// gives the lock back.
-    pub(crate) fn finish(self) -> Result<()> {
-        let Session { store, lock, .. } = self;
-        if lock.is_some() {
-            store.close()?;
+    /// Notes something the operation changed, once.
+    pub(crate) fn note(&mut self, change: Change) {
+        if !self.changes.contains(&change) {
+            self.changes.push(change);
         }
-        drop(lock);
-        Ok(())
     }
 }
 

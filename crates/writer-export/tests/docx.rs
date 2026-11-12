@@ -8,7 +8,8 @@ use std::io::Read;
 use roxmltree::Node;
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
-    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection, Typography,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
+    SpellingLanguage, Typography,
 };
 use writer_export::docx::parts;
 use writer_export::{DocxOptions, ExportSource, PartTitles, to_docx};
@@ -2905,4 +2906,209 @@ fn pages_larger_than_word_allows_are_cut_to_its_limit() {
         (s.0, s.1, s.3, s.4, s.5, s.6),
         (11_906, 16_838, 1440, 1440, 1440, 1440)
     );
+}
+
+// ----- the proofing language ---------------------------------------------------------------------
+
+/// A document with a spelling language (`None`: it follows the app).
+fn in_language(language: Option<&str>, blocks: Vec<Block>) -> Document {
+    let settings = DocumentSettings {
+        spelling_language: language.and_then(SpellingLanguage::language),
+        ..DocumentSettings::default()
+    };
+    Document::from_blocks(blocks).with_settings(settings)
+}
+
+/// The `w:lang` of the document defaults, as (attribute, tag) pairs.
+fn default_languages(package: &Package) -> Vec<(String, String)> {
+    let styles = roxmltree::Document::parse(package.part(parts::STYLES)).unwrap();
+    let defaults = styles
+        .descendants()
+        .find(|n| n.has_tag_name((W, "rPrDefault")))
+        .expect("document defaults");
+    languages(defaults)
+}
+
+/// Every `w:lang` below `node`, as (attribute, tag) pairs.
+fn languages(node: Node<'_, '_>) -> Vec<(String, String)> {
+    node.descendants()
+        .filter(|n| n.has_tag_name((W, "lang")))
+        .flat_map(|n| {
+            n.attributes()
+                .map(|a| (a.name().to_string(), a.value().to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// For every run with text: its text and its `w:lang` value, if any.
+fn run_languages(package: &Package) -> Vec<(String, Option<String>)> {
+    let document = roxmltree::Document::parse(package.part(parts::DOCUMENT)).unwrap();
+    document
+        .descendants()
+        .filter(|n| n.has_tag_name((W, "r")))
+        .filter_map(|r| {
+            let text: String = r
+                .children()
+                .filter(|n| n.has_tag_name((W, "t")))
+                .filter_map(|n| n.text())
+                .collect();
+            let lang = languages(r).into_iter().next().map(|(_, tag)| tag);
+            (!text.is_empty()).then_some((text, lang))
+        })
+        .collect()
+}
+
+#[test]
+fn a_fixed_spelling_language_is_the_proofing_language() {
+    let text = || vec![Block::paragraph("Colour and harbour")];
+    let pair = |attribute: &str, tag: &str| vec![(attribute.to_string(), tag.to_string())];
+    for (setting, expected) in [
+        (Some("en_GB"), pair("val", "en-GB")),
+        (Some("pt_BR"), pair("val", "pt-BR")),
+        // A language without a region gets the one Word's tools are named
+        // after.
+        (Some("de"), pair("val", "de-DE")),
+        (Some("en"), pair("val", "en-US")),
+        (Some("nb"), pair("val", "nb-NO")),
+        // The script decides which of Word's three languages it is.
+        (Some("he"), pair("bidi", "he-IL")),
+        (Some("ars"), pair("bidi", "ar-SA")),
+        (Some("ko"), pair("eastAsia", "ko-KR")),
+        // Not fixed: the reader decides, as before.
+        (None, vec![]),
+        (Some("auto"), vec![]),
+        // An identifier that is no language.
+        (Some("x_YY"), vec![]),
+        (Some("Multilingual"), vec![]),
+    ] {
+        let doc = in_language(setting, text());
+        let package = Package::of(&doc);
+        assert_eq!(default_languages(&package), expected, "{setting:?}");
+        // The styles carry it: no run repeats it.
+        assert_eq!(
+            run_languages(&package),
+            [("Colour and harbour".to_string(), None)],
+            "{setting:?}"
+        );
+    }
+    // Without a language the package is byte for byte what it was.
+    let plain_doc = Document::from_blocks(text());
+    let source = ExportSource::single("Test", &plain_doc);
+    let automatic = in_language(Some("auto"), text());
+    assert_eq!(
+        to_docx(&source, &DocxOptions::default()),
+        to_docx(
+            &ExportSource::single("Test", &automatic),
+            &DocxOptions::default()
+        )
+    );
+    assert!(
+        !Package::of(&plain_doc)
+            .part(parts::STYLES)
+            .contains("w:lang")
+    );
+    // `w:lang` is the last child of the default run properties, where the
+    // schema wants it (after the sizes).
+    let package = Package::of(&in_language(Some("en_GB"), text()));
+    assert!(
+        package
+            .part(parts::STYLES)
+            .contains("<w:szCs w:val=\"34\"/><w:lang w:val=\"en-GB\"/></w:rPr></w:rPrDefault>"),
+        "{}",
+        &package.part(parts::STYLES)[..600]
+    );
+}
+
+#[test]
+fn every_document_of_a_collection_keeps_its_own_proofing_language() {
+    let chapter = |language: Option<&str>, name: &str| {
+        in_language(
+            language,
+            vec![
+                Block::with_text(BlockKind::heading(1), name),
+                Block::paragraph(&format!("{name} body ")).with_span(
+                    "code",
+                    InlineAttrs {
+                        code: true,
+                        ..plain()
+                    },
+                ),
+                Block::with_text(BlockKind::todo(), &format!("{name} todo")),
+                Block::with_text(BlockKind::code(), &format!("{name} block")),
+            ],
+        )
+    };
+    // Every chapter in the same language: the styles carry it, no run does.
+    let (a, b) = (chapter(Some("en_GB"), "one"), chapter(Some("en_GB"), "two"));
+    let package = Package::new(
+        &ExportSource::collection("Book", [("One", &a), ("Two", &b)]),
+        &DocxOptions::default(),
+    );
+    assert_eq!(
+        default_languages(&package),
+        [("val".to_string(), "en-GB".to_string())]
+    );
+    assert!(run_languages(&package).iter().all(|(_, l)| l.is_none()));
+
+    // Different languages, one chapter without: nothing in the styles, and
+    // each chapter with a language says so on its own runs of text.
+    let (fr, none, de, auto) = (
+        chapter(Some("fr"), "un"),
+        chapter(None, "plain"),
+        chapter(Some("de_CH"), "eins"),
+        chapter(Some("auto"), "any"),
+    );
+    let source = ExportSource::collection(
+        "Book",
+        [("Un", &fr), ("Plain", &none), ("Eins", &de), ("Any", &auto)],
+    );
+    let options = DocxOptions {
+        part_titles: PartTitles::Always,
+        ..Default::default()
+    };
+    let package = Package::new(&source, &options);
+    assert_eq!(default_languages(&package), []);
+    let runs = run_languages(&package);
+    let of = |text: &str| -> Option<String> {
+        runs.iter()
+            .find(|(t, _)| t == text)
+            .unwrap_or_else(|| panic!("no run {text:?} in {runs:?}"))
+            .1
+            .clone()
+    };
+    for (text, expected) in [
+        ("un", Some("fr-FR")),
+        ("un body ", Some("fr-FR")),
+        ("un todo", Some("fr-FR")),
+        ("plain", None),
+        ("plain body ", None),
+        ("eins", Some("de-CH")),
+        ("eins body ", Some("de-CH")),
+        ("eins todo", Some("de-CH")),
+        ("any", None),
+        ("any body ", None),
+        // Code is not prose: no language (it is marked as not to be
+        // proofed), nor has the ballot box of a to-do.
+        ("code", None),
+        ("un block", None),
+        ("eins block", None),
+        ("\u{2610}", None),
+    ] {
+        assert_eq!(of(text).as_deref(), expected, "{text}");
+    }
+    // The title put above a chapter is in the chapter's language.
+    assert_eq!(of("Un").as_deref(), Some("fr-FR"));
+    assert_eq!(of("Eins").as_deref(), Some("de-CH"));
+    assert_eq!(of("Plain"), None);
+    // `w:lang` closes the run properties, after everything else.
+    let document = package.part(parts::DOCUMENT);
+    assert!(document.contains("<w:lang w:val=\"fr-FR\"/></w:rPr><w:t"));
+    // A chapter alone is the same text with the language in the styles.
+    let alone = Package::of(&de);
+    assert_eq!(
+        default_languages(&alone),
+        [("val".to_string(), "de-CH".to_string())]
+    );
+    assert!(run_languages(&alone).iter().all(|(_, l)| l.is_none()));
 }

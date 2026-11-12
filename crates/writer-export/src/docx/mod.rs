@@ -34,12 +34,21 @@
 //! - **Comments.** With [`DocxOptions::comments`], every anchored thread is
 //!   a Word comment on its text range, with its replies threaded under it
 //!   and resolved threads marked done.
+//! - **Proofing language.** A document whose spelling language is fixed
+//!   (`DocumentSettings::spelling_language`) names it as the language of
+//!   its text, in the form Word expects ([`language_tag`]: `en_GB` is
+//!   `en-GB`, `de` is `de-DE`), so the reader checks the spelling in that
+//!   language. It is left out when the document follows the app's setting
+//!   or its language is detected automatically.
 //! - **Collections.** Every document is its own section starting on a new
 //!   page, with its own page setup and its own typography. The styles
 //!   are written from the first document; a document whose font, text
 //!   size, line height or paragraph spacing differ carries them on its
 //!   own paragraphs and runs, so that it looks in the collection exactly
 //!   as it does exported alone, and its headings are still headings.
+//!   The proofing language is in the styles when every document names
+//!   the same one; otherwise each document with a fixed language carries
+//!   it on its runs, and the others carry none.
 //!   Page breaks at the very start or end of a document, where the next
 //!   section starts a new page anyway, are dropped so that no empty page
 //!   appears between two documents.
@@ -70,6 +79,7 @@
 //! ```
 
 mod body;
+mod lang;
 mod numbering;
 mod styles;
 mod xml;
@@ -80,6 +90,8 @@ use writer_core::{DocumentSettings, Timestamp};
 use crate::common::iso_datetime;
 use crate::{ExportSource, PartTitles};
 use xml::{DECLARATION, attr, text};
+
+pub use lang::language_tag;
 
 pub(crate) const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 pub(crate) const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -374,7 +386,8 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
         .map(|p| p.document.settings().clone().sanitized())
         .unwrap_or(default_settings);
     let metrics = Metrics::new(options);
-    let body = body::build(source, options, &metrics);
+    let language = lang::Lang::common(source);
+    let body = body::build(source, options, &metrics, language.as_ref());
     let has_comments = !body.comments.is_empty();
 
     let mut zip = zip::ZipWriter::new(options.modified);
@@ -395,7 +408,7 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
     );
     zip.add(
         parts::STYLES,
-        styles::styles_xml(&first_settings.typography, &metrics).as_bytes(),
+        styles::styles_xml(&first_settings.typography, &metrics, language.as_ref()).as_bytes(),
     );
     zip.add(
         parts::NUMBERING,

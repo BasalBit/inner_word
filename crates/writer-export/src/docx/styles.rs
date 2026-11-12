@@ -2,6 +2,7 @@
 
 use writer_core::{BlockKind, Typography};
 
+use super::lang::Lang;
 use super::numbering::Instance;
 use super::xml::{DECLARATION, attr};
 use super::{Metrics, W_NS};
@@ -69,7 +70,9 @@ fn size(half_points: u32) -> String {
 /// `word/styles.xml`: Normal from the document typography, Heading 1 to 6,
 /// Quote, Code, List Paragraph, Hyperlink, and the small styles comments
 /// and the footer need.
-pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
+pub(crate) fn styles_xml(typography: &Typography, m: &Metrics, language: Option<&Lang>) -> String {
+    // The proofing language of the whole export, when it has one.
+    let lang = language.map(Lang::xml).unwrap_or_default();
     let body_font = fonts(&typography.body_font);
     let body_size = size(m.half_points(typography.base_size));
     let after = m.paragraph_gap(typography);
@@ -82,7 +85,7 @@ pub(crate) fn styles_xml(typography: &Typography, m: &Metrics) -> String {
     s.push_str(DECLARATION);
     s.push_str(&format!("<w:styles xmlns:w=\"{W_NS}\">"));
     s.push_str(&format!(
-        "<w:docDefaults><w:rPrDefault><w:rPr>{body_font}{body_size}</w:rPr></w:rPrDefault>\
+        "<w:docDefaults><w:rPrDefault><w:rPr>{body_font}{body_size}{lang}</w:rPr></w:rPrDefault>\
          <w:pPrDefault><w:pPr><w:spacing w:after=\"{after}\" w:line=\"{line}\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
     ));
     s.push_str(&format!(

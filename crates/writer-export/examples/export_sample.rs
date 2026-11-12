@@ -8,14 +8,16 @@
 //! Files written: `sample.md`, `sample-footnotes.md`, `sample.txt`,
 //! `sample-social.txt`, `sample.docx`, `lists.docx` (one page of lists that
 //! restart in every way, small enough for a Quick Look thumbnail),
-//! `book.docx`, `chapter2.docx`, `book-mixed.docx`, `sample-restyled.docx`, `book.md`, and `long.docx`: a book of 1,200 sections whose
+//! `book.docx`, `chapter2.docx`, `book-mixed.docx`, `sample-restyled.docx`, `sample-en-GB.docx`
+//! and `book-languages.docx` (the proofing language), `book.md`, and `long.docx`: a book of 1,200 sections whose
 //! numbered items say their own number ("item 2"), which passes every
 //! limit the DOCX numbering has (a definition per list, shared
 //! definitions, numbers as text).
 
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
-    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection, Typography,
+    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
+    SpellingLanguage, Typography,
 };
 use writer_export::{
     DocxOptions, ExportFormat, ExportSource, MarkdownComments, MarkdownOptions, PlainTextOptions,
@@ -374,6 +376,54 @@ fn main() -> std::io::Result<()> {
             &docx,
         ),
     )?;
+    // The proofing language: the sample in British English (the language
+    // is in the styles), and a book whose chapters name different
+    // languages or none (each carries its own on its runs).
+    let in_language = |d: &Document, language: Option<&str>| {
+        d.clone().with_settings(DocumentSettings {
+            spelling_language: language.and_then(SpellingLanguage::language),
+            ..d.settings().clone()
+        })
+    };
+    let british = in_language(&doc, Some("en_GB"));
+    std::fs::write(
+        dir.join("sample-en-GB.docx"),
+        to_docx(
+            &ExportSource::single("The Writer: export sample", &british),
+            &docx,
+        ),
+    )?;
+    let french = in_language(
+        &Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Le port"),
+            Block::paragraph("Le bateau est arrivé au port ce matin et personne ne l'attendait."),
+            Block::with_text(BlockKind::BulletItem, "Une liste"),
+        ]),
+        Some("fr"),
+    );
+    let german = in_language(
+        &Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Der Hafen"),
+            Block::paragraph(
+                "Das Schiff kam heute Morgen im Hafen an und niemand hat es erwartet.",
+            ),
+        ]),
+        Some("de_CH"),
+    );
+    let hebrew = in_language(
+        &Document::from_blocks(vec![Block::paragraph("שלום עולם, זה מבחן.")]),
+        Some("he"),
+    );
+    let languages = ExportSource::collection(
+        "A Book in Languages",
+        [
+            ("Français", &french),
+            ("Chapter 1", &one),
+            ("Deutsch", &german),
+            ("עברית", &hebrew),
+        ],
+    );
+    std::fs::write(dir.join("book-languages.docx"), to_docx(&languages, &docx))?;
     // The second chapter by itself, to compare with its pages in the book.
     std::fs::write(
         dir.join("chapter2.docx"),

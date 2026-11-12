@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientation, Typography};
 
+use super::lang::Lang;
 use super::numbering::{Allocator, Instance, Slot};
 use super::styles::{
     BULLET_NUM_ID, CHECKED_COLOR, CODE_FILL, FAINT_COLOR, FIRST_DECIMAL_NUM_ID, MUTED_COLOR,
@@ -164,6 +165,8 @@ struct RunProps {
     /// Background fill, `RRGGBB`.
     shade: Option<String>,
     rtl: bool,
+    /// The proofing language, where the styles do not carry it.
+    lang: Option<Lang>,
 }
 
 impl RunProps {
@@ -209,6 +212,9 @@ impl RunProps {
         }
         if self.rtl {
             p.push_str("<w:rtl/>");
+        }
+        if let Some(lang) = &self.lang {
+            p.push_str(&lang.xml());
         }
         if p.is_empty() {
             String::new()
@@ -310,6 +316,12 @@ struct Builder<'a> {
     /// themselves, so that every document of a collection keeps its own
     /// text size, font, line height and spacing.
     local: Option<Typography>,
+    /// The proofing language the styles are written with: the one every
+    /// document of the export names, if they all name the same.
+    language: Option<Lang>,
+    /// The proofing language of the document being written, when the
+    /// styles do not carry it: its runs then say so themselves.
+    local_language: Option<Lang>,
     links: Vec<String>,
     link_ids: HashMap<String, usize>,
     numbering: Allocator,
@@ -423,11 +435,13 @@ impl Builder<'_> {
                     .to_uppercase()
             }),
             size,
+            lang: self.local_language.clone(),
             ..RunProps::default()
         };
         if attrs.code {
             p.font = Some(self.metrics.code_font.clone());
             p.no_proof = true;
+            p.lang = None;
             if p.shade.is_none() {
                 p.shade = Some(CODE_FILL.to_string());
             }
@@ -591,6 +605,7 @@ impl Builder<'_> {
         };
         let typography = doc.settings().typography.clone().sanitized();
         self.local = (typography != self.typography).then(|| typography.clone());
+        self.local_language = Lang::of(doc).filter(|l| Some(l) != self.language.as_ref());
         let ordinals = ordinals(doc);
         let paragraph_gap = self.metrics.paragraph_gap(&typography);
         let quote_gap = self.metrics.quote_gap(&typography);
@@ -743,6 +758,8 @@ impl Builder<'_> {
             if let Some((marker, color, flush_right)) = literal_marker {
                 let props = RunProps {
                     color: Some(color.to_string()),
+                    // A ballot box or a number is not a word.
+                    lang: None,
                     ..self.run_props(&InlineAttrs::default(), size, &Block::paragraph(""))
                 };
                 para.content.push_str(&format!(
@@ -822,7 +839,12 @@ fn section_xml(doc: &Document, page_numbers: bool) -> String {
 }
 
 /// Builds the document body of `source`.
-pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &Metrics) -> Body {
+pub(crate) fn build(
+    source: &ExportSource<'_>,
+    options: &DocxOptions,
+    metrics: &Metrics,
+    language: Option<&Lang>,
+) -> Body {
     let mut builder = Builder {
         options,
         metrics,
@@ -832,6 +854,8 @@ pub(crate) fn build(source: &ExportSource<'_>, options: &DocxOptions, metrics: &
             .map(|p| p.document.settings().typography.clone().sanitized())
             .unwrap_or_default(),
         local: None,
+        language: language.cloned(),
+        local_language: None,
         links: Vec::new(),
         link_ids: HashMap::new(),
         numbering: Allocator::new(),
@@ -945,12 +969,13 @@ mod tests {
             underline: true,
             shade: Some("FFF176".into()),
             rtl: true,
+            lang: Lang::from_identifier("en_GB"),
         };
         assert_eq!(
             p.xml(),
             "<w:rPr><w:rStyle w:val=\"Hyperlink\"/><w:rFonts w:ascii=\"A &quot;B&quot;\" w:hAnsi=\"A &quot;B&quot;\" w:cs=\"A &quot;B&quot;\"/>\
              <w:b/><w:bCs/><w:i/><w:iCs/><w:strike/><w:noProof/><w:color w:val=\"FF0000\"/><w:sz w:val=\"34\"/><w:szCs w:val=\"34\"/>\
-             <w:u w:val=\"single\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFF176\"/><w:rtl/></w:rPr>"
+             <w:u w:val=\"single\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFF176\"/><w:rtl/><w:lang w:val=\"en-GB\"/></w:rPr>"
         );
         assert_eq!(RunProps::default().xml(), "");
     }

@@ -304,3 +304,68 @@ fn typing_after_a_font_was_applied_to_a_selection(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(font_at(&editor, 4, cx), None);
 }
+
+#[gpui::test]
+fn the_list_of_fonts_is_what_the_picker_shows(cx: &mut TestAppContext) {
+    use writer_editor_tools::{FontList, FontRow};
+
+    setup(cx);
+    cx.update(|cx| {
+        set_font_families(["Charter", "Georgia", "Menlo", "Papyrus", "Zapfino"], cx);
+        set_recent_fonts(["Zapfino", "Georgia"], cx);
+    });
+    let list = cx.update(FontList::current);
+    assert_eq!(list.position("Menlo"), Some(2));
+    assert_eq!(list.position("Sabon Next"), None);
+    let name = |row: &FontRow, leading: &[&str]| match row {
+        FontRow::Header(title) => title.to_string(),
+        FontRow::Leading { index, .. } => leading[*index].to_string(),
+        FontRow::Family { index, .. } => list.families()[*index].to_string(),
+    };
+    let names = |leading: &[&str], query: &str| -> Vec<String> {
+        list.rows(leading, query)
+            .iter()
+            .map(|row| name(row, leading))
+            .collect()
+    };
+
+    // Without a query: the groups under their headings. A recent family
+    // that is a writing font is not said twice.
+    let groups = [
+        "Writing fonts",
+        "Charter",
+        "Georgia",
+        "Menlo",
+        "Recent",
+        "Zapfino",
+        "All fonts",
+        "Charter",
+        "Georgia",
+        "Menlo",
+        "Papyrus",
+        "Zapfino",
+    ];
+    assert_eq!(names(&[], ""), groups);
+    // Rows that are not installed families lead.
+    let with_leading = names(&["Sabon Next"], "");
+    assert_eq!(with_leading[0], "Sabon Next");
+    assert_eq!(with_leading[1..], groups);
+    // With a query: the matches, the leading rows among them, no headings.
+    assert_eq!(names(&["Sabon Next"], "sab"), ["Sabon Next"]);
+    assert_eq!(names(&["Sabon Next"], "zap"), ["Zapfino"]);
+    assert!(matches!(
+        list.rows(&[], "zap")[0],
+        FontRow::Family { index: 4, ref positions } if positions == &[0, 1, 2]
+    ));
+
+    // The font picker of the text shows exactly these rows after its own
+    // "Document default".
+    let (tools, _editor, cx) = open(paragraphs(&["Text"]), cx);
+    cx.simulate_keystrokes("cmd-t");
+    let shown: Vec<String> = rows(&tools, cx).into_iter().map(|row| row.label).collect();
+    assert_eq!(shown[0], "Document default");
+    assert_eq!(shown[1..], groups);
+    cx.simulate_input("zap");
+    let shown: Vec<String> = rows(&tools, cx).into_iter().map(|row| row.label).collect();
+    assert_eq!(shown, names(&["Document default"], "zap"));
+}

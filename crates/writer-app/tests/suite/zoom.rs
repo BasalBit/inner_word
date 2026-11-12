@@ -748,6 +748,70 @@ fn each_view_keeps_its_zoom_and_it_comes_back_after_a_relaunch(cx: &mut TestAppC
     assert!(sheet_fits);
 }
 
+/// The app quits (`cmd-q`, the menu, `SIGTERM`: all of them end in GPUI's
+/// shutdown, which runs the quit hooks) before the moment has passed
+/// after which a change of zoom is written: the hook writes it, for the
+/// view that is showing and for the other one, and the next launch has
+/// both. A zoom nobody chose is not written by quitting either.
+#[gpui::test]
+fn a_zoom_still_waiting_to_be_written_is_written_when_the_app_quits(cx: &mut TestAppContext) {
+    init(cx);
+    let disk = Disk::new();
+    let (library, workspace, vcx) = disk.launch(cx);
+    let id = add_document_in(&library, &manuscript(false), vcx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(id, true, window, cx);
+    });
+    vcx.run_until_parked();
+    // A launch that changes no zoom writes none when it quits.
+    assert_eq!(stored(&library, FLOW_ZOOM_KEY, vcx), None);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    // Both views are given a zoom, one right after the other, and the
+    // app quits at once: neither has been written yet.
+    vcx.simulate_keystrokes("cmd-= cmd-=");
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::Percent(125));
+    vcx.simulate_keystrokes("cmd-alt-p");
+    vcx.run_until_parked();
+    set_zoom(&workspace, Zoom::FitPage, vcx);
+    assert_eq!(stored(&library, FLOW_ZOOM_KEY, vcx), None);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    // Quitting: what `App::quit` ends in on a Mac, the same call the test
+    // context makes when a test is over.
+    vcx.cx.update(|cx| cx.shutdown());
+    assert_eq!(
+        stored(&library, FLOW_ZOOM_KEY, vcx),
+        Some("125".to_string())
+    );
+    assert_eq!(
+        stored(&library, PAGE_ZOOM_KEY, vcx),
+        Some("fit-page".to_string())
+    );
+    drop(workspace);
+    drop(library);
+
+    // The next launch has them: the document opens in page view, which
+    // shows a whole sheet, and the column is at 125 %.
+    let (library, workspace, vcx) = disk.launch(cx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::FitPage);
+    vcx.simulate_keystrokes("cmd-alt-p");
+    vcx.run_until_parked();
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::Percent(125));
+    // A launch that changes nothing and quits leaves them as they are.
+    vcx.cx.update(|cx| cx.shutdown());
+    assert_eq!(
+        stored(&library, FLOW_ZOOM_KEY, vcx),
+        Some("125".to_string())
+    );
+    assert_eq!(
+        stored(&library, PAGE_ZOOM_KEY, vcx),
+        Some("fit-page".to_string())
+    );
+}
+
 fn add_document_in(
     library: &Entity<Library>,
     document: &Document,

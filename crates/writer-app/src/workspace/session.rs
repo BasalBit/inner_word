@@ -62,9 +62,10 @@ pub const RETRY_DELAY: Duration = Duration::from_secs(5);
 pub const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// What the toast says when a document is opened whose text was written by
-/// something other than this app since it was last open here (an agent,
-/// through the command line tool, while the app was closed).
-pub const CHANGED_OUTSIDE: &str = "This document was changed while The Writer was closed.";
+/// something other than the writer since it was last open here: an agent,
+/// through the command line tool, while the app was closed, or while it
+/// was open with another document in the window.
+pub const CHANGED_OUTSIDE: &str = "This document was changed since you last had it open.";
 
 /// What the status bar says about saving.
 #[derive(Clone, Debug, PartialEq, Eq)]

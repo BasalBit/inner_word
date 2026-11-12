@@ -30,7 +30,9 @@ use writer_app::{
     settings_view::SettingsView,
     single_instance::{self, Acquired, InstanceLock},
     version_history::VersionHistory,
-    workspace::{AUTOSAVE_DELAY, AgentUndo, Names, Offer, Subject, run_sentence, sentence},
+    workspace::{
+        AUTOSAVE_DELAY, AgentUndo, CHANGED_OUTSIDE, Names, Offer, Subject, run_sentence, sentence,
+    },
 };
 use writer_core::{Position, Selection};
 use writer_library::{Library, LibraryItem};
@@ -740,6 +742,48 @@ fn a_change_to_another_document_offers_to_open_it(cx: &mut TestAppContext) {
     });
     assert!(went);
     assert_eq!(selection(&desk, cx), Selection::caret(Position::new(2, 0)));
+}
+
+#[gpui::test]
+fn a_document_changed_while_another_was_open_says_so_when_it_is_opened(cx: &mut TestAppContext) {
+    let (desk, open, other, cx) = desk_with_two(cx);
+    // The writer was in "Other" before, at the end of its text.
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        assert!(workspace.open_document(other, true, window, cx));
+    });
+    set_caret(&desk, 1, "Text.".len(), cx);
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        assert!(workspace.open_document(open, true, window, cx));
+    });
+    cx.run_until_parked();
+
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.replace_document(&ReplaceDocumentRequest {
+            document: other.into(),
+            markdown: "# Other\n\nRewritten from top to bottom by the agent.".into(),
+            write: claude(),
+        })
+    })
+    .unwrap();
+    cx.executor().advance_clock(live::TOAST_DURATION * 2);
+    cx.run_until_parked();
+
+    // Opened later, it starts at its beginning (the remembered caret
+    // belongs to a text that is gone) and says why.
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        assert!(workspace.open_document(other, true, window, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(selection(&desk, cx), Selection::caret(Position::new(0, 0)));
+    assert_eq!(
+        notes_shown(&desk, cx),
+        [(
+            CHANGED_OUTSIDE.to_string(),
+            Some("Version History".to_string())
+        )]
+    );
+    assert!(CHANGED_OUTSIDE.contains("since you last had it open"));
 }
 
 #[gpui::test]

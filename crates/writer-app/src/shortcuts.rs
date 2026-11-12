@@ -22,10 +22,42 @@
 //! every key context of the row's place; a change of the row is made to
 //! all of them, see `workspace/shortcuts.rs`).
 //!
+//! # A place name is a promise
+//!
+//! Two rows under one place name are in the same place to whoever reads
+//! the list: a key of the one given to the other is "taken", never "used
+//! in another place" (the keymap is told the rows and their place names,
+//! [`listed_rows`], and judges by them). So key contexts that never have
+//! the keyboard together have names of their own, also where they are
+//! parts of one panel: the comment list and the question it asks before
+//! a comment is deleted, the list of shortcuts and a question it asks,
+//! the conversation of a chat, the header and the context row of the side
+//! chat, a button and a segmented control. A test holds every pair of rows of
+//! the real keymap against this.
+//!
 //! Two things the keymap cannot tell are added: the insert menu, which is
 //! opened by typing `/` and not by a binding ([`TYPED_TRIGGERS`]), and a
 //! first line that says the same commands are in the menus
 //! ([`MENUS_NOTE`]), for whoever would rather click.
+//!
+//! # A part of the app that is not shown
+//!
+//! The commands of a hidden category ([`commands::set_category_hidden`];
+//! today the assistant's, while it is not shown) and the keys of its
+//! places are not rows of the list ([`collect_shortcuts`]). They are rows
+//! all the same ([`collect_every_shortcut`], in the same order, so the
+//! list and the shortcuts file have one order whatever is shown): the
+//! file has every command, and the keymap is told which commands are not
+//! there ([`hidden_targets`], [`crate::keymap::refresh_listed`]), so that
+//! their keys count for nothing in what the list says about a key.
+//!
+//! # Every key is a row
+//!
+//! Every command in every key context the keymap has is in a row
+//! ([`Shortcut::targets`]): a test holds that against the keymap. A row
+//! can stand for several key contexts, so there are fewer rows than the
+//! shortcuts file has entries (one per command and key context); the one
+//! row that is no binding (the `/` of the insert menu) is not in the file.
 
 use std::collections::HashSet;
 
@@ -38,7 +70,13 @@ use crate::commands;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 18] = [
+const KEY_GROUPS: [(&str, &str); 19] = [
+    // The keys of the menu bar that are no commands of the palette: hide
+    // the app, hide the others, minimize the window. They are keys like
+    // every other (and were in the shortcuts file without being in the
+    // list, in 0.5.0). Not commands to run from a row: an undescribed row
+    // has no "Run Command".
+    ("app", crate::actions::CATEGORY_APP),
     ("editor", "Moving and selecting"),
     ("editor_tools", ""),
     ("comments", ""),
@@ -101,6 +139,9 @@ pub enum Place {
     LinkField,
     /// In the list of comment threads.
     CommentList,
+    /// In the comment list while it asks whether a comment is to be
+    /// deleted: the list's own keys do not apply then.
+    CommentConfirm,
     /// In the field a comment or a reply is written in.
     CommentField,
     /// In the library sidebar.
@@ -117,11 +158,29 @@ pub enum Place {
     Agents,
     /// In the list of keyboard shortcuts itself.
     Shortcuts,
+    /// In a question the list of keyboard shortcuts asks (about a key,
+    /// about an import, about "reset all"): the choices have the keyboard,
+    /// not the list.
+    ShortcutsQuestion,
     /// In one of the assistant's chats: the quick chat at the selection,
-    /// the side chat beside the text.
+    /// the side chat beside the text. Wherever the keyboard is in them,
+    /// and where a message is written.
     AssistantChat,
+    /// In the conversation of a chat: on its messages.
+    AssistantConversation,
+    /// In the header of the side chat: on its controls.
+    AssistantHeader,
+    /// In the context row of the side chat: on the documents and folders
+    /// that were added.
+    AssistantContextRow,
     /// In a dialog.
     Dialog,
+    /// On a button or a switch.
+    Button,
+    /// On a segmented control.
+    Segmented,
+    /// Between the controls of a form (`tab` and `shift-tab`).
+    Form,
     /// In a text field.
     TextField,
     /// Somewhere this list does not know by name.
@@ -137,6 +196,7 @@ impl Place {
             Place::FindBar => "In the find bar",
             Place::LinkField => "In the link field",
             Place::CommentList => "In the comment list",
+            Place::CommentConfirm => "Confirming in the comment list",
             Place::CommentField => "Writing a comment",
             Place::Library => "In the library",
             Place::Trash => "In the trash",
@@ -145,8 +205,15 @@ impl Place {
             Place::VersionHistory => "In the version history",
             Place::Agents => "In the agents panel",
             Place::Shortcuts => "In keyboard shortcuts",
+            Place::ShortcutsQuestion => "In a question of keyboard shortcuts",
             Place::AssistantChat => "In the assistant's chats",
+            Place::AssistantConversation => "In a chat's conversation",
+            Place::AssistantHeader => "In the header of the side chat",
+            Place::AssistantContextRow => "In the context row of the side chat",
             Place::Dialog => "In a dialog",
+            Place::Button => "On a button or a switch",
+            Place::Segmented => "On a segmented control",
+            Place::Form => "In a form",
             Place::TextField => "In a text field",
             Place::Elsewhere => "Elsewhere",
         }
@@ -159,9 +226,11 @@ impl Place {
             return Place::Anywhere;
         };
         let has = |name: &str| predicate.contains(name);
-        if has("Keymap") {
-            // The list of keyboard shortcuts: its query field, the
-            // question it asks about a key.
+        if has("KeymapChoices") {
+            // A question the list of keyboard shortcuts asks.
+            Place::ShortcutsQuestion
+        } else if has("Keymap") {
+            // The list of keyboard shortcuts: its rows, its query field.
             Place::Shortcuts
         } else if has("FindBar") {
             Place::FindBar
@@ -169,6 +238,8 @@ impl Place {
             Place::LinkField
         } else if has("CommentComposer") {
             Place::CommentField
+        } else if has("CommentThreads") && has("confirming") && !has("!confirming") {
+            Place::CommentConfirm
         } else if has("CommentThreads") || has("CommentsPanel") {
             Place::CommentList
         } else if has("LibraryPanel") {
@@ -183,25 +254,27 @@ impl Place {
             Place::VersionHistory
         } else if has("AgentsView") {
             Place::Agents
+        } else if has("AssistantMessages") {
+            Place::AssistantConversation
+        } else if has("AssistantHeader") {
+            Place::AssistantHeader
+        } else if has("AssistantContext") {
+            Place::AssistantContextRow
         } else if has("QuickChat") || has("Assistant") || has("assistant") {
-            // The side chat (`AssistantPanel`, `AssistantMessages`, ...),
-            // the quick chat's popover, and the editors of both (the
-            // composer and the answers: `Editor && assistant...`).
+            // The side chat (`AssistantPanel`), the quick chat's popover,
+            // and the editors of both (the composer and the answers:
+            // `Editor && assistant...`).
             Place::AssistantChat
         } else if has("Picker") {
             Place::List
-        } else if [
-            "ModalLayer",
-            "ConfirmDialog",
-            "Button",
-            "Toggle",
-            "SegmentedControl",
-            "TabNavigation",
-        ]
-        .into_iter()
-        .any(has)
-        {
+        } else if has("ModalLayer") || has("ConfirmDialog") {
             Place::Dialog
+        } else if has("Button") || has("Toggle") {
+            Place::Button
+        } else if has("SegmentedControl") {
+            Place::Segmented
+        } else if has("TabNavigation") {
+            Place::Form
         } else if has("EditorTools") || has("Editor") || has("vim_mode") {
             Place::Text
         } else if has("TextField") {
@@ -218,9 +291,20 @@ impl Place {
         match self {
             Place::Library => Some("Library"),
             Place::CommentList => Some("Comments"),
-            Place::AssistantChat => Some(crate::actions::CATEGORY_ASSISTANT),
+            place if place.is_of_the_assistant() => Some(crate::actions::CATEGORY_ASSISTANT),
             _ => None,
         }
+    }
+
+    /// Whether the place is a part of the assistant's chats.
+    pub fn is_of_the_assistant(self) -> bool {
+        matches!(
+            self,
+            Place::AssistantChat
+                | Place::AssistantConversation
+                | Place::AssistantHeader
+                | Place::AssistantContextRow
+        )
     }
 
     /// The heading of the commands of `category` in this place.
@@ -310,12 +394,8 @@ pub fn place_of(target: &Target) -> Place {
 /// What tells two rows of one command in one place apart, by something
 /// in the key context of the second: the library moves with the arrows
 /// wherever the keyboard is in it and with letters only while nothing is
-/// typed there; the list of shortcuts moves through its rows and through
-/// the lines of a question it asks.
-const DISTINCTIONS: [(&str, &str); 2] = [
-    ("!TextField", " (outside a text field)"),
-    ("KeymapChoices", " (in a question)"),
-];
+/// typed there.
+const DISTINCTIONS: [(&str, &str); 1] = [("!TextField", " (outside a text field)")];
 
 fn distinction(target: &Target) -> Option<&'static str> {
     let context = target.context.text()?;
@@ -369,7 +449,21 @@ fn rows_of(
                     == writer_keymap::Rank::LaterWins
         })
     };
-    let mut places: Vec<Place> = targets.iter().map(|keys| place_of(&keys.target)).collect();
+    // A command of the assistant that works wherever the keyboard is in a
+    // chat is bound for the chat and once more for the conversation (which
+    // has keys of its own on the same level): one command "in the
+    // assistant's chats", not one there and one in the conversation.
+    let chat_wide = targets
+        .iter()
+        .any(|keys| place_of(&keys.target) == Place::AssistantChat);
+    let place_in_the_list = |target: &Target| match place_of(target) {
+        place if chat_wide && place.is_of_the_assistant() => Place::AssistantChat,
+        place => place,
+    };
+    let mut places: Vec<Place> = targets
+        .iter()
+        .map(|keys| place_in_the_list(&keys.target))
+        .collect();
     places.sort();
     places.dedup();
     let mut rows = Vec::new();
@@ -377,7 +471,7 @@ fn rows_of(
         let mut groups: Vec<Vec<&TargetKeys>> = Vec::new();
         for target in targets
             .iter()
-            .filter(|keys| place_of(&keys.target) == place)
+            .filter(|keys| place_in_the_list(&keys.target) == place)
         {
             match groups.iter_mut().find(|group| same_keys(group[0], target)) {
                 Some(group) => group.push(target),
@@ -405,7 +499,15 @@ fn rows_of(
                 default_keys: state.default_keys.clone(),
                 changed: group.iter().any(|keys| keys.changed),
                 target: Some(state.target.clone()),
-                targets: group.iter().map(|keys| keys.target.clone()).collect(),
+                // The key context that stands for the row first.
+                targets: std::iter::once(state.target.clone())
+                    .chain(
+                        group
+                            .iter()
+                            .map(|keys| keys.target.clone())
+                            .filter(|target| *target != state.target),
+                    )
+                    .collect(),
                 fixed: None,
                 typed: None,
                 described,
@@ -452,15 +554,92 @@ fn plain_words(title: &str) -> String {
         .join(" ")
 }
 
+/// Keys without a descriptor whose action's name alone does not say what
+/// they do: the action, and the title of its row.
+const KEY_TITLES: [(&str, &str); 3] = [
+    ("app::Hide", "Hide The Writer"),
+    ("app::HideOthers", "Hide the other apps"),
+    ("app::Minimize", "Minimize the window"),
+];
+
 /// The title of a command that has no descriptor, from its action's name.
 pub fn title_of_action(name: &str) -> String {
-    plain_words(&humanize_action_name(name))
+    match KEY_TITLES.iter().find(|(action, _)| *action == name) {
+        Some((_, title)) => title.to_string(),
+        None => plain_words(&humanize_action_name(name)),
+    }
 }
 
-/// Every row, in the order the list has them: by place, within a place by
-/// heading (the commands' categories in registration order, then the
-/// undescribed keys of the [`KEY_GROUPS`] namespaces).
+/// Every row of the list, in the order the list has them: by place,
+/// within a place by heading (the commands' categories in registration
+/// order, then the undescribed keys of the [`KEY_GROUPS`] namespaces).
+/// Without the rows of a part of the app that is not shown.
 pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
+    collect(cx)
+        .into_iter()
+        .filter(|(_, hidden)| !hidden)
+        .map(|(shortcut, _)| shortcut)
+        .collect()
+}
+
+/// [`collect_shortcuts`] with the rows that are not shown right now where
+/// they would stand: every command the app has, in one order whatever is
+/// shown. What the shortcuts file is written from.
+pub fn collect_every_shortcut(cx: &App) -> Vec<Shortcut> {
+    collect(cx)
+        .into_iter()
+        .map(|(shortcut, _)| shortcut)
+        .collect()
+}
+
+/// The commands, each in every key context of its row, that are not shown
+/// right now (the commands of a hidden category and the keys of its
+/// places). The keymap is told ([`crate::keymap::refresh_listed`]): their
+/// keys count for nothing in a verdict.
+pub fn hidden_targets(cx: &App) -> Vec<Target> {
+    collect(cx)
+        .into_iter()
+        .filter(|(_, hidden)| *hidden)
+        .flat_map(|(shortcut, _)| shortcut.targets)
+        .collect()
+}
+
+/// The rows as the keymap is told them (`writer_keymap::Row`): the key
+/// contexts of each row, the one that stands for it first, under the
+/// name of its place. The keymap judges a key by them: see "A place name
+/// is a promise" in the [module docs](self).
+pub fn listed_rows(cx: &App) -> Vec<writer_keymap::Row> {
+    listed(cx).1
+}
+
+/// [`hidden_targets`] and [`listed_rows`] from one pass over the rows.
+pub fn listed(cx: &App) -> (Vec<Target>, Vec<writer_keymap::Row>) {
+    let mut hidden_targets = Vec::new();
+    let mut rows = Vec::new();
+    for (shortcut, hidden) in collect(cx) {
+        if shortcut.targets.is_empty() {
+            continue;
+        }
+        if hidden {
+            hidden_targets.extend(shortcut.targets.iter().cloned());
+        }
+        rows.push(writer_keymap::Row::new(
+            shortcut.targets,
+            shortcut.place.label(),
+        ));
+    }
+    (hidden_targets, rows)
+}
+
+/// How the list names the place of a command that is not shown right now,
+/// where such a command has to be named at all (a file that is imported
+/// changes its keys): "In the assistant's chats, not shown now".
+pub fn hidden_place_label(place: Place) -> String {
+    format!("{}, not shown now", place.label())
+}
+
+/// Every row with whether it is hidden, in the order of the list.
+fn collect(cx: &App) -> Vec<(Shortcut, bool)> {
     let Some(effective) = crate::keymap::effective(cx) else {
         return Vec::new();
     };
@@ -471,30 +650,40 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
             .filter(|keys| keys.target.command.action == name)
             .collect()
     };
-    let mut shortcuts = Vec::new();
+    let mut shortcuts: Vec<(Shortcut, bool)> = Vec::new();
     let mut described: HashSet<&'static str> = HashSet::new();
-    let all = commands::all(cx);
+    // Every registered command, those of a hidden category too: they are
+    // rows that are not shown.
+    let registry = cx.try_global::<commands::CommandRegistry>();
+    let all: Vec<writer_ui::CommandDescriptor> = registry
+        .map(|registry| registry.commands().to_vec())
+        .unwrap_or_default();
     for category in commands::categories(&all) {
+        let hidden = registry.is_some_and(|registry| registry.is_hidden(&category));
         for command in all.iter().filter(|command| command.category == category) {
             if !described.insert(command.action_name()) {
                 continue;
             }
             let targets = targets_of(command.action_name());
-            shortcuts.extend(rows_of(
-                &command.title,
-                &category,
-                command.action_ref(),
-                true,
-                &targets,
-                cx,
-            ));
+            shortcuts.extend(
+                rows_of(
+                    &command.title,
+                    &category,
+                    command.action_ref(),
+                    true,
+                    &targets,
+                    cx,
+                )
+                .into_iter()
+                .map(|row| (row, hidden)),
+            );
             if let Some((_, typed, whereabouts)) = TYPED_TRIGGERS
                 .iter()
                 .find(|(action, _, _)| *action == command.action_name())
                 && let Some(hint) = KeyHint::parse(typed)
             {
                 let place = Place::Text;
-                shortcuts.push(Shortcut {
+                let row = Shortcut {
                     title: format!("{} ({whereabouts})", command.title).into(),
                     category: category.clone(),
                     place,
@@ -510,15 +699,9 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
                     described: true,
                     action: command.action(),
                     hint: Some(hint),
-                });
+                };
+                shortcuts.push((row, hidden));
             }
-        }
-    }
-    // The commands of a hidden category are not rows; nor are their keys
-    // listed below under the names of their actions.
-    if let Some(registry) = cx.try_global::<commands::CommandRegistry>() {
-        for command in registry.commands() {
-            described.insert(command.action_name());
         }
     }
 
@@ -526,9 +709,7 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     // action and place, in the order the actions were first bound.
     let assistant_hidden = commands::category_hidden(crate::actions::CATEGORY_ASSISTANT, cx);
     for (namespace, category) in KEY_GROUPS {
-        if assistant_hidden && ASSISTANT_NAMESPACES.contains(&namespace) {
-            continue;
-        }
+        let hidden = assistant_hidden && ASSISTANT_NAMESPACES.contains(&namespace);
         let prefix = format!("{namespace}::");
         let mut seen: HashSet<&str> = HashSet::new();
         for keys in effective.targets() {
@@ -539,32 +720,39 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
             let Some(action) = crate::keymap::action_named(name, cx) else {
                 continue;
             };
-            shortcuts.extend(rows_of(
-                &title_of_action(name).into(),
-                &category.into(),
-                action.as_ref(),
-                false,
-                &targets_of(name),
-                cx,
-            ));
+            shortcuts.extend(
+                rows_of(
+                    &title_of_action(name).into(),
+                    &category.into(),
+                    action.as_ref(),
+                    false,
+                    &targets_of(name),
+                    cx,
+                )
+                .into_iter()
+                .map(|row| (row, hidden)),
+            );
         }
     }
 
     // Without the assistant its chats are not a place: the context menu
-    // that opens in an answer is not listed either.
+    // that opens in an answer is not shown either.
     if assistant_hidden {
-        shortcuts.retain(|shortcut| shortcut.place != Place::AssistantChat);
+        for (shortcut, hidden) in &mut shortcuts {
+            *hidden |= shortcut.place.is_of_the_assistant();
+        }
     }
 
     // By place, then by heading in the order the headings first appeared;
-    // rows keep their order within a heading.
+    // rows keep their order within a heading. The rows that are not shown
+    // are sorted with the others, so the order is one whatever is shown.
     let mut headings: Vec<SharedString> = Vec::new();
-    for shortcut in &shortcuts {
+    for (shortcut, _) in &shortcuts {
         if !headings.contains(&shortcut.heading) {
             headings.push(shortcut.heading.clone());
         }
     }
-    let rank = |shortcut: &Shortcut| {
+    let rank = |(shortcut, _): &(Shortcut, bool)| {
         let heading = headings
             .iter()
             .position(|heading| *heading == shortcut.heading)

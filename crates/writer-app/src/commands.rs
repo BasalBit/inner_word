@@ -82,7 +82,9 @@ pub fn all(cx: &App) -> Vec<CommandDescriptor> {
 /// Hides the commands of `category` from the palette and the shortcuts
 /// overlay, or lists them again. For a feature that is not there on every
 /// Mac (the assistant, without its engine): its commands stay registered
-/// and are simply not offered.
+/// and are simply not offered. The keymap is told too
+/// ([`crate::keymap::refresh_listed`]): while they are hidden their keys
+/// count for nothing in what the list of shortcuts says about a key.
 pub fn set_category_hidden(category: &str, hidden: bool, cx: &mut App) {
     let registry = cx.default_global::<CommandRegistry>();
     let position = registry
@@ -94,8 +96,9 @@ pub fn set_category_hidden(category: &str, hidden: bool, cx: &mut App) {
         (Some(ix), false) => {
             registry.hidden.remove(ix);
         }
-        _ => {}
+        _ => return,
     }
+    crate::keymap::refresh_listed(cx);
 }
 
 /// Whether the commands of `category` are hidden right now.

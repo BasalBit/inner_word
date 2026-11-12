@@ -176,15 +176,40 @@ fn command_row(shortcut: &Shortcut) -> CommandRow {
     }
 }
 
-/// The names of every command in every place, for the sentences of the
-/// list and for the shortcuts file: the rows in their order (each key
-/// context of a row under the row's name), then whatever the keymap has
-/// besides (the commands of a part of the app that is not shown).
-pub fn catalogue(shortcuts: &[Shortcut], cx: &App) -> Catalogue {
+/// The names of every command in every place as the shortcuts file has
+/// them: every row in the order of the list (each key context of a row
+/// under the row's name), the rows of a part of the app that is not shown
+/// among them, where they stand when it is shown. So the file has the
+/// same entries in the same order whatever is shown on the Mac that
+/// writes it, and two files can be compared.
+pub fn file_catalogue(cx: &App) -> Catalogue {
+    catalogue(&shortcuts::collect_every_shortcut(cx), &[], cx)
+}
+
+/// The names of every command in every place for the sentences of the
+/// list: the rows it shows, then the commands that are not shown right
+/// now, each with its place marked as such
+/// ([`shortcuts::hidden_place_label`]). The list names a command from
+/// here when a file that is imported changes its keys; of a command that
+/// is not shown it must not read as if the user could find it.
+pub fn list_catalogue(cx: &App) -> Catalogue {
+    let hidden = shortcuts::hidden_targets(cx);
+    catalogue(&shortcuts::collect_every_shortcut(cx), &hidden, cx)
+}
+
+/// `shortcuts` as a catalogue, the targets of `hidden` with their place
+/// marked as not shown; then whatever the keymap has besides (nothing: a
+/// test holds that every key of the keymap is in a row).
+fn catalogue(shortcuts: &[Shortcut], hidden: &[Target], cx: &App) -> Catalogue {
     let mut catalogue = Catalogue::new();
     for shortcut in shortcuts {
         for target in &shortcut.targets {
-            catalogue.add(target.clone(), &shortcut.title, shortcut.place.label());
+            if hidden.contains(target) {
+                let place = shortcuts::hidden_place_label(shortcut.place);
+                catalogue.add(target.clone(), &shortcut.title, &place);
+            } else {
+                catalogue.add(target.clone(), &shortcut.title, shortcut.place.label());
+            }
         }
     }
     let Some(model) = keymap::model(cx) else {
@@ -217,7 +242,7 @@ pub fn listing(cx: &App) -> Option<Listing> {
     let rows = shortcuts.iter().map(command_row).collect();
     Some(
         Listing::new(model, rows)
-            .catalogue(catalogue(&shortcuts, cx))
+            .catalogue(list_catalogue(cx))
             .note(shortcuts::MENUS_NOTE)
             .note(NOT_CHANGEABLE_NOTE)
             .note(ALSO_FIXED_NOTE),
@@ -232,6 +257,56 @@ pub fn listing(cx: &App) -> Option<Listing> {
 /// run say.
 pub fn changed_command_count(cx: &App) -> usize {
     listing(cx).map_or(0, |listing| listing.changed_commands())
+}
+
+/// "1 command", "4 commands": what every count of changed keyboard
+/// shortcuts counts. A command is a row of the list, never a single key:
+/// a command with two keys of the user's is one, and so is one left
+/// without a key.
+pub fn commands_counted(count: usize) -> String {
+    if count == 1 {
+        "1 command".to_string()
+    } else {
+        format!("{count} commands")
+    }
+}
+
+/// What the row of the settings says after its description while the user
+/// has keys of their own; `None` while every key is the default.
+pub fn own_keys_sentence(changed: usize) -> Option<String> {
+    match changed {
+        0 => None,
+        1 => Some("1 command has keys of your own.".to_string()),
+        count => Some(format!(
+            "{} have keys of your own.",
+            commands_counted(count)
+        )),
+    }
+}
+
+/// What the system dialog of "Reset All Keyboard Shortcuts…" says under
+/// its question: the sentence of the list's own question, so that the two
+/// ways to reset say one thing.
+pub fn reset_all_detail(changed: usize) -> String {
+    match changed {
+        // Only what this version cannot use is stored (a change for a
+        // command it does not have).
+        0 => "No command has other keys than its defaults. Changes this version cannot use are \
+              stored, and are removed."
+            .to_string(),
+        1 => {
+            "1 command goes back to the default keys. Every change you made is removed.".to_string()
+        }
+        count => format!(
+            "{} go back to the default keys. Every change you made is removed.",
+            commands_counted(count)
+        ),
+    }
+}
+
+/// What the toast after an import says.
+pub fn imported_toast(changed: usize) -> String {
+    format!("Imported the keys of {}", commands_counted(changed))
 }
 
 /// Every key context the row of `target` stands for (see the [module
@@ -510,15 +585,7 @@ impl Workspace {
             );
             return;
         }
-        let detail = match changed {
-            // Only what this version cannot use is stored (a change for a
-            // command it does not have).
-            0 => "No command has another key than its default. Changes this version cannot use \
-                  are stored, and are removed."
-                .to_string(),
-            1 => "One command has another key than its default.".to_string(),
-            count => format!("{count} commands have other keys than their defaults."),
-        };
+        let detail = reset_all_detail(changed);
         let answer = window.prompt(
             PromptLevel::Warning,
             "Put every keyboard shortcut back to its default?",
@@ -585,8 +652,7 @@ impl Workspace {
     /// place with its name, its default keys and the keys it has.
     pub fn shortcuts_file(&self, cx: &App) -> Option<String> {
         let model = keymap::model(cx)?;
-        let shortcuts = shortcuts::collect_shortcuts(cx);
-        Some(model.export(&catalogue(&shortcuts, cx), env!("CARGO_PKG_VERSION")))
+        Some(model.export(&file_catalogue(cx), env!("CARGO_PKG_VERSION")))
     }
 
     /// Writes the shortcuts file where the user says in the save panel (a
@@ -641,9 +707,12 @@ impl Workspace {
                             .ok();
                     }
                     this.say_about_shortcuts(
+                        // A path that fits: `~` for the home directory, a
+                        // long one shortened in the middle, the file name
+                        // whole.
                         Toast::new(format!(
                             "Exported the keyboard shortcuts to {}",
-                            crate::export::display_path(&path)
+                            crate::export::short_path(&path)
                         ))
                         .success(),
                         cx,
@@ -652,7 +721,7 @@ impl Workspace {
                 Err(error) => this.toast_error(
                     format!(
                         "Could not write {}: {error}",
-                        crate::export::display_path(&path)
+                        crate::export::short_path(&path)
                     ),
                     cx,
                 ),
@@ -774,10 +843,7 @@ impl Workspace {
             return;
         }
         self.shortcuts.undo = Some(before);
-        let what = match changed {
-            1 => "Imported the keys of one command".to_string(),
-            count => format!("Imported the keys of {count} commands"),
-        };
+        let what = imported_toast(changed);
         self.say_about_shortcuts(
             Toast::new(what)
                 .success()

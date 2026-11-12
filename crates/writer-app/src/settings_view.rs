@@ -841,15 +841,13 @@ impl SettingsView {
             SettingRow::SpellingLanguage => {
                 format!("{}{}", row.description(), whole_list_sentence(cx)).into()
             }
-            SettingRow::KeyboardShortcuts => match crate::workspace::changed_command_count(cx) {
-                0 => row.description().into(),
-                1 => format!("{} One command has a key of your own.", row.description()).into(),
-                count => format!(
-                    "{} {count} commands have keys of your own.",
-                    row.description()
-                )
-                .into(),
-            },
+            SettingRow::KeyboardShortcuts => {
+                let changed = crate::workspace::changed_command_count(cx);
+                match crate::workspace::own_keys_sentence(changed) {
+                    None => row.description().into(),
+                    Some(sentence) => format!("{} {sentence}", row.description()).into(),
+                }
+            }
             row if SettingRow::LENGTHS.contains(&row) && focused => {
                 let unit = self
                     .document_settings(cx)

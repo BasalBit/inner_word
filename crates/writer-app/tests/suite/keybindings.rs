@@ -1543,7 +1543,7 @@ fn a_file_with_things_this_version_cannot_take_says_which_and_why(cx: &mut TestA
     assert!(
         toasts(&workspace, vcx)
             .iter()
-            .any(|toast| toast == "Imported the keys of one command"),
+            .any(|toast| toast == "Imported the keys of 1 command"),
         "{:?}",
         toasts(&workspace, vcx)
     );
@@ -1867,10 +1867,7 @@ fn the_list_is_reached_from_the_settings_the_palette_and_the_menu_bar(cx: &mut T
             .description(SettingRow::KeyboardShortcuts, false, cx)
             .to_string()
     });
-    assert!(
-        says.ends_with("One command has a key of your own."),
-        "{says}"
-    );
+    assert!(says.ends_with("1 command has keys of your own."), "{says}");
     // The row is far down the list: the keyboard takes it into view.
     for _ in 0..row {
         vcx.simulate_keystrokes("down");
@@ -2279,16 +2276,16 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
             .description(SettingRow::KeyboardShortcuts, false, cx)
             .to_string()
     });
-    assert!(
-        says.ends_with("One command has a key of your own."),
-        "{says}"
-    );
+    assert!(says.ends_with("1 command has keys of your own."), "{says}");
     press(vcx, "escape");
     // The system dialog of the menu bar's "reset all".
     vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
     vcx.run_until_parked();
     let (_, detail) = vcx.pending_prompt().expect("the dialog is shown");
-    assert_eq!(detail, "One command has another key than its default.");
+    assert_eq!(
+        detail,
+        "1 command goes back to the default keys. Every change you made is removed."
+    );
     vcx.simulate_prompt_answer("Cancel");
     vcx.run_until_parked();
 
@@ -2309,13 +2306,10 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
     assert!(says.starts_with("1 command gets other keys."), "{says}");
     let rows = view.read_with(vcx, |view, _| view.preview_rows());
     assert_eq!(rows.len(), 2, "a heading and one row: {rows:?}");
-    assert_eq!(rows[0], "Keys that change (1)");
+    assert!(rows[0].ends_with("(1)"), "{rows:?}");
     choose(&view, Choice::ImportMerge, vcx);
     assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 2);
-    assert_eq!(
-        toasts(&workspace, vcx),
-        ["Imported the keys of one command"]
-    );
+    assert_eq!(toasts(&workspace, vcx), ["Imported the keys of 1 command"]);
 }
 
 /// With Vim mode on, Vim sees the keys of the text before any binding
@@ -2471,4 +2465,911 @@ fn every_key_taken_away_is_put_back_with_the_pointer_alone(cx: &mut TestAppConte
     vcx.simulate_prompt_answer("Reset All");
     vcx.run_until_parked();
     assert_eq!(installed(vcx), defaults);
+}
+
+// ---------------------------------------------------------------------
+// 0.5.1: what the keymap knows, and what the user is told
+// ---------------------------------------------------------------------
+
+/// A workspace like [`workspace_in_the_text`] with the assistant shown
+/// (on the fake engine: no test runs Claude Code).
+fn workspace_with_the_assistant(
+    cx: &mut TestAppContext,
+) -> (Entity<Library>, Entity<Workspace>, &mut VisualTestContext) {
+    init(cx);
+    let backend = std::sync::Arc::new(writer_assistant::FakeBackend::new());
+    cx.update(|cx| writer_app::assistant::set_backend(backend, cx));
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Keys", "A paragraph with a few words in it."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |workspace, _| workspace.assistant_shown()));
+    (library, workspace, vcx)
+}
+
+/// The name of a place is a promise: two rows of the list under one place
+/// name are in the same place to whoever reads it. Over the real keymap,
+/// with every part of the app shown:
+///
+/// - for every pair of rows under one place name, the key of the one
+///   given to the other is judged "taken" (or refused), and the row that
+///   has the key is the one named;
+/// - wherever a verdict says "another place" of a command, the place
+///   names of the two differ.
+///
+/// (0.5.0 said of Underline on the key of "Add or edit link", both listed
+/// "In the text": "also used in another place ... in the text", with Keep
+/// Both as the marked choice.)
+#[gpui::test]
+fn two_rows_under_one_place_name_are_in_the_same_place(cx: &mut TestAppContext) {
+    let (_library, _workspace, vcx) = workspace_with_the_assistant(cx);
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        let keymap = &listing.keymap;
+        let rows = collect_shortcuts(cx);
+        let label = |target: &Target| -> &'static str {
+            rows.iter()
+                .find(|row| row.targets.contains(target))
+                .map(|row| row.place.label())
+                .unwrap_or_else(|| panic!("{target} is in no row"))
+        };
+        let contexts = |row: &writer_app::shortcuts::Shortcut| -> String {
+            let mut contexts: Vec<String> = row
+                .targets
+                .iter()
+                .map(|target| match target.context.text() {
+                    Some(context) => context.to_string(),
+                    None => "anywhere".to_string(),
+                })
+                .collect();
+            contexts.sort();
+            contexts.join(" | ")
+        };
+        // What was found wrong, by the key contexts of the two rows.
+        let mut wrong: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        let mut pairs = 0;
+        let mut taken = 0;
+
+        // 1. Every pair of rows under one place name.
+        for row in &rows {
+            let Some(target) = &row.target else { continue };
+            for other in &rows {
+                if other.place != row.place
+                    || other.target.is_none()
+                    || other.action_name() == row.action_name()
+                {
+                    continue;
+                }
+                for key in &other.all_keys {
+                    pairs += 1;
+                    let verdict = keymap.check(target, &key.keys, None);
+                    if verdict.refusal.is_some() {
+                        continue;
+                    }
+                    let named = verdict
+                        .taken
+                        .iter()
+                        .any(|holder| other.targets.contains(&holder.target));
+                    if named {
+                        taken += 1;
+                    } else {
+                        wrong
+                            .entry(format!(
+                                "not taken, {}: [{}] given a key of [{}]",
+                                row.place.label(),
+                                contexts(row),
+                                contexts(other)
+                            ))
+                            .or_default()
+                            .push(format!(
+                                "{} given {} of {}",
+                                row.title, key.keys, other.title
+                            ));
+                    }
+                }
+            }
+        }
+
+        // 2. Every key of the keymap, for one row of each kind (a place
+        //    name and its key contexts: what is said of a holder's place
+        //    depends on nothing else).
+        let mut every_key: Vec<KeySequence> = rows
+            .iter()
+            .flat_map(|row| row.all_keys.iter().map(|key| key.keys.clone()))
+            .collect();
+        every_key.sort();
+        every_key.dedup();
+        let mut kinds: Vec<String> = Vec::new();
+        let mut elsewhere = 0;
+        for row in &rows {
+            let Some(target) = &row.target else { continue };
+            let kind = format!("{}: {}", row.place.label(), contexts(row));
+            if kinds.contains(&kind) {
+                continue;
+            }
+            kinds.push(kind);
+            for key in &every_key {
+                let verdict = keymap.check(target, key, None);
+                for holder in &verdict.elsewhere {
+                    elsewhere += 1;
+                    if label(&holder.target) == row.place.label() {
+                        wrong
+                            .entry(format!(
+                                "another place under the same name, {}: [{}] and [{}] ({:?})",
+                                row.place.label(),
+                                contexts(row),
+                                holder.target.context,
+                                holder.overlap
+                            ))
+                            .or_default()
+                            .push(format!(
+                                "{} given {} of {}",
+                                row.title, key, holder.target.command.action
+                            ));
+                    }
+                }
+            }
+        }
+
+        let report: Vec<String> = wrong
+            .iter()
+            .map(|(what, cases)| format!("{what}: {} cases, e.g. {}", cases.len(), cases[0]))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} kinds of pairs are wrong:\n{}",
+            report.len(),
+            report.join("\n")
+        );
+        // The test looked at something.
+        assert!(pairs > 10_000, "{pairs}");
+        assert!(taken > 5_000, "{taken}");
+        assert!(kinds.len() > 30, "{}", kinds.len());
+        assert!(elsewhere > 1_000, "{elsewhere}");
+    });
+}
+
+/// The titles of the rows the list shows for the command `action`.
+fn rows_of_command(action: &str, cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .into_iter()
+            .filter(|shortcut| shortcut.action_name() == action)
+            .map(|shortcut| format!("{} ({})", shortcut.title, shortcut.place.label()))
+            .collect()
+    })
+}
+
+/// What the keymap, as the list has it, says about giving `target` `keys`.
+fn verdict(target: &Target, keys: &str, cx: &mut VisualTestContext) -> writer_keymap::Verdict {
+    cx.update(|_, cx| {
+        writer_app::workspace::shortcuts_listing(cx)
+            .expect("the app has a keymap")
+            .keymap
+            .check(target, &key(keys), None)
+    })
+}
+
+fn switch_the_assistant(workspace: &Entity<Workspace>, on: bool, cx: &mut VisualTestContext) {
+    workspace.update(cx, |workspace, cx| {
+        workspace.write_setting(setting_keys::ASSISTANT_ENABLED, &on, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |workspace, _| workspace.assistant_shown()),
+        on
+    );
+}
+
+fn version_history_is_open(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .modal_layer()
+            .read(cx)
+            .active::<writer_app::version_history::VersionHistory>()
+            .is_some()
+    })
+}
+
+/// While the assistant is not shown, nothing of it is: its commands are
+/// no rows of the list, and their keys count for nothing in what the list
+/// says about a key. The user uses those keys freely and is not told
+/// about commands that are not there. (0.5.0 put a warning on the row of
+/// a command that was given ⌥⌘N: "also the key of “New chat” in the
+/// assistant's chats", with no assistant on the Mac.) The user's own
+/// changes to the assistant's keys are kept, and when the assistant is
+/// shown again the list as it is then says what collides.
+#[gpui::test]
+fn while_the_assistant_is_not_shown_its_keys_count_for_nothing(cx: &mut TestAppContext) {
+    use writer_keymap::VerdictKind;
+    let (library, workspace, vcx) = workspace_with_the_assistant(cx);
+    let history = Target::new("workspace::ShowVersionHistory", None);
+    let ask = Target::new("workspace::AskAssistant", None);
+    let new_chat = Target::new("assistant::NewChat", Some("AssistantPanel"));
+    let clear_chat = Target::new("assistant::ClearChat", Some("AssistantPanel"));
+
+    // Shown: its commands are rows, and their keys are taken.
+    assert_eq!(
+        rows_of_command("assistant::NewChat", vcx),
+        ["New chat (In the assistant's chats)"]
+    );
+    assert_eq!(verdict(&history, "cmd-j", vcx).kind(), VerdictKind::Taken);
+    assert_eq!(
+        verdict(&history, "cmd-alt-k", vcx).kind(),
+        VerdictKind::Taken
+    );
+    // A change of the user's own to one of them.
+    change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&new_chat, &key("cmd-alt-n"), key("cmd-alt-y"))
+    });
+    let stored_before = stored_shortcuts(&library, vcx).expect("the change is stored");
+
+    // Not shown.
+    switch_the_assistant(&workspace, false, vcx);
+    assert!(rows_of_command("assistant::NewChat", vcx).is_empty());
+    assert!(rows_of_command("workspace::AskAssistant", vcx).is_empty());
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        for target in [&ask, &new_chat, &clear_chat] {
+            assert!(listing.keymap.is_absent(target), "{target}");
+            assert!(
+                listing.rows.iter().all(|row| row.target != *target),
+                "{target}"
+            );
+        }
+        assert!(!listing.keymap.is_absent(&history));
+    });
+    // Their keys are free: the default of one, the user's own of another,
+    // and the key that opens the quick chat anywhere.
+    for keys in ["cmd-j", "cmd-3", "cmd-alt-k", "cmd-alt-y", "cmd-shift-a"] {
+        let verdict = verdict(&history, keys, vcx);
+        assert!(
+            verdict
+                .taken
+                .iter()
+                .chain(&verdict.elsewhere)
+                .all(|holder| !holder.target.command.action.contains("ssistant")),
+            "{keys}: {verdict:?}"
+        );
+    }
+    assert_eq!(verdict(&history, "cmd-j", vcx).kind(), VerdictKind::Fine);
+    assert_eq!(
+        verdict(&history, "cmd-alt-k", vcx).kind(),
+        VerdictKind::Fine
+    );
+
+    // In the list: the key is simply used. No command of the assistant is
+    // named, nothing is to be taken from anybody.
+    let view = open_list_at(&workspace, &history, vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-j");
+    let (title, says, choices) = question(&view, vcx);
+    assert!(
+        !says.to_lowercase().contains("assistant"),
+        "{title}: {says}"
+    );
+    assert!(
+        !choices.iter().any(|choice| choice.starts_with("Take It")),
+        "{choices:?}"
+    );
+    choose(&view, Choice::UseKey, vcx);
+    assert_eq!(row_keys("Version history", Place::Anywhere, vcx), ["cmd-j"]);
+    // No row is warned, and the keymap has no conflict.
+    let described = view.read_with(vcx, |view, cx| view.describe(cx));
+    assert!(!described.contains("clash="), "{described}");
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        assert!(listing.keymap.collisions().is_empty());
+    });
+    press(vcx, "escape");
+    assert!(editor_focused(&workspace, vcx));
+    // And the key does what the user gave it to: the hidden command's own
+    // binding is in the keymap still, and does not eat the key.
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    assert!(version_history_is_open(&workspace, vcx));
+    press(vcx, "escape");
+    assert!(editor_focused(&workspace, vcx));
+
+    // The user's change to the hidden command is untouched: stored,
+    // installed, and in the file that is exported now.
+    let stored = stored_shortcuts(&library, vcx).expect("changes are stored");
+    let entry_of = |stored: &serde_json::Value, command: &str| -> serde_json::Value {
+        stored["changes"]
+            .as_array()
+            .expect("the changes")
+            .iter()
+            .find(|entry| entry["command"] == command)
+            .cloned()
+            .unwrap_or_else(|| panic!("{command} is stored: {stored}"))
+    };
+    assert_eq!(
+        entry_of(&stored, "assistant::NewChat"),
+        entry_of(&stored_before, "assistant::NewChat")
+    );
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        assert_eq!(
+            effective.target(&new_chat).unwrap().keys[0].keys,
+            key("cmd-alt-y")
+        );
+        assert_eq!(effective.target(&ask).unwrap().keys[0].keys, key("cmd-j"));
+    });
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let exported = export_to(&out.path().join("The Writer Shortcuts.json"), vcx);
+    let entry = exported["shortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"] == "assistant::NewChat")
+        .expect("the file has the hidden command");
+    assert_eq!(entry["keys"], serde_json::json!(["cmd-alt-y"]));
+    assert_eq!(entry["where"], "In the assistant's chats");
+
+    // Shown again: nothing was changed behind the user's back, and the
+    // list as it is now says what collides.
+    switch_the_assistant(&workspace, true, vcx);
+    assert_eq!(row_keys("Version history", Place::Anywhere, vcx), ["cmd-j"]);
+    assert_eq!(
+        row_keys("Ask the assistant", Place::Anywhere, vcx),
+        ["cmd-j"]
+    );
+    assert_eq!(
+        row_keys("New chat", Place::AssistantChat, vcx),
+        ["cmd-alt-y"]
+    );
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        let collisions = listing.keymap.collisions();
+        assert_eq!(collisions.len(), 1, "{collisions:#?}");
+        let pair = [&collisions[0].target, &collisions[0].holder.target];
+        assert!(pair.contains(&&history) && pair.contains(&&ask), "{pair:?}");
+    });
+    let view = open_list_at(&workspace, &history, vcx);
+    let described = view.read_with(vcx, |view, cx| view.describe(cx));
+    assert!(
+        described.contains("clash=") && described.contains("Ask the assistant"),
+        "{described}"
+    );
+}
+
+/// The shortcuts file has every command, the assistant's too while the
+/// assistant is not shown, with the same entries in the same order: a
+/// file means the same on every Mac, a change to a key of the assistant
+/// is not lost because the assistant was off when the file was written,
+/// and two files can be compared. (In 0.5.0 the assistant's entries came
+/// at the end of a file written without the assistant, and among the
+/// others in one written with it.)
+#[gpui::test]
+fn the_shortcuts_file_is_the_same_whether_the_assistant_is_shown_or_not(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let (_library, workspace, vcx) = workspace_with_the_assistant(cx);
+    change(&workspace, vcx, |keymap| {
+        keymap.replace_key(
+            &Target::new("assistant::NewChat", Some("AssistantPanel")),
+            &key("cmd-alt-n"),
+            key("cmd-alt-y"),
+        );
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"))
+    });
+    let shown = export_to(&out.path().join("shown.json"), vcx);
+    switch_the_assistant(&workspace, false, vcx);
+    let hidden = export_to(&out.path().join("hidden.json"), vcx);
+
+    let entries = |file: &serde_json::Value| -> Vec<String> {
+        file["shortcuts"]
+            .as_array()
+            .expect("the shortcuts")
+            .iter()
+            .map(|entry| format!("{} in {}", entry["command"], entry["context"]))
+            .collect()
+    };
+    assert_eq!(entries(&shown), entries(&hidden), "the same order");
+    assert_eq!(shown, hidden, "the same file");
+    // Every key context of the keymap is an entry, and the assistant's
+    // are among them, where the list has them when it shows them.
+    let targets = vcx.update(|_, cx| {
+        writer_app::keymap::model(cx)
+            .unwrap()
+            .defaults()
+            .targets()
+            .len()
+    });
+    assert_eq!(entries(&hidden).len(), targets);
+    let assistant: Vec<usize> = hidden["shortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry["where"] == "In the assistant's chats")
+        .map(|(index, _)| index)
+        .collect();
+    assert!(assistant.len() > 30, "{}", assistant.len());
+    assert!(
+        *assistant.last().unwrap() < targets - 20,
+        "not at the end of the file: {assistant:?}"
+    );
+    let new_chat = hidden["shortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"] == "assistant::NewChat")
+        .unwrap();
+    assert_eq!(new_chat["keys"], serde_json::json!(["cmd-alt-y"]));
+}
+
+/// A file that changes a key of a command that is not shown now: the
+/// change is taken (the file means the same on every Mac), the preview
+/// does not read as if the user could find that command, and no collision
+/// with a hidden command is counted.
+#[gpui::test]
+fn an_import_names_a_hidden_command_as_not_shown(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("The Writer Shortcuts.json");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    assert!(!workspace.read_with(vcx, |workspace, _| workspace.assistant_shown()));
+    let new_chat = Target::new("assistant::NewChat", Some("AssistantPanel"));
+    let history = Target::new("workspace::ShowVersionHistory", None);
+
+    // A file that gives "New chat" another key, and the version history
+    // the key of "Ask the assistant".
+    let mut exported = export_to(&file, vcx);
+    for entry in exported["shortcuts"].as_array_mut().unwrap() {
+        if entry["command"] == "assistant::NewChat" {
+            entry["keys"] = serde_json::json!(["cmd-alt-y"]);
+        }
+        if entry["command"] == "workspace::ShowVersionHistory" {
+            entry["keys"] = serde_json::json!(["cmd-j"]);
+        }
+    }
+    std::fs::write(&file, exported.to_string()).unwrap();
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    let rows = view.read_with(vcx, |view, _| view.preview_rows());
+    // The hidden command is named with where it stands: not shown now.
+    vcx.update(|_, cx| {
+        let listing = writer_app::workspace::shortcuts_listing(cx).unwrap();
+        let info = listing.catalogue.info(&new_chat).expect("it has a name");
+        assert_eq!(info.title, "New chat");
+        assert_eq!(info.place, "In the assistant's chats, not shown now");
+        // A command that is shown has its place as it is.
+        assert_eq!(listing.catalogue.info(&history).unwrap().place, "Anywhere");
+    });
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("New chat") && row.contains("not shown now")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Version history") && !row.contains("not shown")),
+        "{rows:?}"
+    );
+    // Two commands change; no collision with the hidden "Ask the
+    // assistant" is counted.
+    assert!(rows[0].ends_with("(2)"), "{rows:?}");
+    assert_eq!(rows.len(), 3, "a heading and two rows: {rows:?}");
+    assert!(
+        !rows.iter().any(|row| row.contains("Ask the assistant")),
+        "{rows:?}"
+    );
+    choose(&view, Choice::ImportMerge, vcx);
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        assert_eq!(
+            effective.target(&new_chat).unwrap().keys[0].keys,
+            key("cmd-alt-y")
+        );
+        assert_eq!(
+            effective.target(&history).unwrap().keys[0].keys,
+            key("cmd-j")
+        );
+    });
+    assert_eq!(toasts(&workspace, vcx), ["Imported the keys of 2 commands"]);
+}
+
+fn is_underlined(workspace: &Entity<Workspace>, needle: &str, cx: &mut VisualTestContext) -> bool {
+    workspace.read_with(cx, |workspace, cx| {
+        let editor = workspace.editor().read(cx);
+        editor
+            .document()
+            .blocks()
+            .iter()
+            .find_map(|block| {
+                let offset = block.text().find(needle)?;
+                Some(block.attrs_at(offset).is_some_and(|attrs| attrs.underline))
+            })
+            .unwrap_or_else(|| panic!("{needle:?} is not in the document"))
+    })
+}
+
+/// "Underline" and "Add or edit link" are both listed "In the text"; the
+/// link's key is bound on the key context of the tools around the text.
+/// 0.5.0 said of ⌘K for Underline: "also used in another place ... in the
+/// text", with Keep Both marked, and an import of the same change listed
+/// no collision. What really happens, held here: with both on ⌘K the key
+/// underlines in the text and the link field can no longer be opened with
+/// it there. So the key is taken, the list offers to take it and not to
+/// keep both, and the import of the same change lists the same collision.
+#[gpui::test]
+fn a_command_of_the_text_on_a_key_of_the_tools_has_taken_it(cx: &mut TestAppContext) {
+    use writer_keymap::{ImportMode, Overlap, VerdictKind};
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let underline = Target::new("editor::ToggleUnderline", Some("Editor"));
+    let link = Target::new("editor_tools::OpenLink", Some("EditorTools"));
+    assert_eq!(
+        runs("cmd-k", vcx).as_deref(),
+        Some("editor_tools::OpenLink")
+    );
+
+    // The question.
+    let judged = verdict(&underline, "cmd-k", vcx);
+    assert_eq!(judged.kind(), VerdictKind::Taken);
+    assert!(judged.elsewhere.is_empty(), "{judged:?}");
+    assert_eq!(judged.taken.len(), 1);
+    assert_eq!(judged.taken[0].target, link);
+    assert_eq!(judged.taken[0].overlap, Overlap::SamePlace);
+    // The other way round, a tool on a key of the text: taken too.
+    let judged = verdict(&link, "cmd-u", vcx);
+    assert_eq!(judged.kind(), VerdictKind::Taken);
+    assert_eq!(judged.taken[0].target, underline);
+    // In the list: taken, with nothing to keep both.
+    let view = open_list_at(&workspace, &underline, vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-k");
+    let (title, says, choices) = question(&view, vcx);
+    assert_eq!(title, "⌘K is taken", "{says}");
+    assert!(says.contains("Add or edit link"), "{says}");
+    assert!(!says.contains("another place"), "{says}");
+    assert!(!choices.contains(&"Keep Both".to_string()), "{choices:?}");
+    assert!(
+        choices.iter().any(|choice| choice.starts_with("Take It")),
+        "{choices:?}"
+    );
+    choose(&view, Choice::Cancel, vcx);
+    press(vcx, "escape");
+    assert!(editor_focused(&workspace, vcx));
+
+    // The plan of an import of the same change names the same collision.
+    let (text, conflicts) = vcx.update(|_, cx| {
+        let mut model = writer_app::keymap::model(cx).unwrap().clone();
+        model.replace_key(&underline, &key("cmd-u"), key("cmd-k"));
+        let catalogue = writer_app::workspace::shortcuts_file_catalogue(cx);
+        let text = model.export(&catalogue, "0.5.1");
+        let plan = writer_app::keymap::model(cx)
+            .unwrap()
+            .plan_import(&text)
+            .expect("the file is read");
+        (text, plan.outcome(ImportMode::Merge).conflicts.clone())
+    });
+    assert!(text.contains("editor::ToggleUnderline"));
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    assert_eq!(conflicts[0].target, underline);
+    assert_eq!(conflicts[0].holder.target, link);
+
+    // What really happens with both on the key (a script, or an import
+    // carried out in spite of the collision, leaves the keymap so).
+    workspace
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.set_keys_of_command(
+                "editor::ToggleUnderline",
+                None,
+                Some(&[key("cmd-k")]),
+                window,
+                cx,
+            )
+        })
+        .expect("underline is listed");
+    vcx.run_until_parked();
+    // In the text the key underlines, and the link field stays closed.
+    assert_eq!(
+        runs("cmd-k", vcx).as_deref(),
+        Some("editor::ToggleUnderline")
+    );
+    vcx.simulate_keystrokes("cmd-a cmd-k");
+    vcx.run_until_parked();
+    assert!(is_underlined(&workspace, "paragraph", vcx));
+    assert!(
+        editor_focused(&workspace, vcx),
+        "no link field took the keyboard"
+    );
+    // The keymap says so about both rows.
+    vcx.update(|_, cx| {
+        let collisions = writer_app::keymap::model(cx).unwrap().collisions();
+        assert_eq!(collisions.len(), 1, "{collisions:#?}");
+        assert_eq!(collisions[0].target, underline);
+        assert_eq!(collisions[0].holder.target, link);
+    });
+    // The one place the tools' binding still answers is where the
+    // keyboard is in something else the tools opened (the find bar's
+    // field): nowhere a link is added from.
+    vcx.simulate_keystrokes("cmd-f");
+    vcx.run_until_parked();
+    assert!(!editor_focused(&workspace, vcx));
+    assert_eq!(
+        runs("cmd-k", vcx).as_deref(),
+        Some("editor_tools::OpenLink")
+    );
+}
+
+/// What the app says in numbers about changed shortcuts counts commands
+/// (a row of the list), never single keys, in one wording with a singular
+/// and a plural: the row of the settings, the system dialog of "Reset All
+/// Keyboard Shortcuts…", the toast after an import, the state line of a
+/// scripted run.
+#[gpui::test]
+fn every_count_of_changed_shortcuts_counts_commands(cx: &mut TestAppContext) {
+    use writer_app::automation::describe_state;
+    use writer_app::settings_view::{SettingRow, SettingsView};
+    use writer_app::workspace::{
+        commands_counted, imported_toast, own_keys_sentence, reset_all_detail,
+    };
+    // The wording, singular and plural.
+    assert_eq!(commands_counted(1), "1 command");
+    assert_eq!(commands_counted(4), "4 commands");
+    assert_eq!(own_keys_sentence(0), None);
+    assert_eq!(
+        own_keys_sentence(1).as_deref(),
+        Some("1 command has keys of your own.")
+    );
+    assert_eq!(
+        own_keys_sentence(4).as_deref(),
+        Some("4 commands have keys of your own.")
+    );
+    assert_eq!(
+        reset_all_detail(1),
+        "1 command goes back to the default keys. Every change you made is removed."
+    );
+    assert_eq!(
+        reset_all_detail(4),
+        "4 commands go back to the default keys. Every change you made is removed."
+    );
+    assert_eq!(imported_toast(1), "Imported the keys of 1 command");
+    assert_eq!(imported_toast(5), "Imported the keys of 5 commands");
+
+    // In the app: Italic with two keys of the user's is one command,
+    // Underline left without a key is one, a row of two key contexts is
+    // one. Three commands, five key contexts, four keys.
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let italic = Target::new("editor::ToggleItalic", Some("Editor"));
+    let underline = Target::new("editor::ToggleUnderline", Some("Editor"));
+    change(&workspace, vcx, |keymap| {
+        keymap.set_keys(&italic, &[key("cmd-alt-i"), key("f5")]);
+        keymap.remove_key(&underline, &key("cmd-u"));
+    });
+    workspace
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.set_keys_of_command(
+                "editor_tools::ToggleWholeWord",
+                None,
+                Some(&[key("cmd-alt-y")]),
+                window,
+                cx,
+            )
+        })
+        .expect("whole word is listed");
+    vcx.run_until_parked();
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 4);
+    assert_eq!(
+        vcx.update(|_, cx| writer_app::workspace::changed_command_count(cx)),
+        3
+    );
+    let line = workspace.update_in(vcx, |workspace, window, cx| {
+        describe_state(workspace, window, cx)
+    });
+    assert!(line.contains("keys=[changed=3]"), "{line}");
+    // The row of the settings.
+    press(vcx, "cmd-,");
+    let settings = workspace
+        .read_with(vcx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<SettingsView>()
+        })
+        .expect("the settings are open");
+    let says = settings.read_with(vcx, |settings, cx| {
+        settings
+            .description(SettingRow::KeyboardShortcuts, false, cx)
+            .to_string()
+    });
+    assert!(
+        says.ends_with(" 3 commands have keys of your own."),
+        "{says}"
+    );
+    press(vcx, "escape");
+    // The system dialog of the menu bar's and the palette's "reset all".
+    vcx.dispatch_action(writer_app::actions::ResetAllShortcuts);
+    vcx.run_until_parked();
+    let (question, detail) = vcx.pending_prompt().expect("the dialog is shown");
+    assert_eq!(question, "Put every keyboard shortcut back to its default?");
+    assert_eq!(
+        detail,
+        "3 commands go back to the default keys. Every change you made is removed."
+    );
+    vcx.simulate_prompt_answer("Cancel");
+    vcx.run_until_parked();
+
+    // The toast after an import counts the same way.
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("The Writer Shortcuts.json");
+    export_to(&file, vcx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.reset_all_shortcuts_now(window, cx)
+    });
+    vcx.run_until_parked();
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    choose(&view, Choice::ImportMerge, vcx);
+    assert_eq!(toasts(&workspace, vcx), ["Imported the keys of 3 commands"]);
+}
+
+/// The list against the keymap and the file. Every command in every key
+/// context the keymap has is in exactly one row; a row can stand for
+/// several key contexts, and one row (the `/` of the insert menu) is no
+/// binding. The shortcuts file has one entry for every key context. So,
+/// with every part of the app shown: rows = commands in places + 1, and
+/// entries = rows - 1 + the key contexts that share a row with another.
+/// (0.5.0 had three entries in the file that were no row of the list:
+/// the menu bar's Hide, Hide Others and Minimize.)
+#[gpui::test]
+fn every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let (_library, _workspace, vcx) = workspace_with_the_assistant(cx);
+    let exported = export_to(&out.path().join("The Writer Shortcuts.json"), vcx);
+    let entries = exported["shortcuts"].as_array().unwrap();
+    vcx.update(|_, cx| {
+        let rows = collect_shortcuts(cx);
+        let model = writer_app::keymap::model(cx).unwrap();
+        let targets = model.defaults().targets();
+        // Each key context of the keymap in one row, and only once.
+        let mut in_rows: Vec<&Target> = Vec::new();
+        for row in &rows {
+            for target in &row.targets {
+                assert!(!in_rows.contains(&target), "{target} is in two rows");
+                in_rows.push(target);
+            }
+            assert_eq!(
+                row.target.is_none(),
+                row.targets.is_empty(),
+                "{}",
+                row.title
+            );
+            if let Some(target) = &row.target {
+                assert_eq!(
+                    &row.targets[0], target,
+                    "{}: the first stands for it",
+                    row.title
+                );
+            }
+        }
+        let missing: Vec<String> = targets
+            .iter()
+            .filter(|target| !in_rows.contains(target))
+            .map(|target| target.to_string())
+            .collect();
+        assert!(missing.is_empty(), "in no row of the list: {missing:?}");
+        assert_eq!(in_rows.len(), targets.len());
+
+        // The file: one entry for each key context, in the order of the
+        // rows.
+        assert_eq!(entries.len(), targets.len());
+        let of_the_file: Vec<String> = entries
+            .iter()
+            .map(|entry| format!("{} in {}", entry["command"], entry["context"]))
+            .collect();
+        let of_the_rows: Vec<String> = in_rows
+            .iter()
+            .map(|target| {
+                format!(
+                    "{} in {}",
+                    serde_json::json!(target.command.action),
+                    serde_json::json!(target.context.text())
+                )
+            })
+            .collect();
+        assert_eq!(of_the_file, of_the_rows);
+
+        // The numbers, and where they come from.
+        let fixed = rows.iter().filter(|row| row.target.is_none()).count();
+        let sharing: usize = rows
+            .iter()
+            .map(|row| row.targets.len().saturating_sub(1))
+            .sum();
+        assert_eq!(fixed, 1, "the / that opens the insert menu");
+        assert_eq!(entries.len(), rows.len() - fixed + sharing);
+        // No two rows read the same: a title and a place are one row.
+        let mut named: Vec<(String, &str)> = rows
+            .iter()
+            .map(|row| (row.title.to_string(), row.place.label()))
+            .collect();
+        named.sort();
+        let before = named.len();
+        named.dedup();
+        assert_eq!(named.len(), before, "two rows with one title in one place");
+        // Titles and places of the file are the rows'.
+        let mut of_the_file: Vec<(String, String)> = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry["title"].as_str().unwrap().to_string(),
+                    entry["where"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        of_the_file.sort();
+        of_the_file.dedup();
+        assert_eq!(of_the_file.len(), rows.len() - fixed);
+        // The keys of the menu bar that are no commands of the palette
+        // are rows like the others, and cannot be run from the list.
+        for title in [
+            "Hide The Writer",
+            "Hide the other apps",
+            "Minimize the window",
+        ] {
+            let row = rows
+                .iter()
+                .find(|row| row.title.as_ref() == title)
+                .unwrap_or_else(|| panic!("{title} is a row"));
+            assert_eq!(row.place, Place::Anywhere);
+            assert!(!row.described, "{title} is not run from its row");
+        }
+        eprintln!(
+            "rows={} (1 fixed) entries={} key contexts that share a row={} rows of several={}",
+            rows.len(),
+            entries.len(),
+            sharing,
+            rows.iter().filter(|row| row.targets.len() > 1).count()
+        );
+    });
+}
+
+/// A key is written the same by the keymap's own glyphs (what the reason
+/// of a skipped entry of an import uses) and by the app's key hints (what
+/// the list shows), for every key of the keymap and a few more.
+#[gpui::test]
+fn the_keymap_writes_a_key_as_the_list_shows_it(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(|cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        let mut keys: Vec<KeySequence> = effective
+            .bindings()
+            .iter()
+            .map(|binding| binding.keys.clone())
+            .collect();
+        for more in [
+            "i",
+            "shift-b",
+            "cmd-tab",
+            "cmd-space",
+            "fn-f",
+            "ctrl-cmd-alt-shift-f12",
+            "g g",
+            "cmd-k cmd-shift-7",
+            "insert",
+            "cmd-pageup",
+            "cmd-home",
+            "shift-end",
+            "cmd-delete",
+            "alt-ö",
+            "cmd--",
+            "cmd-shift--",
+            "f35",
+        ] {
+            keys.push(key(more));
+        }
+        keys.sort();
+        keys.dedup();
+        assert!(keys.len() > 150, "{}", keys.len());
+        for keys in &keys {
+            assert_eq!(
+                keys.glyphs(),
+                writer_app::shortcuts::key_text(keys),
+                "{keys}"
+            );
+            assert_eq!(keys.glyphs(), writer_keymap_ui::glyphs(keys), "{keys}");
+        }
+    });
 }

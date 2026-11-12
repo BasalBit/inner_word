@@ -617,13 +617,13 @@ impl Workspace {
                                 format!("{} documents", prepared.documents)
                             };
                             this.show_toast(
-                                Toast::new(format!("Exported {what} to {}", display_path(&path)))
+                                Toast::new(format!("Exported {what} to {}", short_path(&path)))
                                     .success(),
                                 cx,
                             );
                         }
                         Err(error) => this.toast_error(
-                            format!("Could not write {}: {error}", display_path(&path)),
+                            format!("Could not write {}: {error}", short_path(&path)),
                             cx,
                         ),
                     })
@@ -684,10 +684,150 @@ pub fn with_extension(path: PathBuf, format: ExportFormat) -> PathBuf {
 
 /// The path with the home directory shortened to `~`.
 pub fn display_path(path: &Path) -> String {
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
-        && let Ok(rest) = path.strip_prefix(&home)
+    display_path_from(path, std::env::var_os("HOME").map(PathBuf::from).as_deref())
+}
+
+/// [`display_path`] for the home directory `home`.
+fn display_path_from(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
     {
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+/// How long a path may be in a sentence that has to fit on the lines of a
+/// toast, in characters: with the words before it ("Exported the keyboard
+/// shortcuts to") it stays on two lines.
+pub const SHORT_PATH_CHARS: usize = 56;
+
+/// What stands for the folders a shortened path leaves out.
+const LEFT_OUT: &str = "\u{2026}";
+
+/// The path for a sentence that has to fit (a toast): the home directory
+/// as `~`, and a path longer than [`SHORT_PATH_CHARS`] shortened in the
+/// middle. The file name is always whole; before it stand the folders
+/// nearest to the file, as many as fit, and before those the folder the
+/// path begins with, so that both ends can be read:
+/// `~/Documents/…/Exports/The Writer Shortcuts.json`. A file name that is
+/// too long by itself is given with `…/` before it.
+pub fn short_path(path: &Path) -> String {
+    shorten_path(&display_path(path), SHORT_PATH_CHARS)
+}
+
+/// [`short_path`] for a path as text (`/` between its parts, `~` for the
+/// home directory) and a limit in characters.
+pub fn shorten_path(shown: &str, limit: usize) -> String {
+    let length = |text: &str| text.chars().count();
+    if length(shown) <= limit {
+        return shown.to_string();
+    }
+    let mut parts: Vec<&str> = shown.split('/').collect();
+    let Some(file) = parts.pop().filter(|file| !file.is_empty()) else {
+        return shown.to_string();
+    };
+    // Where the path begins: `~` or the root, and the first folder.
+    let head = match parts.as_slice() {
+        [start, first, ..] => format!("{start}/{first}"),
+        _ => {
+            return shown.to_string();
+        }
+    };
+    // The folders between the first one and the file: the ones nearest
+    // to the file are kept, as many as fit.
+    let folders = &parts[2..];
+    let mut kept: Vec<&str> = Vec::new();
+    for folder in folders.iter().rev() {
+        let mut next = vec![*folder];
+        next.extend(&kept);
+        let candidate = format!("{head}/{LEFT_OUT}/{}/{file}", next.join("/"));
+        if length(&candidate) > limit {
+            break;
+        }
+        kept = next;
+    }
+    let shortened = if kept.is_empty() {
+        format!("{head}/{LEFT_OUT}/{file}")
+    } else {
+        format!("{head}/{LEFT_OUT}/{}/{file}", kept.join("/"))
+    };
+    if !folders.is_empty() && length(&shortened) <= limit {
+        shortened
+    } else {
+        // Nothing to leave out between the two ends, or the file name is
+        // long by itself: the file name, whole.
+        format!("{LEFT_OUT}/{file}")
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn the_home_directory_is_written_as_a_tilde() {
+        let home = Path::new("/Users/someone");
+        assert_eq!(
+            display_path_from(Path::new("/Users/someone/Documents/Essay.md"), Some(home)),
+            "~/Documents/Essay.md"
+        );
+        assert_eq!(
+            display_path_from(Path::new("/Volumes/Backup/Essay.md"), Some(home)),
+            "/Volumes/Backup/Essay.md"
+        );
+        assert_eq!(
+            display_path_from(Path::new("/Users/someone/Essay.md"), None),
+            "/Users/someone/Essay.md"
+        );
+    }
+
+    #[test]
+    fn a_path_that_fits_is_given_whole() {
+        for path in [
+            "~/Documents/The Writer Shortcuts.json",
+            "~/Essay.md",
+            "/Volumes/Backup/Essay.md",
+            "Essay.md",
+        ] {
+            assert_eq!(shorten_path(path, SHORT_PATH_CHARS), path);
+        }
+    }
+
+    #[test]
+    fn a_long_path_is_shortened_in_the_middle_and_keeps_the_file_name_whole() {
+        // The path of the capture of 0.5.0.
+        let long = "/private/tmp/claude-501/-Users-someone-Development-the-writer/\
+                    32da77ec-6880-4cdd-a335-5be772628529/scratchpad/shots-export/14/\
+                    The Writer Shortcuts.json";
+        assert_eq!(
+            shorten_path(long, SHORT_PATH_CHARS),
+            "/private/…/shots-export/14/The Writer Shortcuts.json"
+        );
+        // A real user's: the folders nearest to the file are kept.
+        let books = "~/Documents/Writing/Books/The Harbour at the End of the World/Drafts/\
+                     Third Draft/Exports/Chapter 2 - The Harbour.docx";
+        let short = shorten_path(books, SHORT_PATH_CHARS);
+        assert_eq!(short, "~/Documents/…/Exports/Chapter 2 - The Harbour.docx");
+        for (path, short) in [(long, shorten_path(long, SHORT_PATH_CHARS)), (books, short)] {
+            assert!(short.chars().count() <= SHORT_PATH_CHARS, "{short}");
+            let file = path.rsplit('/').next().unwrap();
+            assert!(short.ends_with(file), "{short}");
+            assert!(short.contains("/…/"), "{short}");
+        }
+    }
+
+    #[test]
+    fn a_file_name_that_is_long_by_itself_stays_whole() {
+        let name = "The Harbour at the End of the World, the third draft with every comment.docx";
+        let path = format!("~/Documents/Writing/Books/Exports/{name}");
+        assert_eq!(shorten_path(&path, SHORT_PATH_CHARS), format!("…/{name}"));
+        // A path with nothing between its first folder and the file has
+        // nothing to leave out.
+        let flat = format!("~/Documents/{name}");
+        assert_eq!(shorten_path(&flat, SHORT_PATH_CHARS), format!("…/{name}"));
+        // No file name at all: left as it is.
+        let folder = format!("~/{}/", "a".repeat(80));
+        assert_eq!(shorten_path(&folder, SHORT_PATH_CHARS), folder);
+    }
 }

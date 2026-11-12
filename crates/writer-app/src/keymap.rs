@@ -115,11 +115,20 @@ pub fn places() -> Places {
     };
 
     let mut places = Places::new().typing(EDITOR).typing(FIELD);
-    // The text, and what its tools open around it.
-    for inner in [EDITOR, tools::FIND_BAR_CONTEXT, tools::LINK_CONTEXT] {
+    // The tools are only around the text: "Find" and "Add or edit link"
+    // are bound on their key context, and are commands of the text to
+    // whoever presses their keys (the list has them "In the text"). A
+    // command of the text on one of their keys takes it from them: the
+    // editor lies deeper, and its binding is the one that runs there.
+    places = places.around(tools::KEY_CONTEXT, EDITOR);
+    // What the tools open around the text.
+    for inner in [
+        tools::FIND_BAR_CONTEXT,
+        tools::LINK_CONTEXT,
+        picker::KEY_CONTEXT,
+    ] {
         places = places.inside(inner, tools::KEY_CONTEXT);
     }
-    places = places.inside(picker::KEY_CONTEXT, tools::KEY_CONTEXT);
     // Where a text field can be.
     for outer in [
         tools::FIND_BAR_CONTEXT,
@@ -195,7 +204,6 @@ pub fn places() -> Places {
     // Never the keyboard's own place: it is in a field, a row, an editor
     // or a button inside them.
     for container in [
-        tools::KEY_CONTEXT,
         tools::FIND_BAR_CONTEXT,
         tools::LINK_CONTEXT,
         picker::KEY_CONTEXT,
@@ -271,7 +279,37 @@ pub fn take_defaults(cx: &mut App) {
         model,
         effective,
     });
+    refresh_listed(cx);
     install(cx);
+}
+
+/// Tells the keymap how it is listed right now (`writer_keymap::Listed`),
+/// so that what it says about a key is what the list shows:
+///
+/// - **which commands are not there**: those of a part of the app that is
+///   not shown ([`crate::shortcuts::hidden_targets`]; today the
+///   assistant's, while it is not shown). Their keys count for nothing: no
+///   verdict names them, no row is warned about them, an import counts no
+///   collision with them. They stay bound, and the user's changes to them
+///   stay stored;
+/// - **the rows** ([`crate::shortcuts::listed_rows`]): the key contexts
+///   that are one command with one key to the user, under the name of
+///   their place. A key is judged for its whole row, a command it
+///   collides with is named once, and two rows under one place name are
+///   in the same place ("taken", never "another place").
+///
+/// Nothing is installed by this. Called when the defaults are taken, with
+/// every change of a key (the rows follow the keys), and whenever a
+/// category of commands is hidden or shown
+/// ([`crate::commands::set_category_hidden`]).
+pub fn refresh_listed(cx: &mut App) {
+    if !cx.has_global::<AppKeymap>() {
+        return;
+    }
+    let (hidden, rows) = crate::shortcuts::listed(cx);
+    let model = &mut cx.global_mut::<AppKeymap>().model;
+    model.set_absent(hidden);
+    model.set_rows(rows);
 }
 
 /// The default bindings, in the order the crates bound them.
@@ -327,6 +365,7 @@ pub fn set_changes(changes: Changes, cx: &mut App) -> Changes {
     let keymap = cx.global_mut::<AppKeymap>();
     let before = keymap.model.set_changes(changes);
     keymap.effective = keymap.model.effective();
+    refresh_listed(cx);
     install(cx);
     menus::install(cx);
     before

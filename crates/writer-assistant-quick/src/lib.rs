@@ -69,6 +69,32 @@
 //! format bar and any popup tool of `writer-editor-tools` (they close when
 //! the text loses the keyboard). Nothing here depends on that crate.
 //!
+//! # What it looks like and how it grows
+//!
+//! A header (the agent's name, the model and effort pickers, close), a
+//! quote of the selection until the first question shows it, the
+//! conversation, the notices (not signed in, where the text goes, what
+//! the agent wants the user to know) and the composer. With nothing said
+//! it is as small as its composer. The conversation is given the height
+//! it needs, measured before each frame that changed it, until the
+//! popover reaches its limit ([`place::FULL_HEIGHT`], or the room beside
+//! the text when that is less); from then on the conversation scrolls
+//! and follows the answer.
+//!
+//! # Tests and scripted runs
+//!
+//! [`QuickChat::describe`] is one line about the open popover.
+//! [`QuickChat::ask`], [`QuickChat::apply_answer`], [`QuickChat::dismiss`]
+//! and [`QuickChat::press_notice`] do what the composer, the buttons,
+//! `escape` and a notice's button do. Debug selectors: `quick-chat` (the
+//! popover), `quick-chat-header`, `quick-chat-quote`,
+//! `quick-chat-conversation`, `quick-chat-close`, the notices
+//! ([`QuickNotice::selector`], with `-action` for the button), and those
+//! of the shared components (`assistant-model`, `assistant-effort`,
+//! `assistant-composer`, `assistant-send`, `assistant-stop`,
+//! `assistant-action-<replace|insert|copy>-<message id>`,
+//! `assistant-failed-<message id>`).
+//!
 //! # Modules
 //!
 //! | Module | Contents |

@@ -263,3 +263,45 @@ fn closing_a_closed_popover_does_nothing(cx: &mut TestAppContext) {
     assert!(fx.events(cx).is_empty());
     assert!(fx.editor_focused(cx));
 }
+
+#[gpui::test]
+fn a_popover_that_lost_the_keyboard_before_its_first_frame_closes(cx: &mut TestAppContext) {
+    // A modal that closes as the popover opens gives the keyboard back to
+    // the text after the popover took it: no frame ever had the keyboard
+    // in the popover, so no focus event says that it left.
+    let (fx, cx) = open_quick(paragraphs(&["The quick brown fox"]), cx);
+    let quick = fx.quick.clone();
+    let editor = fx.editor.clone();
+    cx.update(|window, cx| {
+        quick.update(cx, |quick, cx| quick.open(window, cx));
+        editor.read(cx).focus(window);
+    });
+    cx.run_until_parked();
+    assert!(
+        !fx.is_open(cx),
+        "a popover without the keyboard does not stay"
+    );
+    assert!(fx.editor_focused(cx));
+    // Typing is the text's.
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    assert!(text(&fx.editor, cx).contains('x'));
+}
+
+#[gpui::test]
+fn in_a_window_in_the_background_the_keyboard_leaving_still_closes_it(cx: &mut TestAppContext) {
+    // A window that is not active hears no focus events (a scripted run
+    // of the app is like that).
+    let (fx, cx) = opened(cx);
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(fx.is_open(cx));
+    let elsewhere = fx.host.read_with(cx, |host, _| host.elsewhere.clone());
+    cx.update(|window, _| window.focus(&elsewhere));
+    cx.run_until_parked();
+    // Something has to draw a frame for the popover to notice.
+    fx.quick.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(!fx.is_open(cx));
+    assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+}

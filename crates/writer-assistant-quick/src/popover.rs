@@ -224,6 +224,9 @@ pub struct QuickChat {
     /// How often a frame was drawn with a conversation that wanted more
     /// room than it had (it is given the room in the frame after).
     late_growths: usize,
+    /// How many frames in a row were drawn with the popover open and the
+    /// keyboard somewhere else.
+    frames_without_keyboard: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -284,6 +287,7 @@ impl QuickChat {
             focus_handle,
             drawn: Rc::new(Cell::new(None)),
             late_growths: 0,
+            frames_without_keyboard: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -624,6 +628,7 @@ impl QuickChat {
         // agent's process; dropping the pump ends the reading of events.
         self.open = None;
         self.drawn.set(None);
+        self.frames_without_keyboard = 0;
         if refocus && had_keyboard {
             self.editor.read(cx).focus(window);
         }
@@ -1232,20 +1237,44 @@ impl QuickChat {
         let Some(open) = &this.open else {
             return;
         };
+        let has_keyboard = this.has_keyboard(window, cx);
+        let frames_without_keyboard = this.frames_without_keyboard;
         let full = this
             .drawn
             .get()
             .is_none_or(|drawn| drawn.bounds.size.height >= drawn.max_height - px(0.5));
-        if full || open.session.transcript().is_empty() || open.list_height >= open.list_limit {
-            return;
-        }
+        let can_grow =
+            !full && !open.session.transcript().is_empty() && open.list_height < open.list_limit;
         let (_, hidden) = open.messages.read(cx).scroll_position();
-        if hidden > px(0.5) {
-            let chat = chat.downgrade();
+        let chat = chat.downgrade();
+
+        // The popover is there for as long as the keyboard is in it. The
+        // keyboard leaving is heard as a focus event, but not always: a
+        // window in the background hears none, and neither does a popover
+        // that lost the keyboard before its first frame (a modal that
+        // closed gave it back to the text). So every frame looks, and the
+        // second one in a row without the keyboard closes the popover.
+        if !has_keyboard {
             // State changes wait for the end of the frame.
+            return window.defer(cx, move |window, cx| {
+                chat.update(cx, |chat, cx| {
+                    chat.frames_without_keyboard += 1;
+                    if chat.frames_without_keyboard >= 2 {
+                        chat.close_and(false, window, cx);
+                    } else {
+                        // Look again in a frame of its own.
+                        cx.notify();
+                    }
+                })
+                .ok();
+            });
+        }
+        let late = can_grow && hidden > px(0.5);
+        if late || frames_without_keyboard > 0 {
             window.defer(cx, move |_, cx| {
                 chat.update(cx, |chat, cx| {
-                    if chat.grow_to_fit(false, cx) {
+                    chat.frames_without_keyboard = 0;
+                    if late && chat.grow_to_fit(false, cx) {
                         chat.late_growths += 1;
                         cx.notify();
                     }

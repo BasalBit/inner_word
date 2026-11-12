@@ -6898,6 +6898,7 @@ dependencies = [
  "tempfile",
  "unicode-segmentation",
  "writer-agent-setup",
+ "writer-assistant",
  "writer-comments",
  "writer-core",
  "writer-editor",
@@ -6907,6 +6908,46 @@ dependencies = [
  "writer-spell",
  "writer-ui",
  "writer-vim-mode",
+]
+
+[[package]]
+name = "writer-assistant"
+version = "0.3.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "writer-mcp",
+]
+
+[[package]]
+name = "writer-assistant-quick"
+version = "0.3.0"
+dependencies = [
+ "gpui",
+ "writer-core",
+ "writer-editor",
+ "writer-export",
+ "writer-ui",
+ "writer-vim",
+ "writer-vim-mode",
+]
+
+[[package]]
+name = "writer-assistant-ui"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "objc",
+ "raw-window-handle",
+ "writer-assistant",
+ "writer-core",
+ "writer-editor",
+ "writer-export",
+ "writer-ui",
 ]
 
 [[package]]

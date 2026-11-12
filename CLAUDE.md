@@ -92,7 +92,7 @@ keys"), `agents:<n>[:<ms>]` (waits until agents have made `n` changes through th
 the `writer` tool being run from outside meanwhile; fails after `ms`, 10 s unless given) and
 `agents:on` / `agents:off` (the switch "Agents can make changes while The Writer is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
-written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`, `zoom:fit`),
+written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`, `zoom:fit`, `zoom:auto`),
 `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 the zoom of the view (`zoom=[page 177% fit-width life=177%]`),
@@ -1089,14 +1089,25 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   (`zoom::set_display_density`) or has none, and with none a page opens at 100 % (still
   as wide as its room where the window is narrower, which is all a page did before 0.6.0)
   and there is no "Life Size" to choose.
+- **That first zoom is called "Automatic"** (`zoom::Automatic`,
+  `Workspace::zoom_to_automatic`): the item of the menus is checked while page view has it
+  (`Zoom::FitWidthUpTo`), and choosing it brings it back and removes `view.zoom.page` from
+  the library (also a zoom of page view that was still waiting to be written), so the next
+  launch opens a page the same way. It is for page view only: the menu of the status bar
+  does not have it in flow view, and from the palette or the menu bar it says there what it
+  is for and changes nothing (as "Fit Page" does). No key by default. In the palette and
+  the list of shortcuts it is "Zoom to automatic (page width, not larger than paper)": a
+  command has no line for an explanation, so the title carries it
+  (`zoom::AUTOMATIC_TITLE`).
 - **How it is reached.** Keys: zoom in `cmd-+` (and `cmd-=`), zoom out `cmd--`, actual
   size `cmd-shift-0` (bound in both spellings: `cmd-)` is what a real keyboard reports).
   Palette: "Zoom in", "Zoom out", "Zoom to actual size" (the menus say "Actual Size"; the
   title has "zoom" in it so that the list of shortcuts, which searches titles and not
   keywords, finds it with the others), "Zoom to fit width", "Zoom to fit page",
-  "Zoom to life size" and "Zoom to 50 %" ... "Zoom to 400 %" (no keys by default; the user
-  can give them one). Menu bar: View > Zoom In, Zoom Out, Actual Size, Fit Width, and Zoom
-  To > Fit Page, Life Size and the steps. Pointer: the zoom in the status bar ("125 %"), a
+  "Zoom to life size", "Zoom to automatic (page width, not larger than paper)" and "Zoom
+  to 50 %" ... "Zoom to 400 %" (no keys by default; the user can give them one). Menu bar:
+  View > Zoom In, Zoom Out, Actual Size, Fit Width, and Zoom To > Automatic, Fit Page,
+  Life Size and the steps. Pointer: the zoom in the status bar ("125 %"), a
   click or a right-click opens the same choices with the one in force checked
   (`MenuKind::Zoom`); `cmd` with the wheel; a pinch on the trackpad. The commands are only
   there while a document is open.
@@ -1118,7 +1129,8 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   not a magnify event, as AppKit's exception would. The x86_64 half is read, not run
   (`objc` 0.2 takes `objc_msgSend_stret` there for the `NSRect` and not for the `NSPoint`).
 - **Scripted runs**: `zoom:in`, `zoom:out`, `zoom:actual`, `zoom:fit`, `zoom:page`,
-  `zoom:life`, `zoom:125`, `zoom:by:1.25` (as a pinch at the middle of the text),
+  `zoom:life`, `zoom:auto` ("Automatic"; `state` then has `fit-width-up-to-<life size>`
+  again), `zoom:125`, `zoom:by:1.25` (as a pinch at the middle of the text),
   `zoom:pinch:0.25` (the same through AppKit's monitor and a stand-in for the event; the
   zoom follows a moment later, so `wait:` before `state`), `zoom:sideways:300` (scrolls a sheet that is wider than its room); `menu:zoom` opens the
   status bar's menu; `state` has `zoom=[page 200% sideways=144/470 life=210%]`.

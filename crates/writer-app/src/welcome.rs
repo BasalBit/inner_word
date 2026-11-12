@@ -172,7 +172,8 @@ pub fn welcome_document() -> Document {
              {k:⇧⌘0} goes back to 100 %. The percentage at the bottom right of the window \
              has the other sizes: {b:Fit Width}, {b:Fit Page}, and {b:Life Size}, the size \
              of the paper itself, which is what a page opens at when the window has the \
-             room. {k:⌘} with the scroll wheel and a pinch on the trackpad zoom too.",
+             room ({b:Automatic} brings that back). {k:⌘} with the scroll wheel and a pinch \
+             on the trackpad zoom too.",
         ),
         bullet(
             "{k:⌥⌘M} adds a comment to the selected text, {k:⌥⌘]} and {k:⌥⌘[} step through \

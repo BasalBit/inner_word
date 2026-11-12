@@ -335,6 +335,7 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
             "View: Zoom to fit width",
             "View: Zoom to fit page",
             "View: Zoom to life size",
+            "View: Zoom to automatic (page width, not larger than paper)",
             "View: Zoom to 50 %",
             "View: Zoom to 75 %",
             "View: Zoom to 125 %",
@@ -419,7 +420,7 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
     names_of(&view.items, &mut names);
     let from = names.iter().position(|name| name == "Zoom In").unwrap();
     assert_eq!(
-        names[from - 2..from + 19],
+        names[from - 2..from + 20],
         [
             "Turn Vim Mode On or Off",
             "-",
@@ -428,6 +429,7 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
             "Actual Size",
             "Fit Width",
             "Zoom To >",
+            "Automatic",
             "Fit Page",
             "Life Size",
             "-",
@@ -463,7 +465,190 @@ fn the_commands_are_in_the_palette_the_list_of_shortcuts_and_the_menu_bar(cx: &m
         assert_eq!(key(&zoom::ActualSize).as_deref(), Some("cmd-shift-0"));
         assert_eq!(key(&zoom::FitWidth), None);
         assert_eq!(key(&zoom::ZoomTo150), None);
+        assert_eq!(key(&zoom::Automatic), None, "no key by default");
     });
+}
+
+/// A page that was never given a zoom opens "as wide as its room, but not
+/// larger than paper". In 0.6.0 that zoom had no name: no item of the menu
+/// was checked while it held, and once another zoom was chosen nothing
+/// brought it back. It is "Automatic".
+#[gpui::test]
+fn automatic_is_what_a_page_opens_at_and_choosing_it_forgets_the_stored_zoom(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    cx.update(|cx| zoom::set_display_density(Some(127.5), cx));
+    let disk = Disk::new();
+    let (library, workspace, vcx) = disk.launch(cx);
+    let id = add_document_in(&library, &manuscript(true), vcx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(id, true, window, cx);
+    });
+    vcx.run_until_parked();
+    let open_menu = |vcx: &mut VisualTestContext| {
+        assert!(workspace.update_in(vcx, |w, window, cx| w.open_menu(
+            MenuKind::Zoom,
+            None,
+            window,
+            cx
+        )));
+        vcx.run_until_parked();
+    };
+    let automatic = |vcx: &mut VisualTestContext| -> bool {
+        workspace.read_with(vcx, |w, cx| w.zoom_is_automatic(cx))
+    };
+
+    // As it opens: the item is there and checked, and nothing is kept.
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::FitWidthUpTo(177));
+    assert!(automatic(vcx));
+    open_menu(vcx);
+    assert_eq!(menu_labels(vcx).unwrap()[3], "Automatic");
+    assert_eq!(checked_items(vcx), ["Automatic"]);
+    escape(vcx);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+
+    // Another zoom is chosen and kept: the item is no longer the checked
+    // one.
+    open_menu(vcx);
+    click_item("150 %", vcx);
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::Percent(150));
+    assert!(!automatic(vcx));
+    let_it_be_stored(vcx);
+    assert_eq!(
+        stored(&library, PAGE_ZOOM_KEY, vcx),
+        Some("150".to_string())
+    );
+    open_menu(vcx);
+    assert_eq!(checked_items(vcx), ["150 %"]);
+
+    // The way back, with the pointer: the page is as it opened, and the
+    // library keeps nothing for page view any more.
+    click_item("Automatic", vcx);
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::FitWidthUpTo(177));
+    assert_eq!(percent_of(&workspace, vcx), 177.);
+    assert!(automatic(vcx));
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    let_it_be_stored(vcx);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    open_menu(vcx);
+    assert_eq!(checked_items(vcx), ["Automatic"]);
+    escape(vcx);
+    // It follows the window again, as a page that was never zoomed does.
+    vcx.simulate_resize(size(px(1100.), px(900.)));
+    vcx.run_until_parked();
+    let narrow = percent_of(&workspace, vcx);
+    assert!(narrow < 177. && narrow > 60., "{narrow}");
+    workspace.read_with(vcx, |w, cx| {
+        assert_eq!(w.editor().read(cx).max_horizontal_scroll(), px(0.));
+    });
+    vcx.simulate_resize(size(px(1900.), px(1100.)));
+    vcx.run_until_parked();
+
+    // A zoom that was chosen a moment ago and is still waiting to be
+    // written is not written after "Automatic" either. From the palette
+    // this time.
+    vcx.simulate_keystrokes("cmd--");
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::Percent(175));
+    run_command(&workspace, zoom::AUTOMATIC_TITLE, vcx);
+    assert!(automatic(vcx));
+    let_it_be_stored(vcx);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    // It is not an edit.
+    workspace.read_with(vcx, |w, cx| {
+        assert_eq!(w.save_state(), Some(SaveState::Saved));
+        assert_eq!(w.editor().read(cx).state().undo_depth(), 0);
+    });
+
+    // The scripted step, from a stored zoom, and what the state line says.
+    workspace.update_in(vcx, |w, window, cx| w.zoom_step("200", window, cx).unwrap());
+    let_it_be_stored(vcx);
+    assert_eq!(
+        stored(&library, PAGE_ZOOM_KEY, vcx),
+        Some("200".to_string())
+    );
+    workspace.update_in(vcx, |w, window, cx| {
+        w.zoom_step("auto", window, cx).unwrap()
+    });
+    vcx.run_until_parked();
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.describe_zoom(cx)),
+        "page 177% fit-width-up-to-177 life=177%"
+    );
+
+    // Flow view has no such zoom: the menu does not offer it there, and
+    // the command says what it is for and changes nothing, in either view.
+    vcx.simulate_keystrokes("cmd-alt-p");
+    vcx.run_until_parked();
+    set_zoom(&workspace, Zoom::Percent(125), vcx);
+    open_menu(vcx);
+    let labels = menu_labels(vcx).unwrap();
+    assert!(
+        !labels.iter().any(|label| label == "Automatic"),
+        "{labels:?}"
+    );
+    escape(vcx);
+    run_command(&workspace, zoom::AUTOMATIC_TITLE, vcx);
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::Percent(125));
+    assert!(!automatic(vcx));
+    let toasts: Vec<String> = workspace.read_with(vcx, |w, cx| {
+        w.toast_layer()
+            .read(cx)
+            .toasts()
+            .map(|toast| toast.message.to_string())
+            .collect()
+    });
+    assert!(
+        toasts
+            .iter()
+            .any(|toast| toast.starts_with("Automatic is for page view")),
+        "{toasts:?}"
+    );
+    let_it_be_stored(vcx);
+    assert_eq!(
+        stored(&library, FLOW_ZOOM_KEY, vcx),
+        Some("125".to_string())
+    );
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+
+    // The next launch opens the page the same way: automatic, and flow
+    // view with the zoom it was given.
+    vcx.simulate_keystrokes("cmd-alt-p");
+    vcx.run_until_parked();
+    workspace.update(vcx, |w, cx| assert!(w.flush(cx)));
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
+    drop((workspace, library));
+    let (library, workspace, vcx) = disk.launch(cx);
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::FitWidthUpTo(177));
+    assert!(workspace.read_with(vcx, |w, cx| w.zoom_is_automatic(cx)));
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, vcx), None);
+
+    // The list of keyboard shortcuts has it as a row without a key, which
+    // can be given one; the key then runs it.
+    let row = vcx.update(|_, cx| {
+        writer_app::shortcuts::collect_shortcuts(cx)
+            .into_iter()
+            .find(|row| row.title.as_ref() == zoom::AUTOMATIC_TITLE)
+            .expect("Automatic is a row of the list")
+    });
+    assert!(row.all_keys.is_empty() && row.default_keys.is_empty());
+    assert_eq!(row.place, writer_app::shortcuts::Place::Anywhere);
+    set_zoom(&workspace, Zoom::Percent(300), vcx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.change_keys(window, cx, |keymap| {
+            keymap.add_key(
+                &writer_keymap::Target::new("zoom::Automatic", None),
+                writer_keymap::KeySequence::parse("f6").unwrap(),
+            )
+        })
+    });
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("f6");
+    vcx.run_until_parked();
+    assert_eq!(zoom_of(&workspace, vcx), Zoom::FitWidthUpTo(177));
 }
 
 #[gpui::test]
@@ -588,8 +773,14 @@ fn the_status_bar_shows_the_zoom_and_its_menu_sets_it(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let labels = menu_labels(cx).unwrap();
     assert_eq!(
-        labels[3..7],
-        ["Actual Size", "Fit Width", "Fit Page", "Life Size (177 %)"]
+        labels[3..8],
+        [
+            "Automatic",
+            "Actual Size",
+            "Fit Width",
+            "Fit Page",
+            "Life Size (177 %)"
+        ]
     );
     click_item("Fit Page", cx);
     assert_eq!(zoom_of(&workspace, cx), Zoom::FitPage);

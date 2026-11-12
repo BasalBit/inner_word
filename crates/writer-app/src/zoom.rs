@@ -5,7 +5,8 @@
 //! This module holds what the app adds around it:
 //!
 //! - **the commands** ([`commands`]) with their keys ([`key_bindings`]):
-//!   zoom in, zoom out, actual size, fit width, fit page, life size and a
+//!   zoom in, zoom out, actual size, fit width, fit page, life size,
+//!   automatic (what a page opens at: [`first_page_zoom`]) and a
 //!   command for every step the menus offer ([`MENU_STEPS`]). They are in
 //!   the palette, in View of the menu bar ([`add_menu_items`]) and in the
 //!   menu of the zoom item of the status bar (`workspace/zoom.rs`);
@@ -36,6 +37,11 @@
 //! large it is); from the first zoom the writer chooses, page view shows
 //! what they chose last. Flow view starts at 100 %, the size
 //! its column was made to be read at.
+//!
+//! That first zoom has a name, "Automatic" ([`Automatic`]): the item of
+//! the menus is checked while it holds, and choosing it brings it back
+//! and takes the stored zoom of page view out of the library, so the
+//! next launch opens a page the same way.
 
 use gpui::{Action, App, Global, KeyBinding, Menu, MenuItem, Window, actions};
 use writer_editor::{ZOOM_MAX, ZOOM_MIN, Zoom};
@@ -58,6 +64,10 @@ actions!(
         FitPage,
         /// Draw the page as large as the sheet of paper it stands for.
         LifeSize,
+        /// Draw the page as it opens before a zoom was chosen for it: as
+        /// wide as its room, but not larger than paper. Page view forgets
+        /// the zoom it had.
+        Automatic,
         /// Draw the text at 50 %.
         ZoomTo50,
         /// Draw the text at 75 %.
@@ -78,6 +88,13 @@ actions!(
         ZoomTo400,
     ]
 );
+
+/// What the command "Automatic" is called in the palette and in the list
+/// of keyboard shortcuts: with what it means.
+pub const AUTOMATIC_TITLE: &str = "Zoom to automatic (page width, not larger than paper)";
+
+/// What the menus call it (View > Zoom To, the menu of the status bar).
+pub const AUTOMATIC_MENU_TITLE: &str = "Automatic";
 
 /// The zooms the menus offer by name, in percent. "Zoom in" and "zoom
 /// out" go through a finer list (`writer_editor::ZOOM_STEPS`).
@@ -173,6 +190,17 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "as printed",
             "sheet",
         ]),
+        // What a page opens at. A command has no line of its own for an
+        // explanation, so the title carries it; the menus say "Automatic".
+        CommandDescriptor::new(AUTOMATIC_TITLE, CATEGORY_VIEW, Automatic).keywords([
+            "auto",
+            "default zoom",
+            "reset zoom",
+            "first",
+            "as it opens",
+            "forget zoom",
+            "sheet",
+        ]),
     ];
     for percent in MENU_STEPS {
         if percent == 100 {
@@ -197,7 +225,8 @@ pub fn commands() -> Vec<CommandDescriptor> {
 const AFTER_MENU_ITEM: &str = "Turn Vim Mode On or Off";
 
 /// Puts the zoom into the View menu of the menu bar: in, out, actual size
-/// and fit width as items, the rest under "Zoom To".
+/// and fit width as items, the rest under "Zoom To" (automatic, fit page,
+/// life size, the steps).
 pub fn add_menu_items(menus: &mut [Menu]) {
     let Some(view) = menus.iter_mut().find(|menu| menu.name.as_ref() == "View") else {
         return;
@@ -210,6 +239,7 @@ pub fn add_menu_items(menus: &mut [Menu]) {
         )
         .map_or(view.items.len(), |ix| ix + 1);
     let mut steps = vec![
+        MenuItem::action(AUTOMATIC_MENU_TITLE, Automatic),
         MenuItem::action("Fit Page", FitPage),
         MenuItem::action("Life Size", LifeSize),
         MenuItem::separator(),

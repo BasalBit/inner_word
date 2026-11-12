@@ -28,7 +28,7 @@
 //! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
 //! | `agents:<n>[:<ms>]`   | waits until agents have made `n` changes through this app since it opened (the `writer` tool, run from outside while the script waits), for at most `ms` milliseconds (10000 unless given); fails when they did not come |
 //! | `agents:on`, `agents:off` | sets the switch "Agents can make changes while The Writer is open", as its button in the Agents panel does |
-//! | `zoom:<what>`         | the zoom of the text: `in`, `out`, `actual` (100 %), `fit` (the width), `page` (a whole page), `life` (the size of the paper), a percentage (`zoom:125`), `by:<factor>` (what a pinch at the middle of the text does), `pinch:<magnification>` (hands the monitor AppKit calls a stand-in for a magnify event there) and `sideways:<pixels>` (scrolls a sheet that is wider than its room); prints the zoom afterwards |
+//! | `zoom:<what>`         | the zoom of the text: `in`, `out`, `actual` (100 %), `fit` (the width), `page` (a whole page), `life` (the size of the paper), `auto` (what a page opens at, "Automatic"; page view only), a percentage (`zoom:125`), `by:<factor>` (what a pinch at the middle of the text does), `pinch:<magnification>` (hands the monitor AppKit calls a stand-in for a magnify event there) and `sideways:<pixels>` (scrolls a sheet that is wider than its room); prints the zoom afterwards |
 //! | `pagefit:<font>\|<size>\|<line spacing>\|<a4 or letter>\|<file>` | lays the text of the file out as one paragraph in page view at those settings (2.54 cm margins) and prints what the page holds: the rows of the paragraph, the characters in a full row (mean, least, most), the rows on the first page |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
@@ -477,7 +477,7 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         "pagefit" => Step::PageFit(crate::workspace::PageFit::parse(arg)?),
         "zoom" => {
             if arg.is_empty() {
-                bail!("expected a zoom: in, out, actual, fit, page, life, a percentage");
+                bail!("expected a zoom: in, out, actual, fit, page, life, auto, a percentage");
             }
             Step::Zoom(arg.to_string())
         }

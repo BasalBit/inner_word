@@ -11,6 +11,9 @@
 //! - the status bar shows the zoom of the view ("125 %"); a click or a
 //!   right-click on it opens a menu with the same commands
 //!   ([`MenuKind::Zoom`]);
+//! - "Automatic" brings page view back to the zoom a page opens at and
+//!   takes the stored one out of the library
+//!   ([`Workspace::zoom_to_automatic`]);
 //! - a change is written to the library's settings a moment after it was
 //!   made (the wheel with `cmd` makes many in a row), and at the latest
 //!   when the app quits or the window closes;
@@ -32,8 +35,8 @@ use writer_ui::{ContextMenuItem, KeyHint, Toast, Tooltip};
 
 use super::{MenuKind, Workspace};
 use crate::zoom::{
-    self, ActualSize, FLOW_ZOOM_KEY, FitPage, FitWidth, LifeSize, MENU_STEPS, PAGE_ZOOM_KEY,
-    ZoomIn, ZoomOut, percent_label,
+    self, ActualSize, Automatic, FLOW_ZOOM_KEY, FitPage, FitWidth, LifeSize, MENU_STEPS,
+    PAGE_ZOOM_KEY, ZoomIn, ZoomOut, percent_label,
 };
 
 /// How long after the last change of zoom it is written to the library.
@@ -206,6 +209,9 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &FitPage, _, cx| this.zoom_to_fit_page(cx)))
             .on_action(
+                cx.listener(|this, _: &Automatic, window, cx| this.zoom_to_automatic(window, cx)),
+            )
+            .on_action(
                 cx.listener(|this, _: &LifeSize, window, cx| this.zoom_to_life_size(window, cx)),
             );
         for percent in MENU_STEPS {
@@ -240,6 +246,57 @@ impl Workspace {
             return;
         }
         self.set_zoom(Zoom::FitPage, cx);
+    }
+
+    /// Page view as it opens before a zoom was chosen for it: the page as
+    /// wide as its room, but not larger than paper
+    /// ([`zoom::first_page_zoom`]). The zoom the library keeps for page
+    /// view is taken out, so the next launch opens a page the same way.
+    /// Flow view has no such zoom: it says so.
+    pub fn zoom_to_automatic(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_none() {
+            return;
+        }
+        if !self.editor.read(cx).page_view() {
+            self.show_toast(
+                Toast::new(
+                    "Automatic is for page view: the page as wide as its room, but not larger \
+                     than paper.",
+                )
+                .duration(Duration::from_secs(4)),
+                cx,
+            );
+            return;
+        }
+        self.follow_the_display(window, cx);
+        // Nothing of page view is waiting to be written any more, and
+        // nothing is kept: first, so that the change of zoom below finds
+        // the library without a choice.
+        self.zoom.changed[slot(true)] = false;
+        if self.zoom.stored[slot(true)].take().is_some()
+            || self
+                .library
+                .read(cx)
+                .setting::<String>(PAGE_ZOOM_KEY)
+                .is_ok_and(|kept| kept.is_some())
+        {
+            let removed = self
+                .library
+                .update(cx, |library, cx| library.remove_setting(PAGE_ZOOM_KEY, cx));
+            if let Err(error) = removed {
+                self.show_toast(
+                    Toast::new(format!("Could not forget the zoom of page view: {error}")).error(),
+                    cx,
+                );
+            }
+        }
+        self.set_zoom(zoom::first_page_zoom(self.zoom.life_size), cx);
+    }
+
+    /// Whether page view has the zoom it opens with ("Automatic").
+    pub fn zoom_is_automatic(&self, cx: &App) -> bool {
+        let editor = self.editor.read(cx);
+        editor.page_view() && matches!(editor.zoom(), Zoom::FitWidthUpTo(_))
     }
 
     /// The page as large as the paper it stands for, on the display the
@@ -307,8 +364,9 @@ impl Workspace {
     }
 
     /// The menu of the zoom: in and out, the sizes that mean something
-    /// (actual size, the width of the window, a whole page, the size of
-    /// the paper), then the steps. The one in force is checked.
+    /// (in page view "Automatic", what a page opens at; actual size, the
+    /// width of the window, a whole page, the size of the paper), then
+    /// the steps. The one in force is checked.
     pub(crate) fn zoom_menu_items(&self, cx: &App) -> Vec<ContextMenuItem> {
         let editor = self.editor.read(cx);
         let current = editor.zoom();
@@ -317,10 +375,20 @@ impl Workspace {
             ContextMenuItem::action("Zoom In", ZoomIn),
             ContextMenuItem::action("Zoom Out", ZoomOut),
             ContextMenuItem::separator(),
+        ];
+        if page_view {
+            // What a page opens at, checked while it holds; flow view has
+            // no such zoom.
+            items.push(
+                ContextMenuItem::action(zoom::AUTOMATIC_MENU_TITLE, Automatic)
+                    .checked(matches!(current, Zoom::FitWidthUpTo(_))),
+            );
+        }
+        items.extend([
             ContextMenuItem::action("Actual Size", ActualSize)
                 .checked(current == Zoom::Percent(100)),
             ContextMenuItem::action("Fit Width", FitWidth).checked(current == Zoom::FitWidth),
-        ];
+        ]);
         if page_view {
             items.push(
                 ContextMenuItem::action("Fit Page", FitPage).checked(current == Zoom::FitPage),
@@ -434,7 +502,8 @@ impl Workspace {
     // ----- scripted runs ----------------------------------------------------------------
 
     /// The `zoom:` step of a scripted run: `in`, `out`, `actual`, `fit`
-    /// (the width), `page`, `life`, a percentage (`125`), `by:<factor>`
+    /// (the width), `page`, `life`, `auto` (what a page opens at; the
+    /// stored zoom of page view is removed), a percentage (`125`), `by:<factor>`
     /// (as a pinch at the middle of the text does), `pinch:<magnification>`
     /// (the monitor AppKit calls is handed a stand-in for a magnify event
     /// with the pointer at the middle of the text: `crate::pinch::script`;
@@ -464,6 +533,7 @@ impl Workspace {
             "fit" | "width" | "fit-width" => self.set_zoom(Zoom::FitWidth, cx),
             "page" | "fit-page" => self.zoom_to_fit_page(cx),
             "life" => self.zoom_to_life_size(window, cx),
+            "auto" | "automatic" => self.zoom_to_automatic(window, cx),
             other => {
                 if let Some(factor) = other.strip_prefix("by:") {
                     let factor = number(factor)?;

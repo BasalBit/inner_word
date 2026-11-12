@@ -129,10 +129,13 @@ TextEdit; on today's displays that is about half the size of real paper. So
 a page you have not zoomed yet opens as large as the paper itself, or as wide
 as the window when that is narrower. "Life Size" in the zoom list is the size
 of the paper on the display the window is on, "Fit Width" fills the window
-and "Fit Page" shows one whole sheet. A sheet that is wider than the window
-scrolls sideways with two fingers, or with Shift and the scroll wheel. The
-flowing column and page view each remember their own zoom, and the same
-words stand on the same pages at every zoom.
+and "Fit Page" shows one whole sheet. "Automatic" is what a page opens at
+(as wide as the window, but not larger than paper): it is checked in the
+list while it holds, and choosing it forgets the zoom you gave page view.
+A sheet that is wider than the window scrolls sideways with two fingers, or
+with Shift and the scroll wheel. The flowing column and page view each
+remember their own zoom, and the same words stand on the same pages at
+every zoom.
 
 
 Fonts

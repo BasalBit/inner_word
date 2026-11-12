@@ -22,6 +22,12 @@
 //! from before this module existed (0.2.0 and earlier) take the same lock on the same file
 //! and write the bare process id, so they and this module see each other.
 //!
+//! An app that takes changes from tools while it runs says where it listens in a second
+//! line ([`announce_channel`], read with [`app_channel`]): `"channel <path of a socket>\n"`.
+//! Because the line is in the lock file, it is always the line of whoever holds the lock
+//! now: the next holder writes the file anew, and a file left behind by a crash has no
+//! holder at all.
+//!
 //! ```no_run
 //! use std::time::Duration;
 //! use writer_store::instance_lock::{self, Acquired, HolderKind};
@@ -49,6 +55,9 @@ pub const LOCK_FILE_NAME: &str = "instance.lock";
 
 /// The word after the process id in the lock file when the holder is a tool.
 const TOOL_MARK: &str = "tool";
+
+/// The word a line of the lock file begins with when it names the app's channel.
+const CHANNEL_MARK: &str = "channel ";
 
 /// How long [`acquire_waiting`] sleeps between two tries.
 const RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -237,6 +246,90 @@ pub fn app_is_running(data_dir: &Path) -> io::Result<bool> {
     Ok(holder(data_dir)?.is_some_and(|copy| copy.kind == HolderKind::App))
 }
 
+/// Where the app that holds the lock of a data directory takes requests from tools. See
+/// [`app_channel`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppChannel {
+    /// The app's process id, when the lock file names it.
+    pub pid: Option<u32>,
+    /// The socket it listens on.
+    pub path: PathBuf,
+}
+
+/// Writes into the lock file of `data_dir` where the app listens for requests from tools
+/// (`Some(path)`), or that it no longer does (`None`). Only the app that holds the lock
+/// calls this: it fails with [`io::ErrorKind::PermissionDenied`] when the lock file does
+/// not name this process as its holder, and nothing is written then.
+///
+/// The path must not contain a line break.
+pub fn announce_channel(data_dir: &Path, channel: Option<&Path>) -> io::Result<()> {
+    let path = data_dir.join(LOCK_FILE_NAME);
+    let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+    let held = is_locked_by_another(&file)?;
+    let holder = read_holder(&mut file, data_dir);
+    if !held || holder.pid != Some(std::process::id()) || holder.kind != HolderKind::App {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "this process does not hold the lock of the data directory as the app",
+        ));
+    }
+    let mut text = format!("{}\n", std::process::id());
+    if let Some(channel) = channel {
+        let channel = channel.to_str().filter(|text| !text.contains(['\n', '\r']));
+        let Some(channel) = channel else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path of the channel cannot be written on one line",
+            ));
+        };
+        text.push_str(CHANNEL_MARK);
+        text.push_str(channel);
+        text.push('\n');
+    }
+    // The first line stays what it was, so a reader that comes between the two steps
+    // reads the holder it would have read before.
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(text.as_bytes())?;
+    file.set_len(text.len() as u64)?;
+    file.flush()
+}
+
+/// Where the app that has `data_dir` open takes requests from tools: `None` when nobody
+/// holds the lock, when a tool holds it, and when the app that holds it announced no
+/// channel (every version before 0.6.0, and an app that could not open one).
+///
+/// Only looks, like [`holder`]. A socket file may be left behind by an app that crashed;
+/// this function never names it, because the lock that app held is gone with it.
+pub fn app_channel(data_dir: &Path) -> io::Result<Option<AppChannel>> {
+    let path = data_dir.join(LOCK_FILE_NAME);
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !is_locked_by_another(&file)? {
+        return Ok(None);
+    }
+    let mut text = String::new();
+    file.seek(SeekFrom::Start(0)).ok();
+    file.read_to_string(&mut text).ok();
+    let (pid, kind) = parse_holder(&text);
+    if kind != HolderKind::App {
+        return Ok(None);
+    }
+    Ok(parse_channel(&text).map(|path| AppChannel { pid, path }))
+}
+
+/// The channel a lock file's content names.
+fn parse_channel(text: &str) -> Option<PathBuf> {
+    text.lines()
+        .skip(1)
+        .find_map(|line| line.strip_prefix(CHANNEL_MARK))
+        .map(str::trim_end)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Whether some other open file holds a lock on `file`.
 #[cfg(target_os = "macos")]
 fn is_locked_by_another(file: &File) -> io::Result<bool> {
@@ -293,7 +386,8 @@ fn read_holder(file: &mut File, data_dir: &Path) -> RunningCopy {
 
 /// The process id and the kind a lock file's content names.
 fn parse_holder(text: &str) -> (Option<u32>, HolderKind) {
-    let mut words = text.split_whitespace();
+    // The first line only: an app may say more below it (its channel).
+    let mut words = text.lines().next().unwrap_or_default().split_whitespace();
     let pid = words.next().and_then(|word| word.parse().ok());
     let kind = match words.next() {
         Some(TOOL_MARK) => HolderKind::Tool,
@@ -367,6 +461,87 @@ mod tests {
             (Some(12), HolderKind::Tool)
         );
         assert_eq!(parse_holder("12 other"), (Some(12), HolderKind::App));
+        // The channel of an app is on a line of its own and is not the holder's kind.
+        assert_eq!(
+            parse_holder("12\nchannel /tmp/tool\n"),
+            (Some(12), HolderKind::App)
+        );
+        assert_eq!(
+            parse_channel("12\nchannel /tmp/a b/x.sock\n"),
+            Some(PathBuf::from("/tmp/a b/x.sock"))
+        );
+        assert_eq!(parse_channel("12\n"), None);
+        assert_eq!(parse_channel("12 tool\n"), None);
+        assert_eq!(
+            parse_channel("channel /x\n"),
+            None,
+            "the first line is the holder"
+        );
+    }
+
+    #[test]
+    fn the_app_announces_its_channel_in_the_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nobody holds the lock: nothing to announce in, nothing to read.
+        assert_eq!(app_channel(dir.path()).unwrap(), None);
+        assert!(announce_channel(dir.path(), Some(Path::new("/tmp/x.sock"))).is_err());
+
+        let held = lock(acquire(dir.path()).unwrap());
+        assert_eq!(app_channel(dir.path()).unwrap(), None, "none announced yet");
+        let socket = Path::new("/var/folders/a b/T/the-writer-501/4711-0.sock");
+        announce_channel(dir.path(), Some(socket)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(held.path()).unwrap(),
+            format!("{}\nchannel {}\n", std::process::id(), socket.display())
+        );
+        assert_eq!(
+            app_channel(dir.path()).unwrap(),
+            Some(AppChannel {
+                pid: Some(std::process::id()),
+                path: socket.to_path_buf(),
+            })
+        );
+        // Whoever asks who holds the lock is told what it was told before.
+        let copy = holder(dir.path()).unwrap().expect("held");
+        assert_eq!(copy.pid, Some(std::process::id()));
+        assert_eq!(copy.kind, HolderKind::App);
+        let copy = taken(acquire_as(dir.path(), HolderKind::Tool).unwrap());
+        assert_eq!(copy.kind, HolderKind::App);
+
+        // A shorter path leaves nothing of the longer one behind; none takes the line out.
+        announce_channel(dir.path(), Some(Path::new("/s"))).unwrap();
+        assert_eq!(
+            app_channel(dir.path()).unwrap().map(|channel| channel.path),
+            Some(PathBuf::from("/s"))
+        );
+        assert!(announce_channel(dir.path(), Some(Path::new("/a\nb"))).is_err());
+        announce_channel(dir.path(), None).unwrap();
+        assert_eq!(app_channel(dir.path()).unwrap(), None);
+        assert_eq!(
+            std::fs::read_to_string(held.path()).unwrap(),
+            format!("{}\n", std::process::id())
+        );
+
+        // The lock file of an app that crashed names a channel and has no holder: nobody
+        // is sent there. The next holder writes the file anew.
+        announce_channel(dir.path(), Some(socket)).unwrap();
+        drop(held);
+        assert!(
+            std::fs::read_to_string(dir.path().join(LOCK_FILE_NAME))
+                .unwrap()
+                .contains("channel ")
+        );
+        assert_eq!(app_channel(dir.path()).unwrap(), None);
+        let tool = lock(acquire_as(dir.path(), HolderKind::Tool).unwrap());
+        assert_eq!(app_channel(dir.path()).unwrap(), None);
+        assert!(
+            announce_channel(dir.path(), Some(socket)).is_err(),
+            "a tool has no channel"
+        );
+        drop(tool);
+        let again = lock(acquire(dir.path()).unwrap());
+        assert_eq!(app_channel(dir.path()).unwrap(), None);
+        drop(again);
     }
 
     #[test]

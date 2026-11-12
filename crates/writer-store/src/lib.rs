@@ -311,6 +311,15 @@ impl Store {
         self.snapshot_policy = policy;
     }
 
+    /// Tells the connection to refuse every statement that would write (`true`), or to
+    /// take them again (`false`). Whoever carries out the dry run of a change on a
+    /// connection that can write switches this on for its duration, so that a mistake
+    /// in the dry run fails instead of writing.
+    pub fn set_query_only(&self, on: bool) -> Result<()> {
+        self.conn.pragma_update(None, "query_only", on)?;
+        Ok(())
+    }
+
     /// Checkpoints the WAL into the main file and closes the connection, reporting errors
     /// that a plain drop would swallow. Dropping without calling this is safe too. A
     /// read-only store is closed without a checkpoint.

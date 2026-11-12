@@ -1011,6 +1011,113 @@ fn toasts_stack_and_expire(cx: &mut TestAppContext) {
     assert_eq!(shown, vec!["toast 6", "toast 7", "toast 8", "toast 9"]);
 }
 
+/// No toast draws its message past its own edge, whatever the message is
+/// made of: it wraps onto at most `MESSAGE_LINES` lines and ends in an
+/// ellipsis when there is more. (0.5.0 drew "Exported the keyboard
+/// shortcuts to /private/tmp/…" on two lines, the second one running out
+/// of the toast: a path is one long word, and GPUI's own line clamp leaves
+/// the rest of the text on the last line.)
+#[gpui::test]
+fn no_toast_draws_its_message_past_its_edge(cx: &mut TestAppContext) {
+    use writer_ui::toast::{MAX_WIDTH, MESSAGE_LINES};
+    actions!(widgets_test, [UndoIt]);
+
+    let (root, cx) = root_window(cx);
+    let toasts = root.read_with(cx, |root, _| root.toasts.clone());
+    let path = "/private/tmp/claude-501/-Users-someone-Development-the-writer/\
+                32da77ec-6880-4cdd-a335-5be772628529/scratchpad/shots-export/14/\
+                The Writer Shortcuts.json";
+    let messages: Vec<(String, bool)> = vec![
+        // The message of the capture: a long path after a few words.
+        (format!("Exported the keyboard shortcuts to {path}"), true),
+        // One word and nothing else, far longer than three lines.
+        ("x".repeat(600), true),
+        // Many short words.
+        ("word ".repeat(200).trim_end().to_string(), true),
+        // Words of another script, and line breaks in the message.
+        (
+            format!(
+                "Könnte nicht geschrieben werden:\n{}",
+                "ünïcödé ".repeat(80)
+            ),
+            true,
+        ),
+        // What fits is drawn whole: on one line, on two, on three.
+        ("Exported to ~/Essay.md".to_string(), false),
+        (
+            "Exported the keyboard shortcuts to ~/Documents/The Writer Shortcuts.json".to_string(),
+            false,
+        ),
+        (
+            "Could not write ~/Documents/Books/The Harbour/Exports/The Writer Shortcuts.json: \
+             the folder is read-only, choose another one"
+                .to_string(),
+            false,
+        ),
+    ];
+    for with_button in [false, true] {
+        for (message, cut) in &messages {
+            let id = cx.update(|_, cx| {
+                toasts.update(cx, |layer, cx| {
+                    layer.clear(cx);
+                    let toast = Toast::new(message.clone()).success();
+                    let toast = if with_button {
+                        toast.action("Undo", UndoIt)
+                    } else {
+                        toast
+                    };
+                    layer.push(toast, cx)
+                })
+            });
+            cx.run_until_parked();
+            let drawn = toasts
+                .read_with(cx, |layer, _| layer.drawn_message(id))
+                .unwrap_or_else(|| panic!("the toast was drawn: {message}"));
+            let about = format!("{message:?} with_button={with_button}: {drawn:?}");
+            // Every line is inside the room the message had.
+            assert!(!drawn.lines.is_empty(), "{about}");
+            assert!(drawn.lines.len() <= MESSAGE_LINES, "{about}");
+            for line in &drawn.lines {
+                assert!(*line <= drawn.width + px(0.5), "{about}");
+            }
+            assert!(drawn.width < MAX_WIDTH, "{about}");
+            // Cut only when it has to be, and then with an ellipsis.
+            let whole = message.replace('\n', " ");
+            assert_eq!(drawn.is_cut(), *cut, "{about}");
+            if *cut {
+                assert_eq!(drawn.lines.len(), MESSAGE_LINES, "{about}");
+                let shown = drawn.text.trim_end_matches('\u{2026}');
+                assert!(whole.starts_with(shown), "{about}");
+                // What is drawn is most of what there was room for.
+                let last = *drawn.lines.last().unwrap();
+                assert!(last > drawn.width * 0.6, "{about}");
+            } else {
+                assert_eq!(drawn.text, whole, "{about}");
+            }
+            // The toast itself is as tall as its lines and no taller, and
+            // the message lies inside it.
+            let toast_bounds = cx
+                .debug_bounds(Box::leak(
+                    format!("toast-{}", toast_number(&format!("{id:?}"))).into_boxed_str(),
+                ))
+                .expect("the toast is on screen");
+            assert!(toast_bounds.size.width <= MAX_WIDTH, "{about}");
+            // (18 px a line, or the 22 px of the button, with 9 px above
+            // and below and the border.)
+            let lines = drawn.lines.len() as f32;
+            assert!(
+                toast_bounds.size.height <= (px(18.) * lines).max(px(22.)) + px(20.),
+                "{about}: {toast_bounds:?}"
+            );
+        }
+    }
+}
+
+/// The number in the debug form of a toast's id (`ToastId(3)`).
+fn toast_number(debug: &str) -> String {
+    debug.chars().filter(char::is_ascii_digit).collect()
+}
+
 #[gpui::test]
 fn key_hints_come_from_the_keymap(cx: &mut TestAppContext) {
     let (root, cx) = root_window(cx);

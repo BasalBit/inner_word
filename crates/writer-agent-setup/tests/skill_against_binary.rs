@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use writer_agent_setup::{example_lines, mentioned_commands};
+use writer_agent_setup::{SkillSpec, example_lines, mentioned_commands};
 
 /// `<target dir>/<profile>`, from the path of this test's own executable
 /// (`<target dir>/<profile>/deps/<name>-<hash>`).
@@ -168,7 +168,9 @@ fn every_option_the_examples_use_is_one_the_command_takes() {
     assert!(checked >= 20, "{checked} options checked");
 }
 
-/// The exit codes the skill explains are the ones the tool documents.
+/// The exit codes the skill explains are the ones the tool documents: every code of the
+/// tool has a line in the skill, the skill explains no code the tool does not have, and
+/// each line speaks of what the tool says the code means.
 #[test]
 fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
     let overview = help(&[]);
@@ -177,26 +179,77 @@ fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
         .nth(1)
         .expect("the overview lists the exit codes");
     let codes: String = codes.split_whitespace().collect::<Vec<_>>().join(" ");
-    for expected in [
-        "0 done",
-        "1 failed",
-        "2 the command line is wrong",
-        "3 not found",
-        "4 a name fits several items",
-        "5 The Writer is open",
-        "6 the text or heading is not in the document",
-        "7 the text occurs more than once",
-        "8 not possible as asked",
+    // "0 done, 1 failed, 2 wrong command line or request, ...": a code is a number that
+    // opens the list or follows ", ", and its meaning runs to the next one.
+    let mut of_the_tool: Vec<(u8, String)> = Vec::new();
+    for part in codes.trim_end_matches('.').split(", ") {
+        let (number, meaning) = part.split_once(' ').unwrap_or((part, ""));
+        match number.parse::<u8>() {
+            Ok(code) => of_the_tool.push((code, meaning.to_string())),
+            // A comma inside a meaning ("9 in the trash, or not, and ...").
+            Err(_) => {
+                let last = of_the_tool.last_mut().expect("the list opens with a code");
+                last.1.push_str(", ");
+                last.1.push_str(part);
+            }
+        }
+    }
+    let numbers: Vec<u8> = of_the_tool.iter().map(|(code, _)| *code).collect();
+    assert_eq!(
+        numbers,
+        (0..=13).collect::<Vec<u8>>(),
+        "the exit codes of the tool changed: bring the skill up to date ({codes})"
+    );
+
+    let skill = SkillSpec::new("/Applications/The Writer.app/Contents/MacOS/writer")
+        .unwrap()
+        .render();
+    let section = skill
+        .split("## Exit codes")
+        .nth(1)
+        .expect("the skill has a part about exit codes");
+    let of_the_skill: Vec<(u8, &str)> = section
+        .lines()
+        .filter_map(|line| line.strip_prefix("- "))
+        .filter_map(|line| line.split_once(": "))
+        .filter_map(|(number, meaning)| Some((number.parse::<u8>().ok()?, meaning)))
+        .collect();
+    assert_eq!(
+        of_the_skill
+            .iter()
+            .map(|(code, _)| *code)
+            .collect::<Vec<u8>>(),
+        numbers,
+        "the skill explains other exit codes than the tool has"
+    );
+    // A word of what the tool says each code means, which the line of the skill has too.
+    for (code, word) in [
+        (0, "done"),
+        (1, "failed"),
+        (2, "command line"),
+        (3, "not found"),
+        (4, "a name fits several items"),
+        (5, "The Writer is open"),
+        (6, "not in the document"),
+        (7, "occurs"),
+        (8, "--permanently"),
+        (9, "in the trash"),
+        (10, "no library"),
+        (11, "another tool is writing"),
+        (12, "exists"),
+        (13, "cannot be read"),
     ] {
+        let tool = &of_the_tool[code as usize].1;
+        let skill = of_the_skill[code as usize].1;
         assert!(
-            codes.contains(expected),
-            "the tool no longer says \"{expected}\": {codes}"
+            tool.contains(word),
+            "the tool no longer says \"{word}\" for exit code {code}: {tool}"
+        );
+        assert!(
+            skill.contains(word),
+            "the skill does not say \"{word}\" for exit code {code}: {skill}"
         );
     }
-    assert!(
-        !codes.contains("9 "),
-        "the tool has an exit code the skill does not explain: {codes}"
-    );
 }
 
 #[test]

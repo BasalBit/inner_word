@@ -4,7 +4,7 @@ The Writer is a writing app for macOS. Its library holds the user's folders and 
 
 ## Calling the tool
 
-The tool is not on the PATH. Call it by its full path, in quotes because the path contains a space:
+The tool is not on the PATH. Call it by its full path, written exactly as it is here (the quotes are needed when the path contains a space):
 
 ```
 writer --help
@@ -15,7 +15,7 @@ Every example here is a complete command line. Only the ids, names and files in 
 - `--help` lists every command. After a command (`edit --help`) it explains that command, with examples.
 - `--json` after any command prints the result as JSON on standard output. Errors go to standard error, and the exit code says what kind of failure it was.
 - A document or a folder is named by its id (`doc:12`, `folder:3`) or by its path in the library (`"The Salt Road/Part one/Chapter 1"`). Every output shows ids. Once you have an id, use it: a name can fit several items, an id cannot.
-- Text goes in and comes out as Markdown. Give it with `--content "..."`, with `--file <path>`, or on standard input with `--stdin`. For anything longer than a line, write a file and pass `--file`: that avoids shell quoting mistakes.
+- Text goes in and comes out as Markdown. Give it with `--content "..."`, with `--file <path>`, or on standard input with `--stdin`. `--content` is taken as it is: a `\n` in it is a backslash and an n, not a line break. For anything longer than a line, write a file and pass `--file`: that avoids shell quoting mistakes.
 
 ## While The Writer is open
 
@@ -44,7 +44,7 @@ writer get doc:12
 writer get doc:12 --format text
 ```
 
-Markdown is the default. `--format text` is the plain text without markup.
+Markdown is the default. `--format text` is the plain text without markup. `--section "<heading>"` prints only what stands under that heading, and `--comments` adds the comment threads below the text.
 
 Write. Every command that changes something takes `--dry-run`, which reports what would change and changes nothing:
 
@@ -57,7 +57,7 @@ writer replace-section doc:12 "Synopsis" --file synopsis.md
 writer set doc:12 --file rewritten.md
 ```
 
-`edit` replaces an exact piece of text. `--old` is the text as `get --format text` prints it (no Markdown markup) and must stand in the document exactly once, unless you pass `--all`. Everything around it keeps its formatting and its comments. `insert` also takes `--at-start` and `--before <heading>`. `replace-section` replaces what stands under a heading and keeps the heading. `set` replaces the whole text and is the last resort.
+`edit` replaces an exact piece of text. `--old` is the text as `get --format text` prints it (a piece copied from the Markdown is found too) and must stand in the document exactly once: quote enough of the words around the change to make it so. The words you quote and leave as they are keep their formatting, and so does everything around them, with its comments. When the text occurs several times the error lists the places with their numbers; `--occurrence <n>` takes one of them and `--all` every one. `find doc:12 "some words"` shows where a text stands without changing anything. `insert` also takes `--at-start`, `--before <heading>` and `--end-of <heading>`. `replace-section` replaces what stands under a heading and keeps the heading. `set` replaces the whole text and is the last resort.
 
 Organise:
 
@@ -94,7 +94,7 @@ writer history show doc:12 87
 writer history restore doc:12 87
 ```
 
-Export a document, or a folder as one file, to Markdown, DOCX or plain text. The ending of the path chooses the format:
+Export a document, or a folder as one file, to Markdown, DOCX or plain text. The ending of the path chooses the format (`.md`, `.docx`, `.txt`). A file that exists is left alone unless you pass `--overwrite`:
 
 ```
 writer export "The Salt Road" --to ~/Desktop/salt-road.docx
@@ -114,11 +114,16 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 - 0: done.
 - 1: failed. The message says why.
 - 2: the command line is wrong. Read the command's `--help`.
-- 3: not found. Check the id or the path with `list` or `search`.
-- 4: a name fits several items. The message lists them with their ids: use the id.
+- 3: not found (a document, a folder, a heading, a comment thread, a version). The message says what there is; check the id or the path with `list` or `search`.
+- 4: a name fits several items. The message lists them with their ids: use the id. For a heading that occurs several times, pass `--occurrence <n>`.
 - 5: The Writer is open and the change was refused. See above.
-- 6: the text to replace, the quote or the heading is not in the document. `get` it again and copy the text exactly.
-- 7: the text occurs more than once. Give more of the surrounding text, or pass `--all` to `edit`.
-- 8: not possible as asked (a name that is taken, a folder moved into itself, an item that is not in the trash).
+- 6: the text to replace or to comment on is not in the document. `get` it again and copy the text exactly.
+- 7: the text occurs more than once. Quote more of the words around it, or pass `--occurrence <n>`, or `--all` to `edit`.
+- 8: erasing for good needs `--permanently`. Only when the user asked for exactly that.
+- 9: the item is in the trash (`restore` it first), or it is not and the command needs one that is.
+- 10: there is no library at that place. The Writer creates it on its first run.
+- 11: another tool is writing to the library at this moment. Run the command again.
+- 12: the file an export would write exists. Choose another path, or pass `--overwrite`.
+- 13: the stored document cannot be read as a document. Leave it alone and tell the user.
 
 Installed by The Writer {{VERSION}}. The app's Agents panel updates or removes this skill.

@@ -1032,10 +1032,10 @@ pub struct ReplaceDocumentRequest {
 /// `[text](url)` a link); several paragraphs become several blocks; a line break at the
 /// start or the end of `new_text` ends the block there. When `old_text` was found as it
 /// stands, words without markup take the formatting of the text they replace (a replaced
-/// word in a bold passage stays bold), and what `old_text` and `new_text` begin and end
-/// with in common is not replaced at all: words quoted around the change so that the
-/// place is found once keep the formatting each of them has (one of them in bold, a
-/// link). When `old_text` was found by reading it as Markdown, the
+/// word in a bold passage stays bold), and the words that `old_text` and `new_text` share
+/// are not replaced at all: words quoted around the change so that the place is found
+/// once keep the formatting each of them has (one of them in bold, a link). When
+/// `old_text` was found by reading it as Markdown, the
 /// markup of `new_text` is all the formatting the replacement has (`**word**` replaced by
 /// `word` is no longer bold). A leading `#`, `-`, `>` or `1.` is only read as a heading,
 /// a list item or a quote when the match covers whole blocks: in the middle of a

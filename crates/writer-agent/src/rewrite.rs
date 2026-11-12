@@ -713,61 +713,58 @@ fn splice_block(
 /// `old`: for each part of the new text (a byte range of it, the parts in order and
 /// without gaps) the formatting of the old text it stands for.
 ///
-/// What the old and the new text begin with in common and what they end with in common
-/// is the same text: an agent quotes words around the one it changes so that the place is
-/// found once, and those words keep the formatting each of them has (a word in bold, a
-/// link). Only what differs in between is new, and takes the formatting of what it
-/// replaces: of the first character that went, or, where nothing went, of the character
-/// before it, as typed text does.
+/// The words that the old and the new text share are the same words: an agent quotes
+/// words around the one it changes so that the place is found once, and those words keep
+/// the formatting each of them has (a word in bold, a link). Only the words that differ
+/// are new, and take the formatting of what they replace: of the first character that
+/// went, or, where nothing went, of the character before them, as typed text does.
 fn formatting_to_take(
     old: &Block,
     range: Range<usize>,
     new_text: &str,
 ) -> Vec<(Range<usize>, InlineAttrs)> {
     let was = &old.text()[range.clone()];
-    let mut prefix = 0;
-    for (a, b) in was.chars().zip(new_text.chars()) {
-        if a != b {
-            break;
-        }
-        prefix += a.len_utf8();
-    }
-    let mut suffix = 0;
-    for (a, b) in was[prefix..]
-        .chars()
-        .rev()
-        .zip(new_text[prefix..].chars().rev())
-    {
-        if a != b {
-            break;
-        }
-        suffix += a.len_utf8();
-    }
-    let attrs = |offset: usize| old.attrs_at(offset).cloned().unwrap_or_default();
+    let old_words: Vec<(usize, &str)> = was.split_word_bound_indices().collect();
+    let new_words: Vec<(usize, &str)> = new_text.split_word_bound_indices().collect();
+    let old_keys: Vec<&str> = old_words.iter().map(|(_, word)| *word).collect();
+    let new_keys: Vec<&str> = new_words.iter().map(|(_, word)| *word).collect();
+    let mut same = diff::common(&old_keys, &new_keys);
+    same.push((old_words.len(), new_words.len()));
+    // Where a word begins: in the block for an old one, in the new text for a new one.
+    let old_start =
+        |word: usize| range.start + old_words.get(word).map_or(was.len(), |(offset, _)| *offset);
+    let new_start = |word: usize| {
+        new_words
+            .get(word)
+            .map_or(new_text.len(), |(offset, _)| *offset)
+    };
     let mut parts: Vec<(Range<usize>, InlineAttrs)> = Vec::new();
-    // The runs of the old text between `start` and `end`, as parts of the new text that
-    // begin at `at`.
-    let kept =
-        |parts: &mut Vec<(Range<usize>, InlineAttrs)>, start: usize, end: usize, at: usize| {
+    let mut at = (0, 0);
+    for (o, n) in same {
+        if at.1 < n {
+            // New words, in the place of the old words `gone` (or of none).
+            let gone = old_start(at.0)..old_start(o);
+            let replaced = old
+                .attrs_at(gone.start)
+                .filter(|_| !gone.is_empty() || at.1 == 0);
+            let base = replaced
+                .or_else(|| old.attrs_before(gone.start))
+                .cloned()
+                .unwrap_or_default();
+            parts.push((new_start(at.1)..new_start(n), base));
+        }
+        if o < old_words.len() {
+            // A word that stays: with what it has, run by run.
+            let (start, end, to) = (old_start(o), old_start(o + 1), new_start(n));
             for (span, run) in old.spans() {
-                let (from, to) = (span.start.max(start), span.end.min(end));
-                if from < to {
-                    parts.push((at + from - start..at + to - start, run.clone()));
+                let (from, until) = (span.start.max(start), span.end.min(end));
+                if from < until {
+                    parts.push((to + from - start..to + until - start, run.clone()));
                 }
             }
-        };
-    kept(&mut parts, range.start, range.start + prefix, 0);
-    let middle = prefix..new_text.len() - suffix;
-    if !middle.is_empty() {
-        let gone = range.start + prefix..range.end - suffix;
-        let base = if !gone.is_empty() || prefix == 0 {
-            attrs(gone.start)
-        } else {
-            old.attrs_before(gone.start).cloned().unwrap_or_default()
-        };
-        parts.push((middle.clone(), base));
+        }
+        at = (o + 1, n + 1);
     }
-    kept(&mut parts, range.end - suffix, range.end, middle.end);
     parts
 }
 

@@ -512,7 +512,21 @@ fn words_quoted_around_a_change_keep_the_formatting_each_has() {
         .unwrap()
         .threads;
     assert_eq!(threads[0].anchored_text.as_deref(), Some("quay"));
-    // Accents: the common beginning and end are cut between characters, not inside one.
+    // Two changes in one edit, the first in an italic word: each takes the formatting of
+    // the word it replaces, and the words between them stay as they are.
+    let both = fx.create(None, "She read it *twice*, standing up.\n");
+    edit(
+        &fx,
+        both.id,
+        "read it twice, standing up",
+        "read it three times, sitting down",
+    )
+    .unwrap();
+    assert_eq!(
+        fx.markdown(both.id),
+        "She read it *three times*, sitting down.\n"
+    );
+    // Accents: a word is a word, whatever its letters.
     let accents = fx.create(None, "Le **café** était fermé.\n");
     edit(&fx, accents.id, "café était", "cafè était").unwrap();
     assert!(

@@ -958,15 +958,11 @@ fn spell_service() -> Rc<FakeSpellService> {
 }
 
 /// A workspace with the fake spell checker and the fake engine of the
-/// assistant, `page_view` on or off, at `percent`.
-fn open_at<'a>(
+/// assistant, over a document with `page_view` on or off.
+fn open_at(
     page_view: bool,
-    cx: &'a mut TestAppContext,
-) -> (
-    Entity<Library>,
-    Entity<Workspace>,
-    &'a mut VisualTestContext,
-) {
+    cx: &mut TestAppContext,
+) -> (Entity<Library>, Entity<Workspace>, &mut VisualTestContext) {
     let service = spell_service();
     cx.update(|cx| {
         spelling::set_service(service, cx);

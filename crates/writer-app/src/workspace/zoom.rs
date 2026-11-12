@@ -286,9 +286,7 @@ impl Workspace {
         tips: bool,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<gpui::Div>> {
-        if self.session.is_none() {
-            return None;
-        }
+        self.session.as_ref()?;
         let label = self.zoom_label(cx);
         let hint = KeyHint::for_action(&ZoomIn, cx);
         let item = self

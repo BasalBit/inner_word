@@ -9,6 +9,7 @@ mod chat;
 mod closing;
 mod place;
 mod placing;
+mod rebinding;
 mod states;
 mod support;
 mod tools;

@@ -1388,7 +1388,7 @@ impl QuickChat {
                             "quick-chat-close",
                             IconName::Close,
                             "Close",
-                            KeyHint::parse("escape"),
+                            Self::close_key(cx),
                             false,
                             false,
                             &colors,
@@ -1503,6 +1503,15 @@ impl QuickChat {
                     .child(open.composer.clone()),
             )
             .into_any_element()
+    }
+}
+
+impl QuickChat {
+    /// The key that closes the chat, as the keymap has it now (`escape`
+    /// unless the keymap was changed). The close control names it in its
+    /// tooltip.
+    pub fn close_key(cx: &App) -> Option<KeyHint> {
+        KeyHint::for_action(&DismissChat, cx)
     }
 }
 

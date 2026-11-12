@@ -8,8 +8,12 @@ use gpui::{
 use writer_core::{EditorState, Position, Selection, TextRange};
 use writer_editor::{
     Autoscroll, CaretStyle, Editor, EditorEvent, HighlightStyle, InterceptPriority, KeyDisposition,
+    actions::OpenContextMenu,
 };
-use writer_ui::theme::{ActiveTheme, GlobalTheme};
+use writer_ui::{
+    keymap,
+    theme::{ActiveTheme, GlobalTheme},
+};
 use writer_vim::{
     CaretShape, Effect, Key, Mode, Outcome, RegisterContent, Scroll, ScrollAlign, SpellCommand,
     Vim, VimHost, VimOptions,
@@ -444,13 +448,13 @@ impl VimMode {
             return KeyDisposition::Pass;
         }
         // The key of the context menu (the editor's `ctrl-enter`, as in
-        // macOS) is no Vim command in any mode; to the engine it would be
-        // `enter`. An open command line keeps it.
-        if keystroke.key == "enter"
-            && modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-            && self.vim.mode() != Mode::CommandLine
+        // macOS, unless the keymap gives the menu another key) is no Vim
+        // command in any mode; to the engine `ctrl-enter` would be `enter`.
+        // Which key it is, is asked of the keymap: it is a binding, and the
+        // keymap can be rebuilt with another key for it. An open command
+        // line keeps the key.
+        if self.vim.mode() != Mode::CommandLine
+            && keymap::keystroke_runs(keystroke, &OpenContextMenu, window, cx)
         {
             return KeyDisposition::Pass;
         }

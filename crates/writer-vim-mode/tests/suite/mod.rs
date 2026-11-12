@@ -5,6 +5,7 @@ mod measure;
 mod modes;
 mod mouse;
 mod platform_input;
+mod rebinding;
 mod rows;
 mod seams;
 mod search;

@@ -110,8 +110,9 @@
 //! - A right-click selects the word under the pointer (the editor does
 //!   that, see `writer_editor::ContextMenuRequest`), which is a Visual
 //!   selection by the time the menu opens; inside a selection it keeps it.
-//!   `ctrl-enter` asks for the same menu at the caret and is passed to the
-//!   editor in every mode but the command line. A half-typed command is
+//!   `ctrl-enter` (the key the keymap binds the editor's context menu to,
+//!   asked of the keymap each time) asks for the same menu at the caret and
+//!   is passed to the editor in every mode but the command line. A half-typed command is
 //!   dropped when the menu is asked for. What the chosen item does is an
 //!   edit from outside like any other: one that removes the selection
 //!   (cut) ends in Normal mode on a character, one that keeps it (bold)

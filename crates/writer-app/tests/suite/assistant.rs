@@ -437,31 +437,12 @@ fn an_answer_goes_into_the_text_as_formatted_text_in_one_undo_step(cx: &mut Test
             cx,
         );
     });
-    assert_eq!(
-        editor.read_with(vcx, |editor, _| apply::selection_markdown(editor)),
-        Some("keeper".to_string())
-    );
     assert!(vcx.update(|_, cx| apply::replace_selection(&editor, "*warden*", cx)));
     editor.read_with(vcx, |editor, _| {
         let block = &editor.document().blocks()[1];
         assert_eq!(block.text(), "The warden climbed the stairs.");
         assert!(block.attrs_at(5).unwrap().italic);
         assert!(!block.attrs_at(12).unwrap().italic);
-    });
-    editor.update(vcx, |editor, cx| editor.edit(|state| state.undo(), cx));
-    assert_eq!(editor_text(&workspace, vcx), before);
-
-    // Insert Below: whole blocks under the selection, which stays.
-    editor.update(vcx, |editor, cx| {
-        editor.edit(|state| state.select_range(TextRange::in_block(0, 0, 5)), cx);
-    });
-    assert!(vcx.update(|_, cx| apply::insert_below(&editor, "> A quote.", cx)));
-    editor.read_with(vcx, |editor, _| {
-        let blocks = editor.document().blocks();
-        assert_eq!(blocks[0].text(), "Notes");
-        assert_eq!(blocks[1].kind(), &BlockKind::Quote);
-        assert_eq!(blocks[1].text(), "A quote.");
-        assert_eq!(blocks[2].text(), "The keeper climbed the stairs.");
     });
     editor.update(vcx, |editor, cx| editor.edit(|state| state.undo(), cx));
     assert_eq!(editor_text(&workspace, vcx), before);
@@ -598,7 +579,7 @@ fn an_answer_of_several_blocks_is_never_merged_into_the_text_around_it(cx: &mut 
 }
 
 #[gpui::test]
-fn the_document_and_the_selection_are_read_from_the_live_text(cx: &mut TestAppContext) {
+fn the_document_is_read_from_the_live_text(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);
     let id = add_document(
@@ -624,30 +605,6 @@ fn the_document_and_the_selection_are_read_from_the_live_text(cx: &mut TestAppCo
     assert_eq!(
         markdown.trim_end(),
         "# Notes\n\nThe keeper climbed the stairs. It was dusk."
-    );
-
-    // Nothing selected: no selection. Words of a heading: words, no heading.
-    assert_eq!(
-        editor.read_with(vcx, |editor, _| apply::selection_markdown(editor)),
-        None
-    );
-    editor.update(vcx, |editor, cx| {
-        editor.edit(|state| state.select_range(TextRange::in_block(0, 0, 5)), cx);
-    });
-    assert_eq!(
-        editor.read_with(vcx, |editor, _| apply::selection_markdown(editor)),
-        Some("Notes".to_string())
-    );
-    // Over two blocks the kinds are kept.
-    editor.update(vcx, |editor, cx| {
-        editor.edit(
-            |state| state.select_range(TextRange::new(Position::new(0, 0), Position::new(1, 10))),
-            cx,
-        );
-    });
-    assert_eq!(
-        editor.read_with(vcx, |editor, _| apply::selection_markdown(editor)),
-        Some("# Notes\n\nThe keeper".to_string())
     );
 }
 

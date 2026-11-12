@@ -19,10 +19,13 @@
 
 use std::time::Duration;
 
-use gpui::{AppContext as _, Context, Entity, Focusable as _, Window, px};
-use writer_core::SpellingLanguage;
+use std::rc::Rc;
+
+use gpui::{App, AppContext as _, Context, Entity, Focusable as _, Window, px};
+use writer_core::{Position, SpellingLanguage, TextRange};
 use writer_spell::{SpellChecker, SpellEvent, actions as spell};
 use writer_ui::{Picker, Toast};
+use writer_vim_mode::{VimMode, VimSpelling, VimSuggestions};
 
 use super::{MODAL_WIDTH, Workspace, picker_rows};
 use crate::{
@@ -37,11 +40,72 @@ use crate::{
 /// "check spelling while typing" setting.
 pub const CHECK_SPELLING_MENU_ITEM: &str = "Check Spelling While Typing";
 
+/// The spell checker behind the spelling keys of Vim mode (`]s`, `[s`,
+/// `z=`, `zg`, `zug`). The Vim crates know nothing of `writer-spell`; the
+/// app connects the two ([`VimMode::set_spelling`]).
+struct VimSpellingHooks(Entity<SpellChecker>);
+
+impl VimSpelling for VimSpellingHooks {
+    fn is_enabled(&self, cx: &App) -> bool {
+        self.0.read(cx).is_active(cx)
+    }
+
+    fn misspelling_from(&self, from: Position, forward: bool, cx: &mut App) -> Option<TextRange> {
+        self.0.update(cx, |checker, cx| {
+            if forward {
+                checker.next_misspelling(from, cx)
+            } else {
+                checker.previous_misspelling(from, cx)
+            }
+        })
+    }
+
+    fn suggestions_at(&self, at: Position, cx: &mut App) -> Option<VimSuggestions> {
+        self.0.update(cx, |checker, cx| {
+            let range = checker.misspelling_at(at, cx)?;
+            let suggestions = checker.suggestions_at(at, cx);
+            Some(VimSuggestions { range, suggestions })
+        })
+    }
+
+    fn replace(&self, range: TextRange, replacement: &str, cx: &mut App) -> bool {
+        self.0
+            .update(cx, |checker, cx| checker.replace(range, replacement, cx))
+    }
+
+    fn learn(&self, at: Position, _word: &str, cx: &mut App) -> Option<String> {
+        self.0.update(cx, |checker, cx| checker.learn_at(at, cx))
+    }
+
+    fn unlearn(&self, at: Position, _word: &str, cx: &mut App) -> Option<String> {
+        self.0.update(cx, |checker, cx| checker.unlearn_at(at, cx))
+    }
+
+    /// `z=`: the menu the `Show Suggestions` command opens, under the
+    /// caret, with the first suggestion marked.
+    fn open_suggestions(&self, _at: Position, window: &mut Window, cx: &mut App) -> bool {
+        self.0
+            .update(cx, |checker, cx| checker.show_suggestions(window, cx))
+    }
+}
+
 impl Workspace {
     /// The spell checker of the editor. `None` when the app was given no
     /// spell service (see [`crate::spelling`]).
     pub fn spell(&self) -> Option<&Entity<SpellChecker>> {
         self.spell.as_ref()
+    }
+
+    /// Connects the Vim keys for spelling to the checker. Called once, from
+    /// [`Workspace::new`]; without a checker the keys keep reporting that
+    /// spell checking is off.
+    pub(super) fn connect_vim_spelling(&mut self, cx: &mut Context<Self>) {
+        let hooks = self
+            .spell
+            .clone()
+            .map(|spell| Rc::new(VimSpellingHooks(spell)) as Rc<dyn VimSpelling>);
+        self.vim
+            .update(cx, |vim: &mut VimMode, _| vim.set_spelling(hooks));
     }
 
     /// The language spelling is checked in right now: the open document's

@@ -81,6 +81,8 @@ const EDITOR: &[(&str, &str)] = &[
     ("cmd-alt-f", "editor_tools::FindAndReplace"),
     ("cmd-g", "editor_tools::FindNext"),
     ("cmd-shift-g", "editor_tools::FindPrevious"),
+    ("cmd-;", "spell::NextMisspelling"),
+    ("cmd-shift-;", "spell::PreviousMisspelling"),
     ("cmd-z", "editor::Undo"),
     ("cmd-shift-z", "editor::Redo"),
     ("cmd-a", "editor::SelectAll"),
@@ -99,6 +101,7 @@ const EDITOR: &[(&str, &str)] = &[
     ("cmd-\"", "editor::ToggleCodeBlock"),
     ("cmd->", "editor::IncreaseTextSize"),
     ("cmd-<", "editor::DecreaseTextSize"),
+    ("cmd-:", "spell::PreviousMisspelling"),
     // macOS text navigation and the Emacs set.
     ("left", "editor::MoveLeft"),
     ("right", "editor::MoveRight"),

@@ -16,13 +16,15 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
+| `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard. Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker. Mounts everything above. |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
-Dependency direction: `app → {editor-tools, vim-mode, comments, library, export}`,
-`{editor-tools, vim-mode, comments} → editor → {ui, core}`, `vim-mode → vim → core`,
+Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export}`,
+`{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
+(the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
 `library → {store, ui}`, `export → core`. Never the reverse. Every internal crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
 
@@ -60,7 +62,7 @@ a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
 it), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-Vim, tool, the format bar, comments, status bar), `dump`, `log:<text>`, `quit`, and for measuring
+Vim, tool, the format bar, comments, spelling, status bar), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document), `savecost[:<rounds>]` (every part
 of a synchronous save, timed) and `limitcost[:<rounds>]` (the character-limit count). Useful
 lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a palette command
@@ -103,7 +105,17 @@ menus of the title, the status bar, the text and the library rows, modals);
 `tests/suite/context_menus.rs` right-clicks every kind of object in the assembled workspace
 (a document row, a folder row, the empty library, a selection, a link, a comment thread, a
 text field, the title, a status bar item), clicks an item of each menu, and holds the format
-bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from coming back.
+bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from coming back;
+`tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker.
+
+**Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
+its learned words are shared with every other app). A workspace checks spelling only when
+the app was given a spell service: `main` installs the system one
+(`writer_app::spelling::use_system_service`), a test installs
+`writer_spell::FakeSpellService` with `writer_app::spelling::set_service` before it opens a
+workspace, and without one there is no checker at all. A scripted run of the real binary
+does use the system checker: do not choose "Learn Spelling" there except on an invented
+word that is unlearned again in the same run.
 
 ## Working rules
 
@@ -192,8 +204,24 @@ text, `enter` restores, after keeping the current text as a version), "Document 
 size, orientation, margins, font, text size, line spacing, paragraph spacing; lengths are
 typed, `20mm`, `0.75in`), "Rename document", "Reveal in library" and "Welcome document"
 (opens it; written again when it is gone). In the settings `up` / `down` move, `left` /
-`right` change, `space` switches; the "Writing" section has the switch for the format bar,
-the "Status bar" section chooses the character limit and which counts are shown.
+`right` change, `space` switches; the "Writing" section has the switch for the format bar
+and the two spelling rows, the "Status bar" section chooses the character limit and which
+counts are shown.
+
+Spelling: misspelled words get a wavy red underline (not the word being typed, not code).
+A right-click on a marked word, or `ctrl-enter` / `shift-f10` with the caret in it, starts
+the text menu with up to five suggestions (or "No Guesses Found"), "Learn Spelling" (the
+Mac's own learned words, shared with other apps) and "Ignore Spelling" (this document,
+until it is closed). All of it is in the palette and under Edit > Spelling in the menu
+bar. Settings (stored in the library like the others): `spelling.check_while_typing`
+(bool, on by default; "Check spelling while typing") and `spelling.language` (`"auto"` or
+a system language identifier such as `"en_GB"`; "Spelling language": Automatic detects the
+language of each paragraph). A document can carry a language of its own
+(`DocumentSettings::spelling_language`, "Spelling language" in the "This document"
+settings: follow the app setting, Automatic, or a language), which overrides the app's and
+becomes the proofing language of a DOCX export. `left` / `right` step through the
+languages (the user's preferred ones first); `enter` on either row, or the palette command
+"Spelling language" (for the open document), opens a searchable list.
 
 Global (work anywhere in the window):
 
@@ -242,6 +270,7 @@ Editor:
 | `cmd-.` | Contextual format menu |
 | `/` at the start of a block or after a space | Insert menu |
 | `cmd-f` `cmd-opt-f` `cmd-g` `cmd-shift-g` | Find, replace, next, previous |
+| `cmd-;` / `cmd-shift-;` | Next / previous misspelling (both wrap around the document) |
 | `cmd-z` / `cmd-shift-z` | Undo / redo |
 | `cmd-a` `cmd-c` `cmd-x` `cmd-v` `cmd-shift-v` | Select all, copy, cut, paste, paste as plain text |
 
@@ -274,6 +303,9 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   a field (format menu, link, font, find bar) and modals have the keyboard themselves.
 - **Vim mode**: `:w` saves at once, `:q` closes the document (the window stays), any other
   ex name is looked up among the palette's commands (`:togglepageview`, `:export`).
+  Spelling: `]s` / `[s` next / previous misspelling, `z=` the suggestions as a menu at the
+  caret (`1z=` takes the first), `zg` learns the word and `zug` unlearns it
+  (`Workspace::connect_vim_spelling`).
 - **Held keys with Vim mode on** repeat instead of opening the macOS accent menu: the app
   stores `ApplePressAndHoldEnabled = false` in its own user defaults while Vim mode is on
   and removes it when it is off (`crates/writer-app/src/press_and_hold.rs`). macOS reads
@@ -305,9 +337,11 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
-- **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: File, Edit, Format
-  (with Turn Into and Align), Insert, View (with Theme), Help. Every item is an existing
-  action; it is enabled when the action has a handler on the way from the keyboard.
+- **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: File, Edit (with
+  Spelling), Format (with Turn Into and Align), Insert, View (with Theme), Help. Every item
+  is an existing action; it is enabled when the action has a handler on the way from the
+  keyboard. GPUI's menu items carry no state, so the check mark of "Check Spelling While
+  Typing" is set on the native item (`menus::set_check_mark`, only in the real app).
 - **Context menus** are `writer_ui::ContextMenu`: one widget, drawn by the toast layer, which
   never takes the keyboard. A right-click, `ctrl-enter` or a small "more" control opens one.
   A menu is composed where its object lives: the text menu in `writer-editor-tools` (the
@@ -315,7 +349,9 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   comment threads in `writer-comments`, the Vim chip in `writer-vim-mode`, text fields in
   `writer-ui`. Each offers a hook through which the app adds its items
   (`Workspace::extend_the_menus_of_other_crates`: Add Comment and Go to Comment in the text
-  menu, Export and Version History on library rows).
+  menu, Export and Version History on library rows). The text menu has a second hook for
+  what goes first (`EditorTools::set_text_menu_leading_extension`): the spell checker's
+  suggestions on a marked word.
 - **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),

@@ -401,6 +401,7 @@ impl Workspace {
             _subscriptions: subscriptions,
         };
         this.extend_the_menus_of_other_crates(cx);
+        this.connect_vim_spelling(cx);
         this.restore_session(window, cx);
         this.sync_comments_panel(cx);
         this.apply_vim_setting(cx);

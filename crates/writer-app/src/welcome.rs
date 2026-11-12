@@ -84,8 +84,8 @@ pub const WELCOME_TITLE: &str = "Welcome to The Writer";
 
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
-/// insert menus, Markdown shortcuts, page view, comments, Vim mode and
-/// export.
+/// insert menus, Markdown shortcuts, spelling, page view, comments, Vim
+/// mode and export.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
         heading(1, WELCOME_TITLE),
@@ -147,6 +147,20 @@ pub fn welcome_document() -> Document {
         todo(true, "Open The Writer"),
         todo(false, "Press {k:⇧⌘↩} on this line to tick it"),
         todo(false, "Write the first sentence of something"),
+        heading(2, "Spelling"),
+        bullet(
+            "A misspelled word gets a wavy red line under it once you have moved on from it. \
+             Right-click the word, or press {k:⌃↩} with the caret in it, and choose the right \
+             spelling from the top of the menu. {b:Learn Spelling} teaches your Mac the word; \
+             {b:Ignore Spelling} lets it pass in this document.",
+        ),
+        bullet("{k:⌘;} jumps to the next misspelled word and {k:⇧⌘;} to the one before."),
+        bullet(
+            "The language of each paragraph is recognised by itself. To give this document one \
+             language, choose {b:Spelling language} in the command palette or under Edit, \
+             Spelling in the menu bar. The language for all your documents, and the switch \
+             for the checker, are in Settings under Writing.",
+        ),
         heading(2, "Pages, comments and Vim"),
         bullet(
             "{k:⌥⌘P} switches between the flowing column and page view. Paper size and the \
@@ -159,7 +173,8 @@ pub fn welcome_document() -> Document {
         ),
         bullet(
             "{k:⌥⌘V} turns Vim mode on or off. In it, {c::w} saves at once and {c::q} closes \
-             the document.",
+             the document; {c:]s} and {c:[s} step through misspelled words and {c:z=} \
+             suggests.",
         ),
         heading(2, "Take your words elsewhere"),
         paragraph(

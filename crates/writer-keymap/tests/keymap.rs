@@ -1356,3 +1356,153 @@ fn a_file_without_changes_replaces_the_user_s_own_with_nothing() {
     assert_eq!(mine.stored(), None);
     assert_eq!(apply(mine.defaults(), &Changes::new()), mine.effective());
 }
+
+// ---------------------------------------------------------------------
+// Many changes, made up
+// ---------------------------------------------------------------------
+
+#[test]
+fn whatever_is_changed_the_keymap_stays_whole() {
+    let mut numbers = Texts(0x2545_F491_4F6C_DD1D);
+    let mut pick = |below: usize| -> usize {
+        numbers.0 ^= numbers.0 << 13;
+        numbers.0 ^= numbers.0 >> 7;
+        numbers.0 ^= numbers.0 << 17;
+        (numbers.0 % below as u64) as usize
+    };
+    let pool = keys(&[
+        "cmd-b",
+        "cmd-alt-b",
+        "cmd-shift-7",
+        "cmd-alt-shift-7",
+        "f5",
+        "f6",
+        "ctrl-b",
+        "left",
+        "cmd-enter",
+        "cmd-p",
+        "cmd-k cmd-b",
+        "cmd-g g",
+        "alt-h",
+        "cmd-shift-;",
+        "ctrl-enter",
+        "cmd-q",
+    ]);
+    let pristine = keymap();
+    let targets: Vec<Target> = pristine.defaults().targets().to_vec();
+    let catalogue = catalogue();
+
+    for _ in 0..60 {
+        let mut keymap = keymap();
+        for _ in 0..25 {
+            let target = &targets[pick(targets.len())];
+            let has = keymap.changes().keys_of(keymap.defaults(), target);
+            let new = pool[pick(pool.len())].clone();
+            match pick(6) {
+                0 if !has.is_empty() => {
+                    let old = has[pick(has.len())].clone();
+                    keymap.replace_key(target, &old, new);
+                }
+                1 if !has.is_empty() => {
+                    let old = has[pick(has.len())].clone();
+                    keymap.remove_key(target, &old);
+                }
+                2 => {
+                    let wanted: Vec<KeySequence> = (0..pick(3))
+                        .map(|_| pool[pick(pool.len())].clone())
+                        .collect();
+                    keymap.set_keys(target, &wanted);
+                }
+                3 => {
+                    keymap.reset(target);
+                }
+                _ => {
+                    keymap.add_key(target, new);
+                }
+            }
+
+            let effective = keymap.effective();
+            // Every target is there, and its row is what the changes say.
+            assert_eq!(effective.targets().len(), targets.len());
+            let mut expected: Vec<(Target, KeySequence)> = Vec::new();
+            for row in effective.targets() {
+                let row_keys: Vec<KeySequence> =
+                    row.keys.iter().map(|key| key.keys.clone()).collect();
+                assert_eq!(
+                    row_keys,
+                    keymap.changes().keys_of(keymap.defaults(), &row.target)
+                );
+                assert_eq!(
+                    row.changed,
+                    keymap.changes().is_changed(keymap.defaults(), &row.target)
+                );
+                // No key twice in a row; a changed row differs from its defaults.
+                for (ix, one) in row_keys.iter().enumerate() {
+                    assert!(!row_keys[ix + 1..].contains(one), "{row:?}");
+                }
+                let mut sorted = (row_keys.clone(), row.default_keys.clone());
+                sorted.0.sort();
+                sorted.1.sort();
+                assert_eq!(row.changed, sorted.0 != sorted.1, "{row:?}");
+                assert_eq!(row.shown.is_some(), !row_keys.is_empty());
+                for keys in row_keys {
+                    expected.push((row.target.clone(), keys));
+                }
+            }
+            // What is bound is what the rows show, each key in all its
+            // spellings, side by side.
+            let mut bound: Vec<(Target, KeySequence)> = Vec::new();
+            for binding in effective.bindings() {
+                assert!(
+                    binding.keys.spellings().contains(&binding.spelling)
+                        || binding.origin == Origin::Default
+                );
+                assert_eq!(key(&binding.spelling), binding.keys);
+                let pair = (binding.target.clone(), binding.keys.clone());
+                if bound.last() != Some(&pair) {
+                    assert!(
+                        !bound.contains(&pair),
+                        "a key bound in two places: {pair:?}"
+                    );
+                    bound.push(pair);
+                }
+            }
+            expected.sort();
+            bound.sort();
+            assert_eq!(bound, expected);
+            // The defaults nobody changed keep their order.
+            let order: Vec<usize> = effective
+                .bindings()
+                .iter()
+                .filter(|binding| binding.origin == Origin::Default)
+                .map(|binding| binding.source.unwrap())
+                .collect();
+            assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+            // An entry is stored for a changed target and for no other.
+            assert_eq!(
+                keymap.changes().entries().count(),
+                effective.changed().count()
+            );
+            assert!(effective.inactive().is_empty());
+        }
+
+        // Stored and read back: the same.
+        let (again, error) = Keymap::with_stored(defaults(), places(), keymap.stored().as_deref());
+        assert_eq!(error, None);
+        assert_eq!(again, keymap);
+        // Through a file into a fresh keymap: the same keymap, binding
+        // for binding, whatever the guard rails think of the made-up keys
+        // (none of the pool is refused).
+        let text = keymap.export(&catalogue, "0.5.0");
+        let mut fresh = pristine.clone();
+        let plan = fresh.plan_import(&text).unwrap();
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+        fresh.import(&plan, ImportMode::Replace);
+        assert_eq!(fresh.effective(), keymap.effective());
+        assert_eq!(entries(fresh.changes()), entries(keymap.changes()));
+        // And into itself it changes nothing, either way.
+        let plan = keymap.plan_import(&text).unwrap();
+        assert!(plan.outcome(ImportMode::Replace).differences.is_empty());
+        assert!(plan.outcome(ImportMode::Merge).differences.is_empty());
+    }
+}

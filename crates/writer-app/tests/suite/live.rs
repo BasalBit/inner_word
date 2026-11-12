@@ -1948,3 +1948,21 @@ fn the_note_says_who_did_what() {
         "An agent made 3 changes in the library"
     );
 }
+
+#[test]
+fn a_script_waits_for_agents_and_sets_the_switch() {
+    use writer_app::automation::{Script, Step};
+    let script = Script::parse("agents:2; agents:1:500; agents:off; agents:on").unwrap();
+    assert_eq!(
+        script.steps,
+        [
+            Step::Agents(2, Duration::from_secs(10)),
+            Step::Agents(1, Duration::from_millis(500)),
+            Step::AgentsSwitch(false),
+            Step::AgentsSwitch(true),
+        ]
+    );
+    assert!(Script::parse("agents").is_err());
+    assert!(Script::parse("agents:many").is_err());
+    assert!(Script::parse("agents:1:soon").is_err());
+}

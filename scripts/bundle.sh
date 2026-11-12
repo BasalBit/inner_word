@@ -268,33 +268,66 @@ if [[ $SMOKE -eq 1 ]]; then
     echo "created a document and read it back"
 
     # With the app open on that library: the app shows what the tool wrote, reading still
-    # works, and a change is refused with the exit code for "the app is open" (5) and
-    # changes nothing.
-    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; state; wait:120000; quit" \
+    # works, and a change the tool makes is carried out by the app: it arrives in the
+    # window and in the library. The script of the app waits for two changes by agents,
+    # prints what it shows, switches "Agents can make changes while The Writer is open"
+    # off and waits to be told to quit.
+    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; state; agents:2:120000; wait:300; state; dump; agents:off; state; log:the switch is off; wait:120000; quit" \
         "$APP/Contents/MacOS/$BIN_NAME" >"$TOOL_LOG" 2>&1 &
     APP_PID=$!
-    waited=0
-    until grep -q 'document=' "$TOOL_LOG" 2>/dev/null; do
-        kill -0 "$APP_PID" 2>/dev/null || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app ended before it showed the library"; }
-        [[ $waited -lt $((SMOKE_TIMEOUT_SECS * 2)) ]] || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not show the library within ${SMOKE_TIMEOUT_SECS}s"; }
-        sleep 0.5
-        waited=$((waited + 1))
-    done
+    # wait_for_log <text> <what>: until the app's log has the text.
+    wait_for_log() {
+        local waited=0
+        until grep -q -- "$1" "$TOOL_LOG" 2>/dev/null; do
+            kill -0 "$APP_PID" 2>/dev/null || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app ended before $2"; }
+            [[ $waited -lt $((SMOKE_TIMEOUT_SECS * 2)) ]] || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not get to where $2 within ${SMOKE_TIMEOUT_SECS}s"; }
+            sleep 0.5
+            waited=$((waited + 1))
+        done
+    }
+    wait_for_log 'document=' "it showed the library"
     grep -q 'title="Tool smoke test"' "$TOOL_LOG" \
         || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app does not show the document the tool created"; }
-    echo "the app shows the document the tool created"
+    grep -q 'live=\[channel=open switch=on' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not open its channel for agents"; }
+    echo "the app shows the document the tool created, and its channel for agents is open"
     run_tool 0 get "Tool smoke test"
     tool_said "Written by the bundled tool."
     echo "read while the app is open"
-    run_tool 5 create "Written while open" --content "This must not be stored."
+    run_tool 0 status
     sed 's/^/    /' "$TOOL_OUT"
-    tool_said "Quit The Writer"
+    # Two changes while the app is open: to the document it shows, and a new document.
+    run_tool 0 append "Tool smoke test" --content "Added while the app was open." --author Smoke
+    sed 's/^/    /' "$TOOL_OUT"
+    run_tool 0 create "Written while open" --content "Stored through the app." --author Smoke
+    sed 's/^/    /' "$TOOL_OUT"
+    wait_for_log 'the switch is off' "the changes of the tool had arrived"
+    grep -q 'changes=2 last="Smoke ' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not count two changes by the tool"; }
+    grep -q 'text: .*Added while the app was open\.' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the text the tool appended is not in the window of the app"; }
+    echo "the app made both changes and shows the appended text"
+    run_tool 0 list
+    tool_said "Written while open"
+    run_tool 0 get "Tool smoke test"
+    tool_said "Added while the app was open."
+    run_tool 0 get "Written while open"
+    tool_said "Stored through the app."
+    echo "both changes are in the library"
+    # With the owner's switch off the old rule holds: a change is refused with the exit
+    # code for "the app is open" (5), says why, and changes nothing. Reading goes on.
+    grep -q 'live=\[channel=open switch=off' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the switch for changes by agents is not off"; }
+    run_tool 5 create "Refused while open" --content "This must not be stored."
+    sed 's/^/    /' "$TOOL_OUT"
+    tool_said "switched off"
     run_tool 5 append "Tool smoke test" --content "This must not be stored."
     run_tool 0 list
-    if grep -q "Written while open" "$TOOL_OUT"; then die "a document was created while the app was open"; fi
+    if grep -q "Refused while open" "$TOOL_OUT"; then die "a document was created with the switch off"; fi
     run_tool 0 get "Tool smoke test"
-    if grep -q "This must not be stored." "$TOOL_OUT"; then die "a document was changed while the app was open"; fi
-    echo "changes were refused while the app was open (exit code 5), and nothing was changed"
+    if grep -q "This must not be stored." "$TOOL_OUT"; then die "a document was changed with the switch off"; fi
+    tool_said "Added while the app was open."
+    echo "with the switch off changes were refused (exit code 5), and nothing was changed"
     # The MCP server of the tool, which the assistant's side chat starts for its read-only
     # tools, reads the library while the app has it open.
     MCP_OUT="$WORK/mcp.out"
@@ -315,7 +348,8 @@ if [[ $SMOKE -eq 1 ]]; then
     run_tool 0 append "Tool smoke test" --content "Added after the app was closed."
     run_tool 0 get "Tool smoke test"
     tool_said "Added after the app was closed."
-    echo "smoke test passed: the tool writes with the app closed and only reads while it is open"
+    tool_said "Added while the app was open."
+    echo "smoke test passed: the tool writes with the app closed, through the app while it is open, and only reads with the switch off"
 
     # The assistant, on the fake engine (which starts no program and spends nothing; the
     # real one is never used by this script): it is shown, the side chat takes a message

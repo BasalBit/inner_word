@@ -66,6 +66,11 @@ pub enum Zoom {
     /// As wide as the room there is: the sheet in page view, the text
     /// column in flow view. Follows the window.
     FitWidth,
+    /// As wide as the room there is, but not above this many percent: a
+    /// sheet that fills the window where the window is narrow and stops
+    /// growing at a size that means something (the size of the paper it
+    /// stands for, say). Follows the window.
+    FitWidthUpTo(u16),
     /// Page view: one whole sheet in the window. Follows the window. In
     /// flow view, which has no sheet, this is 100 %.
     FitPage,
@@ -281,6 +286,7 @@ impl Editor {
         let percent = match self.zoom_of(paged) {
             Zoom::Percent(percent) => f32::from(percent),
             Zoom::FitWidth => fit(room.width, fit_width),
+            Zoom::FitWidthUpTo(limit) => fit(room.width, fit_width).min(f32::from(limit)),
             Zoom::FitPage if paged => fit(room.width, fit_width).min(fit(room.height, fit_height)),
             Zoom::FitPage => 100.,
         };
@@ -303,6 +309,7 @@ impl Editor {
 fn clamped(zoom: Zoom) -> Zoom {
     match zoom {
         Zoom::Percent(percent) => Zoom::Percent(percent.clamp(ZOOM_MIN, ZOOM_MAX)),
+        Zoom::FitWidthUpTo(limit) => Zoom::FitWidthUpTo(limit.clamp(ZOOM_MIN, ZOOM_MAX)),
         other => other,
     }
 }
@@ -341,6 +348,11 @@ mod tests {
         assert_eq!(Zoom::percent(f32::NAN), Zoom::Percent(100));
         assert_eq!(clamped(Zoom::Percent(5)), Zoom::Percent(ZOOM_MIN));
         assert_eq!(clamped(Zoom::FitWidth), Zoom::FitWidth);
+        assert_eq!(
+            clamped(Zoom::FitWidthUpTo(9000)),
+            Zoom::FitWidthUpTo(ZOOM_MAX)
+        );
+        assert!(Zoom::FitWidthUpTo(177).is_fit());
         assert!(Zoom::FitPage.is_fit() && !Zoom::default().is_fit());
     }
 }

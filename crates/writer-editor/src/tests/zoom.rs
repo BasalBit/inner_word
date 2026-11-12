@@ -1142,6 +1142,25 @@ fn a_sheet_wider_than_its_room_scrolls_sideways(cx: &mut TestAppContext) {
         );
         assert!((editor.zoom_percent() - 668. / 595.276 * 100.).abs() < 0.1);
     });
+    // Fit width up to a limit: the same in a window this narrow, and no
+    // larger than the limit in a wide one.
+    zoom_to(&editor, Zoom::FitWidthUpTo(177), cx);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.max_horizontal_scroll(), px(0.));
+        assert!((editor.zoom_percent() - 668. / 595.276 * 100.).abs() < 0.1);
+    });
+    cx.simulate_resize(size(px(2000.), px(800.)));
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.zoom(), Zoom::FitWidthUpTo(177));
+        assert_eq!(editor.zoom_percent(), 177.);
+        let sheet = editor.painted_sheets[0];
+        assert!(close(sheet.size.width, px(595.276 * 1.77)), "{sheet:?}");
+        assert!((sheet.center().x - px(1000.)).abs() <= px(0.5));
+        assert_eq!(editor.max_horizontal_scroll(), px(0.));
+    });
+    cx.simulate_resize(size(px(700.), px(800.)));
+    cx.run_until_parked();
     // Fit page: a whole sheet, with the desk above and below it.
     zoom_to(&editor, Zoom::FitPage, cx);
     editor.read_with(cx, |editor, _| {

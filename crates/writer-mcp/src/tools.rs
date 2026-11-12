@@ -143,19 +143,18 @@ struct Operation {
 
 // ----- the words the schemas share -------------------------------------------------------
 
-const DOCUMENT: &str = "The document: its id (12 or \"doc:12\") or its path in the library \
-(\"The Salt Road/Part one/Chapter 1\"; the last part alone is enough when no other document has that name).";
+const DOCUMENT: &str = "The document: its id (12 or \"doc:12\") or its path in the library (\"The Salt Road/Part one/Chapter 1\").";
 const FOLDER: &str = "The folder: its id (3 or \"folder:3\") or its path in the library (\"The Salt Road/Part one\").";
-const FOLDER_OR_TOP: &str = "The folder: its id (3 or \"folder:3\") or its path in the library \
-(\"The Salt Road/Part one\"); \"/\" is the top level of the library.";
+const FOLDER_OR_TOP: &str =
+    "The folder: its id (3 or \"folder:3\") or its path in the library; \"/\" is the top level.";
 const MARKDOWN: &str =
     "The text, as Markdown (headings, lists, quotes, code, *emphasis*, [links](url)).";
 const HEADING: &str = "The heading, by its text (\"The harbour\"); # signs in front (\"## The harbour\") also say its level.";
 const HEADING_OCCURRENCE: &str =
     "Which one, when several headings have that text: its number among them, from 1.";
-const DRY_RUN: &str = "Report what would change, and change nothing. Works while the app is open.";
-const AUTHOR: &str = "Your name (for example \"Claude\"): it labels the version kept before the change \
-and signs a comment.";
+const DRY_RUN: &str = "Report what would change, and change nothing.";
+const AUTHOR: &str =
+    "Your name (\"Claude\"): it labels the version kept before the change and signs a comment.";
 const FORMAT: &str = "\"markdown\" (default), \"text\" (plain text without markup) or \"json\" (the document as the app stores it, with every attribute).";
 const COMMENT: &str = "The id of the comment thread, as list_comments gives it.";
 const FIRST: &str = "Put it before its siblings instead of after them.";

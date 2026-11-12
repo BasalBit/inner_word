@@ -273,9 +273,24 @@ fn every_change_keeps_a_version_that_can_be_read_and_restored() {
             .ends_with("The keeper watched.\n\nThe end.\n")
     );
     // The check against restoring into the wrong document.
-    let wrong = sandbox.run(&["history", "restore", "1", "--document", "doc:2"]);
+    // With the document named too (as the skill writes it), the version must be its own.
+    assert_eq!(sandbox.ok(&["history", "show", "doc:1", "1"]), CHAPTER);
+    let wrong = sandbox.fail(&["history", "show", "doc:2", "1"], 2);
+    assert!(
+        wrong.contains(
+            "version 1 is a version of doc:1 \"The Salt Road/Chapter 1\", not of doc:2 \"Ideas\""
+        ),
+        "{wrong}"
+    );
+    let wrong = sandbox.run(&["history", "restore", "doc:2", "1"]);
     assert_ne!(wrong.code, 0);
+    assert_eq!(wrong.stdout, "");
     assert!(wrong.stderr.contains("version 1"), "{}", wrong.stderr);
+    assert!(
+        sandbox
+            .ok(&["history", "restore", "Chapter 1", "1", "--dry-run"])
+            .contains("Restored version 1 (")
+    );
 }
 
 #[test]

@@ -134,6 +134,7 @@ const FOLDER: &str =
 const ITEM: &str = "A document or a folder: an id (doc:12, folder:3) or a path in the library";
 const THREAD: &str = "A comment thread: its id as \"writer comments\" prints it";
 const VERSION: &str = "A version: its id as \"writer history\" prints it";
+const VERSION_DOCUMENT: &str = "The document the version belongs to (a check; may be left out)";
 const AGENT: &str = "An agent by its id as \"writer agents\" prints it (claude-code, codex, ...)";
 
 /// The options every command with text has.
@@ -731,29 +732,35 @@ so. Also written \"writer history <document>\".",
         ..reading("history list", Group::History)
     },
     Spec {
-        synopsis: "<version>",
+        synopsis: "[<document>] <version>",
         summary: "Print a saved version",
-        about: "Prints the text of a saved version, as \"writer get\" prints a document.",
-        positionals: &[arg("version", VERSION)],
+        about: "Prints the text of a saved version, as \"writer get\" prints a document. The id of a \
+version is enough; with the document named too, the version must be one of that document.",
+        positionals: &[
+            optional("document", VERSION_DOCUMENT),
+            arg("version", VERSION),
+        ],
         options: &[FORMAT_READ],
         examples: &[
             "writer history show 87",
-            "writer history show 87 --format text",
+            "writer history show doc:12 87 --format text",
         ],
         ..reading("history show", Group::History)
     },
     Spec {
-        synopsis: "<version>",
+        synopsis: "[<document>] <version>",
         summary: "Put a saved version back",
         about: "Makes a saved version the text of its document again. The text as it is now is kept as a \
-version first, so restoring can itself be taken back.",
-        positionals: &[arg("version", VERSION)],
-        options: &[value(
-            "document",
-            "document",
-            "The document the version must belong to (a check)",
-        )],
-        examples: &["writer history restore 87"],
+version first, so restoring can itself be taken back. The id of a version is enough; with the \
+document named too, the version must be one of that document, or nothing is restored.",
+        positionals: &[
+            optional("document", VERSION_DOCUMENT),
+            arg("version", VERSION),
+        ],
+        examples: &[
+            "writer history restore 87",
+            "writer history restore doc:12 87 --dry-run",
+        ],
         ..writing("history restore", Group::History)
     },
     // ----- Agents --------------------------------------------------------------------
@@ -999,16 +1006,6 @@ mod tests {
                     "{}: example {example}",
                     spec.name
                 );
-            }
-            // Required arguments come before optional ones.
-            let mut optional_seen = false;
-            for positional in spec.positionals {
-                assert!(
-                    !(optional_seen && positional.required),
-                    "{}: argument order",
-                    spec.name
-                );
-                optional_seen |= !positional.required;
             }
             let options = options(spec);
             for (index, option) in options.iter().enumerate() {

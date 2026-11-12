@@ -519,13 +519,32 @@ pub fn run(
         "history show" => {
             arguments
                 .set_some("format", parsed.value("format"))
-                .set_number("version", "<version>", parsed.arg(0))?;
-            call("read_version", arguments)
+                .set_number("version", "<version>", parsed.arg(1))?;
+            let reply = call("read_version", arguments)?;
+            // The document named with it is a check: the version must be one of its own.
+            if let Some(document) = parsed.arg(0) {
+                let mut named = Arguments::new();
+                named.set("document", document);
+                let info = call("document_info", named)?;
+                if info.data["document"]["id"] != reply.data["document"]["id"] {
+                    return Err(Failure::invalid(format!(
+                        "version {} is a version of doc:{} \"{}\", not of doc:{} \"{}\"",
+                        arg(1),
+                        reply.data["document"]["id"],
+                        reply.data["document"]["path"].as_str().unwrap_or_default(),
+                        info.data["document"]["id"],
+                        info.data["document"]["path"].as_str().unwrap_or_default(),
+                    )));
+                }
+            }
+            Ok(reply)
         }
         "history restore" => {
-            arguments
-                .set_some("document", parsed.value("document"))
-                .set_number("version", "<version>", parsed.arg(0))?;
+            arguments.set_some("document", parsed.arg(0)).set_number(
+                "version",
+                "<version>",
+                parsed.arg(1),
+            )?;
             call("restore_version", arguments)
         }
         other => Err(Failure::new(

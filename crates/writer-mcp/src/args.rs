@@ -26,7 +26,7 @@ pub fn integer(description: &str, minimum: i64) -> Value {
 
 /// A boolean property. Leaving it out means `false`.
 pub fn boolean(description: &str) -> Value {
-    json!({ "type": "boolean", "default": false, "description": description })
+    json!({ "type": "boolean", "description": description })
 }
 
 /// A string property that is one of `choices`.

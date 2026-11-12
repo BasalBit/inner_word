@@ -162,3 +162,134 @@ fn fail(as_json: bool, failure: &Failure) -> ExitCode {
     };
     ExitCode::from(failure.kind.exit_code())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse::{self, Action};
+    use super::spec;
+
+    /// Splits a command line the way a shell does, as far as the examples go: words,
+    /// single and double quotes, a backslash before a character.
+    fn shell_words(line: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut word = String::new();
+        let mut in_word = false;
+        let mut quote: Option<char> = None;
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            match (quote, c) {
+                (Some(open), c) if c == open => quote = None,
+                (Some('"'), '\\') => word.extend(chars.next()),
+                (Some(_), c) => word.push(c),
+                (None, '"' | '\'') => {
+                    quote = Some(c);
+                    in_word = true;
+                }
+                (None, '\\') => {
+                    word.extend(chars.next());
+                    in_word = true;
+                }
+                (None, c) if c.is_whitespace() => {
+                    if in_word {
+                        words.push(std::mem::take(&mut word));
+                        in_word = false;
+                    }
+                }
+                (None, c) => {
+                    word.push(c);
+                    in_word = true;
+                }
+            }
+        }
+        assert!(quote.is_none(), "a quote is left open in: {line}");
+        if in_word {
+            words.push(word);
+        }
+        words
+    }
+
+    /// The `writer ...` commands of a line that may be a pipeline.
+    fn writer_commands(line: &str) -> Vec<Vec<String>> {
+        let words = shell_words(line);
+        words
+            .split(|word| word == "|")
+            .filter(|command| command.first().is_some_and(|first| first == "writer"))
+            .map(|command| command[1..].to_vec())
+            .collect()
+    }
+
+    #[track_caller]
+    fn assert_reads(line: &str) {
+        let commands = writer_commands(line);
+        assert!(!commands.is_empty(), "no writer command in: {line}");
+        for command in commands {
+            match parse::parse(command) {
+                Ok((_, Action::Run(..))) => {}
+                other => panic!("this tool cannot read the command line \"{line}\": {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn shell_words_are_split_as_a_shell_splits_them() {
+        assert_eq!(
+            shell_words(r#"writer edit "Notes/Plan" --old 'a "b"' --new "c \"d\"" x\ y"#),
+            vec![
+                "writer",
+                "edit",
+                "Notes/Plan",
+                "--old",
+                "a \"b\"",
+                "--new",
+                "c \"d\"",
+                "x y"
+            ]
+        );
+        assert_eq!(
+            shell_words(r#"writer set doc:1 --content """#),
+            vec!["writer", "set", "doc:1", "--content", ""]
+        );
+    }
+
+    #[test]
+    fn every_example_in_the_help_is_a_command_line_this_tool_reads() {
+        for spec in spec::COMMANDS {
+            for example in spec.examples {
+                assert_reads(example);
+            }
+            // The first example of a command is an example of that command.
+            let first = writer_commands(spec.examples[0]);
+            let ran = first.iter().any(|command| {
+                matches!(parse::parse(command.clone()), Ok((_, Action::Run(found, _))) if found.name == spec.name)
+            });
+            assert!(
+                ran,
+                "the first example of \"writer {}\" runs another command",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_line_in_the_skill_is_one_this_tool_reads() {
+        // The skill is what agents are told (crates/writer-agent-setup). A command line in
+        // it that this tool cannot read would be a wasted turn for every agent, every time.
+        let lines = writer_agent_setup::example_lines();
+        assert!(lines.len() >= 20, "the skill has examples: {}", lines.len());
+        for line in lines {
+            if shell_words(line) == ["writer", "--help"] {
+                continue;
+            }
+            assert_reads(line);
+        }
+        for command in writer_agent_setup::mentioned_commands() {
+            let first = command.first().map(String::as_str).unwrap_or_default();
+            let second = command.get(1).map(String::as_str);
+            assert!(
+                !matches!(spec::find(first, second), spec::Found::Unknown),
+                "the skill mentions \"writer {}\", which is not a command",
+                command.join(" ")
+            );
+        }
+    }
+}

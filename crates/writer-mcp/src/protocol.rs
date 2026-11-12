@@ -107,7 +107,6 @@ pub struct ToolDef {
 impl ToolDef {
     fn to_json(&self) -> Value {
         let mut annotations = Map::new();
-        annotations.insert("title".into(), json!(self.title));
         annotations.insert("readOnlyHint".into(), json!(self.effect == Effect::Read));
         if self.effect != Effect::Read {
             annotations.insert(

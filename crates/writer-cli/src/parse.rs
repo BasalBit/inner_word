@@ -36,8 +36,9 @@ pub struct Globals {
 /// The arguments and options of one command.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Parsed {
-    /// The arguments, in order.
-    pub positionals: Vec<String>,
+    /// The arguments, one place for each argument of the command's table: `None` for an
+    /// optional one that was left out.
+    pub positionals: Vec<Option<String>>,
     /// The options with a value, by name (without the dashes).
     pub values: BTreeMap<&'static str, String>,
     /// The switches that were given.
@@ -45,9 +46,11 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    /// The argument at `index`, when given.
+    /// The argument at the place `index` of the command's table, when given.
     pub fn arg(&self, index: usize) -> Option<&str> {
-        self.positionals.get(index).map(String::as_str)
+        self.positionals
+            .get(index)
+            .and_then(|argument| argument.as_deref())
     }
 
     /// The value of the option `name`, when given.
@@ -221,9 +224,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
     }
 
     let mut parsed = Parsed::default();
+    let mut words: Vec<String> = Vec::new();
     while let Some(token) = rest.next() {
         match token {
-            Token::Word(word) => parsed.positionals.push(word),
+            Token::Word(word) => words.push(word),
             Token::Short(short) => {
                 return Err(UsageError::of(spec, format!("unknown option {short}")));
             }
@@ -283,15 +287,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
     }
 
     let required = spec.positionals.iter().filter(|p| p.required).count();
-    if parsed.positionals.len() < required {
-        let missing = &spec.positionals[parsed.positionals.len()];
+    if words.len() < required {
+        // The first required argument that the words given do not reach.
+        let missing = spec
+            .positionals
+            .iter()
+            .filter(|p| p.required)
+            .nth(words.len())
+            .unwrap_or(&spec.positionals[0]);
         return Err(UsageError::of(
             spec,
             format!("<{}> is missing: {}", missing.name, missing.help),
         ));
     }
-    if parsed.positionals.len() > spec.positionals.len() {
-        let surplus = &parsed.positionals[spec.positionals.len()];
+    if words.len() > spec.positionals.len() {
+        let surplus = &words[spec.positionals.len()];
         let hint = if spec.positionals.is_empty() {
             format!("\"writer {}\" takes no arguments", spec.name)
         } else {
@@ -300,7 +310,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
                 spec.name,
                 spec.positionals
                     .iter()
-                    .map(|p| format!("<{}>", p.name))
+                    .map(|p| if p.required {
+                        format!("<{}>", p.name)
+                    } else {
+                        format!("[<{}>]", p.name)
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
             )
@@ -309,6 +323,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
             spec,
             format!("unexpected argument \"{surplus}\": {hint}"),
         ));
+    }
+    // An optional argument takes a word only when there are more words than the required
+    // arguments still to come need, so one may also stand before a required one
+    // (`history show [<document>] <version>`).
+    let mut spare = words.len() - required;
+    let mut words = words.into_iter();
+    for positional in spec.positionals {
+        if positional.required {
+            parsed.positionals.push(words.next());
+        } else if spare > 0 {
+            spare -= 1;
+            parsed.positionals.push(words.next());
+        } else {
+            parsed.positionals.push(None);
+        }
     }
     if spec.content != Content::None {
         let sources = ["content", "file"]
@@ -395,7 +424,7 @@ mod tests {
         assert!(globals.json);
         assert!(!globals.dry_run);
         assert_eq!(name, "list");
-        assert!(parsed.positionals.is_empty());
+        assert_eq!(parsed.positionals, vec![None]);
 
         let (globals, name, parsed) =
             command(&["trash", "Notes/Plan", "--dry-run", "--library=/tmp/b"]);
@@ -457,6 +486,15 @@ mod tests {
         assert_eq!(command(&["comment", "Draft"]).1, "comment list");
         assert_eq!(command(&["history", "Draft"]).1, "history list");
         assert_eq!(command(&["history", "show", "3"]).1, "history show");
+        // An optional argument before a required one: the document may be named or not.
+        let (_, _, one) = command(&["history", "show", "3"]);
+        assert_eq!((one.arg(0), one.arg(1)), (None, Some("3")));
+        let (_, _, two) = command(&["history", "restore", "doc:12", "3"]);
+        assert_eq!((two.arg(0), two.arg(1)), (Some("doc:12"), Some("3")));
+        assert!(error(&["history", "show"]).contains("<version> is missing"));
+        assert!(
+            error(&["history", "show", "a", "b", "c"]).contains("takes [<document>] <version>")
+        );
         assert_eq!(
             command(&["history", "restore", "3", "--dry-run"]).1,
             "history restore"

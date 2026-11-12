@@ -83,7 +83,7 @@ const TYPED_TRIGGERS: [(&str, &str, &str); 1] = [(
 pub const TYPED_TRIGGER_NOTE: &str =
     "This is typed into the text, not a keyboard shortcut. It cannot be changed.";
 
-/// What the overlay says above the list: the keys are one way, the menus
+/// What the list says above its rows: the keys are one way, the menus
 /// are the other.
 pub const MENUS_NOTE: &str = "Every command is also in a menu: right-click, or the menu bar";
 
@@ -129,7 +129,7 @@ pub enum Place {
 }
 
 impl Place {
-    /// How the overlay names the place.
+    /// How the list names the place.
     pub fn label(self) -> &'static str {
         match self {
             Place::Anywhere => "Anywhere",

@@ -18,7 +18,9 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, shortcuts overlay, status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict, the shortcuts file (export, and an import plan). |
+| `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
@@ -30,7 +32,8 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
 Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export,
-assistant-quick, assistant-ui, assistant}`, `assistant-quick → {assistant-ui, assistant,
+assistant-quick, assistant-ui, assistant, keymap-ui, keymap}`, `keymap-ui → {keymap, ui}`
+(`keymap` depends on nothing of ours and not on GPUI), `assistant-quick → {assistant-ui, assistant,
 editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant → {mcp, agent-setup}` (for
 the list of its read-only tools and for the folders installers put a program in; no GPUI),
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
@@ -79,11 +82,13 @@ a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `
 `choose:<label>` (chooses that item of the open context menu, as a click would),
 `bar` (shows the format bar over the selection, as a selection made with the mouse does;
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
-it), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
+it), `shortcut:<action>=<keys>` and `shortcuts:<what>` (the keyboard shortcuts, see "Changing
+keys"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
 written), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-Vim, tool, the format bar, comments, spelling, status bar, the Agents panel while it is
+Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
+of shortcuts shows while it is open, status bar, the Agents panel while it is
 open, and in a run with an engine the assistant: whether it is shown, the quick chat while
 it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
@@ -151,7 +156,9 @@ bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from
 `tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker;
 `tests/suite/agents.rs` holds the Agents panel against a temporary home directory;
 `tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it;
-`tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine.
+`tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine;
+`tests/suite/keybindings.rs` holds the keys the user changes: the keymap taken apart and put
+back, every kind of change, the list, the guard rails, storage, the shortcuts file.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -188,7 +195,7 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   launch has answered, the answer of the last launch stands (`assistant.engine_seen`), so
   the keys work from the first moment where the engine was found before. Not installed: nothing of
   the assistant is shown (no key does anything, no command in the palette or the
-  shortcuts overlay, no item in the menu bar, the text menu or the format bar, no panel),
+  list of shortcuts, no item in the menu bar, the text menu or the format bar, no panel),
   except one line in the settings that says what it needs. Installed and not signed in:
   it is shown and says how to sign in. `Workspace::assistant_shown` is the one answer; the
   commands of the category "Assistant" are hidden with `commands::set_category_hidden`,
@@ -364,7 +371,7 @@ built only from the crates without GPUI. It does not need the app to be running.
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
   `writer-store`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
-  `writer-agent-setup`, `writer-assistant`) build and test with
+  `writer-agent-setup`, `writer-assistant`, `writer-keymap`) build and test with
   `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
@@ -407,7 +414,10 @@ built only from the crates without GPUI. It does not need the app to be running.
    double or triple click, a shift-click), never for a keyboard selection, never takes the
    keyboard, and can be switched off in the settings ("Format bar").
 3. **One source of truth for shortcuts.** Bindings are registered through GPUI key bindings;
-   the shortcuts overlay and palette hints are generated from that registry, not hand-written.
+   the list of keyboard shortcuts and palette hints are generated from that registry, not
+   hand-written. The user can change every one of them ("Changing keys"), so no key is ever
+   written into a text, a tooltip or a comparison: whatever shows or obeys a key asks the
+   keymap when it does.
 4. **Never lose text.** Documents autosave (debounced) and on close/quit. No save button;
    "Save Now" (`cmd-s`, the save state in the status bar, the File menu) saves at once for
    whoever wants to be sure. `SIGTERM`, `SIGHUP` and `ctrl-c` in the terminal quit the way
@@ -435,8 +445,9 @@ to text through span attributes so they move with edits.
 ## Default keymap
 
 `opt` below is the option key; in GPUI keystroke strings it is spelled `alt`
-(`KeyBinding::new("cmd-alt-s", ..)`; `opt` does not parse). The shortcuts overlay (`cmd-/`)
-is generated from the keymap and lists everything, grouped by where the keyboard has to be
+(`KeyBinding::new("cmd-alt-s", ..)`; `opt` does not parse). These are the defaults: the user
+can change every one of them (see "Changing keys"). "Keyboard shortcuts" (`cmd-/`) is
+generated from the keymap and lists everything, grouped by where the keyboard has to be
 ("Anywhere", "In the text", "In the find bar", "In the library", "In the comment list", ...),
 including the keys of the panels and overlays that are not repeated here.
 
@@ -486,7 +497,7 @@ Global (work anywhere in the window):
 | `cmd-s` | Save now (the text is saved as it is written anyway) |
 | `ctrl-enter` or `shift-f10` | Context menu of what has the keyboard: the text, a library row, a comment thread, a text field |
 | `cmd-,` | Settings |
-| `cmd-/` | Keyboard shortcuts overlay |
+| `cmd-/` | Keyboard shortcuts: every key, to look up and to change |
 | `cmd-opt-p` | Turn page view on or off |
 | `cmd-opt-v` | Turn Vim mode on or off |
 | `cmd-opt-a` | Agents panel (the command line tool, the skill, the MCP server) |
@@ -495,7 +506,7 @@ Global (work anywhere in the window):
 | `cmd-opt-]` / `cmd-opt-[` | Next / previous comment |
 | `cmd-w` / `cmd-q` | Close the window / quit |
 
-In the assistant's chats (both; the shortcuts overlay lists them under "In the assistant's
+In the assistant's chats (both; the list of shortcuts has them under "In the assistant's
 chats"): `enter` sends, `shift-enter` is a new line, `cmd-.` stops the answer, `escape`
 stops it or leaves the chat, `tab` / `shift-tab` move between the composer, the
 conversation and (side chat) the context row and the header, `cmd-shift-m` / `cmd-opt-e`
@@ -541,8 +552,8 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   key hints show; `shift-f10` is bound beside it everywhere (the text, the library, the
   comment list, text fields; bound first, so hints keep showing `ctrl-enter`), because a
   real `ctrl-return` posted to a background window never reached GPUI (keypad enter did)
-  and nobody has pressed it on a keyboard in an active window yet. The shortcuts overlay
-  names the second key in the row ("Context menu (also ⇧F10)", `shortcuts::EVERY_KEY`).
+  and nobody has pressed it on a keyboard in an active window yet. The list of shortcuts
+  shows both keys on the row.
 - **Panel keys that are easy to miss**: in the library `alt-right` / `alt-left` open or close
   every folder (of the selected folder, or all of them) and a click on a folder row opens
   or closes it; in the comment list `cmd-c` copies the comment's text; `cmd-opt-f` on an
@@ -589,7 +600,19 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   binding of the action that holds in a made-up `Workspace Pane Editor` context. The keys
   the menu bar should show are therefore bound once more in the `Pane` context, which no
   element has (`menus::menu_key_bindings`, added before all other bindings; they never run).
-  A key with `enter` in it cannot be given to AppKit: those items show no key.
+  They are computed from the keymap that is installed, each time it is installed: the key
+  the list of shortcuts shows for the command, or the next key of the same row that the
+  menu bar can draw. A key with `enter` or `tab` in it cannot be given to AppKit: an item
+  whose command has only such keys shows none (a placeholder of two keys says so to GPUI).
+  The key beside an item is live: AppKit runs an enabled item on its key where GPUI has no
+  binding for it, so the menu bar is built again after every change of a key.
+- **The keymap GPUI has is one the app built** (`crates/writer-app/src/keymap.rs`). Every
+  crate binds its keys in its `init`; at the end of `writer_app::init` they are taken as
+  the defaults, and from then on every change clears the keymap and binds it again in the
+  same order (a changed key where its default stood). So: bind keys in `init` and nowhere
+  else (a binding added later is lost at the next change), and never compare against a key
+  or keep a `KeyHint`: ask the keymap when the key arrives or the hint is drawn
+  (`writer_ui::keymap`, `KeyHint::for_action`, `writer_app::keymap::hint_in`).
 
 A layout fact that bites: text that wraps (or has several lines) inside a `flex_col`
 container that is itself the growing child (`flex_1`) of a flex row is measured at no
@@ -597,11 +620,84 @@ width, and the row comes out thousands of pixels tall. Make the growing child a 
 `div()` and space its children with margins (`crates/writer-app/src/agents_view.rs`,
 `render_row`; the test `no_row_is_taller_than_its_text`).
 
+## Changing keys
+
+Every key that is a GPUI binding can be changed by the user, in one place: "Keyboard
+shortcuts" (`cmd-/`, the palette, The Writer > Keyboard Shortcuts… and Help in the menu bar,
+the last row of the settings). Three crates: `writer-keymap` knows what a change is,
+`writer-keymap-ui` is the list, `writer-app` has the keymap and does what the list asks.
+
+- **What a change is.** For a command in a key context (`writer_keymap::Target`:
+  `editor::ToggleBold` in `Editor`) the user has the keys they want: a key replaced, a
+  second key added, a key removed (the command may be left without one), a key given to a
+  command that has none ("Version history"; it applies anywhere for a command of the
+  window, in the text for a command of the text: `keymap::home_context`). One command back
+  to its default, or everything. A default bound in two spellings (`cmd-&` and
+  `cmd-shift-7`) is one key and is changed as one; a new key that needs two spellings gets
+  both.
+- **A row of the list is one key to the user.** A command bound in several key contexts
+  that are one place (the find bar binds "case sensitive" for the bar and for its field,
+  the assistant's chats bind their keys in four) has one row
+  (`shortcuts::Shortcut::targets`), and a change of the row is made in all of them
+  (`workspace/shortcuts.rs`). A command with keys in several places (undo: the text, the
+  comment list) has a row in each. The rows are generated (`shortcuts::collect_shortcuts`)
+  from what is installed: the commands of the palette in their categories, then the keys
+  without a command (moving the caret, the keys of a text field, of the dialogs and of the
+  list itself), named after their actions.
+- **Not changeable**, and the list says so: the grammar of Vim mode (it is not made of
+  bindings; with Vim mode on, a key Vim uses in the current mode never reaches a binding),
+  the `/` that opens the insert menu (typed into the text; the command can be given a real
+  key besides), and the two keys of the message window that stands in when the library
+  cannot be opened.
+- **Guard rails** (`writer_keymap::check`, asked by the list before anything changes): a
+  bare character or shift with one is refused where text is typed; a key macOS keeps
+  (`cmd-tab`, `cmd-alt-escape`, ...) is refused, one it uses unless switched off
+  (`cmd-space`, the screenshots) is warned about. A key another command has in the same
+  place is "taken": the user takes it from that command or cancels. The same key in
+  another place is allowed, and the list says who keeps it where both apply ("Keep Both").
+  What a place is, the app tells in `keymap::places` (which key context can lie inside
+  which, where text is typed). A new key context of a crate goes in there.
+- **Nobody is locked out.** The list works with the pointer alone, and "Reset All Keyboard
+  Shortcuts…" is in the menu bar and the palette, where it asks in a system dialog that no
+  key of the app can break.
+- **Storage.** One setting of the library, `keyboard.shortcuts`
+  (`{"version": 1, "changes": [{"command", "context", "default", "keys"}, ...]}`): only what
+  differs from the defaults, with the defaults of the moment beside it, so later defaults
+  arrive by themselves. Read first of all in `Workspace::new`, before a key hint is drawn;
+  removed again when every key is the default. An entry for a command this version does
+  not have, fields it does not know and entries it cannot read are kept and written back.
+  `writer_app::keymap::set_changes` installs (and builds the menu bar again);
+  `Workspace::set_key_changes` installs and stores. Tests use the same two.
+- **The file.** Export (the list's "Export…", the palette, the menu bar; the save panel
+  suggests "The Writer Shortcuts.json") writes every command in every place with its
+  title, where it applies, its default keys and its keys: a list of all keys a person can
+  read and edit. Import reads such a file and shows a preview in the list: how many
+  commands change, what is skipped and why (a command this version does not have, a key
+  that cannot be read, a change a guard rail refuses), what would collide. Only what
+  differs from the `default` written in the same entry counts as a change. The user
+  replaces their own changes with the file's, adds the file's to their own, or cancels.
+  After an import and after "reset all" a toast offers Undo ("Undo keyboard shortcuts
+  import or reset" in the palette does the same).
+- **Scripted runs.** `keys:cmd-/` opens the list; `type:bold; keys:enter` waits for a key
+  on the row, the next `keys:` is the key, `keys:enter` takes the marked choice. `state`
+  has `keys=[changed=N]` and, while the list is open, `list=[mode=list|recording|question
+  rows=N changed=N selected="..." keys=[...] default=[...] question="..." choices=[...]]`.
+  `shortcut:editor::ToggleBold=cmd-alt-b` gives a command its keys without the list
+  (several: `cmd-alt-b|f5`; `none`; `default`; `@In the find bar` for a command listed in
+  several places; no guard rail is asked). `shortcuts:import:<path>` reads a file and shows
+  the preview (the open panel cannot be driven), `shortcuts:press:<label>` presses a
+  control of the open list by its label (a choice of the preview: `Import`, or `Add to My
+  Changes` and `Replace My Changes` when the user has changes of their own, `Cancel`; a
+  control of the list: `Import…`, `Export…`, `Reset All…`, `Changed Only`),
+  `shortcuts:reset` and `shortcuts:undo` do what they say. An export goes to `THE_WRITER_EXPORT_DIR`. A test names the file an "Import…"
+  takes with `workspace::choose_import_file_beforehand`.
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
-- **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: File, Edit (with
+- **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: The Writer (with
+  the keyboard shortcuts: the list, import, export, reset all), File, Edit (with
   Spelling), Format (with Turn Into and Align), Insert, View (with Theme), Help. While the
   assistant is shown it has its items too (Edit > Ask the Assistant…; View > Show or Hide
   Assistant, Go to Assistant, New Chat, Clear Chat), and none of them otherwise. Every item

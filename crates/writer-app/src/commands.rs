@@ -2,7 +2,7 @@
 //!
 //! Each crate publishes its user-facing commands as
 //! [`writer_ui::CommandDescriptor`]s. The app gathers them here; the command
-//! palette and the keyboard shortcuts overlay read from here, and look the
+//! palette and the list of keyboard shortcuts read from here, and look the
 //! shortcut of each command up in GPUI's keymap, so nothing is written twice.
 //!
 //! ```ignore
@@ -64,7 +64,7 @@ pub fn register(commands: impl IntoIterator<Item = CommandDescriptor>, cx: &mut 
 
 /// Every command that is listed right now, in registration order: the
 /// registered ones without those of a hidden category
-/// ([`set_category_hidden`]). The palette, the shortcuts overlay and Vim's
+/// ([`set_category_hidden`]). The palette, the list of shortcuts and Vim's
 /// command line read this.
 pub fn all(cx: &App) -> Vec<CommandDescriptor> {
     cx.try_global::<CommandRegistry>()
@@ -125,7 +125,7 @@ const PROPER_NOUNS: [&str; 4] = ["Markdown", "Vim", "Word", "I"];
 /// [`PROPER_NOUNS`] are left alone.
 ///
 /// The crates publish their commands in whichever case they chose; the
-/// palette and the shortcuts overlay show them side by side, so the app
+/// palette and the list of shortcuts show them side by side, so the app
 /// brings them to one.
 pub fn sentence_case(title: &str) -> String {
     let mut out = String::with_capacity(title.len());

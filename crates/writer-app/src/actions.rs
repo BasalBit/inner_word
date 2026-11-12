@@ -191,7 +191,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
-/// The app's commands for the palette and the shortcuts overlay.
+/// The app's commands for the palette and the list of keyboard shortcuts.
 pub fn commands() -> Vec<CommandDescriptor> {
     vec![
         CommandDescriptor::new("New document", CATEGORY_FILE, NewDocument)

@@ -74,6 +74,29 @@ From the keyboard, Control-Return opens the same menus as a right-click, and
 so does Shift-F10.
 
 
+Your own keys
+-------------
+
+Every keyboard shortcut can be changed. The Writer > Keyboard Shortcuts...
+(Command-/) lists all of them, grouped by where they work; type a name or a
+key to find one. Press Return on a row (or click its key) and then the key
+you want: the list says whether it is free, whether another command has it,
+or why it cannot be used (a plain letter where you type text, a key macOS
+keeps for itself), and you confirm. A command can have a second key or
+none, and a command that has no key can be given one. Menus, hints and the
+menu bar show your keys at once.
+
+The rows you changed are marked and show what the default was; "Changed
+Only" lists just those. A single command goes back to its default from its
+row, everything with Reset All (also in The Writer menu, in case a change
+went wrong). Export writes all keys to a file you can read, edit, keep or
+take to another Mac; Import reads such a file and shows what it would
+change before anything changes. Your keys are stored with your library.
+
+Two things are not shortcuts and stay as they are: the keys of Vim mode, and
+the "/" that opens the insert menu while you type.
+
+
 Spelling
 --------
 

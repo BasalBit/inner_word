@@ -17,7 +17,7 @@
 //! assistant is not shown until it is.
 //!
 //! While it is not shown, nothing of it is: its keys do nothing, its
-//! commands are not in the palette or the shortcuts overlay
+//! commands are not in the palette or the list of shortcuts
 //! ([`crate::commands::set_category_hidden`]), the menu bar has none of
 //! its items ([`crate::menus::set_assistant_shown`]), the text menu and the
 //! format bar have no "Ask the Assistant", and the side chat is not drawn.

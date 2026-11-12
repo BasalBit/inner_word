@@ -20,6 +20,7 @@
 //! | [`VimMode`] with its status item and command line | status bar (left), a strip under the editor | `apply_vim_setting` (the `editor.vim_mode` setting) and `on_vim_event` (`:w`, `:q`, named commands) |
 //! | The assistant's two chats (only when the app has an engine for it, see [`crate::assistant`]): `writer_assistant_quick::QuickChat` and `writer_assistant_ui::AssistantPanel` | a popover over the editor area; the right panel slot, shared with the comments | `assistant.rs`: whether the assistant is shown, the open document, the conversations, the answers applied to the text |
 //! | [`writer_spell::SpellChecker`] (only when the app has a spell service, see [`crate::spelling`]) | wavy underlines in the text, the top of the text context menu | `apply_spelling`: the `spelling.*` settings and the open document's own language |
+//! | `writer_keymap_ui::KeymapView`, the list of keyboard shortcuts (a modal, made when it is opened) | the modal layer | `shortcuts.rs`: the rows and the keymap it shows, what it asks for (a key changed, export, import, reset), the changes stored in the library |
 //!
 //! The slots themselves are public, so another view can be plugged in the
 //! same way:
@@ -30,7 +31,7 @@
 //! | A panel at the right | [`Workspace::set_right_panel`], [`Workspace::set_right_panel_width`] |
 //! | A strip under the editor | [`Workspace::set_editor_strip`], keyed, stacked in insertion order |
 //! | An item in the status bar | [`Workspace::set_status_item`], keyed, shown at the left |
-//! | Commands for the palette and the shortcuts overlay | [`crate::commands::register`] |
+//! | Commands for the palette and the list of keyboard shortcuts | [`crate::commands::register`] |
 //! | Settings | [`Workspace::settings`], [`crate::WorkspaceEvent::SettingsChanged`], [`crate::settings::keys`] |
 //! | Modals and toasts | [`Workspace::modal_layer`], [`Workspace::toast_layer`], [`Workspace::show_toast`] |
 //!

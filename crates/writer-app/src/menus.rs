@@ -24,7 +24,7 @@
 //! key context holds in a made-up `Workspace Pane Editor` context, or
 //! failing that the first binding at all (`create_menu_item` in GPUI's
 //! `platform/mac/platform.rs`). For several actions that is not the key
-//! the palette and the shortcuts overlay show ("Find Previous" got
+//! the palette and the list of shortcuts show ("Find Previous" got
 //! `shift-enter`, a key of the find bar), and a key named `enter` reaches
 //! AppKit as that word instead of the return key.
 //!

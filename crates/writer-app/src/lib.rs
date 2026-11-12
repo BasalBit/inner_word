@@ -24,7 +24,9 @@
 //! | [`workspace`] | [`Workspace`]: layout, mount points, document session and autosave, app action handlers, status bar |
 //! | [`actions`] | app actions, their key bindings and command descriptors |
 //! | [`commands`] | the command registry every crate registers into |
-//! | [`palette`], [`quick_open`], [`library_search`], [`shortcuts`] | the picker modals |
+//! | [`palette`], [`quick_open`], [`library_search`] | the picker modals |
+//! | [`keymap`] | the keymap as the app's own thing: the defaults every crate bound, the user's changes (`writer-keymap`), the keymap that is installed, the lookups for texts that name a key |
+//! | [`shortcuts`] | the rows of "Keyboard shortcuts": every command in every place it has a key or can be given one (the list itself is `writer-keymap-ui`, mounted by [`workspace`], which also stores the changes and has the export and import of the shortcuts file) |
 //! | [`settings`], [`settings_view`] | setting keys and the typed snapshot; the settings modal, with the section for the open document |
 //! | [`version_history`] | the snapshots of the open document, a preview, restore |
 //! | [`assistant`] | the assistant in the app: which engine it runs on and whether it is there, the model and effort of its two chats, the conversations it keeps per document, what the user applies to the text, the fake engine of a scripted run (the chats themselves are `writer-assistant-quick` and `writer-assistant-ui`, mounted by [`workspace`]) |
@@ -84,8 +86,9 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 ///    read by the workspace);
 /// 2. the app's context-free key bindings ([`actions::key_bindings`]);
 /// 3. the widget, editor, library-panel, settings-modal, version-history
-///    and agents-panel bindings (later bindings win ties, so a focused
-///    widget keeps its own keys);
+///    and agents-panel bindings, and those of the list of keyboard
+///    shortcuts (later bindings win ties, so a focused widget keeps its own
+///    keys);
 /// 4. the comments, Vim and editor-tools bindings and global handlers. The
 ///    tools come after the comments: inside the find bar `cmd-alt-c` is
 ///    "case sensitive", and it must win over the window-wide "show or hide
@@ -96,8 +99,14 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 ///    [`register_commands`] for the three that are left out; the
 ///    assistant's are registered and hidden until a workspace finds its
 ///    engine);
-/// 6. the app-global actions (quit, hide) and the menu bar;
-/// 7. quit when the last window closes.
+/// 6. the keymap: what was bound so far becomes the defaults, and the
+///    keymap that runs from here on is the one [`keymap`] installs (the
+///    defaults with the user's changes, once a workspace has read them
+///    from its library; before them the bindings that only give menu bar
+///    items their key). **A crate binds its keys before this point**: a
+///    binding added later is lost at the next change of a key;
+/// 7. the app-global actions (quit, hide) and the menu bar;
+/// 8. quit when the last window closes.
 pub fn init(cx: &mut App) {
     writer_ui::theme::init(writer_ui::ThemeMode::System, cx);
 
@@ -145,7 +154,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// Fills the command registry from every crate, in the order the palette
-/// and the shortcuts overlay list the categories.
+/// and the list of keyboard shortcuts have the categories.
 ///
 /// Three published commands are left out, because the app has the same
 /// thing and the palette should not list it twice:

@@ -31,6 +31,7 @@
 //! | [`version_history`] | the snapshots of the open document, a preview, restore |
 //! | [`assistant`] | the assistant in the app: which engine it runs on and whether it is there, the model and effort of its two chats, the conversations it keeps per document, what the user applies to the text, the fake engine of a scripted run (the chats themselves are `writer-assistant-quick` and `writer-assistant-ui`, mounted by [`workspace`]) |
 //! | [`agents`], [`agents_view`] | the `writer` command line tool beside the app, the skill and the MCP server for the agents on this Mac; the Agents panel |
+//! | [`live`] | agents that write while the app is open: the channel on which the `writer` tool hands the app a change, the thread that listens, the queue to the main thread (what the workspace does with a request is `workspace/live.rs`) |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`view_memory`] | the caret position and the chosen-title flag of a document, checked against the document as it is now |
@@ -58,6 +59,7 @@ pub mod export;
 pub mod font_choice;
 pub mod keymap;
 pub mod library_search;
+pub mod live;
 pub mod menus;
 pub mod palette;
 pub mod press_and_hold;
@@ -170,6 +172,8 @@ pub fn init(cx: &mut App) {
 ///   overlay under "In the library".
 fn register_commands(cx: &mut App) {
     commands::register(actions::commands(), cx);
+    // Beside "Agents": what an agent changed last, to undo and to go to.
+    commands::register(live::commands(), cx);
     // The editor and its tools title their commands Like This; the rest of
     // the app says them like this.
     commands::register(commands::in_sentence_case(writer_editor::commands()), cx);

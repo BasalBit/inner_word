@@ -63,6 +63,7 @@
 
 mod assistant;
 mod fonts;
+mod live;
 mod measure;
 mod menus;
 mod render;
@@ -104,6 +105,7 @@ use crate::{
 };
 
 pub use assistant::{library_attachments, library_tool_server};
+pub use live::{AgentChanges, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence};
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
@@ -200,6 +202,9 @@ pub struct Workspace {
     pub(crate) assistant: assistant::AssistantState,
     /// The keyboard shortcuts: the open list, what Undo puts back.
     pub(crate) shortcuts: shortcuts::ShortcutsState,
+    /// What agents changed while the app is open: the note about it, what
+    /// its Undo takes back.
+    pub(crate) live: live::LiveState,
     /// The panel beside the text that was used last: it keeps its place in
     /// a window too narrow for both.
     pub(crate) last_side_panel: SidePanel,
@@ -422,6 +427,7 @@ impl Workspace {
             right,
             assistant,
             shortcuts: shortcuts::ShortcutsState::new(unread_shortcuts),
+            live: live::LiveState::default(),
             last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             vim_status_id: vim_status.entity_id(),
@@ -1041,8 +1047,11 @@ impl Workspace {
     /// Opens the Agents panel (the command line tool, the skill, the MCP
     /// server), or closes it when it is open.
     pub fn toggle_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let library = self.library.clone();
         self.modal_layer.update(cx, |layer, cx| {
-            layer.toggle(window, cx, |_, cx| crate::agents_view::AgentsView::new(cx));
+            layer.toggle(window, cx, |_, cx| {
+                crate::agents_view::AgentsView::for_library(library, cx)
+            });
         });
     }
 
@@ -1279,9 +1288,21 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorEvent::Edited { .. } => self.mark_dirty(cx),
+            // The change of an agent arriving in the text is in the library
+            // already: there is nothing to save (`live.rs`).
+            EditorEvent::Edited { .. } => {
+                if self.text_is_what_an_agent_stored(cx) {
+                    cx.notify();
+                } else {
+                    self.mark_dirty(cx);
+                }
+            }
             EditorEvent::SettingsChanged => {
-                self.mark_dirty(cx);
+                if self.text_is_what_an_agent_stored(cx) {
+                    cx.notify();
+                } else {
+                    self.mark_dirty(cx);
+                }
                 // The document's own spelling language may be what changed.
                 self.apply_spelling(cx);
             }

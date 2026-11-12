@@ -151,6 +151,13 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Agents…", ShowAgents),
+                // What an agent changed last while the app was open: the
+                // note about it has these two as buttons.
+                MenuItem::action("Undo Last Change by an Agent", crate::live::UndoAgentChange),
+                MenuItem::action(
+                    "Go to Last Change by an Agent",
+                    crate::live::ShowAgentChange,
+                ),
                 MenuItem::separator(),
                 // Every key of the app, to look up and to change. "Reset
                 // All" is here for the day a change went wrong: the menu

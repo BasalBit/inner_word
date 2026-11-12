@@ -1,10 +1,15 @@
 //! The Agents panel: a modal that shows what agents on this Mac can do
 //! with the library and sets them up for it.
 //!
-//! Three parts, top to bottom:
+//! Four parts, top to bottom:
 //!
 //! - **Command line tool**: the absolute path of the `writer` binary that
 //!   belongs to this copy of the app, with a button that copies it.
+//! - **While The Writer is open**: the owner's switch "Agents can make
+//!   changes while The Writer is open" ([`crate::live`]), with a sentence
+//!   that says what it means as it stands. It is a setting of the library,
+//!   so the row is there whenever the panel was opened for a library
+//!   ([`AgentsView::for_library`]), also where no agent is looked for.
 //! - **Skill**: every agent found on this Mac that reads skills, with the
 //!   folder the skill goes to and whether it is there (not installed,
 //!   installed, needs updating); a button per agent to install, update or
@@ -26,15 +31,15 @@
 //! The panel is a list of rows; one is selected. In the `"AgentsView"`
 //! context: `up` / `down` (also `ctrl-p` / `ctrl-n`) move, `home` / `end`
 //! go to the first and the last row, `enter` does what the first button of
-//! the row does (copy, install, update), `backspace` removes the skill of
+//! the row does (copy, install, update, switch), `backspace` removes the skill of
 //! the selected agent, `cmd-c` copies what the row shows, `o` opens the
 //! documentation of the selected agent, `escape` closes. The footer names
 //! what the keys do on the selected row. With the mouse: every row has its
 //! buttons, and a click on a row selects it.
 
 use gpui::{
-    App, ClipboardItem, Context, DismissEvent, EventEmitter, FocusHandle, Focusable, KeyBinding,
-    MouseButton, ScrollHandle, SharedString, Window, actions, div, prelude::*, px,
+    App, ClipboardItem, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    KeyBinding, MouseButton, ScrollHandle, SharedString, Window, actions, div, prelude::*, px,
 };
 use writer_ui::{
     Button, ButtonSize, Icon, IconName, Toast,
@@ -45,8 +50,12 @@ use writer_ui::{
 };
 
 use writer_agent_setup::SkillState;
+use writer_library::Library;
 
-use crate::agents::{self, Environment, McpForm, Model, Report};
+use crate::{
+    agents::{self, Environment, McpForm, Model, Report},
+    live,
+};
 
 actions!(
     agents,
@@ -96,14 +105,21 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 /// What the panel says first: what this is, and the one rule.
 pub const INTRODUCTION: &str = "The AI agents on this Mac can work with your library through \
     the writer command line tool that comes inside The Writer: find and read documents, write \
-    and edit them, leave comments. They can read at any time, and can only change things while \
-    The Writer is closed.";
+    and edit them, leave comments. They can read at any time, and they can change things while \
+    The Writer is closed and, unless you switch that off below, while it is open.";
+
+/// What the panel says above the switch.
+pub const WHILE_OPEN: &str = "While The Writer is open an agent does not write to the library \
+    itself: it hands its change to The Writer, which makes it between two key presses. \
+    Nothing you are typing is lost.";
 
 /// One row of the panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     /// The path of the command line tool.
     Tool,
+    /// The switch "Agents can make changes while The Writer is open".
+    Switch,
     /// "Install for all detected agents".
     InstallAll,
     /// The skill of the agent at this index of [`Model::skills`].
@@ -117,6 +133,7 @@ pub enum Row {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Deed {
     Copy,
+    Switch,
     InstallAll,
     Install,
     Update,
@@ -125,10 +142,13 @@ enum Deed {
 }
 
 impl Deed {
-    fn label(self, row: Row) -> &'static str {
+    /// The label of the button. `on` is how the switch stands.
+    fn label(self, row: Row, on: bool) -> &'static str {
         match (self, row) {
             (Deed::Copy, Row::Tool) => "Copy Path",
             (Deed::Copy, _) => "Copy",
+            (Deed::Switch, _) if on => "Switch Off",
+            (Deed::Switch, _) => "Switch On",
             (Deed::InstallAll, _) => "Install for All",
             (Deed::Install, _) => "Install",
             (Deed::Update, _) => "Update",
@@ -141,6 +161,8 @@ impl Deed {
 /// The Agents panel. See the [module docs](self).
 pub struct AgentsView {
     environment: Option<Environment>,
+    /// The library whose switch the panel shows.
+    library: Option<Entity<Library>>,
     model: Model,
     rows: Vec<Row>,
     selected: usize,
@@ -161,12 +183,24 @@ impl Focusable for AgentsView {
 }
 
 impl AgentsView {
-    /// The panel over the app's agents environment ([`agents::environment`]).
+    /// The panel over the app's agents environment ([`agents::environment`]),
+    /// without the switch (which is a setting of a library).
     pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::build(None, cx)
+    }
+
+    /// The panel for `library`: with the switch "Agents can make changes
+    /// while The Writer is open", which is a setting of that library.
+    pub fn for_library(library: Entity<Library>, cx: &mut Context<Self>) -> Self {
+        Self::build(Some(library), cx)
+    }
+
+    fn build(library: Option<Entity<Library>>, cx: &mut Context<Self>) -> Self {
         let environment = agents::environment(cx);
         let model = environment.as_ref().map(agents::load).unwrap_or_default();
         let mut this = Self {
             environment,
+            library,
             model,
             rows: Vec::new(),
             selected: 0,
@@ -184,6 +218,11 @@ impl AgentsView {
         let mut rows = Vec::new();
         if self.environment.is_some() {
             rows.push(Row::Tool);
+        }
+        if self.library.is_some() {
+            rows.push(Row::Switch);
+        }
+        if self.environment.is_some() {
             if self.model.skills.len() > 1 {
                 rows.push(Row::InstallAll);
             }
@@ -235,18 +274,44 @@ impl AgentsView {
     }
 
     /// The labels of the buttons of `row`, in order.
-    pub fn button_labels(&self, row: Row) -> Vec<&'static str> {
+    pub fn button_labels(&self, row: Row, cx: &App) -> Vec<&'static str> {
+        let on = self.changes_while_open(cx);
         self.deeds(row)
             .into_iter()
-            .map(|deed| deed.label(row))
+            .map(|deed| deed.label(row, on))
             .collect()
+    }
+
+    /// How the switch "Agents can make changes while The Writer is open"
+    /// stands (on, when the panel has no library to ask).
+    pub fn changes_while_open(&self, cx: &App) -> bool {
+        self.library
+            .as_ref()
+            .is_none_or(|library| library.read(cx).setting_or(live::CHANGES_SETTING, true))
+    }
+
+    /// Sets the switch, and says in a note what holds from now on.
+    pub fn set_changes_while_open(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(library) = self.library.clone() else {
+            return;
+        };
+        let stored = library.update(cx, |library, cx| {
+            library.set_setting(live::CHANGES_SETTING, &on, cx)
+        });
+        let toast = match stored {
+            Ok(()) if on => Toast::new("Agents can make changes while The Writer is open"),
+            Ok(()) => Toast::new("Agents can only read while The Writer is open"),
+            Err(error) => Toast::new(format!("Could not save the setting: {error}")).error(),
+        };
+        writer_ui::toast::show_toast(toast.duration(std::time::Duration::from_secs(3)), cx);
+        cx.notify();
     }
 
     /// The text a copy on `row` puts on the clipboard.
     pub fn copy_text(&self, row: Row) -> Option<String> {
         match row {
             Row::Tool => Some(self.model.tool.to_string_lossy().into_owned()),
-            Row::InstallAll => None,
+            Row::Switch | Row::InstallAll => None,
             Row::Skill(ix) => self
                 .model
                 .skills
@@ -264,9 +329,18 @@ impl AgentsView {
 
     /// One line that says what the panel shows: for the `state` step of a
     /// scripted run.
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, cx: &App) -> String {
+        let switch = match &self.library {
+            Some(_) if self.changes_while_open(cx) => "on",
+            Some(_) => "off",
+            None => "none",
+        };
         let Some(environment) = &self.environment else {
-            return "no environment".to_string();
+            return format!(
+                "no environment changes_while_open={switch} rows={} selected={:?}",
+                self.rows.len(),
+                self.selected_row()
+            );
         };
         let skills = self
             .model
@@ -287,8 +361,8 @@ impl AgentsView {
             None => "none".to_string(),
         };
         format!(
-            "tool={:?} found={} home={:?} skills=[{skills}] not_found={:?} mcp={} rows={} \
-             selected={:?} report=[{report}]",
+            "tool={:?} found={} home={:?} changes_while_open={switch} skills=[{skills}] \
+             not_found={:?} mcp={} rows={} selected={:?} report=[{report}]",
             self.model.tool,
             self.model.tool_found,
             environment.home(),
@@ -319,6 +393,7 @@ impl AgentsView {
     fn deeds(&self, row: Row) -> Vec<Deed> {
         match row {
             Row::Tool => vec![Deed::Copy],
+            Row::Switch => vec![Deed::Switch],
             Row::InstallAll => vec![Deed::InstallAll],
             Row::Skill(ix) => match self.model.skills.get(ix) {
                 // A copy no agent reads any more can only go.
@@ -385,6 +460,12 @@ impl AgentsView {
     }
 
     fn perform(&mut self, row: Row, deed: Deed, cx: &mut Context<Self>) {
+        // The switch is the library's, not the Mac's.
+        if deed == Deed::Switch {
+            let on = self.changes_while_open(cx);
+            self.set_changes_while_open(!on, cx);
+            return;
+        }
         let Some(environment) = self.environment.clone() else {
             return;
         };
@@ -434,7 +515,7 @@ impl AgentsView {
                     McpForm::Config => format!("the configuration for {name}"),
                 }
             }
-            Row::InstallAll => return,
+            Row::Switch | Row::InstallAll => return,
         };
         let writes = self
             .environment
@@ -463,20 +544,25 @@ impl AgentsView {
         position: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let on = self.changes_while_open(cx);
         let name = match deed {
             Deed::Copy => "copy",
+            Deed::Switch => "switch",
             Deed::InstallAll => "install-all",
             Deed::Install => "install",
             Deed::Update => "update",
             Deed::Remove => "remove",
             Deed::Documentation => "documentation",
         };
-        let button = Button::new(("agents-button", row_ix * 4 + position), deed.label(row))
-            .size(ButtonSize::Compact)
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.select(row_ix, cx);
-                this.perform(row, deed, cx);
-            }));
+        let button = Button::new(
+            ("agents-button", row_ix * 4 + position),
+            deed.label(row, on),
+        )
+        .size(ButtonSize::Compact)
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            this.select(row_ix, cx);
+            this.perform(row, deed, cx);
+        }));
         div()
             .debug_selector(move || format!("agents-{name}-{row_ix}"))
             .flex_none()
@@ -555,6 +641,39 @@ impl AgentsView {
                     );
                 }
                 column.into_any_element()
+            }
+            Row::Switch => {
+                let on = self.changes_while_open(cx);
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .child(div().child(live::SWITCH))
+                            .child(
+                                div()
+                                    .debug_selector(|| "agents-switch-state".into())
+                                    .flex_none()
+                                    .text_size(UI_TEXT_SM)
+                                    .text_color(if on { colors.success } else { colors.muted })
+                                    .child(if on { "On" } else { "Off" }),
+                            ),
+                    )
+                    .child(
+                        muted(
+                            if on {
+                                live::SWITCH_ON
+                            } else {
+                                live::SWITCH_OFF
+                            }
+                            .into(),
+                        )
+                        .mt(px(1.)),
+                    )
+                    .into_any_element()
             }
             Row::InstallAll => div()
                 .flex_1()
@@ -845,6 +964,12 @@ impl Render for AgentsView {
                     .into_any_element(),
                 );
             }
+            if row == Row::Switch {
+                above.push(
+                    heading("WHILE THE WRITER IS OPEN", WHILE_OPEN.into(), row_ix == 0)
+                        .into_any_element(),
+                );
+            }
             if Some(row_ix) == first_skill_row {
                 above.push(skill_heading().into_any_element());
             }
@@ -930,7 +1055,8 @@ impl Render for AgentsView {
         };
         // What the keys do on the selected row.
         let selected = self.selected_row();
-        let primary = selected.and_then(|row| self.primary(row).map(|deed| deed.label(row)));
+        let on = self.changes_while_open(cx);
+        let primary = selected.and_then(|row| self.primary(row).map(|deed| deed.label(row, on)));
         let removes = selected.is_some_and(|row| self.can(row, Deed::Remove));
         let documents = selected.is_some_and(|row| self.can(row, Deed::Documentation));
         // Named when enter does something else on the row.

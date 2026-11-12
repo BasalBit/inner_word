@@ -41,6 +41,10 @@ writer-assistant.workspace = true
 writer-assistant-ui.workspace = true
 # The quick chat popover at the selection.
 writer-assistant-quick.workspace = true
+# The command layer for agents (no GPUI): its live channel, on which the
+# `writer` tool hands the running app the changes of agents, and the code
+# that carries one out on the library's own store.
+writer-agent.workspace = true
 # The keyboard shortcuts as data (no GPUI): the user's changes over the
 # defaults, conflicts and guard rails, the shortcuts file.
 writer-keymap.workspace = true

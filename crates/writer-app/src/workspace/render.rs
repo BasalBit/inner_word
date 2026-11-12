@@ -987,6 +987,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_document_settings))
             .on_action(cx.listener(Self::on_version_history))
             .on_action(cx.listener(Self::on_show_agents))
+            .on_action(cx.listener(Self::on_undo_agent_change))
+            .on_action(cx.listener(Self::on_show_agent_change))
             .on_action(cx.listener(Self::on_toggle_orientation))
             .on_action(cx.listener(Self::on_larger_body_text))
             .on_action(cx.listener(Self::on_smaller_body_text))

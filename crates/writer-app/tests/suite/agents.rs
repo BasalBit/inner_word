@@ -318,7 +318,8 @@ fn the_panel_says_what_this_is_and_shows_the_tool(cx: &mut TestAppContext) {
     // Two sentences, with the rule in them.
     assert_eq!(INTRODUCTION.matches(". ").count() + 1, 2, "{INTRODUCTION}");
     assert!(INTRODUCTION.contains("read at any time"));
-    assert!(INTRODUCTION.contains("only change things while The Writer is closed"));
+    assert!(INTRODUCTION.contains("change things while The Writer is closed"));
+    assert!(INTRODUCTION.contains("unless you switch that off below, while it is open"));
 
     // The first row is the tool, with its real path; it is there.
     let (rows, model) = view.read_with(vcx, |view, _| (view.rows().to_vec(), view.model().clone()));
@@ -331,7 +332,7 @@ fn the_panel_says_what_this_is_and_shows_the_tool(cx: &mut TestAppContext) {
         Some(Row::Tool)
     );
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Tool)),
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Tool, cx)),
         ["Copy Path"]
     );
 
@@ -422,21 +423,23 @@ fn the_agents_found_are_listed_and_the_others_named(cx: &mut TestAppContext) {
     assert!(!model.not_found.iter().any(|name| name == "Claude Code"));
     assert!(vcx.debug_bounds("agents-not-found").is_some());
 
-    // The rows: the tool, install for all, one per agent, then MCP.
+    // The rows: the tool, the switch for changes while the app is open,
+    // install for all, one per agent, then MCP.
     let rows = view.read_with(vcx, |view, _| view.rows().to_vec());
     assert_eq!(
-        rows[..5],
+        rows[..6],
         [
             Row::Tool,
+            Row::Switch,
             Row::InstallAll,
             Row::Skill(0),
             Row::Skill(1),
             Row::Skill(2)
         ]
     );
-    assert!(matches!(rows[5], Row::Mcp(0, _)));
+    assert!(matches!(rows[6], Row::Mcp(0, _)));
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Skill(0))),
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(0), cx)),
         ["Install"]
     );
 
@@ -474,8 +477,9 @@ fn the_skill_is_installed_and_removed_from_the_keyboard(cx: &mut TestAppContext)
     let file = home.skill_file(".claude/skills");
     assert!(!file.exists());
 
-    // Down to Claude Code's row (the tool, install for all, then it).
-    vcx.simulate_keystrokes("down down");
+    // Down to Claude Code's row (the tool, the switch, install for all,
+    // then it).
+    vcx.simulate_keystrokes("down down down");
     let row = skill_row(&view, AgentId::ClaudeCode, vcx);
     assert_eq!(
         view.read_with(vcx, |view, _| view.selected_row()),
@@ -550,7 +554,7 @@ fn the_skill_is_installed_and_removed_from_the_keyboard(cx: &mut TestAppContext)
         Some(Row::Skill(0))
     );
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Skill(0))),
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(0), cx)),
         ["Remove"]
     );
 
@@ -600,7 +604,7 @@ fn install_for_all_and_the_buttons_work_with_the_mouse(cx: &mut TestAppContext) 
     assert!(panel(&workspace, vcx).is_some());
 
     // "Install for All": one copy per folder covers the three agents.
-    click("agents-install-all-1", vcx);
+    click("agents-install-all-2", vcx);
     let claude = home.skill_file(".claude/skills");
     let shared = home.skill_file(".agents/skills");
     assert!(claude.is_file());
@@ -639,7 +643,7 @@ fn install_for_all_and_the_buttons_work_with_the_mouse(cx: &mut TestAppContext) 
 
     // A second time changes nothing and says so.
     let before = std::fs::read_to_string(&shared).unwrap();
-    click("agents-install-all-1", vcx);
+    click("agents-install-all-2", vcx);
     let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
     assert!(report.ok);
     assert!(
@@ -758,7 +762,7 @@ fn a_skill_from_another_copy_of_the_app_needs_updating(cx: &mut TestAppContext) 
         skill.detail
     );
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Skill(0))),
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(0), cx)),
         ["Update", "Remove"]
     );
 
@@ -807,7 +811,7 @@ fn a_folder_somebody_else_made_is_left_alone(cx: &mut TestAppContext) {
     );
     // No button on the row; enter and backspace do nothing.
     assert!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Skill(0)))
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(0), cx))
             .is_empty()
     );
     let row = skill_row(&view, AgentId::ClaudeCode, vcx);
@@ -820,7 +824,7 @@ fn a_folder_somebody_else_made_is_left_alone(cx: &mut TestAppContext) {
     );
 
     // Install for all installs for the others and says what was in the way.
-    click("agents-install-all-1", vcx);
+    click("agents-install-all-2", vcx);
     let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
     assert!(!report.ok);
     assert!(
@@ -857,7 +861,7 @@ fn a_copy_no_agent_reads_any_more_can_be_removed(cx: &mut TestAppContext) {
     assert_eq!(skills[1].agent, None);
     assert_eq!(skills[1].directory_display, "~/.agents/skills/the-writer");
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(Row::Skill(1))),
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(1), cx)),
         ["Remove"]
     );
     let row = view.read_with(vcx, |view, _| {
@@ -943,7 +947,7 @@ fn the_mcp_commands_carry_the_real_path_and_are_copied(cx: &mut TestAppContext) 
     let row = mcp_row(&view, AgentId::ClaudeCode, McpForm::Command, vcx);
     select(&view, row, vcx);
     assert_eq!(
-        view.read_with(vcx, |view, _| view.button_labels(view.rows()[row])),
+        view.read_with(vcx, |view, cx| view.button_labels(view.rows()[row], cx)),
         ["Copy", "Documentation"]
     );
     vcx.simulate_keystrokes("enter");
@@ -1077,10 +1081,11 @@ fn without_an_environment_the_panel_lists_and_touches_nothing(cx: &mut TestAppCo
     let (workspace, vcx) = open_workspace(&library, cx);
     let view = open_panel(&workspace, vcx);
     let (model, rows) = view.read_with(vcx, |view, _| (view.model().clone(), view.rows().to_vec()));
-    assert!(rows.is_empty());
+    // Nothing of the Mac: only the switch, which is the library's.
+    assert_eq!(rows, [Row::Switch]);
     assert!(model.skills.is_empty() && model.mcp.is_empty());
-    // The keys do nothing and nothing breaks.
-    vcx.simulate_keystrokes("down enter backspace cmd-c o");
+    // The keys that copy, remove and open do nothing and nothing breaks.
+    vcx.simulate_keystrokes("down backspace cmd-c o");
     vcx.run_until_parked();
     assert_eq!(clipboard(vcx), None);
     assert_eq!(vcx.opened_url(), None);

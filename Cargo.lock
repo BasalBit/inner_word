@@ -6898,6 +6898,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "unicode-segmentation",
+ "writer-agent",
  "writer-agent-setup",
  "writer-assistant",
  "writer-assistant-quick",

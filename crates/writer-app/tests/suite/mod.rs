@@ -11,6 +11,7 @@ mod findings;
 mod keybindings;
 mod keymap;
 mod launch;
+mod live;
 mod mouse;
 mod saving;
 mod session;

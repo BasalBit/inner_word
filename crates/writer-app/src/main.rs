@@ -95,9 +95,14 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
     // One running copy per library: two would overwrite each other's text
     // (see `single_instance`). The lock is held until the process ends. A
     // command line tool that is writing right now is waited for.
+    // The data directory, once this process holds its lock.
+    let mut locked = None;
     if let Ok(data_dir) = writer_library::data_dir() {
         match single_instance::acquire(&data_dir) {
-            Ok(Acquired::Lock(lock)) => cx.set_global(single_instance::HeldLock(lock)),
+            Ok(Acquired::Lock(lock)) => {
+                cx.set_global(single_instance::HeldLock(lock));
+                locked = Some(data_dir);
+            }
             Ok(Acquired::Taken(running)) => {
                 let (title, message, detail) = window::already_running_text(&running);
                 eprintln!("The Writer: {title}. {message}\n{detail}");
@@ -135,7 +140,16 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
         seed_demo(&library, cx);
     }
     match window::open_main_window(library, cx) {
-        Ok(handle) => Some(handle.into()),
+        Ok(handle) => {
+            // Agents change the library through the app while it is open:
+            // from here on the `writer` tool finds the app's channel in
+            // the lock file. Without the lock there is no channel, and a
+            // tool is told to ask for the app to be quit, as it always was.
+            if let Some(data_dir) = &locked {
+                writer_app::live::open_at_launch(data_dir, handle, cx);
+            }
+            Some(handle.into())
+        }
         Err(err) => {
             eprintln!("The Writer: cannot open the main window: {err:#}");
             None

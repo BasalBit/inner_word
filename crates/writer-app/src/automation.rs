@@ -26,12 +26,13 @@
 //! | `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys are separated by a bar (`cmd-alt-b\|f5`), `none` leaves it without a key, `default` puts it back; `@In the find bar` names the place for a command that is listed in several |
 //! | `shortcuts:<what>`    | the keyboard shortcuts: `shortcuts:import:<path>` reads a shortcuts file and shows what it would change in the list (as choosing it in the open panel does), `shortcuts:press:<label>` presses a control of the open list by its label (`Import…`, `Export…`, `Reset All…`, `Changed Only`, `Close`, or a choice of its open question: `Replace My Changes`, `Use ⌥⌘B`, `Cancel`), `shortcuts:reset` puts every key back without asking, `shortcuts:undo` undoes the last import or reset |
 //! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
+//! | `agents:<n>[:<ms>]`   | waits until agents have made `n` changes through this app since it opened (the `writer` tool, run from outside while the script waits), for at most `ms` milliseconds (10000 unless given); fails when they did not come |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts and what its button offers), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
@@ -132,6 +133,8 @@ pub enum Step {
     Choose(String),
     MenuKey(String),
     Bar(Option<String>),
+    /// Wait for this many changes by agents, at most this long.
+    Agents(usize, Duration),
     Shortcut {
         /// The name of the command's action.
         action: String,
@@ -316,6 +319,24 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             Step::MenuKey(unescape(arg))
         }
         "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
+        "agents" => {
+            let (count, patience) = match arg.split_once(':') {
+                Some((count, patience)) => (
+                    count,
+                    Duration::from_millis(
+                        patience.trim().parse().context("expected milliseconds")?,
+                    ),
+                ),
+                None => (arg, Duration::from_secs(10)),
+            };
+            Step::Agents(
+                count
+                    .trim()
+                    .parse()
+                    .context("expected a number of changes")?,
+                patience,
+            )
+        }
         "shortcut" => {
             let (command, keys) = arg
                 .split_once('=')
@@ -738,6 +759,26 @@ async fn execute(
                 )
             })?;
             eprintln!("[automation] {info}");
+        }
+        Step::Agents(count, patience) => {
+            let workspace = workspace_handle(window, cx)?;
+            let started = Instant::now();
+            loop {
+                let made =
+                    workspace.update(cx, |workspace, _, _| workspace.agent_change_count())?;
+                if made >= count {
+                    break;
+                }
+                if started.elapsed() >= patience {
+                    bail!(
+                        "agents made {made} of {count} changes in {} ms",
+                        patience.as_millis()
+                    );
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(20))
+                    .await;
+            }
         }
         Step::State => {
             let state = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
@@ -1259,12 +1300,15 @@ pub fn describe_state(
     };
     let spelling = workspace.describe_spelling(cx);
     let shortcuts = workspace.describe_shortcuts(cx);
+    // Agents that write while the app is open: the channel, the switch,
+    // what came in.
+    let live = workspace.describe_live(cx);
     // The Agents panel, while it is open.
     let agents = workspace
         .modal_layer()
         .read(cx)
         .active::<crate::agents_view::AgentsView>()
-        .map(|view| format!(" agents=[{}]", view.read(cx).describe()))
+        .map(|view| format!(" agents=[{}]", view.read(cx).describe(cx)))
         .unwrap_or_default();
     // The assistant, in a run that has an engine for it.
     let assistant = workspace
@@ -1291,7 +1335,7 @@ pub fn describe_state(
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
-         limit={:?}{agents}{assistant}{font_list}",
+         limit={:?} live=[{live}]{agents}{assistant}{font_list}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),
         workspace.save_state(),

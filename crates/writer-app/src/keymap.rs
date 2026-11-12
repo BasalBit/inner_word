@@ -105,6 +105,29 @@ pub fn hint_in(action: &dyn Action, place: &str, cx: &App) -> Option<KeyHint> {
     here.or(anywhere).map(KeyHint::from_binding)
 }
 
+/// Every key of `action` in one place, in the order they are bound, each
+/// once: `"↩ or Space"`. For a sentence that says which keys do something.
+/// `None` when the action has no key there.
+pub fn keys_sentence_in(action: &dyn Action, place: &str, cx: &App) -> Option<String> {
+    let stack: Vec<KeyContext> = place
+        .split('>')
+        .filter_map(|name| KeyContext::parse(name.trim()).ok())
+        .collect();
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    let mut keys: Vec<String> = Vec::new();
+    for binding in keymap.bindings_for_action(action) {
+        let applies = binding
+            .predicate()
+            .is_some_and(|predicate| predicate.depth_of(&stack).is_some());
+        let text = KeyHint::from_binding(binding).text();
+        if applies && !keys.contains(&text) {
+            keys.push(text);
+        }
+    }
+    (!keys.is_empty()).then(|| keys.join(" or "))
+}
+
 /// The keys of several actions in one place, as one text: `"↑ ↓"` for
 /// "previous" and "next". An action without a key there is left out;
 /// `None` when none of them has one.

@@ -338,7 +338,9 @@ impl SettingRow {
                 "Marks misspelled words. Right-click a marked word to correct it."
             }
             SettingRow::SpellingLanguage => {
-                "Automatic detects the language of each paragraph. Enter opens the whole list."
+                // Which key opens the whole list is added from the keymap:
+                // see `SettingsView::description`.
+                "Automatic detects the language of each paragraph."
             }
             SettingRow::Author => "Written on the comments you add.",
             SettingRow::Font => "Body text of a new document.",
@@ -372,9 +374,7 @@ impl SettingRow {
             SettingRow::DocumentTextSize => "Body text, in points. Headings scale with it.",
             SettingRow::DocumentLineHeight => "As a multiple of the text size.",
             SettingRow::DocumentParagraphSpacing => "Space after each paragraph, in points.",
-            SettingRow::DocumentSpellingLanguage => {
-                "This document's own language, or the app's. Enter opens the whole list."
-            }
+            SettingRow::DocumentSpellingLanguage => "This document's own language, or the app's.",
         }
     }
 }
@@ -811,15 +811,18 @@ impl SettingsView {
                 let follows = self
                     .document_settings(cx)
                     .is_some_and(|settings| settings.spelling_language.is_none());
-                if follows {
+                let says = if follows {
                     format!(
-                        "The app's setting applies: {}. Enter opens the whole list.",
+                        "The app's setting applies: {}.",
                         spelling::language_label(&self.settings.spelling_language, cx)
                     )
-                    .into()
                 } else {
-                    row.description().into()
-                }
+                    row.description().to_string()
+                };
+                format!("{says}{}", whole_list_sentence(cx)).into()
+            }
+            SettingRow::SpellingLanguage => {
+                format!("{}{}", row.description(), whole_list_sentence(cx)).into()
             }
             row if SettingRow::LENGTHS.contains(&row) && focused => {
                 let unit = self
@@ -1612,6 +1615,14 @@ impl SettingsView {
             .child(control_element)
             .into_any_element()
     }
+}
+
+/// " ↩ or Space opens the whole list.", with the keys the keymap has for
+/// a row's own action; empty when it has none.
+fn whole_list_sentence(cx: &App) -> String {
+    crate::keymap::keys_sentence_in(&Activate, ROW_KEY_CONTEXT, cx)
+        .map(|keys| format!(" {keys} opens the whole list."))
+        .unwrap_or_default()
 }
 
 /// What the field of the length row `row` shows for `document`.

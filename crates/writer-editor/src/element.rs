@@ -35,7 +35,7 @@ use crate::{
         pages::{DESK_PADDING, DESK_SIDE_PADDING},
     },
     paint::{PlannedRow, snap},
-    scroll::ScrollbarGeometry,
+    scroll::{PendingScroll, ScrollbarGeometry},
     spelling::{self, PlannedWave},
 };
 
@@ -268,7 +268,23 @@ impl Editor {
         if layout.revision() != self.state.revision() || layout.count() != document.block_count() {
             layout.rebuild(document, self.state.revision());
         }
+        // The room of a sheet that is wider than it changed (a panel
+        // opened or closed beside the text, the window was resized), at
+        // the same zoom: what the writer was at is brought back into view
+        // sideways, unless something else is already on its way there.
+        let room_changed = layout.env().is_some_and(|old| {
+            old.page.is_some()
+                && env.page.is_some()
+                && env.max_scroll_x > px(0.)
+                && (old.zoom - env.zoom).abs() < 0.0005
+                && ((old.viewport.size.width - env.viewport.size.width).abs() > px(0.5)
+                    || (old.viewport.left() - env.viewport.left()).abs() > px(0.5))
+        });
         layout.set_env(env, document);
+        drop(layout);
+        if room_changed && self.pending_scroll.is_none() {
+            self.pending_scroll = Some(PendingScroll::Sideways);
+        }
         shown
     }
 

@@ -1056,7 +1056,12 @@ item and its menu, storing), `pinch.rs` (the trackpad).
 - **Page view**: a true zoom of the sheets. A sheet wider than its room does not shrink
   (the clamp of 0.5.0 that only ever made a page smaller is gone): the view scrolls
   sideways, with two fingers or with shift and the wheel, a move that goes mostly up and
-  down leaves the sheet where it is, and the caret is kept in view while typing.
+  down leaves the sheet where it is, and the caret is kept in view while typing. When the
+  room of such a sheet changes at the same zoom (the comments or the side chat open or
+  close, the sidebar, the window), the caret is brought back into view sideways, or a
+  selection on one row whole (its start where it does not fit), and nothing moves up or
+  down; a caret that is not on screen pulls nothing (`PendingScroll::Sideways`, asked for
+  in `Editor::install_layout_env`).
   **Flow view**: the column is 700 points wide and grows with the zoom until it fills the
   width there is; beyond that it holds fewer points and the text reflows. Flow view never
   scrolls sideways. Compact editors (a comment being written) do not zoom.

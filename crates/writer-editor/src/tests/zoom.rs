@@ -1234,6 +1234,154 @@ fn a_sheet_wider_than_its_room_scrolls_sideways(cx: &mut TestAppContext) {
     }
 }
 
+/// Found with 0.6.0: at 200 % in page view a comment was made on the words
+/// at the end of a line; the comments panel opened, the room of the sheet
+/// got narrower, and the words were to the right of what was shown. The
+/// caret was kept in view while typing, not when the room changed.
+#[gpui::test]
+fn when_the_room_of_a_wide_sheet_changes_the_caret_stays_in_view(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open(sample(true), EditorConfig::full(), cx);
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.run_until_parked();
+    zoom_to(&editor, Zoom::Percent(200), cx);
+    let viewport = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap())
+    };
+    let sideways = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.horizontal_scroll_offset())
+    };
+    let down =
+        |cx: &mut VisualTestContext| editor.read_with(cx, |editor, _| editor.scroll_offset());
+    let in_view = |cx: &mut VisualTestContext, at: Bounds<Pixels>, what: &str| {
+        let viewport = viewport(cx);
+        assert!(
+            at.left() >= viewport.left() && at.right() <= viewport.right(),
+            "{what}: {at:?} is not in {viewport:?}"
+        );
+    };
+    let caret = |cx: &mut VisualTestContext| {
+        editor.read_with(cx, |editor, _| editor.caret_bounds().unwrap())
+    };
+
+    // The caret at the end of a full line: 898 pixels from where the line
+    // starts, in a room of 1100 where the sheet (1190) is a little wider.
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(2, 0)), cx);
+    });
+    cx.simulate_keystrokes("cmd-right");
+    cx.run_until_parked();
+    assert!(editor.read_with(cx, |editor, _| editor.max_horizontal_scroll()) > px(0.));
+    let at = caret(cx);
+    in_view(cx, at, "before anything changes");
+    let was_down = down(cx);
+
+    // A panel opens beside the text: the room is 700 now. The end of the
+    // line is brought back into view, and the view does not move up or
+    // down.
+    cx.simulate_resize(size(px(700.), px(800.)));
+    cx.run_until_parked();
+    let at = caret(cx);
+    in_view(cx, at, "after the room got narrower");
+    // (Where the view rests in a room of 700 is 144 from the left: the
+    // start of the lines. It is further right now.)
+    assert!(sideways(cx) > px(300.), "{:?}", sideways(cx));
+    assert!(close(down(cx), was_down));
+    // The panel closes again: still in view.
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.run_until_parked();
+    let at = caret(cx);
+    in_view(cx, at, "after the room got wider");
+    assert!(close(down(cx), was_down));
+
+    // With a selection it is the start of the selection: the words at
+    // the end of the line a comment was made on.
+    let end = editor.read_with(cx, |editor, _| editor.selection().head);
+    let start = Position::new(end.block, end.offset - 11);
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_selection(Selection::new(start, end)), cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(640.), px(800.)));
+    cx.run_until_parked();
+    let first = editor.read_with(cx, |editor, _| editor.position_bounds(start).unwrap());
+    in_view(cx, first, "the start of the selection");
+    // And all of it, where the room holds it: not only its first letter.
+    // (Its last letter: the end itself is where the row wraps, which a
+    // position without a caret's affinity puts on the next row.)
+    let last_letter = Position::new(end.block, end.offset - 1);
+    let last = editor.read_with(cx, |editor, _| editor.position_bounds(last_letter).unwrap());
+    in_view(cx, last, "the end of the selection");
+    assert!(close(down(cx), was_down));
+    // A selection wider than the room shows from its start.
+    let line_start = Position::new(end.block, end.offset - 40);
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| state.set_selection(Selection::new(line_start, end)),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(400.), px(800.)));
+    cx.run_until_parked();
+    let first = editor.read_with(cx, |editor, _| editor.position_bounds(line_start).unwrap());
+    in_view(cx, first, "the start of a selection wider than the room");
+    cx.simulate_resize(size(px(640.), px(800.)));
+    cx.run_until_parked();
+
+    // Whoever moved the sheet away from the caret and changes nothing
+    // about the room is left alone: only a change of the room brings the
+    // caret back.
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.set_caret(end), cx);
+    });
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.scroll_sideways_by_pixels(px(-5000.), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(sideways(cx), px(0.));
+    cx.simulate_resize(size(px(640.), px(790.)));
+    cx.run_until_parked();
+    assert_eq!(
+        sideways(cx),
+        px(0.),
+        "the height of the room is not its width"
+    );
+    cx.simulate_resize(size(px(660.), px(790.)));
+    cx.run_until_parked();
+    let at = caret(cx);
+    in_view(cx, at, "after the window got wider");
+
+    // A caret that is not on screen (the writer scrolled away to read
+    // elsewhere) pulls nothing: the view stays where it was put.
+    editor.update(cx, |editor, cx| {
+        editor.scroll_by_pages(3., cx);
+        editor.scroll_sideways_by_pixels(px(-5000.), cx);
+        editor.scroll_sideways_by_pixels(px(100.), cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        editor.read_with(cx, |editor, _| editor.caret_bounds().is_none_or(|caret| {
+            let viewport = editor.viewport_bounds().unwrap();
+            caret.bottom() < viewport.top() || caret.top() > viewport.bottom()
+        }))
+    );
+    assert!(close(sideways(cx), px(100.)));
+    let far_down = down(cx);
+    cx.simulate_resize(size(px(700.), px(790.)));
+    cx.run_until_parked();
+    assert!(close(sideways(cx), px(100.)), "{:?}", sideways(cx));
+    assert!(close(down(cx), far_down));
+
+    // A zoom that follows the window has nothing to bring back: the
+    // sheet is never wider than its room.
+    zoom_to(&editor, Zoom::FitWidth, cx);
+    cx.simulate_resize(size(px(900.), px(790.)));
+    cx.run_until_parked();
+    assert_eq!(sideways(cx), px(0.));
+}
+
 #[gpui::test]
 fn fit_page_shows_the_whole_sheet_the_caret_is_on(cx: &mut TestAppContext) {
     setup(cx);

@@ -27,7 +27,7 @@ use writer_core::Position;
 
 use crate::{
     editor::Editor,
-    layout::{ScrollPosition, pages::DESK_SIDE_PADDING},
+    layout::{Lay, ScrollPosition, pages::DESK_SIDE_PADDING},
 };
 
 /// Where a position should end up in the viewport after a change or a
@@ -78,6 +78,12 @@ pub(crate) enum PendingScroll {
     /// Page view: put the sheet the caret is on in the middle of the
     /// viewport (the zoom became "fit page": the whole sheet shows).
     SheetOfCaret,
+    /// Page view: bring the caret, or the start of the selection, into
+    /// view sideways, and leave the view where it is up and down. The
+    /// room of a sheet that is wider than it changed (a panel opened or
+    /// closed beside the text, the window was resized): what the writer
+    /// was at would otherwise be left beside the picture.
+    Sideways,
 }
 
 /// Flow view: how far above the bottom of the viewport the last line of
@@ -120,6 +126,37 @@ impl Scrollbar {
     pub(crate) fn is_active(&self) -> bool {
         self.hovered || self.drag.is_some()
     }
+}
+
+/// Scrolls sideways the least that brings `x` (layout units from the
+/// column's left edge) into view with a little room beside it; nothing
+/// when it is in view, and nothing unless a sheet is wider than the room
+/// it has. Says whether the view moved.
+fn bring_into_view_sideways(lay: &mut Lay, x: Pixels) -> bool {
+    let max_x = lay.layout.max_scroll_x();
+    if max_x <= px(0.) {
+        return false;
+    }
+    let env = lay.env();
+    let zoom = env.zoom;
+    let width = env.viewport.size.width / zoom;
+    let before = lay.layout.scroll_x();
+    // Column-local x of the viewport's left edge.
+    let left = (env.viewport.left() - env.column_left) / zoom + before;
+    // The desk that shows beside a sheet at either end is the room kept
+    // beside the caret: at the start of a line the view is where it rests.
+    let room = (px(DESK_SIDE_PADDING) / zoom).min(width / 4.);
+    let slack = px(0.01);
+    let target = if x - room < left - slack {
+        before - (left - (x - room))
+    } else if x + room > left + width + slack {
+        before + (x + room - (left + width))
+    } else {
+        return false;
+    };
+    let target = target.clamp(px(0.), max_x);
+    lay.layout.set_scroll_x(Some(target));
+    (target - before).abs() > px(0.01)
 }
 
 impl Editor {
@@ -300,6 +337,7 @@ impl Editor {
         let head = self.caret_position();
         let head_upstream = self.caret_is_upstream();
         let document = self.state.document();
+        let selection = self.state.selection();
         let compact = self.config.mode.is_compact();
         self.with_layout(|lay| {
             let viewport_height = lay.env().view_height();
@@ -353,11 +391,42 @@ impl Editor {
                 lay.layout.set_scroll_y(target.clamp(px(0.), max));
                 return (lay.scroll_y() - before).abs() > px(0.01);
             }
+            if request == PendingScroll::Sideways {
+                // The start of what is selected: where reading it begins.
+                let (position, upstream) = if selection.is_collapsed() {
+                    (head, head_upstream)
+                } else {
+                    (selection.start(), false)
+                };
+                let position = document.clamp_position(position);
+                let Some(placed) = lay.placed(position.block) else {
+                    return false;
+                };
+                let row = placed.caret_box(position.offset, upstream);
+                // Only a row that shows: whoever scrolled away from the
+                // caret to read elsewhere is left where they are.
+                let scroll_y = lay.scroll_y();
+                if row.bottom() <= scroll_y || row.top() >= scroll_y + viewport_height {
+                    return false;
+                }
+                // A selection on one row is shown whole where the room
+                // holds it: its end first, then its start, which wins
+                // where both do not fit.
+                let end = document.clamp_position(selection.end());
+                let end_on_the_row = (!selection.is_collapsed() && end.block == position.block)
+                    .then(|| placed.caret_box(end.offset, true))
+                    .filter(|end| (end.top() - row.top()).abs() < px(0.5));
+                let moved_to_end =
+                    end_on_the_row.is_some_and(|end| bring_into_view_sideways(lay, end.left()));
+                return bring_into_view_sideways(lay, row.left()) || moved_to_end;
+            }
             let (position, mode, viewport_y) = match request {
                 PendingScroll::Position(position, mode) => (position, mode, px(0.)),
                 PendingScroll::Writing => (None, Autoscroll::Fit, px(0.)),
                 PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y / zoom),
-                PendingScroll::Anchor { .. } | PendingScroll::SheetOfCaret => return false,
+                PendingScroll::Anchor { .. }
+                | PendingScroll::SheetOfCaret
+                | PendingScroll::Sideways => return false,
             };
             // The caret is on the row its affinity puts it on.
             let upstream = position.is_none() && head_upstream;
@@ -378,37 +447,7 @@ impl Editor {
             let margin = margin.min(viewport_height / 4.);
             // Sideways: a sheet wider than its room follows the position
             // too, so whoever types never types out of sight.
-            let moved_sideways = {
-                let max_x = lay.layout.max_scroll_x();
-                let env = lay.env();
-                let width = env.viewport.size.width / zoom;
-                let before = lay.layout.scroll_x();
-                // Column-local x of the viewport's left edge.
-                let left = (env.viewport.left() - env.column_left) / zoom + before;
-                // The desk that shows beside a sheet at either end is the
-                // room kept beside the caret: at the start of a line the
-                // view is where it rests.
-                let room = (px(DESK_SIDE_PADDING) / zoom).min(width / 4.);
-                let slack = px(0.01);
-                let x = row.left();
-                let target = if max_x <= px(0.) {
-                    None
-                } else if x - room < left - slack {
-                    Some(before - (left - (x - room)))
-                } else if x + room > left + width + slack {
-                    Some(before + (x + room - (left + width)))
-                } else {
-                    None
-                };
-                match target {
-                    Some(target) => {
-                        let target = target.clamp(px(0.), max_x);
-                        lay.layout.set_scroll_x(Some(target));
-                        (target - before).abs() > px(0.01)
-                    }
-                    None => false,
-                }
-            };
+            let moved_sideways = bring_into_view_sideways(lay, row.left());
             // Writing on the last line of a document in flow view: room
             // under it.
             let last_row = position.block + 1 == document.block_count()

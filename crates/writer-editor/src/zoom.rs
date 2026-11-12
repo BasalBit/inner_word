@@ -13,8 +13,9 @@
 //! - **Page view**: a true zoom of the sheets. A sheet that is wider than
 //!   the room it has does not shrink: the view scrolls sideways (two
 //!   fingers on a trackpad, `shift` with a wheel), and the caret is kept in
-//!   view while typing. [`Zoom::FitWidth`] and [`Zoom::FitPage`] follow the
-//!   window instead.
+//!   view while typing, and brought back into view sideways when the room
+//!   itself changes (a panel beside the text, the window). [`Zoom::FitWidth`]
+//!   and [`Zoom::FitPage`] follow the window instead.
 //! - **Flow view**: the type and the spacing zoom. The column grows with
 //!   them up to the width there is; beyond that it keeps the width of the
 //!   window and the text reflows. Flow view never scrolls sideways.

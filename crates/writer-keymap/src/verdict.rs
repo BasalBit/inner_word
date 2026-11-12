@@ -5,7 +5,8 @@
 //!
 //! - **refused**, with the reason: the key would stop text from being
 //!   typed where text is typed (a bare character, or shift with one);
-//!   macOS keeps the key (`cmd-tab`); the command has that key already;
+//!   macOS keeps the key and no setting frees it (`cmd-tab`); the command
+//!   has that key already;
 //! - **taken**: another command has the key in the same place, so one of
 //!   the two would never run. The user takes it from that command
 //!   ([`Holder::take`]) or cancels;
@@ -16,7 +17,8 @@
 //!
 //! Warnings come with any of them: option with a character types a
 //! special character, the key is one a text is edited with, macOS uses
-//! the key unless that was switched off.
+//! the key unless that was switched off (`cmd-space` for Spotlight, the
+//! screenshot keys, the keys of Mission Control).
 //!
 //! Which places are the same, and who gets a key where two bindings both
 //! apply, is decided from the text of the key contexts and the caller's
@@ -521,9 +523,13 @@ mod tests {
         let kept = ask("editor::ToggleBold", Some("Editor"), "cmd-tab");
         assert!(matches!(kept.refusal, Some(Refusal::SystemKeeps(system)) if system.kept));
         assert!(matches!(
-            ask("app::Quit", None, "cmd-space").refusal,
+            ask("app::Quit", None, "cmd-alt-escape").refusal,
             Some(Refusal::SystemKeeps(_))
         ));
+        // Spotlight's key can be freed in System Settings: a warning.
+        let spotlight = ask("app::Quit", None, "cmd-space");
+        assert_eq!(spotlight.refusal, None);
+        assert!(matches!(spotlight.warnings[..], [Warning::SystemUses(_)]));
         let usual = ask("editor::ToggleBold", Some("Editor"), "ctrl-up");
         assert_eq!(usual.refusal, None);
         assert!(matches!(usual.warnings[..], [Warning::SystemUses(system)] if !system.kept));

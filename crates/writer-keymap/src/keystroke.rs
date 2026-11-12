@@ -141,9 +141,12 @@ pub struct SystemUse {
     /// What the key does, as the end of a sentence that starts with the
     /// key: "switches between apps".
     pub what: &'static str,
-    /// `true`: the key never reaches an app (a shortcut on it would never
-    /// run). `false`: macOS uses it unless the user switched that off in
-    /// System Settings, so a shortcut on it may not run.
+    /// `true`: the key never reaches an app and no setting frees it (app
+    /// switching, Force Quit, locking the screen, logging out): a shortcut
+    /// on it would never run. `false`: macOS uses it unless the user
+    /// switched that off or moved it in System Settings (Spotlight, the
+    /// screenshots, Mission Control, the input source, ...), so a shortcut
+    /// on it runs only then.
     pub kept: bool,
 }
 
@@ -221,20 +224,22 @@ const EDITING_KEYS: [&str; 13] = [
 ];
 
 /// The keys macOS uses itself: the key, what it does, and whether it is
-/// kept from apps altogether.
+/// kept from apps altogether (`true`: there is no setting that frees the
+/// key; `false`: System Settings > Keyboard > Keyboard Shortcuts, or
+/// another setting, can switch the system's use off).
 const SYSTEM_KEYS: [(&str, &str, bool); 30] = [
     ("cmd-tab", "switches between apps", true),
     ("cmd-shift-tab", "switches between apps", true),
-    ("cmd-space", "opens Spotlight", true),
+    ("cmd-space", "opens Spotlight", false),
     ("cmd-alt-escape", "opens Force Quit", true),
     ("ctrl-cmd-q", "locks the screen", true),
     ("cmd-shift-q", "logs out", true),
     ("cmd-alt-shift-q", "logs out", true),
-    ("cmd-shift-3", "takes a screenshot", true),
-    ("cmd-shift-4", "takes a screenshot", true),
-    ("cmd-shift-5", "opens the screenshot tools", true),
-    ("ctrl-cmd-shift-3", "takes a screenshot", true),
-    ("ctrl-cmd-shift-4", "takes a screenshot", true),
+    ("cmd-shift-3", "takes a screenshot", false),
+    ("cmd-shift-4", "takes a screenshot", false),
+    ("cmd-shift-5", "opens the screenshot tools", false),
+    ("ctrl-cmd-shift-3", "takes a screenshot", false),
+    ("ctrl-cmd-shift-4", "takes a screenshot", false),
     ("cmd-alt-space", "opens a Finder search window", false),
     ("ctrl-space", "switches the input source", false),
     ("ctrl-alt-space", "switches the input source", false),
@@ -797,9 +802,13 @@ mod tests {
         let kept = key("cmd-tab").system_use().unwrap();
         assert!(kept.kept);
         assert_eq!(kept.what, "switches between apps");
-        assert!(key("cmd-space").system_use().unwrap().kept);
+        assert!(key("cmd-shift-tab").system_use().unwrap().kept);
+        // Spotlight and the screenshots can be switched off or moved.
+        let spotlight = key("cmd-space").system_use().unwrap();
+        assert!(!spotlight.kept);
+        assert_eq!(spotlight.what, "opens Spotlight");
         assert!(
-            key("cmd-$").system_use().unwrap().kept,
+            !key("cmd-$").system_use().unwrap().kept,
             "cmd-shift-4 as a keyboard sends it"
         );
         let usual = key("ctrl-up").system_use().unwrap();

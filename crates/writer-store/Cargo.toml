@@ -9,6 +9,8 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# flock on the lock file of the data directory (instance_lock).
+libc.workspace = true
 rusqlite = { version = "0.42", features = ["bundled"] }
 
 [dev-dependencies]

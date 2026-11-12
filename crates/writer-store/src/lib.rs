@@ -17,6 +17,10 @@
 //!   by triggers, tolerant of any user input, with prefix matching on the last word.
 //! - **Daily backups** written on open into a `backups` directory next to the database.
 //!
+//! Next to the database lives the lock of the data directory ([`instance_lock`]): whoever
+//! is going to write to a library (the app for as long as it runs, a tool for one write)
+//! takes it first, so two writers never have one library.
+//!
 //! Ordering: folders are ordered among sibling folders and documents among sibling
 //! documents; the tree lists a folder's subfolders first, then its documents.
 //!
@@ -51,6 +55,7 @@ mod documents;
 mod error;
 mod folders;
 mod ids;
+pub mod instance_lock;
 mod paths;
 mod schema;
 mod search;

@@ -101,7 +101,10 @@ fn a_selection_of_several_rows_is_not_covered(cx: &mut TestAppContext) {
     let rows = rows(&fx, range, cx);
     assert!(rows.len() >= 3);
     for row in &rows {
-        assert!(!popover.intersects(row), "{row:?} is covered by {popover:?}");
+        assert!(
+            !popover.intersects(row),
+            "{row:?} is covered by {popover:?}"
+        );
     }
     let last = rows.last().unwrap();
     assert_eq!(popover.top(), last.bottom() + GAP);
@@ -133,7 +136,10 @@ fn near_the_bottom_it_stands_over_the_text(cx: &mut TestAppContext) {
     assert_eq!(popover.bottom(), row.top() - GAP);
     assert!(inside(popover, viewport));
     assert_eq!(
-        fx.quick.read_with(cx, |quick, _| quick.drawn()).unwrap().side,
+        fx.quick
+            .read_with(cx, |quick, _| quick.drawn())
+            .unwrap()
+            .side,
         Side::Above
     );
 }
@@ -201,7 +207,10 @@ fn it_stays_in_the_viewport_while_its_text_is_out_of_sight(cx: &mut TestAppConte
     cx.run_until_parked();
     let viewport = fx.viewport(cx);
     let row = rows(&fx, range, cx)[0];
-    assert!(row.bottom() < viewport.top(), "the text is above the viewport");
+    assert!(
+        row.bottom() < viewport.top(),
+        "the text is above the viewport"
+    );
     let popover = fx.popover(cx);
     assert!(inside(popover, viewport));
     assert_eq!(popover.top(), viewport.top() + MARGIN);
@@ -275,7 +284,10 @@ fn a_selection_that_fills_the_viewport_is_covered_at_its_edge(cx: &mut TestAppCo
     let popover = fx.popover(cx);
     assert!(inside(popover, viewport));
     let drawn = fx.quick.read_with(cx, |quick, _| quick.drawn()).unwrap();
-    assert!(!drawn.clear, "there is no room beside a selection like this");
+    assert!(
+        !drawn.clear,
+        "there is no room beside a selection like this"
+    );
     assert!(fx.composer_focused(cx));
 }
 

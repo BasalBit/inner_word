@@ -37,6 +37,9 @@ use crate::{
 /// sent; it grows from there with what is said.
 const FIRST_LIST_HEIGHT: Pixels = px(56.);
 
+/// What the composer says while it is empty, once a question was asked.
+const FOLLOW_UP_PLACEHOLDER: &str = "Ask a follow-up";
+
 /// How tall the composer's field grows in the popover before it scrolls.
 const COMPOSER_HEIGHT: Pixels = px(96.);
 
@@ -671,6 +674,9 @@ impl QuickChat {
         }
         open.messages
             .update(cx, |list, cx| list.scroll_to_bottom(cx));
+        open.composer.update(cx, |composer, cx| {
+            composer.set_placeholder(FOLLOW_UP_PLACEHOLDER, cx)
+        });
         self.sync(window, cx);
     }
 
@@ -1174,8 +1180,18 @@ impl QuickChat {
         let shadow = theme.shadow_popover();
         let ui_font = theme.fonts.ui.clone();
 
+        // A conversation that is scrolled passes under the header: a
+        // hairline says where it goes.
+        let scrolled = !open.session.transcript().is_empty()
+            && open.messages.read(cx).scroll_position().0 > px(0.5);
         let header = div()
             .debug_selector(|| "quick-chat-header".into())
+            .border_b_1()
+            .border_color(if scrolled {
+                colors.hairline
+            } else {
+                gpui::transparent_black()
+            })
             .flex()
             .flex_none()
             .items_center()

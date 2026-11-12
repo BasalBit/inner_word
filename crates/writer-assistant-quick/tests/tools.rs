@@ -16,12 +16,16 @@ fn opening_closes_the_format_bar(cx: &mut TestAppContext) {
         .update_in(cx, |tools, window, cx| tools.show_format_bar(window, cx));
     cx.run_until_parked();
     assert!(shown);
-    assert!(fx.tools.read_with(cx, |tools, _| tools.format_bar_visible()));
+    assert!(
+        fx.tools
+            .read_with(cx, |tools, _| tools.format_bar_visible())
+    );
 
     fx.toggle(cx);
     assert!(fx.is_open(cx));
     assert!(
-        !fx.tools.read_with(cx, |tools, _| tools.format_bar_visible()),
+        !fx.tools
+            .read_with(cx, |tools, _| tools.format_bar_visible()),
         "the format bar gives way"
     );
     assert!(fx.composer_focused(cx));
@@ -38,15 +42,17 @@ fn opening_closes_the_insert_menu(cx: &mut TestAppContext) {
     caret(&fx.editor, 1, 0, cx);
     cx.simulate_input("/");
     cx.run_until_parked();
-    assert!(fx
-        .tools
-        .read_with(cx, |tools, _| tools.is_open(ToolKind::Insert)));
+    assert!(
+        fx.tools
+            .read_with(cx, |tools, _| tools.is_open(ToolKind::Insert))
+    );
 
     fx.toggle(cx);
     assert!(fx.is_open(cx));
-    assert!(!fx
-        .tools
-        .read_with(cx, |tools, _| tools.is_open(ToolKind::Insert)));
+    assert!(
+        !fx.tools
+            .read_with(cx, |tools, _| tools.is_open(ToolKind::Insert))
+    );
     assert!(fx.composer_focused(cx));
     // Typing is the composer's, not the menu's filter.
     cx.simulate_input("heading");
@@ -61,15 +67,17 @@ fn opening_closes_a_popup_tool_with_a_field(cx: &mut TestAppContext) {
     select(&fx.editor, TextRange::in_block(0, 4, 9), cx);
     cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
-    assert!(fx
-        .tools
-        .read_with(cx, |tools, _| tools.is_open(ToolKind::Link)));
+    assert!(
+        fx.tools
+            .read_with(cx, |tools, _| tools.is_open(ToolKind::Link))
+    );
 
     fx.toggle(cx);
     assert!(fx.is_open(cx));
-    assert!(!fx
-        .tools
-        .read_with(cx, |tools, _| tools.is_open(ToolKind::Link)));
+    assert!(
+        !fx.tools
+            .read_with(cx, |tools, _| tools.is_open(ToolKind::Link))
+    );
     assert!(fx.composer_focused(cx));
     assert_eq!(fx.tools.read_with(cx, |tools, _| tools.active_tool()), None);
 }
@@ -85,7 +93,11 @@ fn the_find_bar_stays_and_the_editor_keys_do_not_reach_the_text(cx: &mut TestApp
     cx.simulate_input("bold?");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.run_until_parked();
-    assert_eq!(fx.draft(cx), "", "select all and delete act on the composer");
+    assert_eq!(
+        fx.draft(cx),
+        "",
+        "select all and delete act on the composer"
+    );
     assert_eq!(text(&fx.editor, cx), "The quick brown fox\nNext.");
     assert!(fx.is_open(cx));
 }
@@ -102,9 +114,7 @@ fn a_context_menu_item_can_open_it(cx: &mut TestAppContext) {
             vec![writer_ui::ContextMenuItem::new(
                 "Ask the Assistant",
                 move |window, cx| {
-                    quick
-                        .update(cx, |quick, cx| quick.toggle(window, cx))
-                        .ok();
+                    quick.update(cx, |quick, cx| quick.toggle(window, cx)).ok();
                 },
             )]
         })

@@ -6,9 +6,7 @@ use writer_vim_mode::{Mode, VimMode};
 
 use crate::support::*;
 
-fn with_vim(
-    cx: &mut TestAppContext,
-) -> (Fixture, Entity<VimMode>, &mut VisualTestContext) {
+fn with_vim(cx: &mut TestAppContext) -> (Fixture, Entity<VimMode>, &mut VisualTestContext) {
     let (fx, cx) = open_quick(
         paragraphs(&["The quick brown fox", "jumps over", "the lazy dog"]),
         cx,
@@ -62,7 +60,10 @@ fn from_normal_mode_typing_goes_to_the_composer(cx: &mut TestAppContext) {
     // Back in the text the keys are commands again.
     cx.simulate_keystrokes("x");
     cx.run_until_parked();
-    assert_eq!(text(&fx.editor, cx), "The uick brown fox\njumps over\nthe lazy dog");
+    assert_eq!(
+        text(&fx.editor, cx),
+        "The uick brown fox\njumps over\nthe lazy dog"
+    );
 }
 
 #[gpui::test]

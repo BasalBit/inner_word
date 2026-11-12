@@ -387,3 +387,171 @@ fn replacing_inside_a_code_block_inserts_plain_text(cx: &mut TestAppContext) {
     assert_eq!(text(&editor, cx), "let count = 1;");
     assert!(attrs(&editor, 0, 5, cx).is_plain());
 }
+
+#[gpui::test]
+fn several_blocks_for_a_part_of_a_paragraph_split_it_around_them(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["Before. Old words. After.", "Next."]), cx);
+    let capture = capture(&editor, TextRange::in_block(0, 8, 18), cx);
+    assert_eq!(capture.text(), "Old words.");
+    let depth = undo_depth(&editor, cx);
+
+    let changed = replace(
+        &editor,
+        &capture,
+        "First new paragraph.\n\n- one\n- two",
+        cx,
+    );
+
+    // Whole blocks between the two halves; nothing is merged into them.
+    assert_eq!(
+        text(&editor, cx),
+        "Before. \nFirst new paragraph.\none\ntwo\n After.\nNext."
+    );
+    assert_eq!(
+        kinds(&editor, cx),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Paragraph,
+            BlockKind::BulletItem,
+            BlockKind::BulletItem,
+            BlockKind::Paragraph,
+            BlockKind::Paragraph,
+        ]
+    );
+    assert_eq!(
+        changed,
+        Some(TextRange::new(Position::new(1, 0), Position::new(3, 3)))
+    );
+    assert_eq!(selected_text(&editor, cx), "First new paragraph.\none\ntwo");
+    assert_eq!(undo_depth(&editor, cx), depth + 1, "one undo step");
+    undo(&editor, cx);
+    assert_eq!(text(&editor, cx), "Before. Old words. After.\nNext.");
+    assert_eq!(kinds(&editor, cx), vec![BlockKind::Paragraph; 2]);
+}
+
+#[gpui::test]
+fn a_heading_for_a_whole_paragraph_makes_it_a_heading(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["Before.", "about the harbour", "After."]), cx);
+    let capture = capture(&editor, TextRange::in_block(1, 0, 17), cx);
+
+    let changed = replace(&editor, &capture, "## The Harbour", cx);
+
+    assert_eq!(text(&editor, cx), "Before.\nThe Harbour\nAfter.");
+    assert_eq!(
+        kinds(&editor, cx),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::heading(2),
+            BlockKind::Paragraph
+        ]
+    );
+    assert_eq!(changed, Some(TextRange::in_block(1, 0, 11)));
+    assert_eq!(selected_text(&editor, cx), "The Harbour");
+    undo(&editor, cx);
+    assert_eq!(text(&editor, cx), "Before.\nabout the harbour\nAfter.");
+    assert_eq!(kinds(&editor, cx), vec![BlockKind::Paragraph; 3]);
+}
+
+#[gpui::test]
+fn a_paragraph_for_a_whole_heading_leaves_it_a_heading(cx: &mut TestAppContext) {
+    setup(cx);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "A very long title of the chapter"),
+        Block::paragraph("Text."),
+    ]);
+    let (editor, cx) = open_editor(document, cx);
+    let capture = capture(&editor, TextRange::in_block(0, 0, 32), cx);
+
+    replace(&editor, &capture, "A short title", cx);
+
+    assert_eq!(text(&editor, cx), "A short title\nText.");
+    assert_eq!(
+        kinds(&editor, cx),
+        vec![BlockKind::heading(1), BlockKind::Paragraph]
+    );
+    assert_eq!(selected_text(&editor, cx), "A short title");
+}
+
+#[gpui::test]
+fn one_block_of_another_kind_for_a_few_words_stays_in_the_paragraph(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["The quick brown fox"]), cx);
+    let capture = capture(&editor, TextRange::in_block(0, 4, 9), cx);
+
+    // The assistant answered with a list of one.
+    replace(&editor, &capture, "- swift", cx);
+
+    assert_eq!(text(&editor, cx), "The swift brown fox");
+    assert_eq!(kinds(&editor, cx), vec![BlockKind::Paragraph]);
+    assert_eq!(selected_text(&editor, cx), "swift");
+}
+
+#[gpui::test]
+fn whole_paragraphs_are_replaced_by_the_blocks_of_the_answer(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["Keep.", "one, two", "three", "Keep too."]), cx);
+    let capture = capture(
+        &editor,
+        TextRange::new(Position::new(1, 0), Position::new(2, 5)),
+        cx,
+    );
+
+    let changed = replace(&editor, &capture, "1. one\n2. two\n3. three", cx);
+
+    assert_eq!(text(&editor, cx), "Keep.\none\ntwo\nthree\nKeep too.");
+    assert_eq!(
+        kinds(&editor, cx),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::NumberedItem,
+            BlockKind::NumberedItem,
+            BlockKind::NumberedItem,
+            BlockKind::Paragraph,
+        ]
+    );
+    assert_eq!(
+        changed,
+        Some(TextRange::new(Position::new(1, 0), Position::new(3, 5)))
+    );
+    undo(&editor, cx);
+    assert_eq!(text(&editor, cx), "Keep.\none, two\nthree\nKeep too.");
+}
+
+#[gpui::test]
+fn the_last_paragraph_of_a_document_can_be_replaced_by_blocks(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["Only this."]), cx);
+    let capture = capture(&editor, TextRange::in_block(0, 0, 10), cx);
+
+    replace(&editor, &capture, "One.\n\nTwo.", cx);
+
+    assert_eq!(text(&editor, cx), "One.\nTwo.");
+    assert_eq!(selected_text(&editor, cx), "One.\nTwo.");
+    undo(&editor, cx);
+    assert_eq!(text(&editor, cx), "Only this.");
+}
+
+#[gpui::test]
+fn an_answer_that_opens_with_a_rule_keeps_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let (editor, cx) = open_editor(paragraphs(&["First.", "Last."]), cx);
+    let capture = capture(&editor, TextRange::empty(Position::new(0, 2)), cx);
+
+    // Text that a Markdown reader could take for data about the text.
+    below(
+        &editor,
+        &capture,
+        "---\ntitle: A letter\n---\n\nDear Anna,",
+        cx,
+    );
+
+    let all = text(&editor, cx);
+    assert!(
+        all.contains("title: A letter"),
+        "nothing was left out: {all:?}"
+    );
+    assert!(all.contains("Dear Anna,"));
+    assert!(all.starts_with("First.\n") && all.ends_with("\nLast."));
+}

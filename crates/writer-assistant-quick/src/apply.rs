@@ -6,26 +6,45 @@
 //! changed is selected, so the writer sees what the button did and one
 //! `cmd-z` takes it back.
 //!
-//! - **Replace** puts the answer where the captured selection is. An
-//!   answer of one paragraph is inline text: it goes into the paragraph
-//!   the selection is in, which keeps its kind, and takes the character
-//!   formatting of the first character it replaces (an answer for a
-//!   phrase in a heading set in another font stays in that font), with
-//!   the answer's own emphasis on top. An answer of several blocks is
-//!   pasted as blocks, as the clipboard would paste them.
-//! - **Insert below** puts the answer as whole blocks after the block the
-//!   selection (or the caret) ended in, without touching that block.
+//! **Replace** puts the answer where the captured selection is:
+//!
+//! - An answer of one paragraph is running text. It goes into the block
+//!   the selection starts in, which keeps its kind (a phrase of a heading
+//!   that is replaced is still in that heading), and takes the character
+//!   formatting of the first character it replaces, with the answer's own
+//!   emphasis on top. So does an answer of one block of another kind (a
+//!   lone list item, a lone heading) for a selection inside one block:
+//!   replacing a few words never breaks their paragraph apart.
+//! - Any other answer (several blocks, or one heading, list item, quote
+//!   or code block for a selection of whole blocks) goes in as whole
+//!   blocks, with the kinds the answer gave them: selected blocks are
+//!   replaced by them, a block the selection was only a part of is split
+//!   around them, and nothing of the answer is merged into the
+//!   neighbouring text. This is what the side chat's Replace Selection
+//!   does too.
+//! - Inside a code block the answer is plain text, as a paste is.
+//!
+//! **Insert below** puts the answer as whole blocks after the block the
+//! selection (or the caret) ended in, without touching that block.
 
 use gpui::Context;
-use writer_core::{Block, BlockKind, Document, Fragment, InlineAttrs, Position, TextRange};
+use writer_core::{
+    Block, BlockKind, Document, EditorState, Fragment, InlineAttrs, Position, TextRange,
+};
 use writer_editor::Editor;
-use writer_export::{MarkdownImportOptions, from_markdown};
+use writer_export::{MarkdownFrontMatter, MarkdownImportOptions, from_markdown};
 
 use crate::capture::Capture;
 
 /// The blocks an answer becomes.
 pub fn answer_fragment(markdown: &str) -> Fragment {
-    from_markdown(markdown, &MarkdownImportOptions::default()).fragment()
+    let options = MarkdownImportOptions {
+        // An answer that opens with a rule is a rule, never data about
+        // the text that would be left out.
+        front_matter: MarkdownFrontMatter::Markdown,
+        ..MarkdownImportOptions::default()
+    };
+    from_markdown(markdown, &options).fragment()
 }
 
 /// Whether "Replace Selection" can run: text was selected when the chat
@@ -39,10 +58,19 @@ pub fn can_insert(editor: &Editor) -> bool {
     !editor.is_read_only()
 }
 
+/// How an answer takes the place of a selection.
+enum Replacement {
+    /// Pasted into the block: running text, or plain text in code.
+    Inline(Fragment),
+    /// As whole blocks.
+    Blocks(Fragment),
+}
+
 /// Replaces the captured selection with the answer and selects what was
-/// put there. Returns the new selection, or `None` when nothing was done:
-/// the captured text has changed or is gone, the answer is empty, or the
-/// editor is read-only.
+/// put there (see the [module docs](self) for where an answer of several
+/// blocks goes). Returns the new selection, or `None` when nothing was
+/// done: the captured text has changed or is gone, the answer is empty,
+/// or the editor is read-only.
 pub fn replace_selection(
     editor: &mut Editor,
     capture: &Capture,
@@ -54,31 +82,85 @@ pub fn replace_selection(
     }
     let document = editor.document();
     let range = capture.intact_range(document)?;
-    let mut fragment = answer_fragment(markdown);
+    let fragment = answer_fragment(markdown);
     if fragment.is_empty() {
         return None;
     }
-    if fragment.is_inline()
-        && let Some(target) = document.block(range.start.block)
-        && !target.kind().is_code()
-    {
-        fragment = with_formatting_of(&fragment, &replaced_formatting(document, range));
-    }
+    let target = document.block(range.start.block)?;
+    let within_one_block = range.start.block == range.end.block;
+    let whole_blocks = range.start.offset == 0
+        && document
+            .block(range.end.block)
+            .is_some_and(|block| range.end.offset == block.len());
+    let running_text = fragment.is_inline()
+        && (matches!(fragment.blocks()[0].kind(), BlockKind::Paragraph)
+            || (within_one_block && !whole_blocks));
+    let replacement = if target.kind().is_code() {
+        Replacement::Inline(fragment)
+    } else if running_text {
+        Replacement::Inline(with_formatting_of(
+            &fragment,
+            &replaced_formatting(document, range),
+        ))
+    } else {
+        Replacement::Blocks(fragment)
+    };
     editor.edit(
         |state| {
             state.break_undo_group();
             state.grouped(|state| {
                 state.select_range(range);
-                if !state.paste(&fragment) {
-                    return None;
-                }
-                let changed = TextRange::new(range.start, state.selection().end());
+                let changed = match &replacement {
+                    Replacement::Inline(fragment) => {
+                        if !state.paste(fragment) {
+                            return None;
+                        }
+                        TextRange::new(range.start, state.selection().end())
+                    }
+                    Replacement::Blocks(fragment) => replace_with_blocks(state, fragment)?,
+                };
                 state.select_range(changed);
                 Some(changed)
             })
         },
         cx,
     )
+}
+
+/// Puts the blocks of `fragment` in the place of the selection of `state`,
+/// as whole blocks: what is selected goes; a block that is empty then is
+/// replaced by them, a block with the caret inside it is split around
+/// them. Returns the range of what was put in.
+fn replace_with_blocks(state: &mut EditorState, fragment: &Fragment) -> Option<TextRange> {
+    if !state.selection().is_collapsed() {
+        state.delete_selection();
+    }
+    let caret = state.selection().head;
+    let (is_void, is_empty, length) = {
+        let block = state.document().block(caret.block)?;
+        (block.is_void(), block.is_empty(), block.len())
+    };
+    let replaces_empty = !is_void && is_empty;
+    let first = if is_void || (caret.offset >= length && !replaces_empty) {
+        caret.block + 1
+    } else if caret.offset == 0 {
+        caret.block
+    } else {
+        // In the middle of a block: the answer goes between its halves.
+        state.insert_paragraph_break();
+        caret.block + 1
+    };
+    if !state.insert_blocks_at(first, fragment) {
+        return None;
+    }
+    let last = first + fragment.blocks().len() - 1;
+    let end = Position::new(last, state.document().block(last).map_or(0, Block::len));
+    if replaces_empty {
+        // The empty block the selection left is under the answer now: it
+        // goes, the answer has taken its place.
+        state.delete_range(TextRange::new(end, Position::new(last + 1, 0)));
+    }
+    Some(TextRange::new(Position::new(first, 0), end))
 }
 
 /// Inserts the answer as new blocks after the block the captured

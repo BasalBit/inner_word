@@ -42,7 +42,10 @@ fn escape_closes_it(cx: &mut TestAppContext) {
     assert!(!fx.is_open(cx));
     assert!(fx.editor_focused(cx));
     assert_eq!(selected_text(&fx.editor, cx), "quick");
-    assert_eq!(text(&fx.editor, cx), "The quick brown fox\njumps over\nthe lazy dog");
+    assert_eq!(
+        text(&fx.editor, cx),
+        "The quick brown fox\njumps over\nthe lazy dog"
+    );
     assert!(fx.fake.sent().is_empty());
 }
 
@@ -178,20 +181,29 @@ fn a_press_inside_never_moves_the_keyboard_to_the_text(cx: &mut TestAppContext) 
 
     // On the question (a message of the user is marked by a press).
     let conversation = bounds("quick-chat-conversation", cx);
-    press_at(point(conversation.right() - px(20.), conversation.top() + px(12.)), cx);
+    press_at(
+        point(conversation.right() - px(20.), conversation.top() + px(12.)),
+        cx,
+    );
     assert!(fx.is_open(cx));
     assert!(!fx.editor_focused(cx));
     assert!(fx.has_keyboard(cx));
 
     // On the very edge of the popover.
-    press_at(point(popover.left() + px(2.), popover.bottom() - px(2.)), cx);
+    press_at(
+        point(popover.left() + px(2.), popover.bottom() - px(2.)),
+        cx,
+    );
     assert!(fx.is_open(cx));
     assert!(!fx.editor_focused(cx));
     assert!(fx.has_keyboard(cx));
 
     // The text under the popover did not get any of the presses.
     assert_eq!(selected_text(&fx.editor, cx), "quick");
-    assert_eq!(text(&fx.editor, cx), "The quick brown fox\njumps over\nthe lazy dog");
+    assert_eq!(
+        text(&fx.editor, cx),
+        "The quick brown fox\njumps over\nthe lazy dog"
+    );
 
     // Typing still goes to the composer.
     cx.simulate_input("more");

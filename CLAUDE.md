@@ -103,7 +103,7 @@ write while the app is open (`live=[channel=open|closed switch=on|off waiting=N 
 last="Claude changed “Chapter 2”" run=N offers=Undo|Open|nothing cost=[save, change, window]]`:
 the last part is what the last change cost on the main thread), the Agents panel while it is
 open, and in a run with an engine the assistant: whether it is shown, the quick chat while
-it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
+it is open, the side chat while it is in the right panel), `dump` (`dump:<path>`: the whole text in the editor, written to a file), `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
 the text on screen was checked for spelling), `savecost[:<rounds>]` (every part of a
 synchronous save, timed), `limitcost[:<rounds>]` (the character-limit count),

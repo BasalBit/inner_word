@@ -865,6 +865,7 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `typecost:<text>`, `keycost:<keystrokes>` | press the keys at a writer's pace (one every 80 ms) and time each: dispatch, the frame after it, and how long the main thread kept a 4 ms timer waiting in between; ends with the spell checker's slices |
 | `stall:<ms>` | watches the main thread for that long without pressing anything (the background pass of the spell checker, events posted from outside): timer waits, frame costs, slices |
 | `dump` | the first 400 characters of the text in the editor |
+| `dump:<path>` | the whole text in the editor, written to a file |
 | `log:<text>` | print |
 | `quit` | quit through `cx.quit()` (runs on_app_quit hooks) |
 

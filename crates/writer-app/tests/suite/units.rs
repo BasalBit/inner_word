@@ -70,6 +70,11 @@ mod automation {
             Script::parse("state; dump; info").unwrap().steps,
             vec![Step::State, Step::Dump, Step::Info]
         );
+        // With a file, the whole text goes there.
+        assert_eq!(
+            Script::parse("dump:/tmp/a b.txt").unwrap().steps,
+            vec![Step::Text("/tmp/a b.txt".into())]
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
 //! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
+//! | `dump:<path>`         | writes the whole text in the editor to a file, its blocks one to a line as the document model joins them: what the writer has on screen, to hold against what the library has |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
 //! | `limitcost[:<rounds>]` | times the character-limit count: whole text against block by block |
@@ -157,6 +158,7 @@ pub enum Step {
     Info,
     State,
     Dump,
+    Text(PathBuf),
     Book(usize),
     SaveCost(usize),
     LimitCost(usize),
@@ -432,7 +434,13 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         "log" | "echo" => Step::Log(unescape(arg)),
         "info" => Step::Info,
         "state" => Step::State,
-        "dump" => Step::Dump,
+        "dump" => {
+            if arg.is_empty() {
+                Step::Dump
+            } else {
+                Step::Text(PathBuf::from(unescape(arg)))
+            }
+        }
         "book" => Step::Book(arg.parse().context("expected a number of blocks")?),
         "savecost" => Step::SaveCost(if arg.is_empty() {
             5
@@ -823,6 +831,21 @@ async fn execute(
                 shown
             })?;
             eprintln!("[automation] text: {text:?}");
+        }
+        Step::Text(path) => {
+            let text = workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                workspace.editor().read(cx).document().plain_text()
+            })?;
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "[automation] text: {} characters written to {}",
+                text.chars().count(),
+                path.display()
+            );
         }
         Step::Book(blocks) => {
             let started = Instant::now();

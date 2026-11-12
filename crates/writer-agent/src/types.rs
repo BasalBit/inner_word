@@ -1695,7 +1695,10 @@ mod tests {
         assert_eq!(Target::parse("folder:x"), Target::path("folder:x"));
         assert_eq!(Target::parse("doc:"), Target::path("doc:"));
         assert_eq!(Target::DocumentId(12).to_string(), "doc:12");
-        assert_eq!(Target::parse(&Target::FolderId(3).to_string()), Target::FolderId(3));
+        assert_eq!(
+            Target::parse(&Target::FolderId(3).to_string()),
+            Target::FolderId(3)
+        );
         assert!(Target::default().is_empty());
         assert_eq!(Target::parse("/1984"), Target::path("/1984"));
         assert_eq!(Target::parse("Chapter 12"), Target::path("Chapter 12"));
@@ -1723,7 +1726,10 @@ mod tests {
             serde_json::to_string(&Target::FolderId(7)).unwrap(),
             "\"folder:7\""
         );
-        assert_eq!(serde_json::to_string(&Target::path("a/b")).unwrap(), "\"a/b\"");
+        assert_eq!(
+            serde_json::to_string(&Target::path("a/b")).unwrap(),
+            "\"a/b\""
+        );
 
         // A request reads with only the fields that matter.
         let request: EditRequest = serde_json::from_str(
@@ -1752,10 +1758,16 @@ mod tests {
     #[test]
     fn times_are_written_as_utc() {
         assert_eq!(Time(0).to_rfc3339(), "1970-01-01T00:00:00.000Z");
-        assert_eq!(Time(1_000_000_000_123).to_rfc3339(), "2001-09-09T01:46:40.123Z");
+        assert_eq!(
+            Time(1_000_000_000_123).to_rfc3339(),
+            "2001-09-09T01:46:40.123Z"
+        );
         assert_eq!(Time(-1).to_rfc3339(), "1969-12-31T23:59:59.999Z");
         // 2024-02-29 12:00:00 UTC.
-        assert_eq!(Time(1_709_208_000_000).to_rfc3339(), "2024-02-29T12:00:00.000Z");
+        assert_eq!(
+            Time(1_709_208_000_000).to_rfc3339(),
+            "2024-02-29T12:00:00.000Z"
+        );
         for ms in [
             0,
             1,
@@ -1782,7 +1794,11 @@ mod tests {
 
     #[test]
     fn formats_have_names() {
-        for format in [TextFormat::Markdown, TextFormat::PlainText, TextFormat::Json] {
+        for format in [
+            TextFormat::Markdown,
+            TextFormat::PlainText,
+            TextFormat::Json,
+        ] {
             assert_eq!(TextFormat::parse(format.name()), Some(format));
             assert_eq!(
                 serde_json::to_string(&format).unwrap(),

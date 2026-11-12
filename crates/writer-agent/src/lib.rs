@@ -133,6 +133,7 @@ mod library;
 mod markdown_in;
 mod matching;
 mod resolve;
+mod rewrite;
 mod sections;
 mod types;
 mod versions;

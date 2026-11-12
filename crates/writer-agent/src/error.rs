@@ -309,6 +309,21 @@ pub enum Error {
         /// The file.
         path: PathBuf,
     },
+    /// The library was last written by an older version of the app, and the app has it
+    /// open, so it could not be brought up to date for reading.
+    #[error(
+        "the library at {} was written by an older version of The Writer (schema {found}, \
+         this tool reads {supported}) and is in use. Quit The Writer and run this again.",
+        .path.display()
+    )]
+    OutdatedLibrary {
+        /// The database file.
+        path: PathBuf,
+        /// The schema version found in it.
+        found: i64,
+        /// The schema version this build reads.
+        supported: i64,
+    },
     /// A file could not be read or written.
     #[error("{}: {source}", .path.display())]
     Io {
@@ -339,6 +354,7 @@ impl Error {
             Error::LibraryNotFound { .. } => ErrorKind::LibraryNotFound,
             Error::Unreadable { .. } => ErrorKind::Unreadable,
             Error::FileExists { .. } => ErrorKind::FileExists,
+            Error::OutdatedLibrary { .. } => ErrorKind::AppIsOpen,
             Error::Io { .. } | Error::Store(_) => ErrorKind::Failed,
         }
     }

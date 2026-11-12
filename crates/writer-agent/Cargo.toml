@@ -12,6 +12,8 @@ writer-export.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Word boundaries, to change a paragraph word by word.
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

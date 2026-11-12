@@ -522,6 +522,44 @@ window.available_actions(cx)          // actions with listeners on the focused p
 cx.build_action("editor::Bold", None) // by name; fails for no_json actions with fields
 ```
 
+Taking the keymap apart and putting it back (the user's own shortcuts; tested in
+`crates/writer-app/tests/suite/keybindings.rs`, and every suite of the app runs on a keymap
+that was rebuilt this way, because `writer_app::init` ends with it):
+- `KeyBinding` is `Clone`, and it can be read completely from outside: `keystrokes()`
+  (`&[KeybindingKeystroke]`, each with `unparse()` and `inner()`), `action()` (`boxed_clone()`
+  copies it, fields included), `predicate()` (`Option<Rc<KeyBindingContextPredicate>>`, shared,
+  not copied), `meta()`, `action_input()`.
+- `KeyBinding::load(keys, action, predicate, false, action_input, &DummyKeyboardMapper)` is what
+  `KeyBinding::new` calls. A binding rebuilt with it from those parts **is the binding it
+  was**: equal keystrokes (`KeybindingKeystroke: PartialEq`), `action().partial_eq`, equal
+  predicate, for all 404 bindings of the app. `load` leaves `meta` at `None`: put it back
+  with `set_meta` (no binding of this app has one, nor an action input; nothing loads a
+  keymap file). On macOS a `KeybindingKeystroke` is only the `Keystroke` (the display key and
+  display modifiers are Windows fields), so nothing about key equivalents is lost with
+  `use_key_equivalents = false` and the dummy mapper.
+- Text round trips: `Keystroke::parse(&key.unparse()) == key` for every key of the keymap
+  (`cmd-&`, `cmd-"`, `cmd-\`, `shift-f10`, `space`), and
+  `KeyBindingContextPredicate::parse(&predicate.to_string()) == predicate` for every key
+  context (Display puts parentheses around every pair: `((LibraryPanel && mode == tree) &&
+  !TextField)`, `FindBar > TextField`). `unparse` writes the modifiers in the order `fn ctrl
+  alt cmd shift` (`cmd-alt-s` comes back as `alt-cmd-s`): compare parsed keystrokes, not text.
+- `cx.clear_key_bindings()` then `cx.bind_keys(the same list in the same order)` gives a
+  keymap that resolves every key as before: precedence is context depth, then order, and
+  both are kept. Each of the two calls queues a refresh of every window and bumps
+  `Keymap::version()`. `cx.key_bindings()` is an `Rc<RefCell<Keymap>>`: drop the borrow before
+  `clear_key_bindings` or `bind_keys` (they `borrow_mut`).
+- A `Keymap` can be made without an app (`Keymap::new(bindings)`) to ask it things
+  (`bindings_for_action`, `bindings_for_input`) before anything is installed.
+- **The menu bar keeps the keys it was built with.** `cx.set_menus` reads the keymap once;
+  after a change of the keymap, call it again. And the key beside an item is live: AppKit
+  runs an enabled item when its key is pressed and GPUI has no binding for that key where
+  the keyboard is, so a key taken away from a command keeps running it from the menu bar
+  until the menu bar is built again.
+- What does not come along: anything that compared against a key written in the code (an
+  interceptor, an `on_key_down`) and anything that kept a `KeyHint` it made earlier. Ask the
+  keymap when the key arrives or when the hint is drawn (`writer_ui::keymap`,
+  `KeyHint::for_action`).
+
 Raw keys (Vim mode):
 - `div().on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| ..))` (`ev.keystroke`,
   `ev.is_held`), `capture_key_down`, `on_key_up`, `on_modifiers_changed`. Runs only when no

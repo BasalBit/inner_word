@@ -398,6 +398,8 @@ fn closing_ends_the_process_and_finishes_what_was_open() {
         assert!(Instant::now() < deadline, "the stream never ended");
         let _ = talk.events.wait(Duration::from_millis(20));
     }
+    // The process that was in the middle of a turn was not waited for: it was ended.
+    stage.wait_until_processes_are_gone();
 }
 
 #[test]
@@ -409,6 +411,7 @@ fn dropping_a_conversation_closes_the_programs_input() {
     stage.wait_for_log("the end of the input", |stage| {
         stage.notes().contains(&"input closed".to_string())
     });
+    stage.wait_until_processes_are_gone();
 }
 
 #[test]

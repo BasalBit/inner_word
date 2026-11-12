@@ -112,6 +112,18 @@ impl ClaudeCode {
     pub fn with_search(search: Search) -> Self {
         ClaudeCode::with(None, Some(search))
     }
+
+    /// Gives the backend a catalog it learned in an earlier run of the app (a
+    /// [`Catalog`] serialises; the app may keep the last one it was given), so that the
+    /// pickers show the program's own names from the first moment.
+    /// [`Backend::refresh_catalog`] replaces it with the program's current answer.
+    pub fn seed_catalog(&self, catalog: Catalog) {
+        if let Ok(mut cache) = self.shared.catalog.lock()
+            && cache.is_none()
+        {
+            *cache = Some(catalog);
+        }
+    }
 }
 
 impl Shared {

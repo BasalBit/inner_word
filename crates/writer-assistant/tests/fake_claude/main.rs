@@ -83,6 +83,7 @@ fn main() {
             "argv": args,
             "env": env,
             "cwd": std::env::current_dir().ok().map(|dir| dir.to_string_lossy().into_owned()),
+            "pid": std::process::id(),
         }),
     );
 
@@ -141,10 +142,10 @@ fn main() {
             }
             if deaf_after.is_some_and(|limit| messages >= limit) {
                 // A program that has stopped reading: whatever is written to it now
-                // fills the pipe and goes no further.
-                loop {
-                    std::thread::sleep(Duration::from_secs(3600));
-                }
+                // fills the pipe and goes no further. (It does not outlive a test by
+                // much if nobody ends it.)
+                std::thread::sleep(Duration::from_secs(30));
+                std::process::exit(0);
             }
         }
         let _ = tx.send(None);

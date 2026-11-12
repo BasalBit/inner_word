@@ -169,3 +169,25 @@ fn a_program_that_cannot_list_its_models_leaves_the_built_in_table() {
     assert!(matches!(catalog.source, CatalogSource::BuiltIn { .. }));
     assert!(signed_out.conversations().is_empty());
 }
+
+#[test]
+fn a_catalog_kept_from_an_earlier_run_shows_until_the_program_is_asked() {
+    let stage = Stage::new(json!({"initialize": fixture("initialize.jsonl")}));
+    let earlier = {
+        let claude = stage.backend();
+        claude.refresh_catalog()
+    };
+    // The app stored it, and starts again.
+    let stored = serde_json::to_string(&earlier).unwrap();
+    let claude = stage.backend();
+    claude.seed_catalog(serde_json::from_str(&stored).unwrap());
+    assert_eq!(
+        claude.catalog(),
+        earlier,
+        "the program's names, before it was asked"
+    );
+    // A second seed does not replace what is known, and a refresh does.
+    claude.seed_catalog(writer_assistant::fake_catalog());
+    assert_eq!(claude.catalog(), earlier);
+    assert_eq!(claude.refresh_catalog(), earlier);
+}

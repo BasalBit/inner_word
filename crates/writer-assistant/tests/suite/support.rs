@@ -149,6 +149,39 @@ impl Stage {
             .collect()
     }
 
+    /// Waits until no conversation process of this stage is running any more.
+    pub fn wait_until_processes_are_gone(&self) {
+        let pids: Vec<u64> = self
+            .log()
+            .iter()
+            .filter(|entry| entry["argv"][0] == "-p")
+            .filter_map(|entry| entry["pid"].as_u64())
+            .collect();
+        let deadline = std::time::Instant::now() + PATIENCE;
+        loop {
+            let running: Vec<u64> = pids
+                .iter()
+                .copied()
+                .filter(|pid| {
+                    // `kill -0` asks whether the process exists and signals nothing.
+                    std::process::Command::new("/bin/kill")
+                        .args(["-0", &pid.to_string()])
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|status| status.success())
+                })
+                .collect();
+            if running.is_empty() {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "processes of the stand-in are still running: {running:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Waits until the stand-in's log satisfies `done`.
     pub fn wait_for_log(&self, what: &str, done: impl Fn(&Stage) -> bool) {
         let deadline = std::time::Instant::now() + PATIENCE;

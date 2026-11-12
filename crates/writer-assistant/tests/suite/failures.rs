@@ -221,6 +221,7 @@ fn a_program_that_ignores_stop_is_ended() {
         talk.ask("Hello?").error(),
         AssistantError::Exited { .. }
     ));
+    stage.wait_until_processes_are_gone();
 }
 
 #[test]
@@ -342,4 +343,6 @@ fn a_program_that_has_stopped_reading_does_not_block_stop_or_close() {
         closing.elapsed() < Duration::from_secs(1),
         "closing never waits"
     );
+    // And the process is really gone, not left behind deaf.
+    stage.wait_until_processes_are_gone();
 }

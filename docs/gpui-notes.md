@@ -201,6 +201,24 @@ that wraps, or has several lines, inside a `flex_col()` container that is itself
 pixels tall. Make the growing child a plain block `div()` and space its children with
 margins (`crates/writer-app/src/agents_view.rs`, `render_row`).
 
+**A block in a block that is a `flex_none()` item of a flex column is as wide as its
+content** (seen in the assistant's side chat, tested in the assembled app): the composer (a
+view whose root is `w_full()`) and a notice (a plain block) sat in plain `div()` wrappers
+that were items of the panel's column. They came out at their content's width (the composer
+at the 240 px a compact editor falls back to when it is offered none, a notice as wide as
+its text) while the item beside them was a plain `div().size_full()`, and at the full width
+once that item held a `list`. `w_full()` on the wrapper changed nothing. Making the wrapper
+a flex column (`.flex().flex_col()`) stretches what is in it (`writer-assistant-ui`,
+`panel/render.rs`; the test `the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment`).
+
+Three more from the assistant's crates (each read from gpui's source and seen in a test):
+an element's own mouse-down listeners run before the listener gpui adds for focus on
+click, so `on_any_mouse_down` with `prevent_default` on an element with `track_focus`
+keeps the pointer from focusing it; `ListState::splice` on the item at the top of the
+scroll resets the offset within that item; and `debug_bounds` are never cleared between
+frames, so `cx.debug_bounds(selector)` still answers for an element that is no longer
+drawn (ask the view's state to prove that something is gone).
+
 Animation (tested render): `el.with_animation("id", Animation::new(Duration).repeat().with_easing(ease_in_out), |el, delta: f32| el.opacity(delta))`.
 Easings: `linear, quadratic, ease_in_out, ease_out_quint(), bounce(f), pulsating_between(a,b)`.
 For a caret blink, prefer a timer task + `cx.notify()` (see State).
@@ -733,6 +751,7 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `menu:<name>` | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 | `choose:<label>` | chooses that item of the open context menu, as a click on it would |
 | `bar[:<button>]` | shows the format bar over the selection, as a mouse selection does; `bar:bold`, `bar:extra-0`, `bar:more` press a button of it |
+| `fake:hold`, `fake:advance:<n>`, `fake:release` | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`): hold its events back, let the next `n` through (an answer half written, with its Stop control), let everything through again |
 | `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), the open context menu, Vim mode and command line, open tool and find count, the format bar, comment threads, spelling (`on language=<id\|auto> (app\|document) [detected=<id>] marks=N pending=N`), status bar |
 | `book:<blocks>` | creates and opens a generated document; prints what opening cost and how long it took until the text on screen was checked for spelling |
 | `savecost[:<rounds>]`, `limitcost[:<rounds>]` | time a synchronous save part by part, and the character-limit count |
@@ -755,6 +774,26 @@ into it; without the variable the panel lists nothing), `THE_WRITER_AGENTS_HINT=
 one-time toast about agents, which a scripted run otherwise leaves out). While the Agents
 panel is open the `state` line ends with `agents=[tool=... found=... skills=[...] mcp=N
 rows=N selected=... report=[...]]`.
+
+The assistant in a scripted run: none, unless `THE_WRITER_ASSISTANT_FAKE=ready` (or
+`signed-out`, `missing`) gives it the fake engine, which starts no program and answers from
+`THE_WRITER_ASSISTANT_FAKE_REPLIES=<file>` (answers separated by a line of `====`, leading
+lines `!tool <name> <words>` and `!error <kind>`; `crates/writer-app/src/assistant/fake.rs`).
+With an engine the `state` line has `assistant=[shown=... engine=[...] tools=[<the command of
+the library's MCP server>] quick=[open side=... selection="..." messages=N answering=...
+model=... effort=... replace=... notices=[...] draft="..." last="..."] side=[document="..."
+messages=N answering=... last=done|streaming|stopped|failed model=... effort=... attached=N
+notices=[...] focus=composer|...]] right_panel=...`. The picker of a chat is a context menu:
+`keys:cmd-shift-m`, then `state` lists its items under `menu=[...]` and `choose:<label>`
+takes one. `THE_WRITER_ASSISTANT_REAL=1` gives the run the real Claude Code: a script that
+only looks sends nothing, **every message it sends spends the user's allowance**. How the
+few real messages of 0.4.0 were watched: a small pass-through named `claude`, first on the
+`PATH` of the run (the engine looks through the `PATH` before the installers' folders),
+that starts the real program with the same arguments and environment and writes down both
+directions of the stream; `system/init` in what comes back names the tools, MCP servers,
+skills and commands the process has. Start such a run from a shell and it inherits that
+shell's environment: the engine takes the markers of an enclosing Claude Code session out
+(`claude/args.rs`, `REMOVED_ENV`).
 
 A library the `writer` tool made is a library like any other: build one with the tool
 (`THE_WRITER_DATA_DIR=$QA/data target/debug/writer create ...`), then start the app on the
@@ -794,6 +833,10 @@ Notes:
   view `displayLayer:` (`writer_app::screenshot::force_frame`; it is the path AppKit uses for
   a synchronous frame, and it must be called outside any GPUI update). With that, a covered
   window behaves and captures like a visible one (app).
+- **Look at every capture.** In one run of 0.4.0 two captures in a row came back as the
+  same stale picture (byte for byte, of a state several steps earlier), although a frame is
+  forced before each; the ones before and after were right. The `state` line of the same
+  moment was right too, so it is the picture that was old, not the app.
 - A background window is **inactive**: focus events do not fire (see Focus), so behaviour
   that hangs on blur (a popup tool closing when a modal opens over it) does not happen in a
   scripted run. Check those paths headlessly, where the test window is activated.

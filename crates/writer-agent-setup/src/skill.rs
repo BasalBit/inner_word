@@ -10,7 +10,7 @@
 //! ```yaml
 //! metadata:
 //!   generator: the-writer-app
-//!   version: "0.3.0"
+//!   version: "0.4.0"
 //!   binary: "/Applications/The Writer.app/Contents/MacOS/writer"
 //! ```
 //!

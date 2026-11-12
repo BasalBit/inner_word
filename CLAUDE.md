@@ -31,14 +31,16 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 
 Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export,
 assistant-quick, assistant-ui, assistant}`, `assistant-quick → {assistant-ui, assistant,
-editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant → mcp` (for
-the list of its read-only tools; no GPUI),
+editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant → {mcp, agent-setup}` (for
+the list of its read-only tools and for the folders installers put a program in; no GPUI),
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
 `library → {store, ui}`, `export → core`, `cli → {agent, mcp, agent-setup}`,
-`agent → {store, core, export}`, `app → agent-setup`. Never the reverse. None of the agent
-crates depends on GPUI, and the app does not depend on `writer-agent` or `writer-cli`: the
-tool is a separate program beside it. Every internal crate has an
+`mcp → agent`, `agent → {store, core, export}`, `app → agent-setup`. Never the reverse. None
+of the agent crates depends on GPUI. The app does not depend on `writer-cli` (the tool is a
+separate program beside it) and never calls `writer-agent`: that crate is in the app's build
+only through `assistant → mcp`, which reads the table of the server's tools. Every internal
+crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
 
 ## Build and test
@@ -210,6 +212,8 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   workspace applies them as one undo step, the answer's Markdown becoming formatted text
   (`assistant/apply.rs`: one paragraph is running text and joins the block it goes into,
   anything else goes in as whole blocks and is never merged into the text around it).
+  An answer that went into the text leaves the keyboard in the text, so `cmd-z` right
+  after it takes the answer out again (`Workspace::apply_answer`).
 - **The slot at the right is shared with the comments, one at a time**
   (`workspace/right_panel.rs`). A panel is there when it has something to show (comments:
   the document has a thread or one is being written; side chat: the user has it open).

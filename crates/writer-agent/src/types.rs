@@ -28,7 +28,8 @@ use crate::error::Occurrence;
 /// without regard to case. A document without a title is named `Untitled`. The path `/`
 /// alone is the top of the library, where a folder is asked for.
 ///
-/// In JSON an id is a number or one of the strings below, and a path is any other string.
+/// In JSON an id is a number or one of the strings below, and a path is any other string
+/// (or, for a path that looks like one of the id forms, `{"path": "1984"}`).
 /// [`Target::parse`] reads what somebody typed:
 ///
 /// | Written | Means |
@@ -168,6 +169,15 @@ impl Serialize for Target {
             Target::DocumentId(_) | Target::FolderId(_) => {
                 serializer.serialize_str(&self.to_string())
             }
+            // A path that would be read back as an id (a document called "1984", named
+            // by a relative path) says that it is a path, so that a request arrives as
+            // it was sent (it travels to the app as JSON, `crate::live`).
+            Target::Path(path) if Target::parse(path) != *self => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("path", path)?;
+                map.end()
+            }
             Target::Path(path) => serializer.serialize_str(path),
         }
     }
@@ -180,10 +190,12 @@ impl<'de> Deserialize<'de> for Target {
         enum Raw {
             Id(i64),
             Text(String),
+            Path { path: String },
         }
         Ok(match Raw::deserialize(deserializer)? {
             Raw::Id(id) => Target::Id(id),
             Raw::Text(text) => Target::parse(&text),
+            Raw::Path { path } => Target::Path(path),
         })
     }
 }
@@ -1779,6 +1791,42 @@ mod tests {
             serde_json::to_string(&Target::path("a/b")).unwrap(),
             "\"a/b\""
         );
+
+        // Every target comes back from JSON as it was: a request travels to the app that
+        // way. A path that reads like an id says that it is a path.
+        assert_eq!(
+            serde_json::to_string(&Target::path("1984")).unwrap(),
+            r#"{"path":"1984"}"#
+        );
+        assert_eq!(read(r#"{"path":"1984"}"#), Target::path("1984"));
+        for target in [
+            Target::Id(12),
+            Target::DocumentId(12),
+            Target::FolderId(3),
+            Target::path("Book/Chapter 1"),
+            Target::path("1984"),
+            Target::path(" 12 "),
+            Target::path("#12"),
+            Target::path("id:12"),
+            Target::path("doc:12"),
+            Target::path("Document:12"),
+            Target::path("folder:3"),
+            Target::path("/1984"),
+            Target::path(" spaces around "),
+            Target::path("a \"quoted\"\nname"),
+            Target::root(),
+            Target::default(),
+        ] {
+            let json = serde_json::to_string(&target).unwrap();
+            assert_eq!(read(&json), target, "{json}");
+            let placed = Placement::After(target.clone());
+            let json = serde_json::to_string(&placed).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Placement>(&json).unwrap(),
+                placed,
+                "{json}"
+            );
+        }
 
         // A request reads with only the fields that matter.
         let request: EditRequest = serde_json::from_str(

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use writer_store::instance_lock;
 
-use super::{Answer, AnswerLine, PROTOCOL_VERSION, Refusal, Request};
+use super::{Answer, AnswerLine, LONGEST_WAIT, PROTOCOL_VERSION, Refusal, Request};
 use crate::error::Error;
 
 /// The longest path a socket may have here. The system's limit is 104 bytes with the
@@ -133,7 +133,14 @@ pub(crate) fn read_line(
         if left.is_zero() {
             return Err(io::ErrorKind::TimedOut.into());
         }
-        stream.set_read_timeout(Some(left.min(idle).max(Duration::from_millis(1))))?;
+        let wait = left.min(idle).max(Duration::from_millis(1));
+        if stream.set_read_timeout(Some(wait)).is_err() {
+            // macOS refuses to set an option on a socket whose other end is closed
+            // already. What that end sent before it closed is still there to read: an
+            // app that answers and hangs up at once is not one whose answer was lost.
+            // Reading without waiting takes what is there and cannot hang.
+            stream.set_nonblocking(true)?;
+        }
         let count = match stream.read(&mut buffer) {
             Ok(count) => count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -461,7 +468,9 @@ impl Incoming {
             state: Mutex::new((Stage::Waiting, stream)),
             moved: Condvar::new(),
         });
-        let deadline = Instant::now() + Duration::from_millis(request.wait_ms);
+        // A request cannot ask for more patience than there is (nor for a time that
+        // cannot be added to now).
+        let deadline = Instant::now() + Duration::from_millis(request.wait_ms).min(LONGEST_WAIT);
         let watched = slot.clone();
         // Tells the tool that it was not served in time, at the moment its patience ends,
         // so that it never waits for an answer that says nothing happened.
@@ -576,6 +585,90 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         assert!(!process_exists(pid));
+    }
+
+    /// The other side may have written its line and closed before this side gets to
+    /// read (an app that answers at once, a tool under load): the line is read all the
+    /// same. On macOS setting the timeout of such a socket fails.
+    #[test]
+    fn a_line_is_read_after_the_other_side_has_closed() {
+        let deadline = || Instant::now() + Duration::from_secs(5);
+        let idle = Duration::from_secs(1);
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"{\"answer\":\"done\"}\n").unwrap();
+        drop(writer);
+        assert_eq!(
+            read_line(&mut reader, idle, deadline()).unwrap().as_deref(),
+            Some("{\"answer\":\"done\"}")
+        );
+        // Nothing sent and closed: nothing, at once.
+        let (mut reader, writer) = UnixStream::pair().unwrap();
+        drop(writer);
+        let started = Instant::now();
+        assert_eq!(read_line(&mut reader, idle, deadline()).unwrap(), None);
+        // Half a line and closed: cut off.
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"{\"answer\":").unwrap();
+        drop(writer);
+        assert_eq!(
+            read_line(&mut reader, idle, deadline()).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        // A line in two pieces, with more after it, from a side that stays: the line.
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let sender = std::thread::spawn(move || {
+            writer.write_all(b"one ").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            writer.write_all(b"line\nand more").unwrap();
+            writer
+        });
+        assert_eq!(
+            read_line(&mut reader, idle, deadline()).unwrap().as_deref(),
+            Some("one line")
+        );
+        let writer = sender.join().unwrap();
+        // Silence from a side that stays: the time runs out.
+        let started = Instant::now();
+        let silent = read_line(&mut reader, Duration::from_millis(100), deadline());
+        assert_eq!(silent.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() >= Duration::from_millis(90));
+        let short = Instant::now() + Duration::from_millis(100);
+        assert_eq!(
+            read_line(&mut reader, idle, short).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(writer);
+    }
+
+    #[test]
+    fn sockets_of_apps_that_are_gone_are_swept_away() {
+        let dir = tempfile::Builder::new()
+            .prefix("tw")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let gone = child.id();
+        child.wait().unwrap();
+        let left_behind = dir.path().join(format!("{gone}-0.sock"));
+        let alive = dir.path().join(format!("{}-7.sock", std::process::id()));
+        let not_a_socket = dir.path().join(format!("{gone}-1.sock"));
+        let other = dir.path().join("notes.txt");
+        drop(UnixListener::bind(&left_behind).unwrap());
+        let listening = UnixListener::bind(&alive).unwrap();
+        std::fs::write(&not_a_socket, "x").unwrap();
+        std::fs::write(&other, "x").unwrap();
+        sweep(dir.path());
+        assert!(
+            !left_behind.exists(),
+            "the socket of a process that is gone"
+        );
+        assert!(alive.exists(), "the socket of a process that runs");
+        assert!(
+            not_a_socket.exists() && other.exists(),
+            "nothing that is no socket"
+        );
+        drop(listening);
     }
 
     #[test]

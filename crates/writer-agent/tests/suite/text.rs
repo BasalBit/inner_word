@@ -9,7 +9,7 @@ use writer_agent::{
 use writer_core::{BlockKind, Document, Rgb};
 use writer_store::DocumentId;
 
-use super::{Fixture, claude, fixture};
+use super::{Fixture, claude, fixture, through_the_app};
 
 const CHAPTER: &str = "# The Harbour\n\nThe *Maren* left at dawn. The gulls left too.\n\n## Crew\n\n- Ada, the **captain**\n- Ben\n\n## Cargo\n\nSalt, and [more salt](https://example.com/salt).\n";
 
@@ -176,8 +176,9 @@ fn a_document_is_read_as_markdown_text_or_json() {
 fn documents_are_created_from_markdown() {
     let fx = fixture();
     let create = |request: CreateDocumentRequest| fx.library.create_document(&request);
-    // The first write creates the library.
-    assert!(!fx.data_dir().exists());
+    // The first write creates the library (unless an app has it open: then the app made
+    // it when it started).
+    assert_eq!(fx.data_dir().exists(), through_the_app());
     let first = create(CreateDocumentRequest {
         markdown: CHAPTER.into(),
         write: claude(),

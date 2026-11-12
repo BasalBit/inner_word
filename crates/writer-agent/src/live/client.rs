@@ -25,6 +25,9 @@ pub(crate) enum Sent {
     Gone,
 }
 
+/// How long the tool listens for a word from an app that hung up on its request.
+const GONE_WORD: Duration = Duration::from_millis(200);
+
 /// The user this process runs as.
 fn user_id() -> u32 {
     // SAFETY: `getuid` has no arguments and cannot fail.
@@ -49,12 +52,21 @@ pub(crate) fn change(socket: &Path, operation: &Operation, patience: Duration) -
         wait_ms: patience.as_millis().try_into().unwrap_or(u64::MAX),
         operation,
     };
+    // The app says so itself when it could not take the request up in time. One that did
+    // take it up is given a little longer for its answer (never more than the patience
+    // itself, so that a caller in a hurry is not kept).
+    let wait = patience + ANSWER_GRACE.min(patience);
     if write_line(&mut stream, &line, patience.max(Duration::from_secs(1))).is_err() {
-        // The app closed its end before it had the whole request.
-        return Sent::Gone;
+        // The app closed its end before it had the whole request. It has carried
+        // nothing out; it may have said why (it is quitting).
+        let said = read_line(&mut stream, GONE_WORD, Instant::now() + GONE_WORD);
+        return match said.ok().flatten().as_deref().and_then(read_answer) {
+            Some(Answer::Refused { refusal }) => Sent::Refused(refusal),
+            _ => Sent::Gone,
+        };
     }
-    let deadline = Instant::now() + patience + ANSWER_GRACE;
-    let line = match read_line(&mut stream, patience + ANSWER_GRACE, deadline) {
+    let deadline = Instant::now() + wait;
+    let line = match read_line(&mut stream, wait, deadline) {
         Ok(Some(line)) => line,
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
             return Sent::Refused(Refusal::Unanswered {
@@ -115,6 +127,24 @@ pub(crate) fn save(socket: &Path, patience: Duration) -> Option<AppState> {
     match read_answer(&line)? {
         Answer::Done { result } => serde_json::from_value(result).ok(),
         _ => None,
+    }
+}
+
+/// Waits up to `patience` for something else than an app that names `socket` and does not
+/// listen there: for that app to be gone, or for the lock file of `data_dir` to name
+/// another channel (an app that has just started, where a file left by a crash named the
+/// old one for an instant). Says whether there is something new to look at.
+pub(crate) fn wait_for_another(data_dir: &Path, socket: &Path, patience: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        match instance_lock::app_channel(data_dir) {
+            Ok(Some(channel)) if channel.path == socket => {}
+            _ => return true,
+        }
+        if started.elapsed() >= patience {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

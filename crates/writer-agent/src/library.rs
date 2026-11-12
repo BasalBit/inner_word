@@ -1,7 +1,7 @@
 //! The [`Library`] handle: where the library is, and how it is opened for one operation.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use writer_store::instance_lock::{self, Acquired, HolderKind, InstanceLock};
@@ -248,65 +248,112 @@ impl Library {
             return run(&mut session);
         }
         let mut run = Some(run);
-        let mut waited_for_quit = false;
-        loop {
-            let copy = match self.lock()? {
-                Ok(lock) => {
-                    let mut store = self.open_for_writing()?;
-                    let mut session = Session::writing(&mut store, self.clock.clone());
-                    let run = run.take().expect("an operation runs once");
-                    let result = run(&mut session)?;
-                    // Folds the write-ahead log into the database file, then gives the
-                    // lock back.
-                    store.close()?;
-                    drop(lock);
-                    return Ok(result);
-                }
-                Err(Taken::Tool(pid)) => return Err(Error::Busy { pid }),
-                Err(Taken::App(pid)) => pid,
-            };
-            let refuse = |why: Refusal| Error::AppIsOpen {
-                pid: copy,
-                data_dir: self.data_dir.clone(),
-                why,
-            };
-            let channel = instance_lock::app_channel(&self.data_dir).unwrap_or(None);
-            let Some(channel) = channel else {
-                if instance_lock::app_is_running(&self.data_dir).unwrap_or(true) {
-                    return Err(refuse(Refusal::OldVersion));
-                }
-                // It quit between the two looks: the lock is free now.
-                continue;
+        let refuse = |pid: Option<u32>, why: Refusal| Error::AppIsOpen {
+            pid,
+            data_dir: self.data_dir.clone(),
+            why,
+        };
+        let (mut said_quitting, mut found_gone) = (false, false);
+        // Every way round the loop but the last waits for something that then is so (the
+        // app is gone, or says where it listens), so a few rounds are all there can be.
+        for _ in 0..8 {
+            // An app that listens is handed the operation at once; its lock is not tried.
+            let channel = match instance_lock::app_channel(&self.data_dir).unwrap_or(None) {
+                Some(channel) => channel,
+                None => match self.lock()? {
+                    Ok(lock) => {
+                        let mut store = self.open_for_writing()?;
+                        let mut session = Session::writing(&mut store, self.clock.clone());
+                        let run = run.take().expect("an operation runs once");
+                        let result = run(&mut session)?;
+                        // Folds the write-ahead log into the database file, then gives
+                        // the lock back.
+                        store.close()?;
+                        drop(lock);
+                        return Ok(result);
+                    }
+                    Err(Taken::Tool(pid)) => return Err(Error::Busy { pid }),
+                    Err(Taken::App(pid)) => {
+                        // The app has the lock and names no channel. One that has only
+                        // just started will in a moment; an older one never does.
+                        if self.wait_for_channel() {
+                            continue;
+                        }
+                        return Err(refuse(pid, Refusal::OldVersion));
+                    }
+                },
             };
             match live::client::change(&channel.path, &operation(), self.app_patience) {
                 live::client::Sent::Done(value) => {
                     return serde_json::from_value(value).map_err(|error| Error::InApp {
                         kind: crate::error::ErrorKind::Failed,
                         message: format!(
-                            "the answer of The Writer cannot be read ({error}); the change \
-                             was made"
+                            "The Writer made the change, but its answer cannot be read \
+                             ({error}). Read the document again to see what it is now."
                         ),
                     });
                 }
                 live::client::Sent::Failed(error) => return Err(error),
-                live::client::Sent::Refused(Refusal::Quitting) if !waited_for_quit => {
+                live::client::Sent::Refused(Refusal::Quitting) if !said_quitting => {
                     // The app goes away: its lock is free in a moment, and the change is
                     // written directly then.
-                    waited_for_quit = true;
-                    live::client::wait_for_quit(&self.data_dir, live::QUIT_PATIENCE);
+                    said_quitting = true;
+                    live::client::wait_for_quit(
+                        &self.data_dir,
+                        live::QUIT_PATIENCE.min(self.app_patience),
+                    );
                 }
-                live::client::Sent::Refused(why) => return Err(refuse(why)),
+                live::client::Sent::Refused(why) => return Err(refuse(channel.pid, why)),
                 live::client::Sent::Gone => {
                     // Nobody listens where the lock file says: the app is on its way out
-                    // (or in), or it lost its channel.
-                    if waited_for_quit
-                        || !live::client::wait_for_quit(&self.data_dir, live::GONE_PATIENCE)
-                    {
-                        return Err(refuse(Refusal::NotListening));
+                    // (the lock is free in a moment), or another one is on its way in
+                    // (the file names its channel in a moment).
+                    if found_gone {
+                        return Err(refuse(channel.pid, Refusal::NotListening));
                     }
-                    waited_for_quit = true;
+                    found_gone = true;
+                    live::client::wait_for_another(
+                        &self.data_dir,
+                        &channel.path,
+                        live::GONE_PATIENCE,
+                    );
                 }
             }
+        }
+        let pid = instance_lock::holder(&self.data_dir)
+            .unwrap_or(None)
+            .and_then(|copy| copy.pid);
+        Err(refuse(pid, Refusal::NotListening))
+    }
+
+    /// Waits for the app that holds the lock without naming a channel to name one, for as
+    /// long as it may still be starting ([`live::STARTING_GRACE`] from the moment it took
+    /// the lock, and never longer than [`Library::with_app_patience`]). True when there
+    /// is something new to look at: it names a channel now, or it is gone.
+    fn wait_for_channel(&self) -> bool {
+        let started = Instant::now();
+        loop {
+            match instance_lock::app_channel(&self.data_dir) {
+                Ok(Some(_)) => return true,
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+            let since = match instance_lock::held_since(&self.data_dir) {
+                // Nobody holds the lock any more.
+                Ok(None) => return true,
+                Ok(Some(since)) => since,
+                Err(_) => return false,
+            };
+            if !instance_lock::app_is_running(&self.data_dir).unwrap_or(true) {
+                // A tool has it now: wait for that one as for any tool.
+                return true;
+            }
+            // A lock file from the future is not one of an app that has just started.
+            let held_for = since.elapsed().unwrap_or(live::STARTING_GRACE);
+            if held_for >= live::STARTING_GRACE || started.elapsed() >= self.app_patience {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 

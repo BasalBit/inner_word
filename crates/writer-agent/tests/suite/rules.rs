@@ -9,24 +9,30 @@ use writer_agent::{
     EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest, InsertPosition, InsertRequest,
     Library, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, Refusal,
     RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest,
-    ReplyRequest, RestoreDocumentRequest, RestoreVersionRequest, SearchRequest, Target, TextFormat,
-    TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
+    ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest,
+    SearchRequest, Target, TextFormat, TrashDocumentRequest, TrashFolderRequest, TreeRequest,
+    WriteOptions,
 };
 use writer_core::Document;
 use writer_store::instance_lock::{self, HolderKind};
 
-use super::{Fixture, claude, fixture};
+use super::live::age_the_lock;
+use super::{Fixture, claude, closed_fixture, fixture, through_the_app};
 
-fn dry() -> WriteOptions {
+/// The options of a dry run by "Claude".
+pub fn dry() -> WriteOptions {
     WriteOptions {
         dry_run: true,
         author: Some("Claude".into()),
     }
 }
 
-/// One of every kind of write, against the documents `seed` makes, with the given options.
-/// Returns how many of them were refused because the app is open.
-fn every_write(fx: &Fixture, options: &WriteOptions) -> Vec<(&'static str, Result<bool, Error>)> {
+/// One of every kind of write, against the documents `seed` makes, with the given options:
+/// the name of the operation, and whether it changed the library.
+pub fn every_write(
+    fx: &Fixture,
+    options: &WriteOptions,
+) -> Vec<(&'static str, Result<bool, Error>)> {
     let library = &fx.library;
     let chapter = Target::path("Book/Chapter 1");
     let o = || options.clone();
@@ -190,6 +196,15 @@ fn every_write(fx: &Fixture, options: &WriteOptions) -> Vec<(&'static str, Resul
                 .map(|r| r.written.changed),
         ),
         (
+            "restore_folder",
+            library
+                .restore_folder(&RestoreFolderRequest {
+                    folder: Target::path("Attic"),
+                    write: o(),
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
             "delete_folder",
             library
                 .delete_folder(&DeleteFolderRequest {
@@ -242,6 +257,16 @@ fn every_write(fx: &Fixture, options: &WriteOptions) -> Vec<(&'static str, Resul
                 .map(|r| r.written.changed),
         ),
         (
+            "reopen_comment",
+            library
+                .reopen_comment(&CommentRequest {
+                    document: chapter.clone(),
+                    comment: 1,
+                    write: o(),
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
             "delete_comment",
             library
                 .delete_comment(&DeleteCommentRequest {
@@ -273,6 +298,12 @@ fn every_write(fx: &Fixture, options: &WriteOptions) -> Vec<(&'static str, Resul
 /// A library with something for every kind of write to work on.
 fn seeded() -> Fixture {
     let fx = fixture();
+    seed(&fx);
+    fx
+}
+
+/// Puts into the library of `fx` something for every kind of write to work on.
+pub fn seed(fx: &Fixture) {
     let chapter = fx.create(
         Some("Book"),
         "# Chapter 1\n\nThe *Maren* left at dawn.\n\n## Notes\n\nOld notes.\n",
@@ -305,7 +336,14 @@ fn seeded() -> Fixture {
             ..Default::default()
         })
         .unwrap();
-    fx
+    // A folder in the trash, with a document in it.
+    fx.create(Some("Attic"), "# Old box\n\nDust.\n");
+    fx.library
+        .trash_folder(&TrashFolderRequest {
+            folder: Target::path("Attic"),
+            write: claude(),
+        })
+        .unwrap();
 }
 
 /// An app from before 0.6.0 holds the lock and listens nowhere. For it the old rule
@@ -313,7 +351,8 @@ fn seeded() -> Fixture {
 /// changes does is in `live.rs`.)
 #[test]
 fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_refused() {
-    let fx = seeded();
+    let fx = closed_fixture();
+    seed(&fx);
     let before = fx.bytes();
     let tree_before = fx.library.tree(&TreeRequest::default()).unwrap();
 
@@ -322,6 +361,9 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
         .unwrap()
         .lock()
         .unwrap();
+    // It has been running for a while (one that has only just taken the lock is given a
+    // moment to say where it listens).
+    age_the_lock(&fx);
     assert!(fx.library.app_is_open());
     let status = fx.library.status().unwrap();
     assert!(status.app_is_open);
@@ -329,7 +371,7 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
     assert_eq!(status.app_pid, Some(std::process::id()));
     assert_eq!(
         (status.documents, status.folders, status.trashed),
-        (3, 2, 1)
+        (3, 2, 2)
     );
 
     // Everything that reads works.
@@ -374,7 +416,12 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
 
     // Everything that writes is refused, with the same error, and writes nothing.
     let results = every_write(&fx, &claude());
-    assert_eq!(results.len(), 22);
+    assert_eq!(results.len(), writer_agent::live::Operation::CHANGES.len());
+    assert_eq!(
+        results.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        writer_agent::live::Operation::CHANGES,
+        "one of every operation that writes, in the order of the table"
+    );
     for (name, result) in results {
         match result {
             Err(
@@ -443,7 +490,8 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
 
 #[test]
 fn another_tool_that_is_writing_is_waited_for_and_then_reported() {
-    let fx = seeded();
+    let fx = closed_fixture();
+    seed(&fx);
     let edit = |library: &Library, old: &str, new: &str| {
         library.edit(&EditRequest {
             document: Target::path("Chapter 1"),
@@ -526,7 +574,9 @@ fn a_dry_run_reports_and_changes_nothing() {
             .unwrap(),
         versions
     );
-    assert!(!fx.dir.path().join("data/instance.lock").exists() || !fx.library.app_is_open());
+    if !through_the_app() {
+        assert!(!fx.dir.path().join("data/instance.lock").exists() || !fx.library.app_is_open());
+    }
 
     // The report of a dry run is the report of the real run.
     let request = |write: WriteOptions| EditRequest {
@@ -573,7 +623,7 @@ fn a_dry_run_reports_and_changes_nothing() {
     assert_eq!(tried.headings, done.headings);
 
     // In a library that does not exist yet, a dry run creates nothing either.
-    let empty = fixture();
+    let empty = closed_fixture();
     let created = empty
         .library
         .create_document(&CreateDocumentRequest {
@@ -1209,7 +1259,8 @@ fn the_default_library_follows_the_environment_variable() {
 
 #[test]
 fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it() {
-    let fx = seeded();
+    let fx = closed_fixture();
+    seed(&fx);
     // As schema version 1 left it: without the index version 2 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(fx.library.database_path()).unwrap();
@@ -1248,7 +1299,7 @@ fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it()
     );
 
     // What is not a library is refused, for reading and for writing, and left alone.
-    let other = fixture();
+    let other = closed_fixture();
     std::fs::create_dir_all(other.data_dir()).unwrap();
     let conn = rusqlite::Connection::open(other.library.database_path()).unwrap();
     conn.execute_batch("CREATE TABLE mine (x); INSERT INTO mine VALUES (1);")
@@ -1379,7 +1430,9 @@ fn requests_and_results_are_json() {
     let json = serde_json::to_value(&tried).unwrap();
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["changed"], false);
-    assert_eq!(json["app_is_open"], false);
+    // (In the run of the suite in which an app has every library open, it says so.)
+    assert_eq!(json["app_is_open"], through_the_app());
+    assert_eq!(json["app_takes_changes"], through_the_app());
     assert_eq!(json["replacements"], 1);
     assert_eq!(json["matched_as"], "text");
     assert_eq!(json["document"]["path"], "Book/Chapter 1");

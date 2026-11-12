@@ -114,8 +114,19 @@ pub(crate) const ANSWER_GRACE: Duration = Duration::from_secs(3);
 /// directly.
 pub(crate) const QUIT_PATIENCE: Duration = Duration::from_secs(5);
 
-/// How long a tool waits for an app that does not listen where it said to be gone.
+/// How long a tool waits for an app that does not listen where it said to be gone, or to
+/// say where it listens now.
 pub(crate) const GONE_PATIENCE: Duration = Duration::from_millis(500);
+
+/// How long after it took the lock of its data directory an app is given to open its
+/// channel. An app that holds the lock for longer than this and names no channel is one
+/// that takes no changes ([`Refusal::OldVersion`]); a tool that meets a younger one waits
+/// for the rest of this time.
+pub(crate) const STARTING_GRACE: Duration = Duration::from_secs(5);
+
+/// The longest time the app keeps a request waiting, whatever the request says
+/// ([`Request::wait_ms`]): an hour.
+pub(crate) const LONGEST_WAIT: Duration = Duration::from_secs(3600);
 
 /// The setting of the library that is the owner's switch "Agents can make changes while
 /// The Writer is open": a bool, on when it is missing. [`execute`] reads it
@@ -639,12 +650,38 @@ pub fn execute(store: &mut Store, request: &Request) -> Executed {
         };
     }
     let clock = store.clock().clone();
+    let allowed = changes_allowed(store);
     // A dry run does not write; the connection is told so, as the read-only connection
     // of a tool's own dry run is.
     let guarded = options.dry_run && store.set_query_only(true).is_ok();
     let mut session = Session::writing(store, clock);
-    session.dry_run = options.dry_run;
-    let result = request.operation.run(&mut session);
+    if options.dry_run {
+        // What the result of a dry run says about the app: it is open, here.
+        session.dry_run = true;
+        session.app_is_open = true;
+        session.app_takes_changes = allowed;
+    }
+    // Whatever goes wrong in an operation must not take the app down with it: the
+    // writer's window is not the agent's to lose. A transaction that was open when an
+    // operation panicked is rolled back as its guard is dropped.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        request.operation.run(&mut session)
+    }))
+    .unwrap_or_else(|panic| {
+        let said = panic
+            .downcast_ref::<&str>()
+            .map(|text| text.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".to_string());
+        Err(Error::InApp {
+            kind: ErrorKind::Failed,
+            message: format!(
+                "The Writer could not carry out {} (an internal error: {said}). Read the \
+                 document again before you repeat it.",
+                request.name()
+            ),
+        })
+    });
     let changes = std::mem::take(&mut session.changes);
     if guarded {
         store.set_query_only(false).ok();

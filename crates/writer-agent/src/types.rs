@@ -475,6 +475,10 @@ pub struct Written {
     /// with [`Error::AppIsOpen`](crate::Error::AppIsOpen) until the app is quit.
     #[serde(default)]
     pub app_is_open: bool,
+    /// Whether the request has anything to do: what `changed` is after a real run, and
+    /// what it would be after the real run of a dry run.
+    #[serde(default)]
+    pub would_change: bool,
 }
 
 // ----- what results are made of ----------------------------------------------------------
@@ -715,7 +719,8 @@ pub struct SearchRequest {
     pub query: String,
     /// The most hits to return. Without it: 20.
     pub limit: Option<usize>,
-    /// Only documents in this folder (at any depth).
+    /// Only documents in this folder (at any depth): those among the 2,000 best hits of
+    /// the whole library.
     pub folder: Option<Target>,
 }
 

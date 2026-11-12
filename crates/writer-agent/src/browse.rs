@@ -17,6 +17,8 @@ use crate::types::{
 
 /// How many hits a search returns unless the request says.
 const DEFAULT_SEARCH_LIMIT: usize = 20;
+/// How many of the best hits of the whole library a search in one folder looks through.
+const FOLDER_SEARCH_POOL: usize = 2000;
 /// How many documents "recent" returns unless the request says.
 const DEFAULT_RECENT_LIMIT: usize = 10;
 
@@ -124,7 +126,11 @@ impl Library {
         };
         let found = store.search(
             &request.query,
-            if within.is_some() { usize::MAX } else { limit },
+            if within.is_some() {
+                limit.max(FOLDER_SEARCH_POOL)
+            } else {
+                limit
+            },
         )?;
         let mut hits = Vec::new();
         for hit in found {

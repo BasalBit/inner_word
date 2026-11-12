@@ -248,6 +248,7 @@ impl Session {
             dry_run: self.dry_run,
             changed: changed && !self.dry_run,
             app_is_open: self.dry_run && self.app_is_open,
+            would_change: changed,
         }
     }
 

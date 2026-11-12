@@ -528,7 +528,25 @@ fn a_dry_run_reports_and_changes_nothing() {
     let tried = fx.library.edit(&request(dry())).unwrap();
     let done = fx.library.edit(&request(claude())).unwrap();
     assert!(tried.written.dry_run && !tried.written.changed && tried.snapshot.is_none());
+    assert!(
+        tried.written.would_change,
+        "the dry run says that there is something to do"
+    );
     assert!(!done.written.dry_run && done.written.changed && done.snapshot.is_some());
+    assert!(done.written.would_change);
+    // The same request once more has nothing to do, tried or done.
+    let nothing = |write: WriteOptions| {
+        fx.library
+            .rename_folder(&RenameFolderRequest {
+                folder: Target::path("Book"),
+                name: "Book".into(),
+                write,
+            })
+            .unwrap()
+            .written
+    };
+    assert!(!nothing(dry()).would_change && !nothing(claude()).would_change);
+    assert!(!nothing(claude()).changed);
     assert_eq!(tried.replacements, done.replacements);
     assert_eq!(tried.matched_as, done.matched_as);
     assert_eq!(

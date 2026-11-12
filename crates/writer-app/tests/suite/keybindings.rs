@@ -2287,6 +2287,31 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
     assert_eq!(detail, "One command has another key than its default.");
     vcx.simulate_prompt_answer("Cancel");
     vcx.run_until_parked();
+
+    // A file with that change has the command twice, once for each key
+    // context. The preview of its import shows it once, and the toast
+    // counts it once.
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("The Writer Shortcuts.json");
+    export_to(&file, vcx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.reset_all_shortcuts_now(window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    let (_, says, _) = question(&view, vcx);
+    assert!(says.starts_with("1 command gets other keys."), "{says}");
+    let rows = view.read_with(vcx, |view, _| view.preview_rows());
+    assert_eq!(rows.len(), 2, "a heading and one row: {rows:?}");
+    assert_eq!(rows[0], "Keys that change (1)");
+    choose(&view, Choice::ImportMerge, vcx);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 2);
+    assert_eq!(
+        toasts(&workspace, vcx),
+        ["Imported the keys of one command"]
+    );
 }
 
 /// With Vim mode on, Vim sees the keys of the text before any binding

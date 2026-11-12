@@ -761,7 +761,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let changed = plan.outcome(mode).differences.len();
+        // As the preview counted them: a command the file changes in
+        // several key contexts of one place is one command.
+        let differences = &plan.outcome(mode).differences;
+        let changed = listing(cx).map_or(differences.len(), |listing| {
+            listing.commands_among(differences.iter().map(|difference| &difference.target))
+        });
         let carried = plan.carry_out(mode);
         let before = self.set_key_changes(carried.changes, window, cx);
         if before == keymap::changes(cx) {

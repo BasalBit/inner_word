@@ -2123,6 +2123,247 @@ fn with_vim_mode_on_the_change_is_one_undo_in_normal_mode(cx: &mut TestAppContex
     );
 }
 
+/// What the acceptance of 0.6.0 could not check: an agent's change arriving
+/// in the open document while Vim mode is in Normal mode, and in Insert
+/// mode. The mode stays the writer's, the caret stays on its text (the
+/// change is above it and in its own paragraph, before it), and the next
+/// key does what it would have done without the change, also the second
+/// key of a command that was begun before it.
+#[gpui::test]
+fn with_vim_mode_on_a_change_leaves_the_mode_the_caret_and_the_next_key(cx: &mut TestAppContext) {
+    use writer_vim_mode::Mode;
+    let (desk, id, cx) = desk_with_notes(cx);
+    desk.workspace
+        .update(cx, |workspace, cx| workspace.toggle_vim_mode(cx));
+    cx.run_until_parked();
+    let mode = |desk: &Desk, cx: &mut VisualTestContext| {
+        desk.workspace
+            .read_with(cx, |workspace, cx| workspace.vim().read(cx).mode())
+    };
+    // The letter the caret is on (in Normal mode the caret is a block on
+    // it), with the paragraph it is in.
+    let under = |desk: &Desk, cx: &mut VisualTestContext| -> (String, char) {
+        desk.workspace.read_with(cx, |workspace, cx| {
+            let editor = workspace.editor().read(cx);
+            let selection = editor.selection();
+            assert!(selection.is_collapsed(), "{selection:?}");
+            let text = editor.document().blocks()[selection.head.block]
+                .text()
+                .to_string();
+            let letter = text[selection.head.offset..].chars().next().unwrap_or(' ');
+            (text, letter)
+        })
+    };
+    let paragraphs = |desk: &Desk, cx: &mut VisualTestContext| -> Vec<String> {
+        editor_text(&desk.workspace, cx)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    // What an agent does meanwhile: a paragraph above everything, and a
+    // word in the writer's own paragraph, before the caret.
+    let above = |desk: &Desk, text: &'static str, cx: &mut VisualTestContext| {
+        let tool = desk.tool();
+        ask(cx, move || {
+            tool.insert(&InsertRequest {
+                document: id.into(),
+                markdown: text.into(),
+                position: agent::InsertPosition::Start,
+                write: claude(),
+                ..InsertRequest::default()
+            })
+        })
+        .unwrap();
+    };
+    let reword = |desk: &Desk, old: &'static str, new: &'static str, cx: &mut VisualTestContext| {
+        let tool = desk.tool();
+        ask(cx, move || tool.edit(&edit(id, old, new))).unwrap();
+    };
+
+    // ----- Normal mode ------------------------------------------------
+    // The caret is on the "p" of "paragraph" in the last paragraph.
+    set_caret(&desk, 2, "The second ".len(), cx);
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    assert_eq!(
+        under(&desk, cx),
+        ("The second paragraph is the last.".to_string(), 'p')
+    );
+    above(&desk, "Written above by an agent.", cx);
+    reword(&desk, "The second", "The 2nd", cx);
+    assert_eq!(mode(&desk, cx), Mode::Normal, "the mode is the writer's");
+    // The paragraph is one further down and its start is shorter: the
+    // caret is on the letter it was on.
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(3, "The 2nd ".len()))
+    );
+    assert_eq!(
+        under(&desk, cx),
+        ("The 2nd paragraph is the last.".to_string(), 'p')
+    );
+    // The next key does what it would have done: "x" takes that letter.
+    cx.simulate_keystrokes("x");
+    assert_eq!(paragraphs(&desk, cx)[3], "The 2nd aragraph is the last.");
+    assert_eq!(under(&desk, cx).1, 'a');
+    // "u" takes back the writer's own step, not the agent's before it.
+    cx.simulate_keystrokes("u");
+    assert_eq!(paragraphs(&desk, cx)[3], "The 2nd paragraph is the last.");
+    assert_eq!(paragraphs(&desk, cx)[0], "Written above by an agent.");
+
+    // A command that was begun before the change is finished after it:
+    // "d", the change, "w" deletes the word the caret is on.
+    set_caret(&desk, 3, "The 2nd ".len(), cx);
+    cx.simulate_keystrokes("d");
+    assert_eq!(mode(&desk, cx), Mode::OperatorPending);
+    reword(&desk, "is short", "is brief", cx);
+    above(&desk, "And once more.", cx);
+    assert_eq!(mode(&desk, cx), Mode::OperatorPending, "the command waits");
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(4, "The 2nd ".len()))
+    );
+    cx.simulate_keystrokes("w");
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    assert_eq!(
+        paragraphs(&desk, cx),
+        [
+            "And once more.",
+            "Written above by an agent.",
+            "Notes",
+            "The first paragraph is brief.",
+            "The 2nd is the last.",
+        ]
+    );
+    assert_eq!(under(&desk, cx).1, 'i');
+    // So is a count: "2", the change, "x" takes two letters.
+    cx.simulate_keystrokes("2");
+    reword(&desk, "is brief", "is short", cx);
+    cx.simulate_keystrokes("x");
+    assert_eq!(paragraphs(&desk, cx)[4], "The 2nd  the last.");
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    // A motion goes from where the caret is: "w" to the next word, "$"
+    // to the end of the line.
+    above(&desk, "A third one.", cx);
+    cx.simulate_keystrokes("w");
+    assert_eq!(under(&desk, cx).1, 't');
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(5, "The 2nd  ".len()))
+    );
+
+    // A search that is being typed stays the search. (Found by this test:
+    // 0.6.0 closed the command line when the change arrived, and the rest
+    // of the word ran as commands of Normal mode, "a" among them, which
+    // typed the letters after it into the text.)
+    let command_line = |desk: &Desk, cx: &mut VisualTestContext| -> Option<String> {
+        desk.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .vim()
+                .read(cx)
+                .status()
+                .command_line
+                .as_ref()
+                .map(|line| format!("{}{}", line.prefix, line.text))
+        })
+    };
+    let text_before = paragraphs(&desk, cx);
+    cx.simulate_keystrokes("g g /");
+    cx.simulate_keystrokes("p a r");
+    assert_eq!(command_line(&desk, cx).as_deref(), Some("/par"));
+    assert_eq!(mode(&desk, cx), Mode::CommandLine);
+    reword(&desk, "is short", "is quite short", cx);
+    assert_eq!(command_line(&desk, cx).as_deref(), Some("/par"));
+    assert_eq!(
+        mode(&desk, cx),
+        Mode::CommandLine,
+        "the search is still open"
+    );
+    cx.simulate_keystrokes("a g r a p h enter");
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    assert_eq!(command_line(&desk, cx), None);
+    // Nothing of the word went into the text, and the caret is on the
+    // first "paragraph" after the top.
+    let mut expected = text_before.clone();
+    expected[4] = "The first paragraph is quite short.".to_string();
+    assert_eq!(paragraphs(&desk, cx), expected);
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(4, "The first ".len()))
+    );
+    // The same for a command after ":": it is run when it is finished.
+    cx.simulate_keystrokes(":");
+    cx.simulate_keystrokes("6");
+    reword(&desk, "is quite short", "is short", cx);
+    assert_eq!(command_line(&desk, cx).as_deref(), Some(":6"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    assert_eq!(selection(&desk, cx).head.block, 5, "line 6");
+    assert_eq!(paragraphs(&desk, cx), text_before);
+    // Back to where the next part begins.
+    set_caret(&desk, 5, "The 2nd  ".len(), cx);
+    assert_eq!(under(&desk, cx).1, 't');
+
+    // ----- Insert mode ------------------------------------------------
+    // "i" before "the", a word typed, and no escape yet.
+    cx.simulate_keystrokes("i");
+    assert_eq!(mode(&desk, cx), Mode::Insert);
+    cx.simulate_input("now ");
+    assert_eq!(paragraphs(&desk, cx)[5], "The 2nd  now the last.");
+    let caret = selection(&desk, cx);
+    assert_eq!(
+        caret,
+        Selection::caret(Position::new(5, "The 2nd  now ".len()))
+    );
+    // The agent writes above, and in this paragraph before the caret.
+    above(&desk, "A fourth.", cx);
+    reword(&desk, "The 2nd", "The second", cx);
+    assert_eq!(mode(&desk, cx), Mode::Insert, "the mode is the writer's");
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(6, "The second  now ".len())),
+        "the caret is between the letters it was between"
+    );
+    // The insert goes on at that place.
+    cx.simulate_input("really ");
+    assert_eq!(paragraphs(&desk, cx)[6], "The second  now really the last.");
+    // And a change after the caret in the same paragraph leaves it too.
+    reword(&desk, "the last.", "the last one.", cx);
+    assert_eq!(mode(&desk, cx), Mode::Insert);
+    cx.simulate_input("very ");
+    assert_eq!(
+        paragraphs(&desk, cx)[6],
+        "The second  now really very the last one."
+    );
+    // Escape ends the insert as it always does: Normal mode, the caret on
+    // the letter before.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(mode(&desk, cx), Mode::Normal);
+    assert_eq!(
+        selection(&desk, cx),
+        Selection::caret(Position::new(6, "The second  now really very".len()))
+    );
+    assert_eq!(under(&desk, cx).1, ' ');
+    // "." repeats the writer's insert ("now really very ", typed around
+    // the agent's changes), not anything of the agent's.
+    let before_repeat = paragraphs(&desk, cx);
+    cx.simulate_keystrokes("u");
+    assert_ne!(paragraphs(&desk, cx), before_repeat);
+    // Every paragraph the agent wrote is still there, in order.
+    assert_eq!(
+        paragraphs(&desk, cx)[..4],
+        [
+            "A fourth.",
+            "A third one.",
+            "And once more.",
+            "Written above by an agent.",
+        ]
+    );
+    // What is stored is what is on screen.
+    desk.workspace
+        .update(cx, |workspace, cx| assert!(workspace.flush(cx)));
+    assert_eq!(stored(&desk, id, cx), editor_text(&desk.workspace, cx));
+}
+
 #[gpui::test]
 fn an_app_without_a_library_tells_the_tool_so(cx: &mut TestAppContext) {
     init(cx);

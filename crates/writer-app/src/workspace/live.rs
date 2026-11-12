@@ -547,6 +547,11 @@ impl Workspace {
         let adopted = self
             .editor
             .update(cx, |editor, cx| editor.adopt_document(loaded.document, cx));
+        // Vim mode hears of it here, before the editor's events of the
+        // change reach it: this was not the writer's doing, so a command
+        // they are in the middle of (an operator waiting for its motion,
+        // a search being typed after "/") stays theirs.
+        self.vim.update(cx, |vim, cx| vim.changed_elsewhere(cx));
         let revision = self.editor.read(cx).state().revision();
         // From here to the writer's next edit the editor holds what the
         // library holds.

@@ -627,7 +627,7 @@ impl Vim {
             return;
         }
         if !matches!(self.base, Base::Insert | Base::Replace) {
-            self.sync_inner(cx);
+            self.sync_inner(cx, false);
         }
     }
 
@@ -720,7 +720,7 @@ impl Vim {
             && caret.is_some_and(|caret| self.amend_typed(range, caret, text));
         self.expect_host = false;
         if !amended && self.changed_outside(&cx) {
-            self.sync_inner(&mut cx);
+            self.sync_inner(&mut cx, false);
         }
         self.observe(&cx);
         self.finish(true)
@@ -803,8 +803,39 @@ impl Vim {
                 // cursor key that moved the caret ends what `.` repeats.
                 self.settle_cursor_key(&mut cx, false);
             } else {
-                self.sync_inner(&mut cx);
+                self.sync_inner(&mut cx, false);
             }
+        }
+        self.observe(&cx);
+        self.finish(true)
+    }
+
+    /// The document was changed by somebody else than the writer, and the
+    /// editor kept the selection on its text: an agent's change that the
+    /// app took over while the document is open
+    /// (`writer_core::EditorState::adopt`). The engine catches up as
+    /// [`Vim::sync`] does, with one difference: **nothing the writer is in
+    /// the middle of is dropped.** An operator waiting for its motion, a
+    /// count, a register name, a key waiting for its argument and an open
+    /// command line stay as they are. The writer did nothing, so the next
+    /// key they press means what it would have meant: after `d`, a `w`
+    /// still deletes a word, and the rest of a search typed after `/` is
+    /// still the search (after a [`Vim::sync`] those letters would run as
+    /// commands of Normal mode).
+    ///
+    /// What follows the place is brought up to date as in `sync`: in
+    /// Normal mode the caret is put on a character, a Visual selection
+    /// follows the editor's selection, and in Insert mode what was typed
+    /// before the change is an undo step of its own (the change is one
+    /// too) and no longer repeats.
+    ///
+    /// A host calls this right after the editor took the change over,
+    /// before it calls `sync` for the same change; the `sync` that follows
+    /// then finds the editor as the engine left it.
+    pub fn changed_elsewhere(&mut self, ed: &mut EditorState, host: &mut dyn VimHost) -> Outcome {
+        let mut cx = Cx { ed, host };
+        if self.changed_outside(&cx) {
+            self.sync_inner(&mut cx, true);
         }
         self.observe(&cx);
         self.finish(true)
@@ -854,7 +885,7 @@ impl Vim {
             let p = buf::clamp_normal(cx.ed.document(), sel.head);
             cx.ed.set_caret(p);
         } else {
-            self.sync_inner(&mut cx);
+            self.sync_inner(&mut cx, false);
         }
         // The context mark starts at the top of the document, as in a file
         // Vim has just opened, so `''` works before the first jump.
@@ -903,9 +934,15 @@ impl Vim {
         self.redo_carets.clear();
     }
 
-    fn sync_inner(&mut self, cx: &mut Cx) {
-        self.cmdline = None;
-        self.pending = Pending::default();
+    /// Brings the engine in line with an editor that was changed from
+    /// outside. `keep_command`: the change was not the writer's doing
+    /// ([`Vim::changed_elsewhere`]), so what they are in the middle of
+    /// typing stays: a half-typed command and an open command line.
+    fn sync_inner(&mut self, cx: &mut Cx, keep_command: bool) {
+        if !keep_command {
+            self.cmdline = None;
+            self.pending = Pending::default();
+        }
         self.goal = None;
         let sel = cx.ed.selection();
         // The document itself was changed from outside (an undo or redo of

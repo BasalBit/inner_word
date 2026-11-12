@@ -60,6 +60,7 @@ pub(crate) enum Call<'a> {
     CommandLineInput(&'a str),
     Execute(&'a str),
     Sync,
+    ChangedElsewhere,
     Attach,
     Detach,
 }
@@ -73,6 +74,7 @@ impl Call<'_> {
             Call::CommandLineInput(text) => vim.command_line_input(text, state, host),
             Call::Execute(command) => vim.execute(command, state, host),
             Call::Sync => vim.sync(state, host),
+            Call::ChangedElsewhere => vim.changed_elsewhere(state, host),
             Call::Attach => vim.attach(state, host),
             Call::Detach => vim.detach(state, host),
         }
@@ -83,7 +85,10 @@ impl Call<'_> {
     /// editor: they may nudge the caret onto a character, which must not
     /// undo a scroll position somebody just restored.
     fn follows_caret(&self) -> bool {
-        !matches!(self, Call::Sync | Call::Attach | Call::Detach)
+        !matches!(
+            self,
+            Call::Sync | Call::ChangedElsewhere | Call::Attach | Call::Detach
+        )
     }
 }
 
@@ -586,6 +591,27 @@ impl VimMode {
             return;
         }
         let outcome = self.engine_call(Call::Sync, cx);
+        self.apply(outcome, false, cx);
+    }
+
+    /// The editor took over a change somebody else made to the open
+    /// document (`Editor::adopt_document`: an agent's change that the app
+    /// carried out), with the caret and the selection kept on their text.
+    /// It is not the writer's doing, so nothing they are in the middle of
+    /// is dropped: the mode, a half-typed command (`d` waiting for its
+    /// motion, a count) and an open command line stay, and the next key
+    /// means what it would have meant (`Vim::changed_elsewhere`).
+    ///
+    /// Call it right after the editor took the change over, before the
+    /// editor's events of that change are delivered: they find the engine
+    /// in step and change nothing. Without this call those events are
+    /// taken for the writer's own doing somewhere else in the app, which
+    /// cancels a command and closes the command line.
+    pub fn changed_elsewhere(&mut self, cx: &mut Context<Self>) {
+        if !self.attached {
+            return;
+        }
+        let outcome = self.engine_call(Call::ChangedElsewhere, cx);
         self.apply(outcome, false, cx);
     }
 

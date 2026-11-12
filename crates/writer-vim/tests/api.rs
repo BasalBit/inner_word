@@ -248,6 +248,99 @@ fn an_edit_from_outside_does_not_start_visual_mode() {
     assert_eq!(s.mode(), Mode::Visual);
 }
 
+/// A change somebody else made to the document (an agent's, taken over by
+/// the app while the document is open) is not the writer's doing: what
+/// they are in the middle of typing stays, where a `sync` drops it.
+#[test]
+fn a_change_made_elsewhere_keeps_a_half_typed_command_and_the_command_line() {
+    // What an agent's change looks like to the engine: the text changed
+    // before the caret, and the caret is on the letter it was on.
+    fn changed_before_the_caret(s: &mut Session) {
+        let caret = s.ed.selection().head;
+        s.ed.set_caret(Position::new(0, 0));
+        s.ed.insert_text("So ");
+        s.ed.set_caret(Position::new(caret.block, caret.offset + 3));
+    }
+
+    // An operator waiting for its motion.
+    let mut s = Session::new("alpha |beta gamma");
+    s.keys("d");
+    assert_eq!(s.mode(), Mode::OperatorPending);
+    changed_before_the_caret(&mut s);
+    let o = s.vim.changed_elsewhere(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::OperatorPending);
+    assert!(!o.effects.contains(&Effect::PendingKeys(String::new())));
+    // The `sync` a host makes for the same change finds nothing to do.
+    assert!(s.vim.sync(&mut s.ed, &mut s.host).effects.is_empty());
+    assert_eq!(s.mode(), Mode::OperatorPending);
+    s.keys("w");
+    assert_eq!(s.text(), "So alpha gamma");
+    assert_eq!(s.mode(), Mode::Normal);
+
+    // A count, and a key waiting for its argument.
+    let mut s = Session::new("alpha |beta gamma");
+    s.keys("2");
+    changed_before_the_caret(&mut s);
+    s.vim.changed_elsewhere(&mut s.ed, &mut s.host);
+    s.keys("x");
+    assert_eq!(s.text(), "So alpha ta gamma");
+    s.keys("r");
+    changed_before_the_caret(&mut s);
+    s.vim.changed_elsewhere(&mut s.ed, &mut s.host);
+    s.keys("X");
+    assert_eq!(s.text(), "So So alpha Xa gamma");
+
+    // A search that is being typed: the rest of it is still the search.
+    let mut s = Session::new("|alpha beta gamma");
+    s.keys("/ga");
+    assert_eq!(s.mode(), Mode::CommandLine);
+    changed_before_the_caret(&mut s);
+    let o = s.vim.changed_elsewhere(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::CommandLine);
+    assert!(!o.effects.contains(&Effect::CommandLine(None)));
+    s.keys("mma<CR>");
+    assert_eq!(s.mode(), Mode::Normal);
+    assert_eq!(s.buffer(), "So alpha beta |gamma");
+
+    // Nothing changed: the call is a no-op.
+    let mut s = Session::new("alpha |beta gamma");
+    s.keys("2d");
+    assert!(
+        s.vim
+            .changed_elsewhere(&mut s.ed, &mut s.host)
+            .effects
+            .is_empty()
+    );
+    s.keys("w");
+    assert_eq!(s.text(), "alpha ");
+
+    // In Normal mode the caret is put on a character, as after a `sync`.
+    // (The letter it was on is gone: the caret stands after the last one.)
+    let mut s = Session::new("abc|d");
+    s.ed.set_selection(Selection::new(Position::new(0, 3), Position::new(0, 4)));
+    s.ed.delete_selection();
+    s.ed.set_caret(Position::new(0, 3));
+    assert_eq!(s.text(), "abc");
+    s.vim.changed_elsewhere(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Normal);
+    assert_eq!(s.buffer(), "ab|c");
+
+    // The same change taken for the writer's own doing drops the command:
+    // that is `sync`, and it stays what it was.
+    let mut s = Session::new("alpha |beta gamma");
+    s.keys("d");
+    changed_before_the_caret(&mut s);
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Normal);
+    s.keys("w");
+    assert_eq!(s.text(), "So alpha beta gamma");
+    let mut s = Session::new("|alpha beta gamma");
+    s.keys("/ga");
+    changed_before_the_caret(&mut s);
+    s.vim.sync(&mut s.ed, &mut s.host);
+    assert_eq!(s.mode(), Mode::Normal);
+}
+
 #[test]
 fn syncing_after_the_host_moved_things() {
     // Normal mode: the caret is put on a character.

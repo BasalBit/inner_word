@@ -391,6 +391,16 @@ open" below).
     request moved to the trash. For a document that is not the open one the button is
     **Open**. The same two are commands without a key ("Undo the last change by an agent",
     "Go to the last change by an agent": the palette, The Writer menu).
+  - **Vim mode keeps what the writer is in the middle of.** The editor reports a change
+    it took over as any edit, and Vim mode takes an edit it did not make for the writer's
+    own doing elsewhere in the app, which cancels a half-typed command and closes the
+    command line (`Vim::sync`). So `Workspace::take_over_open_document` tells Vim mode
+    itself, right after the editor took the change over and before the editor's events
+    reach it
+    (`VimMode::changed_elsewhere`, `Vim::changed_elsewhere`): the mode, an operator waiting
+    for its motion, a count and an open `:` or `/` line stay, and the next key means what
+    it would have meant. (0.6.0 did not: a search being typed was closed by an agent's
+    change, and the rest of the word ran as commands of Normal mode.)
   - **A composition is never broken.** While text is composed with an input method
     (`Editor::is_composing`) a change waits, and the requests behind it; after
     `live::COMPOSITION_PATIENCE` (3 s) it is refused and the composition goes on.

@@ -1,4 +1,5 @@
-//! Markdown, plain-text and DOCX exporters for The Writer.
+//! Markdown, plain-text and DOCX exporters for The Writer, and the
+//! importers that read Markdown and plain text back.
 //!
 //! Pure Rust over [`writer_core`]: no UI, no file dialogs, no clock. The app
 //! picks a destination and writes the bytes this crate returns.
@@ -25,6 +26,21 @@
 //! [`export`] dispatches on an [`ExportFormat`] and always returns bytes;
 //! [`suggested_file_name`] turns a title into a safe file name.
 //!
+//! # Importing
+//!
+//! - [`from_markdown`]: Markdown to a document, the inverse of
+//!   [`to_markdown`]. This is how anything that does not type writes into
+//!   the library (an agent creating or rewriting a document). See
+//!   [`MarkdownImportOptions`] and the [`import`] module.
+//! - [`from_plain_text`]: paragraphs separated by blank lines.
+//!
+//! Both return an [`Imported`]: the document, a [`Fragment`] of the same
+//! blocks to insert into a document that exists, the title the text
+//! names, and an [`ImportWarning`] for everything the document cannot hold
+//! as written (tables, images, raw HTML), which is kept as readable text.
+//!
+//! [`Fragment`]: writer_core::Fragment
+//!
 //! # Example
 //!
 //! ```
@@ -50,6 +66,7 @@
 
 mod common;
 pub mod docx;
+pub mod import;
 pub mod markdown;
 pub mod plain;
 pub mod social;
@@ -57,6 +74,11 @@ pub mod social;
 use writer_core::Document;
 
 pub use docx::{DocxOptions, to_docx};
+pub use import::{
+    ImportWarning, ImportWarningKind, Imported, MarkdownFrontMatter, MarkdownImportOptions,
+    MarkdownLeadingHeading, MarkdownSoftBreaks, PlainTextImportOptions, PlainTextLines,
+    from_markdown, from_plain_text, summarize_warnings,
+};
 pub use markdown::{
     MarkdownComments, MarkdownHighlight, MarkdownOptions, MarkdownPageBreak, to_markdown,
 };

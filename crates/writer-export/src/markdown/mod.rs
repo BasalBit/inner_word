@@ -449,7 +449,19 @@ impl<'a> Writer<'a> {
             _ => "",
         };
         let child_prefix = format!("{parent_prefix}{}", " ".repeat(marker.len() + 1));
-        let text = self.inline(index, block, false);
+        let mut text = self.inline(index, block, false);
+        // `- |` right under the text of the item above is the delimiter
+        // row of a table to a parser, with that text as the header row.
+        if marker == "-" && task.is_empty() && depth > 0 {
+            let first_line = text.split('\n').next().unwrap_or("");
+            if first_line.contains('|')
+                && first_line
+                    .chars()
+                    .all(|c| matches!(c, '|' | ':' | '-' | ' ' | '\t'))
+            {
+                text = text.replacen('|', "\\|", 1);
+            }
+        }
         let line = format!(
             "{parent_prefix}{marker} {task}{}",
             text.replace('\n', &format!("\n{child_prefix}"))

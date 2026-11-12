@@ -641,6 +641,24 @@ fn lists() {
     assert_eq!(out, "- [ ] open\n- [x] done\n- plain\n");
 }
 
+/// `- |` under the text of the item above would be the delimiter row of a
+/// table, with that text as its header.
+#[test]
+fn a_nested_item_of_pipes_is_not_a_table() {
+    let out = round_trip(vec![
+        Block::with_text(BlockKind::BulletItem, "header |"),
+        Block::with_text(BlockKind::BulletItem, "|").with_indent(1),
+        Block::with_text(BlockKind::BulletItem, "| - | :-: |").with_indent(1),
+        Block::with_text(BlockKind::TodoItem { checked: false }, "a | b"),
+        Block::with_text(BlockKind::BulletItem, "-|-").with_indent(1),
+        Block::with_text(BlockKind::BulletItem, "| not only pipes").with_indent(1),
+    ]);
+    assert_eq!(
+        out,
+        "- header |\n  - \\|\n  - \\| - | :-: |\n- [ ] a | b\n  - \\-|-\n  - | not only pipes\n"
+    );
+}
+
 #[test]
 fn long_numbered_list_keeps_real_ordinals_and_alignment() {
     let mut blocks: Vec<Block> = (1..=11)
@@ -2505,3 +2523,7 @@ fn footnote_comments_keep_their_text() {
         assert_eq!(refs, want.len(), "seed {seed}\n{out}");
     }
 }
+
+// ----- import: the corpus and the round trips with the importer ---------------------------
+
+mod import;

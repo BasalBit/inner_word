@@ -1,6 +1,6 @@
 [package]
 name = "writer-export"
-description = "Markdown, plain-text and DOCX exporters for The Writer."
+description = "Markdown, plain-text and DOCX exporters and Markdown and plain-text importers for The Writer."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -13,11 +13,11 @@ unicode-segmentation.workspace = true
 unicode-properties = "0.1.5"
 # Raw DEFLATE for the DOCX (ZIP) container.
 miniz_oxide = "0.8"
+# The CommonMark parser behind the Markdown importer. The Markdown tests
+# also parse the exporter's output with it and compare it with the document.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
-# An independent CommonMark parser: the Markdown tests parse the exporter's
-# output and compare it with the document.
-pulldown-cmark = { version = "0.13", default-features = false }
 # An independent ZIP reader and XML parser for the DOCX package tests.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"

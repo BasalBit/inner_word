@@ -27,6 +27,7 @@
 //! | [`palette`], [`quick_open`], [`library_search`], [`shortcuts`] | the picker modals |
 //! | [`settings`], [`settings_view`] | setting keys and the typed snapshot; the settings modal, with the section for the open document |
 //! | [`version_history`] | the snapshots of the open document, a preview, restore |
+//! | [`agents`], [`agents_view`] | the `writer` command line tool beside the app, the skill and the MCP server for the agents on this Mac; the Agents panel |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`view_memory`] | the caret position and the chosen-title flag of a document, checked against the document as it is now |
@@ -42,6 +43,8 @@
 //! | [`automation`], [`screenshot`] | the visual-QA script hook |
 
 pub mod actions;
+pub mod agents;
+pub mod agents_view;
 pub mod automation;
 pub mod character_limit;
 pub mod commands;
@@ -77,8 +80,8 @@ pub use workspace::{SaveState, Workspace, WorkspaceEvent};
 /// 1. theme ([`writer_ui::theme::init`], System until the stored setting is
 ///    read by the workspace);
 /// 2. the app's context-free key bindings ([`actions::key_bindings`]);
-/// 3. the widget, editor, library-panel, settings-modal and
-///    version-history bindings (later bindings win ties, so a focused
+/// 3. the widget, editor, library-panel, settings-modal, version-history
+///    and agents-panel bindings (later bindings win ties, so a focused
 ///    widget keeps its own keys);
 /// 4. the comments, Vim and editor-tools bindings and global handlers. The
 ///    tools come last: inside the find bar `cmd-alt-c` is "case sensitive",
@@ -99,6 +102,7 @@ pub fn init(cx: &mut App) {
     writer_library::init(cx);
     cx.bind_keys(settings_view::key_bindings());
     cx.bind_keys(version_history::key_bindings());
+    cx.bind_keys(agents_view::key_bindings());
     writer_comments::init(cx);
     writer_vim_mode::init(cx);
     writer_editor_tools::init(cx);

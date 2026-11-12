@@ -109,6 +109,9 @@ actions!(
         OpenWelcomeDocument,
         /// Choose the language the open document's spelling is checked in.
         ChooseSpellingLanguage,
+        /// Show what agents on this Mac can do with the library: the command
+        /// line tool, the skill and the MCP server.
+        ShowAgents,
     ]
 );
 
@@ -162,6 +165,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-/", ShowShortcuts, None),
         KeyBinding::new("cmd-alt-p", TogglePageView, None),
         KeyBinding::new("cmd-alt-v", ToggleVimMode, None),
+        KeyBinding::new("cmd-alt-a", ShowAgents, None),
     ]
 }
 
@@ -292,6 +296,25 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "preferences",
             "options",
             "configure",
+        ]),
+        CommandDescriptor::new("Agents", CATEGORY_APP, ShowAgents).keywords([
+            "ai",
+            "assistant",
+            "claude",
+            "codex",
+            "gemini",
+            "cursor",
+            "copilot",
+            "opencode",
+            "mcp",
+            "server",
+            "skill",
+            "install",
+            "command line",
+            "cli",
+            "terminal",
+            "tool",
+            "writer",
         ]),
         CommandDescriptor::new("Welcome document", CATEGORY_APP, OpenWelcomeDocument).keywords([
             "help",

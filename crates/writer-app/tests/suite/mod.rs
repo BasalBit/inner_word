@@ -1,6 +1,7 @@
 //! Shared helpers. Every test runs against an in-memory or temp-dir library,
 //! never the user's data directory.
 
+mod agents;
 mod assembly;
 mod commands;
 mod context_menus;

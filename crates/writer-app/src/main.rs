@@ -45,6 +45,9 @@ fn main() {
             if script.is_none() || scripted_opt_in {
                 writer_app::press_and_hold::manage_user_default(cx);
             }
+            // What the Agents panel looks at and writes to: this Mac. A
+            // scripted run gets a home directory of its own or none.
+            writer_app::agents::use_this_mac(script.is_some(), cx);
             // A scripted run stays in the background, also when it finds
             // another copy running.
             let may_activate = script.is_none() || automation::foreground_requested();

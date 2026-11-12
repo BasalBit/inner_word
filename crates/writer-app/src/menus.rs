@@ -59,6 +59,7 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("About The Writer", About),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action("Agents…", ShowAgents),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),

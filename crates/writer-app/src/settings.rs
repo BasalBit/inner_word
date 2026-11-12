@@ -68,6 +68,8 @@ pub mod keys {
     pub const LAST_DOCUMENT: &str = "session.last_document";
     /// Array of action names: commands run from the palette, newest first.
     pub const RECENT_COMMANDS: &str = "palette.recent";
+    /// `bool`: the one-time hint about agents has been shown.
+    pub const AGENTS_HINT_SHOWN: &str = "agents.hint_shown";
     /// `bool`: the welcome document has been created once.
     pub const WELCOME_CREATED: &str = "app.welcome_created";
     /// `string`: the directory of the last export.

@@ -85,7 +85,7 @@ pub const WELCOME_TITLE: &str = "Welcome to The Writer";
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
 /// insert menus, Markdown shortcuts, spelling, page view, comments, Vim
-/// mode and export.
+/// mode, agents and export.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
         heading(1, WELCOME_TITLE),
@@ -175,6 +175,19 @@ pub fn welcome_document() -> Document {
             "{k:⌥⌘V} turns Vim mode on or off. In it, {c::w} saves at once and {c::q} closes \
              the document; {c:]s} and {c:[s} step through misspelled words and {c:z=} \
              suggests.",
+        ),
+        heading(2, "Agents"),
+        paragraph(
+            "The assistants that run on this Mac can work with your library through a small \
+             command line tool that comes inside The Writer: find and read your documents, \
+             write and edit them, file them in folders, leave comments for you to go through. \
+             They can read at any time. They can only change things while The Writer is \
+             closed, and a version of a document is kept before one of them changes it.",
+        ),
+        bullet(
+            "{b:Agents} in the command palette, or {k:⌥⌘A}, shows where the tool is, installs \
+             the skill that tells your assistants about it, and lists the command that connects \
+             each of them to The Writer. Nothing is installed until you press a button there.",
         ),
         heading(2, "Take your words elsewhere"),
         paragraph(

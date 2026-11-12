@@ -6895,6 +6895,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "unicode-segmentation",
+ "writer-agent-setup",
  "writer-comments",
  "writer-core",
  "writer-editor",
@@ -6990,7 +6991,11 @@ dependencies = [
 name = "writer-mcp"
 version = "0.2.0"
 dependencies = [
+ "serde",
  "serde_json",
+ "tempfile",
+ "writer-agent",
+ "writer-store",
 ]
 
 [[package]]

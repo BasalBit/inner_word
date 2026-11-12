@@ -28,6 +28,7 @@ const GLOBAL: &[(&str, &str)] = &[
     ("cmd-/", "workspace::ShowShortcuts"),
     ("cmd-alt-p", "workspace::TogglePageView"),
     ("cmd-alt-v", "workspace::ToggleVimMode"),
+    ("cmd-alt-a", "workspace::ShowAgents"),
     ("cmd-alt-c", "comments::ToggleComments"),
     ("cmd-alt-m", "comments::AddComment"),
     ("cmd-alt-]", "comments::NextComment"),

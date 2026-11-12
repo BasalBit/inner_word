@@ -406,6 +406,7 @@ impl Workspace {
         this.extend_the_menus_of_other_crates(cx);
         this.connect_vim_spelling(cx);
         this.restore_session(window, cx);
+        this.offer_agents_hint(cx);
         this.sync_comments_panel(cx);
         this.apply_vim_setting(cx);
         this.apply_spelling(cx);
@@ -1011,6 +1012,14 @@ impl Workspace {
         );
     }
 
+    /// Opens the Agents panel (the command line tool, the skill, the MCP
+    /// server), or closes it when it is open.
+    pub fn toggle_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal_layer.update(cx, |layer, cx| {
+            layer.toggle(window, cx, |_, cx| crate::agents_view::AgentsView::new(cx));
+        });
+    }
+
     /// Opens the version history of the open document, or closes it when
     /// it is open. What is on screen is saved first, so the list is up to
     /// date.
@@ -1552,6 +1561,15 @@ impl Workspace {
     ) {
         self.close_modal_first(window, cx);
         self.toggle_vim_mode(cx);
+    }
+
+    pub(crate) fn on_show_agents(
+        &mut self,
+        _: &ShowAgents,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_agents(window, cx);
     }
 
     pub(crate) fn on_version_history(

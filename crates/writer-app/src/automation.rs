@@ -935,6 +935,13 @@ pub fn describe_state(
         None => "none".to_string(),
     };
     let spelling = workspace.describe_spelling(cx);
+    // The Agents panel, while it is open.
+    let agents = workspace
+        .modal_layer()
+        .read(cx)
+        .active::<crate::agents_view::AgentsView>()
+        .map(|view| format!(" agents=[{}]", view.read(cx).describe()))
+        .unwrap_or_default();
     let menu = match writer_ui::ContextMenu::current(window, cx) {
         Some(menu) => menu.read(cx).labels().join(" | "),
         None => "none".to_string(),
@@ -945,7 +952,7 @@ pub fn describe_state(
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          words={:?} characters={:?} \
          page={:?} \
-         limit={:?}",
+         limit={:?}{agents}",
         workspace.open_document_id().map(|id| id.0),
         workspace.document_title().unwrap_or_default(),
         workspace.save_state(),

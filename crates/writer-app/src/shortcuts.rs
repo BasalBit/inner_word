@@ -32,7 +32,7 @@ pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 8] = [
+const KEY_GROUPS: [(&str, &str); 9] = [
     ("editor", "Moving and selecting"),
     ("editor_tools", ""),
     ("comments", ""),
@@ -40,6 +40,7 @@ const KEY_GROUPS: [(&str, &str); 8] = [
     ("picker", ""),
     ("settings", ""),
     ("version_history", ""),
+    ("agents", ""),
     // `ctrl-enter` (and `shift-f10`) in the library, the comment list and a
     // text field.
     ("context_menu", ""),
@@ -91,6 +92,8 @@ pub enum Place {
     Settings,
     /// In the version history.
     VersionHistory,
+    /// In the Agents panel.
+    Agents,
     /// In a dialog.
     Dialog,
     /// In a text field.
@@ -114,6 +117,7 @@ impl Place {
             Place::List => "In a list or menu",
             Place::Settings => "In settings",
             Place::VersionHistory => "In the version history",
+            Place::Agents => "In the agents panel",
             Place::Dialog => "In a dialog",
             Place::TextField => "In a text field",
             Place::Elsewhere => "Elsewhere",
@@ -145,6 +149,8 @@ impl Place {
             Place::Settings
         } else if has("VersionHistory") {
             Place::VersionHistory
+        } else if has("AgentsView") {
+            Place::Agents
         } else if has("Picker") {
             Place::List
         } else if [

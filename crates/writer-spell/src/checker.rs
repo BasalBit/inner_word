@@ -1,22 +1,30 @@
 //! The checker: a GPUI entity that attaches to an [`Editor`] and keeps its
 //! spelling marks current.
 //!
-//! Status: skeleton (the public API is final; the work behind it follows).
+//! This file holds the entity, its settings and what it tells the world;
+//! `work` holds the checking itself (what, when, in which language),
+//! `words` what is done with a marked word (suggestions, replace, learn,
+//! ignore, the menu rows) and `navigate` the walk from one marked word to
+//! the next.
 
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::ops::Range;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
-    Action, App, Context, Entity, EventEmitter, InteractiveElement, SharedString, Subscription,
-    Window,
+    Action, App, Context, Entity, EventEmitter, InteractiveElement, Pixels, SharedString, Size,
+    Subscription, Task, Window,
 };
-use writer_core::{Position, TextRange};
-use writer_editor::{ContextMenuRequest, Editor};
-use writer_ui::ContextMenuItem;
+use writer_core::{BlockId, Position, Selection, TextRange};
+use writer_editor::{Editor, EditorEvent};
+use writer_ui::toast::{Toast, show_toast};
 
 use crate::actions::{
     IgnoreSpelling, LearnSpelling, NextMisspelling, PreviousMisspelling, ShowSuggestions,
     ToggleSpellChecking, UnlearnSpelling,
 };
+use crate::marks;
 use crate::service::{SpellDocument, SpellLanguage, SpellService};
 
 /// The most suggestions a menu offers.
@@ -30,6 +38,28 @@ pub const LEARN_SPELLING: &str = "Learn Spelling";
 pub const IGNORE_SPELLING: &str = "Ignore Spelling";
 /// The title of the menu item that takes a learned word back.
 pub const UNLEARN_SPELLING: &str = "Unlearn Spelling";
+
+/// How long one slice of checking may take before it gives the main
+/// thread back. A slice ends after the first piece of work that passes
+/// this, so it can run over by one call into the service (about 2 ms at
+/// most).
+pub const SLICE_BUDGET: Duration = Duration::from_millis(4);
+/// The pause between two slices.
+pub const SLICE_PAUSE: Duration = Duration::from_millis(8);
+/// How long after the first edit of a burst the edited blocks are checked
+/// again. Not pushed back by the edits that follow: while somebody types
+/// without a break, their paragraph is still checked this often.
+pub const EDIT_PAUSE: Duration = Duration::from_millis(150);
+/// How long after the last edit or scroll the rest of the document (what
+/// is neither on screen nor just edited) is checked again: the background
+/// pass waits while somebody is at work.
+pub const IDLE_PAUSE: Duration = Duration::from_millis(300);
+/// How long after the last edit the word the caret is in gets its mark,
+/// when the caret has not left it before.
+pub const TYPING_PAUSE: Duration = Duration::from_millis(1000);
+/// How long "next misspelling" may check ahead in a document that is not
+/// fully checked before it says that it has found nothing yet.
+pub const SEEK_LIMIT: Duration = Duration::from_millis(200);
 
 /// What a [`SpellChecker`] tells its subscribers. `#[non_exhaustive]`:
 /// match with a wildcard arm.
@@ -66,19 +96,112 @@ pub enum SpellEvent {
     Notice(SharedString),
 }
 
-/// Keeps the spelling marks of one [`Editor`] current. See the crate
-/// docs.
+/// What the checker knows about the language of a block that was checked
+/// with [`SpellLanguage::Automatic`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Tag {
+    /// The service identified this language.
+    Detected(Rc<str>),
+    /// The service could not name a language but marked words all the
+    /// same (a text in a language it has no dictionary for).
+    Unidentified,
+    /// The service could not tell and marked nothing (too little text):
+    /// the block was checked in this language instead, the language of
+    /// the text around it. `None`: it was left alone.
+    Fallback(Option<Rc<str>>),
+}
+
+/// A block whose check was interrupted by the end of a slice.
+pub(crate) struct Partial {
+    pub(crate) block: BlockId,
+    pub(crate) revision: u64,
+    /// How many bytes of the text are done.
+    pub(crate) at: usize,
+    pub(crate) found: Vec<Range<usize>>,
+    pub(crate) tag: Option<Tag>,
+}
+
+/// The result of the block the caret is typing in: one word is not shown
+/// yet.
+pub(crate) struct Held {
+    pub(crate) block: BlockId,
+    pub(crate) revision: u64,
+    /// The word that is held back.
+    pub(crate) word: Range<usize>,
+    /// The whole result, the held word included.
+    pub(crate) all: Vec<Range<usize>>,
+}
+
+/// Keeps the spelling marks of one [`Editor`] current: what is on screen
+/// first, the rest of the document in small slices while nobody types, an
+/// edited paragraph again after a short pause. See the crate docs.
 pub struct SpellChecker {
-    editor: Entity<Editor>,
-    service: Rc<dyn SpellService>,
-    enabled: bool,
-    language: SpellLanguage,
-    document: SpellDocument,
-    last_notice: Option<SharedString>,
+    pub(crate) editor: Entity<Editor>,
+    pub(crate) service: Rc<dyn SpellService>,
+    pub(crate) enabled: bool,
+    pub(crate) language: SpellLanguage,
+    pub(crate) document: SpellDocument,
+    /// The user's preferred languages and every language of the service,
+    /// read when first needed.
+    pub(crate) known_languages: Option<(Vec<String>, Vec<String>)>,
+
+    // --- The work ---
+    /// Whether the checker was at work on the editor when it last looked
+    /// (enabled, a full editor that can be written in).
+    pub(crate) was_active: bool,
+    /// Whether the worker task is running.
+    pub(crate) working: bool,
+    pub(crate) worker: Option<Task<()>>,
+    /// Whether the service has been warmed up.
+    pub(crate) warmed_up: bool,
+    /// Every block before this index is checked, or waits in `waiting` or
+    /// `recheck`: where the background pass goes on.
+    pub(crate) scan: usize,
+    /// Blocks that were just edited: checked when the pause is over.
+    pub(crate) waiting: HashSet<BlockId>,
+    /// Blocks to check before anything else.
+    pub(crate) recheck: VecDeque<BlockId>,
+    pub(crate) partial: Option<Partial>,
+    /// Whether every block has been checked and nothing waits.
+    pub(crate) settled: bool,
+    /// Somebody is typing or scrolling: the background pass waits.
+    pub(crate) busy: bool,
+    pub(crate) busy_timer: Option<Task<()>>,
+    pub(crate) edit_timer: Option<Task<()>>,
+    pub(crate) typing_timer: Option<Task<()>>,
+    /// The block the caret is typing in.
+    pub(crate) typing: Option<BlockId>,
+    pub(crate) held: Option<Held>,
+    /// The selection right after the last edit: a `SelectionChanged` that
+    /// finds it unchanged belongs to that edit.
+    pub(crate) selection_at_edit: Option<Selection>,
+    /// Scroll offset and viewport size when the checker last looked.
+    pub(crate) last_view: Option<(Pixels, Option<Size<Pixels>>)>,
+
+    // --- Languages, with automatic detection ---
+    pub(crate) tags: HashMap<BlockId, Tag>,
+    /// How many blocks were identified as each language.
+    pub(crate) detected: HashMap<Rc<str>, usize>,
+    /// How many blocks have [`Tag::Unidentified`].
+    pub(crate) unidentified: usize,
+    /// The language a text is checked in when the service cannot tell.
+    pub(crate) fallback: Option<Rc<str>>,
+
+    // --- For a status line, a script or a test ---
+    pub(crate) last_notice: Option<SharedString>,
+    pub(crate) slices: u64,
+    pub(crate) longest_slice: Duration,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<SpellEvent> for SpellChecker {}
+
+impl Drop for SpellChecker {
+    fn drop(&mut self) {
+        // The words ignored in the document go with it.
+        self.service.close_document(self.document);
+    }
+}
 
 impl SpellChecker {
     /// Attaches a checker to `editor`: `cx.new(|cx| SpellChecker::new(editor.clone(), service, cx))`.
@@ -94,17 +217,49 @@ impl SpellChecker {
         service: Rc<dyn SpellService>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let _ = cx;
         let document = service.open_document();
-        SpellChecker {
+        let subscriptions = vec![
+            cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| {
+                this.on_editor_event(event, cx)
+            }),
+            cx.observe(&editor, |this, _, cx| this.editor_notified(cx)),
+        ];
+        let mut this = SpellChecker {
             editor,
             service,
             enabled: true,
             language: SpellLanguage::Automatic,
             document,
+            known_languages: None,
+            was_active: false,
+            working: false,
+            worker: None,
+            warmed_up: false,
+            scan: 0,
+            waiting: HashSet::new(),
+            recheck: VecDeque::new(),
+            partial: None,
+            settled: false,
+            busy: false,
+            busy_timer: None,
+            edit_timer: None,
+            typing_timer: None,
+            typing: None,
+            held: None,
+            selection_at_edit: None,
+            last_view: None,
+            tags: HashMap::new(),
+            detected: HashMap::new(),
+            unidentified: 0,
+            fallback: None,
             last_notice: None,
-            _subscriptions: Vec::new(),
-        }
+            slices: 0,
+            longest_slice: Duration::ZERO,
+            _subscriptions: subscriptions,
+        };
+        this.was_active = this.is_active(cx);
+        this.start_worker(cx);
+        this
     }
 
     /// The editor this checker is attached to.
@@ -131,11 +286,13 @@ impl SpellChecker {
     /// work; on starts over with what is on screen. Emits
     /// [`SpellEvent::EnabledChanged`] when the value changed.
     pub fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.enabled != enabled {
-            self.enabled = enabled;
-            cx.emit(SpellEvent::EnabledChanged(enabled));
-            cx.notify();
+        if self.enabled == enabled {
+            return;
         }
+        self.enabled = enabled;
+        self.follow_activity(cx);
+        cx.emit(SpellEvent::EnabledChanged(enabled));
+        cx.notify();
     }
 
     /// Turns checking on when it is off and off when it is on.
@@ -156,48 +313,90 @@ impl SpellChecker {
     }
 
     /// Sets the effective language (the document's own, or the app's
-    /// setting). A change removes every mark and checks again. Emits
-    /// [`SpellEvent::LanguageChanged`] when the value changed.
+    /// setting). A change removes every mark and checks again, what is on
+    /// screen first. Emits [`SpellEvent::LanguageChanged`] when the value
+    /// changed.
     pub fn set_language(&mut self, language: SpellLanguage, cx: &mut Context<Self>) {
-        if self.language != language {
-            self.language = language.clone();
-            cx.emit(SpellEvent::LanguageChanged(language));
-            cx.notify();
+        if self.language == language {
+            return;
         }
+        self.language = language.clone();
+        if self.was_active {
+            let had_marks = marks::count(self.editor.read(cx)) > 0;
+            marks::clear(&self.editor, cx);
+            self.forget_results();
+            if had_marks {
+                cx.emit(SpellEvent::MarksChanged);
+            }
+            self.start_worker(cx);
+        }
+        cx.emit(SpellEvent::LanguageChanged(language));
+        cx.notify();
     }
 
-    /// The language the service detected for the block at `block` (only
-    /// with [`SpellLanguage::Automatic`], once the block was checked).
+    /// The language the block at `block` was checked in, when the
+    /// language is [`SpellLanguage::Automatic`] and the block has been
+    /// checked: the one the service identified, or the one the checker
+    /// fell back to when the service could not tell. `None` when it is
+    /// not known (and always with a fixed language).
     pub fn detected_language(&self, block: usize, cx: &App) -> Option<String> {
-        let _ = (block, cx);
-        None
+        let id = self.editor.read(cx).document().block(block)?.id();
+        match self.tags.get(&id)? {
+            Tag::Detected(language) | Tag::Fallback(Some(language)) => Some(language.to_string()),
+            Tag::Unidentified | Tag::Fallback(None) => None,
+        }
     }
 
     // --- State, for a status line, a script or a test ---
 
     /// Whether every block of the document has been checked for its
-    /// current text.
+    /// current text (always false while checking is off or the editor is
+    /// left alone).
     pub fn is_settled(&self, cx: &App) -> bool {
-        let _ = cx;
-        true
+        self.is_active(cx) && self.settled
     }
 
-    /// How many blocks still wait to be checked.
+    /// How many blocks still wait to be checked. Counts the whole
+    /// document: for a status line, not for every frame.
     pub fn pending_blocks(&self, cx: &App) -> usize {
-        let _ = cx;
-        0
+        if !self.is_active(cx) || self.settled {
+            return 0;
+        }
+        let editor = self.editor.read(cx);
+        (0..editor.document().block_count())
+            .filter(|index| !marks::is_checked(editor, *index))
+            .count()
     }
 
     /// How many words are marked in the whole document.
     pub fn misspelling_count(&self, cx: &App) -> usize {
-        let _ = cx;
-        0
+        marks::count(self.editor.read(cx))
     }
 
-    /// Every marked range, in document order.
+    /// Every marked range, in document order. Walks the whole document:
+    /// for tests and scripts.
     pub fn misspellings(&self, cx: &App) -> Vec<TextRange> {
-        let _ = cx;
-        Vec::new()
+        let editor = self.editor.read(cx);
+        if marks::count(editor) == 0 {
+            return Vec::new();
+        }
+        (0..editor.document().block_count())
+            .flat_map(|index| {
+                marks::of_block(editor, index)
+                    .iter()
+                    .map(move |range| TextRange::in_block(index, range.start, range.end))
+            })
+            .collect()
+    }
+
+    /// The marked words as text, in document order. For tests and
+    /// scripts.
+    pub fn misspelled_words(&self, cx: &App) -> Vec<String> {
+        let document = self.editor.read(cx).document();
+        self.misspellings(cx)
+            .into_iter()
+            .map(|range| document.text_in(range))
+            .collect()
     }
 
     /// The last [`SpellEvent::Notice`].
@@ -205,172 +404,16 @@ impl SpellChecker {
         self.last_notice.clone()
     }
 
-    /// Checks everything that is waiting, now, without regard to time
-    /// (the word being typed stays unmarked). For tests and scripts; the
-    /// app never needs it.
-    pub fn check_all_now(&mut self, cx: &mut Context<Self>) {
-        let _ = cx;
+    /// How many slices of checking have run, and the longest of them:
+    /// what the checker cost the main thread at its worst.
+    pub fn slice_stats(&self) -> (u64, Duration) {
+        (self.slices, self.longest_slice)
     }
 
-    // --- Queries (the Vim keys use them) ---
-
-    /// The marked word at `position`: the mark that contains it or ends
-    /// or starts there.
-    pub fn misspelling_at(&self, position: Position, cx: &App) -> Option<TextRange> {
-        let _ = (position, cx);
-        None
-    }
-
-    /// The first marked word that starts after `from`, wrapping around
-    /// the end of the document. Blocks that were not checked yet are
-    /// checked on the way, within a time limit; `None` when nothing is
-    /// marked (or nothing was found in time).
-    pub fn next_misspelling(
-        &mut self,
-        from: Position,
-        cx: &mut Context<Self>,
-    ) -> Option<TextRange> {
-        let _ = (from, cx);
-        None
-    }
-
-    /// The last marked word that starts before `from`, wrapping around
-    /// the start of the document. See [`SpellChecker::next_misspelling`].
-    pub fn previous_misspelling(
-        &mut self,
-        from: Position,
-        cx: &mut Context<Self>,
-    ) -> Option<TextRange> {
-        let _ = (from, cx);
-        None
-    }
-
-    /// The suggestions for the marked word at `position`, best first, at
-    /// most [`MAX_SUGGESTIONS`]. Empty when the word is not marked or the
-    /// service has none.
-    pub fn suggestions_at(&mut self, position: Position, cx: &mut Context<Self>) -> Vec<String> {
-        let _ = (position, cx);
-        Vec::new()
-    }
-
-    /// The word at `position` (marked or not): its range and text.
-    pub fn word_at(&self, position: Position, cx: &App) -> Option<(TextRange, String)> {
-        let _ = (position, cx);
-        None
-    }
-
-    /// Replaces the text at `range` (a marked word) by `replacement` as
-    /// one undo step, keeping the formatting of the replaced text, and
-    /// puts the caret after it. Returns whether the document changed.
-    pub fn replace(&mut self, range: TextRange, replacement: &str, cx: &mut Context<Self>) -> bool {
-        let _ = (range, replacement, cx);
-        false
-    }
-
-    /// Learns the marked word at `position` (permanent). Every occurrence
-    /// in the document loses its mark at once. Returns the word.
-    pub fn learn_at(&mut self, position: Position, cx: &mut Context<Self>) -> Option<String> {
-        let _ = (position, cx);
-        None
-    }
-
-    /// Takes the word at `position` out of the user's own dictionary, if
-    /// it was learned; the document is checked again. Returns the word.
-    pub fn unlearn_at(&mut self, position: Position, cx: &mut Context<Self>) -> Option<String> {
-        let _ = (position, cx);
-        None
-    }
-
-    /// Ignores the marked word at `position` in this document until it is
-    /// closed. Every occurrence loses its mark at once. Returns the word.
-    pub fn ignore_at(&mut self, position: Position, cx: &mut Context<Self>) -> Option<String> {
-        let _ = (position, cx);
-        None
-    }
-
-    /// Learns `word` (permanent) and removes its marks.
-    pub fn learn_word(&mut self, word: &str, cx: &mut Context<Self>) {
-        let _ = (word, cx);
-    }
-
-    /// Unlearns `word` and checks the document again.
-    pub fn unlearn_word(&mut self, word: &str, cx: &mut Context<Self>) {
-        let _ = (word, cx);
-    }
-
-    /// Ignores `word` in this document and removes its marks.
-    pub fn ignore_word(&mut self, word: &str, cx: &mut Context<Self>) {
-        let _ = (word, cx);
-    }
-
-    // --- Commands ---
-
-    /// Selects the next misspelled word after the caret and scrolls to
-    /// it, wrapping. Says so ([`SpellEvent::Notice`]) when there is none.
-    /// Returns whether a word was selected.
-    pub fn go_to_next_misspelling(&mut self, cx: &mut Context<Self>) -> bool {
-        let _ = cx;
-        false
-    }
-
-    /// Selects the previous misspelled word before the caret and scrolls
-    /// to it, wrapping. See [`SpellChecker::go_to_next_misspelling`].
-    pub fn go_to_previous_misspelling(&mut self, cx: &mut Context<Self>) -> bool {
-        let _ = cx;
-        false
-    }
-
-    /// Learns the marked word at the caret (or the marked word that is
-    /// selected). Returns whether there was one.
-    pub fn learn_at_caret(&mut self, cx: &mut Context<Self>) -> bool {
-        let _ = cx;
-        false
-    }
-
-    /// Unlearns the word at the caret, if it was learned.
-    pub fn unlearn_at_caret(&mut self, cx: &mut Context<Self>) -> bool {
-        let _ = cx;
-        false
-    }
-
-    /// Ignores the marked word at the caret (or the marked word that is
-    /// selected) in this document. Returns whether there was one.
-    pub fn ignore_at_caret(&mut self, cx: &mut Context<Self>) -> bool {
-        let _ = cx;
-        false
-    }
-
-    /// Opens the suggestions for the marked word at the caret as a menu
-    /// under it, with the first row marked (the keyboard path; `z=` in Vim
-    /// mode). Returns whether a menu was opened.
-    pub fn show_suggestions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let _ = (window, cx);
-        false
-    }
-
-    // --- The context menu ---
-
-    /// The rows that lead the text context menu for `request`: when the
-    /// request is on a marked word, up to [`MAX_SUGGESTIONS`] suggestions
-    /// (or a disabled [`NO_GUESSES`] row), [`LEARN_SPELLING`],
-    /// [`IGNORE_SPELLING`]; otherwise nothing. The caller adds the
-    /// separator and the rest of the menu.
-    pub fn context_menu_items(
-        &mut self,
-        request: &ContextMenuRequest,
-        cx: &mut Context<Self>,
-    ) -> Vec<ContextMenuItem> {
-        self.menu_items_at(request.document_position, cx)
-    }
-
-    /// The same rows for the marked word at `position`.
-    pub fn menu_items_at(
-        &mut self,
-        position: Position,
-        cx: &mut Context<Self>,
-    ) -> Vec<ContextMenuItem> {
-        let _ = (position, cx);
-        Vec::new()
+    /// Forgets [`SpellChecker::slice_stats`].
+    pub fn reset_slice_stats(&mut self) {
+        self.slices = 0;
+        self.longest_slice = Duration::ZERO;
     }
 
     // --- Actions ---
@@ -403,6 +446,38 @@ impl SpellChecker {
             return false;
         }
         true
+    }
+
+    // --- Inside ---
+
+    /// Tells the user something: an event, and a toast where the window
+    /// has a toast layer.
+    pub(crate) fn notice(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let message = message.into();
+        self.last_notice = Some(message.clone());
+        show_toast(Toast::new(message.clone()), cx);
+        cx.emit(SpellEvent::Notice(message));
+    }
+
+    /// Says why a command did nothing, when the checker is not at work.
+    /// Returns whether it is.
+    pub(crate) fn ready_for_command(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.enabled {
+            self.notice("Spell checking is off", cx);
+            return false;
+        }
+        self.is_active(cx)
+    }
+
+    /// The position a command at the caret is about: the caret, or the
+    /// start of the selection.
+    pub(crate) fn caret(&self, cx: &App) -> Position {
+        let selection = self.editor.read(cx).selection();
+        if selection.is_collapsed() {
+            selection.head
+        } else {
+            selection.start()
+        }
     }
 }
 

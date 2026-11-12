@@ -492,3 +492,55 @@ fn system_bounded_check_of_a_text_in_another_language() {
     );
     assert_eq!(part.covered, german.len());
 }
+
+/// Run alone (`-- --ignored --nocapture system_first_call`): the first
+/// call of a process is the one that starts things.
+#[test]
+#[ignore = "calls the real system spell checker"]
+fn system_first_call() {
+    let _guard = serial();
+    let service = SystemSpellService::new();
+    let started = Instant::now();
+    let tag = service.open_document();
+    println!(
+        "the first document tag (a class method): {:?}",
+        started.elapsed()
+    );
+    service.close_document(tag);
+    println!(
+        "... and closing it (the shared checker comes to be): {:?}",
+        started.elapsed()
+    );
+    let preferred = service.preferred_languages();
+    println!("... preferred languages: {:?}", started.elapsed());
+    let first = SpellLanguage::fixed(preferred.first().cloned().unwrap_or_else(|| "en".into()));
+    service.check("Teh", &first, SpellDocument::NONE);
+    println!("... the first check: {:?}", started.elapsed());
+    service.suggestions("Teh", 0..3, &first, SpellDocument::NONE);
+    println!("... the first suggestions: {:?}", started.elapsed());
+    let again = Instant::now();
+    service.warm_up();
+    println!("warm_up after that: {:?}", again.elapsed());
+    for language in ["en_GB", "en", "de", "fr", "en"] {
+        let language = SpellLanguage::fixed(language);
+        let text = "The ship came in this morning and nobdy expected it.";
+        let started = Instant::now();
+        let check = service.check(text, &language, SpellDocument::NONE);
+        let first = started.elapsed();
+        let started = Instant::now();
+        service.check(text, &language, SpellDocument::NONE);
+        println!(
+            "{language:?}: first check {first:?} ({} flagged), second {:?}",
+            check.misspelled.len(),
+            started.elapsed()
+        );
+    }
+    let text = "The ship came in this morning and nobdy expected it.";
+    let started = Instant::now();
+    service.check(text, &SpellLanguage::Automatic, SpellDocument::NONE);
+    println!("automatic: first check {:?}", started.elapsed());
+    let started = Instant::now();
+    service.languages();
+    service.preferred_languages();
+    println!("languages: {:?}", started.elapsed());
+}

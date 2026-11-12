@@ -278,16 +278,25 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             }
                             cx.background_executor().timer(Duration::from_millis(20)).await;
                         }
-                        let (slices, longest, marks) = demo.update(cx, |demo, cx| {
+                        let (slices, longest, slow, marks) = demo.update(cx, |demo, cx| {
                             let checker = demo.checker.read(cx);
                             let (slices, longest) = checker.slice_stats();
-                            (slices, longest, checker.misspelling_count(cx))
+                            (
+                                slices,
+                                longest,
+                                checker.slow_slice_count(),
+                                checker.misspelling_count(cx),
+                            )
                         })?;
                         draw_frame(window, view, cx);
                         eprintln!(
-                            "[automation] settle: {:?}, {slices} slices, the longest {longest:?}, {marks} marked",
+                            "[automation] settle: {:?}, {slices} slices, the longest {longest:?}, \
+                             {slow} over twice the budget, {marks} marked",
                             started.elapsed()
                         );
+                        demo.update(cx, |demo, cx| {
+                            demo.checker.update(cx, |checker, _| checker.reset_slice_stats())
+                        })?;
                     }
                     Step::Quit => return Ok(true),
                 }

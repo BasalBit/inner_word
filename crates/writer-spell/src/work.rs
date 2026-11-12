@@ -365,6 +365,9 @@ impl SpellChecker {
         let took = started.elapsed();
         self.slices += 1;
         self.longest_slice = self.longest_slice.max(took);
+        if took > SLICE_BUDGET * 2 {
+            self.slow_slices += 1;
+        }
         if !more {
             self.working = false;
         }

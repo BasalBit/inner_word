@@ -62,6 +62,35 @@ impl SpellLanguage {
     }
 }
 
+impl From<&writer_core::SpellingLanguage> for SpellLanguage {
+    /// The language a document (or the app's setting) names, as the
+    /// service takes it.
+    fn from(language: &writer_core::SpellingLanguage) -> SpellLanguage {
+        match language {
+            writer_core::SpellingLanguage::Automatic => SpellLanguage::Automatic,
+            writer_core::SpellingLanguage::Language(id) => SpellLanguage::Fixed(id.clone()),
+        }
+    }
+}
+
+impl From<writer_core::SpellingLanguage> for SpellLanguage {
+    fn from(language: writer_core::SpellingLanguage) -> SpellLanguage {
+        SpellLanguage::from(&language)
+    }
+}
+
+impl SpellLanguage {
+    /// The language in force for a document: its own
+    /// (`DocumentSettings::spelling_language`) when it has one, else the
+    /// app's setting.
+    pub fn effective(
+        document: Option<&writer_core::SpellingLanguage>,
+        app: &SpellLanguage,
+    ) -> SpellLanguage {
+        document.map_or_else(|| app.clone(), SpellLanguage::from)
+    }
+}
+
 /// A language the service can check: its identifier and the name a person
 /// reads.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -196,9 +225,11 @@ pub trait SpellService: 'static {
     /// (each is one of [`SpellService::languages`]).
     fn preferred_languages(&self) -> Vec<String>;
 
-    /// Does whatever makes the first real call slow (the system checker
-    /// needs about 30 ms to start), so that it does not happen under a
-    /// keystroke. The default does nothing.
+    /// Does whatever makes the first real calls slow, so that it does not
+    /// happen under a keystroke or a right-click (the system checker
+    /// starts its server and loads dictionaries: 40 to 80 ms in a running
+    /// app, once per process). The checker calls it a moment after it was
+    /// attached. The default does nothing.
     fn warm_up(&self) {}
 }
 

@@ -148,6 +148,30 @@ fn setting_strings() {
     assert_eq!(SpellLanguage::Automatic.as_setting(), "auto");
     assert_eq!(SpellLanguage::fixed("de").identifier(), Some("de"));
     assert!(SpellLanguage::default().is_automatic());
+
+    // What a document names, and what is in force for it.
+    use writer_core::SpellingLanguage;
+    assert_eq!(
+        SpellLanguage::from(&SpellingLanguage::Automatic),
+        SpellLanguage::Automatic
+    );
+    assert_eq!(
+        SpellLanguage::from(SpellingLanguage::Language("pt_BR".into())),
+        SpellLanguage::fixed("pt_BR")
+    );
+    let app = SpellLanguage::fixed("en_GB");
+    assert_eq!(SpellLanguage::effective(None, &app), app);
+    assert_eq!(
+        SpellLanguage::effective(Some(&SpellingLanguage::Automatic), &app),
+        SpellLanguage::Automatic
+    );
+    assert_eq!(
+        SpellLanguage::effective(
+            Some(&SpellingLanguage::Language("de".into())),
+            &SpellLanguage::Automatic
+        ),
+        SpellLanguage::fixed("de")
+    );
 }
 
 #[test]

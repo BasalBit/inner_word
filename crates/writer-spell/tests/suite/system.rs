@@ -588,3 +588,57 @@ fn system_cost_of_texts_the_checker_cannot_place() {
         }
     }
 }
+
+/// The resident memory of this process in kilobytes.
+fn resident_kb() -> u64 {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
+/// A long session: many calls must not pile up Objective-C objects.
+#[test]
+#[ignore = "calls the real system spell checker"]
+fn system_memory_stays_flat_over_many_calls() {
+    let _guard = serial();
+    let service = SystemSpellService::new();
+    service.warm_up();
+    let paragraph = "The bridge was a plain stone fact and nobdy owed the town anything at all,                      😀 with a cafe\u{301} and a wrod in it. "
+        .repeat(4);
+    let languages = [SpellLanguage::fixed("en_GB"), SpellLanguage::Automatic];
+    let round = |checks: usize, guesses: usize| {
+        let document = service.open_document();
+        for index in 0..checks {
+            let check = service.check(&paragraph, &languages[index % 2], document);
+            assert!(!check.misspelled.is_empty());
+            if index < guesses {
+                let range = check.misspelled[0].clone();
+                service.suggestions(&paragraph, range, &languages[0], document);
+            }
+        }
+        service.ignore("zxqvorblatt", document);
+        service.ignored_words(document);
+        service.languages();
+        service.preferred_languages();
+        service.close_document(document);
+    };
+    // Let everything that is allocated once be allocated.
+    round(2_000, 50);
+    let before = resident_kb();
+    let started = Instant::now();
+    round(20_000, 200);
+    let after = resident_kb();
+    println!(
+        "20,000 checks and 200 guesses in {:?}: resident memory {before} KB before, {after} KB after ({:+} KB)",
+        started.elapsed(),
+        after as i64 - before as i64
+    );
+    // Without the pools and releases every call leaves a string of 500
+    // bytes and an array of results behind: tens of megabytes here.
+    assert!(after < before + 8 * 1024, "{before} KB -> {after} KB");
+}

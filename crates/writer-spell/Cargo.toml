@@ -34,6 +34,8 @@ writer-editor-tools.workspace = true
 raw-window-handle.workspace = true
 anyhow.workspace = true
 
+# `cargo test -p writer-spell` also links this example (about 150 MB); use
+# `cargo test -p writer-spell --test main` for the test loop.
 [[example]]
 name = "spell_demo"
 path = "examples/spell_demo/main.rs"

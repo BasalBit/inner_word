@@ -22,7 +22,7 @@
 //!
 //! `NSString` ranges count UTF-16 code units; the service takes and
 //! returns UTF-8 byte offsets. The conversion walks the text once per
-//! call ([`Utf16Map`]) and never lands inside a character.
+//! call (`Utf16Map`) and never lands inside a character.
 //!
 //! # Memory
 //!

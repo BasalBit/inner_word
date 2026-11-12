@@ -45,7 +45,7 @@ pub const UNLEARN_SPELLING: &str = "Unlearn Spelling";
 /// most).
 pub const SLICE_BUDGET: Duration = Duration::from_millis(4);
 /// The pause between two slices.
-pub const SLICE_PAUSE: Duration = Duration::from_millis(8);
+pub const SLICE_PAUSE: Duration = Duration::from_millis(4);
 /// How long after the first edit of a burst the edited blocks are checked
 /// again. Not pushed back by the edits that follow: while somebody types
 /// without a break, their paragraph is still checked this often.
@@ -200,6 +200,8 @@ pub struct SpellChecker {
     pub(crate) last_notice: Option<SharedString>,
     pub(crate) slices: u64,
     pub(crate) longest_slice: Duration,
+    /// Slices that took more than twice their budget.
+    pub(crate) slow_slices: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -264,6 +266,7 @@ impl SpellChecker {
             last_notice: None,
             slices: 0,
             longest_slice: Duration::ZERO,
+            slow_slices: 0,
             _subscriptions: subscriptions,
         };
         this.was_active = this.is_active(cx);
@@ -276,7 +279,7 @@ impl SpellChecker {
             cx.background_executor().timer(WARM_UP_DELAY).await;
             this.update(cx, |this, _| {
                 this.warm_up = None;
-                if this.enabled {
+                if this.was_active {
                     this.service.warm_up();
                 }
             })
@@ -439,10 +442,18 @@ impl SpellChecker {
         (self.slices, self.longest_slice)
     }
 
-    /// Forgets [`SpellChecker::slice_stats`].
+    /// How many slices took more than twice [`SLICE_BUDGET`] (a call into
+    /// the service that was slow, or a main thread that was kept waiting).
+    pub fn slow_slice_count(&self) -> u64 {
+        self.slow_slices
+    }
+
+    /// Forgets [`SpellChecker::slice_stats`] and
+    /// [`SpellChecker::slow_slice_count`].
     pub fn reset_slice_stats(&mut self) {
         self.slices = 0;
         self.longest_slice = Duration::ZERO;
+        self.slow_slices = 0;
     }
 
     // --- Actions ---

@@ -291,10 +291,12 @@ fn the_note_about_where_the_text_goes_is_shown_once(cx: &mut TestAppContext) {
             .contains("Nothing is sent before you send a message")
     );
     bounds("assistant-notice-privacy", cx);
-    // Typing does not start the agent before the note was read.
+    // Typing starts nothing, and neither does a host that asks for the
+    // agent ahead of time while the note is unread.
     ws.panel
         .update_in(cx, |panel, window, cx| panel.focus(window, cx));
     cx.simulate_input("Hel");
+    ws.panel.update(cx, |panel, cx| panel.prepare(cx));
     assert_eq!(ws.fake.prepares(), 0);
     assert!(ws.fake.started().is_empty());
 
@@ -306,14 +308,20 @@ fn the_note_about_where_the_text_goes_is_shown_once(cx: &mut TestAppContext) {
     ws.panel
         .read_with(cx, |panel, _| assert!(!panel.shows_privacy_notice()));
     assert_eq!(ws.focus(cx), Focus::Panel(PanelArea::Composer));
-    // Now the first words of a message start the agent ahead of it, once,
-    // and send it nothing.
+    // The panel still starts nothing by itself; a host can have the
+    // agent's program started ahead of the first message, once, and
+    // nothing is sent to it.
     cx.simulate_input("lo");
     cx.run_until_parked();
+    assert_eq!(ws.fake.prepares(), 0);
+    assert!(ws.fake.started().is_empty());
+    ws.panel.update(cx, |panel, cx| {
+        panel.prepare(cx);
+        panel.prepare(cx);
+    });
     assert_eq!(ws.fake.prepares(), 1);
     assert!(ws.fake.sent().is_empty());
     cx.simulate_input("?");
-    assert_eq!(ws.fake.prepares(), 1);
 
     // Sending the first message is reading the note too.
     ws.panel

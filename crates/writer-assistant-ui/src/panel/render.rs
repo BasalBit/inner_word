@@ -26,7 +26,7 @@ use writer_ui::{
     ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, Tooltip,
     theme::{
         ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, ThemeColors, UI_LINE_HEIGHT,
-        UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS, focus_ring,
+        UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
     },
 };
 
@@ -41,7 +41,7 @@ use crate::{
         InsertAtCaret, NewChat, NextControl, PANEL_CONTEXT, PressControl, PreviousControl,
         RemoveContext, ReplaceSelection, StopAnswer,
     },
-    controls::{Look, icon_button, keep_focus, text_button},
+    controls::{Look, icon_button, keep_focus, keyboard_mark, text_button},
     notice::notice_row,
     pickers::{PickerKind, picker_button},
 };
@@ -649,12 +649,10 @@ fn chip(
         .border_1()
         .border_color(colors.hairline)
         .bg(colors.elevated)
-        .when(marked, |chip| {
-            chip.border_color(colors.accent).shadow(focus_ring(colors))
-        })
         .text_size(UI_TEXT_SM)
         .line_height(px(16.))
         .text_color(if known { colors.ink } else { colors.muted })
+        .map(|chip| keyboard_mark(chip, marked, colors))
         .child(Icon::new(icon).size(px(12.)).color(colors.muted))
         .child(div().min_w_0().truncate().child(title))
 }

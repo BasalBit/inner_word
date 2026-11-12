@@ -3,6 +3,11 @@
 //! (no GPUI); the quick chat popover is `writer-assistant-quick`, built on
 //! the components here.
 //!
+//! Nothing here names an agent: the words come from the engine's
+//! `BackendInfo` and `Catalog`. Nothing here writes the clipboard or
+//! changes a document: the host is told what the user wants done with an
+//! answer and does it.
+//!
 //! # The shared components
 //!
 //! | What | Where |
@@ -105,6 +110,95 @@
 //!             .on_click(cx.listener(|this, _, window, cx| this.open_picker(PickerKind::Model, false, window, cx))),
 //!     )
 //! ```
+//!
+//! # The side chat
+//!
+//! [`AssistantPanel`] is the whole side chat: header, context row,
+//! conversation, notices, composer. It fills the container the app gives
+//! it (about 380px wide; it works from 300px) and draws no outer border.
+//!
+//! ```ignore
+//! // Per window, when the engine is there (`backend: Arc<dyn Backend>`).
+//! let panel = cx.new(|cx| {
+//!     let mut panel = AssistantPanel::new(
+//!         backend.clone(),
+//!         AssistantPanelOptions {
+//!             tools: Some(writer_assistant::library_tools(writer_binary, library_dir)),
+//!             selection: stored_side_selection,     // None: the engine's default for the side chat
+//!             privacy_notice: !notice_was_read,
+//!             availability: known_availability,     // None: what the backend has cached
+//!         },
+//!         window,
+//!         cx,
+//!     );
+//!     // The open document as it is at the moment a message is sent.
+//!     panel.set_document_source({
+//!         let editor = editor.downgrade();
+//!         move |cx| {
+//!             let editor = editor.upgrade()?;
+//!             Some(OpenDocument { id: Some(id), title, path, markdown: document_markdown(editor.read(cx)) })
+//!         }
+//!     });
+//!     // The documents and folders of the library, for the picker.
+//!     panel.set_library_source(move |cx| {
+//!         library.read(cx).everything().map(|item| Attachment::document(item.id, item.title, item.path)).collect()
+//!     });
+//!     panel
+//! });
+//! cx.subscribe_in(&panel, window, |workspace, panel, event: &AssistantPanelEvent, window, cx| match event {
+//!     AssistantPanelEvent::Apply { kind: ApplyKind::InsertAtCaret, markdown, .. } => workspace.insert_at_caret(markdown, window, cx),
+//!     AssistantPanelEvent::Apply { kind: ApplyKind::ReplaceSelection, markdown, .. } => workspace.replace_selection(markdown, window, cx),
+//!     AssistantPanelEvent::Apply { kind: ApplyKind::Copy, markdown, .. } => workspace.copy_answer(markdown, cx),
+//!     AssistantPanelEvent::CopyText(text) => cx.write_to_clipboard(ClipboardItem::new_string(text.clone())),
+//!     AssistantPanelEvent::TranscriptChanged { document, transcript } => workspace.store_conversation(*document, transcript, cx),
+//!     AssistantPanelEvent::SelectionChanged(selection) => workspace.store_side_selection(selection, cx),
+//!     AssistantPanelEvent::FocusTextRequested => workspace.focus_text(window, cx),
+//!     AssistantPanelEvent::CloseRequested => workspace.close_side_chat(window, cx),
+//!     AssistantPanelEvent::PrivacyNoticeAcknowledged => workspace.store_notice_read(cx),
+//!     AssistantPanelEvent::AvailabilityChanged(found) => workspace.assistant_availability_changed(found, cx),
+//!     _ => {}
+//! })
+//! .detach();
+//!
+//! // Whenever another document is opened (and once for the one that is open):
+//! panel.update(cx, |panel, cx| {
+//!     panel.set_document(Some(DocumentRef::new(id, title)), stored_conversation(id), window, cx)
+//! });
+//! // When the title of the open document changes:
+//! panel.update(cx, |panel, cx| panel.set_document_title(title, cx));
+//! // When the selection of the text changes, or the document becomes read-only:
+//! panel.update(cx, |panel, cx| panel.set_apply_state(can_insert, has_selection, cx));
+//! // The app's "go to the assistant" (cmd-3): show the container, then
+//! panel.update(cx, |panel, cx| { panel.set_shown(true, cx); panel.focus(window, cx) });
+//! // When the container is hidden:
+//! panel.update(cx, |panel, cx| { panel.set_shown(false, cx); panel.end_idle_processes(cx) });
+//!
+//! // Drawing: div().w(width).h_full().border_l_1().child(panel.clone())
+//! // The palette and the shortcuts overlay: writer_assistant_ui::commands().
+//! ```
+//!
+//! The panel's commands ([`commands`]: new chat, clear, stop, choose
+//! model, choose effort, add context, insert, replace, copy) reach the
+//! panel of the active window from wherever the keyboard is, as the
+//! comment commands do: [`init`] installs global listeners for them, and a
+//! panel answers while its host says it is on screen
+//! ([`AssistantPanel::set_shown`]).
+//!
+//! | Where | Keys | What |
+//! |---|---|---|
+//! | anywhere in the panel | `tab` / `shift-tab` | header, context, messages, composer, and round again |
+//! | anywhere in the panel | `escape` | back to the text ([`AssistantPanelEvent::FocusTextRequested`]) |
+//! | anywhere in the panel | `cmd-enter` / `cmd-shift-enter` / `cmd-shift-c` | insert at caret / replace selection / copy: the marked answer in the message list, else the latest |
+//! | anywhere in the panel | `cmd-.` | stop the answer |
+//! | anywhere in the panel | `cmd-alt-n` / `cmd-alt-k` | new chat / clear |
+//! | anywhere in the panel | `cmd-shift-m` / `cmd-alt-e` | the model menu / the effort menu |
+//! | anywhere in the panel | `cmd-shift-a` | add a document or a folder as context |
+//! | composer | `enter` / `shift-enter` | send / a new line |
+//! | header, context row | `left` / `right`, `enter` or `space` | move over the controls, press the marked one |
+//! | context row | `delete` or `backspace` | remove the marked item |
+//! | message list | `up` / `down`, `home` / `end` | mark a message |
+//! | message list | `enter`, `ctrl-enter`, `shift-f10` | the menu of the marked message |
+//! | message list | `cmd-c` | copy the marked message |
 //!
 //! # Keys the components bring
 //!

@@ -33,12 +33,12 @@ use gpui::{
 use writer_assistant::{Catalog, EffortChoice, ModelChoice, Selection};
 use writer_ui::{
     ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, MenuAnchor, Tooltip,
-    theme::{RADIUS_SM, ThemeColors, UI_TEXT_SM, focus_ring},
+    theme::{RADIUS_SM, ThemeColors, UI_TEXT_SM},
 };
 
 use crate::{
     actions::{ChooseEffort, ChooseModel},
-    controls::keep_focus,
+    controls::{keep_focus, keyboard_mark},
 };
 
 /// Where a control was drawn in the last frame: a menu drops down from
@@ -157,7 +157,9 @@ pub fn picker_button(
         .text_size(UI_TEXT_SM)
         .line_height(px(16.))
         .text_color(colors.muted)
-        .when(focused, |button| button.shadow(focus_ring(colors)))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .map(|button| keyboard_mark(button, focused, colors))
         .map(|button| {
             if enabled {
                 button
@@ -256,7 +258,8 @@ pub fn picker_menu_items(
 
 /// Opens the menu of a picker under its control (`bounds`; under the top
 /// left corner of the window while the control was never drawn). From the
-/// keyboard the current choice is marked. Returns the open menu.
+/// keyboard the current choice is marked, so the arrows start from it and
+/// `enter` keeps it. Returns the open menu.
 #[allow(clippy::too_many_arguments)]
 pub fn open_picker_menu(
     kind: PickerKind,
@@ -275,7 +278,7 @@ pub fn open_picker_menu(
     };
     let menu = ContextMenu::open(anchor, items, window, cx);
     if from_keyboard {
-        menu.update(cx, |menu, cx| menu.select_first(cx));
+        menu.update(cx, |menu, cx| menu.select_checked(cx));
     }
     menu
 }

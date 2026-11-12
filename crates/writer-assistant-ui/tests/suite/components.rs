@@ -927,11 +927,11 @@ fn the_pickers_show_the_choice_and_change_it(cx: &mut TestAppContext) {
         let menu = writer_ui::ContextMenu::current(window, cx).unwrap();
         assert_eq!(
             menu.read(cx).selected_index(),
-            Some(0),
-            "opened from the keyboard"
+            Some(3),
+            "opened from the keyboard, the current choice is marked"
         );
     });
-    cx.simulate_keystrokes("down enter");
+    cx.simulate_keystrokes("up enter");
     cx.run_until_parked();
     let now = selection(cx);
     assert_eq!(now.model.id(), Some("swift"));
@@ -955,4 +955,64 @@ fn the_pickers_show_the_choice_and_change_it(cx: &mut TestAppContext) {
     chat.chat.read_with(cx, |chat, _| {
         assert_eq!(chat.selections.len(), 3);
     });
+}
+
+/// An answer of a hundred paragraphs arrives in four hundred pieces. Every
+/// piece makes the document of the answer anew from its Markdown; that
+/// must stay far below the time between two pieces of a real answer.
+#[gpui::test]
+fn a_long_answer_streams_without_stalling(cx: &mut TestAppContext) {
+    let (chat, cx) = open_chat(cx);
+    let paragraph = "A sentence of the answer with **some bold** words and *some italic* ones, \
+                     long enough to wrap in the column of the chat more than once. ";
+    let mut pieces = Vec::new();
+    for index in 0..100 {
+        if index % 10 == 0 {
+            pieces.push(format!("## Part {}\n\n", index / 10 + 1));
+        }
+        for quarter in paragraph.split_inclusive(", ") {
+            pieces.push(quarter.to_string());
+        }
+        pieces.push("\n\n".to_string());
+    }
+    let count = pieces.len();
+    chat.fake.hold();
+    chat.fake.push(FakeReply::pieces(pieces));
+    chat.send("Write a lot", cx);
+    chat.fake.advance(2);
+    cx.run_until_parked();
+
+    let started = std::time::Instant::now();
+    let mut slowest = std::time::Duration::ZERO;
+    let mut pieces_seen = 0;
+    while chat.fake.held() > 1 {
+        let piece = std::time::Instant::now();
+        chat.fake.advance(1);
+        cx.run_until_parked();
+        slowest = slowest.max(piece.elapsed());
+        pieces_seen += 1;
+    }
+    let total = started.elapsed();
+    chat.fake.finish();
+    cx.run_until_parked();
+    let answer = chat.last_id(cx);
+    let blocks = chat.messages.read_with(cx, |list, cx| {
+        list.answer_editor(answer)
+            .unwrap()
+            .read(cx)
+            .document()
+            .block_count()
+    });
+    assert_eq!(blocks, 110);
+    assert!(pieces_seen > count - 5);
+    let average = total / pieces_seen as u32;
+    eprintln!(
+        "streaming: {pieces_seen} pieces into {blocks} blocks, average {average:?}, slowest {slowest:?}"
+    );
+    // A debug build on a busy machine; a real answer brings a piece every
+    // thirty milliseconds or so.
+    assert!(
+        average < std::time::Duration::from_millis(25),
+        "a piece took {average:?} on average"
+    );
 }

@@ -1,5 +1,37 @@
 //! The [`AssistantPanel`] entity: the side chat. State and commands; the
 //! drawing is in `render`, the picker of the context row in `context`.
+//!
+//! # What the panel owns and what the host does
+//!
+//! The panel owns the conversation with the agent: one
+//! `writer_assistant::ChatSession` for the document that is open (and one
+//! for every document whose answer is still being written although another
+//! document is open now), the message list, the composer, the pickers. It
+//! starts the agent only when a message is sent.
+//!
+//! The host owns everything about the app:
+//!
+//! | The host... | With |
+//! |---|---|
+//! | says which document is open and hands over its stored conversation | [`AssistantPanel::set_document`], [`AssistantPanel::set_document_title`] |
+//! | hands over the document's text when a message is sent | [`AssistantPanel::set_document_source`] |
+//! | lists the library for the picker of the context row | [`AssistantPanel::set_library_source`] |
+//! | says whether there is a caret to insert at and a selection to replace | [`AssistantPanel::set_apply_state`] |
+//! | says what it knows about the agent | [`AssistantPanel::set_availability`] |
+//! | says whether the panel is on screen | [`AssistantPanel::set_shown`], [`AssistantPanel::end_idle_processes`] |
+//! | stores the conversations and the chosen model and effort | [`AssistantPanelEvent::TranscriptChanged`], [`AssistantPanelEvent::SelectionChanged`] |
+//! | carries out what the user does with an answer | [`AssistantPanelEvent::Apply`], [`AssistantPanelEvent::CopyText`] |
+//! | moves the keyboard back to the text, closes the panel | [`AssistantPanelEvent::FocusTextRequested`], [`AssistantPanelEvent::CloseRequested`] |
+//! | remembers that the note about where the text goes was read | [`AssistantPanelEvent::PrivacyNoticeAcknowledged`] |
+//!
+//! # New chat and clear
+//!
+//! "New Chat" starts a new conversation: the messages go and so does what
+//! was added as context. "Clear" removes the messages and keeps the
+//! context. Either way the agent starts afresh with the next message (it
+//! must not remember what the user no longer sees). The conversation that
+//! went can be brought back until the next message is sent (the toast's
+//! "Undo", [`AssistantPanel::restore_cleared`]).
 
 use std::sync::Arc;
 
@@ -662,6 +694,24 @@ impl AssistantPanel {
         self.shown
     }
 
+    /// Starts the agent's program now, without sending it anything, so
+    /// that the first answer does not also wait for the program to start
+    /// (about a second). The panel never does this by itself: a process
+    /// is started when a message is sent, not before. A host that wants
+    /// the first answer sooner calls this when the user is clearly about
+    /// to ask (and never while the note about where the text goes is
+    /// still unread: nothing happens then).
+    pub fn prepare(&mut self, _: &mut Context<Self>) {
+        let ready = self
+            .availability
+            .as_ref()
+            .is_some_and(Availability::is_ready);
+        if ready && !self.privacy_notice && !self.chat.prepared {
+            self.chat.prepared = true;
+            self.chat.session.prepare();
+        }
+    }
+
     /// Ends the agent's programs of conversations that are not being
     /// answered (the panel was closed). The conversations stay; the next
     /// message starts the agent again and continues.
@@ -1089,23 +1139,7 @@ impl AssistantPanel {
             ComposerEvent::Submitted(text) => self.send(text.clone(), window, cx),
             ComposerEvent::StopRequested => self.stop(cx),
             ComposerEvent::Dismissed => cx.emit(AssistantPanelEvent::FocusTextRequested),
-            ComposerEvent::Changed => {
-                // The first words of a message: start the agent's program
-                // now, so that the answer does not also wait for that.
-                // Nothing is sent to it before the message is.
-                let ready = self
-                    .availability
-                    .as_ref()
-                    .is_some_and(Availability::is_ready);
-                if ready
-                    && !self.privacy_notice
-                    && !self.chat.prepared
-                    && !self.composer.read(cx).is_blank(cx)
-                {
-                    self.chat.prepared = true;
-                    self.chat.session.prepare();
-                }
-            }
+            ComposerEvent::Changed => {}
         }
     }
 
@@ -1152,8 +1186,10 @@ impl AssistantPanel {
         self.focus_area(PanelArea::Composer, window, cx);
     }
 
-    /// Moves the keyboard to a part of the panel.
+    /// Moves the keyboard to a part of the panel. An open picker of the
+    /// context row closes.
     pub fn focus_area(&mut self, area: PanelArea, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_context_picker(window, cx);
         match area {
             PanelArea::Header => {
                 if !self.header_control_enabled(self.header_control) {

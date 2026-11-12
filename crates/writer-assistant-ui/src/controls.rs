@@ -17,11 +17,26 @@ use gpui::{
 };
 use writer_ui::{
     Icon, IconName, KeyHint, Tooltip,
-    theme::{RADIUS_SM, ThemeColors, UI_TEXT_SM, focus_ring},
+    theme::{RADIUS_SM, ThemeColors, UI_TEXT_SM},
 };
 
 /// Side of an icon button.
 pub const ICON_BUTTON: Pixels = px(22.);
+
+/// The mark of the keyboard on a small control: an accent outline on a
+/// tint of the accent. (The kit's halo is made for fields and full-size
+/// buttons; around a 22px control it reads as a filled square.) The
+/// control must have a border of its own, so that nothing moves.
+pub fn keyboard_mark<E: Styled>(control: E, focused: bool, colors: &ThemeColors) -> E {
+    if focused {
+        control
+            .border_color(colors.accent)
+            .bg(colors.accent_subtle)
+            .text_color(colors.ink)
+    } else {
+        control
+    }
+}
 
 /// Keeps a press from moving the keyboard to whatever is under it.
 pub(crate) fn keep_focus(element: Stateful<Div>) -> Stateful<Div> {
@@ -58,7 +73,9 @@ pub fn icon_button(
         .items_center()
         .justify_center()
         .rounded(RADIUS_SM)
-        .when(focused, |button| button.shadow(focus_ring(colors)))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .map(|button| keyboard_mark(button, focused, colors))
         .map(|button| {
             if disabled {
                 button.opacity(0.55).cursor_default()
@@ -144,7 +161,7 @@ pub fn text_button(
         .when(look == Look::Primary, |button| {
             button.font_weight(FontWeight::MEDIUM)
         })
-        .when(focused, |button| button.shadow(focus_ring(colors)))
+        .map(|button| keyboard_mark(button, focused, colors))
         .map(|button| {
             if disabled {
                 button.opacity(0.45).cursor_default()

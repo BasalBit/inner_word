@@ -3628,3 +3628,247 @@ fn an_open_list_follows_when_the_assistant_is_shown_or_hidden(cx: &mut TestAppCo
     assert_eq!(view.read_with(vcx, |view, _| view.listed().len()), with_it);
     assert!(view.update(vcx, |view, cx| view.select_target(&new_chat, cx)));
 }
+
+// ----- the zoom (0.6.0) -------------------------------------------------------------
+
+/// The six commands of the zoom that are named in the menus (in, out,
+/// actual size, fit width, fit page, life size) are rows of the list like
+/// any other: each is given another key there with the keyboard, the new
+/// key runs it and the old one no longer does, and the menu bar and the
+/// menu of the zoom in the status bar show the new key. A key another
+/// command has is named with that command before anything changes.
+#[gpui::test]
+fn the_zoom_commands_are_given_other_keys_in_the_list(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, px, size};
+    use writer_app::zoom;
+    use writer_editor::Zoom;
+    use writer_ui::{ContextMenu, KeyHint};
+
+    init(cx);
+    // A display like this Mac's, so that there is a life size: 177 %.
+    cx.update(|cx| zoom::set_display_density(Some(127.5), cx));
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Keys", "A paragraph with a few words in it."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.simulate_resize(size(px(1900.), px(1100.)));
+    vcx.run_until_parked();
+    assert!(editor_focused(&workspace, vcx));
+    let zoom_now =
+        |cx: &mut VisualTestContext| -> Zoom { workspace.read_with(cx, |w, cx| w.zoom(cx)) };
+    let target = |action: &str| Target::new(action, None);
+
+    // The defaults: three have keys, three have none. Zoom in has two:
+    // the plus key with `cmd`, with shift (which is how "+" is typed on
+    // most keyboards) and without.
+    let zoom_in_default = ["cmd-=", "cmd-shift-="];
+    assert_eq!(row_keys("Zoom in", Place::Anywhere, vcx), zoom_in_default);
+    assert_eq!(row_keys("Zoom out", Place::Anywhere, vcx), ["cmd--"]);
+    assert_eq!(
+        row_keys("Actual size", Place::Anywhere, vcx),
+        ["cmd-shift-0"]
+    );
+    for title in ["Zoom to fit width", "Zoom to fit page", "Zoom to life size"] {
+        assert!(row_keys(title, Place::Anywhere, vcx).is_empty(), "{title}");
+    }
+
+    // A key that is taken is said to be taken, and by whom: zoom out is
+    // given the key of zoom in, and zoom in a key Bold has in the text.
+    let view = open_list_at(&workspace, &target("zoom::ZoomOut"), vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-=");
+    let (title, says, choices) = question(&view, vcx);
+    assert_eq!(title, "⌘= is taken");
+    assert!(says.contains("Zoom in"), "{says}");
+    assert!(
+        choices.iter().any(|choice| choice.contains("Zoom in")),
+        "{choices:?}"
+    );
+    choose(&view, Choice::Cancel, vcx);
+    assert!(view.update(vcx, |view, cx| {
+        view.select_target(&target("zoom::ZoomIn"), cx)
+    }));
+    press(vcx, "enter");
+    press(vcx, "cmd-b");
+    let (title, says, choices) = question(&view, vcx);
+    assert!(says.contains("Bold"), "{title}: {says}");
+    assert!(
+        choices.contains(&"Keep Both".to_string()),
+        "{title}: {says} {choices:?}"
+    );
+    choose(&view, Choice::Cancel, vcx);
+    press(vcx, "escape");
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+
+    // Each of the six gets a key of its own, in the list, with the
+    // keyboard.
+    let changes: [(&str, &str, &str, &str); 6] = [
+        ("zoom::ZoomIn", "Zoom in", "cmd-alt-=", "⌥⌘="),
+        ("zoom::ZoomOut", "Zoom out", "cmd-alt--", "⌥⌘-"),
+        ("zoom::ActualSize", "Actual size", "f6", "F6"),
+        ("zoom::FitWidth", "Zoom to fit width", "f7", "F7"),
+        ("zoom::FitPage", "Zoom to fit page", "f8", "F8"),
+        ("zoom::LifeSize", "Zoom to life size", "f9", "F9"),
+    ];
+    for (action, title, keys, _) in changes {
+        let view = open_list_at(&workspace, &target(action), vcx);
+        press(vcx, "enter");
+        assert_eq!(
+            view.read_with(vcx, |view, _| view.mode()),
+            ModeKind::Recording,
+            "{title}"
+        );
+        press(vcx, keys);
+        let (heading, says, choices) = question(&view, vcx);
+        assert!(heading.ends_with("is free"), "{title}: {heading}: {says}");
+        choose(&view, Choice::UseKey, vcx);
+        assert_eq!(
+            view.read_with(vcx, |view, _| view.mode()),
+            ModeKind::List,
+            "{title}: {choices:?}"
+        );
+        // The key the row shows first is the one that is replaced: zoom
+        // in keeps the second of its two.
+        let expected = if action == "zoom::ZoomIn" {
+            vec!["cmd-=", keys]
+        } else {
+            vec![keys]
+        };
+        assert_eq!(row_keys(title, Place::Anywhere, vcx), expected, "{title}");
+        press(vcx, "escape");
+        assert!(!has_modal(&workspace, vcx));
+        assert!(editor_focused(&workspace, vcx));
+    }
+    // The second key of zoom in still zooms in, as its row says; then it
+    // is taken away too.
+    assert_eq!(runs("cmd-=", vcx).as_deref(), Some("zoom::ZoomIn"));
+    assert_eq!(runs("cmd-shift-=", vcx), None);
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.remove_key(&target("zoom::ZoomIn"), &key("cmd-="))
+    }));
+    assert_eq!(row_keys("Zoom in", Place::Anywhere, vcx), ["cmd-alt-="]);
+    assert_eq!(
+        vcx.update(|_, cx| writer_app::workspace::changed_command_count(cx)),
+        6
+    );
+
+    // The new keys run the commands, and the old ones run nothing.
+    for old in ["cmd-=", "cmd-+", "cmd--", "cmd-shift-0", "cmd-)"] {
+        assert_eq!(runs(old, vcx), None, "{old}");
+    }
+    assert_eq!(zoom_now(vcx), Zoom::Percent(100));
+    vcx.simulate_keystrokes("cmd-= cmd-+");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(100), "the old keys do nothing");
+    vcx.simulate_keystrokes("cmd-alt-= cmd-alt-=");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(125));
+    vcx.simulate_keystrokes("cmd-alt--");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(110));
+    vcx.simulate_keystrokes("f6");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(100));
+    vcx.simulate_keystrokes("f7");
+    assert_eq!(zoom_now(vcx), Zoom::FitWidth);
+    vcx.simulate_keystrokes("f9");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(177));
+    // Fit page is for page view.
+    vcx.simulate_keystrokes("cmd-alt-p");
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("f8");
+    assert_eq!(zoom_now(vcx), Zoom::FitPage);
+    // They work wherever the keyboard is, as the defaults do.
+    vcx.simulate_keystrokes("cmd-0 f6");
+    assert_eq!(zoom_now(vcx), Zoom::Percent(100));
+    vcx.simulate_keystrokes("cmd-1");
+    vcx.run_until_parked();
+
+    // The menu bar shows them, and so do the hints of the palette.
+    let in_the_menu_bar = [
+        (
+            menu_key(&zoom::ZoomIn, vcx),
+            hint(&zoom::ZoomIn, vcx),
+            "alt-cmd-=",
+        ),
+        (
+            menu_key(&zoom::ZoomOut, vcx),
+            hint(&zoom::ZoomOut, vcx),
+            "alt-cmd--",
+        ),
+        (
+            menu_key(&zoom::ActualSize, vcx),
+            hint(&zoom::ActualSize, vcx),
+            "f6",
+        ),
+        (
+            menu_key(&zoom::FitWidth, vcx),
+            hint(&zoom::FitWidth, vcx),
+            "f7",
+        ),
+        (
+            menu_key(&zoom::FitPage, vcx),
+            hint(&zoom::FitPage, vcx),
+            "f8",
+        ),
+        (
+            menu_key(&zoom::LifeSize, vcx),
+            hint(&zoom::LifeSize, vcx),
+            "f9",
+        ),
+    ];
+    for ((menu, hint, expected), (_, title, _, shown)) in in_the_menu_bar.iter().zip(changes) {
+        assert_eq!(menu.as_deref(), Some(*expected), "{title} in the menu bar");
+        assert_eq!(hint.as_deref(), Some(shown), "the hint of {title}");
+    }
+
+    // The menu of the zoom in the status bar: its items are the commands,
+    // each drawn with the key the keymap has for it now.
+    let at = vcx
+        .debug_bounds("status-zoom")
+        .expect("the zoom is in the status bar")
+        .center();
+    vcx.simulate_click(at, Modifiers::none());
+    vcx.run_until_parked();
+    let drawn: Vec<(String, Option<String>)> = vcx.update(|window, cx| {
+        let menu = ContextMenu::current(window, cx).expect("the menu of the zoom is open");
+        menu.read(cx)
+            .items()
+            .iter()
+            .filter_map(|item| {
+                let action = item.action_ref()?;
+                Some((
+                    action.name().to_string(),
+                    KeyHint::for_action(action, cx).map(|hint| hint.text()),
+                ))
+            })
+            .collect()
+    });
+    for (action, title, _, shown) in changes {
+        let item = drawn
+            .iter()
+            .find(|(name, _)| name == action)
+            .unwrap_or_else(|| panic!("{title} is not in the menu of the zoom: {drawn:?}"));
+        assert_eq!(item.1.as_deref(), Some(shown), "{title} in the status bar");
+    }
+    // The sizes without a key show none.
+    assert!(
+        drawn
+            .iter()
+            .any(|(name, hint)| name == "zoom::ZoomTo150" && hint.is_none()),
+        "{drawn:?}"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+
+    // One of them back to its default: the row has its two keys again and
+    // the others keep theirs.
+    change(&workspace, vcx, |keymap| {
+        keymap.reset(&target("zoom::ZoomIn"))
+    });
+    assert_eq!(row_keys("Zoom in", Place::Anywhere, vcx), zoom_in_default);
+    assert_eq!(runs("cmd-alt-=", vcx), None);
+    assert_eq!(runs("cmd-=", vcx).as_deref(), Some("zoom::ZoomIn"));
+    assert_eq!(runs("f7", vcx).as_deref(), Some("zoom::FitWidth"));
+    assert_eq!(menu_key(&zoom::ZoomIn, vcx).as_deref(), Some("cmd-+"));
+}

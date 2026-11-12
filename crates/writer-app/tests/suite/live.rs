@@ -2211,3 +2211,356 @@ fn the_version_history_of_a_document_an_agent_trashes_closes(cx: &mut TestAppCon
     assert!(editor_focused(&desk.workspace, cx));
     assert_eq!(editor_text(&desk.workspace, cx), "Other\nText.");
 }
+
+// ----- where 0.6.0 meets itself: the zoom, the list of shortcuts, the list of fonts --------
+
+/// An agent's changes arrive in a text that is zoomed: in the column at
+/// 150 %, and on sheets that follow the window (fit width, fit page). The
+/// zoom stays what it was, the selection stays on its words, and the line
+/// the writer is on stays where it is on screen although text came in
+/// above it.
+#[gpui::test]
+fn a_change_arrives_in_a_text_that_is_zoomed(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    use writer_editor::Zoom;
+
+    let (dir, lock, library) = library_on_disk(cx);
+    let long = Document::from_blocks(
+        std::iter::once(Block::with_text(BlockKind::heading(1), "Long"))
+            .chain((1..400).map(|ix| {
+                Block::paragraph(&format!(
+                    "Paragraph number {ix}. The harbor was a plain grey fact and the boats \
+                     came by road every spring."
+                ))
+            }))
+            .collect(),
+    );
+    let id = add_document(&library, None, &long, cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    cx.simulate_resize(size(px(1500.), px(1000.)));
+    cx.run_until_parked();
+    let editor = desk
+        .workspace
+        .read_with(cx, |workspace, _| workspace.editor().clone());
+    let mut blocks_above = 0;
+    let mut round = 0;
+    for (page_view, zoom) in [
+        (false, Zoom::Percent(150)),
+        (true, Zoom::FitWidth),
+        (true, Zoom::FitPage),
+    ] {
+        round += 1;
+        let what = format!("page view {page_view}, {zoom:?}");
+        if page_view != editor.read_with(cx, |editor, _| editor.page_view()) {
+            cx.simulate_keystrokes("cmd-alt-p");
+            cx.run_until_parked();
+        }
+        desk.workspace
+            .update(cx, |workspace, cx| workspace.set_zoom(zoom, cx));
+        cx.run_until_parked();
+        // The writer has "plain grey" of a paragraph in the middle
+        // selected.
+        let block = 250 + blocks_above;
+        let text = editor.read_with(cx, |editor, _| {
+            editor.document().blocks()[block].text().to_string()
+        });
+        let from = text
+            .find("plain grey")
+            .expect("the paragraph has the words");
+        editor.update(cx, |editor, cx| {
+            editor.edit(
+                |state| {
+                    state.set_selection(Selection::new(
+                        Position::new(block, from),
+                        Position::new(block, from + "plain grey".len()),
+                    ))
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let look = |cx: &mut VisualTestContext| {
+            editor.read_with(cx, |editor, _| {
+                let view = editor.view_state();
+                (
+                    editor.zoom(),
+                    editor.zoom_percent(),
+                    editor.state().selected_text(),
+                    editor
+                        .selection_bounds()
+                        .expect("the selection is on screen"),
+                    (view.scroll_block, view.scroll_offset),
+                )
+            })
+        };
+        let (zoom_before, percent_before, selected_before, bounds_before, top_before) = look(cx);
+        assert_eq!(zoom_before, zoom, "{what}");
+        assert_eq!(selected_before, "plain grey", "{what}");
+
+        // Two paragraphs at the very top, a word changed further down,
+        // and a paragraph at the end.
+        let tool = desk.tool();
+        ask(cx, move || {
+            tool.insert(&InsertRequest {
+                document: id.into(),
+                markdown: format!("Top one of round {round}.\n\nTop two of round {round}."),
+                position: agent::InsertPosition::Start,
+                write: claude(),
+                ..InsertRequest::default()
+            })
+        })
+        .unwrap();
+        let tool = desk.tool();
+        let (old, new) = (
+            format!("Paragraph number {}.", 300 + round),
+            format!("Paragraph number {} was changed.", 300 + round),
+        );
+        ask(cx, move || tool.edit(&edit(id, &old, &new))).unwrap();
+        let tool = desk.tool();
+        ask(cx, move || {
+            tool.insert(&InsertRequest {
+                document: id.into(),
+                markdown: format!("The end of round {round}."),
+                position: agent::InsertPosition::End,
+                write: claude(),
+                ..InsertRequest::default()
+            })
+        })
+        .unwrap();
+        blocks_above += 2;
+
+        let (zoom_after, percent_after, selected_after, bounds_after, top_after) = look(cx);
+        assert_eq!(zoom_after, zoom, "{what}: the zoom");
+        assert!(
+            (percent_after - percent_before).abs() < 0.01,
+            "{what}: {percent_before} % became {percent_after} %"
+        );
+        assert_eq!(selected_after, "plain grey", "{what}");
+        assert_eq!(
+            selection(&desk, cx),
+            Selection::new(
+                Position::new(block + 2, from),
+                Position::new(block + 2, from + "plain grey".len()),
+            ),
+            "{what}"
+        );
+        // The same paragraph is at the top of the view, as far in as it
+        // was, and the selected words are where they were in the window.
+        assert_eq!(top_after.0, top_before.0 + 2, "{what}");
+        assert!(
+            (top_after.1 - top_before.1).abs() < 0.5,
+            "{what}: {top_before:?} became {top_after:?}"
+        );
+        for (before, after) in [
+            (bounds_before.left(), bounds_after.left()),
+            (bounds_before.top(), bounds_after.top()),
+            (bounds_before.right(), bounds_after.right()),
+            (bounds_before.bottom(), bounds_after.bottom()),
+        ] {
+            assert!(
+                (after - before).abs() < px(0.5),
+                "{what}: the selection was at {bounds_before:?} and is at {bounds_after:?}"
+            );
+        }
+        // The three changes are in the text and one undo takes them out.
+        let text = editor_text(&desk.workspace, cx);
+        assert!(
+            text.contains(&format!("Top two of round {round}.")),
+            "{what}"
+        );
+        assert!(text.contains(&format!("Paragraph number {} was changed.", 300 + round)));
+        assert!(
+            text.ends_with(&format!("The end of round {round}.")),
+            "{what}"
+        );
+        assert_eq!(
+            notes_shown(&desk, cx).last().map(|note| note.0.clone()),
+            Some("Claude made 3 changes to “Long”".to_string()),
+            "{what}"
+        );
+        // Let the note of this round go, so the next round has its own.
+        cx.executor().advance_clock(Duration::from_secs(20));
+        cx.run_until_parked();
+    }
+    // Nothing of the view was written into the document: it is saved as
+    // the agent left it.
+    assert_eq!(save_state(&desk, cx), Some(SaveState::Saved));
+    assert_eq!(stored(&desk, id, cx), editor_text(&desk.workspace, cx));
+}
+
+/// A change arrives while the list of keyboard shortcuts waits for a key,
+/// and while the list of fonts of the settings is open with something
+/// typed into it: the change is made and shown, the list stays as it was
+/// and what the writer does next goes where it was going.
+#[gpui::test]
+fn a_change_arrives_while_a_key_is_being_chosen_or_a_font(cx: &mut TestAppContext) {
+    use writer_app::font_choice::FontChoicePicker;
+    use writer_keymap_ui::{Choice, ModeKind};
+
+    let (desk, id, cx) = desk_with_notes(cx);
+    cx.update(|_, cx| {
+        writer_editor_tools::set_font_families(["Charter", "Georgia", "Menlo", "Palatino"], cx)
+    });
+
+    // The list of keyboard shortcuts, waiting for the key of Bold.
+    cx.simulate_keystrokes("cmd-/");
+    cx.run_until_parked();
+    let list = desk
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.shortcuts_list(cx))
+        .expect("the list of keyboard shortcuts is open");
+    let bold = writer_keymap::Target::new("editor::ToggleBold", Some("Editor"));
+    assert!(list.update(cx, |list, cx| list.select_target(&bold, cx)));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        list.read_with(cx, |list, _| list.mode()),
+        ModeKind::Recording
+    );
+    let tool = desk.tool();
+    ask(cx, move || tool.edit(&edit(id, "is short", "is long"))).unwrap();
+    assert!(editor_text(&desk.workspace, cx).contains("is long"));
+    assert_eq!(
+        notes_shown(&desk, cx).last().map(|note| note.0.clone()),
+        Some("Claude changed “Notes”".to_string())
+    );
+    // It still waits, and the next key is the key it waited for.
+    assert_eq!(
+        list.read_with(cx, |list, _| list.mode()),
+        ModeKind::Recording
+    );
+    cx.simulate_keystrokes("cmd-alt-b");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("cmd-alt-b").unwrap(),
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        list.read_with(cx, |list, _| list.mode()),
+        ModeKind::Question
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.question_title())
+            .as_deref(),
+        Some("⌥⌘B is free")
+    );
+    // A second change while the question stands.
+    let tool = desk.tool();
+    ask(cx, move || tool.edit(&edit(id, "is long", "is longer"))).unwrap();
+    assert_eq!(
+        list.read_with(cx, |list, _| list.mode()),
+        ModeKind::Question
+    );
+    assert!(list.update_in(cx, |list, window, cx| list.choose(
+        Choice::UseKey,
+        window,
+        cx
+    )));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!has_modal(&desk, cx));
+    assert!(editor_focused(&desk.workspace, cx));
+    // The key was changed, and it works on the text the agent changed.
+    cx.simulate_keystrokes("cmd-a cmd-alt-b");
+    cx.run_until_parked();
+    let all_bold = desk.workspace.read_with(cx, |workspace, cx| {
+        let editor = workspace.editor().read(cx);
+        editor.document().blocks()[1]
+            .text_spans()
+            .all(|(_, _, attrs)| attrs.bold)
+    });
+    assert!(all_bold, "the new key of Bold runs Bold");
+    assert!(editor_text(&desk.workspace, cx).contains("is longer"));
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+
+    // The settings, the font of this document, its list with "pal" typed.
+    cx.simulate_keystrokes("cmd-shift-p");
+    cx.simulate_input("document settings");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let settings = desk
+        .workspace
+        .read_with(cx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<SettingsView>()
+        })
+        .expect("the settings are open");
+    for _ in 0..60 {
+        let row = settings.update_in(cx, |view, window, cx| view.focused_row(window, cx));
+        if row == Some(writer_app::settings_view::SettingRow::DocumentFont) {
+            break;
+        }
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let fonts = |cx: &mut VisualTestContext| {
+        desk.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .modal_layer()
+                .read(cx)
+                .active::<FontChoicePicker>()
+        })
+    };
+    let picker = fonts(cx).expect("the list of fonts is open");
+    cx.simulate_input("pa");
+    cx.run_until_parked();
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.insert(&InsertRequest {
+            document: id.into(),
+            markdown: "A paragraph the agent added.".into(),
+            position: agent::InsertPosition::End,
+            write: claude(),
+            ..InsertRequest::default()
+        })
+    })
+    .unwrap();
+    assert!(editor_text(&desk.workspace, cx).ends_with("A paragraph the agent added."));
+    // The list is still there, with what was typed, and takes the rest.
+    assert!(fonts(cx).is_some(), "the list of fonts stays open");
+    cx.simulate_input("l");
+    cx.run_until_parked();
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.labels()),
+        ["Palatino"]
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(fonts(cx).is_none());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(editor_focused(&desk.workspace, cx));
+    // The font went to the document the agent had changed, and both are
+    // saved: the agent's paragraph and the writer's font.
+    assert_eq!(
+        desk.workspace
+            .read_with(cx, |workspace, cx| workspace.document_font(cx)),
+        "Palatino"
+    );
+    assert!(
+        desk.workspace
+            .update(cx, |workspace, cx| workspace.flush(cx))
+    );
+    let content = desk
+        .library
+        .read_with(cx, |library, _| library.document(id).unwrap().content);
+    let reread = Document::from_json(&content).unwrap();
+    assert_eq!(reread.settings().typography.body_font, "Palatino");
+    assert!(
+        reread
+            .plain_text()
+            .ends_with("A paragraph the agent added.")
+    );
+    assert!(reread.plain_text().contains("is longer"));
+    // And an agent that reads now is given the same.
+    let tool = desk.tool();
+    let read = ask(cx, move || {
+        tool.read(&ReadRequest {
+            document: id.into(),
+            ..ReadRequest::default()
+        })
+    })
+    .unwrap();
+    assert!(read.content.contains("A paragraph the agent added."));
+}

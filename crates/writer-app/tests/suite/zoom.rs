@@ -30,8 +30,8 @@ use writer_ui::ContextMenu;
 use super::*;
 
 /// The zooms the anchored things are looked at: 100 %, one below, one
-/// above.
-const ZOOMS: [u16; 3] = [100, 75, 150];
+/// above, and twice the size.
+const ZOOMS: [u16; 4] = [100, 75, 150, 200];
 
 /// A document long enough for several pages: a heading, a paragraph with
 /// a misspelled word, a long paragraph, and many more.
@@ -1326,6 +1326,91 @@ fn vim_moves_by_the_rows_on_screen_at_every_zoom(cx: &mut TestAppContext) {
             cx.run_until_parked();
         }
     }
+}
+
+/// With Vim mode on the keys of the zoom zoom, in every mode: Vim sees
+/// the keys of the text first, and lets every key with `cmd` through. The
+/// mode stays what it was, a count that was begun is not eaten, and the
+/// text only changes by what was typed.
+#[gpui::test]
+fn the_zoom_keys_zoom_with_vim_mode_on(cx: &mut TestAppContext) {
+    use writer_vim_mode::Mode;
+
+    init(cx);
+    let (library, workspace, cx) = open_document(&manuscript(false), cx);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    select(&workspace, TextRange::in_block(2, 4, 4), cx);
+    cx.simulate_keystrokes("cmd-alt-v");
+    cx.run_until_parked();
+    let mode =
+        |cx: &mut VisualTestContext| workspace.read_with(cx, |w, cx| w.vim().read(cx).mode());
+    assert!(workspace.read_with(cx, |w, cx| w.vim().read(cx).is_attached()));
+    let text = editor_text(&workspace, cx);
+
+    // Normal mode.
+    assert_eq!(mode(cx), Mode::Normal);
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(110));
+    cx.simulate_keystrokes("cmd-+");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(125));
+    cx.simulate_keystrokes("cmd--");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(110));
+    cx.simulate_keystrokes("cmd-shift-0");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
+    assert_eq!(mode(cx), Mode::Normal);
+    // A count that was begun is still the count of the next command:
+    // "3", a zoom, then "l" moves three letters.
+    cx.simulate_input("3");
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(110));
+    cx.simulate_input("l");
+    cx.run_until_parked();
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.selection().head),
+        Position::new(2, 7)
+    );
+    assert_eq!(editor_text(&workspace, cx), text);
+
+    // Insert mode: the keys zoom, and typing goes on going into the text.
+    cx.simulate_input("i");
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Mode::Insert);
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(125));
+    cx.simulate_input("Z");
+    cx.simulate_keystrokes("cmd--");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(110));
+    cx.simulate_input("Z");
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Mode::Insert);
+    let typed = editor_text(&workspace, cx);
+    assert_eq!(typed.len(), text.len() + 2);
+    assert!(typed.contains("The harZZbor was"), "{typed}");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Mode::Normal);
+
+    // Visual mode: the selection stays, and so does the mode.
+    cx.simulate_input("vll");
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Mode::Visual);
+    let selected = editor.read_with(cx, |editor, _| editor.state().selected_text());
+    assert_eq!(selected.chars().count(), 3, "{selected:?}");
+    cx.simulate_keystrokes("cmd-shift-0");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(110));
+    assert_eq!(mode(cx), Mode::Visual);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.state().selected_text()),
+        selected
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(editor_text(&workspace, cx), typed);
+    // The zoom the keys left is kept like any other.
+    let_it_be_stored(cx);
+    assert_eq!(stored(&library, FLOW_ZOOM_KEY, cx), Some("110".to_string()));
 }
 
 #[gpui::test]

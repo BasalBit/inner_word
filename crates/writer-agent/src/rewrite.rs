@@ -78,13 +78,26 @@ struct BlockKey {
 
 impl BlockKey {
     fn of(block: &Block) -> BlockKey {
+        let code = block.kind().is_code();
+        let text = block.text();
+        // Markdown does not say the white space at the ends of a line.
+        let (start, end) = if code {
+            (0, text.len())
+        } else {
+            let start = text.len() - text.trim_start().len();
+            (start, text.trim_end().len().max(start))
+        };
         let mut runs: Vec<(usize, Marks)> = Vec::new();
-        if !block.kind().is_code() {
+        if !code {
             for (range, attrs) in block.spans() {
+                let length = range.end.min(end).saturating_sub(range.start.max(start));
+                if length == 0 {
+                    continue;
+                }
                 let marks = Marks::of(attrs);
                 match runs.last_mut() {
-                    Some((length, last)) if *last == marks => *length += range.len(),
-                    _ => runs.push((range.len(), marks)),
+                    Some((sum, last)) if *last == marks => *sum += length,
+                    _ => runs.push((length, marks)),
                 }
             }
         }
@@ -95,10 +108,16 @@ impl BlockKey {
         BlockKey {
             kind: block.kind().clone(),
             indent: block.indent(),
-            text: block.text().to_string(),
+            text: text[start..end].to_string(),
             runs,
         }
     }
+}
+
+/// Whether a block is a paragraph without text: what a writer leaves between two
+/// paragraphs for space, and what Markdown does not say.
+fn is_blank(block: &Block) -> bool {
+    *block.kind() == BlockKind::Paragraph && block.text().trim().is_empty()
 }
 
 /// What a block says beyond the Markdown an agent ordinarily writes: alignment, text
@@ -189,11 +208,36 @@ pub(crate) fn rewrite_blocks(ed: &mut EditorState, range: Range<usize>, new: &[B
     }
     stretch(at, (old.len(), new.len()), &mut steps);
 
+    // Empty paragraphs are not in Markdown, so their absence from the new text does not
+    // mean that they should go: those at the edges of a replaced stretch stay (unless
+    // everything goes, or there was nothing but them).
+    let keep_blanks = !new.is_empty() && !old.iter().all(is_blank);
+
     // From the end, so that the blocks before a step are where they were.
     for step in steps.into_iter().rev() {
         match step {
             Step::Edit(o, n) => edit_block(ed, range.start + o, &new[n]),
-            Step::Replace(o, n) => {
+            Step::Replace(mut o, mut n) => {
+                if keep_blanks {
+                    let was = o.clone();
+                    while o.start < o.end && is_blank(&old[o.start]) {
+                        o.start += 1;
+                    }
+                    while o.start < o.end && is_blank(&old[o.end - 1]) {
+                        o.end -= 1;
+                    }
+                    // Where one stays, the new text's own (a separator between two
+                    // lists) is not put beside it.
+                    while o.start > was.start && n.start < n.end && is_blank(&new[n.start]) {
+                        n.start += 1;
+                    }
+                    while o.end < was.end && n.start < n.end && is_blank(&new[n.end - 1]) {
+                        n.end -= 1;
+                    }
+                }
+                if o.is_empty() && n.is_empty() {
+                    continue;
+                }
                 replace_block_range(ed, range.start + o.start..range.start + o.end, &new[n]);
             }
         }

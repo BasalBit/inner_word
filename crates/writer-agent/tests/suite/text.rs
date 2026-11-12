@@ -1012,3 +1012,170 @@ fn replacing_a_document_keeps_what_markdown_cannot_say() {
     assert_eq!(after.blocks()[2].alignment(), writer_core::Alignment::Right);
     assert_eq!(after.settings(), &settings.sanitized());
 }
+
+/// A document with one of everything the app can make, stored as the app stores it.
+fn everything(fx: &Fixture) -> DocumentId {
+    use writer_core::{
+        Alignment, Block, EditorState, Highlight, InlineAttrs, InlineStyle, TextRange,
+    };
+    let doc = fx.create(None, "placeholder");
+    let plain = InlineAttrs::default;
+    let blocks = vec![
+        Block::with_text(BlockKind::heading(1), "Everything"),
+        Block::paragraph("Plain, ")
+            .with_span("bold", plain().with(InlineStyle::Bold))
+            .with_span(", ", plain())
+            .with_span("italic", plain().with(InlineStyle::Italic))
+            .with_span(", ", plain())
+            .with_span("underlined", plain().with(InlineStyle::Underline))
+            .with_span(", ", plain())
+            .with_span("struck", plain().with(InlineStyle::Strikethrough))
+            .with_span(", ", plain())
+            .with_span("code", plain().with(InlineStyle::Code))
+            .with_span(" and ", plain())
+            .with_span(
+                "bold italic",
+                plain().with(InlineStyle::Bold).with(InlineStyle::Italic),
+            )
+            .with_span(".", plain()),
+        Block::paragraph(""),
+        Block::paragraph("A line\nand a second line after a soft break, with trailing spaces.  "),
+        Block::with_text(BlockKind::heading(2), "Lists"),
+        Block::with_text(BlockKind::BulletItem, "One"),
+        Block::with_text(BlockKind::BulletItem, "Nested").with_indent(1),
+        Block::with_text(BlockKind::NumberedItem, "First"),
+        Block::with_text(BlockKind::NumberedItem, "Second"),
+        Block::with_text(BlockKind::TodoItem { checked: false }, "To do"),
+        Block::with_text(BlockKind::TodoItem { checked: true }, "Done"),
+        Block::with_text(BlockKind::Quote, "A quote."),
+        Block::with_text(
+            BlockKind::CodeBlock {
+                language: Some("rust".into()),
+            },
+            "fn main() {\n    println!(\"hi\");\n}",
+        ),
+        Block::new(BlockKind::Divider),
+        Block::paragraph("Centred, large and partly coloured.")
+            .with_alignment(Alignment::Center)
+            .with_text_size(Some(24.0)),
+        Block::new(BlockKind::PageBreak),
+        Block::paragraph(""),
+        Block::paragraph(
+            "Unicode: caf\u{e9}, \u{6771}\u{4eac}, \u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}, 5 * 3 = 15, a_b_c, [not a link], <tag>.",
+        ),
+        Block::paragraph(""),
+    ];
+    let mut ed = EditorState::new(Document::from_blocks(blocks));
+    ed.select_range(TextRange::in_block(14, 9, 14));
+    ed.set_text_color(Some(Rgb {
+        r: 10,
+        g: 120,
+        b: 200,
+    }));
+    ed.set_font_family(Some("Georgia"));
+    ed.select_range(TextRange::in_block(14, 19, 25));
+    ed.set_highlight(Some(Highlight::Green));
+    let document = ed.into_document();
+    let stats = document.stats();
+    let mut store = writer_store::Store::open(fx.library.database_path()).unwrap();
+    store
+        .save_document(
+            doc.id,
+            &writer_store::DocumentContent {
+                content: &document.to_json(),
+                title: "Everything",
+                plain_text: &document.plain_text(),
+                word_count: stats.words as u64,
+                char_count: stats.characters as u64,
+            },
+        )
+        .unwrap();
+    store.close().unwrap();
+    doc.id
+}
+
+#[test]
+fn writing_back_what_was_read_changes_nothing() {
+    let fx = fixture();
+    let id = everything(&fx);
+    let before = fx.document(id);
+    let markdown = fx.markdown(id);
+    let result = fx
+        .library
+        .replace_document(&ReplaceDocumentRequest {
+            document: id.into(),
+            markdown: markdown.clone(),
+            write: claude(),
+        })
+        .unwrap();
+    let after = fx.document(id);
+    for (index, (old, new)) in before.blocks().iter().zip(after.blocks()).enumerate() {
+        assert_eq!(old, new, "block {index} of:\n{markdown}");
+    }
+    assert_eq!(before, after, "{markdown}");
+    assert!(!result.written.changed, "{result:?}");
+    assert_eq!(
+        (
+            result.blocks_added,
+            result.blocks_removed,
+            result.blocks_changed
+        ),
+        (0, 0, 0)
+    );
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert!(result.snapshot.is_none());
+    // Section by section too.
+    for heading in ["Everything", "Lists"] {
+        let section = fx
+            .library
+            .read(&ReadRequest {
+                document: id.into(),
+                heading: Some(heading.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let result = fx
+            .library
+            .replace_section(&ReplaceSectionRequest {
+                document: id.into(),
+                heading: heading.into(),
+                markdown: section.content,
+                include_heading: true,
+                write: claude(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!result.written.changed, "{heading}: {result:?}");
+    }
+    assert_eq!(fx.document(id), before);
+
+    // One change among all of it touches one block.
+    let result = fx
+        .library
+        .replace_document(&ReplaceDocumentRequest {
+            document: id.into(),
+            markdown: markdown.replace("A quote.", "A longer quote."),
+            write: claude(),
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            result.blocks_added,
+            result.blocks_removed,
+            result.blocks_changed
+        ),
+        (0, 0, 1)
+    );
+    let after = fx.document(id);
+    assert_eq!(after.block_count(), before.block_count());
+    assert_eq!(
+        after.blocks()[14],
+        before.blocks()[14],
+        "colour, font, size and alignment stay"
+    );
+    assert_eq!(
+        after.blocks()[2],
+        before.blocks()[2],
+        "an empty paragraph stays"
+    );
+}

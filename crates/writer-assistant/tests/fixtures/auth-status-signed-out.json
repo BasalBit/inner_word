@@ -1,0 +1,9 @@
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/the-writer-fixture/config/projects",
+  "configDirectory": "/tmp/the-writer-fixture/config",
+  "loginExpiresAt": null
+}

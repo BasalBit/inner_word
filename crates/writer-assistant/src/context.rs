@@ -293,9 +293,7 @@ pub fn outline(markdown: &str) -> Vec<OutlineEntry> {
                         continue;
                     }
                     Some((open, length))
-                        if open == mark
-                            && run >= length
-                            && trimmed[run..].trim().is_empty() =>
+                        if open == mark && run >= length && trimmed[run..].trim().is_empty() =>
                     {
                         fence = None;
                         continue;

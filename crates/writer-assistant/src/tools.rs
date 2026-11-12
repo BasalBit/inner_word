@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use writer_mcp::protocol::{Effect, ToolHost};
 
-use crate::backend::{ToolDescriber, ToolServer, one_line};
+use crate::backend::{ToolDescriber, ToolObserver, ToolServer, one_line};
 
 /// The name the server is registered under with the agent: `the-writer`.
 pub const LIBRARY_SERVER_NAME: &str = writer_mcp::SERVER_NAME;
@@ -66,21 +66,59 @@ pub fn library_tools_named(
     names: &NameBook,
 ) -> ToolServer {
     let library: PathBuf = library.into();
-    let names = names.clone();
-    let describe: ToolDescriber =
-        Arc::new(move |tool, input| describe_library_tool(tool, input, &names));
-    ToolServer {
-        name: LIBRARY_SERVER_NAME.to_string(),
-        command: writer.into(),
-        args: vec![
+    let mut server = ToolServer::new(LIBRARY_SERVER_NAME, writer)
+        .with_args([
             "--library".to_string(),
             library.to_string_lossy().into_owned(),
             "mcp".to_string(),
-        ],
-        env: Vec::new(),
-        allowed: read_only_tools(),
-        denied: withheld_tools(),
-        describe: Some(describe),
+        ])
+        .allowing(read_only_tools())
+        .denying(withheld_tools());
+    server.describe = Some(library_describer(names));
+    server.observe = Some(library_observer(names));
+    server
+}
+
+/// The describer of the library's tools that names items by the titles in `names`.
+pub fn library_describer(names: &NameBook) -> ToolDescriber {
+    let names = names.clone();
+    Arc::new(move |tool, input| describe_library_tool(tool, input, &names))
+}
+
+/// The observer of the library's tools: notes in `names` the title of every document
+/// and the name of every folder a tool result mentions, so that a later call that names
+/// one by its id reads "Reading Chapter 2".
+pub fn library_observer(names: &NameBook) -> ToolObserver {
+    let names = names.clone();
+    Arc::new(move |_tool, _input, result| learn_names(result, &names, 0))
+}
+
+/// Walks a tool result for documents (`id` and `title`) and folders (`id` and `name`).
+fn learn_names(value: &Value, names: &NameBook, depth: usize) {
+    if depth > 12 {
+        return;
+    }
+    match value {
+        Value::Array(items) => {
+            for item in items.iter().take(2000) {
+                learn_names(item, names, depth + 1);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(id) = map.get("id").and_then(Value::as_i64) {
+                if let Some(title) = map.get("title").and_then(Value::as_str) {
+                    names.learn(format!("doc:{id}"), title);
+                } else if let Some(name) = map.get("name").and_then(Value::as_str) {
+                    names.learn(format!("folder:{id}"), name);
+                }
+            }
+            for (_, inner) in map {
+                if inner.is_object() || inner.is_array() {
+                    learn_names(inner, names, depth + 1);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

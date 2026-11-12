@@ -56,6 +56,7 @@ pub struct FakeReply {
 enum Step {
     Text(String),
     Tool(ToolActivity),
+    Status(String),
 }
 
 impl FakeReply {
@@ -130,7 +131,9 @@ impl FakeReply {
         let calls = self
             .steps
             .iter()
-            .filter(|step| matches!(step, Step::Tool(activity) if activity.state == ToolState::Running))
+            .filter(
+                |step| matches!(step, Step::Tool(activity) if activity.state == ToolState::Running),
+            )
             .count();
         let id = format!("fake-tool-{}", calls + 1);
         let at = self
@@ -152,6 +155,12 @@ impl FakeReply {
         self.steps.insert(at, Step::Tool(running));
     }
 
+    /// The same answer with a status line ("Thinking") before what it has so far.
+    pub fn with_status(mut self, text: impl Into<String>) -> Self {
+        self.steps.insert(0, Step::Status(text.into()));
+        self
+    }
+
     /// The same answer, reporting this usage when it ends.
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
@@ -171,7 +180,7 @@ impl FakeReply {
             .iter()
             .filter_map(|step| match step {
                 Step::Text(text) => Some(text.as_str()),
-                Step::Tool(_) => None,
+                Step::Tool(_) | Step::Status(_) => None,
             })
             .collect()
     }
@@ -238,6 +247,8 @@ struct State {
     script: VecDeque<FakeReply>,
     fallback: Option<FakeReply>,
     hold: bool,
+    live_selection: bool,
+    selections: Vec<(usize, Selection)>,
     started: Vec<ConversationOptions>,
     talks: Vec<Talk>,
     sent: Vec<FakeSent>,
@@ -288,6 +299,8 @@ impl FakeBackend {
                 script: VecDeque::new(),
                 fallback: None,
                 hold: false,
+                live_selection: false,
+                selections: Vec::new(),
                 started: Vec::new(),
                 talks: Vec::new(),
                 sent: Vec::new(),
@@ -394,6 +407,19 @@ impl FakeBackend {
         self.lock().fallback = Some(reply);
     }
 
+    /// Whether conversations started from now on can change their model and effort
+    /// while they run ([`Conversation::select`]), as Claude Code can. Off by default: a
+    /// change of selection then starts a new conversation with the history.
+    pub fn set_live_selection(&self, live: bool) {
+        self.lock().live_selection = live;
+    }
+
+    /// Every change of model and effort a running conversation was asked for, with the
+    /// index of the conversation.
+    pub fn selections(&self) -> Vec<(usize, Selection)> {
+        self.lock().selections.clone()
+    }
+
     /// Holds every event back until [`advance`](Self::advance),
     /// [`finish`](Self::finish) or [`release`](Self::release) lets it through.
     pub fn hold(&self) {
@@ -467,7 +493,8 @@ impl FakeBackend {
         let state = self.lock();
         for talk in &state.talks {
             if talk.alive.load(Ordering::SeqCst) {
-                talk.sink.send(AssistantEvent::Notice { text: text.clone() });
+                talk.sink
+                    .send(AssistantEvent::Notice { text: text.clone() });
             }
         }
     }
@@ -588,6 +615,10 @@ impl FakeBackend {
                             turn,
                             activity: activity.clone(),
                         },
+                        Step::Status(text) => AssistantEvent::Status {
+                            turn,
+                            text: text.clone(),
+                        },
                     });
                 }
                 events.push_back(AssistantEvent::Finished {
@@ -604,6 +635,9 @@ impl FakeBackend {
                 if !state.hold {
                     while deliver_one(&mut state) {}
                 }
+            }
+            Command::Select(selection) => {
+                state.selections.push((index, selection));
             }
             Command::Stop => {
                 state.stops += 1;
@@ -690,8 +724,9 @@ impl Backend for FakeBackend {
 
     fn start(&self, options: ConversationOptions, events: EventSink) -> Conversation {
         let alive = Arc::new(AtomicBool::new(true));
-        let index = {
+        let (index, live) = {
             let mut state = self.lock();
+            let live = state.live_selection;
             state.started.push(options);
             state.talks.push(Talk {
                 sink: events,
@@ -699,10 +734,15 @@ impl Backend for FakeBackend {
                 ready: false,
                 turns: VecDeque::new(),
             });
-            state.talks.len() - 1
+            (state.talks.len() - 1, live)
         };
         let fake = self.clone();
-        Conversation::new(move |command| fake.command(index, command), alive)
+        let conversation = Conversation::new(move |command| fake.command(index, command), alive);
+        if live {
+            conversation.with_live_selection()
+        } else {
+            conversation
+        }
     }
 }
 

@@ -81,10 +81,7 @@ pub fn describe_moment(at: i64, now: i64) -> String {
     {
         format!("tomorrow at {clock}")
     } else {
-        format!(
-            "on {} {} at {clock}",
-            then.day, MONTHS[then.month as usize]
-        )
+        format!("on {} {} at {clock}", then.day, MONTHS[then.month as usize])
     }
 }
 

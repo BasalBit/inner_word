@@ -56,7 +56,7 @@ use crate::backend::{
 use crate::context::{HISTORY_LIMIT, OpenDocument, SideContext, quick_prompt};
 use crate::events::{EventSink, EventStream, event_channel};
 use crate::prompts;
-use crate::tools::{LIBRARY_SERVER_NAME, NameBook, describe_library_tool};
+use crate::tools::{LIBRARY_SERVER_NAME, NameBook, library_describer, library_observer};
 use crate::transcript::{Attachment, AttachmentKind, MessageId, Transcript};
 
 /// A conversation that is running, and what it was started with.
@@ -227,20 +227,28 @@ impl ChatSession {
     // ----- changing --------------------------------------------------------------------
 
     /// Chooses the model and effort for the messages from now on. An answer that is
-    /// being written goes on as it was asked. The conversation continues: the agent is
-    /// started anew with the next message and told what was said so far.
+    /// being written goes on as it was asked. The conversation continues: an agent that
+    /// can change them while it runs does (it keeps everything it knows); for another
+    /// the agent is started anew with the next message and told what was said so far.
     pub fn set_selection(&mut self, selection: Selection) {
+        if self.selection == selection {
+            return;
+        }
         self.selection = selection;
+        if let Some(running) = &mut self.running
+            && running.selection != self.selection
+            && running.conversation.select(self.selection.clone())
+        {
+            running.selection = self.selection.clone();
+        }
     }
 
     /// Gives the chat other tools (or none), from the next message on.
     pub fn set_tools(&mut self, tools: Option<ToolServer>) {
         let tools = tools.map(|mut tools| {
             if tools.name == LIBRARY_SERVER_NAME {
-                let names = self.names.clone();
-                tools.describe = Some(Arc::new(move |tool, input| {
-                    describe_library_tool(tool, input, &names)
-                }));
+                tools.describe = Some(library_describer(&self.names));
+                tools.observe = Some(library_observer(&self.names));
             }
             tools
         });
@@ -324,7 +332,8 @@ impl ChatSession {
             .expect("ensure_running leaves a conversation");
         let turn = running.conversation.send(prompt);
         self.open_turns.insert(turn, running.generation);
-        self.transcript.begin_answer(turn, running.selection.clone());
+        self.transcript
+            .begin_answer(turn, running.selection.clone());
         message
     }
 
@@ -338,10 +347,13 @@ impl ChatSession {
             return;
         }
         self.retire_running();
-        let system_prompt = self.system_prompt.clone().unwrap_or_else(|| match self.mode {
-            Mode::Quick => prompts::QUICK_SYSTEM_PROMPT.to_string(),
-            Mode::Side => prompts::side_system_prompt(self.tools.is_some()),
-        });
+        let system_prompt = self
+            .system_prompt
+            .clone()
+            .unwrap_or_else(|| match self.mode {
+                Mode::Quick => prompts::QUICK_SYSTEM_PROMPT.to_string(),
+                Mode::Side => prompts::side_system_prompt(self.tools.is_some()),
+            });
         let mut options = ConversationOptions::new(system_prompt)
             .with_selection(self.selection.clone())
             .with_tools(self.tools.clone())

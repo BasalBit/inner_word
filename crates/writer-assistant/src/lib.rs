@@ -66,7 +66,7 @@ pub use backend::{
     AssistantError, AssistantEvent, Availability, Backend, BackendInfo, Catalog, CatalogSource,
     Command, Conversation, ConversationOptions, EffortChoice, EffortOption, ErrorText,
     HistoryMessage, Installation, Mode, ModelChoice, ModelOption, Role, Selection, SignIn,
-    ToolActivity, ToolDescriber, ToolServer, ToolState, TurnEnd, TurnId, Usage,
+    ToolActivity, ToolDescriber, ToolObserver, ToolServer, ToolState, TurnEnd, TurnId, Usage,
 };
 pub use claude::ClaudeCode;
 pub use context::{
@@ -79,8 +79,8 @@ pub use fake::{FakeBackend, FakeReply, FakeSent, fake_catalog, fake_info};
 pub use prompts::{QUICK_SYSTEM_PROMPT, SIDE_SYSTEM_PROMPT, side_system_prompt, system_prompt};
 pub use session::{ChatSession, privacy_notice};
 pub use tools::{
-    LIBRARY_SERVER_NAME, NameBook, describe_library_tool, library_tools, library_tools_named,
-    read_only_tools, withheld_tools,
+    LIBRARY_SERVER_NAME, NameBook, describe_library_tool, describe_unknown_tool, library_describer,
+    library_observer, library_tools, library_tools_named, read_only_tools, withheld_tools,
 };
 pub use transcript::{
     Attachment, AttachmentKind, CUT_OFF_NOTE, Message, MessageId, MessageState, Transcript,

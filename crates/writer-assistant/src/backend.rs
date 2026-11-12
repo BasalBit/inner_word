@@ -404,12 +404,21 @@ pub enum Role {
 /// arguments. `None`: no better words than the tool's name.
 pub type ToolDescriber = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
 
+/// Is told what a tool call returned: the tool's name (as the server names it), its
+/// arguments and its structured result (JSON `null` when the tool gave none). Used to
+/// learn the titles behind ids, so that a later call reads "Reading Chapter 2".
+pub type ToolObserver = Arc<dyn Fn(&str, &serde_json::Value, &serde_json::Value) + Send + Sync>;
+
 /// A set of tools given to the agent as an MCP server it starts itself (over stdio).
 ///
 /// The assistant only ever reads: `allowed` are the tools the agent may call without
 /// asking, `denied` are the tools of the server it must not see at all. A backend that
 /// cannot enforce both must not offer the server.
+///
+/// Made with [`ToolServer::new`], or for the library of the app with
+/// [`library_tools`](crate::library_tools).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ToolServer {
     /// The name the server is registered under: `the-writer`.
     pub name: String,
@@ -425,6 +434,55 @@ pub struct ToolServer {
     pub denied: Vec<String>,
     /// Words for a tool call, for the activity line.
     pub describe: Option<ToolDescriber>,
+    /// Is told the result of every tool call.
+    pub observe: Option<ToolObserver>,
+}
+
+impl ToolServer {
+    /// A server registered as `name` that is started by running `command`, with no
+    /// arguments, no tools allowed and none withheld yet.
+    pub fn new(name: impl Into<String>, command: impl Into<PathBuf>) -> Self {
+        ToolServer {
+            name: name.into(),
+            command: command.into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            allowed: Vec::new(),
+            denied: Vec::new(),
+            describe: None,
+            observe: None,
+        }
+    }
+
+    /// With these arguments.
+    pub fn with_args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// With the tools that may be called without asking.
+    pub fn allowing<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed = tools.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// With the tools that are withheld.
+    pub fn denying<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.denied = tools.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 impl std::fmt::Debug for ToolServer {
@@ -437,6 +495,7 @@ impl std::fmt::Debug for ToolServer {
             .field("allowed", &self.allowed)
             .field("denied", &self.denied)
             .field("describe", &self.describe.is_some())
+            .field("observe", &self.observe.is_some())
             .finish()
     }
 }
@@ -524,12 +583,17 @@ impl TurnId {
 
 /// What a [`Conversation`] asks of its backend. Only backends read these.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Command {
     /// Starts the agent now, without sending anything, so that the first answer does not
     /// wait for the program to start.
     Prepare,
     /// A user message.
     Send { turn: TurnId, text: String },
+    /// Answer the messages from now on with this model and effort. Sent only to a
+    /// conversation that said it can change them while it runs
+    /// ([`Conversation::with_live_selection`]).
+    Select(Selection),
     /// Stop the answer that is being written (and drop the messages waiting behind it).
     Stop,
     /// End the conversation.
@@ -568,6 +632,7 @@ pub enum Command {
 pub struct Conversation {
     control: Box<dyn Fn(Command) + Send + Sync>,
     alive: Arc<AtomicBool>,
+    live_selection: bool,
 }
 
 impl Conversation {
@@ -581,7 +646,30 @@ impl Conversation {
         Conversation {
             control: Box::new(control),
             alive,
+            live_selection: false,
         }
+    }
+
+    /// For backends: the same conversation, declared able to change its model and
+    /// effort while it runs ([`Command::Select`]).
+    pub fn with_live_selection(mut self) -> Conversation {
+        self.live_selection = true;
+        self
+    }
+
+    /// Changes the model and effort for the messages from now on, keeping everything
+    /// the agent knows of the conversation. Returns `false`, and does nothing, when
+    /// this conversation cannot change them while it runs: then start a new one with
+    /// the other selection and hand it the history. Never blocks.
+    ///
+    /// A selection the agent refuses (a model it does not know) shows as the failure of
+    /// the next message, with [`AssistantError::Rejected`].
+    pub fn select(&self, selection: Selection) -> bool {
+        if !self.live_selection || !self.is_alive() {
+            return false;
+        }
+        (self.control)(Command::Select(selection));
+        true
     }
 
     /// Sends a user message and returns the id its answer will carry. Never blocks. A
@@ -649,7 +737,14 @@ pub enum AssistantEvent {
     Text { turn: TurnId, text: String },
     /// The assistant uses a tool, or has finished using it (the same
     /// [`ToolActivity::id`] with another state).
-    Tool { turn: TurnId, activity: ToolActivity },
+    Tool {
+        turn: TurnId,
+        activity: ToolActivity,
+    },
+    /// What is happening while no text arrives, for the line under the answer:
+    /// "Thinking", "No connection, trying again (2 of 4)". It holds until the next
+    /// event of the turn; an empty text clears it.
+    Status { turn: TurnId, text: String },
     /// The answer to this message is over. Sent exactly once for every message.
     Finished {
         turn: TurnId,
@@ -673,6 +768,7 @@ impl AssistantEvent {
             AssistantEvent::Started { turn }
             | AssistantEvent::Text { turn, .. }
             | AssistantEvent::Tool { turn, .. }
+            | AssistantEvent::Status { turn, .. }
             | AssistantEvent::Finished { turn, .. } => Some(*turn),
             AssistantEvent::Ready { .. } | AssistantEvent::Notice { .. } => None,
         }
@@ -745,6 +841,10 @@ pub enum AssistantError {
     /// The user is not signed in to the agent, or the sign-in has expired.
     #[error("not signed in to the agent")]
     NotSignedIn,
+    /// The installed agent is older than the assistant can safely use. `found` is its
+    /// version, `needed` the oldest one that will do.
+    #[error("the agent is too old: {found}, {needed} is needed")]
+    Outdated { found: String, needed: String },
     /// The user's allowance is used up. `resets_at` is when it comes back, in seconds
     /// since 1970 (UTC), when the agent says; `detail` is the agent's own sentence.
     #[error("the usage limit is reached: {detail}")]
@@ -804,6 +904,12 @@ impl AssistantError {
             AssistantError::NotSignedIn => ErrorText {
                 headline: format!("You are not signed in to {name}."),
                 advice: format!("{} Then send the message again.", info.sign_in_help),
+            },
+            AssistantError::Outdated { found, needed } => ErrorText {
+                headline: format!("{name} {found} is too old for the assistant."),
+                advice: format!(
+                    "Update {name} to version {needed} or newer, then send the message again."
+                ),
             },
             AssistantError::UsageLimit { resets_at, detail } => ErrorText {
                 headline: format!("You have reached the usage limit of your {name} plan."),

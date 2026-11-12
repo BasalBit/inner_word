@@ -125,6 +125,10 @@ pub struct Message {
     /// An answer in this run of the app: the turn whose events fill it.
     #[serde(skip)]
     pub turn: Option<TurnId>,
+    /// An answer that is being written: what is happening while no text arrives
+    /// ("Thinking", "No connection, trying again"), as the agent last said.
+    #[serde(skip)]
+    pub status: Option<String>,
 }
 
 impl Message {
@@ -148,7 +152,8 @@ impl Message {
     }
 
     /// What the assistant is doing right now, for the line under a streaming answer:
-    /// the description of the tool call that is running, if one is.
+    /// the description of the tool call that is running ("Reading Chapter 2"), else
+    /// what the agent last said of itself ("Thinking"), else nothing.
     pub fn current_activity(&self) -> Option<&str> {
         if !self.is_streaming() {
             return None;
@@ -158,6 +163,7 @@ impl Message {
             .rev()
             .find(|activity| activity.state == ToolState::Running)
             .map(|activity| activity.description.as_str())
+            .or(self.status.as_deref())
     }
 }
 
@@ -227,7 +233,10 @@ impl Transcript {
 
     /// The question an answer answers: the nearest user message before it.
     pub fn question_of(&self, answer: MessageId) -> Option<&Message> {
-        let index = self.messages.iter().position(|message| message.id == answer)?;
+        let index = self
+            .messages
+            .iter()
+            .position(|message| message.id == answer)?;
         self.messages[..index]
             .iter()
             .rev()
@@ -260,6 +269,7 @@ impl Transcript {
             usage: None,
             at: now_millis(),
             turn: None,
+            status: None,
         });
         self.trim();
         id
@@ -281,6 +291,7 @@ impl Transcript {
             usage: None,
             at: now_millis(),
             turn: Some(turn),
+            status: None,
         });
         self.trim();
         id
@@ -305,8 +316,20 @@ impl Transcript {
             return false;
         }
         match event {
-            AssistantEvent::Text { text, .. } => push_bounded(&mut message.text, text),
+            AssistantEvent::Text { text, .. } => {
+                let cleared = message.status.take().is_some();
+                push_bounded(&mut message.text, text) || cleared
+            }
+            AssistantEvent::Status { text, .. } => {
+                let status = (!text.trim().is_empty()).then(|| text.clone());
+                if message.status == status {
+                    return false;
+                }
+                message.status = status;
+                true
+            }
             AssistantEvent::Tool { activity, .. } => {
+                message.status = None;
                 match message
                     .activity
                     .iter_mut()
@@ -346,6 +369,7 @@ impl Transcript {
                     }
                 }
                 message.usage = usage.clone();
+                message.status = None;
                 message.state = match end {
                     TurnEnd::Complete => MessageState::Done,
                     TurnEnd::Stopped => MessageState::Stopped,
@@ -365,6 +389,7 @@ impl Transcript {
         for message in &mut self.messages {
             if message.is_streaming() {
                 message.state = MessageState::Stopped;
+                message.status = None;
                 for activity in &mut message.activity {
                     if activity.state == ToolState::Running {
                         activity.state = ToolState::Failed;

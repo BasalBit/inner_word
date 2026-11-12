@@ -1,24 +1,57 @@
 //! The backend for Claude Code.
 //!
-//! This first commit is the interface only: the program is not looked for yet and a
-//! conversation answers every message with [`AssistantError::NotInstalled`]. The
-//! implementation follows in this module without changing what is public here.
+//! [`ClaudeCode`] finds the `claude` program ([`locate`]), asks it for its version and
+//! the sign-in state ([`status`]) and for the models it offers ([`catalog`]), and runs
+//! one long-lived process per conversation ([`process`]) in the program's streaming
+//! mode (`-p --input-format stream-json --output-format stream-json`), started with the
+//! flags and the environment of [`args`] so that it is a writing assistant and nothing
+//! of the user's coding setup: no settings files, no hooks, no skills or commands, no
+//! `CLAUDE.md`, no MCP server but the one given, no built-in tool, no session left in
+//! the user's history. The user's sign-in is the program's own: nothing here reads or
+//! stores a credential.
+//!
+//! The program's output is read by [`stream`], whose shapes are those recorded from
+//! Claude Code 2.1.322 in `tests/fixtures`.
+
+pub mod args;
+pub mod catalog;
+pub mod locate;
+pub mod process;
+pub mod run;
+pub mod status;
+pub mod stream;
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 
 use crate::backend::{
-    AssistantError, AssistantEvent, Availability, Backend, BackendInfo, Catalog, CatalogSource,
-    Command, Conversation, ConversationOptions, EffortOption, ModelOption, Selection, TurnEnd,
+    AssistantError, AssistantEvent, Availability, Backend, BackendInfo, Catalog, Command,
+    Conversation, ConversationOptions, Installation, SignIn, TurnEnd,
 };
 use crate::events::EventSink;
 
-/// The day the built-in table of models and effort levels was read from Claude Code's
-/// documentation and program.
-pub const CATALOG_AS_OF: &str = "2026-11-12";
+pub use catalog::{CATALOG_AS_OF, builtin_catalog};
+pub use locate::Search;
+pub use status::MINIMUM_VERSION;
+
+use process::{Input, Launcher, Worker};
 
 /// Claude Code as the agent behind the assistant.
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use writer_assistant::{Backend, ChatSession, ClaudeCode};
+///
+/// let claude = ClaudeCode::new();
+/// // On a background thread: is it installed, is the user signed in?
+/// let availability = claude.availability();
+/// if availability.is_ready() {
+///     let mut chat = ChatSession::quick(Arc::new(claude));
+///     chat.ask_quick("A word for very tired?", None);
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ClaudeCode {
     shared: Arc<Shared>,
@@ -27,8 +60,12 @@ pub struct ClaudeCode {
 struct Shared {
     /// A program given by the caller instead of the one that is looked for.
     program: Option<PathBuf>,
+    /// Where to look; `None`: on this Mac.
+    search: Option<Search>,
     availability: Mutex<Option<Availability>>,
     catalog: Mutex<Option<Catalog>>,
+    /// One look at a time: a second caller waits for the first and takes its answer.
+    looking: Mutex<()>,
 }
 
 impl Default for ClaudeCode {
@@ -37,27 +74,113 @@ impl Default for ClaudeCode {
     }
 }
 
+impl std::fmt::Debug for ClaudeCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeCode")
+            .field("program", &self.shared.program)
+            .finish()
+    }
+}
+
 impl ClaudeCode {
-    /// Claude Code as it is installed on this Mac: the program is looked for in the
-    /// usual places and, failing that, through the user's login shell.
-    pub fn new() -> Self {
+    fn with(program: Option<PathBuf>, search: Option<Search>) -> Self {
         ClaudeCode {
             shared: Arc::new(Shared {
-                program: None,
+                program,
+                search,
                 availability: Mutex::new(None),
                 catalog: Mutex::new(None),
+                looking: Mutex::new(()),
             }),
         }
     }
 
-    /// Claude Code as this program, without looking for it (tests run a stand-in).
+    /// Claude Code as it is installed on this Mac: the program is looked for in the
+    /// folders of the `PATH` and of the usual installers and, failing that, through the
+    /// user's login shell ([`Search::this_mac`]). Nothing is looked for until
+    /// [`Backend::availability`] is asked.
+    pub fn new() -> Self {
+        ClaudeCode::with(None, None)
+    }
+
+    /// Claude Code as this program, without looking for it. Tests run a stand-in.
     pub fn with_program(program: impl Into<PathBuf>) -> Self {
-        ClaudeCode {
-            shared: Arc::new(Shared {
-                program: Some(program.into()),
-                availability: Mutex::new(None),
-                catalog: Mutex::new(None),
-            }),
+        ClaudeCode::with(Some(program.into()), None)
+    }
+
+    /// Claude Code looked for where `search` says. Tests search a temporary home.
+    pub fn with_search(search: Search) -> Self {
+        ClaudeCode::with(None, Some(search))
+    }
+}
+
+impl Shared {
+    fn cached(&self) -> Option<Availability> {
+        self.availability.lock().ok()?.clone()
+    }
+
+    fn look(&self) -> Availability {
+        // Whoever comes while a look is under way waits for it.
+        let _looking = self.looking.lock();
+        let program = match &self.program {
+            Some(program) => locate::is_executable(program).then(|| program.clone()),
+            None => match &self.search {
+                Some(search) => search.find(),
+                None => Search::this_mac().find(),
+            },
+        };
+        let found = match program {
+            None => Availability::NotInstalled,
+            Some(program) => {
+                let version = status::version(&program);
+                let sign_in = status::sign_in(&program);
+                Availability::Installed(Installation {
+                    program,
+                    version,
+                    sign_in,
+                })
+            }
+        };
+        if let Ok(mut cache) = self.availability.lock() {
+            *cache = Some(found.clone());
+        }
+        found
+    }
+
+    fn availability(&self) -> Availability {
+        if let Some(known) = self.cached() {
+            return known;
+        }
+        // Two callers at once: the second finds the first one's answer.
+        let waited = self.looking.lock();
+        drop(waited);
+        self.cached().unwrap_or_else(|| self.look())
+    }
+}
+
+impl Launcher for Arc<Shared> {
+    fn program(&self, fresh: bool) -> Result<PathBuf, AssistantError> {
+        let availability = if fresh {
+            self.look()
+        } else {
+            self.availability()
+        };
+        match availability {
+            Availability::NotInstalled => Err(AssistantError::NotInstalled),
+            Availability::Installed(installation) => {
+                if installation.sign_in == SignIn::SignedOut {
+                    return Err(AssistantError::NotSignedIn);
+                }
+                if let Some(version) = &installation.version
+                    && !status::is_at_least(version, MINIMUM_VERSION)
+                {
+                    return Err(AssistantError::Outdated {
+                        found: version.clone(),
+                        needed: MINIMUM_VERSION.to_string(),
+                    });
+                }
+                Ok(installation.program)
+            }
         }
     }
 }
@@ -68,22 +191,15 @@ impl Backend for ClaudeCode {
     }
 
     fn availability(&self) -> Availability {
-        if let Some(known) = self.cached_availability() {
-            return known;
-        }
-        self.recheck()
+        self.shared.availability()
     }
 
     fn recheck(&self) -> Availability {
-        let found = Availability::NotInstalled;
-        if let Ok(mut cache) = self.shared.availability.lock() {
-            *cache = Some(found.clone());
-        }
-        found
+        self.shared.look()
     }
 
     fn cached_availability(&self) -> Option<Availability> {
-        self.shared.availability.lock().ok()?.clone()
+        self.shared.cached()
     }
 
     fn catalog(&self) -> Catalog {
@@ -96,25 +212,69 @@ impl Backend for ClaudeCode {
     }
 
     fn refresh_catalog(&self) -> Catalog {
+        if let Availability::Installed(installation) = self.shared.availability()
+            && installation.sign_in != SignIn::SignedOut
+            && let Some(found) = catalog::probe(&installation.program, None)
+            && let Ok(mut cache) = self.shared.catalog.lock()
+        {
+            *cache = Some(found);
+        }
         self.catalog()
     }
 
-    fn start(&self, _options: ConversationOptions, events: EventSink) -> Conversation {
-        let _ = &self.shared.program;
+    fn start(&self, options: ConversationOptions, events: EventSink) -> Conversation {
         let alive = Arc::new(AtomicBool::new(true));
+        let (inbox_tx, inbox) = channel::<Input>();
+        let worker = Worker::new(
+            self.shared.clone(),
+            options,
+            events.clone(),
+            alive.clone(),
+            inbox,
+            inbox_tx.clone(),
+        );
+        let started = std::thread::Builder::new()
+            .name("writer-assistant-claude".into())
+            .spawn(move || worker.run());
+        if started.is_err() {
+            alive.store(false, Ordering::SeqCst);
+        }
+        let closed = Arc::new(AtomicBool::new(false));
+        let closing = alive.clone();
         Conversation::new(
             move |command| {
-                if let Command::Send { turn, .. } = command {
+                // The thread is gone or going (the conversation was closed, or the
+                // thread could not be started): a message is still answered.
+                let refuse = |turn| {
                     events.send(AssistantEvent::Finished {
                         turn,
                         text: None,
-                        end: TurnEnd::Failed(AssistantError::NotInstalled),
+                        end: TurnEnd::Failed(AssistantError::Exited {
+                            code: None,
+                            detail: "the conversation has ended".to_string(),
+                        }),
                         usage: None,
                     });
+                };
+                if closed.load(Ordering::SeqCst) {
+                    if let Command::Send { turn, .. } = command {
+                        refuse(turn);
+                    }
+                    return;
+                }
+                if command == Command::Close {
+                    closed.store(true, Ordering::SeqCst);
+                    closing.store(false, Ordering::SeqCst);
+                }
+                if let Err(unsent) = inbox_tx.send(Input::Command(command))
+                    && let Input::Command(Command::Send { turn, .. }) = unsent.0
+                {
+                    refuse(turn);
                 }
             },
             alive,
         )
+        .with_live_selection()
     }
 }
 
@@ -128,43 +288,5 @@ pub fn info() -> BackendInfo {
             .to_string(),
         install_url: "https://claude.com/claude-code".to_string(),
         sign_in_help: "Open Terminal, run claude and sign in.".to_string(),
-    }
-}
-
-/// The models and effort levels of Claude Code as this version of the app knows them:
-/// the aliases the program accepts for `--model` and the levels it accepts for
-/// `--effort`. [`Backend::refresh_catalog`] replaces it with what the installed program
-/// says of itself.
-pub fn builtin_catalog() -> Catalog {
-    let model = |id: &str, name: &str, description: &str| ModelOption {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: description.to_string(),
-        efforts: None,
-    };
-    let effort = |id: &str, name: &str| EffortOption {
-        id: id.to_string(),
-        name: name.to_string(),
-    };
-    Catalog {
-        models: vec![
-            model("haiku", "Haiku", "Fastest, for short answers"),
-            model("sonnet", "Sonnet", "Balanced"),
-            model("opus", "Opus", "Most capable"),
-            model("fable", "Fable", "Most capable, newest"),
-        ],
-        efforts: vec![
-            effort("low", "Low"),
-            effort("medium", "Medium"),
-            effort("high", "High"),
-            effort("xhigh", "Extra high"),
-            effort("max", "Maximum"),
-        ],
-        quick_default: Selection::named("haiku", "low"),
-        side_default: Selection::named("sonnet", "medium"),
-        agent_default_label: "Claude Code's default".to_string(),
-        source: CatalogSource::BuiltIn {
-            as_of: CATALOG_AS_OF.to_string(),
-        },
     }
 }

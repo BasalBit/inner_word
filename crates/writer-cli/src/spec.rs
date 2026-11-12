@@ -288,8 +288,12 @@ its page and type settings) or about a folder (id, path, what is in it).",
         summary: "Where the library is, and whether The Writer is open",
         about: "Prints the data directory, how many documents and folders the library has, and whether \
 the app has it open right now. While it does, the commands that read work, and a change is carried \
-out by the app, where the user sees it at once; the status says when the app takes no changes \
-(they are switched off in its Agents panel, or it is a version before 0.6.0).",
+out by the app, where the user sees it at once; the status says when the app takes no changes, \
+and which of the two it is: they are switched off in its Agents panel, or it is a version before \
+0.6.0 (with --json: \"app_takes_changes\", and \"app_refuses\" with the reason a change would be \
+refused for). The result of every command that writes has \"app_is_open\" and \
+\"app_takes_changes\" too: true when the app made the change, false when the tool wrote to the \
+library itself.",
         examples: &["writer status", "writer status --json"],
         ..reading("status", Group::Library)
     },

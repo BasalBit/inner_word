@@ -407,10 +407,18 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_change_is_
     assert_eq!(status["app_pid"], std::process::id());
     let said = sandbox.ok(&["status"]);
     assert!(said.contains("The Writer is open (process "), "{said}");
+    // The lock file names no channel and the app has been running for a while: the tool
+    // knows which case this is, and says that one (not "switched off, or an old version").
+    assert_eq!(status["app_refuses"]["why"], "old_version");
     assert!(
-        said.contains("takes no changes from agents") && said.contains("every change is refused"),
+        said.contains(
+            ") and takes no changes from agents while it runs (it is a version before 0.6.0, \
+             or it could not open its channel): reading works, every change is refused until \
+             the user quits the app, or updates it.\n"
+        ),
         "{said}"
     );
+    assert!(!said.contains("switched off"), "{said}");
     assert!(sandbox.ok(&["list"]).contains("Chapter 1  doc:1"));
     assert!(sandbox.ok(&["search", "keeper"]).contains("doc:1"));
     assert!(sandbox.ok(&["recent"]).contains("doc:1"));
@@ -515,15 +523,16 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_change_is_
     );
     assert!(
         dry.ends_with(
-            "The Writer is open and takes no changes from agents (they are switched off in its \
-             Agents panel, or it is a version before 0.6.0): the real run will be refused \
-             until that is changed or the user quits the app.\n"
+            "The Writer is open and takes no changes from agents while it runs (it is a \
+             version before 0.6.0, or it could not open its channel): the real run will be \
+             refused until the user quits the app, or updates it.\n"
         ),
         "{dry}"
     );
     let dry = sandbox.json(&["trash", "doc:1", "--dry-run"]);
     assert_eq!(dry["app_is_open"], true);
     assert_eq!(dry["app_takes_changes"], false);
+    assert_eq!(dry["app_refuses"]["why"], "old_version");
 
     // Nothing of all that changed the library.
     assert_eq!(sandbox.ok(&["get", "doc:1"]), before);
@@ -766,10 +775,15 @@ fn the_tools_of_the_server_do_what_the_commands_do() {
     let (dry, dry_data) =
         client.call_ok("trash_document", json!({ "document": 1, "dry_run": true }));
     assert!(
-        dry.contains("the real run will be refused until that is changed or the user quits"),
+        dry.contains(
+            "(it is a version before 0.6.0, or it could not open its channel): the real run \
+             will be refused until the user quits the app, or updates it."
+        ),
         "{dry}"
     );
     assert_eq!(dry_data["app_is_open"], true);
+    assert_eq!(dry_data["app_refuses"]["why"], "old_version");
+    assert_eq!(status["app_refuses"]["why"], "old_version");
     let (read, _) = client.call_ok("read_document", json!({ "document": 1 }));
     assert_eq!(read, CHAPTER, "nothing was changed");
     // The app quits; the same server, still running, can write again.

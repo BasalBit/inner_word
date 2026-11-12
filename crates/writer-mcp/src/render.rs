@@ -5,6 +5,7 @@
 //! (every id needed for the next step is in it), compact, plain ASCII punctuation, no
 //! decoration. Ids are written the way they can be passed back: `doc:12`, `folder:3`.
 
+use writer_agent::live::{CHANGES_SWITCH, Refusal};
 use writer_agent::{
     CommentChanged, CommentList, CommentThreadInfo, ContentChanged, DocumentChanged,
     DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, ExportFormat,
@@ -93,14 +94,40 @@ fn nothing_to_do(written: &Written) -> Option<&'static str> {
 /// What a write says about itself, after everything else.
 fn written_suffix(written: &Written, out: &mut String) {
     if written.dry_run && written.app_is_open {
-        out.push_str(if written.app_takes_changes {
+        out.push_str(&if written.app_takes_changes {
             "\nThe Writer is open: the real run will be carried out by the app, where the user sees \
              the change at once."
+                .to_string()
         } else {
-            "\nThe Writer is open and takes no changes from agents (they are switched off in its \
-             Agents panel, or it is a version before 0.6.0): the real run will be refused until \
-             that is changed or the user quits the app."
+            match no_changes(written.app_refuses.as_ref()) {
+                Some((why, until)) => format!(
+                    "\nThe Writer is open and {why}: the real run will be refused until {until}."
+                ),
+                None => "\nThe Writer is open and has only just started, so whether it takes \
+                         changes from agents is not known yet: the real run is carried out by the \
+                         app if it does, and refused if it is a version before 0.6.0."
+                    .to_string(),
+            }
         });
+    }
+}
+
+/// What is said of an app that is open and takes no changes from agents, where the tool
+/// knows which case it is: that it takes none and why, and what ends that. `None` where
+/// it cannot be known (an app that has only just started names no channel yet, and a
+/// version before 0.6.0 never does).
+fn no_changes(refuses: Option<&Refusal>) -> Option<(&'static str, String)> {
+    match refuses? {
+        Refusal::SwitchedOff => Some((
+            "takes no changes from agents (they are switched off in its Agents panel)",
+            format!("the user switches on \"{CHANGES_SWITCH}\" there, or quits the app"),
+        )),
+        Refusal::OldVersion => Some((
+            "takes no changes from agents while it runs (it is a version before 0.6.0, or it \
+             could not open its channel)",
+            "the user quits the app, or updates it".to_string(),
+        )),
+        _ => None,
     }
 }
 
@@ -129,11 +156,17 @@ pub fn status(status: &LibraryStatus) -> String {
                  where the user sees it at once and can undo it.\n"
             )
         } else {
-            format!(
-                "The Writer is open{pid} and takes no changes from agents (they are switched off \
-                 in its Agents panel, or it is a version before 0.6.0): reading works, every \
-                 change is refused until that is changed or the user quits the app.\n"
-            )
+            match no_changes(status.app_refuses.as_ref()) {
+                Some((why, until)) => format!(
+                    "The Writer is open{pid} and {why}: reading works, every change is refused \
+                     until {until}.\n"
+                ),
+                None => format!(
+                    "The Writer is open{pid} and has only just started, so whether it takes \
+                     changes from agents is not known yet (a version before 0.6.0 takes none): \
+                     reading works; ask again in a few seconds.\n"
+                ),
+            }
         });
     } else {
         out.push_str("The Writer is not running: reading and writing both work.\n");
@@ -956,6 +989,72 @@ mod tests {
     #[test]
     fn times_are_cut_to_the_minute() {
         assert_eq!(time(Time(1_709_208_000_000)), "2024-02-29T12:00Z");
+    }
+
+    /// An app that is open and takes no changes: the status and the note of a dry run
+    /// say which case it is, and keep an "or" only for the one that cannot be known.
+    #[test]
+    fn an_app_that_takes_no_changes_is_said_to_be_the_case_it_is() {
+        let said = |refuses: serde_json::Value| {
+            let mut status = serde_json::json!({
+                "data_dir": "/library", "database": "/library/library.db", "exists": true,
+                "app_is_open": true, "app_pid": 7, "app_takes_changes": false,
+                "documents": 1, "folders": 0, "trashed": 0, "version": "1",
+            });
+            let mut written =
+                serde_json::json!({"dry_run": true, "changed": false, "app_is_open": true});
+            if !refuses.is_null() {
+                status["app_refuses"] = refuses.clone();
+                written["app_refuses"] = refuses;
+            }
+            let status: LibraryStatus = serde_json::from_value(status).unwrap();
+            let written: Written = serde_json::from_value(written).unwrap();
+            let mut note = String::new();
+            written_suffix(&written, &mut note);
+            (super::status(&status), note)
+        };
+        let (status, note) = said(serde_json::json!({"why": "switched_off"}));
+        assert!(
+            status.contains(
+                "The Writer is open (process 7) and takes no changes from agents (they are \
+                 switched off in its Agents panel): reading works, every change is refused \
+                 until the user switches on \"Agents can make changes while The Writer is \
+                 open\" there, or quits the app.\n"
+            ),
+            "{status}"
+        );
+        assert!(!status.contains("0.6.0") && !note.contains("0.6.0"));
+        assert!(note.starts_with("\nThe Writer is open and takes no changes from agents (they"));
+        assert!(note.ends_with("there, or quits the app."), "{note}");
+
+        let (status, note) = said(serde_json::json!({"why": "old_version"}));
+        assert!(
+            status.contains(
+                "takes no changes from agents while it runs (it is a version before 0.6.0, or \
+                 it could not open its channel): reading works, every change is refused until \
+                 the user quits the app, or updates it.\n"
+            ),
+            "{status}"
+        );
+        assert!(!status.contains("switched off") && !note.contains("switched off"));
+        assert!(
+            note.ends_with("until the user quits the app, or updates it."),
+            "{note}"
+        );
+
+        // An app that has only just started names no channel yet: that is the one case
+        // that cannot be told from a version before 0.6.0.
+        let (status, note) = said(serde_json::Value::Null);
+        assert!(
+            status.contains(
+                "The Writer is open (process 7) and has only just started, so whether it \
+                 takes changes from agents is not known yet (a version before 0.6.0 takes \
+                 none): reading works; ask again in a few seconds.\n"
+            ),
+            "{status}"
+        );
+        assert!(note.contains("has only just started"), "{note}");
+        assert!(!status.contains("switched off") && !note.contains("switched off"));
     }
 
     #[test]

@@ -580,14 +580,18 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
     assert_eq!(status["app_is_open"], true);
     assert_eq!(status["app_takes_changes"], false);
     let said = sandbox.ok(&["status"]);
+    // The app listens and says that it takes none: the tool knows that it is the switch,
+    // says so, and names what the refusal of a change names, in the same order.
+    assert_eq!(status["app_refuses"], json!({ "why": "switched_off" }));
     assert!(
         said.contains(
-            "and takes no changes from agents (they are switched off in its Agents panel, or \
-             it is a version before 0.6.0): reading works, every change is refused until \
-             that is changed or the user quits the app.\n"
+            "and takes no changes from agents (they are switched off in its Agents panel): \
+             reading works, every change is refused until the user switches on \"Agents can \
+             make changes while The Writer is open\" there, or quits the app.\n"
         ),
         "{said}"
     );
+    assert!(!said.contains("before 0.6.0"), "{said}");
 
     let writes: Vec<Vec<&str>> = vec![
         vec!["create", "New", "--content", "x"],
@@ -661,6 +665,10 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
     let error = run.error();
     assert_eq!(error["code"], "app_is_open");
     assert_eq!(error["refusal"]["why"], "switched_off");
+    assert_eq!(
+        error["refusal"], status["app_refuses"],
+        "the status and the refusal of a change at the same moment name the same reason"
+    );
     assert_eq!(error["nothing_changed"], true);
     assert!(error["hint"].as_str().unwrap().contains("--dry-run"));
 
@@ -687,16 +695,24 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
     );
     let (said, status) = client.call_ok("library_status", json!({}));
     assert_eq!(status["app_takes_changes"], false);
-    assert!(said.contains("takes no changes from agents"), "{said}");
+    assert_eq!(status["app_refuses"]["why"], "switched_off");
+    assert!(
+        said.contains("takes no changes from agents (they are switched off in its Agents panel):"),
+        "{said}"
+    );
     // A dry run works, and says what the real run would meet.
     let (dry, dry_data) =
         client.call_ok("trash_document", json!({ "document": 1, "dry_run": true }));
     assert!(
-        dry.contains("The Writer is open and takes no changes from agents"),
+        dry.contains(
+            "The Writer is open and takes no changes from agents (they are switched off in \
+             its Agents panel): the real run will be refused until the user switches on"
+        ),
         "{dry}"
     );
     assert_eq!(dry_data["app_is_open"], true);
     assert_eq!(dry_data["app_takes_changes"], false);
+    assert_eq!(dry_data["app_refuses"]["why"], "switched_off");
     client.close();
     let dry = sandbox.ok(&[
         "edit",
@@ -709,7 +725,9 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
     ]);
     assert!(
         dry.ends_with(
-            "the real run will be refused until that is changed or the user quits the app.\n"
+            "(they are switched off in its Agents panel): the real run will be refused until \
+             the user switches on \"Agents can make changes while The Writer is open\" there, \
+             or quits the app.\n"
         ),
         "{dry}"
     );
@@ -721,7 +739,9 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
 
     // The owner switches it on again: the same command line is carried out.
     app.set_switch(true);
-    assert_eq!(sandbox.json(&["status"])["app_takes_changes"], true);
+    let status = sandbox.json(&["status"]);
+    assert_eq!(status["app_takes_changes"], true);
+    assert!(status.get("app_refuses").is_none(), "{status}");
     app.served();
     sandbox.ok(&["edit", "doc:1", "--old", "at dawn", "--new", "at dusk"]);
     assert_eq!(app.changes(), ["edit"]);

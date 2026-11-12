@@ -1546,6 +1546,157 @@ fn an_app_that_holds_the_lock_and_does_not_listen_is_told_apart_and_nothing_is_w
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nWords.\n");
 }
 
+/// "It takes no changes" has two reasons, and the tool can tell them apart without
+/// anything new on the channel: an app that listens and says "no" has the switch off (an
+/// app of 0.6.0 says that in the same words), an app that has been running for a while
+/// and names no channel is one that never takes a change. Only an app that has just
+/// taken the lock and names no channel yet is not known.
+#[test]
+fn the_status_and_a_dry_run_say_why_the_app_takes_no_changes_where_that_can_be_known() {
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    let tried = |library: &Library| {
+        library
+            .edit(&EditRequest {
+                write: dry(),
+                ..edit(library, chapter.id, "Text", "Words")
+            })
+            .unwrap()
+            .written
+    };
+    // No app: nothing refuses.
+    let status = fx.library.status().unwrap();
+    assert!(!status.app_is_open && status.app_refuses.is_none());
+    assert_eq!(tried(&fx.library).app_refuses, None);
+    assert!(
+        !serde_json::to_string(&status)
+            .unwrap()
+            .contains("app_refuses"),
+        "absent, not null"
+    );
+
+    // The app of today with the switch off.
+    let app = StandIn::open(&fx);
+    let status = fx.library.status().unwrap();
+    assert!(status.app_takes_changes && status.app_refuses.is_none());
+    assert_eq!(tried(&fx.library).app_refuses, None);
+    set_switch(&fx, false);
+    let status = fx.library.status().unwrap();
+    assert!(status.app_is_open && !status.app_takes_changes);
+    assert_eq!(status.app_refuses, Some(Refusal::SwitchedOff));
+    let written = tried(&fx.library);
+    assert!(written.app_is_open && !written.app_takes_changes);
+    assert_eq!(written.app_refuses, Some(Refusal::SwitchedOff));
+    // What the refusal of the change itself says is the same.
+    assert_eq!(
+        refusal(
+            fx.library
+                .edit(&edit(&fx.library, chapter.id, "Text", "Words"))
+        ),
+        Refusal::SwitchedOff
+    );
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["app_refuses"],
+        serde_json::json!({"why": "switched_off"})
+    );
+    set_switch(&fx, true);
+    drop(app);
+
+    // An app of 0.6.0 with the switch off: it answers "flush" with exactly this line.
+    let app = RawApp::open(&fx, |_| {
+        b"{\"version\":1,\"answer\":\"done\",\"result\":{\"takes_changes\":false,\
+          \"app_version\":\"0.6.0\"}}\n"
+            .to_vec()
+    });
+    let status = fx.library.status().unwrap();
+    assert!(status.app_is_open && !status.app_takes_changes);
+    assert_eq!(status.app_refuses, Some(Refusal::SwitchedOff));
+    assert_eq!(tried(&fx.library).app_refuses, Some(Refusal::SwitchedOff));
+    drop(app);
+    // And with the switch on, in its words.
+    let app = RawApp::open(&fx, |_| {
+        b"{\"version\":1,\"answer\":\"done\",\"result\":{\"takes_changes\":true,\
+          \"app_version\":\"0.6.0\"}}\n"
+            .to_vec()
+    });
+    let status = fx.library.status().unwrap();
+    assert!(status.app_takes_changes && status.app_refuses.is_none());
+    drop(app);
+
+    // An app that holds the lock and names no channel. In its first seconds it may be
+    // one that is about to: that cannot be known, and nothing is claimed.
+    let lock = instance_lock::acquire(&fx.data_dir())
+        .unwrap()
+        .lock()
+        .unwrap();
+    let status = fx.library.status().unwrap();
+    assert!(status.app_is_open && !status.app_takes_changes);
+    assert_eq!(status.app_refuses, None, "it has only just started");
+    assert_eq!(tried(&fx.library).app_refuses, None);
+    // After that it is a version that takes none.
+    age_the_lock(&fx);
+    let status = fx.library.status().unwrap();
+    assert!(status.app_is_open && !status.app_takes_changes);
+    assert_eq!(status.app_refuses, Some(Refusal::OldVersion));
+    let written = tried(&fx.library);
+    assert!(written.app_is_open && !written.app_takes_changes);
+    assert_eq!(written.app_refuses, Some(Refusal::OldVersion));
+    assert_eq!(
+        refusal(
+            fx.library
+                .edit(&edit(&fx.library, chapter.id, "Text", "Words"))
+        ),
+        Refusal::OldVersion
+    );
+    drop(lock);
+    assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
+}
+
+/// What an app of today puts on the channel is what 0.6.0 put there, key for key: the
+/// reason is worked out by the tool, so a tool of 0.6.0 meets nothing it did not know.
+#[test]
+fn nothing_new_goes_over_the_channel_for_the_reason() {
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    let mut store = Store::open(fx.library.database_path()).unwrap();
+    store.set_setting(CHANGES_SETTING, &false).unwrap();
+    for operation in [Operation::Flush, Operation::Hello] {
+        let answer = live::execute(&mut store, &Request::new(operation, Duration::from_secs(1)));
+        assert_eq!(
+            serde_json::to_value(&answer.answer).unwrap(),
+            serde_json::json!({
+                "answer": "done",
+                "result": {"takes_changes": false, "app_version": env!("CARGO_PKG_VERSION")},
+            })
+        );
+    }
+    let refused = live::execute(
+        &mut store,
+        &Request::new(
+            Operation::Edit(edit(&fx.library, chapter.id, "Text", "Words")),
+            Duration::from_secs(1),
+        ),
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.answer).unwrap(),
+        serde_json::json!({"answer": "refused", "refusal": {"why": "switched_off"}})
+    );
+    // The result of a real run has no key for it either.
+    store.set_setting(CHANGES_SETTING, &true).unwrap();
+    let Answer::Done { result } = live::execute(
+        &mut store,
+        &Request::new(
+            Operation::Edit(edit(&fx.library, chapter.id, "Text", "Words")),
+            Duration::from_secs(1),
+        ),
+    )
+    .answer
+    else {
+        panic!("not done");
+    };
+    assert!(result.get("app_refuses").is_none(), "{result}");
+}
+
 #[test]
 fn a_socket_left_behind_by_a_crash_misleads_nobody() {
     let fx = closed_fixture();

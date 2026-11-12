@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use writer_store::{DocumentId, FolderId, SnapshotId};
 
-use crate::error::Occurrence;
+use crate::error::{Occurrence, Refusal};
 
 // ----- naming things ---------------------------------------------------------------------
 
@@ -496,6 +496,13 @@ pub struct Written {
     /// would then be refused with [`Error::AppIsOpen`](crate::Error::AppIsOpen).
     #[serde(default)]
     pub app_takes_changes: bool,
+    /// In a dry run while the app is open and takes no changes: why the real run would be
+    /// refused, where the tool can know it, in the form the refusal itself has in an
+    /// error (`{"why": "switched_off"}`, `{"why": "old_version"}`). Absent when the app
+    /// takes changes or is not open, and for an app that has only just started (it names
+    /// no channel yet, as a version before 0.6.0 never does).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_refuses: Option<Refusal>,
     /// Whether the request has anything to do: what `changed` is after a real run, and
     /// what it would be after the real run of a dry run.
     #[serde(default)]
@@ -671,11 +678,20 @@ pub struct LibraryStatus {
     /// The process id of the app that has it open, when the lock file names it.
     pub app_pid: Option<u32>,
     /// While the app is open: whether it takes changes from agents. When it does not
-    /// (its owner switched that off, or it is a version before 0.6.0) everything that
-    /// writes is refused with [`Error::AppIsOpen`](crate::Error::AppIsOpen) until the app
-    /// is quit. False when the app is not open.
+    /// (its owner switched that off, or it is a version before 0.6.0;
+    /// [`LibraryStatus::app_refuses`] says which) everything that writes is refused with
+    /// [`Error::AppIsOpen`](crate::Error::AppIsOpen) until that is changed or the app is
+    /// quit. False when the app is not open.
     #[serde(default)]
     pub app_takes_changes: bool,
+    /// While the app is open and takes no changes: why, in the form the refusal of a
+    /// change has in an error. `{"why": "switched_off"}`: the app listens and says that
+    /// its owner switched changes by agents off. `{"why": "old_version"}`: the app has
+    /// been running for a while and names no channel (a version before 0.6.0, or one that
+    /// could not open its channel). Absent when the app takes changes or is not open, and
+    /// in the first seconds of an app that names no channel yet: then it cannot be known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_refuses: Option<Refusal>,
     /// How many documents the library has (not counting the trash).
     pub documents: u64,
     /// How many folders (not counting the trash).

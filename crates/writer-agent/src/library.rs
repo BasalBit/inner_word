@@ -124,6 +124,9 @@ impl Library {
             app_is_open: app.is_some(),
             app_pid: app.and_then(|copy| copy.pid),
             app_takes_changes: app.is_some() && asked.takes_changes,
+            app_refuses: asked
+                .why_not
+                .filter(|_| app.is_some() && !asked.takes_changes),
             documents: 0,
             folders: 0,
             trashed: 0,
@@ -159,17 +162,32 @@ impl Library {
     /// afterwards; without an app, or without an answer, nothing was asked or learned.
     pub(crate) fn ask_app_to_save(&self) -> AppAsked {
         let Ok(Some(channel)) = instance_lock::app_channel(&self.data_dir) else {
-            // No app, or one that announced no channel: it takes no changes either.
+            // No app, or one that announced no channel: it takes no changes either. Which
+            // app that is, is known once it has held the lock for longer than an app
+            // takes to open its channel: one that never will. A younger one may be about
+            // to (a write waits for it, [`Library::wait_for_channel`]; a read does not).
+            let is_open = self.app_is_open();
+            let old = is_open
+                && instance_lock::held_since(&self.data_dir)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|since| {
+                        since.elapsed().unwrap_or(live::STARTING_GRACE) >= live::STARTING_GRACE
+                    });
             return AppAsked {
-                is_open: self.app_is_open(),
+                is_open,
                 takes_changes: false,
+                why_not: old.then_some(Refusal::OldVersion),
             };
         };
         let state = live::client::save(&channel.path, self.save_patience);
+        // An app that listens and did not answer in time is taken at its word.
+        let takes_changes = state.is_none_or(|state| state.takes_changes);
         AppAsked {
             is_open: true,
-            // An app that listens and did not answer in time is taken at its word.
-            takes_changes: state.is_none_or(|state| state.takes_changes),
+            takes_changes,
+            // An app that listens and says that it takes no changes: its owner's switch.
+            why_not: (!takes_changes).then_some(Refusal::SwitchedOff),
         }
     }
 
@@ -242,6 +260,7 @@ impl Library {
                 dry_run: true,
                 app_is_open: asked.is_open,
                 app_takes_changes: asked.is_open && asked.takes_changes,
+                app_refuses: asked.why_not,
                 clock: self.clock.clone(),
                 changes: Vec::new(),
             };
@@ -400,12 +419,17 @@ enum Taken {
 }
 
 /// What is known about the app after it was asked to save.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct AppAsked {
     /// The app has the library open.
     pub(crate) is_open: bool,
     /// It takes changes from agents (as far as known).
     pub(crate) takes_changes: bool,
+    /// Why it takes none, where that can be known: its owner switched them off (an app
+    /// that listens says so), or it is a version that never takes one (it has held the
+    /// lock for a while and names no channel). `None` while it takes changes, and for an
+    /// app that has only just started and names no channel yet.
+    pub(crate) why_not: Option<Refusal>,
 }
 
 /// The library, open for reading.
@@ -426,6 +450,8 @@ pub(crate) struct Session<'a> {
     pub(crate) app_is_open: bool,
     /// While the app is open: the app takes changes from agents.
     pub(crate) app_takes_changes: bool,
+    /// While the app is open and takes none: why, where that is known.
+    pub(crate) app_refuses: Option<Refusal>,
     /// The clock for what the operation stamps itself (a comment, a planned item).
     pub(crate) clock: Clock,
     /// What the operation changed so far, for the app ([`crate::live::Change`]).
@@ -441,6 +467,7 @@ impl<'a> Session<'a> {
             dry_run: false,
             app_is_open: false,
             app_takes_changes: false,
+            app_refuses: None,
             clock,
             changes: Vec::new(),
         }
@@ -456,6 +483,10 @@ impl<'a> Session<'a> {
             changed: changed && !self.dry_run,
             app_is_open: self.app_is_open,
             app_takes_changes: self.app_is_open && self.app_takes_changes,
+            app_refuses: self
+                .app_refuses
+                .clone()
+                .filter(|_| self.app_is_open && !self.app_takes_changes),
             would_change: changed,
         }
     }

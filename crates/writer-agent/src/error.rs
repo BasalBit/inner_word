@@ -508,9 +508,10 @@ fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
     match why {
         Refusal::SwitchedOff => format!(
             "{open} and changes by agents while it is open are switched off there, so \
-             nothing was changed. Ask the user to switch on \u{201c}Agents can make changes \
-             while The Writer is open\u{201d} in the Agents panel of the app (The Writer > \
-             Agents\u{2026}), or to quit The Writer; then try again."
+             nothing was changed. Ask the user to switch on \u{201c}{}\u{201d} in the \
+             Agents panel of the app (The Writer > Agents\u{2026}), or to quit The Writer; \
+             then try again.",
+            crate::live::CHANGES_SWITCH
         ),
         Refusal::Composing => format!(
             "{open} and the writer is in the middle of typing a character (text is being \

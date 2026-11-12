@@ -139,6 +139,10 @@ pub(crate) const LONGEST_WAIT: Duration = Duration::from_secs(3600);
 /// ([`changes_allowed`]); the app writes it.
 pub const CHANGES_SETTING: &str = "agents.changes_while_open";
 
+/// What that switch is called, in the app's Agents panel and in everything the tool says
+/// about it: one name everywhere.
+pub const CHANGES_SWITCH: &str = "Agents can make changes while The Writer is open";
+
 /// Whether the owner lets agents make changes while the app is open: the setting
 /// [`CHANGES_SETTING`] of `store`, on unless it was switched off.
 pub fn changes_allowed(store: &Store) -> bool {
@@ -666,6 +670,7 @@ pub fn execute(store: &mut Store, request: &Request) -> Executed {
     session.dry_run = options.dry_run;
     session.app_is_open = true;
     session.app_takes_changes = allowed;
+    session.app_refuses = (!allowed).then_some(Refusal::SwitchedOff);
     // Whatever goes wrong in an operation must not take the app down with it: the
     // writer's window is not the agent's to lose. A transaction that was open when an
     // operation panicked is rolled back as its guard is dropped.

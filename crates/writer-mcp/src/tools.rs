@@ -503,8 +503,8 @@ fn operations() -> Vec<Operation> {
             "Library status",
             "Where the library of The Writer is, how much is in it, and whether the app is open right now. \
 While the app is open a change is carried out by the app, where the user sees it at once and can undo it; \
-the status says when the app takes no changes (the user switched that off, or it is an older version). \
-Check here when in doubt.",
+the status says when the app takes no changes, and which it is: the user switched that off, or it is an \
+older version (app_refuses). Check here when in doubt.",
             reads(vec![], &[]),
             library_status as Run,
         ),

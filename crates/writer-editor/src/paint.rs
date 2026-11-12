@@ -11,6 +11,11 @@
 //! from the block's `Decorations`: text colour per byte range, and marks
 //! with a background (highlight, inline code), an underline or a
 //! strikethrough.
+//!
+//! A row is shaped in points and painted at the zoom of the view: every
+//! glyph at its shaped position times the zoom, in its font at its size
+//! times the zoom. Nothing is shaped again for a zoom, so the glyphs of a
+//! row keep their places relative to each other at every size.
 
 use std::rc::Rc;
 
@@ -24,6 +29,8 @@ pub(crate) struct PlannedRow {
     pub(crate) row: usize,
     /// Window position of the row's top at the left edge of the text box.
     pub(crate) origin: Point<Pixels>,
+    /// Window pixels per layout unit.
+    pub(crate) zoom: f32,
 }
 
 /// Rounds to half a pixel: whole device pixels on a Retina display, so
@@ -69,11 +76,12 @@ impl PlannedRow {
                 MarkShape::Highlight => (ink_box, px(2.)),
                 MarkShape::Code => (layout.code_box, px(3.5)),
             };
+            let zoom = self.zoom;
             window.paint_quad(
                 fill(
                     Bounds::new(
-                        point(self.origin.x + x0, self.origin.y + top),
-                        size(x1 - x0, height),
+                        point(self.origin.x + x0 * zoom, self.origin.y + top * zoom),
+                        size((x1 - x0) * zoom, height * zoom),
                     ),
                     color,
                 )
@@ -89,7 +97,8 @@ impl PlannedRow {
         let Some(line) = layout.lines.get(row.line) else {
             return;
         };
-        let baseline = self.origin.y + layout.baseline;
+        let zoom = self.zoom;
+        let baseline = self.origin.y + layout.baseline * zoom;
         let colors = &layout.decorations.colors;
         // Colour runs are walked in step with the glyphs; a glyph that goes
         // backwards (right-to-left text) looks its colour up instead.
@@ -107,9 +116,9 @@ impl PlannedRow {
                 run_ix += 1;
             }
             let color: Hsla = colors.get(run_ix).map_or(ink, |(_, color)| *color);
-            let origin = point(self.origin.x + x, baseline);
+            let origin = point(self.origin.x + x * zoom, baseline);
             // Inline code is drawn smaller than the line it was shaped in.
-            let font_size = layout.font_size * scale;
+            let font_size = layout.font_size * scale * zoom;
             if glyph.is_emoji {
                 window
                     .paint_emoji(origin, run.font_id, glyph.id, font_size)
@@ -121,7 +130,7 @@ impl PlannedRow {
             }
         });
 
-        let thickness = px((f32::from(layout.font_size) / 16.).round().max(1.));
+        let thickness = px((f32::from(layout.font_size) * zoom / 16.).round().max(1.));
         for (ix, range) in self.marks() {
             let mark = &layout.decorations.marks[ix];
             if mark.underline.is_none() && mark.strikethrough.is_none() {
@@ -132,15 +141,21 @@ impl PlannedRow {
             };
             let mut line_at = |y: Pixels, color: Hsla| {
                 window.paint_quad(fill(
-                    Bounds::new(point(self.origin.x + x0, snap(y)), size(x1 - x0, thickness)),
+                    Bounds::new(
+                        point(self.origin.x + x0 * zoom, snap(y)),
+                        size((x1 - x0) * zoom, thickness),
+                    ),
                     color,
                 ));
             };
             if let Some(color) = mark.underline {
-                line_at(baseline + (layout.descent * 0.5).max(px(1.5)), color);
+                line_at(baseline + (layout.descent * zoom * 0.5).max(px(1.5)), color);
             }
             if let Some(color) = mark.strikethrough {
-                line_at(baseline - layout.x_height * 0.5 - thickness / 2., color);
+                line_at(
+                    baseline - layout.x_height * zoom * 0.5 - thickness / 2.,
+                    color,
+                );
             }
         }
     }

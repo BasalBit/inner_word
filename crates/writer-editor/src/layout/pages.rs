@@ -33,31 +33,32 @@
 
 use std::rc::Rc;
 
-use gpui::{Bounds, Pixels, px};
+use gpui::{Pixels, px};
 use writer_core::PageSetup;
 
 use super::{block::Measure, style::Group};
 
-/// Space between two sheets, and around them, in pixels.
+/// Space between two sheets, in layout units (it zooms with the sheets).
 pub(crate) const PAGE_GAP: f32 = 20.;
-/// Space between the sheets and the editor's top and bottom edges.
+/// Space between the sheets and the editor's top and bottom edges, in
+/// layout units.
 pub(crate) const DESK_PADDING: f32 = 24.;
-/// Smallest space kept left and right of a sheet.
-const DESK_SIDE_PADDING: f32 = 16.;
-/// The page is never scaled below this.
-const MIN_SCALE: f32 = 0.2;
-/// Tolerance for "fits on the page" comparisons (scaled layouts are not
-/// whole pixels).
+/// Smallest space kept left and right of a sheet, in window pixels: where
+/// a sheet is wider than its room, the view scrolls sideways and this
+/// much desk shows at either end.
+pub(crate) const DESK_SIDE_PADDING: f32 = 16.;
+/// Tolerance for "fits on the page" comparisons (lengths in millimetres
+/// or inches are not whole points).
 const EPSILON: f32 = 0.01;
 /// How many blocks after a heading can decide where the heading goes (a
 /// run of headings is kept together with the text after it).
 pub(crate) const KEEP_LOOKAHEAD: usize = 4;
 
-/// The sheets of page view for one viewport, in layout pixels.
+/// The sheets of page view, in layout units (points). A pure function of
+/// the document's page setup: neither the window nor the zoom of the view
+/// is in it, so which row stands on which sheet cannot depend on either.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PageGeometry {
-    /// Window x of the sheets' left edge.
-    pub(crate) sheet_left: Pixels,
     pub(crate) sheet_width: Pixels,
     pub(crate) sheet_height: Pixels,
     pub(crate) margin_top: Pixels,
@@ -66,42 +67,31 @@ pub(crate) struct PageGeometry {
     pub(crate) content_width: Pixels,
     pub(crate) content_height: Pixels,
     pub(crate) gap: Pixels,
-    /// Layout pixels per point: 1, or less when the viewport is narrower
-    /// than the page.
-    pub(crate) scale: f32,
 }
 
 impl PageGeometry {
-    pub(crate) fn new(setup: &PageSetup, viewport: Bounds<Pixels>) -> Self {
+    pub(crate) fn new(setup: &PageSetup) -> Self {
         let (page_width, page_height) = setup.page_size();
         let (content_width, content_height) = setup.content_size();
-        let available = f32::from(viewport.size.width) - DESK_SIDE_PADDING * 2.;
-        let scale = if page_width > 0. {
-            (available / page_width).clamp(MIN_SCALE, 1.)
-        } else {
-            1.
-        };
-        let sheet_width = px(page_width * scale);
-        let sheet_left = viewport.left()
-            + ((viewport.size.width - sheet_width) / 2.)
-                .max(px(0.))
-                .round();
         Self {
-            sheet_left,
-            sheet_width,
-            sheet_height: px(page_height * scale),
-            margin_top: px(setup.margins.top * scale),
-            margin_bottom: px(setup.margins.bottom * scale),
-            margin_left: px(setup.margins.left * scale),
-            content_width: px((content_width * scale).max(1.)),
-            content_height: px((content_height * scale).max(1.)),
+            sheet_width: px(page_width),
+            sheet_height: px(page_height),
+            margin_top: px(setup.margins.top),
+            margin_bottom: px(setup.margins.bottom),
+            margin_left: px(setup.margins.left),
+            content_width: px(content_width.max(1.)),
+            content_height: px(content_height.max(1.)),
             gap: px(PAGE_GAP),
-            scale,
         }
     }
 
+    /// x of the sheets' left edge, from the left edge of the text column.
+    pub(crate) fn sheet_x(&self) -> Pixels {
+        -self.margin_left
+    }
+
     /// Whether `other` places blocks exactly as this geometry does (only
-    /// the horizontal position may differ).
+    /// the horizontal measures may differ).
     pub(crate) fn same_flow(&self, other: &Self) -> bool {
         self.sheet_height == other.sheet_height
             && self.margin_top == other.margin_top
@@ -333,7 +323,6 @@ mod tests {
 
     fn geometry(content_height: f32) -> PageGeometry {
         PageGeometry {
-            sheet_left: px(0.),
             sheet_width: px(600.),
             sheet_height: px(content_height + 144.),
             margin_top: px(72.),
@@ -342,7 +331,6 @@ mod tests {
             content_width: px(456.),
             content_height: px(content_height),
             gap: px(PAGE_GAP),
-            scale: 1.,
         }
     }
 
@@ -576,22 +564,22 @@ mod tests {
     }
 
     #[test]
-    fn geometry_scales_down_to_fit() {
+    fn geometry_is_the_page_setup_and_nothing_else() {
+        // A4 with one-inch margins, in points.
         let setup = PageSetup::default();
-        let (page_width, _) = setup.page_size();
-        let wide = PageGeometry::new(
-            &setup,
-            Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(1200.), px(800.))),
+        let (page_width, page_height) = setup.page_size();
+        let geometry = PageGeometry::new(&setup);
+        assert_eq!(geometry.sheet_width, px(page_width));
+        assert_eq!(geometry.sheet_height, px(page_height));
+        assert_eq!(geometry.margin_left, px(setup.margins.left));
+        assert_eq!(geometry.sheet_x(), px(-setup.margins.left));
+        assert_eq!(
+            geometry.content_width,
+            px(page_width - setup.margins.left - setup.margins.right)
         );
-        assert_eq!(wide.scale, 1.);
-        assert_eq!(wide.sheet_width, px(page_width));
-        let narrow = PageGeometry::new(
-            &setup,
-            Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(400.), px(800.))),
+        assert_eq!(
+            geometry.content_height,
+            px(page_height - setup.margins.top - setup.margins.bottom)
         );
-        assert!(narrow.scale < 1.);
-        assert!(narrow.sheet_left >= px(DESK_SIDE_PADDING - 0.5));
-        assert!(narrow.sheet_left + narrow.sheet_width <= px(400. - DESK_SIDE_PADDING + 0.5));
-        assert!(!wide.same_flow(&narrow));
     }
 }

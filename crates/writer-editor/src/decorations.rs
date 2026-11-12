@@ -4,15 +4,16 @@
 //! bar, the code block panel, the divider rule and the page break marker.
 //! Everything is added to the frame plan as quads, paths and single shaped
 //! lines; nothing here affects layout (the gutters the markers sit in come
-//! from `layout::style`).
+//! from `layout::style`). Sizes and positions are worked out in window
+//! pixels, from the layout's points through the frame's `View`: a marker
+//! is as large as the text it belongs to is drawn.
 //!
 //! A block that continues on the next sheet (page view) is decorated per
 //! segment: the code panel and the quote bar are drawn once for each run of
 //! rows on a sheet.
 
 use gpui::{
-    Bounds, Font, Hsla, PathBuilder, Pixels, Point, SharedString, TextRun, Window, fill, point, px,
-    size,
+    Bounds, Font, Hsla, PathBuilder, Pixels, SharedString, TextRun, Window, fill, point, px, size,
 };
 use writer_core::{Block, BlockKind};
 use writer_ui::theme;
@@ -20,7 +21,7 @@ use writer_ui::theme;
 use crate::{
     element::{FramePlan, PlannedMarker},
     layout::{
-        LayoutEnv, Placed,
+        LayoutEnv, Placed, View,
         style::{CODE_PADDING, MARKER_GAP, MARKER_GUTTER, QUOTE_GUTTER},
     },
     paint::snap,
@@ -31,8 +32,8 @@ pub(crate) struct BlockContext<'a> {
     pub(crate) index: usize,
     pub(crate) block: &'a Block,
     pub(crate) placed: &'a Placed,
-    /// Window position of (column left, content top).
-    pub(crate) origin: Point<Pixels>,
+    /// From layout coordinates to the window.
+    pub(crate) view: View,
     /// Number of a numbered list item.
     pub(crate) ordinal: Option<usize>,
     /// The next block is a quote too: the bar runs on to it.
@@ -79,23 +80,30 @@ pub(crate) fn plan_block(
     let BlockContext {
         block,
         placed,
-        origin,
+        view,
         env,
         ..
     } = cx;
     let layout = &placed.layout;
     let style = &env.style;
     let colors = style.colors;
-    let line_height = layout.line_height;
-    let first_row_y = origin.y + placed.row_top(0);
-    let text_left = origin.x + layout.text_left;
+    // Points as they are drawn.
+    let units = |points: f32| px(points * view.zoom);
+    let font_size = view.len(layout.font_size);
+    let baseline = view.len(layout.baseline);
+    let x_height = view.len(layout.x_height);
+    let line_height = view.len(layout.line_height);
+    let column_left = view.x(px(0.));
+    let column_width = view.len(env.column_width);
+    let first_row_y = view.y(placed.row_top(0));
+    let text_left = view.x(layout.text_left);
     // The optical middle of lowercase text on the first row.
-    let middle_y = first_row_y + layout.baseline - layout.x_height * 0.55;
+    let middle_y = first_row_y + baseline - x_height * 0.55;
 
     match block.kind() {
         BlockKind::BulletItem => {
             let level = block.indent() % 3;
-            let diameter = px((f32::from(layout.font_size) * 0.3).round().max(4.));
+            let diameter = px((f32::from(font_size) * 0.3).round().max(4.));
             let side = if level == 2 {
                 diameter - px(1.)
             } else {
@@ -103,7 +111,7 @@ pub(crate) fn plan_block(
             };
             let bounds = Bounds::new(
                 point(
-                    snap(text_left - style.px(MARKER_GUTTER * 0.5) - side / 2.),
+                    snap(text_left - units(MARKER_GUTTER * 0.5) - side / 2.),
                     snap(middle_y - side / 2.),
                 ),
                 size(side, side),
@@ -125,23 +133,25 @@ pub(crate) fn plan_block(
                 window,
                 label.into(),
                 style.body_font.clone(),
-                layout.font_size,
+                font_size,
                 colors.muted,
             );
             // Right-aligned in the gutter so the dots line up. The gutter
             // is as wide as the widest number of the list needs.
             plan.markers.push(PlannedMarker {
-                origin: point(text_left - style.px(MARKER_GAP) - line.width, first_row_y),
+                origin: point(text_left - units(MARKER_GAP) - line.width, first_row_y),
                 line_height,
                 line,
             });
         }
         BlockKind::TodoItem { checked } => {
-            let side = px((f32::from(layout.font_size) * 0.86).round().clamp(10., 28.));
+            let side = px((f32::from(font_size) * 0.86)
+                .round()
+                .clamp(10. * view.zoom.min(1.), 28. * view.zoom.max(1.)));
             let bounds = Bounds::new(
                 point(
-                    snap(text_left - style.px(MARKER_GUTTER) + style.px(3.)),
-                    snap(first_row_y + layout.baseline - layout.x_height * 0.72 - side / 2.),
+                    snap(text_left - units(MARKER_GUTTER) + units(3.)),
+                    snap(first_row_y + baseline - x_height * 0.72 - side / 2.),
                 ),
                 size(side, side),
             );
@@ -184,14 +194,12 @@ pub(crate) fn plan_block(
                 if ix == last && cx.quote_continues {
                     bottom += px(layout.measure.group_gap);
                 }
+                let (top, bottom) = (view.y(segment.top), view.y(bottom));
                 plan.back.push(
                     fill(
                         Bounds::new(
-                            point(
-                                text_left - style.px(QUOTE_GUTTER) + style.px(1.),
-                                origin.y + segment.top,
-                            ),
-                            size(style.px(3.).max(px(2.)), bottom - segment.top),
+                            point(text_left - units(QUOTE_GUTTER) + units(1.), top),
+                            size(units(3.).max(px(2.)), bottom - top),
                         ),
                         colors.border_strong,
                     )
@@ -200,16 +208,14 @@ pub(crate) fn plan_block(
             }
         }
         BlockKind::CodeBlock { language } => {
-            let padding = style.px(CODE_PADDING);
+            let padding = units(CODE_PADDING);
             let left = text_left - padding;
-            let width = layout.text_width + padding * 2.;
+            let width = view.len(layout.text_width) + padding * 2.;
             for segment in placed.segments() {
+                let (top, bottom) = (view.y(segment.top), view.y(segment.bottom));
                 plan.back.push(
                     fill(
-                        Bounds::new(
-                            point(left, origin.y + segment.top),
-                            size(width, segment.bottom - segment.top),
-                        ),
+                        Bounds::new(point(left, top), size(width, bottom - top)),
                         colors.hover,
                     )
                     .corner_radii(theme::RADIUS_MD),
@@ -220,14 +226,14 @@ pub(crate) fn plan_block(
                     window,
                     language.clone().into(),
                     style.ui_font.clone(),
-                    style.px(f32::from(theme::UI_TEXT_XS)),
+                    units(f32::from(theme::UI_TEXT_XS)),
                     colors.faint,
                 );
-                let label_height = style.px(16.);
+                let label_height = units(16.);
                 plan.markers.push(PlannedMarker {
                     origin: point(
-                        left + width - label.width - style.px(8.),
-                        origin.y + placed.top + style.px(4.),
+                        left + width - label.width - units(8.),
+                        view.y(placed.top) + units(4.),
                     ),
                     line_height: label_height,
                     line: label,
@@ -237,7 +243,7 @@ pub(crate) fn plan_block(
         BlockKind::Divider => {
             let y = snap(first_row_y + line_height / 2.);
             plan.back.push(fill(
-                Bounds::new(point(origin.x, y), size(env.column_width, px(1.))),
+                Bounds::new(point(column_left, y), size(column_width, px(1.))),
                 colors.border_strong,
             ));
         }
@@ -249,22 +255,22 @@ pub(crate) fn plan_block(
                 window,
                 "Page break".into(),
                 style.ui_font.clone(),
-                style.px(f32::from(theme::UI_TEXT_XS)),
+                units(f32::from(theme::UI_TEXT_XS)),
                 colors.faint,
             );
-            let gap = style.px(10.);
-            let label_x = (origin.x + (env.column_width - label.width) / 2.).round();
-            let left_width = label_x - gap - origin.x;
+            let gap = units(10.);
+            let label_x = (column_left + (column_width - label.width) / 2.).round();
+            let left_width = label_x - gap - column_left;
             if left_width > px(0.) {
                 plan.back.push(fill(
-                    Bounds::new(point(origin.x, y), size(left_width, px(1.))),
+                    Bounds::new(point(column_left, y), size(left_width, px(1.))),
                     colors.hairline,
                 ));
                 let right = label_x + label.width + gap;
                 plan.back.push(fill(
                     Bounds::new(
                         point(right, y),
-                        size(origin.x + env.column_width - right, px(1.)),
+                        size(column_left + column_width - right, px(1.)),
                     ),
                     colors.hairline,
                 ));

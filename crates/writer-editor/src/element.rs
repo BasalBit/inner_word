@@ -29,8 +29,11 @@ use crate::{
     config::{CaretStyle, EditorMode},
     decorations::{self, BlockContext, CheckboxHit},
     editor::Editor,
-    geometry::{caret_rect, drawn_caret, shifted},
-    layout::{Lay, LayoutEnv, LayoutStyle, PageGeometry, pages::DESK_PADDING},
+    geometry::{caret_rect, drawn_caret},
+    layout::{
+        Lay, LayoutEnv, LayoutStyle, PageGeometry,
+        pages::{DESK_PADDING, DESK_SIDE_PADDING},
+    },
     paint::{PlannedRow, snap},
     scroll::ScrollbarGeometry,
     spelling::{self, PlannedWave},
@@ -132,14 +135,15 @@ impl FramePlan {
 impl Editor {
     /// Installs the layout environment for a viewport. Called from prepaint
     /// with the element's bounds and from the compact measure pass with the
-    /// offered width. Nothing is shaped here.
+    /// offered width. Nothing is shaped here. Returns the zoom of the view
+    /// in percent (100 for a compact editor).
     pub(crate) fn install_layout_env(
         &mut self,
         viewport: Option<Bounds<Pixels>>,
         width: Pixels,
         window: &mut Window,
         cx: &App,
-    ) {
+    ) -> f32 {
         let theme = cx.theme();
         let compact = self.config.mode.is_compact();
         let viewport = viewport.unwrap_or_else(|| {
@@ -160,17 +164,54 @@ impl Editor {
         let document = self.state.document();
         let settings = document.settings();
         let paged = settings.page_view && !compact;
+        let mut shown = 100.;
         let env = if paged {
-            let geometry = PageGeometry::new(&settings.page, viewport);
+            // The sheets are the page setup, in points; the zoom only
+            // says how large a point is drawn.
+            let geometry = PageGeometry::new(&settings.page);
+            let side = px(DESK_SIDE_PADDING);
+            let (zoom, percent) = self.zoom_for(
+                true,
+                size(
+                    (viewport.size.width - side * 2.).max(px(1.)),
+                    viewport.size.height.max(px(1.)),
+                ),
+                geometry.sheet_width,
+                geometry.sheet_height + px(DESK_PADDING * 2.),
+            );
+            shown = percent;
+            let sheet_width = geometry.sheet_width * zoom;
+            let room = viewport.size.width;
+            let (sheet_left, max_scroll_x, rest_scroll_x) =
+                if sheet_width + side * 2. <= room + px(0.5) {
+                    let inset = ((room - sheet_width) / 2.).max(px(0.)).round();
+                    (viewport.left() + inset, px(0.), px(0.))
+                } else {
+                    // Wider than the room: the view scrolls sideways. It
+                    // rests with the text column in the middle, or with
+                    // the column's left edge in view when the column alone
+                    // is too wide.
+                    let max = (sheet_width + side * 2. - room) / zoom;
+                    let column = geometry.content_width * zoom;
+                    let rest = if column <= room - side * 2. {
+                        (side + geometry.margin_left * zoom - (room - column) / 2.) / zoom
+                    } else {
+                        geometry.margin_left
+                    };
+                    (viewport.left() + side, max, rest.clamp(px(0.), max))
+                };
             LayoutEnv {
                 text_system: window.text_system().clone(),
-                style: LayoutStyle::new(theme, &settings.typography, false, true, geometry.scale),
+                style: LayoutStyle::new(theme, &settings.typography, false, true),
                 viewport,
-                column_left: geometry.sheet_left + geometry.margin_left,
+                zoom,
+                column_left: sheet_left + geometry.margin_left * zoom,
                 column_width: geometry.content_width,
                 pad_top: px(DESK_PADDING),
                 pad_bottom: px(DESK_PADDING),
                 page: Some(geometry),
+                max_scroll_x,
+                rest_scroll_x,
             }
         } else if compact {
             LayoutEnv {
@@ -178,32 +219,49 @@ impl Editor {
                 style: if self.config.mode.is_formatted_compact() {
                     LayoutStyle::formatted_compact(theme, &settings.typography)
                 } else {
-                    LayoutStyle::new(theme, &settings.typography, true, false, 1.)
+                    LayoutStyle::new(theme, &settings.typography, true, false)
                 },
                 viewport,
+                zoom: 1.,
                 column_left: viewport.left(),
                 column_width: viewport.size.width,
                 pad_top: px(0.),
                 pad_bottom: px(0.),
                 page: None,
+                max_scroll_x: px(0.),
+                rest_scroll_x: px(0.),
             }
         } else {
-            let column_width = theme::DOCUMENT_COLUMN_WIDTH
-                .min(viewport.size.width - theme::SPACE_8 * 2.)
-                .max(MIN_COLUMN_WIDTH);
-            let inset = ((viewport.size.width - column_width) / 2.)
+            // The room the column has, in window pixels; the column
+            // itself is in points and grows with the zoom until it fills
+            // the room. Beyond that it keeps the room's width and holds
+            // fewer points: the text reflows, and nothing scrolls
+            // sideways.
+            let room = (viewport.size.width - theme::SPACE_8 * 2.).max(MIN_COLUMN_WIDTH);
+            let (zoom, percent) = self.zoom_for(
+                false,
+                size(room, viewport.size.height),
+                theme::DOCUMENT_COLUMN_WIDTH,
+                px(0.),
+            );
+            shown = percent;
+            let column_width = theme::DOCUMENT_COLUMN_WIDTH.min(room / zoom);
+            let inset = ((viewport.size.width - column_width * zoom) / 2.)
                 .max(px(0.))
                 .round();
             LayoutEnv {
                 text_system: window.text_system().clone(),
-                style: LayoutStyle::new(theme, &settings.typography, false, false, 1.),
+                style: LayoutStyle::new(theme, &settings.typography, false, false),
                 viewport,
+                zoom,
                 column_left: viewport.left() + inset,
                 column_width,
                 pad_top: theme::SPACE_12,
                 // Room to scroll the last lines up to a comfortable height.
-                pad_bottom: (viewport.size.height * 0.4).round(),
+                pad_bottom: (viewport.size.height * 0.4).round() / zoom,
                 page: None,
+                max_scroll_x: px(0.),
+                rest_scroll_x: px(0.),
             }
         };
         let mut layout = self.layout.borrow_mut();
@@ -211,6 +269,7 @@ impl Editor {
             layout.rebuild(document, self.state.revision());
         }
         layout.set_env(env, document);
+        shown
     }
 
     /// Builds the paint plan for the blocks in the viewport.
@@ -222,6 +281,8 @@ impl Editor {
         let mut checkboxes: Vec<CheckboxHit> = Vec::new();
         let mut scrollbar = None;
         let mut caret_painted = false;
+        #[cfg(test)]
+        let mut tints: Vec<Bounds<Pixels>> = Vec::new();
         let document = self.state.document();
         let selection = self.state.selection();
         let caret_position = self.caret_position();
@@ -234,13 +295,17 @@ impl Editor {
                 return plan;
             };
             layout.begin_frame();
-            let visible = layout.stabilize(document, viewport.size.height);
+            let view_height = layout.env().map_or(px(0.), LayoutEnv::view_height);
+            let visible = layout.stabilize(document, view_height);
             let mut lay = Lay { layout, document };
             let scroll_y = lay.scroll_y();
-            let origin = lay.origin();
+            // Everything below is planned in layout units and put into
+            // the window through this one transform.
+            let view = lay.view();
+            let zoom = view.zoom;
             let (colors, surface, paged) = {
                 let env = lay.env();
-                plan.row_height = env.style.base_line_height();
+                plan.row_height = env.style.base_line_height() * zoom;
                 (env.style.colors, env.style.surface(), env.page.is_some())
             };
 
@@ -251,7 +316,11 @@ impl Editor {
                 let env = lay.env();
                 if let Some(geometry) = &env.page {
                     plan.sheet_color = colors.page;
-                    plan.sheet_shadows = page_shadows(colors.shadow, colors.appearance.is_dark());
+                    plan.sheet_shadows = page_shadows(
+                        colors.shadow,
+                        colors.appearance.is_dark(),
+                        self.zoom_shown / 100.,
+                    );
                     // A shadow separates a white sheet from a light desk.
                     // On Night's desk it cannot be seen: there the sheet
                     // gets an edge that catches a little light.
@@ -263,23 +332,21 @@ impl Editor {
                     // margin, so that the text above it keeps its air, and
                     // smaller when the margin is small. No number in a
                     // margin that has no room for one at all.
-                    let margin = geometry.margin_bottom;
-                    let label_size = env
-                        .style
-                        .px(f32::from(theme::UI_TEXT_XS))
+                    let margin = view.len(geometry.margin_bottom);
+                    let label_size = view
+                        .len(theme::UI_TEXT_XS)
                         .max(px(8.))
                         .min((margin * 0.5).max(px(6.)));
                     let label_height = (label_size * 1.4).round();
                     let numbered = margin >= label_height + px(2.);
                     for page in geometry.page_at(scroll_y, env.pad_top)..pages {
-                        let top = viewport.top() + geometry.sheet_top(page, env.pad_top) - scroll_y;
-                        if top >= viewport.bottom() {
+                        let sheet = view.rect(Bounds::new(
+                            point(geometry.sheet_x(), geometry.sheet_top(page, env.pad_top)),
+                            size(geometry.sheet_width, geometry.sheet_height),
+                        ));
+                        if sheet.top() >= viewport.bottom() {
                             break;
                         }
-                        let sheet = Bounds::new(
-                            point(geometry.sheet_left, top),
-                            size(geometry.sheet_width, geometry.sheet_height),
-                        );
                         plan.sheets.push(sheet);
                         let visible = sheet.intersect(&viewport);
                         if visible.size.width > px(0.) && visible.size.height > px(0.) {
@@ -323,7 +390,7 @@ impl Editor {
             self.spelling.on_screen = visible.clone();
             plan.spelling_color = colors.spelling;
             let view_top = scroll_y;
-            let view_bottom = scroll_y + viewport.size.height;
+            let view_bottom = scroll_y + view_height;
 
             for index in visible.clone() {
                 let Some(block) = document.block(index) else {
@@ -345,7 +412,7 @@ impl Editor {
                         index,
                         block,
                         placed: &placed,
-                        origin,
+                        view,
                         ordinal: ordinals.get(index - visible.start).copied().flatten(),
                         quote_continues: matches!(block.kind(), BlockKind::Quote)
                             && document
@@ -377,7 +444,9 @@ impl Editor {
                             colors.comment
                         };
                         for rect in placed.ink_rects(range, rows.clone()) {
-                            let rect = shifted(rect, origin);
+                            let rect = view.rect(rect);
+                            #[cfg(test)]
+                            tints.push(rect);
                             plan.back.push(fill(rect, color).corner_radii(px(2.)));
                             if active_thread {
                                 plan.back.push(fill(
@@ -399,7 +468,9 @@ impl Editor {
                             continue;
                         };
                         for rect in placed.ink_rects(local, rows.clone()) {
-                            let rect = shifted(rect, origin);
+                            let rect = view.rect(rect);
+                            #[cfg(test)]
+                            tints.push(rect);
                             if let Some(background) = layer.style.background {
                                 plan.back.push(fill(rect, background).corner_radii(px(2.)));
                             }
@@ -420,9 +491,10 @@ impl Editor {
                 if self.spelling.visible && !block_layout.void {
                     let marks = self.spelling.ranges_at(document, index);
                     if !marks.is_empty() {
-                        let thickness = spelling::WAVE_THICKNESS;
-                        let top =
-                            block_layout.baseline + spelling::wave_offset(block_layout.font_size);
+                        // The wave is drawn as large as the text is.
+                        let thickness = snap(spelling::WAVE_THICKNESS * zoom).max(px(1.));
+                        let top = view.len(block_layout.baseline)
+                            + (spelling::wave_offset(block_layout.font_size) * zoom).max(px(1.));
                         for range in marks {
                             for (row, rect) in placed.row_rects(range.clone(), rows.clone()) {
                                 let row_bytes = &block_layout.rows[row].range;
@@ -446,7 +518,7 @@ impl Editor {
                                 } else {
                                     rect
                                 };
-                                let rect = shifted(rect, origin);
+                                let rect = view.rect(rect);
                                 plan.spelling.push(PlannedWave {
                                     origin: point(rect.left(), snap(rect.top() + top)),
                                     width: rect.size.width,
@@ -495,7 +567,7 @@ impl Editor {
                         for (_, rect) in rects {
                             // Whole device pixels vertically: rows meet
                             // without a seam or an overlap.
-                            let rect = shifted(rect, origin);
+                            let rect = view.rect(rect);
                             let (top, bottom) = (snap(rect.top()), snap(rect.bottom()));
                             plan.selection.push(fill(
                                 Bounds::new(
@@ -514,7 +586,9 @@ impl Editor {
                 if let Some(marked) = &self.marked
                     && marked.block == index
                 {
-                    let thin = px((f32::from(block_layout.font_size) / 16.).round().max(1.));
+                    let thin = px((f32::from(view.len(block_layout.font_size)) / 16.)
+                        .round()
+                        .max(1.));
                     let clause = selected
                         .and_then(|range| document.range_in_block(range, index))
                         .map(|local| {
@@ -523,8 +597,9 @@ impl Editor {
                         .filter(|clause| clause.start < clause.end);
                     let mut underline = |range: std::ops::Range<usize>, thickness: Pixels| {
                         for rect in placed.rects(range, rows.clone()) {
-                            let rect = shifted(rect, origin);
-                            let y = rect.top() + block_layout.baseline + block_layout.descent * 0.6;
+                            let rect = view.rect(rect);
+                            let y = rect.top()
+                                + view.len(block_layout.baseline + block_layout.descent * 0.6);
                             plan.front.push(fill(
                                 Bounds::new(
                                     point(rect.left(), snap(y)),
@@ -546,10 +621,8 @@ impl Editor {
                         plan.rows.push(PlannedRow {
                             layout: placed.layout.clone(),
                             row,
-                            origin: point(
-                                origin.x + block_layout.text_left,
-                                origin.y + placed.row_top(row),
-                            ),
+                            origin: view.point(point(block_layout.text_left, placed.row_top(row))),
+                            zoom,
                         });
                     }
                 }
@@ -571,19 +644,22 @@ impl Editor {
                         || self.caret_override.is_some())
                 {
                     caret_painted = true;
-                    let rect =
-                        caret_rect(&placed, block.text(), head.offset, style, caret_upstream);
+                    let rect = caret_rect(
+                        &placed,
+                        block.text(),
+                        head.offset,
+                        style,
+                        caret_upstream,
+                        zoom,
+                    );
                     let color = match style {
                         // A block caret lets the character show through.
                         CaretStyle::Block => colors.caret.alpha(0.45),
                         _ => colors.caret,
                     };
                     plan.front.push(
-                        fill(
-                            shifted(drawn_caret(rect, block_layout, style), origin),
-                            color,
-                        )
-                        .corner_radii(px(1.)),
+                        fill(view.rect(drawn_caret(rect, block_layout, style)), color)
+                            .corner_radii(px(1.)),
                     );
                 }
             }
@@ -600,16 +676,13 @@ impl Editor {
                     window,
                     self.config.placeholder.clone(),
                     env.style.body_font.clone(),
-                    placed.layout.font_size,
+                    view.len(placed.layout.font_size),
                     colors.faint,
                 );
                 plan.markers.push(PlannedMarker {
                     line,
-                    origin: point(
-                        origin.x + placed.layout.text_left,
-                        origin.y + placed.row_top(0),
-                    ),
-                    line_height: placed.layout.line_height,
+                    origin: view.point(point(placed.layout.text_left, placed.row_top(0))),
+                    line_height: view.len(placed.layout.line_height),
                 });
             }
             let _ = surface;
@@ -627,8 +700,8 @@ impl Editor {
                         (viewport.size.height - SCROLLBAR_INSET * 2.).max(px(0.)),
                     ),
                 );
-                let content = max_scroll + viewport.size.height;
-                let thumb_height = (track.size.height * (viewport.size.height / content))
+                let content = max_scroll + view_height;
+                let thumb_height = (track.size.height * (view_height / content))
                     .max(SCROLLBAR_MIN_THUMB.min(track.size.height));
                 let travel = track.size.height - thumb_height;
                 let thumb = Bounds::new(
@@ -682,6 +755,13 @@ impl Editor {
                 .iter()
                 .map(|wave| Bounds::new(wave.origin, size(wave.width, wave.thickness * 3.)))
                 .collect();
+            self.painted_tints = tints;
+            self.painted_rows = plan
+                .rows
+                .iter()
+                .map(|row| (row.origin, row.layout.font_size * row.zoom))
+                .collect();
+            self.painted_sheets = plan.sheets.clone();
         }
         self.checkbox_hits = checkboxes;
         self.scrollbar.geometry = scrollbar;
@@ -690,20 +770,22 @@ impl Editor {
     }
 }
 
-/// The soft shadow under a sheet of paper.
-fn page_shadows(color: Hsla, dark: bool) -> Vec<BoxShadow> {
+/// The soft shadow under a sheet of paper, as large as the sheet is
+/// drawn (`scale` is 1 at 100 %).
+fn page_shadows(color: Hsla, dark: bool, scale: f32) -> Vec<BoxShadow> {
     let strength = if dark { 2. } else { 1. };
+    let scale = scale.clamp(0.25, 4.);
     vec![
         BoxShadow {
             color: color.alpha(0.05 * strength),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
+            offset: point(px(0.), px(1.) * scale),
+            blur_radius: px(2.) * scale,
             spread_radius: px(0.),
         },
         BoxShadow {
             color: color.alpha(0.07 * strength),
-            offset: point(px(0.), px(6.)),
-            blur_radius: px(18.),
+            offset: point(px(0.), px(6.) * scale),
+            blur_radius: px(18.) * scale,
             spread_radius: px(0.),
         },
     ]
@@ -773,7 +855,8 @@ impl Element for EditorElement {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         self.editor.update(cx, |editor, cx| {
             let started = Instant::now();
-            editor.install_layout_env(Some(bounds), bounds.size.width, window, cx);
+            let zoom = editor.install_layout_env(Some(bounds), bounds.size.width, window, cx);
+            editor.note_zoom_shown(zoom, cx);
             editor.settle_scroll();
             let plan = editor.plan_frame(hitbox, window);
             editor.prepaint_link_tip(window);
@@ -960,10 +1043,25 @@ impl EditorElement {
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && scroll_hitbox.should_handle_scroll(window) {
                 let delta = event.delta.pixel_delta(row_height);
-                editor.update(cx, |editor, cx| editor.scroll_wheel(delta.y, cx));
+                editor.update(cx, |editor, cx| {
+                    if event.modifiers.platform && !editor.config.mode.is_compact() {
+                        // `cmd` with the wheel zooms around the pointer:
+                        // towards the top of the wheel is in.
+                        editor.zoom_by(wheel_zoom(delta.y), event.position, cx);
+                    } else {
+                        editor.scroll_wheel(delta, cx);
+                    }
+                });
             }
         });
     }
+}
+
+/// How much `cmd` with the wheel zooms for a wheel delta in window pixels:
+/// a line of text on the wheel is about seven percent, a long swipe on
+/// the trackpad doubles or halves.
+pub(crate) fn wheel_zoom(delta: Pixels) -> f32 {
+    (f32::from(delta) / 400.).clamp(-1., 1.).exp()
 }
 
 impl Editor {

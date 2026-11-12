@@ -170,6 +170,15 @@ pub enum EditorEvent {
     /// opened or re-flowed is showing an estimate (say so: "of about
     /// 1,290") and should read the numbers again on this event.
     LayoutSettled,
+    /// The zoom of the view that is showing changed: someone set it
+    /// ([`crate::Editor::set_zoom`], `cmd` with the wheel), or a zoom that
+    /// follows the window ([`crate::Zoom::FitWidth`]) came out differently
+    /// for a new window size. Read [`crate::Editor::zoom`] and
+    /// [`crate::Editor::zoom_percent`]. Not emitted by
+    /// [`crate::Editor::set_view_zooms`], nor when the view changes
+    /// between flow and page (that is a `SettingsChanged`). A zoom is not
+    /// a change of the document: no `Edited` comes with it.
+    ZoomChanged,
     /// The user asked for the context menu of the text: a right-click
     /// (secondary button or `ctrl`-click) or `ctrl-enter`. The editor has
     /// already adjusted the selection as a macOS text view does; whoever

@@ -7,6 +7,13 @@
 //! screen; [`Editor::scroll_offset`] reports it in pixels for the current
 //! layout.
 //!
+//! Inside, a scroll position is in layout units (the document's points),
+//! like the layout itself; what comes in from the window (a wheel delta, a
+//! distance from the top of the viewport) is in window pixels and is
+//! divided by the zoom of the view where it enters. Sideways the view only
+//! moves in page view, and only while a sheet is wider than the room it
+//! has (see `crate::zoom`).
+//!
 //! A scroll request that needs geometry (bring the caret into view, put a
 //! position at the top) is applied at once when a layout exists, and again
 //! in the next frame's prepaint, after the blocks around the target were
@@ -18,7 +25,10 @@ use std::time::Duration;
 use gpui::{Bounds, Context, Pixels, Task, px};
 use writer_core::Position;
 
-use crate::{editor::Editor, layout::ScrollPosition};
+use crate::{
+    editor::Editor,
+    layout::{ScrollPosition, pages::DESK_SIDE_PADDING},
+};
 
 /// Where a position should end up in the viewport after a change or a
 /// scroll request.
@@ -50,10 +60,21 @@ pub(crate) enum PendingScroll {
     /// document gets room under the last line instead of writing along
     /// the bottom edge of the window.
     Writing,
-    /// Put the caret's row `viewport_y` pixels below the top of the
+    /// Put the caret's row `viewport_y` window pixels below the top of the
     /// viewport (page-wise movement, switching between flow and page
-    /// view).
+    /// view, a change of zoom from the keyboard).
     CaretAt { viewport_y: Pixels },
+    /// Put a point of the text back where it was in the viewport after
+    /// the zoom changed under the pointer: the point `dy` layout units
+    /// below the top of the row that `position` starts, and `x` layout
+    /// units from the column's left edge, goes to `at` (window pixels from
+    /// the viewport's top left corner).
+    Anchor {
+        position: Position,
+        dy: Pixels,
+        x: Pixels,
+        at: gpui::Point<Pixels>,
+    },
 }
 
 /// Flow view: how far above the bottom of the viewport the last line of
@@ -99,12 +120,26 @@ impl Scrollbar {
 }
 
 impl Editor {
-    /// How far the content is scrolled, in pixels from its top. Blocks
-    /// that were never laid out count with an estimated height, so this
-    /// number can change a little while the background layout catches up
-    /// even though the view does not move.
+    /// How far the content is scrolled, in window pixels from its top (at
+    /// the zoom the view has). Blocks that were never laid out count with
+    /// an estimated height, so this number can change a little while the
+    /// background layout catches up even though the view does not move.
     pub fn scroll_offset(&self) -> Pixels {
-        self.with_layout(|lay| lay.scroll_y()).unwrap_or(px(0.))
+        self.with_layout(|lay| lay.scroll_y() * lay.env().zoom)
+            .unwrap_or(px(0.))
+    }
+
+    /// How far the view is scrolled sideways, in window pixels: 0 except
+    /// in page view while a sheet is wider than the room it has.
+    pub fn horizontal_scroll_offset(&self) -> Pixels {
+        self.with_layout(|lay| lay.layout.scroll_x() * lay.env().zoom)
+            .unwrap_or(px(0.))
+    }
+
+    /// How far the view can be scrolled sideways, in window pixels.
+    pub fn max_horizontal_scroll(&self) -> Pixels {
+        self.with_layout(|lay| lay.layout.max_scroll_x() * lay.env().zoom)
+            .unwrap_or(px(0.))
     }
 
     /// Scrolls so the caret (the selection head, or the position set with
@@ -134,7 +169,7 @@ impl Editor {
         let Some(row_height) = self.row_height() else {
             return;
         };
-        self.scroll_by_pixels(row_height * rows as f32, cx);
+        self.scroll_by(row_height * rows as f32, cx);
     }
 
     /// Scrolls by viewport pages (`1.0` a page down, `-0.5` half a page up)
@@ -144,11 +179,43 @@ impl Editor {
             return;
         };
         let rows = (rows as f32 * pages).round();
-        self.scroll_by_pixels(row_height * rows, cx);
+        self.scroll_by(row_height * rows, cx);
     }
 
-    /// Scrolls by pixels (positive: later text comes into view).
+    /// Scrolls by window pixels (positive: later text comes into view).
     pub fn scroll_by_pixels(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        let zoom = self.view_zoom();
+        self.scroll_by(delta / zoom, cx);
+    }
+
+    /// Scrolls sideways by window pixels (positive: what is further right
+    /// comes into view). Does nothing unless a sheet is wider than the
+    /// room it has.
+    pub fn scroll_sideways_by_pixels(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        let moved = self
+            .with_layout(|lay| {
+                let max = lay.layout.max_scroll_x();
+                if max <= px(0.) {
+                    return false;
+                }
+                let before = lay.layout.scroll_x();
+                let target = (before + delta / lay.env().zoom).clamp(px(0.), max);
+                lay.layout.set_scroll_x(Some(target));
+                target != before
+            })
+            .unwrap_or(false);
+        if moved {
+            cx.notify();
+        }
+    }
+
+    /// Window pixels per layout unit, as of the last layout (1 before it).
+    pub(crate) fn view_zoom(&self) -> f32 {
+        self.layout.borrow().env().map_or(1., |env| env.zoom)
+    }
+
+    /// Scrolls by layout units (positive: later text comes into view).
+    pub(crate) fn scroll_by(&mut self, delta: Pixels, cx: &mut Context<Self>) {
         self.pending_scroll = None;
         let moved = self
             .with_layout(|lay| {
@@ -165,8 +232,9 @@ impl Editor {
         }
     }
 
-    /// Scrolls to an absolute pixel offset (the scroll bar thumb).
-    pub(crate) fn scroll_to_pixels(&mut self, y: Pixels, cx: &mut Context<Self>) {
+    /// Scrolls to an absolute offset in layout units (the scroll bar
+    /// thumb).
+    pub(crate) fn scroll_to_y(&mut self, y: Pixels, cx: &mut Context<Self>) {
         self.pending_scroll = None;
         self.with_layout(|lay| {
             let max = lay.layout.max_scroll();
@@ -175,7 +243,8 @@ impl Editor {
         cx.notify();
     }
 
-    /// Line height of body text: the unit of [`Editor::scroll_by_rows`].
+    /// Line height of body text in layout units: the unit of
+    /// [`Editor::scroll_by_rows`].
     fn row_height(&self) -> Option<Pixels> {
         self.layout
             .borrow()
@@ -230,11 +299,44 @@ impl Editor {
         let document = self.state.document();
         let compact = self.config.mode.is_compact();
         self.with_layout(|lay| {
-            let viewport_height = lay.env().viewport.size.height;
+            let viewport_height = lay.env().view_height();
+            let zoom = lay.env().zoom;
+            if let PendingScroll::Anchor {
+                position,
+                dy,
+                x,
+                at,
+            } = request
+            {
+                let position = document.clamp_position(position);
+                let Some(placed) = lay.placed(position.block) else {
+                    return false;
+                };
+                let row = placed.layout.row_for_offset(position.offset);
+                let before = (lay.scroll_y(), lay.layout.scroll_x());
+                let target = placed.row_top(row) + dy - at.y / zoom;
+                let max = lay.layout.max_scroll();
+                lay.layout.set_scroll_y(target.clamp(px(0.), max));
+                let max_x = lay.layout.max_scroll_x();
+                if max_x > px(0.) {
+                    // The window x of `x` is the column's left edge, less
+                    // what is scrolled, plus `x`, all at the zoom.
+                    let env = lay.env();
+                    let column = (env.column_left - env.viewport.left()) / zoom;
+                    let target = column + x - at.x / zoom;
+                    lay.layout.set_scroll_x(Some(target.clamp(px(0.), max_x)));
+                } else {
+                    lay.layout.set_scroll_x(None);
+                }
+                let after = (lay.scroll_y(), lay.layout.scroll_x());
+                return (after.0 - before.0).abs() > px(0.01)
+                    || (after.1 - before.1).abs() > px(0.01);
+            }
             let (position, mode, viewport_y) = match request {
                 PendingScroll::Position(position, mode) => (position, mode, px(0.)),
                 PendingScroll::Writing => (None, Autoscroll::Fit, px(0.)),
-                PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y),
+                PendingScroll::CaretAt { viewport_y } => (None, Autoscroll::Top, viewport_y / zoom),
+                PendingScroll::Anchor { .. } => return false,
             };
             // The caret is on the row its affinity puts it on.
             let upstream = position.is_none() && head_upstream;
@@ -253,6 +355,39 @@ impl Editor {
                 lay.env().style.base_line_height()
             };
             let margin = margin.min(viewport_height / 4.);
+            // Sideways: a sheet wider than its room follows the position
+            // too, so whoever types never types out of sight.
+            let moved_sideways = {
+                let max_x = lay.layout.max_scroll_x();
+                let env = lay.env();
+                let width = env.viewport.size.width / zoom;
+                let before = lay.layout.scroll_x();
+                // Column-local x of the viewport's left edge.
+                let left = (env.viewport.left() - env.column_left) / zoom + before;
+                // The desk that shows beside a sheet at either end is the
+                // room kept beside the caret: at the start of a line the
+                // view is where it rests.
+                let room = (px(DESK_SIDE_PADDING) / zoom).min(width / 4.);
+                let slack = px(0.01);
+                let x = row.left();
+                let target = if max_x <= px(0.) {
+                    None
+                } else if x - room < left - slack {
+                    Some(before - (left - (x - room)))
+                } else if x + room > left + width + slack {
+                    Some(before + (x + room - (left + width)))
+                } else {
+                    None
+                };
+                match target {
+                    Some(target) => {
+                        let target = target.clamp(px(0.), max_x);
+                        lay.layout.set_scroll_x(Some(target));
+                        (target - before).abs() > px(0.01)
+                    }
+                    None => false,
+                }
+            };
             // Writing on the last line of a document in flow view: room
             // under it.
             let last_row = position.block + 1 == document.block_count()
@@ -287,11 +422,11 @@ impl Editor {
                 Autoscroll::Bottom => Some(bottom - viewport_height),
             };
             let Some(target) = target else {
-                return false;
+                return moved_sideways;
             };
             let max = lay.layout.max_scroll();
             lay.layout.set_scroll_y(target.clamp(px(0.), max));
-            (lay.scroll_y() - scroll_y).abs() > px(0.01)
+            moved_sideways || (lay.scroll_y() - scroll_y).abs() > px(0.01)
         })
     }
 
@@ -299,7 +434,7 @@ impl Editor {
     /// scroll request until both agree (shaping changes heights, which
     /// moves the target).
     pub(crate) fn settle_scroll(&mut self) {
-        let Some(height) = self.viewport_bounds().map(|viewport| viewport.size.height) else {
+        let Some(height) = self.layout.borrow().env().map(|env| env.view_height()) else {
             return;
         };
         let stabilize = |editor: &Self| {
@@ -317,8 +452,8 @@ impl Editor {
         }
     }
 
-    /// The scroll position as a block and an offset into it (what a saved
-    /// view stores).
+    /// The scroll position as a block and an offset into it in layout
+    /// units, which no zoom changes (what a saved view stores).
     pub(crate) fn scroll_anchor(&self) -> (usize, Pixels) {
         let position = self.layout.borrow().scroll_position();
         match position {

@@ -38,6 +38,7 @@ use crate::{
     popup::{Popup, PopupElement},
     scroll::{Autoscroll, PendingScroll, Scrollbar},
     spelling::SpellingMarks,
+    zoom::Zoom,
 };
 
 /// Half a caret blink: how long the caret is shown, then hidden.
@@ -136,6 +137,14 @@ pub struct Editor {
     /// The last pointer position of a drag, in window coordinates.
     pub(crate) last_mouse: Point<Pixels>,
     pub(crate) scrollbar: Scrollbar,
+    /// The zoom of flow view and of page view (see `crate::zoom`).
+    pub(crate) zoom_flow: Zoom,
+    pub(crate) zoom_page: Zoom,
+    /// The zoom the last frame was laid out at, in percent.
+    pub(crate) zoom_shown: f32,
+    /// A run of small zoom steps (the wheel with `cmd`, a pinch): the
+    /// percent that is shown and the exact zoom it stands for.
+    pub(crate) zoom_fine: Option<(f32, f32)>,
     /// The to-do checkboxes of the last frame.
     pub(crate) checkbox_hits: Vec<CheckboxHit>,
     /// The pointer is over a link with `cmd` held.
@@ -172,6 +181,17 @@ pub struct Editor {
     /// coordinates.
     #[cfg(test)]
     pub(crate) painted_spelling: Vec<gpui::Bounds<Pixels>>,
+    /// What the last frame painted behind the text for comment anchors
+    /// and highlight layers, in window coordinates.
+    #[cfg(test)]
+    pub(crate) painted_tints: Vec<gpui::Bounds<Pixels>>,
+    /// The rows of text of the last frame: the window position of each
+    /// row's top left corner and the size its text is drawn at.
+    #[cfg(test)]
+    pub(crate) painted_rows: Vec<(Point<Pixels>, Pixels)>,
+    /// The sheets of the last frame, in window coordinates.
+    #[cfg(test)]
+    pub(crate) painted_sheets: Vec<gpui::Bounds<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -333,6 +353,10 @@ impl Editor {
             drag_scrolling: false,
             last_mouse: Point::default(),
             scrollbar: Scrollbar::default(),
+            zoom_flow: Zoom::default(),
+            zoom_page: Zoom::default(),
+            zoom_shown: 100.,
+            zoom_fine: None,
             checkbox_hits: Vec::new(),
             link_hover: false,
             link_tip: None,
@@ -356,6 +380,12 @@ impl Editor {
             painted_markers: Vec::new(),
             #[cfg(test)]
             painted_spelling: Vec::new(),
+            #[cfg(test)]
+            painted_tints: Vec::new(),
+            #[cfg(test)]
+            painted_rows: Vec::new(),
+            #[cfg(test)]
+            painted_sheets: Vec::new(),
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.

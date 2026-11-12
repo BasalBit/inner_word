@@ -350,13 +350,20 @@ impl Editor {
         }
     }
 
-    /// The scroll wheel or trackpad moved over the editor.
-    pub(crate) fn scroll_wheel(&mut self, delta_y: Pixels, cx: &mut Context<Self>) {
+    /// The scroll wheel or trackpad moved over the editor: `delta` in
+    /// window pixels. Sideways it moves the view only where a sheet is
+    /// wider than its room (page view, zoomed in or in a narrow window).
+    pub(crate) fn scroll_wheel(&mut self, delta: Point<Pixels>, cx: &mut Context<Self>) {
         // A positive wheel delta moves the content down (towards the top).
         // Whole half pixels keep rules and text on device pixels.
-        let delta = px((f32::from(delta_y) * 2.).round() / 2.);
+        let whole = |delta: Pixels| px((f32::from(delta) * 2.).round() / 2.);
         self.hide_link_tip(cx);
-        self.scroll_by_pixels(-delta, cx);
+        if delta.y != px(0.) {
+            self.scroll_by_pixels(-whole(delta.y), cx);
+        }
+        if delta.x != px(0.) {
+            self.scroll_sideways_by_pixels(-whole(delta.x), cx);
+        }
     }
 
     /// The URL of the link under a window point.
@@ -380,7 +387,7 @@ impl Editor {
             return;
         }
         let ratio = ((position.y - grab - geometry.track.top()) / travel).clamp(0., 1.);
-        self.scroll_to_pixels(geometry.max_scroll * ratio, cx);
+        self.scroll_to_y(geometry.max_scroll * ratio, cx);
     }
 
     /// Extends the drag selection to the last pointer position.

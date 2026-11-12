@@ -1,15 +1,17 @@
 //! From document attributes to fonts, colours and block metrics.
 //!
 //! Everything that decides how a block is shaped and spaced lives in
-//! [`LayoutStyle`]: a snapshot of the theme, the document typography, the
-//! editor mode and the page scale. Two styles with the same *shape*
+//! [`LayoutStyle`]: a snapshot of the theme, the document typography and
+//! the editor mode. Two styles with the same *shape*
 //! ([`LayoutStyle::same_shape`]) wrap and measure a block identically, so
 //! measured heights survive a pure colour change (a theme switch) and are
-//! dropped exactly when fonts, sizes or the scale change.
+//! dropped exactly when fonts or sizes change.
 //!
-//! All lengths a style hands out are in layout pixels: document points
-//! times [`LayoutStyle::scale`]. The scale is 1 everywhere except in page
-//! view when the window is narrower than the page.
+//! All lengths a style hands out are in layout units: the document's own
+//! points. A style knows nothing of the zoom of the view: a block is
+//! shaped, wrapped and measured in points whatever size it is drawn at,
+//! which is why a zoom never moves a word to another line (see
+//! `crate::zoom`).
 
 use std::ops::Range;
 
@@ -45,8 +47,6 @@ pub(crate) struct LayoutStyle {
     pub(crate) ui_font: Font,
     pub(crate) colors: ThemeColors,
     pub(crate) typography: Typography,
-    /// Layout pixels per document point.
-    pub(crate) scale: f32,
     /// Page view: text sits on the page colour instead of the canvas.
     pub(crate) paged: bool,
     /// A formatted compact editor (`CompactOptions::formatted`): headings
@@ -54,7 +54,7 @@ pub(crate) struct LayoutStyle {
     pub(crate) small_headings: bool,
 }
 
-/// Sizes and spacing of one block, in layout pixels.
+/// Sizes and spacing of one block, in layout units (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BlockMetrics {
     pub(crate) font_size: Pixels,
@@ -155,13 +155,7 @@ pub(crate) struct Decorations {
 }
 
 impl LayoutStyle {
-    pub(crate) fn new(
-        theme: &Theme,
-        typography: &Typography,
-        compact: bool,
-        paged: bool,
-        scale: f32,
-    ) -> Self {
+    pub(crate) fn new(theme: &Theme, typography: &Typography, compact: bool, paged: bool) -> Self {
         let document_font = theme.document_font();
         let body_font = if compact {
             theme.ui_font()
@@ -184,11 +178,6 @@ impl LayoutStyle {
             ui_font: theme.ui_font(),
             colors: theme.colors,
             typography: typography.clone(),
-            scale: if scale.is_finite() && scale > 0. {
-                scale
-            } else {
-                1.
-            },
             paged,
             small_headings: false,
         }
@@ -200,7 +189,7 @@ impl LayoutStyle {
     pub(crate) fn formatted_compact(theme: &Theme, typography: &Typography) -> Self {
         Self {
             small_headings: true,
-            ..Self::new(theme, typography, false, false, 1.)
+            ..Self::new(theme, typography, false, false)
         }
     }
 
@@ -211,14 +200,13 @@ impl LayoutStyle {
             && self.body_font == other.body_font
             && self.mono_font == other.mono_font
             && self.typography == other.typography
-            && self.scale == other.scale
             && self.paged == other.paged
             && self.small_headings == other.small_headings
     }
 
-    /// Document points to layout pixels.
+    /// Document points as a layout length (one layout unit is one point).
     pub(crate) fn px(&self, points: f32) -> Pixels {
-        px(points * self.scale)
+        px(points)
     }
 
     /// The surface the text sits on.

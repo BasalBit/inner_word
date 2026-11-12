@@ -1,6 +1,7 @@
 //! Geometry queries: where document positions are on screen, and back.
 //!
-//! All results are in window coordinates and are `None` until the editor was
+//! All results are in window coordinates, at the zoom the view has (see
+//! `crate::zoom`), and are `None` until the editor was
 //! laid out once (painted, or measured in compact mode). After that they are
 //! always answered for the *current* document: a query shapes the blocks it
 //! needs on demand (see [`crate::layout`]), so it is valid right after an
@@ -16,6 +17,7 @@
 use std::cell::RefCell;
 
 use gpui::{Bounds, Pixels, Point, point, px, size};
+
 use writer_core::{EditorState, Position, TextRange, text};
 
 use crate::{
@@ -66,7 +68,7 @@ impl Editor {
         let position = self.state.document().clamp_position(position);
         self.with_layout(|lay| {
             let placed = lay.placed(position.block)?;
-            Some(shifted(placed.line_box(position.offset), lay.origin()))
+            Some(lay.view().rect(placed.line_box(position.offset)))
         })
         .flatten()
     }
@@ -84,16 +86,15 @@ impl Editor {
         let block_text = document.block(head.block).map_or("", |block| block.text());
         self.with_layout(|lay| {
             let placed = lay.placed(head.block)?;
-            Some(shifted(
-                caret_rect(
-                    &placed,
-                    block_text,
-                    head.offset,
-                    self.config.caret_style,
-                    upstream,
-                ),
-                lay.origin(),
-            ))
+            let view = lay.view();
+            Some(view.rect(caret_rect(
+                &placed,
+                block_text,
+                head.offset,
+                self.config.caret_style,
+                upstream,
+                view.zoom,
+            )))
         })
         .flatten()
     }
@@ -121,10 +122,7 @@ impl Editor {
         let upstream = self.caret_is_upstream();
         self.with_layout(|lay| {
             let placed = lay.placed(head.block)?;
-            Some(shifted(
-                placed.caret_box(head.offset, upstream),
-                lay.origin(),
-            ))
+            Some(lay.view().rect(placed.caret_box(head.offset, upstream)))
         })
         .flatten()
     }
@@ -170,12 +168,12 @@ impl Editor {
                 } else {
                     local.end
                 };
-                let origin = lay.origin();
+                let view = lay.view();
                 rects.extend(
                     placed
                         .rects(local.start..end, 0..usize::MAX)
                         .into_iter()
-                        .map(|rect| shifted(rect, origin)),
+                        .map(|rect| view.rect(rect)),
                 );
             }
             rects
@@ -228,12 +226,13 @@ impl Editor {
     fn hit_test(&self, point: Point<Pixels>, affine: bool) -> Option<(Position, bool)> {
         let document = self.state.document();
         self.with_layout(|lay| {
-            let y = point.y - lay.origin().y;
+            let y = lay.view().layout_y(point.y);
             let index = lay.block_at(y);
             let placed = lay.placed(index)?;
-            let origin = lay.origin();
-            let row = placed.row_at(point.y - origin.y);
-            let x = point.x - origin.x - placed.layout.text_left;
+            // Shaping the block may have moved it: ask again.
+            let view = lay.view();
+            let row = placed.row_at(view.layout_y(point.y));
+            let x = view.layout_x(point.x) - placed.layout.text_left;
             let (offset, upstream) = if affine {
                 placed.layout.caret_for_x(row, x)
             } else {
@@ -252,11 +251,11 @@ impl Editor {
     /// of a row, between blocks).
     pub(crate) fn position_under_point(&self, point: Point<Pixels>) -> Option<Position> {
         self.with_layout(|lay| {
-            let y = point.y - lay.origin().y;
+            let y = lay.view().layout_y(point.y);
             let index = lay.block_at(y);
             let placed = lay.placed(index)?;
-            let origin = lay.origin();
-            let y = point.y - origin.y;
+            let view = lay.view();
+            let y = view.layout_y(point.y);
             let row = placed.row_at(y);
             let row_top = placed.row_top(row);
             if placed.layout.void || y < row_top || y >= row_top + placed.layout.line_height {
@@ -264,7 +263,7 @@ impl Editor {
             }
             let offset = placed
                 .layout
-                .offset_under_x(row, point.x - origin.x - placed.layout.text_left)?;
+                .offset_under_x(row, view.layout_x(point.x) - placed.layout.text_left)?;
             Some(Position::new(index, offset))
         })
         .flatten()
@@ -282,7 +281,7 @@ impl Editor {
         let document = self.state.document();
         self.with_layout(|lay| {
             let top = lay.scroll_y();
-            let bottom = top + lay.env().viewport.size.height;
+            let bottom = lay.view_bottom();
             let mut edge = |y: Pixels, end: bool| {
                 let index = lay.block_at(y);
                 let placed = lay.placed(index)?;
@@ -299,32 +298,32 @@ impl Editor {
 /// The blocks that intersect the viewport.
 pub(crate) fn visible_blocks(lay: &mut Lay) -> std::ops::Range<usize> {
     let top = lay.scroll_y();
-    let bottom = top + lay.env().viewport.size.height;
+    let bottom = lay.view_bottom();
     let first = lay.block_at(top);
     let last = lay.block_at(bottom);
     first..last + 1
 }
 
-/// `rect` (column-local x, content-space y) moved to the window.
-pub(crate) fn shifted(rect: Bounds<Pixels>, origin: Point<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(rect.origin + origin, rect.size)
-}
-
 /// The caret rectangle at `offset` for a caret style: column-local x,
-/// content-space y, one row high. `upstream` puts a bar caret at a soft
-/// wrap on the row that ends there.
+/// content-space y, one row high, in layout units. `upstream` puts a bar
+/// caret at a soft wrap on the row that ends there. `zoom` is the zoom of
+/// the view the rectangle will be drawn in: the bar and the underline
+/// keep their thickness on screen ([`CARET_WIDTH`] window pixels) at
+/// every zoom, as an insertion point does everywhere on a Mac.
 pub(crate) fn caret_rect(
     placed: &Placed,
     block_text: &str,
     offset: usize,
     style: CaretStyle,
     upstream: bool,
+    zoom: f32,
 ) -> Bounds<Pixels> {
     let line_box = placed.caret_box(offset, upstream && style == CaretStyle::Bar);
+    let thickness = CARET_WIDTH / zoom.max(0.01);
     if style == CaretStyle::Bar {
         return Bounds::new(
-            point(line_box.origin.x - CARET_WIDTH / 2., line_box.origin.y),
-            size(CARET_WIDTH, line_box.size.height),
+            point(line_box.origin.x - thickness / 2., line_box.origin.y),
+            size(thickness, line_box.size.height),
         );
     }
     // Block and underline carets cover the character at the caret, or half
@@ -341,9 +340,9 @@ pub(crate) fn caret_rect(
         CaretStyle::Underline => Bounds::new(
             point(
                 line_box.origin.x,
-                line_box.origin.y + line_box.size.height - CARET_WIDTH,
+                line_box.origin.y + line_box.size.height - thickness,
             ),
-            size(width, CARET_WIDTH),
+            size(width, thickness),
         ),
         _ => Bounds::new(line_box.origin, size(width, line_box.size.height)),
     }
@@ -351,7 +350,7 @@ pub(crate) fn caret_rect(
 
 /// The caret as it is painted: [`caret_rect`] reduced to the height of the
 /// text (the row's ink), so it does not tower over a line with generous
-/// leading.
+/// leading. In layout units, like the rectangle it is given.
 pub(crate) fn drawn_caret(
     rect: Bounds<Pixels>,
     block: &BlockLayout,

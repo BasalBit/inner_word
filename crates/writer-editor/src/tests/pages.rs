@@ -252,37 +252,64 @@ fn page_setup_changes_the_sheets(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn narrow_window_scales_the_page_down(cx: &mut TestAppContext) {
+fn a_narrow_window_scrolls_the_page_sideways_and_fit_width_fits_it(cx: &mut TestAppContext) {
     setup(cx);
     let (editor, cx) = open(paged(one_row_paragraphs(100)), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.finish_layout(cx));
+    let rows_before = editor.read_with(cx, |editor, _| super::zoom::row_starts(editor));
     cx.simulate_resize(size(px(420.), px(700.)));
     cx.run_until_parked();
+    let sheet = |editor: &Editor| {
+        // Window x of the sheet's left and right edge.
+        let text = editor.position_bounds(Position::new(3, 0)).unwrap().left();
+        editor
+            .with_layout(|lay| {
+                let geometry = lay.env().page.unwrap();
+                let zoom = lay.env().zoom;
+                let left = text - geometry.margin_left * zoom;
+                (left, left + geometry.sheet_width * zoom, zoom)
+            })
+            .unwrap()
+    };
     editor.update(cx, |editor, cx| {
         editor.finish_layout(cx);
         let viewport = editor.viewport_bounds().unwrap();
         assert_eq!(viewport.size.width, px(420.));
-        let (scale, left, width) = editor
-            .with_layout(|lay| {
-                let geometry = lay.env().page.unwrap();
-                (geometry.scale, geometry.sheet_left, geometry.sheet_width)
-            })
-            .unwrap();
-        // The sheet fits between the edges: no horizontal scrolling.
-        assert!(scale < 0.7 && scale > 0.6, "{scale}");
-        assert!(left >= viewport.left() + px(15.));
-        assert!(left + width <= viewport.right() - px(15.));
-        // Text is scaled with the sheet: the same lines on the same pages.
+        // The sheet keeps its size: it is wider than the window now, and
+        // the view scrolls sideways instead.
+        let (left, right, zoom) = sheet(editor);
+        assert_eq!(zoom, crate::PAGE_VIEW_SCALE);
+        assert!(right - left > viewport.size.width);
+        assert!(editor.max_horizontal_scroll() > px(200.));
+        // The same lines on the same pages as in the wide window.
         assert_eq!(editor.page_count(), Some(6));
         assert_eq!(assert_rows_on_sheets(editor), 6);
+        assert_eq!(super::zoom::row_starts(editor), rows_before);
+
+        // Fit width: the sheet between the edges, nothing to scroll.
+        editor.set_zoom(crate::Zoom::FitWidth, cx);
+    });
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.finish_layout(cx);
+        let viewport = editor.viewport_bounds().unwrap();
+        let (left, right, zoom) = sheet(editor);
+        assert!(zoom < 0.7 && zoom > 0.6, "{zoom}");
+        assert!(left >= viewport.left() + px(15.));
+        assert!(right <= viewport.right() - px(15.));
+        assert_eq!(editor.max_horizontal_scroll(), px(0.));
+        assert_eq!(editor.page_count(), Some(6));
+        assert_eq!(assert_rows_on_sheets(editor), 6);
+        assert_eq!(super::zoom::row_starts(editor), rows_before);
         let row = editor.position_bounds(Position::new(3, 0)).unwrap();
-        assert!((row.size.height - px(27. * scale)).abs() < px(0.01));
+        assert!((row.size.height - px(27. * zoom)).abs() < px(0.01));
         // Everything is inside the sheet horizontally.
         let end = editor.document().blocks()[3].len();
-        let right = editor
+        let end_x = editor
             .position_bounds(Position::new(3, end))
             .unwrap()
             .left();
-        assert!(row.left() > left && right < left + width);
+        assert!(row.left() > left && end_x < right);
     });
 }
 
@@ -334,8 +361,9 @@ fn switching_views_keeps_the_caret_on_screen(cx: &mut TestAppContext) {
     cx.run_until_parked();
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.scroll_offset(), px(0.));
-        // Desk padding, then the sheet's top margin, then the text.
-        assert_eq!(caret_y(editor), px(24. + 72.));
+        // Desk padding, then the sheet's top margin, then the text, at
+        // the size page view draws a point at 100 %.
+        assert_eq!(caret_y(editor), px(24. + 72.) * crate::PAGE_VIEW_SCALE);
     });
 
     // The gap between two sheets is desk: PAGE_GAP pixels without rows.
@@ -514,12 +542,13 @@ fn the_page_number_keeps_clear_of_the_text_and_fits_small_margins(cx: &mut TestA
         editor.read_with(cx, |editor, _| {
             let (sheet_bottom, text_bottom) = editor
                 .with_layout(|lay| {
+                    let view = lay.view();
                     let env = lay.env();
                     let geometry = env.page.unwrap();
-                    let top = env.viewport.top() + geometry.sheet_top(0, env.pad_top);
+                    let top = geometry.sheet_top(0, env.pad_top);
                     (
-                        top + geometry.sheet_height,
-                        top + geometry.margin_top + geometry.content_height,
+                        view.y(top + geometry.sheet_height),
+                        view.y(top + geometry.margin_top + geometry.content_height),
                     )
                 })
                 .unwrap();
@@ -537,8 +566,12 @@ fn the_page_number_keeps_clear_of_the_text_and_fits_small_margins(cx: &mut TestA
     cx.simulate_keystrokes("cmd-down cmd-up");
     let (label, text_bottom, sheet_bottom) = number(cx);
     let label = label.expect("a page number in a one-inch margin");
-    assert!(label.top() - text_bottom >= px(35.), "{label:?}");
-    assert!(sheet_bottom - label.bottom() >= px(18.), "{label:?}");
+    let points = crate::PAGE_VIEW_SCALE;
+    assert!(label.top() - text_bottom >= px(35.) * points, "{label:?}");
+    assert!(
+        sheet_bottom - label.bottom() >= px(18.) * points,
+        "{label:?}"
+    );
     // A margin of 14 pt still has one, smaller, inside the margin.
     set_margins(cx, 14.);
     let (small, text_bottom, sheet_bottom) = number(cx);

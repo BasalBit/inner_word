@@ -17,6 +17,9 @@
 //!   the caret override.
 //! - `spelling`: the spelling marks a checker sets: following edits,
 //!   queries, drawing, the context menu request, the cost in a book.
+//! - `zoom`: the zoom of the two views: the same lines and pages at every
+//!   zoom, everything that is drawn at or found from a position, keeping
+//!   the place, sideways scrolling.
 
 mod editing;
 mod ime;
@@ -29,3 +32,4 @@ mod seams;
 mod slice;
 mod spelling;
 mod vim_seams;
+mod zoom;

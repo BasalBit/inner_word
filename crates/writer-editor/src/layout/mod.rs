@@ -45,6 +45,16 @@
 //! pixels, so measuring or editing blocks above the viewport never moves
 //! what is on screen.
 //!
+//! **Units.** Everything in here is in layout units: the document's own
+//! points, with x from the left edge of the text column and y from the top
+//! of the scrollable content. The zoom of the view is not part of any
+//! measure, wrap or placement: it is one number of the environment
+//! ([`LayoutEnv::zoom`]) that [`View`] applies when layout coordinates
+//! become window coordinates, and takes out again when a pointer position
+//! comes in. So the same rows stand on the same sheets at every zoom, and
+//! a change of zoom lays nothing out again (in flow view only when the
+//! column has to become narrower than its full width).
+//!
 //! The environment (viewport, column, style, text system) is installed by
 //! the element's prepaint and kept, so geometry queries between frames lay
 //! out on demand: a consumer that edits and then asks for a caret position
@@ -89,18 +99,85 @@ pub(crate) struct LayoutEnv {
     pub(crate) style: LayoutStyle,
     /// The editor element's bounds, in window coordinates.
     pub(crate) viewport: Bounds<Pixels>,
-    /// Window x of the text column's left edge.
+    /// Window pixels per layout unit: the zoom of the view (1 in a
+    /// compact editor).
+    pub(crate) zoom: f32,
+    /// Window x of the text column's left edge while the view is not
+    /// scrolled sideways.
     pub(crate) column_left: Pixels,
+    /// Width of the text column, in layout units.
     pub(crate) column_width: Pixels,
     /// Space above the first block (flow view) or the first sheet, and
-    /// below the last one.
+    /// below the last one, in layout units.
     pub(crate) pad_top: Pixels,
     pub(crate) pad_bottom: Pixels,
     /// Page view: the sheets.
     pub(crate) page: Option<PageGeometry>,
+    /// How far the view can be scrolled sideways, in layout units: 0
+    /// unless a sheet is wider than the room it has.
+    pub(crate) max_scroll_x: Pixels,
+    /// Where the view rests sideways until someone scrolls it: the text
+    /// column in the middle of the room, or at its left edge when the
+    /// column alone is wider than the room. In layout units.
+    pub(crate) rest_scroll_x: Pixels,
+}
+
+/// How layout coordinates (column-local x, content-space y, in layout
+/// units) become window coordinates, and back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct View {
+    /// Window position of the point (column left, content top).
+    pub(crate) origin: Point<Pixels>,
+    /// Window pixels per layout unit.
+    pub(crate) zoom: f32,
+}
+
+impl View {
+    /// A layout length in window pixels.
+    pub(crate) fn len(&self, length: Pixels) -> Pixels {
+        length * self.zoom
+    }
+
+    /// Window x of a column-local x.
+    pub(crate) fn x(&self, x: Pixels) -> Pixels {
+        self.origin.x + x * self.zoom
+    }
+
+    /// Window y of a content-space y.
+    pub(crate) fn y(&self, y: Pixels) -> Pixels {
+        self.origin.y + y * self.zoom
+    }
+
+    pub(crate) fn point(&self, at: Point<Pixels>) -> Point<Pixels> {
+        point(self.x(at.x), self.y(at.y))
+    }
+
+    /// A rectangle of the layout in the window.
+    pub(crate) fn rect(&self, rect: Bounds<Pixels>) -> Bounds<Pixels> {
+        Bounds::new(
+            self.point(rect.origin),
+            size(rect.size.width * self.zoom, rect.size.height * self.zoom),
+        )
+    }
+
+    /// Column-local x of a window x.
+    pub(crate) fn layout_x(&self, x: Pixels) -> Pixels {
+        (x - self.origin.x) / self.zoom
+    }
+
+    /// Content-space y of a window y.
+    pub(crate) fn layout_y(&self, y: Pixels) -> Pixels {
+        (y - self.origin.y) / self.zoom
+    }
 }
 
 impl LayoutEnv {
+    /// Height of the viewport in layout units: how much of the content a
+    /// frame shows.
+    pub(crate) fn view_height(&self) -> Pixels {
+        self.viewport.size.height / self.zoom
+    }
+
     /// Blocks wrap and measure the same in both environments.
     fn same_shape(&self, other: &Self) -> bool {
         self.column_width == other.column_width && self.style.same_shape(&other.style)
@@ -117,8 +194,8 @@ impl LayoutEnv {
     }
 }
 
-/// Where the viewport's top edge is: at the very top, or `offset` pixels
-/// below the top of a block's box (negative: above it).
+/// Where the viewport's top edge is: at the very top, or `offset` layout
+/// units below the top of a block's box (negative: above it).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ScrollPosition {
     Top,
@@ -164,6 +241,10 @@ pub(crate) struct DocumentLayout {
     /// The `EditorState::revision` the slots describe.
     revision: u64,
     scroll: ScrollPosition,
+    /// How far the view is scrolled sideways, in layout units; `None`
+    /// while it rests where the environment puts it
+    /// ([`LayoutEnv::rest_scroll_x`]).
+    scroll_x: Option<Pixels>,
     /// Number of slots whose measure is an estimate.
     unmeasured: usize,
     /// Number of slots without word counts.
@@ -232,6 +313,7 @@ impl DocumentLayout {
             epoch: 0,
             revision,
             scroll: ScrollPosition::Top,
+            scroll_x: None,
             unmeasured: 0,
             uncounted: 0,
             uncounted_large: 0,
@@ -257,6 +339,7 @@ impl DocumentLayout {
         self.layouts.clear();
         self.seamed.clear();
         self.scroll = ScrollPosition::Top;
+        self.scroll_x = None;
         self.stats_shown = Stats::default();
         self.calibrated = false;
         self.calibration = (0., 0.);
@@ -1098,8 +1181,8 @@ impl DocumentLayout {
         }
     }
 
-    /// Shapes the blocks in the viewport (`height` pixels from the scroll
-    /// position) until their placement no longer changes, and returns
+    /// Shapes the blocks in the viewport (`height` layout units from the
+    /// scroll position) until their placement no longer changes, and returns
     /// their range. After this, everything a frame shows is real and the
     /// scroll position is inside the content.
     pub(crate) fn stabilize(&mut self, document: &Document, height: Pixels) -> Range<usize> {
@@ -1143,7 +1226,7 @@ impl DocumentLayout {
         self.scroll = position;
     }
 
-    /// How far the content is scrolled, in pixels from its top.
+    /// How far the content is scrolled, in layout units from its top.
     pub(crate) fn scroll_y(&mut self) -> Pixels {
         match self.scroll {
             ScrollPosition::Top => px(0.),
@@ -1165,11 +1248,49 @@ impl DocumentLayout {
 
     pub(crate) fn max_scroll(&mut self) -> Pixels {
         let height = self.content_height();
-        let viewport = self
-            .env
-            .as_ref()
-            .map_or(px(0.), |env| env.viewport.size.height);
+        let viewport = self.env.as_ref().map_or(px(0.), LayoutEnv::view_height);
         (height - viewport).max(px(0.))
+    }
+
+    /// How far the view is scrolled sideways, in layout units: where it
+    /// was put, or where it rests, inside what the environment allows.
+    pub(crate) fn scroll_x(&self) -> Pixels {
+        let Some(env) = &self.env else {
+            return px(0.);
+        };
+        self.scroll_x
+            .unwrap_or(env.rest_scroll_x)
+            .clamp(px(0.), env.max_scroll_x)
+    }
+
+    /// Scrolls sideways to `x` layout units; `None` lets the view rest
+    /// where the environment puts it.
+    pub(crate) fn set_scroll_x(&mut self, x: Option<Pixels>) {
+        self.scroll_x = x;
+    }
+
+    pub(crate) fn max_scroll_x(&self) -> Pixels {
+        self.env.as_ref().map_or(px(0.), |env| env.max_scroll_x)
+    }
+
+    /// The transform from layout coordinates to the window, for the
+    /// scroll position as it is now.
+    pub(crate) fn view(&mut self) -> View {
+        let scroll_y = self.scroll_y();
+        let scroll_x = self.scroll_x();
+        match &self.env {
+            Some(env) => View {
+                origin: point(
+                    env.column_left - scroll_x * env.zoom,
+                    env.viewport.top() - scroll_y * env.zoom,
+                ),
+                zoom: env.zoom,
+            },
+            None => View {
+                origin: Point::default(),
+                zoom: 1.,
+            },
+        }
     }
 
     /// Keeps the scroll position inside the content.
@@ -1408,12 +1529,15 @@ impl Lay<'_> {
         self.layout.scroll_y()
     }
 
-    /// Window position of the point (column left, content top): add it to
-    /// column-local x and content-space y.
-    pub(crate) fn origin(&mut self) -> Point<Pixels> {
-        let scroll_y = self.layout.scroll_y();
-        let env = self.env();
-        point(env.column_left, env.viewport.top() - scroll_y)
+    /// The transform from layout coordinates (column-local x,
+    /// content-space y) to the window.
+    pub(crate) fn view(&mut self) -> View {
+        self.layout.view()
+    }
+
+    /// Content-space y of the bottom edge of the viewport.
+    pub(crate) fn view_bottom(&mut self) -> Pixels {
+        self.layout.scroll_y() + self.env().view_height()
     }
 
     /// The sheet (0-based) that content-space `y` is on; 0 in flow view.

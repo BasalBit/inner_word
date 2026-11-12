@@ -148,7 +148,7 @@ impl<'a> RowOracle<'a> {
     pub fn rows_per_page(&self) -> Option<usize> {
         let layout = self.layout.borrow();
         let env = layout.env()?;
-        let rows = (env.viewport.size.height / env.style.base_line_height()).floor() as usize;
+        let rows = (env.view_height() / env.style.base_line_height()).floor() as usize;
         Some(rows.max(1))
     }
 
@@ -159,12 +159,12 @@ impl<'a> RowOracle<'a> {
         if !self.owns(state) {
             return None;
         }
-        // Half a pixel of tolerance: a row scrolled exactly to an edge
+        // Half a unit of tolerance: a row scrolled exactly to an edge
         // counts as visible despite float rounding.
         let slack = gpui::px(0.5);
         with_layout_of(self.layout, state, |lay| {
             let top = lay.scroll_y();
-            let bottom = top + lay.env().viewport.size.height;
+            let bottom = lay.view_bottom();
             let count = lay.count();
             let first_block = lay.block_at(top);
             let mut rows = Vec::new();

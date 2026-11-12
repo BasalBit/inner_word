@@ -927,11 +927,14 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
                     let block_layout = layout.layout(block, editor.document()).unwrap();
                     (block_layout, row.top())
                 };
-                let baseline = row_top + layout.baseline;
-                // One pixel under body text, two under a first heading
-                // (34 px), to the half pixel.
+                // (The layout is in points; page view draws a point
+                // larger than a pixel at 100 %.)
+                let zoom = editor.view_zoom();
+                let baseline = row_top + layout.baseline * zoom;
+                // One point under body text, two under a first heading
+                // (34 pt), to the half pixel.
                 let offset = band.top() - baseline;
-                let expected = if block == 0 { px(2.) } else { px(1.) };
+                let expected = if block == 0 { px(2.) } else { px(1.) } * zoom;
                 assert!(
                     (offset - expected).abs() <= px(0.25),
                     "just under the baseline: {band:?} {baseline:?}"
@@ -941,8 +944,9 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
                     band.bottom() <= row.bottom(),
                     "inside the row: {band:?} in {row:?}"
                 );
-                // The same line under every text size.
-                assert_eq!(band.size.height, px(3.));
+                // The same line under every text size: a point thick,
+                // on device pixels.
+                assert_eq!(band.size.height, snap(px(1.) * zoom) * 3.);
             }
             // The two halves of the wrapped mark are on two rows.
             assert!(bands[4].top() > bands[3].bottom());
@@ -991,7 +995,8 @@ fn a_wave_is_drawn_under_each_marked_word(cx: &mut TestAppContext) {
             assert_eq!(after.len(), before.len());
             // Two glyphs of the test platform's font to the right.
             let shift = after[1].left() - before[1].left();
-            assert!((shift - px(2. * 0.6 * 17.)).abs() < px(0.01), "{shift:?}");
+            let two = px(2. * 0.6 * 17.) * editor.view_zoom();
+            assert!((shift - two).abs() < px(0.01), "{shift:?}");
             assert_eq!(after[0], before[0]);
         });
     }

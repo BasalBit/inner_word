@@ -39,7 +39,8 @@
 //! | Join key dispatch with own bindings | [`Editor::set_key_context_value`], [`Editor::add_key_context_flag`], [`Editor::remove_key_context_entry`] |
 //! | Where is it on screen | [`Editor::caret_bounds`], [`Editor::position_bounds`], [`Editor::range_bounds`], [`Editor::selection_bounds`], [`Editor::position_at_point`], [`Editor::viewport_bounds`], [`Editor::visible_range`] |
 //! | Vertical movement over wrapped rows | [`Editor::visual_row`], [`Editor::move_by_visual_rows`], [`Editor::column_x`], [`Editor::rows_per_page`], [`Editor::visible_rows`], [`Editor::first_visible_row`], [`Editor::last_visible_row`] |
-//! | Scroll | [`Editor::scroll_to_caret`], [`Editor::scroll_to_position`], [`Editor::scroll_by_rows`], [`Editor::scroll_by_pages`], [`Editor::scroll_by_pixels`] with [`Autoscroll`] |
+//! | Scroll | [`Editor::scroll_to_caret`], [`Editor::scroll_to_position`], [`Editor::scroll_by_rows`], [`Editor::scroll_by_pages`], [`Editor::scroll_by_pixels`] with [`Autoscroll`]; sideways [`Editor::scroll_sideways_by_pixels`] |
+//! | Zoom the view | [`Editor::set_zoom`], [`Editor::set_zoom_at`], [`Editor::zoom_in`], [`Editor::zoom_out`], [`Editor::zoom_by`] with a [`Zoom`]; [`Editor::zoom`], [`Editor::zoom_percent`], [`Editor::set_view_zooms`], [`EditorEvent::ZoomChanged`] |
 //! | Float a view at the caret | [`Editor::show_popup`], [`Editor::hide_popup`] with [`PopupAnchor`], [`PopupPlacement`] |
 //! | Show a context menu for the text | [`EditorEvent::ContextMenuRequested`] with a [`ContextMenuRequest`] (right-click, `ctrl`-click, `ctrl-enter`) |
 //! | Mark ranges (find, Vim search) | [`Editor::set_highlights`], [`Editor::clear_highlights`] with [`HighlightStyle`] |
@@ -85,9 +86,20 @@
 //! orientation and margins of the document's page setup: rows flow from
 //! sheet to sheet, a block continues on the next sheet at a row boundary,
 //! a page break starts a new sheet, headings stay with the text after
-//! them. A window narrower than the page shows the page scaled down. All
-//! geometry, the visual-row oracle and scrolling work the same in both
-//! views.
+//! them. All geometry, the visual-row oracle and scrolling work the same in
+//! both views.
+//!
+//! ## Zoom
+//!
+//! Each view has a zoom ([`Zoom`]: a percentage, or one that follows the
+//! window). It changes how large the view is drawn and nothing of the
+//! document: the layout is computed in the document's points and never
+//! sees the zoom, so the same words stand on the same lines and pages at
+//! every zoom of page view (the module `zoom` says how). A sheet that is
+//! wider than its room scrolls sideways; flow view reflows instead.
+//! Everything in the table above that is "in window coordinates" or "in
+//! pixels" is at the zoom the view has, so whatever is anchored to the
+//! text through it follows.
 //!
 //! ## Geometry and visual rows
 //!
@@ -129,6 +141,7 @@
 //! | `link_tip` | the tooltip of a link under the pointer |
 //! | `scroll` | scroll position, requests, autoscroll, the overlay scroll bar |
 //! | `geometry` | positions to window rectangles and back |
+//! | `zoom` | the zoom of the two views: what it is, setting it, keeping the place |
 //! | `highlights` | highlight layers |
 //! | `popup` | popup hosting and placement |
 //! | `intercept` | key interception registry |
@@ -184,6 +197,7 @@ mod scroll;
 pub mod spelling;
 mod stats;
 mod view_state;
+mod zoom;
 
 #[cfg(test)]
 mod tests;
@@ -203,6 +217,9 @@ pub use popup::{PopupAnchor, PopupPlacement};
 pub use scroll::Autoscroll;
 pub use spelling::SpellingMarksOutcome;
 pub use view_state::ViewState;
+pub use zoom::{
+    PAGE_VIEW_SCALE, ZOOM_FIT_MIN, ZOOM_MAX, ZOOM_MIN, ZOOM_STEPS, Zoom, step_above, step_below,
+};
 
 /// Installs the editor's key bindings (in the `"Editor"` key context). Call
 /// once at startup, after the app's own context-free bindings and after

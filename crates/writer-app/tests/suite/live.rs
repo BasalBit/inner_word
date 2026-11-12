@@ -283,11 +283,16 @@ fn an_agent_edits_the_open_document_while_it_has_unsaved_typing(cx: &mut TestApp
     assert_eq!(selection(&desk, cx), caret);
     assert!(editor_focused(&desk.workspace, cx));
     // The version from before the agent's edit holds the typing (the app
-    // kept it when it saved for the agent, a moment before the edit).
+    // kept it when it saved for the agent, a moment before the edit), and
+    // says whose edit it was kept for.
     let versions = desk
         .library
         .read_with(cx, |library, _| library.snapshots(id).unwrap());
     assert_eq!(versions.len(), 1);
+    assert_eq!(
+        version_labels(&desk, id, cx),
+        ["Before an edit by Claude".to_string()]
+    );
     let kept = desk.library.read_with(cx, |library, _| {
         Document::from_json(&library.snapshot(versions[0].id).unwrap().content)
             .unwrap()

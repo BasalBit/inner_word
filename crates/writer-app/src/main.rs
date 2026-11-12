@@ -156,6 +156,8 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
             if let Some(data_dir) = &locked {
                 writer_app::live::open_at_launch(data_dir, handle, cx);
             }
+            // Two fingers pinched on the trackpad zoom the text.
+            writer_app::pinch::watch(handle, cx);
             Some(handle.into())
         }
         Err(err) => {

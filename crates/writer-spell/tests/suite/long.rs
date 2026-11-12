@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use gpui::TestAppContext;
 use writer_core::{Block, Document, Position};
 use writer_spell::{
-    EDIT_PAUSE, FAKE_LANGUAGE, IDLE_PAUSE, SLICE_BUDGET, SLICE_PAUSE, SpellLanguage, TYPING_PAUSE,
+    EDIT_PAUSE, FAKE_LANGUAGE, IDLE_PAUSE, SLICE_BUDGET, SLICE_PAUSE, SpellEvent, SpellLanguage,
+    TYPING_PAUSE,
 };
 
 use crate::suite::support::*;
@@ -124,6 +125,13 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
     // The typing stops: the pass goes on and comes to an end.
     wait(IDLE_PAUSE, cx);
     checker.update(cx, |checker, _| checker.reset_slice_stats());
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = cx.update(|_, cx| {
+        let events = events.clone();
+        cx.subscribe(&checker, move |_, event: &SpellEvent, _| {
+            events.borrow_mut().push(event.clone())
+        })
+    });
     let started = Instant::now();
     let rounds = settle(&checker, cx);
     let took = started.elapsed();
@@ -139,6 +147,27 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
         checker.read_with(cx, |checker, cx| checker.misspelling_count(cx)),
         1_001
     );
+    // Whoever counts the marks is told a few times a second while the
+    // pass runs, not once a slice, and a last time before it is over.
+    {
+        let events = events.borrow();
+        let told = events
+            .iter()
+            .filter(|event| **event == SpellEvent::MarksChanged)
+            .count();
+        println!("long: {told} MarksChanged events for {slices} slices");
+        assert!(
+            told >= 1 && (told as u64) < slices / 4,
+            "{told} events, {slices} slices"
+        );
+        let last_marks = events
+            .iter()
+            .rposition(|event| *event == SpellEvent::MarksChanged);
+        let settled = events
+            .iter()
+            .rposition(|event| *event == SpellEvent::Settled);
+        assert!(last_marks.is_some() && last_marks < settled, "{events:?}");
+    }
     wait(TYPING_PAUSE, cx);
     assert_eq!(
         checker.read_with(cx, |checker, cx| checker.misspelling_count(cx)),

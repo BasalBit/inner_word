@@ -75,6 +75,9 @@ const SMALL_SPLICE: usize = 64;
 /// marked words without naming a language, the document may count as
 /// written in a language it has no dictionary for.
 const UNPLACED_BLOCKS: usize = 3;
+/// While slice follows slice, [`SpellEvent::MarksChanged`] is emitted at
+/// most this often.
+const MARKS_EVENT_PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
 /// A slice checks at most this many blocks, whatever the clock says.
 const SLICE_BLOCKS: usize = 2000;
 
@@ -355,6 +358,7 @@ impl SpellChecker {
         self.detected.clear();
         self.unidentified = 0;
         self.fallback = None;
+        self.marks_changed = false;
     }
 
     /// One slice, as the worker runs it. Returns whether there is more to
@@ -420,7 +424,19 @@ impl SpellChecker {
             }
             budget.changed |= extra.changed;
         }
-        if budget.changed {
+        // The editor repaints by itself when marks on screen change. The
+        // event is for whoever counts them: while a long document is
+        // being checked it is told a few times a second, not once a
+        // slice, and always when the work comes to a stop.
+        self.marks_changed |= budget.changed;
+        if self.marks_changed
+            && (state != Work::More
+                || self
+                    .marks_told
+                    .is_none_or(|told| told.elapsed() >= MARKS_EVENT_PAUSE))
+        {
+            self.marks_changed = false;
+            self.marks_told = Some(Instant::now());
             cx.emit(SpellEvent::MarksChanged);
         }
         match state {

@@ -75,7 +75,10 @@ pub enum SpellEvent {
     EnabledChanged(bool),
     /// The language changed ([`SpellChecker::set_language`]).
     LanguageChanged(SpellLanguage),
-    /// The marks of at least one block changed.
+    /// The marks of at least one block changed. While a long document is
+    /// being checked this comes a few times a second, not once per block;
+    /// it always comes before [`SpellEvent::Settled`]. (The editor
+    /// repaints by itself: the event is for whoever shows a count.)
     MarksChanged,
     /// Every block of the document has been checked (the background pass
     /// is done); emitted again after each later change has been checked.
@@ -196,6 +199,11 @@ pub struct SpellChecker {
     /// The language a text is checked in when the service cannot tell.
     pub(crate) fallback: Option<Rc<str>>,
 
+    /// Marks changed since the last [`SpellEvent::MarksChanged`], and
+    /// when that was emitted.
+    pub(crate) marks_changed: bool,
+    pub(crate) marks_told: Option<std::time::Instant>,
+
     // --- For a status line, a script or a test ---
     pub(crate) last_notice: Option<SharedString>,
     pub(crate) slices: u64,
@@ -263,6 +271,8 @@ impl SpellChecker {
             detected: HashMap::new(),
             unidentified: 0,
             fallback: None,
+            marks_changed: false,
+            marks_told: None,
             last_notice: None,
             slices: 0,
             longest_slice: Duration::ZERO,

@@ -296,6 +296,9 @@ impl LayoutStyle {
                 // More air above a heading than below: it belongs to what
                 // follows.
                 let (before, after) = match level {
+                    // A small surface: the headings are smaller, and so
+                    // is the air around them.
+                    _ if self.small_headings => (0.6, 0.2),
                     1 => (0.9, 0.5),
                     2 => (0.9, 0.35),
                     3 => (0.75, 0.3),

@@ -161,6 +161,7 @@
 //! opens one. The editor draws no menu itself.
 
 pub mod actions;
+mod adopt;
 mod commands;
 mod compact;
 mod config;

@@ -86,7 +86,7 @@ writer comment delete doc:12 3
 
 `--quote` is the exact text the comment is anchored to, as `get --format text` prints it, and it must stand in the document exactly once. The number after the document is the id of the thread, which `comment list` prints.
 
-History. A version of the document is kept before every change this tool makes, so anything can be taken back:
+History. A version of the document is kept before every change this tool makes to its text (and before a comment is deleted), so anything can be taken back. The app shows these versions with their reason, such as "Before an edit by Claude", when you pass `--author`:
 
 ```
 writer history list doc:12

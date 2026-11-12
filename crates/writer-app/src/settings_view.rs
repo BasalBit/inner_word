@@ -1707,9 +1707,11 @@ impl Render for SettingsView {
                 .iter()
                 .any(|(row, handle)| wanted(*row) && handle.is_focused(window))
         };
+        // The row that opens the keyboard shortcuts has nothing to step.
+        let opens = on_row(&|row| row == SettingRow::KeyboardShortcuts);
         let space_hint = if on_row(&|row| Self::language_target(row).is_some()) {
             "Whole list"
-        } else if on_row(&|row| row == SettingRow::KeyboardShortcuts) {
+        } else if opens {
             "Open"
         } else {
             "Switch"
@@ -1882,7 +1884,9 @@ impl Render for SettingsView {
                     .text_size(UI_TEXT_XS)
                     .text_color(colors.muted)
                     .children(hint(&[&FocusPrevious, &FocusNext], KEY_CONTEXT, "Move"))
-                    .children(hint(&[&Decrease, &Increase], ROW_KEY_CONTEXT, "Change"))
+                    .when(!opens, |el| {
+                        el.children(hint(&[&Decrease, &Increase], ROW_KEY_CONTEXT, "Change"))
+                    })
                     .children(hint(&[&Activate], ROW_KEY_CONTEXT, space_hint))
                     .children(crate::controls::close_hint(cx)),
             )

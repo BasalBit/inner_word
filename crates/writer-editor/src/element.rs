@@ -1047,9 +1047,9 @@ impl EditorElement {
                     if event.modifiers.platform && !editor.config.mode.is_compact() {
                         // `cmd` with the wheel zooms around the pointer:
                         // towards the top of the wheel is in.
-                        editor.zoom_by(wheel_zoom(delta.y), event.position, cx);
+                        editor.zoom_by(wheel_zoom(event.delta), event.position, cx);
                     } else {
-                        editor.scroll_wheel(delta, cx);
+                        editor.scroll_wheel(delta, event.modifiers.shift, cx);
                     }
                 });
             }
@@ -1057,11 +1057,15 @@ impl EditorElement {
     }
 }
 
-/// How much `cmd` with the wheel zooms for a wheel delta in window pixels:
-/// a line of text on the wheel is about seven percent, a long swipe on
-/// the trackpad doubles or halves.
-pub(crate) fn wheel_zoom(delta: Pixels) -> f32 {
-    (f32::from(delta) / 400.).clamp(-1., 1.).exp()
+/// How much `cmd` with the wheel zooms for a turn of it: a notch of a
+/// wheel is seven percent at every zoom, a long swipe on the trackpad
+/// doubles or halves.
+pub(crate) fn wheel_zoom(delta: gpui::ScrollDelta) -> f32 {
+    let turn = match delta {
+        gpui::ScrollDelta::Pixels(delta) => f32::from(delta.y) / 400.,
+        gpui::ScrollDelta::Lines(delta) => delta.y * 0.07,
+    };
+    turn.clamp(-1., 1.).exp()
 }
 
 impl Editor {

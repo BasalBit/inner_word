@@ -352,12 +352,19 @@ impl Editor {
 
     /// The scroll wheel or trackpad moved over the editor: `delta` in
     /// window pixels. Sideways it moves the view only where a sheet is
-    /// wider than its room (page view, zoomed in or in a narrow window).
-    pub(crate) fn scroll_wheel(&mut self, delta: Point<Pixels>, cx: &mut Context<Self>) {
+    /// wider than its room (page view, zoomed in or in a narrow window);
+    /// there `shift` turns a wheel that only goes up and down sideways.
+    pub(crate) fn scroll_wheel(
+        &mut self,
+        delta: Point<Pixels>,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) {
         // A positive wheel delta moves the content down (towards the top).
         // Whole half pixels keep rules and text on device pixels.
         let whole = |delta: Pixels| px((f32::from(delta) * 2.).round() / 2.);
         self.hide_link_tip(cx);
+        let delta = sideways_intent(delta, shift, self.max_horizontal_scroll() > px(0.));
         if delta.y != px(0.) {
             self.scroll_by_pixels(-whole(delta.y), cx);
         }
@@ -493,5 +500,32 @@ impl Editor {
         };
         let speed = (f32::from(distance.abs()) * 0.4).clamp(4., 80.);
         Some(px(speed.round() * f32::from(distance).signum()))
+    }
+}
+
+/// What a wheel delta means where the view may also move sideways
+/// (`can_go_sideways`). Two fingers on a trackpad never move straight: the
+/// small part of a move that is mostly up and down (or mostly sideways) is
+/// dropped, so a sheet does not wander while the text is scrolled. With
+/// `shift` a delta that only goes up and down goes sideways (macOS turns
+/// the wheel of most mice itself; this is for the ones it does not).
+pub(crate) fn sideways_intent(
+    delta: Point<Pixels>,
+    shift: bool,
+    can_go_sideways: bool,
+) -> Point<Pixels> {
+    if !can_go_sideways {
+        return gpui::point(px(0.), delta.y);
+    }
+    if shift && delta.x == px(0.) {
+        return gpui::point(delta.y, px(0.));
+    }
+    let (across, along) = (delta.x.abs(), delta.y.abs());
+    if along >= across * 2. {
+        gpui::point(px(0.), delta.y)
+    } else if across >= along * 2. {
+        gpui::point(delta.x, px(0.))
+    } else {
+        delta
     }
 }

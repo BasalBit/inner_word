@@ -1069,6 +1069,47 @@ fn a_sheet_wider_than_its_room_scrolls_sideways(cx: &mut TestAppContext) {
     });
     assert!(close(sheet(cx).left(), viewport.left() + px(16.)));
 
+    // A wheel that only goes up and down goes sideways with shift.
+    let from = editor.read_with(cx, |editor, _| editor.horizontal_scroll_offset());
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-150.))),
+        modifiers: Modifiers::shift(),
+        touch_phase: TouchPhase::Moved,
+    });
+    editor.read_with(cx, |editor, _| {
+        assert!(close(editor.horizontal_scroll_offset(), from + px(150.)));
+        assert_eq!(editor.scroll_offset(), down);
+    });
+    // Two fingers that go down and a little sideways scroll the text and
+    // leave the sheet where it is; a move across both does both.
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(-9.), px(-60.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    editor.read_with(cx, |editor, _| {
+        assert!(close(editor.horizontal_scroll_offset(), from + px(150.)));
+        assert!(close(editor.scroll_offset(), down + px(60.)));
+    });
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(40.), px(60.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    editor.read_with(cx, |editor, _| {
+        assert!(close(editor.horizontal_scroll_offset(), from + px(110.)));
+        assert!(close(editor.scroll_offset(), down));
+    });
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(5000.), px(0.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+
     // Hit testing knows where the sheet is: a click finds the character
     // under it wherever the sheet was scrolled to.
     for offset in [px(0.), px(200.), max] {

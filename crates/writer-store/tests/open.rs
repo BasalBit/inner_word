@@ -378,3 +378,121 @@ fn a_version_1_library_file_is_upgraded_on_open() {
 fn big_content_len() -> usize {
     format!("{{\"text\":{:?}}}", "word ".repeat(20_000)).len()
 }
+
+/// Every file in `dir` with its size and modification time.
+fn listing(dir: &std::path::Path) -> BTreeMap<String, (u64, std::time::SystemTime)> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let meta = entry.metadata().unwrap();
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                (meta.len(), meta.modified().unwrap()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn read_only_open_reads_beside_a_writer_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    // There is no library yet: nothing is created.
+    assert!(Store::open_read_only(&path).is_err());
+    assert!(!path.exists());
+    assert!(listing(dir.path()).is_empty());
+
+    // The app has the library open and writes to it.
+    let mut app = Store::open(&path).unwrap();
+    let folder = app.create_folder(None, "Notes").unwrap();
+    let first = doc(&mut app, Some(folder.id), "First", "alpha beta");
+
+    let reader = Store::open_read_only(&path).unwrap().store().unwrap();
+    assert!(reader.is_read_only());
+    assert!(!app.is_read_only());
+    assert_eq!(reader.path(), Some(path.as_path()));
+    assert_eq!(reader.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(reader.document(first.id).unwrap().meta.title, "First");
+    assert_eq!(reader.library_tree().unwrap().folders.len(), 1);
+    assert_eq!(reader.search("alpha", 10).unwrap().len(), 1);
+    assert_eq!(reader.backup_on_open(), None);
+
+    // What the app writes while the reader is open is seen by the next read.
+    let second = doc(&mut app, None, "Second", "gamma");
+    assert_eq!(reader.document(second.id).unwrap().meta.title, "Second");
+    assert_eq!(reader.search("gamma", 10).unwrap().len(), 1);
+
+    // The reader cannot write, and the app is not held up by it.
+    let mut reader = reader;
+    assert!(matches!(
+        reader.create_folder(None, "No"),
+        Err(StoreError::Sqlite(_))
+    ));
+    assert!(matches!(
+        reader.save_document(first.id, &content("Changed", "x", "{}")),
+        Err(StoreError::Sqlite(_))
+    ));
+    assert!(reader.set_setting("theme", "dark").is_err());
+    app.rename_document(first.id, "Still mine").unwrap();
+    assert_eq!(reader.document(first.id).unwrap().meta.title, "Still mine");
+    reader.close().unwrap();
+    assert_eq!(app.documents().unwrap().len(), 2);
+    app.close().unwrap();
+
+    // With the app gone, reading leaves the files as they are: no backup, no migration,
+    // no change to the database file.
+    let before = listing(dir.path());
+    let before_bytes = std::fs::read(&path).unwrap();
+    let reader = Store::open_read_only(&path).unwrap().store().unwrap();
+    assert_eq!(reader.documents().unwrap().len(), 2);
+    assert_eq!(reader.trash().unwrap().len(), 0);
+    drop(reader);
+    assert_eq!(std::fs::read(&path).unwrap(), before_bytes);
+    assert_eq!(
+        listing(dir.path()).get("library.db"),
+        before.get("library.db")
+    );
+    assert!(!backups_dir(&path).exists());
+
+    // Not a library, and a library from the future, are refused as by `open`.
+    let other = dir.path().join("other.db");
+    let conn = rusqlite::Connection::open(&other).unwrap();
+    conn.execute_batch("CREATE TABLE t (x)").unwrap();
+    drop(conn);
+    assert!(matches!(
+        Store::open_read_only(&other),
+        Err(StoreError::NotALibrary)
+    ));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .unwrap();
+    drop(conn);
+    assert!(matches!(
+        Store::open_read_only(&path),
+        Err(StoreError::SchemaTooNew { .. })
+    ));
+}
+
+#[test]
+fn read_only_open_reports_a_library_that_needs_an_upgrade() {
+    use writer_store::ReadOnlyLibrary;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let mut store = Store::open(&path).unwrap();
+    doc(&mut store, None, "Kept", "words");
+    store.close().unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .unwrap();
+    drop(conn);
+    match Store::open_read_only(&path).unwrap() {
+        ReadOnlyLibrary::NeedsUpgrade { found, supported } => {
+            assert_eq!(found, SCHEMA_VERSION - 1);
+            assert_eq!(supported, SCHEMA_VERSION);
+        }
+        ReadOnlyLibrary::Open(_) => panic!("an older library was opened as it is"),
+    }
+    assert!(Store::open_read_only(&path).unwrap().store().is_none());
+}

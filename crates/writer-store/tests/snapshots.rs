@@ -127,3 +127,82 @@ fn snapshot_if_stale_prunes_with_store_policy() {
     }
     assert_eq!(store.snapshots(d.id).unwrap().len(), 3);
 }
+
+#[test]
+fn labels_say_why_a_snapshot_was_taken() {
+    let (mut store, clock) = store();
+    let d = doc(&mut store, None, "Draft", "one two");
+    let plain = store.create_snapshot(d.id).unwrap();
+    clock.advance_ms(MINUTE);
+    let labelled = store
+        .create_labeled_snapshot(d.id, "  Before an edit by Claude ")
+        .unwrap();
+    assert_eq!(labelled.document_id, d.id);
+    assert_eq!(store.snapshot_label(plain.id).unwrap(), None);
+    assert_eq!(
+        store.snapshot_label(labelled.id).unwrap().as_deref(),
+        Some("Before an edit by Claude")
+    );
+    let labels = store.snapshot_labels(d.id).unwrap();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[&labelled.id], "Before an edit by Claude");
+    // The snapshot itself is an ordinary one: listed, loaded and restored as any other.
+    assert_eq!(store.snapshots(d.id).unwrap().len(), 2);
+    assert_eq!(store.snapshot(labelled.id).unwrap().meta, labelled);
+    // Another document's labels are its own.
+    let other = doc(&mut store, None, "Other", "x");
+    assert!(store.snapshot_labels(other.id).unwrap().is_empty());
+    // An empty label is no label.
+    clock.advance_ms(MINUTE);
+    let bare = store.create_labeled_snapshot(d.id, "  ").unwrap();
+    assert_eq!(store.snapshot_label(bare.id).unwrap(), None);
+    assert_eq!(store.snapshot_label(SnapshotId(999)).unwrap(), None);
+}
+
+#[test]
+fn a_label_does_not_pass_to_a_later_snapshot_with_the_same_id() {
+    let (mut store, clock) = store();
+    let d = doc(&mut store, None, "Draft", "one two");
+    let first = store
+        .create_labeled_snapshot(d.id, "Before an edit")
+        .unwrap();
+    store.delete_snapshot(first.id).unwrap();
+    // The label is left behind, and never shown.
+    assert_eq!(store.snapshot_label(first.id).unwrap(), None);
+    clock.advance_ms(MINUTE);
+    // SQLite hands the id of the deleted row out again.
+    let second = store.create_snapshot(d.id).unwrap();
+    assert_eq!(second.id, first.id);
+    assert_eq!(store.snapshot_label(second.id).unwrap(), None);
+    assert!(store.snapshot_labels(d.id).unwrap().is_empty());
+
+    // Housekeeping removes what belongs to no snapshot, and nothing else.
+    let kept = store.create_labeled_snapshot(d.id, "Kept").unwrap();
+    let gone = store.create_labeled_snapshot(d.id, "Gone").unwrap();
+    store
+        .set_setting("snapshot.labels_are_not_this", &true)
+        .unwrap();
+    store.set_setting("theme", "dark").unwrap();
+    store.delete_snapshot(gone.id).unwrap();
+    assert_eq!(store.remove_stale_snapshot_labels().unwrap(), 1);
+    assert_eq!(
+        store.snapshot_label(kept.id).unwrap().as_deref(),
+        Some("Kept")
+    );
+    assert_eq!(
+        store.setting::<String>("theme").unwrap().as_deref(),
+        Some("dark")
+    );
+    assert_eq!(
+        store
+            .setting::<bool>("snapshot.labels_are_not_this")
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(store.remove_stale_snapshot_labels().unwrap(), 0);
+    // Deleting the document takes its snapshots along; their labels go with the next
+    // housekeeping.
+    store.trash_document(d.id).unwrap();
+    store.purge_document(d.id).unwrap();
+    assert_eq!(store.remove_stale_snapshot_labels().unwrap(), 2);
+}

@@ -98,6 +98,44 @@ impl SnapshotPolicy {
     }
 }
 
+/// The settings key of a snapshot's label is this prefix followed by the snapshot's id
+/// (`snapshot.label.42`). The value is an object `{"label": "...", "created_at": <unix
+/// ms>}`; `created_at` is the creation time of the snapshot the label was given to, so a
+/// label left behind by a deleted snapshot does not pass to a later one with the same id.
+/// Use [`Store::snapshot_label`] and [`Store::snapshot_labels`] rather than the key.
+pub const SNAPSHOT_LABEL_PREFIX: &str = "snapshot.label.";
+
+/// A snapshot's label as the settings table holds it.
+#[derive(Serialize, Deserialize)]
+struct StoredLabel {
+    label: String,
+    created_at: i64,
+}
+
+fn label_key(id: SnapshotId) -> String {
+    format!("{SNAPSHOT_LABEL_PREFIX}{}", id.0)
+}
+
+fn write_label(conn: &Connection, meta: &SnapshotMeta, label: &str, now: i64) -> Result<()> {
+    let value = serde_json::to_string(&StoredLabel {
+        label: label.to_owned(),
+        created_at: meta.created_at,
+    })?;
+    conn.execute(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+             updated_at = excluded.updated_at",
+        params![label_key(meta.id), value, now],
+    )?;
+    Ok(())
+}
+
+/// The label in a stored value, when it was given to the snapshot created at `created_at`.
+fn label_for(raw: &str, created_at: i64) -> Option<String> {
+    let stored: StoredLabel = serde_json::from_str(raw).ok()?;
+    (stored.created_at == created_at && !stored.label.is_empty()).then_some(stored.label)
+}
+
 const SNAPSHOT_COLS: &str = "id, document_id, created_at, title, word_count, char_count";
 
 fn snapshot_meta_from_row(row: &Row<'_>) -> rusqlite::Result<SnapshotMeta> {
@@ -162,6 +200,89 @@ impl Store {
         let meta = insert_snapshot(&tx, document, now)?;
         tx.commit()?;
         Ok(meta)
+    }
+
+    /// Takes a snapshot like [`Store::create_snapshot`] and gives it a label: a few words
+    /// that say why it was taken ("Before an edit by Claude"), for whoever looks at the
+    /// versions of the document later. An empty label is no label.
+    ///
+    /// The schema knows no labels; they are kept in the settings table (see
+    /// [`SNAPSHOT_LABEL_PREFIX`]), so a library with labels opens in every version of the
+    /// app, and versions that do not know them show the snapshot without one.
+    pub fn create_labeled_snapshot(
+        &mut self,
+        document: DocumentId,
+        label: &str,
+    ) -> Result<SnapshotMeta> {
+        let now = self.now();
+        let tx = self.conn.transaction()?;
+        let meta = insert_snapshot(&tx, document, now)?;
+        if label.trim().is_empty() {
+            tx.execute("DELETE FROM settings WHERE key = ?1", [label_key(meta.id)])?;
+        } else {
+            write_label(&tx, &meta, label.trim(), now)?;
+        }
+        tx.commit()?;
+        Ok(meta)
+    }
+
+    /// The label of a snapshot, `None` when it has none (or does not exist).
+    pub fn snapshot_label(&self, id: SnapshotId) -> Result<Option<String>> {
+        let row: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT s.created_at, t.value FROM snapshots s
+                 JOIN settings t ON t.key = ?2
+                 WHERE s.id = ?1",
+                params![id, label_key(id)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(created_at, raw)| label_for(&raw, created_at)))
+    }
+
+    /// The labels of a document's snapshots, by snapshot id. Snapshots without a label
+    /// are not in the map.
+    pub fn snapshot_labels(
+        &self,
+        document: DocumentId,
+    ) -> Result<std::collections::BTreeMap<SnapshotId, String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.id, s.created_at, t.value FROM snapshots s
+             JOIN settings t ON t.key = ?2 || s.id
+             WHERE s.document_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![document, SNAPSHOT_LABEL_PREFIX], |r| {
+            Ok((
+                r.get::<_, SnapshotId>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut labels = std::collections::BTreeMap::new();
+        for row in rows {
+            let (id, created_at, raw) = row?;
+            if let Some(label) = label_for(&raw, created_at) {
+                labels.insert(id, label);
+            }
+        }
+        Ok(labels)
+    }
+
+    /// Removes the labels of snapshots that are gone (pruned, deleted, or deleted with
+    /// their document); returns how many were removed. Labels are small and a stale one is
+    /// never shown, so this is housekeeping: call it after taking labelled snapshots.
+    pub fn remove_stale_snapshot_labels(&mut self) -> Result<usize> {
+        let removed = self.conn.execute(
+            "DELETE FROM settings
+             WHERE key >= ?1 AND key < ?2
+               AND NOT EXISTS (SELECT 1 FROM snapshots s WHERE ?1 || s.id = settings.key)",
+            params![
+                SNAPSHOT_LABEL_PREFIX,
+                format!("{SNAPSHOT_LABEL_PREFIX}\u{10ffff}")
+            ],
+        )?;
+        Ok(removed)
     }
 
     /// Snapshot metadata for a document, newest first. Empty when there are none or the

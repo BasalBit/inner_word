@@ -17,6 +17,11 @@
 //!   by triggers, tolerant of any user input, with prefix matching on the last word.
 //! - **Daily backups** written on open into a `backups` directory next to the database.
 //!
+//! A tool that only reads opens the library with [`Store::open_read_only`]: nothing is
+//! created, migrated, backed up or locked, so a running app is not disturbed. Snapshots a
+//! tool takes before it changes a document carry a label ([`Store::create_labeled_snapshot`],
+//! [`Store::snapshot_labels`]).
+//!
 //! Next to the database lives the lock of the data directory ([`instance_lock`]): whoever
 //! is going to write to a library (the app for as long as it runs, a tool for one write)
 //! takes it first, so two writers never have one library.
@@ -66,7 +71,7 @@ mod tree;
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub use crate::backup::{DEFAULT_KEEP_BACKUPS, list_backups};
 pub use crate::clock::Clock;
@@ -79,7 +84,7 @@ pub use crate::paths::{
 };
 pub use crate::schema::SCHEMA_VERSION;
 pub use crate::search::{MATCH_END, MATCH_START, SearchHit, SnippetPart};
-pub use crate::snapshots::{Snapshot, SnapshotMeta, SnapshotPolicy};
+pub use crate::snapshots::{SNAPSHOT_LABEL_PREFIX, Snapshot, SnapshotMeta, SnapshotPolicy};
 pub use crate::trash::{EmptiedTrash, TrashEntry};
 pub use crate::tree::{FolderNode, LibraryTree};
 
@@ -112,6 +117,34 @@ pub struct Store {
     path: Option<PathBuf>,
     snapshot_policy: SnapshotPolicy,
     backup_outcome: Option<std::result::Result<PathBuf, String>>,
+    read_only: bool,
+}
+
+/// What [`Store::open_read_only`] found at the path.
+#[derive(Debug)]
+pub enum ReadOnlyLibrary {
+    /// The library, open for reading. Everything that takes `&mut Store` fails on it
+    /// with an SQLite "read-only database" error.
+    Open(Box<Store>),
+    /// The library was written by an older version of the app and has to be upgraded
+    /// before this build can read it. Opening it with [`Store::open`] does that, and
+    /// writes to the file: do it only while holding the [`instance_lock`].
+    NeedsUpgrade {
+        /// The schema version found in the file.
+        found: i64,
+        /// The schema version this build reads ([`SCHEMA_VERSION`]).
+        supported: i64,
+    },
+}
+
+impl ReadOnlyLibrary {
+    /// The store, when the library could be opened as it is.
+    pub fn store(self) -> Option<Store> {
+        match self {
+            ReadOnlyLibrary::Open(store) => Some(*store),
+            ReadOnlyLibrary::NeedsUpgrade { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Debug for Store {
@@ -167,7 +200,49 @@ impl Store {
             path: Some(path),
             snapshot_policy: SnapshotPolicy::default(),
             backup_outcome,
+            read_only: false,
         })
+    }
+
+    /// Opens the library at `path` for reading only, as a tool does that must not disturb
+    /// a running app: no directory or file is created, nothing is migrated, no backup is
+    /// written and the journal mode is left as it is. The app (or another tool) may write
+    /// to the library meanwhile; every read sees a consistent state.
+    ///
+    /// Fails when there is no file at `path` (an SQLite error), with
+    /// [`StoreError::NotALibrary`] for an unrelated SQLite file and with
+    /// [`StoreError::SchemaTooNew`] for a library of a newer version. A library of an
+    /// older version is not an error but [`ReadOnlyLibrary::NeedsUpgrade`].
+    ///
+    /// The returned store stamps time with the system clock ([`Store::set_clock`]), though
+    /// nothing a read-only store can do stamps anything.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<ReadOnlyLibrary> {
+        let path = path.as_ref().to_path_buf();
+        let conn = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        schema::configure(&conn)?;
+        let header = schema::inspect(&conn)?;
+        if header.user_version < SCHEMA_VERSION {
+            return Ok(ReadOnlyLibrary::NeedsUpgrade {
+                found: header.user_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        Ok(ReadOnlyLibrary::Open(Box::new(Self {
+            conn,
+            clock: Clock::system(),
+            path: Some(path),
+            snapshot_policy: SnapshotPolicy::default(),
+            backup_outcome: None,
+            read_only: true,
+        })))
+    }
+
+    /// Whether this store was opened with [`Store::open_read_only`].
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Opens a fresh in-memory library (for tests) with the system clock.
@@ -186,6 +261,7 @@ impl Store {
             path: None,
             snapshot_policy: SnapshotPolicy::default(),
             backup_outcome: None,
+            read_only: false,
         })
     }
 
@@ -236,9 +312,10 @@ impl Store {
     }
 
     /// Checkpoints the WAL into the main file and closes the connection, reporting errors
-    /// that a plain drop would swallow. Dropping without calling this is safe too.
+    /// that a plain drop would swallow. Dropping without calling this is safe too. A
+    /// read-only store is closed without a checkpoint.
     pub fn close(self) -> Result<()> {
-        if self.path.is_some() {
+        if self.path.is_some() && !self.read_only {
             self.conn
                 .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         }

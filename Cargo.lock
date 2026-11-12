@@ -6861,7 +6861,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "writer-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6885,7 +6885,7 @@ dependencies = [
 
 [[package]]
 name = "writer-comments"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gpui",
  "writer-core",
@@ -6895,7 +6895,7 @@ dependencies = [
 
 [[package]]
 name = "writer-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6904,7 +6904,7 @@ dependencies = [
 
 [[package]]
 name = "writer-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6918,7 +6918,7 @@ dependencies = [
 
 [[package]]
 name = "writer-editor-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gpui",
  "libc",
@@ -6929,7 +6929,7 @@ dependencies = [
 
 [[package]]
 name = "writer-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "pulldown-cmark",
@@ -6942,7 +6942,7 @@ dependencies = [
 
 [[package]]
 name = "writer-library"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6956,7 +6956,7 @@ dependencies = [
 
 [[package]]
 name = "writer-spell"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6970,7 +6970,7 @@ dependencies = [
 
 [[package]]
 name = "writer-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -6981,7 +6981,7 @@ dependencies = [
 
 [[package]]
 name = "writer-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6992,14 +6992,14 @@ dependencies = [
 
 [[package]]
 name = "writer-vim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "writer-core",
 ]
 
 [[package]]
 name = "writer-vim-mode"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gpui",
  "writer-core",

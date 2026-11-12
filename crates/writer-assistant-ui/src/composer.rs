@@ -398,6 +398,12 @@ impl Render for Composer {
                 this.focus(window, cx);
             }))
             .w_full()
+            // A flex column, so that the rows in it are as wide as the box
+            // (as blocks they came out as wide as their content while the
+            // conversation above was empty, and the button stood in the
+            // middle of the box).
+            .flex()
+            .flex_col()
             .rounded(RADIUS_LG)
             .bg(colors.elevated)
             .border_1()

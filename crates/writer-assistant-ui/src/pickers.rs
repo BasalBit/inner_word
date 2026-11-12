@@ -235,7 +235,7 @@ pub fn picker_menu_items(
                 effort,
             };
             items.push(item(
-                catalog.agent_default_label.clone(),
+                catalog.effort_label(&EffortChoice::AgentDefault),
                 selection.effort == EffortChoice::AgentDefault,
                 choose(EffortChoice::AgentDefault),
             ));

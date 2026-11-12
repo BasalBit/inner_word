@@ -554,7 +554,15 @@ pub const CUT_OFF_NOTE: &str = "\n\n*(The answer was cut off here: it is too lon
 /// Appends `piece` to `text` up to the bound of one answer. Returns whether anything
 /// was appended.
 fn push_bounded(text: &mut String, piece: &str) -> bool {
-    if piece.is_empty() || text.ends_with(CUT_OFF_NOTE) {
+    if piece.is_empty() {
+        return false;
+    }
+    // The common case costs nothing: an answer whose bytes fit has characters that fit.
+    if text.len() + piece.len() <= Transcript::MAX_ANSWER_CHARS {
+        text.push_str(piece);
+        return true;
+    }
+    if text.ends_with(CUT_OFF_NOTE) {
         return false;
     }
     let have = text.chars().count();

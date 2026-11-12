@@ -30,6 +30,8 @@
 //! * `{"text": "...", "pieces": 40}`: a made-up answer in that many pieces
 //!   (`"echo": true`: the answer is the message it was sent);
 //! * `{"silent": true}`: no answer at all;
+//! * (for the whole script) `"deaf_after_messages": 1`: after that many messages the
+//!   stand-in stops reading its input for good;
 //! * any of them with `"noise": true` (lines that are not JSON and lines of unknown
 //!   kinds in between), `"die_after_lines": 4` with `"exit_code"` and `"stderr"` (the
 //!   process ends in the middle), or `"no_partials": true` (a made-up answer without
@@ -125,12 +127,24 @@ fn main() {
     }
 
     let (tx, input) = channel();
+    let deaf_after = script.get("deaf_after_messages").and_then(Value::as_u64);
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
+        let mut messages = 0u64;
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
+            if line.contains("\"type\":\"user\"") {
+                messages += 1;
+            }
             if tx.send(Some(line)).is_err() {
                 return;
+            }
+            if deaf_after.is_some_and(|limit| messages >= limit) {
+                // A program that has stopped reading: whatever is written to it now
+                // fills the pipe and goes no further.
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
             }
         }
         let _ = tx.send(None);

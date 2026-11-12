@@ -458,3 +458,33 @@ fn several_conversations_run_side_by_side() {
     let handle = std::thread::spawn(move || shared.info().name);
     assert_eq!(handle.join().unwrap(), "Claude Code");
 }
+
+#[test]
+fn tools_that_did_not_start_are_said_once() {
+    // Recorded with a server command that does not exist: the program goes on without
+    // the tools and says so in its first line.
+    let stage = Stage::new(json!({"turns": [
+        {"replay": fixture("tools-not-started-turn.jsonl")},
+        {"replay": fixture("tools-not-started-turn.jsonl")},
+    ]}));
+    let tools = writer_assistant::library_tools("/no/such/writer", "/tmp/library");
+    let talk = Talk::start(&stage.backend(), options().with_tools(Some(tools)));
+    let first = talk.conversation.send("Who is Tam?");
+    let mut events = talk.until_finished(first);
+    let second = talk.conversation.send("And Mara?");
+    events.extend(talk.until_finished(second));
+    let notices: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantEvent::Notice { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].starts_with("The assistant's tools did not start"));
+    assert_eq!(
+        Answer::of(second, &events).end,
+        TurnEnd::Complete,
+        "the conversation goes on"
+    );
+}

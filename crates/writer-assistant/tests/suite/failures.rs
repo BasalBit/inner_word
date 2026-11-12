@@ -309,3 +309,37 @@ fn a_version_that_would_expand_file_mentions_is_refused() {
     );
     assert!(text.advice.contains(MINIMUM_VERSION));
 }
+
+#[test]
+fn a_program_that_has_stopped_reading_does_not_block_stop_or_close() {
+    let stage =
+        Stage::new(json!({"deaf_after_messages": 1, "turns": [{"text": "Fine.", "pieces": 1}]}));
+    let talk = Talk::start(&stage.backend(), options());
+    assert_eq!(talk.ask("One.").text, "Fine.");
+    // A message far larger than a pipe holds (a long document goes with a message of
+    // the side chat): the program never reads it.
+    let turn = talk.conversation.send("x".repeat(2_000_000));
+    std::thread::sleep(Duration::from_millis(200));
+    let pressed = Instant::now();
+    talk.conversation.stop();
+    assert_eq!(
+        Answer::of(turn, &talk.until_finished(turn)).end,
+        TurnEnd::Stopped
+    );
+    assert!(
+        pressed.elapsed() < Duration::from_secs(2),
+        "Stop is heard although the program is not listening"
+    );
+    // The program cannot confirm; it is ended and the conversation with it.
+    let deadline = Instant::now() + PATIENCE;
+    while talk.conversation.is_alive() {
+        assert!(Instant::now() < deadline, "the program was never ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let closing = Instant::now();
+    drop(talk.conversation);
+    assert!(
+        closing.elapsed() < Duration::from_secs(1),
+        "closing never waits"
+    );
+}

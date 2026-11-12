@@ -40,7 +40,7 @@ fn every_line_of_every_recording_is_read_without_complaint() {
 fn a_recorded_turn_reads_as_init_text_and_result() {
     let lines = lines("quick-turn.jsonl");
     assert!(
-        matches!(&lines[0], Line::Init { model: Some(model), version: Some(version), tools } if model == "claude-haiku-5-5" && version == "2.1.322" && tools.is_empty())
+        matches!(&lines[0], Line::Init { model: Some(model), version: Some(version), tools, failed_servers } if model == "claude-haiku-5-5" && version == "2.1.322" && tools.is_empty() && failed_servers.is_empty())
     );
     assert!(lines.contains(&Line::MessageStart));
     assert!(lines.contains(&Line::TextStart));

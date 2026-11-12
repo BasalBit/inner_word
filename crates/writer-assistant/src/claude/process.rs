@@ -64,6 +64,8 @@ pub(super) enum Input {
     Line(u64, String),
     /// The process of this generation closed its output.
     Eof(u64),
+    /// The process of this generation does not take input any more.
+    Deaf(u64),
 }
 
 /// Where the program is and whether it can be used: asked when a process is to be
@@ -76,7 +78,10 @@ pub(super) trait Launcher: Send + 'static {
 /// A running process.
 struct Proc {
     child: Child,
-    stdin: Option<ChildStdin>,
+    /// The lines for the process's input. They are written by a thread of their own:
+    /// a process that has stopped reading must not stop this thread, which still has
+    /// to hear Stop and Close. Dropping the sender closes the process's input.
+    stdin: Option<Sender<String>>,
     generation: u64,
     stderr: Arc<Mutex<String>>,
     /// The total cost the program last reported.
@@ -154,6 +159,7 @@ pub(super) struct Worker<L: Launcher> {
     request_seq: u64,
     model: Option<String>,
     warned: bool,
+    tools_warned: bool,
     /// The process is gone for good: the conversation takes no more messages.
     dead: bool,
     last_noise: String,
@@ -190,6 +196,7 @@ impl<L: Launcher> Worker<L> {
             request_seq: 0,
             model: None,
             warned: false,
+            tools_warned: false,
             dead: false,
             last_noise: String::new(),
         }
@@ -246,7 +253,7 @@ impl<L: Launcher> Worker<L> {
                         self.on_line(&line);
                     }
                 }
-                Input::Eof(generation) => {
+                Input::Eof(generation) | Input::Deaf(generation) => {
                     if self
                         .proc
                         .as_ref()
@@ -333,7 +340,14 @@ impl<L: Launcher> Worker<L> {
         };
         self.generation += 1;
         let generation = self.generation;
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().map(|pipe| {
+            let (lines, queue) = std::sync::mpsc::channel::<String>();
+            let inbox = self.inbox_tx.clone();
+            let _ = std::thread::Builder::new()
+                .name("writer-assistant-claude-in".into())
+                .spawn(move || write_lines(pipe, queue, generation, inbox));
+            lines
+        });
         if let Some(stdout) = child.stdout.take() {
             let inbox = self.inbox_tx.clone();
             let _ = std::thread::Builder::new()
@@ -363,14 +377,10 @@ impl<L: Launcher> Worker<L> {
 
     /// Writes a line to the process. `false` when it does not take it any more.
     fn write(&mut self, line: &str) -> bool {
-        let Some(stdin) = self.proc.as_mut().and_then(|proc| proc.stdin.as_mut()) else {
+        let Some(stdin) = self.proc.as_ref().and_then(|proc| proc.stdin.as_ref()) else {
             return false;
         };
-        stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .and_then(|_| stdin.flush())
-            .is_ok()
+        stdin.send(line.to_string()).is_ok()
     }
 
     fn request(&mut self, subtype: &str, fields: Value, pending: Pending) -> bool {
@@ -519,6 +529,9 @@ impl<L: Launcher> Worker<L> {
 
     /// Ends the process and the conversation with it: what is open fails.
     fn end_process(&mut self, why: &str) {
+        // Said first: whoever asks from now on starts a new conversation instead of
+        // sending a message to one that is going.
+        self.alive.store(false, Ordering::SeqCst);
         let code = self.proc.take().and_then(|mut proc| {
             // It ends by itself when its input closes, if it is still listening.
             drop(proc.stdin.take());
@@ -617,10 +630,22 @@ impl<L: Launcher> Worker<L> {
                 }
             }
             Line::Other => {}
-            Line::Init { model, .. } => {
+            Line::Init {
+                model,
+                failed_servers,
+                ..
+            } => {
                 if model.is_some() && model != self.model {
                     self.model = model.clone();
                     self.emit(AssistantEvent::Ready { model });
+                }
+                if !failed_servers.is_empty() && !self.tools_warned {
+                    self.tools_warned = true;
+                    self.emit(AssistantEvent::Notice {
+                        text: "The assistant's tools did not start: in this conversation it \
+                               cannot look anything up and works from what it is sent."
+                            .to_string(),
+                    });
                 }
             }
             Line::Retry {
@@ -998,6 +1023,26 @@ fn read_lines(stdout: impl Read, generation: u64, inbox: Sender<Input>) {
         ));
     }
     let _ = inbox.send(Input::Eof(generation));
+}
+
+/// Writes the lines of the queue to the process's input, one a line, until the queue is
+/// closed (which closes the input) or the process does not take them any more.
+fn write_lines(
+    mut pipe: ChildStdin,
+    queue: Receiver<String>,
+    generation: u64,
+    inbox: Sender<Input>,
+) {
+    for line in queue {
+        let written = pipe
+            .write_all(line.as_bytes())
+            .and_then(|_| pipe.write_all(b"\n"))
+            .and_then(|_| pipe.flush());
+        if written.is_err() {
+            let _ = inbox.send(Input::Deaf(generation));
+            return;
+        }
+    }
 }
 
 /// Keeps the last of what the process writes to its standard error.

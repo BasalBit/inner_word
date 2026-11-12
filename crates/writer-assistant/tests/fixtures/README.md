@@ -35,6 +35,7 @@ are made up; "127.0.0.1" in a sentence is that stand-in):
 |---|---|
 | `tool-turn.jsonl` | a `read_document` call, then text |
 | `withheld-tool-turn.jsonl` | a call to a tool that writes (`append_to_document`), then text |
+| `tools-not-started-turn.jsonl` | text; the program was given a server command that does not exist |
 | `error-usage-limit.jsonl` | 429 with the headers of a subscriber's used-up five-hour allowance |
 | `error-overloaded.jsonl`, `error-overloaded-retries.jsonl` | 529, without and with four retries |
 | `error-server.jsonl` | 500 |

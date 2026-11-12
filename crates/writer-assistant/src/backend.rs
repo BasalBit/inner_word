@@ -3,7 +3,7 @@
 //! Nothing here assumes a particular agent: a [`Backend`] says what it is called, whether
 //! it is installed and signed in, which models and effort levels it offers, and starts
 //! [`Conversation`]s. A conversation takes user messages and reports what happens as
-//! [`AssistantEvent`]s through an [`EventSink`](crate::EventSink). Claude Code is the
+//! [`AssistantEvent`]s through an [`EventSink`]. Claude Code is the
 //! first implementation ([`ClaudeCode`](crate::ClaudeCode)); the tests of every crate use
 //! [`FakeBackend`](crate::FakeBackend).
 //!

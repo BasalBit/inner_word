@@ -70,11 +70,13 @@ impl ResultLine {
 /// One line of the program's output.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Line {
-    /// `system/init`: a turn begins. `model` is the model that answers.
+    /// `system/init`: a turn begins. `model` is the model that answers, `tools` what
+    /// the model is offered, `failed_servers` the MCP servers that did not start.
     Init {
         model: Option<String>,
         version: Option<String>,
         tools: Vec<String>,
+        failed_servers: Vec<String>,
     },
     /// `system/api_retry`: a request failed and is tried again.
     Retry {
@@ -175,6 +177,24 @@ pub fn parse_line(line: &str) -> Line {
                         tools
                             .iter()
                             .filter_map(|tool| tool.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                failed_servers: value
+                    .get("mcp_servers")
+                    .and_then(Value::as_array)
+                    .map(|servers| {
+                        servers
+                            .iter()
+                            .filter(|server| {
+                                // "connected" and "pending" are fine; so is a state this
+                                // version does not know.
+                                matches!(
+                                    server.get("status").and_then(Value::as_str),
+                                    Some("failed") | Some("needs-auth") | Some("disabled")
+                                )
+                            })
+                            .filter_map(|server| text_of(server, "name"))
                             .collect()
                     })
                     .unwrap_or_default(),

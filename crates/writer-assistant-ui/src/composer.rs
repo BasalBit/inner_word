@@ -318,6 +318,14 @@ impl Composer {
     pub fn send_key(cx: &App) -> Option<KeyHint> {
         KeyHint::for_action(&writer_editor::actions::Newline, cx)
     }
+
+    /// The key that stops the answer, as the Stop control names it: the
+    /// binding of [`StopAnswer`] that fires in this composer. The action is
+    /// bound once for each chat and for each part of a chat, and each of
+    /// those bindings can be given another key.
+    pub fn stop_key(&self, window: &Window, cx: &App) -> Option<KeyHint> {
+        KeyHint::for_action_at(&StopAnswer, &self.editor.focus_handle(cx), window, cx)
+    }
 }
 
 impl Render for Composer {
@@ -336,7 +344,7 @@ impl Render for Composer {
                     "assistant-stop",
                     IconName::Stop,
                     "Stop",
-                    KeyHint::for_action(&StopAnswer, cx),
+                    self.stop_key(window, cx),
                     true,
                 )
             } else {

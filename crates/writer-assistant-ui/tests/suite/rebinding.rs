@@ -132,3 +132,48 @@ fn a_key_bound_in_every_place_of_the_chat(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(ws.fake.stops(), 2);
 }
+
+/// A control of a chat names the key that works in its own place. The keys
+/// of a chat are bound once for each place of each chat, and each binding
+/// can be changed by itself; the keymap-wide answer is whichever was bound
+/// last.
+#[gpui::test]
+fn a_control_names_the_key_of_its_own_place(cx: &mut TestAppContext) {
+    let (ws, cx) = open_panel(cx);
+    ws.fake.hold();
+    ws.fake.push(FakeReply::pieces(["First ", "second."]));
+    ws.send("Go", cx);
+    ws.advance_to_text("First ", cx);
+    let composer = ws.panel.read_with(cx, |panel, _| panel.composer().clone());
+    let stop_key = |cx: &mut VisualTestContext| {
+        composer.update_in(cx, |composer, window, cx| {
+            composer.stop_key(window, cx).map(|key| key.text())
+        })
+    };
+    assert_eq!(stop_key(cx).as_deref(), Some("⌘."));
+
+    // The message list's binding (the one added last) gets another key.
+    let changed = cx.update(|_, cx| {
+        keymap::replace_key_in(
+            &StopAnswer,
+            Some(writer_assistant_ui::MESSAGES_CONTEXT),
+            "cmd-.",
+            Some("ctrl-c"),
+            cx,
+        )
+    });
+    assert_eq!(changed, 1);
+    cx.run_until_parked();
+    assert_eq!(hint(&StopAnswer, cx).as_deref(), Some("⌃C"));
+    assert_eq!(
+        stop_key(cx).as_deref(),
+        Some("⌘."),
+        "the composer names the key that works in it"
+    );
+    cx.simulate_keystrokes("ctrl-c");
+    cx.run_until_parked();
+    assert_eq!(ws.fake.stops(), 0, "the list's key is not the composer's");
+    cx.simulate_keystrokes("cmd-.");
+    cx.run_until_parked();
+    assert_eq!(ws.fake.stops(), 1);
+}

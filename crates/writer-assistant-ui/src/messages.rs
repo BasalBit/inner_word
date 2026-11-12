@@ -154,11 +154,23 @@ impl AnswerAction {
         self
     }
 
-    /// The key that does the same, from the keymap.
+    /// The key that does the same, from the keymap as a whole (the binding
+    /// added last). A chat names the key in its own place:
+    /// [`AnswerAction::key_hint_at`].
     pub fn key_hint(&self, cx: &App) -> Option<KeyHint> {
         self.key_of
             .as_ref()
             .and_then(|action| KeyHint::for_action(action.as_ref(), cx))
+    }
+
+    /// The key that does the same where `focus` has the keyboard (the
+    /// message list of the chat the answer is in), or the keymap-wide one
+    /// when that place has none. The actions of an answer are bound once
+    /// for each chat, and each of those bindings can be given another key.
+    pub fn key_hint_at(&self, focus: &FocusHandle, window: &Window, cx: &App) -> Option<KeyHint> {
+        self.key_of
+            .as_ref()
+            .and_then(|action| KeyHint::for_action_at(action.as_ref(), focus, window, cx))
     }
 }
 
@@ -844,6 +856,7 @@ impl MessageList {
         &self,
         id: MessageId,
         selection_in: Option<FocusHandle>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<ContextMenuItem> {
         let Some(message) = self.message(id) else {
@@ -861,7 +874,12 @@ impl MessageList {
                         })
                         .ok();
                     })
-                    .key_hint(KeyHint::for_action(&CopyMessage, cx)),
+                    .key_hint(KeyHint::for_action_at(
+                        &CopyMessage,
+                        &self.focus_handle,
+                        window,
+                        cx,
+                    )),
                 );
             }
             Role::Assistant => {
@@ -884,7 +902,11 @@ impl MessageList {
                             .ok();
                         })
                         .disabled(!action.enabled || !applicable)
-                        .key_hint(action.key_hint(cx)),
+                        .key_hint(action.key_hint_at(
+                            &self.focus_handle,
+                            window,
+                            cx,
+                        )),
                     );
                 }
                 if matches!(message.state, MessageState::Failed(_)) {
@@ -915,7 +937,7 @@ impl MessageList {
             return;
         }
         self.selected = Some(id);
-        let items = self.menu_items(id, None, cx);
+        let items = self.menu_items(id, None, window, cx);
         let menu = ContextMenu::open(position, items, window, cx);
         if from_keyboard {
             menu.update(cx, |menu, cx| menu.select_first(cx));
@@ -953,7 +975,12 @@ impl MessageList {
         };
         self.selected = Some(id);
         let target = view.editor.focus_handle(cx);
-        let items = self.menu_items(id, request.has_selection.then(|| target.clone()), cx);
+        let items = self.menu_items(
+            id,
+            request.has_selection.then(|| target.clone()),
+            window,
+            cx,
+        );
         let position = request.position;
         let from_keyboard = request.from_keyboard;
         // After this update: the editor is in the middle of emitting.
@@ -992,7 +1019,7 @@ impl MessageList {
         let content = match message.role {
             Role::User => self.render_question(&message, &colors).into_any_element(),
             Role::Assistant => self
-                .render_answer(&message, last, marked, group.clone(), &colors, cx)
+                .render_answer(&message, last, marked, group.clone(), &colors, window, cx)
                 .into_any_element(),
         };
         div()
@@ -1075,6 +1102,7 @@ impl MessageList {
 
     /// An answer: its text, what went wrong if something did, and the line
     /// under it.
+    #[allow(clippy::too_many_arguments)]
     fn render_answer(
         &self,
         message: &Message,
@@ -1082,6 +1110,7 @@ impl MessageList {
         marked: bool,
         group: SharedString,
         colors: &ThemeColors,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let id = message.id;
@@ -1189,7 +1218,10 @@ impl MessageList {
                         name,
                         action.label.clone(),
                         None,
-                        Some((action.tooltip.clone(), action.key_hint(cx))),
+                        Some((
+                            action.tooltip.clone(),
+                            action.key_hint_at(&self.focus_handle, window, cx),
+                        )),
                         Look::Ghost,
                         !action.enabled,
                         false,

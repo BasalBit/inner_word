@@ -27,12 +27,12 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, Bounds, Div, Entity, Pixels, SharedString, Stateful, Window, canvas, div, point,
+    Action, App, Bounds, Div, Entity, Pixels, SharedString, Stateful, Window, canvas, div, point,
     prelude::*, px,
 };
 use writer_assistant::{Catalog, EffortChoice, ModelChoice, Selection};
 use writer_ui::{
-    ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, MenuAnchor, Tooltip,
+    ContextMenu, ContextMenuItem, Icon, IconName, MenuAnchor, Tooltip,
     theme::{RADIUS_SM, ThemeColors, UI_TEXT_SM},
 };
 
@@ -131,12 +131,15 @@ pub fn picker_button(
     bounds: &ControlBounds,
     focused: bool,
     colors: &ThemeColors,
-    cx: &App,
+    _cx: &App,
 ) -> Stateful<Div> {
     let name = kind.selector();
-    let hint = match kind {
-        PickerKind::Model => KeyHint::for_action(&ChooseModel, cx),
-        PickerKind::Effort => KeyHint::for_action(&ChooseEffort, cx),
+    // The key of the picker is bound once for each chat, so the tooltip
+    // asks for it where the keyboard is when it is shown (in the chat the
+    // control belongs to, as a rule), not for the binding added last.
+    let action: Box<dyn Action> = match kind {
+        PickerKind::Model => Box::new(ChooseModel),
+        PickerKind::Effort => Box::new(ChooseEffort),
     };
     let enabled = picker_has_choices(kind, catalog, selection);
     let hover = colors.hover;
@@ -176,7 +179,7 @@ pub fn picker_button(
                 .size(px(12.))
                 .color(colors.faint),
         )
-        .tooltip(Tooltip::new(kind.tooltip()).key_hint(hint).build());
+        .tooltip(Tooltip::for_action(kind.tooltip(), action.as_ref()));
     keep_focus(button)
 }
 

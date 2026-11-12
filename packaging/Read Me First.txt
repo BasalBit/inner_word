@@ -181,19 +181,36 @@ They do it through a command line tool that comes inside the app:
 
     /Applications/The Writer.app/Contents/MacOS/writer
 
-Agents can read at any time. They can only change things while The Writer is
-closed: while the app is open the tool says so and changes nothing, so an
-agent never writes into a document you are working on. Before an agent
-changes the text of a document a version of it is kept: File > Version
-History lists it with its reason ("Before an edit by Claude") and brings it
-back. What an agent deletes goes to the trash. Comments an agent leaves show
-up in the comments of the document under the agent's name.
+Agents can read at any time, and they can change things at any time too.
+While The Writer is closed the tool writes to the library itself. While The
+Writer is open the tool hands each change to the app, and the app makes it:
+between two of your key presses, after saving whatever you have typed, so
+nothing of yours is lost and nothing of the agent's is. A change to the
+document you have open appears in the text where it belongs, and your caret
+and your selection stay where they are. A note at the bottom of the window
+says who changed what (for example: Claude changed "Chapter 2"), with an
+Undo button. Undo in the Edit menu takes the agent's change out the same
+way: it is one step, on top of your own typing. For a change to a document
+that is not the open one the note has an Open button instead, and several
+changes in a row are one note that counts them. The Writer menu has "Undo
+Last Change by an Agent" and "Go to Last Change by an Agent" for the
+keyboard; both are in the command palette too.
 
-The Writer > Agents... (Option-Command-A) shows the tool, installs the skill
-that tells your agents about it, and lists the command that adds The
-Writer's MCP server to each of them. Nothing is installed anywhere until you
-press a button there, and The Writer does not edit the configuration of any
-agent.
+Before an agent changes the text of a document a version of it is kept:
+File > Version History lists it with its reason ("Before an edit by Claude")
+and brings it back. What an agent deletes goes to the trash. Comments an
+agent leaves show up in the comments of the document under the agent's name.
+
+If you would rather have agents wait until the app is closed, switch "Agents
+can make changes while The Writer is open" off in The Writer > Agents... .
+While the app is open they can then only read, and they are told to ask you
+to quit it before they change anything.
+
+The Writer > Agents... (Option-Command-A) shows the tool, has that switch,
+installs the skill that tells your agents about the tool, and lists the
+command that adds The Writer's MCP server to each of them. Nothing is
+installed anywhere until you press a button there, and The Writer does not
+edit the configuration of any agent.
 
 If an agent reports that macOS does not let it run the tool, the app still
 carries the "downloaded from the internet" mark (see above: the tool is not

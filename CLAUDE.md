@@ -17,10 +17,10 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events) and the library sidebar panel. |
+| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted) and the library sidebar panel. |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
@@ -39,10 +39,13 @@ the list of its read-only tools and for the folders installers put a program in;
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
 `library → {store, ui}`, `export → core`, `cli → {agent, mcp, agent-setup}`,
-`mcp → agent`, `agent → {store, core, export}`, `app → agent-setup`. Never the reverse. None
-of the agent crates depends on GPUI. The app does not depend on `writer-cli` (the tool is a
-separate program beside it) and never calls `writer-agent`: that crate is in the app's build
-only through `assistant → mcp`, which reads the table of the server's tools. Every internal
+`mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`. Never the
+reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
+(the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
+live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
+the tool out on the library's own store; `crates/writer-app/src/live.rs` and
+`workspace/live.rs` are the only callers), and the assistant has that crate in its build
+through `assistant → mcp`, which reads the table of the server's tools. Every internal
 crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
 
@@ -85,13 +88,17 @@ AppKit's own menu: `menukey:Bold`),
 `bar` (shows the format bar over the selection, as a selection made with the mouse does;
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
 it), `shortcut:<action>=<keys>` and `shortcuts:<what>` (the keyboard shortcuts, see "Changing
-keys"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
+keys"), `agents:<n>[:<ms>]` (waits until agents have made `n` changes through this app,
+the `writer` tool being run from outside meanwhile; fails after `ms`, 10 s unless given) and
+`agents:on` / `agents:off` (the switch "Agents can make changes while The Writer is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
 written), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
-is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), the Agents panel while it is
+is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
+write while the app is open (`live=[channel=open|closed switch=on|off waiting=N changes=N
+last="Claude changed “Chapter 2”" run=N offers=Undo|Open|nothing]`), the Agents panel while it is
 open, and in a run with an engine the assistant: whether it is shown, the quick chat while
 it is open, the side chat while it is in the right panel), `dump`, `log:<text>`, `quit`, and for measuring
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
@@ -172,6 +179,8 @@ bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from
 `tests/suite/spelling.rs` holds spell checking in the assembled app, with the fake checker;
 `tests/suite/agents.rs` holds the Agents panel against a temporary home directory;
 `tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it;
+`tests/suite/live.rs` holds agents that write while the app is open: the assembled workspace
+with the real listener, and the real client of `writer-agent` asking from a second thread;
 `tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine;
 `tests/suite/keybindings.rs` holds the keys the user changes: the keymap taken apart and put
 back, every kind of change, the list, the guard rails, storage, the shortcuts file.
@@ -301,18 +310,76 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
 
 The AI agents on the user's Mac (Claude Code, Codex, Gemini CLI, Cursor and the others in
 `writer_agent_setup::AGENTS`) work with the library through `writer`, a command line tool
-built only from the crates without GPUI. It does not need the app to be running.
+built only from the crates without GPUI. It does not need the app to be running, and it
+works while the app is running: then the app makes the tool's changes ("While the app is
+open" below).
 
 - **Where it is.** In the bundle at `The Writer.app/Contents/MacOS/writer`, beside the
   app's executable, built from the same commit by `scripts/bundle.sh` and signed with the
   bundle. Agents call it by its absolute path; nothing is added to `PATH`. A debug app
   looks for it at `target/debug/writer` (`cargo build -p writer-cli`). The script's smoke
   test runs the bundled tool on a temporary library: create, read back, the app shows the
-  document, a write while the bundled app is open is refused with exit code 5.
-- **The one rule.** Agents can read at any time (list, search, get, info, history,
-  export). They can change things only while the app is closed: while the app holds the
-  lock of the data directory every write is refused with exit code 5 and a message that
-  says to quit The Writer first. There is no merging. `crates/writer-agent` enforces it.
+  document, a write while the bundled app is open arrives in the window and in the
+  library, and with the owner's switch off it is refused with exit code 5.
+- **The one rule.** Agents can read and change things at any time, and **the library has
+  one writer at a time**. While the app is closed that is the tool, which takes the lock
+  of the data directory for the moment of each write. While the app is open it is the app:
+  it holds the lock, text that is not saved yet and its own picture of the library, so the
+  tool does not write underneath it but hands it the operation, and the app carries it
+  out. There is no merging. `crates/writer-agent` enforces it (`Library::write` is the one
+  way to a library that can be written to). Where the app does not take the change, the
+  tool says so with exit code 5 (`app_is_open`) and words that say what to do: the owner
+  switched changes off, the app is a version before 0.6.0 (its lock file names no
+  channel), it did not answer in ten seconds, a text was being composed.
+- **While the app is open** (`writer_agent::live` is the channel, the protocol, the client
+  and `execute`; `crates/writer-app/src/live.rs` and `workspace/live.rs` are the app's
+  half). The app opens a Unix socket once it has the lock (`live::open_at_launch`, `main`)
+  and its path stands in the lock file; a thread accepts requests and queues them for the
+  main thread; every way of quitting closes it (`live::close` in a quit hook: a request
+  still in the queue is answered "quitting", and the tool then writes directly once the
+  lock is free). A request is **one turn of the main thread** (`Workspace::carry_out`), so
+  no key press comes between its steps: (1) what is unsaved in the open document is saved
+  with the synchronous flush, which settles the background autosave first (a save that
+  fails refuses the request); (2) `live::execute` works on the library's own store through
+  `Library::change_outside`, which emits the events the library's own methods emit, so the
+  sidebar, the trash and an open version history follow; (3) the open document, when it is
+  among what changed, is read back and taken over by the editor
+  (`Editor::adopt_document`, `EditorState::adopt`): the blocks that did not change stay,
+  caret, selection and view stay, the change is one step of undo on top of the writer's
+  own, title and the flag of a chosen title are read again; a document that was trashed or
+  deleted closes as it does when the writer trashes it; the keyboard and an open dialog
+  stay where they are; (4) one note at the bottom; (5) the answer goes back, after every
+  view has heard of the change. A read by the tool first asks the app to save (`flush`),
+  so an agent reads the text as it is on screen.
+  - **Nothing to save afterwards.** The editor reports the text it took over as an edit.
+    `Workspace::text_is_what_an_agent_stored` tells it from the writer's own by the
+    revision of the document: the session stays "Saved" and nothing is written twice.
+    The first edit of the writer's (an undo of the agent's change is one) is saved.
+  - **The note** (`workspace::AgentChanges`): "Claude changed “Chapter 2”", the name being
+    the `--author` ("An agent" without one; `workspace::sentence` has the words of every
+    operation). A change that comes in while the note of the one before is still up joins
+    it: "Claude made 20 changes to “Chapter 2”", never a pile. Its button is **Undo**
+    where one step undoes all of it: the steps the run added to the undo history of the
+    open document (`Editor::undo_steps`; exactly what `cmd-z` takes out, and the offer
+    goes when the writer edits, because then it would take out their words), or what one
+    request moved to the trash. For a document that is not the open one the button is
+    **Open**. The same two are commands without a key ("Undo the last change by an agent",
+    "Go to the last change by an agent": the palette, The Writer menu).
+  - **A composition is never broken.** While text is composed with an input method
+    (`Editor::is_composing`) a change waits, and the requests behind it; after
+    `live::COMPOSITION_PATIENCE` (3 s) it is refused and the composition goes on.
+  - **A request is whole or not at all**: carrying out and answering are one turn of the
+    main thread, quitting is another. A tool that stopped waiting was told that nothing
+    was changed, and then nothing is (`Incoming::begin`).
+  - **The switch** "Agents can make changes while The Writer is open" is the setting
+    `agents.changes_while_open` of the library (on unless switched off), in the Agents
+    panel. Off is the rule of before 0.6.0: agents read (a `flush` is still answered) and
+    are told to ask for the app to be quit. `THE_WRITER_AGENT_CHANNEL=off` keeps a run from
+    opening the channel at all, which is what a version before 0.6.0 looks like to a tool.
+  - **Tests** (`tests/suite/live.rs`): `live::open` on a temporary data directory whose
+    lock the test holds, the real client on a second thread, and the test's main thread
+    letting the app work until the answer is there (`ask`). The app's timers run on the
+    test clock: a wait for a composition needs `advance_clock`.
 - **The safety net** is in `writer-agent` too: a version snapshot before an agent changes
   the text of a document or deletes a comment (labelled "Before an edit by Claude" with the
   `--author` given; the app's version history shows the label in the row, read through
@@ -349,7 +416,10 @@ built only from the crates without GPUI. It does not need the app to be running.
   with a copy button; every agent found that reads skills with the folder and the state of
   the skill, install / update / remove per agent and install for all, with a report of
   every path written; the command or configuration entry that adds the MCP server to each
-  agent, with a copy button and a link to its documentation. The app never edits an
+  agent, with a copy button and a link to its documentation. Its second row is the switch
+  for changes while the app is open (`Row::Switch`, a button "Switch Off" / "Switch On"
+  and a sentence that says what holds as it stands); it is the library's and not the
+  Mac's, so it is there in a run without an agents environment too. The app never edits an
   agent's configuration, and writes into an agent's skills folder only when a button is
   pressed. Keys in the panel: `up` / `down`, `enter` (the row's first button), `backspace`
   (remove the skill), `cmd-c` (copy what the row shows), `o` (documentation), `escape`.
@@ -375,10 +445,11 @@ built only from the crates without GPUI. It does not need the app to be running.
   library, with a button that opens the panel (`agents.hint_shown` in the settings). Only
   the real app shows it; a scripted run does with `THE_WRITER_AGENTS_HINT=1`.
 - **A launch shows the library as it is.** Agents change the library while the app is
-  closed, so nothing remembered across launches is trusted without a check: the caret and
-  scroll position carry a stamp of the text they were taken on
+  closed too, so nothing remembered across launches is trusted without a check: the caret
+  and scroll position carry a stamp of the text they were taken on
   (`crates/writer-app/src/view_memory.rs`), and a document that was rewritten opens at its
-  start and says so; the last open document, the selection and the open folders of the
+  start and says so (the same holds for a document an agent changed while another one was
+  open in the window); the last open document, the selection and the open folders of the
   sidebar are dropped when what they name was trashed or deleted
   (`tests/suite/launch.rs`, one test per kind of change).
 

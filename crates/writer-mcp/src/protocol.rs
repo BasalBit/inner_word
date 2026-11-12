@@ -56,6 +56,8 @@ pub const LEGACY_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26"
 pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 /// `_meta` key: the client capabilities of a modern request.
 pub const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+/// `_meta` key: the client's identity in a modern request.
+pub const META_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
 /// `_meta` key: the server's identity in a modern result.
 pub const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
@@ -108,7 +110,10 @@ impl ToolDef {
         annotations.insert("title".into(), json!(self.title));
         annotations.insert("readOnlyHint".into(), json!(self.effect == Effect::Read));
         if self.effect != Effect::Read {
-            annotations.insert("destructiveHint".into(), json!(self.effect == Effect::Change));
+            annotations.insert(
+                "destructiveHint".into(),
+                json!(self.effect == Effect::Change),
+            );
             annotations.insert("idempotentHint".into(), json!(self.idempotent));
         }
         // The library is on this Mac and nowhere else.
@@ -137,17 +142,28 @@ pub struct ToolOutput {
 impl ToolOutput {
     /// A result.
     pub fn ok(text: impl Into<String>, structured: Value) -> Self {
-        Self { text: text.into(), structured, is_error: false }
+        Self {
+            text: text.into(),
+            structured,
+            is_error: false,
+        }
     }
 
     /// A failure the model should read.
     pub fn error(text: impl Into<String>, structured: Value) -> Self {
-        Self { text: text.into(), structured, is_error: true }
+        Self {
+            text: text.into(),
+            structured,
+            is_error: true,
+        }
     }
 
     fn to_json(&self) -> Map<String, Value> {
         let mut result = Map::new();
-        result.insert("content".into(), json!([{ "type": "text", "text": self.text }]));
+        result.insert(
+            "content".into(),
+            json!([{ "type": "text", "text": self.text }]),
+        );
         // Revisions from 2025-06-18 to 2025-11-25 want an object here.
         let structured = match &self.structured {
             Value::Object(_) => self.structured.clone(),
@@ -166,8 +182,15 @@ pub trait ToolHost {
     fn tools(&self) -> &[ToolDef];
 
     /// Calls the tool `name`. `None` when there is no such tool; a tool that fails
-    /// returns an output with `is_error`.
-    fn call(&mut self, name: &str, arguments: &Map<String, Value>) -> Option<ToolOutput>;
+    /// returns an output with `is_error`. `client` is the name the client gave itself
+    /// (its title, else its program name), when it gave one: good for a label, nothing
+    /// else.
+    fn call(
+        &mut self,
+        name: &str,
+        arguments: &Map<String, Value>,
+        client: Option<&str>,
+    ) -> Option<ToolOutput>;
 }
 
 /// Who the server says it is.
@@ -193,6 +216,10 @@ impl ServerInfo {
 pub struct Server<H> {
     host: H,
     info: ServerInfo,
+    /// The name the client gave in the handshake of a legacy revision. That handshake is
+    /// the one thing the protocol ever asked a server to remember; a modern request
+    /// names its client itself.
+    handshake_client: Option<String>,
 }
 
 /// A JSON-RPC error on its way out.
@@ -204,7 +231,11 @@ struct RpcError {
 
 impl RpcError {
     fn new(code: i64, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), data: None }
+        Self {
+            code,
+            message: message.into(),
+            data: None,
+        }
     }
 }
 
@@ -218,7 +249,11 @@ enum Era {
 impl<H: ToolHost> Server<H> {
     /// A server that offers the tools of `host`.
     pub fn new(host: H, info: ServerInfo) -> Self {
-        Self { host, info }
+        Self {
+            host,
+            info,
+            handshake_client: None,
+        }
     }
 
     /// The tools.
@@ -228,7 +263,9 @@ impl<H: ToolHost> Server<H> {
 
     /// Every protocol version the server speaks, the modern one first.
     pub fn supported_versions() -> Vec<&'static str> {
-        std::iter::once(MODERN_VERSION).chain(LEGACY_VERSIONS).collect()
+        std::iter::once(MODERN_VERSION)
+            .chain(LEGACY_VERSIONS)
+            .collect()
     }
 
     /// Serves until `input` ends: one message per line in, at most one line out for each.
@@ -237,7 +274,9 @@ impl<H: ToolHost> Server<H> {
     pub fn run(&mut self, input: impl BufRead, mut output: impl Write) -> io::Result<()> {
         for line in input.split(b'\n') {
             let line = line?;
-            let Some(answer) = self.handle_bytes(&line) else { continue };
+            let Some(answer) = self.handle_bytes(&line) else {
+                continue;
+            };
             let written = output
                 .write_all(answer.as_bytes())
                 .and_then(|()| output.write_all(b"\n"))
@@ -255,11 +294,13 @@ impl<H: ToolHost> Server<H> {
     pub fn handle_bytes(&mut self, line: &[u8]) -> Option<String> {
         match std::str::from_utf8(line) {
             Ok(line) => self.handle_line(line),
-            Err(_) => Some(error_response(
-                None,
-                RpcError::new(PARSE_ERROR, "Parse error: the message is not valid UTF-8"),
-            )
-            .to_string()),
+            Err(_) => Some(
+                error_response(
+                    None,
+                    RpcError::new(PARSE_ERROR, "Parse error: the message is not valid UTF-8"),
+                )
+                .to_string(),
+            ),
         }
     }
 
@@ -274,8 +315,11 @@ impl<H: ToolHost> Server<H> {
             Ok(message) => message,
             Err(error) => {
                 return Some(
-                    error_response(None, RpcError::new(PARSE_ERROR, format!("Parse error: {error}")))
-                        .to_string(),
+                    error_response(
+                        None,
+                        RpcError::new(PARSE_ERROR, format!("Parse error: {error}")),
+                    )
+                    .to_string(),
                 );
             }
         };
@@ -287,8 +331,10 @@ impl<H: ToolHost> Server<H> {
                         RpcError::new(INVALID_REQUEST, "Invalid request: an empty batch"),
                     ))
                 } else {
-                    let answers: Vec<Value> =
-                        messages.into_iter().filter_map(|m| self.handle_message(m)).collect();
+                    let answers: Vec<Value> = messages
+                        .into_iter()
+                        .filter_map(|m| self.handle_message(m))
+                        .collect();
                     (!answers.is_empty()).then_some(Value::Array(answers))
                 }
             }
@@ -302,7 +348,10 @@ impl<H: ToolHost> Server<H> {
         let Value::Object(message) = message else {
             return Some(error_response(
                 None,
-                RpcError::new(INVALID_REQUEST, "Invalid request: a message is a JSON object"),
+                RpcError::new(
+                    INVALID_REQUEST,
+                    "Invalid request: a message is a JSON object",
+                ),
             ));
         };
         let id = message.get("id");
@@ -320,7 +369,10 @@ impl<H: ToolHost> Server<H> {
         let Some(method) = method.as_str() else {
             return Some(error_response(
                 valid_id(id),
-                RpcError::new(INVALID_REQUEST, "Invalid request: \"method\" must be a string"),
+                RpcError::new(
+                    INVALID_REQUEST,
+                    "Invalid request: \"method\" must be a string",
+                ),
             ));
         };
         let Some(id) = id else {
@@ -332,13 +384,19 @@ impl<H: ToolHost> Server<H> {
         let Some(id) = valid_id(Some(id)) else {
             return Some(error_response(
                 None,
-                RpcError::new(INVALID_REQUEST, "Invalid request: \"id\" must be a string or a number"),
+                RpcError::new(
+                    INVALID_REQUEST,
+                    "Invalid request: \"id\" must be a string or a number",
+                ),
             ));
         };
         if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
             return Some(error_response(
                 Some(id),
-                RpcError::new(INVALID_REQUEST, "Invalid request: \"jsonrpc\" must be \"2.0\""),
+                RpcError::new(
+                    INVALID_REQUEST,
+                    "Invalid request: \"jsonrpc\" must be \"2.0\"",
+                ),
             ));
         }
         let empty = Map::new();
@@ -348,7 +406,10 @@ impl<H: ToolHost> Server<H> {
             Some(_) => {
                 return Some(error_response(
                     Some(id),
-                    RpcError::new(INVALID_PARAMS, "Invalid params: \"params\" must be an object"),
+                    RpcError::new(
+                        INVALID_PARAMS,
+                        "Invalid params: \"params\" must be an object",
+                    ),
                 ));
             }
         };
@@ -364,7 +425,10 @@ impl<H: ToolHost> Server<H> {
             None | Some(Value::Null) => None,
             Some(Value::Object(meta)) => Some(meta),
             Some(_) => {
-                return Err(RpcError::new(INVALID_PARAMS, "Invalid params: \"_meta\" must be an object"));
+                return Err(RpcError::new(
+                    INVALID_PARAMS,
+                    "Invalid params: \"_meta\" must be an object",
+                ));
             }
         };
         let Some(version) = meta.and_then(|meta| meta.get(META_PROTOCOL_VERSION)) else {
@@ -387,7 +451,9 @@ impl<H: ToolHost> Server<H> {
             if !matches!(capabilities, Some(Value::Object(_))) {
                 return Err(RpcError::new(
                     INVALID_PARAMS,
-                    format!("Invalid params: params._meta needs \"{META_CLIENT_CAPABILITIES}\", an object"),
+                    format!(
+                        "Invalid params: params._meta needs \"{META_CLIENT_CAPABILITIES}\", an object"
+                    ),
                 ));
             }
             return Ok(Era::Modern);
@@ -395,7 +461,11 @@ impl<H: ToolHost> Server<H> {
         if LEGACY_VERSIONS.contains(&version) {
             // A handshake-era version named per request: the server lists these
             // versions as supported, so it serves them, in their own shape.
-            return Ok(if method == "server/discover" { Era::Modern } else { Era::Legacy });
+            return Ok(if method == "server/discover" {
+                Era::Modern
+            } else {
+                Era::Legacy
+            });
         }
         Err(RpcError {
             code: UNSUPPORTED_PROTOCOL_VERSION,
@@ -404,21 +474,40 @@ impl<H: ToolHost> Server<H> {
         })
     }
 
-    fn handle_request(&mut self, method: &str, params: &Map<String, Value>) -> Result<Value, RpcError> {
+    fn handle_request(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Result<Value, RpcError> {
         let era = self.era(method, params)?;
         let mut result = match (method, era) {
-            ("initialize", _) => return Ok(self.initialize(params)),
+            ("initialize", _) => {
+                self.handshake_client = client_name(params.get("clientInfo"));
+                return Ok(self.initialize(params));
+            }
             ("ping", Era::Legacy) => Map::new(),
             ("server/discover", _) => self.discover(),
             ("tools/list", _) => self.list_tools(params, era)?,
-            ("tools/call", _) => self.call_tool(params)?,
+            ("tools/call", _) => {
+                let client = params
+                    .get("_meta")
+                    .and_then(|meta| client_name(meta.get(META_CLIENT_INFO)))
+                    .or_else(|| self.handshake_client.clone());
+                self.call_tool(params, client.as_deref())?
+            }
             _ => {
-                return Err(RpcError::new(METHOD_NOT_FOUND, format!("Method not found: {method}")));
+                return Err(RpcError::new(
+                    METHOD_NOT_FOUND,
+                    format!("Method not found: {method}"),
+                ));
             }
         };
         if era == Era::Modern {
             result.insert("resultType".into(), json!("complete"));
-            result.insert("_meta".into(), json!({ META_SERVER_INFO: self.info.to_json() }));
+            result.insert(
+                "_meta".into(),
+                json!({ META_SERVER_INFO: self.info.to_json() }),
+            );
         }
         Ok(Value::Object(result))
     }
@@ -443,7 +532,10 @@ impl<H: ToolHost> Server<H> {
 
     fn discover(&self) -> Map<String, Value> {
         let mut result = Map::new();
-        result.insert("supportedVersions".into(), json!(Self::supported_versions()));
+        result.insert(
+            "supportedVersions".into(),
+            json!(Self::supported_versions()),
+        );
         result.insert("capabilities".into(), Self::capabilities());
         result.insert("instructions".into(), json!(self.info.instructions));
         result.insert("ttlMs".into(), json!(CACHE_TTL_MS));
@@ -451,10 +543,17 @@ impl<H: ToolHost> Server<H> {
         result
     }
 
-    fn list_tools(&self, params: &Map<String, Value>, era: Era) -> Result<Map<String, Value>, RpcError> {
+    fn list_tools(
+        &self,
+        params: &Map<String, Value>,
+        era: Era,
+    ) -> Result<Map<String, Value>, RpcError> {
         // The whole list is one page, so the server never hands out a cursor.
         if let Some(cursor) = params.get("cursor").filter(|cursor| !cursor.is_null()) {
-            return Err(RpcError::new(INVALID_PARAMS, format!("Invalid params: unknown cursor {cursor}")));
+            return Err(RpcError::new(
+                INVALID_PARAMS,
+                format!("Invalid params: unknown cursor {cursor}"),
+            ));
         }
         let tools: Vec<Value> = self.host.tools().iter().map(ToolDef::to_json).collect();
         let mut result = Map::new();
@@ -466,23 +565,47 @@ impl<H: ToolHost> Server<H> {
         Ok(result)
     }
 
-    fn call_tool(&mut self, params: &Map<String, Value>) -> Result<Map<String, Value>, RpcError> {
+    fn call_tool(
+        &mut self,
+        params: &Map<String, Value>,
+        client: Option<&str>,
+    ) -> Result<Map<String, Value>, RpcError> {
         let Some(name) = params.get("name").and_then(Value::as_str) else {
-            return Err(RpcError::new(INVALID_PARAMS, "Invalid params: \"name\" must be the name of a tool"));
+            return Err(RpcError::new(
+                INVALID_PARAMS,
+                "Invalid params: \"name\" must be the name of a tool",
+            ));
         };
         let empty = Map::new();
         let arguments = match params.get("arguments") {
             None | Some(Value::Null) => &empty,
             Some(Value::Object(arguments)) => arguments,
             Some(_) => {
-                return Err(RpcError::new(INVALID_PARAMS, "Invalid params: \"arguments\" must be an object"));
+                return Err(RpcError::new(
+                    INVALID_PARAMS,
+                    "Invalid params: \"arguments\" must be an object",
+                ));
             }
         };
-        match self.host.call(name, arguments) {
+        match self.host.call(name, arguments, client) {
             Some(output) => Ok(output.to_json()),
-            None => Err(RpcError::new(INVALID_PARAMS, format!("Unknown tool: {name}"))),
+            None => Err(RpcError::new(
+                INVALID_PARAMS,
+                format!("Unknown tool: {name}"),
+            )),
         }
     }
+}
+
+/// The name of a client from its `Implementation` object: the title, else the name.
+fn client_name(info: Option<&Value>) -> Option<String> {
+    let info = info?.as_object()?;
+    ["title", "name"]
+        .iter()
+        .filter_map(|key| info.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 /// The id of a request when it is one the protocol allows: a string or a number.
@@ -515,6 +638,7 @@ mod tests {
     struct Echo {
         tools: Vec<ToolDef>,
         calls: usize,
+        clients: Vec<Option<String>>,
     }
 
     impl Echo {
@@ -534,6 +658,7 @@ mod tests {
                     tool("change", Effect::Change, true),
                 ],
                 calls: 0,
+                clients: Vec::new(),
             }
         }
     }
@@ -543,14 +668,26 @@ mod tests {
             &self.tools
         }
 
-        fn call(&mut self, name: &str, arguments: &Map<String, Value>) -> Option<ToolOutput> {
+        fn call(
+            &mut self,
+            name: &str,
+            arguments: &Map<String, Value>,
+            client: Option<&str>,
+        ) -> Option<ToolOutput> {
             self.calls += 1;
+            self.clients.push(client.map(str::to_string));
             match name {
                 "echo" => {
                     let text = arguments.get("text").and_then(Value::as_str).unwrap_or("");
-                    Some(ToolOutput::ok(format!("said: {text}"), json!({ "text": text })))
+                    Some(ToolOutput::ok(
+                        format!("said: {text}"),
+                        json!({ "text": text }),
+                    ))
                 }
-                "change" => Some(ToolOutput::error("The Writer is open.", json!({ "kind": "app_open" }))),
+                "change" => Some(ToolOutput::error(
+                    "The Writer is open.",
+                    json!({ "kind": "app_open" }),
+                )),
                 "add" => Some(ToolOutput::ok("three", json!(3))),
                 _ => None,
             }
@@ -592,7 +729,10 @@ mod tests {
             assert_eq!(answer["result"]["protocolVersion"], version);
             assert_eq!(answer["result"]["serverInfo"]["name"], "the-writer");
             assert_eq!(answer["result"]["serverInfo"]["version"], "9.9.9");
-            assert_eq!(answer["result"]["capabilities"]["tools"]["listChanged"], false);
+            assert_eq!(
+                answer["result"]["capabilities"]["tools"]["listChanged"],
+                false
+            );
             assert_eq!(answer["result"]["instructions"], "Use the tools.");
             assert!(answer["result"].get("resultType").is_none());
         }
@@ -612,21 +752,34 @@ mod tests {
         let mut server = server();
         assert_eq!(server.handle_line(""), None);
         assert_eq!(server.handle_line("   "), None);
-        for method in ["notifications/initialized", "notifications/cancelled", "notifications/unknown"] {
+        for method in [
+            "notifications/initialized",
+            "notifications/cancelled",
+            "notifications/unknown",
+        ] {
             let line = json!({ "jsonrpc": "2.0", "method": method, "params": { "requestId": 1 } });
             assert_eq!(server.handle_line(&line.to_string()), None);
         }
         // A response to a request the server never sent.
-        assert_eq!(server.handle_line(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#), None);
+        assert_eq!(
+            server.handle_line(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#),
+            None
+        );
     }
 
     #[test]
     fn legacy_requests_have_the_legacy_shape() {
         let mut server = server();
-        let ping = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
+        let ping = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
+        );
         assert_eq!(ping, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
 
-        let list = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
+        let list = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }),
+        );
         let tools = list["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 3);
         assert!(list["result"].get("resultType").is_none());
@@ -647,7 +800,10 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
                 "params": { "name": "echo", "arguments": { "text": "hi" } } }),
         );
-        assert_eq!(call["result"]["content"], json!([{ "type": "text", "text": "said: hi" }]));
+        assert_eq!(
+            call["result"]["content"],
+            json!([{ "type": "text", "text": "said: hi" }])
+        );
         assert_eq!(call["result"]["structuredContent"], json!({ "text": "hi" }));
         assert_eq!(call["result"]["isError"], false);
         assert!(call["result"].get("resultType").is_none());
@@ -662,14 +818,20 @@ mod tests {
         );
         assert!(refused.get("error").is_none());
         assert_eq!(refused["result"]["isError"], true);
-        assert_eq!(refused["result"]["content"][0]["text"], "The Writer is open.");
+        assert_eq!(
+            refused["result"]["content"][0]["text"],
+            "The Writer is open."
+        );
         assert_eq!(refused["result"]["structuredContent"]["kind"], "app_open");
 
         let number = ask(
             &mut server,
             json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "add", "arguments": null } }),
         );
-        assert_eq!(number["result"]["structuredContent"], json!({ "result": 3 }));
+        assert_eq!(
+            number["result"]["structuredContent"],
+            json!({ "result": 3 })
+        );
     }
 
     #[test]
@@ -698,7 +860,10 @@ mod tests {
         assert_eq!(list["result"]["ttlMs"], 3_600_000);
         assert_eq!(list["result"]["cacheScope"], "public");
         assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 3);
-        assert_eq!(list["result"]["_meta"][META_SERVER_INFO]["title"], "The Writer");
+        assert_eq!(
+            list["result"]["_meta"][META_SERVER_INFO]["title"],
+            "The Writer"
+        );
 
         let call = ask(
             &mut server,
@@ -707,7 +872,10 @@ mod tests {
         );
         assert_eq!(call["result"]["resultType"], "complete");
         assert_eq!(call["result"]["content"][0]["text"], "said: x");
-        assert_eq!(call["result"]["_meta"][META_SERVER_INFO]["name"], "the-writer");
+        assert_eq!(
+            call["result"]["_meta"][META_SERVER_INFO]["name"],
+            "the-writer"
+        );
 
         // `ping` left the protocol with the handshake.
         let ping = ask(
@@ -742,7 +910,10 @@ mod tests {
                 "params": { "_meta": { META_PROTOCOL_VERSION: MODERN_VERSION } } }),
         );
         assert_eq!(no_capabilities["error"]["code"], INVALID_PARAMS);
-        let no_version = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 2, "method": "server/discover" }));
+        let no_version = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "server/discover" }),
+        );
         assert_eq!(no_version["error"]["code"], INVALID_PARAMS);
         let bad_version = ask(
             &mut server,
@@ -779,41 +950,73 @@ mod tests {
         let mut server = server();
         let parse: Value = serde_json::from_str(&server.handle_line("{not json").unwrap()).unwrap();
         assert_eq!(parse["error"]["code"], PARSE_ERROR);
-        assert!(parse.get("id").is_none(), "no id could be read, so none is sent");
+        assert!(
+            parse.get("id").is_none(),
+            "no id could be read, so none is sent"
+        );
         assert_eq!(parse["jsonrpc"], "2.0");
 
-        let utf8: Value = serde_json::from_str(&server.handle_bytes(&[0xff, 0xfe, b'{']).unwrap()).unwrap();
+        let utf8: Value =
+            serde_json::from_str(&server.handle_bytes(&[0xff, 0xfe, b'{']).unwrap()).unwrap();
         assert_eq!(utf8["error"]["code"], PARSE_ERROR);
 
-        for message in [json!(5), json!("tools/list"), json!({ "jsonrpc": "2.0", "id": 1 }), json!([])] {
+        for message in [
+            json!(5),
+            json!("tools/list"),
+            json!({ "jsonrpc": "2.0", "id": 1 }),
+            json!([]),
+        ] {
             let answer = ask(&mut server, message.clone());
             assert_eq!(answer["error"]["code"], INVALID_REQUEST, "{message}");
         }
         let no_method_id = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 1 }));
         assert_eq!(no_method_id["id"], 1);
 
-        let null_id = ask(&mut server, json!({ "jsonrpc": "2.0", "id": null, "method": "ping" }));
+        let null_id = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": null, "method": "ping" }),
+        );
         assert_eq!(null_id["error"]["code"], INVALID_REQUEST);
         assert!(null_id.get("id").is_none());
 
-        let method = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 1, "method": 5 }));
+        let method = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": 5 }),
+        );
         assert_eq!(method["error"]["code"], INVALID_REQUEST);
 
-        let version = ask(&mut server, json!({ "jsonrpc": "1.0", "id": 1, "method": "ping" }));
+        let version = ask(
+            &mut server,
+            json!({ "jsonrpc": "1.0", "id": 1, "method": "ping" }),
+        );
         assert_eq!(version["error"]["code"], INVALID_REQUEST);
         assert_eq!(version["id"], 1);
 
-        let params = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [1] }));
+        let params = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [1] }),
+        );
         assert_eq!(params["error"]["code"], INVALID_PARAMS);
     }
 
     #[test]
     fn unknown_methods_tools_and_cursors() {
         let mut server = server();
-        for method in ["resources/list", "prompts/list", "logging/setLevel", "nonsense"] {
-            let answer = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 9, "method": method }));
+        for method in [
+            "resources/list",
+            "prompts/list",
+            "logging/setLevel",
+            "nonsense",
+        ] {
+            let answer = ask(
+                &mut server,
+                json!({ "jsonrpc": "2.0", "id": 9, "method": method }),
+            );
             assert_eq!(answer["error"]["code"], METHOD_NOT_FOUND, "{method}");
-            assert_eq!(answer["error"]["message"], format!("Method not found: {method}"));
+            assert_eq!(
+                answer["error"]["message"],
+                format!("Method not found: {method}")
+            );
             assert_eq!(answer["id"], 9);
         }
         let tool = ask(
@@ -822,7 +1025,10 @@ mod tests {
         );
         assert_eq!(tool["error"]["code"], INVALID_PARAMS);
         assert_eq!(tool["error"]["message"], "Unknown tool: nope");
-        let no_name = ask(&mut server, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call" }));
+        let no_name = ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call" }),
+        );
         assert_eq!(no_name["error"]["code"], INVALID_PARAMS);
         let arguments = ask(
             &mut server,
@@ -834,6 +1040,50 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": { "cursor": "abc" } }),
         );
         assert_eq!(cursor["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn the_client_names_itself_in_the_handshake_or_in_each_modern_request() {
+        let mut server = server();
+        let call = |meta: Value| {
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "echo", "_meta": meta } })
+        };
+        ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "echo" } }),
+        );
+        ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": { "name": "claude-code", "title": "Claude Code", "version": "2" } } }),
+        );
+        ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "echo" } }),
+        );
+        let mut meta = modern_meta();
+        meta[META_CLIENT_INFO] = json!({ "name": "codex", "version": "1" });
+        ask(&mut server, call(meta));
+        ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-11-25", "clientInfo": { "name": " ", "version": "2" } } }),
+        );
+        ask(
+            &mut server,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "echo" } }),
+        );
+        assert_eq!(
+            server.host().clients,
+            vec![
+                None,
+                Some("Claude Code".to_string()),
+                Some("codex".to_string()),
+                None
+            ]
+        );
     }
 
     #[test]
@@ -849,7 +1099,8 @@ mod tests {
         assert_eq!(answers.len(), 2);
         assert_eq!(answers[0]["id"], 1);
         assert_eq!(answers[1]["error"]["code"], METHOD_NOT_FOUND);
-        let only_notifications = json!([{ "jsonrpc": "2.0", "method": "notifications/initialized" }]);
+        let only_notifications =
+            json!([{ "jsonrpc": "2.0", "method": "notifications/initialized" }]);
         assert_eq!(server.handle_line(&only_notifications.to_string()), None);
     }
 

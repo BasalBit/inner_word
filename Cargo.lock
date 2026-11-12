@@ -6867,6 +6867,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "writer-core",
  "writer-export",
  "writer-store",
@@ -6913,7 +6914,9 @@ version = "0.2.0"
 dependencies = [
  "serde_json",
  "tempfile",
+ "writer-agent-setup",
  "writer-mcp",
+ "writer-store",
 ]
 
 [[package]]

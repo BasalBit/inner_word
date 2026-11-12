@@ -41,7 +41,10 @@ pub fn object(properties: Vec<(&str, Value)>, required: &[&str]) -> Value {
         map.insert(name.to_string(), schema);
     }
     for name in required {
-        debug_assert!(map.contains_key(*name), "required property {name} is not declared");
+        debug_assert!(
+            map.contains_key(*name),
+            "required property {name} is not declared"
+        );
     }
     let mut schema = Map::new();
     schema.insert("type".into(), json!("object"));
@@ -89,6 +92,11 @@ impl Args {
         self.0.contains_key(name)
     }
 
+    /// The arguments as a JSON object again.
+    pub fn into_map(self) -> Map<String, Value> {
+        self.0
+    }
+
     /// The names of the arguments that were given.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
@@ -99,7 +107,10 @@ impl Args {
 /// per problem, then the arguments the tool takes.
 pub fn check(schema: &Value, arguments: &Map<String, Value>) -> Result<Args, String> {
     let empty = Map::new();
-    let properties = schema.get("properties").and_then(Value::as_object).unwrap_or(&empty);
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
     let required: Vec<&str> = schema
         .get("required")
         .and_then(Value::as_array)
@@ -135,14 +146,33 @@ pub fn check(schema: &Value, arguments: &Map<String, Value>) -> Result<Args, Str
     let mut takes: Vec<String> = Vec::new();
     for (name, property) in properties {
         let kind = match property.get("enum").and_then(Value::as_array) {
-            Some(choices) => choices.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("|"),
-            None => property.get("type").and_then(Value::as_str).unwrap_or("value").to_string(),
+            Some(choices) => choices
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("|"),
+            None => property
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("value")
+                .to_string(),
         };
-        let mark = if required.contains(&name.as_str()) { ", required" } else { "" };
+        let mark = if required.contains(&name.as_str()) {
+            ", required"
+        } else {
+            ""
+        };
         takes.push(format!("{name} ({kind}{mark})"));
     }
-    let takes = if takes.is_empty() { "none".to_string() } else { takes.join(", ") };
-    Err(format!("{} Arguments of this tool: {takes}.", problems.join(" ")))
+    let takes = if takes.is_empty() {
+        "none".to_string()
+    } else {
+        takes.join(", ")
+    };
+    Err(format!(
+        "{} Arguments of this tool: {takes}.",
+        problems.join(" ")
+    ))
 }
 
 /// `value` as the type `property` names, or what was expected instead.
@@ -188,7 +218,11 @@ fn coerce(property: &Value, value: &Value) -> Result<Value, String> {
 }
 
 fn quoted_list(words: &[&str]) -> String {
-    words.iter().map(|word| format!("\"{word}\"")).collect::<Vec<_>>().join(", ")
+    words
+        .iter()
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -217,7 +251,10 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["document"]));
-        assert_eq!(schema["properties"]["format"]["enum"], json!(["markdown", "text"]));
+        assert_eq!(
+            schema["properties"]["format"]["enum"],
+            json!(["markdown", "text"])
+        );
         assert_eq!(schema["properties"]["limit"]["minimum"], 1);
         let none = object(vec![], &[]);
         assert!(none.get("required").is_none());
@@ -228,7 +265,9 @@ mod tests {
     fn good_arguments_come_back_typed() {
         let args = check(
             &schema(),
-            &arguments(json!({ "document": "Notes/Plan", "limit": 5, "all": true, "format": "text" })),
+            &arguments(
+                json!({ "document": "Notes/Plan", "limit": 5, "all": true, "format": "text" }),
+            ),
         )
         .unwrap();
         assert_eq!(args.required("document"), "Notes/Plan");
@@ -264,16 +303,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("There is no argument \"doc\"."), "{error}");
-        assert!(error.contains("\"limit\" must be a whole number, 1 or more."), "{error}");
+        assert!(
+            error.contains("\"limit\" must be a whole number, 1 or more."),
+            "{error}"
+        );
         assert!(error.contains("\"all\" must be true or false."), "{error}");
-        assert!(error.contains("\"format\" must be one of \"markdown\", \"text\"."), "{error}");
+        assert!(
+            error.contains("\"format\" must be one of \"markdown\", \"text\"."),
+            "{error}"
+        );
         assert!(error.contains("\"document\" is required."), "{error}");
         assert!(error.contains("document (string, required)"), "{error}");
         assert!(error.contains("format (markdown|text)"), "{error}");
 
         let wrong_type = check(&schema(), &arguments(json!({ "document": ["a"] }))).unwrap_err();
-        assert!(wrong_type.contains("\"document\" must be a string."), "{wrong_type}");
+        assert!(
+            wrong_type.contains("\"document\" must be a string."),
+            "{wrong_type}"
+        );
         let null_required = check(&schema(), &arguments(json!({ "document": null }))).unwrap_err();
-        assert!(null_required.contains("\"document\" must be a string."), "{null_required}");
+        assert!(
+            null_required.contains("\"document\" must be a string."),
+            "{null_required}"
+        );
     }
 }

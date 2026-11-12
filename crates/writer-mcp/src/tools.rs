@@ -1,0 +1,1503 @@
+//! The operations of the command layer (`writer-agent`) by name, with JSON arguments.
+//!
+//! This is the one place where an operation gets its name, its description, the schema of
+//! its arguments and its text: the MCP server lists these operations as its tools, and the
+//! `writer` command line tool runs the same operations for its subcommands, so the two
+//! front ends cannot drift apart.
+//!
+//! An operation takes a JSON object and answers with a [`Reply`] (text for a reader and
+//! the result as data) or a [`Failure`] (the kind of failure, a message that says what to
+//! do, and the same as data). The arguments are checked against the schema first
+//! ([`crate::args::check`]) and then read into the request type of the command layer,
+//! whose field names the schemas use.
+//!
+//! Three operations are not listed as tools and exist only for the command line, which
+//! asks for them with an explicit flag: `delete_document`, `delete_folder` and
+//! `empty_trash` erase for good. The operations ending in `_item` take a name that may be
+//! a document or a folder and are the command line's too.
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value, json};
+use writer_agent::{
+    AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
+    DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
+    EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest, FindRequest,
+    FolderInfoRequest, InfoRequest, InsertRequest, Item, Library, ListCommentsRequest,
+    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, ReadVersionRequest,
+    RecentRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
+    ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
+    RestoreVersionRequest, SearchRequest, Target, TrashDocumentRequest, TrashFolderRequest,
+    TreeRequest,
+};
+
+use crate::args::{self, boolean, integer, one_of, string};
+use crate::protocol::{Effect, ToolDef, ToolHost, ToolOutput};
+use crate::render;
+
+/// What an operation came to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reply {
+    /// The result as text. Ends with a line break unless it is the text of a document,
+    /// which is given as it is.
+    pub text: String,
+    /// The result as data: the result type of the command layer as JSON.
+    pub data: Value,
+}
+
+/// Why an operation did not do what was asked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    /// The kind of failure; [`ErrorKind::exit_code`] is the exit code of the command line.
+    pub kind: ErrorKind,
+    /// What happened and what to do about it.
+    pub message: String,
+    /// The same as data: `{"code": ..., "message": ..., "candidates": [...], "occurrences": [...]}`.
+    pub data: Value,
+}
+
+impl Failure {
+    /// A failure of the given kind with this message.
+    pub fn new(kind: ErrorKind, message: impl Into<String>) -> Failure {
+        let message = message.into();
+        let data = json!({ "code": kind.code(), "message": message });
+        Failure {
+            kind,
+            message,
+            data,
+        }
+    }
+
+    /// A request that is wrong in itself.
+    pub fn invalid(message: impl Into<String>) -> Failure {
+        Failure::new(ErrorKind::Invalid, message)
+    }
+}
+
+impl From<Error> for Failure {
+    fn from(error: Error) -> Failure {
+        let report = error.report();
+        let data = serde_json::to_value(&report)
+            .unwrap_or_else(|_| json!({ "code": report.code, "message": report.message }));
+        Failure {
+            kind: error.kind(),
+            message: report.message,
+            data,
+        }
+    }
+}
+
+type Run = fn(&Library, Map<String, Value>) -> Result<Reply, Error>;
+
+/// One operation.
+struct Operation {
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    effect: Effect,
+    idempotent: bool,
+    /// Whether the MCP server offers it as a tool.
+    listed: bool,
+    schema: Value,
+    run: Run,
+}
+
+// ----- the words the schemas share -------------------------------------------------------
+
+const DOCUMENT: &str = "The document: its id (12 or \"doc:12\") or its path in the library \
+(\"The Salt Road/Part one/Chapter 1\"; the last part alone is enough when no other document has that name).";
+const FOLDER: &str = "The folder: its id (3 or \"folder:3\") or its path in the library (\"The Salt Road/Part one\").";
+const FOLDER_OR_TOP: &str = "The folder: its id (3 or \"folder:3\") or its path in the library \
+(\"The Salt Road/Part one\"); \"/\" is the top level of the library.";
+const MARKDOWN: &str =
+    "The text, as Markdown (headings, lists, quotes, code, *emphasis*, [links](url)).";
+const HEADING: &str = "The heading, by its text (\"The harbour\"); # signs in front (\"## The harbour\") also say its level.";
+const HEADING_OCCURRENCE: &str =
+    "Which one, when several headings have that text: its number among them, from 1.";
+const DRY_RUN: &str = "Report what would change, and change nothing. Works while the app is open.";
+const AUTHOR: &str = "Your name (for example \"Claude\"): it labels the version kept before the change \
+and signs a comment.";
+const FORMAT: &str = "\"markdown\" (default), \"text\" (plain text without markup) or \"json\" (the document as the app stores it, with every attribute).";
+const COMMENT: &str = "The id of the comment thread, as list_comments gives it.";
+const FIRST: &str = "Put it before its siblings instead of after them.";
+const BEFORE: &str = "Put it directly before this sibling in the destination folder (id or name).";
+const AFTER: &str = "Put it directly after this sibling in the destination folder (id or name).";
+
+/// The schema of a reading operation.
+fn reads(properties: Vec<(&str, Value)>, required: &[&str]) -> Value {
+    args::object(properties, required)
+}
+
+/// The schema of a writing operation: its own properties, then `dry_run` and `author`.
+fn writes(mut properties: Vec<(&'static str, Value)>, required: &[&str]) -> Value {
+    properties.push(("dry_run", boolean(DRY_RUN)));
+    properties.push(("author", string(AUTHOR)));
+    args::object(properties, required)
+}
+
+// ----- from arguments to requests and from results to replies ----------------------------
+
+fn request<T: DeserializeOwned>(arguments: Map<String, Value>) -> Result<T, Error> {
+    serde_json::from_value(Value::Object(arguments))
+        .map_err(|error| Error::invalid(format!("the arguments cannot be read: {error}")))
+}
+
+fn reply<T: Serialize>(result: &T, text: String) -> Result<Reply, Error> {
+    let data = serde_json::to_value(result).map_err(|error| {
+        Error::invalid(format!("the result cannot be written as JSON: {error}"))
+    })?;
+    Ok(Reply { text, data })
+}
+
+/// Turns `first`, `before` and `after` into the `placement` of a request.
+fn placement(arguments: &mut Map<String, Value>) -> Result<(), Error> {
+    let first = arguments
+        .remove("first")
+        .and_then(|first| first.as_bool())
+        .unwrap_or(false);
+    let before = arguments.remove("before");
+    let after = arguments.remove("after");
+    let given = usize::from(first) + usize::from(before.is_some()) + usize::from(after.is_some());
+    if given > 1 {
+        return Err(Error::invalid(
+            "give one of \"first\", \"before\" and \"after\", not several",
+        ));
+    }
+    if first {
+        arguments.insert("placement".into(), json!("first"));
+    } else if let Some(before) = before {
+        arguments.insert("placement".into(), json!({ "before": before }));
+    } else if let Some(after) = after {
+        arguments.insert("placement".into(), json!({ "after": after }));
+    }
+    Ok(())
+}
+
+// ----- the operations ----------------------------------------------------------------------
+
+fn library_status(library: &Library, _: Map<String, Value>) -> Result<Reply, Error> {
+    let status = library.status()?;
+    reply(&status, render::status(&status))
+}
+
+fn list_library(library: &Library, mut arguments: Map<String, Value>) -> Result<Reply, Error> {
+    // The top level is the whole library.
+    if arguments
+        .get("folder")
+        .and_then(Value::as_str)
+        .is_some_and(|folder| folder.trim() == "/")
+    {
+        arguments.remove("folder");
+    }
+    let tree = library.tree(&request::<TreeRequest>(arguments)?)?;
+    reply(&tree, render::tree(&tree))
+}
+
+fn search_library(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let results = library.search(&request::<SearchRequest>(arguments)?)?;
+    reply(&results, render::search(&results))
+}
+
+fn recent_documents(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let list = library.recent(&request::<RecentRequest>(arguments)?)?;
+    reply(&list, render::documents(&list))
+}
+
+fn document_info(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let info = library.info(&request::<InfoRequest>(arguments)?)?;
+    reply(&info, render::info(&info))
+}
+
+fn folder_info(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let info = library.folder_info(&request::<FolderInfoRequest>(arguments)?)?;
+    reply(&info, render::folder_info(&info))
+}
+
+fn list_trash(library: &Library, _: Map<String, Value>) -> Result<Reply, Error> {
+    let trash = library.trash()?;
+    reply(&trash, render::trash(&trash))
+}
+
+fn read_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let text = library.read(&request::<ReadRequest>(arguments)?)?;
+    reply(&text, render::text(&text))
+}
+
+fn find_in_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let found = library.find(&request::<FindRequest>(arguments)?)?;
+    reply(&found, render::found(&found))
+}
+
+fn create_document(library: &Library, mut arguments: Map<String, Value>) -> Result<Reply, Error> {
+    placement(&mut arguments)?;
+    let created = library.create_document(&request::<CreateDocumentRequest>(arguments)?)?;
+    reply(&created, render::created(&created))
+}
+
+fn replace_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.replace_document(&request::<ReplaceDocumentRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::content_changed("Replaced the text of", &changed),
+    )
+}
+
+fn edit_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.edit(&request::<EditRequest>(arguments)?)?;
+    reply(&changed, render::content_changed("Edited", &changed))
+}
+
+fn append_to_document(
+    library: &Library,
+    mut arguments: Map<String, Value>,
+) -> Result<Reply, Error> {
+    arguments.insert("position".into(), json!("end"));
+    let changed = library.insert(&request::<InsertRequest>(arguments)?)?;
+    reply(&changed, render::content_changed("Appended to", &changed))
+}
+
+fn insert_in_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.insert(&request::<InsertRequest>(arguments)?)?;
+    reply(&changed, render::content_changed("Inserted into", &changed))
+}
+
+fn replace_section(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.replace_section(&request::<ReplaceSectionRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::content_changed("Replaced a section of", &changed),
+    )
+}
+
+fn rename_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.rename_document(&request::<RenameDocumentRequest>(arguments)?)?;
+    reply(&changed, render::document_changed("Renamed", &changed))
+}
+
+fn move_document(library: &Library, mut arguments: Map<String, Value>) -> Result<Reply, Error> {
+    placement(&mut arguments)?;
+    let changed = library.move_document(&request::<MoveDocumentRequest>(arguments)?)?;
+    reply(&changed, render::document_changed("Moved", &changed))
+}
+
+fn duplicate_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.duplicate_document(&request::<DuplicateDocumentRequest>(arguments)?)?;
+    reply(&changed, render::document_copied(&changed))
+}
+
+fn trash_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.trash_document(&request::<TrashDocumentRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::document_changed("Moved to the trash:", &changed),
+    )
+}
+
+fn restore_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.restore_document(&request::<RestoreDocumentRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::document_changed("Restored from the trash:", &changed),
+    )
+}
+
+fn delete_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.delete_document(&request::<DeleteDocumentRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::document_changed("Erased for good:", &changed),
+    )
+}
+
+fn create_folder(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let created = library.create_folder(&request::<CreateFolderRequest>(arguments)?)?;
+    reply(&created, render::folder_created(&created))
+}
+
+fn rename_folder(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.rename_folder(&request::<RenameFolderRequest>(arguments)?)?;
+    reply(&changed, render::folder_changed("Renamed", &changed))
+}
+
+fn move_folder(library: &Library, mut arguments: Map<String, Value>) -> Result<Reply, Error> {
+    placement(&mut arguments)?;
+    let changed = library.move_folder(&request::<MoveFolderRequest>(arguments)?)?;
+    reply(&changed, render::folder_changed("Moved", &changed))
+}
+
+fn trash_folder(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.trash_folder(&request::<TrashFolderRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::folder_changed("Moved to the trash:", &changed),
+    )
+}
+
+fn restore_folder(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.restore_folder(&request::<RestoreFolderRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::folder_changed("Restored from the trash:", &changed),
+    )
+}
+
+fn delete_folder(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.delete_folder(&request::<DeleteFolderRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::folder_changed("Erased for good:", &changed),
+    )
+}
+
+fn empty_trash(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let emptied = library.empty_trash(&request::<EmptyTrashRequest>(arguments)?)?;
+    reply(&emptied, render::trash_emptied(&emptied))
+}
+
+fn list_comments(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let list = library.comments(&request::<ListCommentsRequest>(arguments)?)?;
+    reply(&list, render::comments(&list))
+}
+
+fn add_comment(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.add_comment(&request::<AddCommentRequest>(arguments)?)?;
+    reply(&changed, render::comment_changed("Added", &changed))
+}
+
+fn reply_to_comment(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.reply(&request::<ReplyRequest>(arguments)?)?;
+    reply(&changed, render::comment_changed("Replied in", &changed))
+}
+
+fn resolve_comment(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.resolve_comment(&request::<CommentRequest>(arguments)?)?;
+    reply(&changed, render::comment_changed("Resolved", &changed))
+}
+
+fn reopen_comment(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.reopen_comment(&request::<CommentRequest>(arguments)?)?;
+    reply(&changed, render::comment_changed("Reopened", &changed))
+}
+
+fn delete_comment(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let only_a_reply = arguments.contains_key("reply");
+    let changed = library.delete_comment(&request::<DeleteCommentRequest>(arguments)?)?;
+    let did = if only_a_reply {
+        "Deleted a reply of"
+    } else {
+        "Deleted"
+    };
+    reply(&changed, render::comment_changed(did, &changed))
+}
+
+fn list_versions(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let list = library.versions(&request::<ListVersionsRequest>(arguments)?)?;
+    reply(&list, render::versions(&list))
+}
+
+fn read_version(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let text = library.read_version(&request::<ReadVersionRequest>(arguments)?)?;
+    reply(&text, render::version_text(&text))
+}
+
+fn restore_version(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let restored = library.restore_version(&request::<RestoreVersionRequest>(arguments)?)?;
+    reply(&restored, render::version_restored(&restored))
+}
+
+fn export(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let exported = library.export(&request::<ExportRequest>(arguments)?)?;
+    reply(&exported, render::exported(&exported))
+}
+
+fn operations() -> Vec<Operation> {
+    let read = |name, title, description, schema, run| Operation {
+        name,
+        title,
+        description,
+        effect: Effect::Read,
+        idempotent: true,
+        listed: true,
+        schema,
+        run,
+    };
+    let add = |name, title, description, idempotent, schema, run| Operation {
+        name,
+        title,
+        description,
+        effect: Effect::Add,
+        idempotent,
+        listed: true,
+        schema,
+        run,
+    };
+    let change = |name, title, description, idempotent, schema, run| Operation {
+        name,
+        title,
+        description,
+        effect: Effect::Change,
+        idempotent,
+        listed: true,
+        schema,
+        run,
+    };
+    let hidden = |name, title, description, schema, run| Operation {
+        name,
+        title,
+        description,
+        effect: Effect::Change,
+        idempotent: true,
+        listed: false,
+        schema,
+        run,
+    };
+    let place = |mut properties: Vec<(&'static str, Value)>| {
+        properties.push(("first", boolean(FIRST)));
+        properties.push(("before", string(BEFORE)));
+        properties.push(("after", string(AFTER)));
+        properties
+    };
+
+    vec![
+        // ----- look around -----------------------------------------------------------
+        read(
+            "library_status",
+            "Library status",
+            "Where the library of The Writer is, how much is in it, and whether the app is open right now. \
+While the app is open the tools that read still work and every tool that changes something is refused; \
+check here when in doubt.",
+            reads(vec![], &[]),
+            library_status as Run,
+        ),
+        read(
+            "list_library",
+            "List the library",
+            "The folders and documents of the library as a tree, each with its id, documents with their word \
+count and the time of their last change. Start here to see what exists. Give a folder to list only that \
+folder; depth limits how many levels of folders are gone into.",
+            reads(
+                vec![
+                    ("folder", string(FOLDER)),
+                    (
+                        "depth",
+                        integer(
+                            "How many levels of folders to go into (0: only what is directly there). Default: all.",
+                            0,
+                        ),
+                    ),
+                    ("folders_only", boolean("Leave the documents out.")),
+                ],
+                &[],
+            ),
+            list_library,
+        ),
+        read(
+            "search_library",
+            "Search the library",
+            "Full-text search over the titles and the text of every document. Every word must occur; words in \
+double quotes must occur as that phrase; the last word also finds words that begin with it; case and accents \
+do not matter. Returns the matching documents, best first, each with a snippet around the match. To find \
+where a text stands inside one document, use find_in_document.",
+            reads(
+                vec![
+                    ("query", string("The words to look for.")),
+                    ("limit", integer("The most hits to return. Default: 20.", 1)),
+                    (
+                        "folder",
+                        string("Only documents in this folder, at any depth (id or path)."),
+                    ),
+                ],
+                &["query"],
+            ),
+            search_library,
+        ),
+        read(
+            "recent_documents",
+            "Recent documents",
+            "The documents that were changed last, newest first: what the user is working on.",
+            reads(
+                vec![(
+                    "limit",
+                    integer("The most documents to return. Default: 10.", 1),
+                )],
+                &[],
+            ),
+            recent_documents,
+        ),
+        read(
+            "document_info",
+            "Document info",
+            "Everything about one document except its text: path, word and character counts, dates, the outline \
+of its headings, how many comments and versions it has, its page and type settings. The outline is where to \
+pick a heading for read_document, insert_in_document or replace_section.",
+            reads(vec![("document", string(DOCUMENT))], &["document"]),
+            document_info,
+        ),
+        read(
+            "folder_info",
+            "Folder info",
+            "One folder: its path and dates, the folders and documents directly in it, and how much it holds in \
+all.",
+            reads(vec![("folder", string(FOLDER_OR_TOP))], &["folder"]),
+            folder_info,
+        ),
+        read(
+            "list_trash",
+            "List the trash",
+            "What is in the trash: the documents and folders that were trashed, with their ids. \
+restore_document and restore_folder bring them back.",
+            reads(vec![], &[]),
+            list_trash,
+        ),
+        // ----- read ------------------------------------------------------------------
+        read(
+            "read_document",
+            "Read a document",
+            "The text of a document: as Markdown (default), as plain text without markup, or as the JSON the app \
+stores. Give a heading to read only that section. The plain text is what edit_document and add_comment match \
+against, character for character.",
+            reads(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("format", one_of(FORMAT, &["markdown", "text", "json"])),
+                    (
+                        "heading",
+                        string(
+                            "Read only the section under this heading: the heading and everything up to the next heading of the same or a higher level.",
+                        ),
+                    ),
+                    ("heading_occurrence", integer(HEADING_OCCURRENCE, 1)),
+                    (
+                        "comments",
+                        boolean(
+                            "Also return the comment threads (of the section, when a heading is given).",
+                        ),
+                    ),
+                ],
+                &["document"],
+            ),
+            read_document,
+        ),
+        read(
+            "find_in_document",
+            "Find text in a document",
+            "Where a piece of text stands in a document, matched the way edit_document and add_comment match: \
+how many times it occurs, and each occurrence with its number, the heading it is under and the line it is on. \
+Changes nothing. Use it to make sure a text occurs once before editing or commenting, or to choose an \
+occurrence.",
+            reads(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    (
+                        "text",
+                        string("The text to find, exactly as it stands in the document."),
+                    ),
+                    (
+                        "limit",
+                        integer("The most occurrences to return. Default: 20.", 1),
+                    ),
+                ],
+                &["document", "text"],
+            ),
+            find_in_document,
+        ),
+        // ----- write text ------------------------------------------------------------
+        add(
+            "create_document",
+            "Create a document",
+            "Creates a new document from Markdown and returns its id and path. Without a title the title \
+follows the text (the first heading, else the first line). The folder must exist unless create_folders is \
+true. What the app has no form for (a table, an image) is kept as plain text and named in the warnings.",
+            false,
+            writes(
+                place(vec![
+                    (
+                        "markdown",
+                        string(
+                            "The text of the new document, as Markdown. Leave it out for an empty document.",
+                        ),
+                    ),
+                    (
+                        "title",
+                        string("The title. Leave it out to let the title follow the text."),
+                    ),
+                    (
+                        "folder",
+                        string("The folder to create it in (id or path). Default: the top level."),
+                    ),
+                    (
+                        "create_folders",
+                        boolean("Create the folder path when it does not exist yet."),
+                    ),
+                ]),
+                &[],
+            ),
+            create_document,
+        ),
+        change(
+            "replace_document",
+            "Replace the whole text",
+            "Replaces the whole text of a document with new Markdown. Paragraphs that read the same are left as \
+they are, with their formatting and comments, but for a change to part of a text edit_document, \
+replace_section and append_to_document are the better tools. The text as it was is kept as a version first.",
+            true,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("markdown", string(MARKDOWN)),
+                ],
+                &["document", "markdown"],
+            ),
+            replace_document,
+        ),
+        change(
+            "edit_document",
+            "Edit a document",
+            "Replaces an exact piece of text in a document, the way a string replacement edits a file. old_text \
+must be in the document exactly as given (words, punctuation, quotation marks, capitals) and exactly once, \
+unless all is true or occurrence picks one: include enough of the words around it. It is matched against the \
+text without markup; a piece copied from the Markdown form is found too. new_text is Markdown: plain words \
+take the formatting of what they replace, an empty text deletes. Formatting and comments outside the replaced \
+text stay. The text as it was is kept as a version first.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    (
+                        "old_text",
+                        string("The text to replace, exactly as it stands in the document."),
+                    ),
+                    (
+                        "new_text",
+                        string(
+                            "What to put in its place, as Markdown. Empty deletes the old text.",
+                        ),
+                    ),
+                    ("all", boolean("Replace every occurrence.")),
+                    (
+                        "occurrence",
+                        integer(
+                            "Replace only this occurrence: its number among the matches, from 1 (find_in_document lists them).",
+                            1,
+                        ),
+                    ),
+                    (
+                        "literal",
+                        boolean(
+                            "Take old_text and new_text as the characters they are: no Markdown is read in either.",
+                        ),
+                    ),
+                ],
+                &["document", "old_text", "new_text"],
+            ),
+            edit_document,
+        ),
+        add(
+            "append_to_document",
+            "Append to a document",
+            "Adds Markdown as new paragraphs at the end of a document. Nothing that is there is changed.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("markdown", string(MARKDOWN)),
+                ],
+                &["document", "markdown"],
+            ),
+            append_to_document,
+        ),
+        add(
+            "insert_in_document",
+            "Insert into a document",
+            "Inserts Markdown as new paragraphs at one place in a document: at the start, directly before a \
+heading, directly after a heading line, or at the end of the section under a heading. Nothing that is there \
+is changed. For the very end, use append_to_document.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("markdown", string(MARKDOWN)),
+                    (
+                        "position",
+                        one_of(
+                            "Where: \"start\" of the document, \"before_heading\", \"after_heading\" (right under the heading line) or \"end_of_section\" (after the section's text and subsections).",
+                            &["start", "before_heading", "after_heading", "end_of_section"],
+                        ),
+                    ),
+                    (
+                        "heading",
+                        string(
+                            "The heading the position refers to; required for every position but \"start\". By its text; # signs in front also say its level.",
+                        ),
+                    ),
+                    ("heading_occurrence", integer(HEADING_OCCURRENCE, 1)),
+                ],
+                &["document", "markdown", "position"],
+            ),
+            insert_in_document,
+        ),
+        change(
+            "replace_section",
+            "Replace a section",
+            "Replaces the section under a heading with new Markdown: everything below the heading down to the \
+next heading of the same or a higher level, subsections included. The heading line stays unless \
+include_heading is true. The text as it was is kept as a version first.",
+            true,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("heading", string(HEADING)),
+                    (
+                        "markdown",
+                        string("The new text of the section, as Markdown."),
+                    ),
+                    ("heading_occurrence", integer(HEADING_OCCURRENCE, 1)),
+                    (
+                        "include_heading",
+                        boolean(
+                            "Replace the heading line too; the Markdown should then begin with the new heading.",
+                        ),
+                    ),
+                ],
+                &["document", "heading", "markdown"],
+            ),
+            replace_section,
+        ),
+        // ----- documents -------------------------------------------------------------
+        change(
+            "rename_document",
+            "Rename a document",
+            "Gives a document a new title. It stays where it is (move_document puts it somewhere else). With \
+follow_text the title is handed back to the text instead: it becomes the first heading or the first line and \
+follows them from then on.",
+            true,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("title", string("The new title.")),
+                    (
+                        "follow_text",
+                        boolean("Let the title follow the text again; title is then not needed."),
+                    ),
+                ],
+                &["document"],
+            ),
+            rename_document,
+        ),
+        change(
+            "move_document",
+            "Move a document",
+            "Moves a document into another folder, to another place among the documents of its folder, or both.",
+            true,
+            writes(
+                place(vec![
+                    ("document", string(DOCUMENT)),
+                    (
+                        "folder",
+                        string(
+                            "The folder to move it into (id or path; \"/\" is the top level). Leave it out to only change its place in its folder.",
+                        ),
+                    ),
+                    (
+                        "create_folders",
+                        boolean("Create the folder path when it does not exist yet."),
+                    ),
+                ]),
+                &["document"],
+            ),
+            move_document,
+        ),
+        add(
+            "duplicate_document",
+            "Duplicate a document",
+            "Copies a document (its text, comments and settings; not its versions) and returns the id of the \
+copy. Without a title the copy is named after the original with \" copy\"; without a folder it stands right \
+after the original.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("title", string("The title of the copy.")),
+                    (
+                        "folder",
+                        string(
+                            "The folder for the copy (id or path). Default: the folder of the original.",
+                        ),
+                    ),
+                ],
+                &["document"],
+            ),
+            duplicate_document,
+        ),
+        change(
+            "trash_document",
+            "Move a document to the trash",
+            "Moves a document to the trash. Nothing is lost: it stays there with its versions until \
+restore_document brings it back. This is how a document is deleted; no tool erases one for good.",
+            true,
+            writes(vec![("document", string(DOCUMENT))], &["document"]),
+            trash_document,
+        ),
+        add(
+            "restore_document",
+            "Restore a document from the trash",
+            "Brings a document back from the trash to where it was (to the top level when its folder is gone).",
+            true,
+            writes(
+                vec![(
+                    "document",
+                    string(
+                        "The trashed document: its id (12 or \"doc:12\") or its title among the entries of the trash (list_trash shows them).",
+                    ),
+                )],
+                &["document"],
+            ),
+            restore_document,
+        ),
+        // ----- folders ---------------------------------------------------------------
+        add(
+            "create_folder",
+            "Create a folder",
+            "Creates a folder at a path in the library, with every folder above it that is missing, and returns \
+its id. A folder that is there already is returned as it is.",
+            true,
+            writes(
+                vec![
+                    (
+                        "path",
+                        string(
+                            "The path of the folder, parts separated by \"/\": \"The Salt Road/Part two\".",
+                        ),
+                    ),
+                    (
+                        "parent",
+                        string(
+                            "The folder the path starts in (id or path). Default: the top level.",
+                        ),
+                    ),
+                ],
+                &["path"],
+            ),
+            create_folder,
+        ),
+        change(
+            "rename_folder",
+            "Rename a folder",
+            "Gives a folder a new name. It stays where it is, with everything in it.",
+            true,
+            writes(
+                vec![
+                    ("folder", string(FOLDER)),
+                    ("name", string("The new name.")),
+                ],
+                &["folder", "name"],
+            ),
+            rename_folder,
+        ),
+        change(
+            "move_folder",
+            "Move a folder",
+            "Moves a folder, with everything in it, into another folder, to another place among the folders \
+beside it, or both.",
+            true,
+            writes(
+                place(vec![
+                    ("folder", string(FOLDER)),
+                    (
+                        "parent",
+                        string(
+                            "The folder to move it into (id or path; \"/\" is the top level). Leave it out to only change its place.",
+                        ),
+                    ),
+                ]),
+                &["folder"],
+            ),
+            move_folder,
+        ),
+        change(
+            "trash_folder",
+            "Move a folder to the trash",
+            "Moves a folder to the trash with every folder and document in it. Nothing is lost: restore_folder \
+brings all of it back.",
+            true,
+            writes(vec![("folder", string(FOLDER))], &["folder"]),
+            trash_folder,
+        ),
+        add(
+            "restore_folder",
+            "Restore a folder from the trash",
+            "Brings a folder back from the trash, with everything that went there with it.",
+            true,
+            writes(
+                vec![(
+                    "folder",
+                    string(
+                        "The trashed folder: its id (3 or \"folder:3\") or its name among the entries of the trash (list_trash shows them).",
+                    ),
+                )],
+                &["folder"],
+            ),
+            restore_folder,
+        ),
+        // ----- comments --------------------------------------------------------------
+        read(
+            "list_comments",
+            "List comments",
+            "The comment threads of a document: for each its id, the text it is anchored to, the heading it is \
+under, whether it is resolved, and the comment and its replies with their authors. This is where the user's \
+notes on a text are.",
+            reads(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("open_only", boolean("Leave the resolved threads out.")),
+                ],
+                &["document"],
+            ),
+            list_comments,
+        ),
+        add(
+            "add_comment",
+            "Comment on a text",
+            "Comments on an exact quote of a document, to review a text instead of rewriting it. The thread \
+shows up in the comments panel of the app, anchored to the quoted text and signed with author. quote is \
+matched the way edit_document matches old_text and must occur exactly once, unless occurrence picks one.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    (
+                        "quote",
+                        string(
+                            "The text the comment is about, exactly as it stands in the document.",
+                        ),
+                    ),
+                    ("body", string("What the comment says.")),
+                    (
+                        "occurrence",
+                        integer(
+                            "Which occurrence of the quote, when it occurs several times: its number, from 1.",
+                            1,
+                        ),
+                    ),
+                ],
+                &["document", "quote", "body"],
+            ),
+            add_comment,
+        ),
+        add(
+            "reply_to_comment",
+            "Reply to a comment",
+            "Adds a reply to a comment thread, signed with author.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("comment", integer(COMMENT, 0)),
+                    ("body", string("What the reply says.")),
+                ],
+                &["document", "comment", "body"],
+            ),
+            reply_to_comment,
+        ),
+        change(
+            "resolve_comment",
+            "Resolve a comment",
+            "Marks a comment thread as resolved. It stays in the document and can be reopened.",
+            true,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("comment", integer(COMMENT, 0)),
+                ],
+                &["document", "comment"],
+            ),
+            resolve_comment,
+        ),
+        change(
+            "reopen_comment",
+            "Reopen a comment",
+            "Opens a resolved comment thread again.",
+            true,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("comment", integer(COMMENT, 0)),
+                ],
+                &["document", "comment"],
+            ),
+            reopen_comment,
+        ),
+        change(
+            "delete_comment",
+            "Delete a comment",
+            "Deletes a comment thread with its replies, or only one reply of it. The text it was about is not \
+touched. The document as it was is kept as a version first, so the thread can be brought back.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("comment", integer(COMMENT, 0)),
+                    (
+                        "reply",
+                        integer("Delete only this reply of the thread, by its id.", 0),
+                    ),
+                ],
+                &["document", "comment"],
+            ),
+            delete_comment,
+        ),
+        // ----- history ---------------------------------------------------------------
+        read(
+            "list_versions",
+            "List versions",
+            "The versions the library keeps of a document, newest first: id, time, word count, and for a \
+version kept before a change by an agent the label that says so (\"Before an edit by Claude\"). One is kept \
+before every change these tools make to a text.",
+            reads(vec![("document", string(DOCUMENT))], &["document"]),
+            list_versions,
+        ),
+        read(
+            "read_version",
+            "Read a version",
+            "The text of one version of a document, as Markdown, plain text or JSON.",
+            reads(
+                vec![
+                    (
+                        "version",
+                        integer("The id of the version, as list_versions gives it.", 0),
+                    ),
+                    ("format", one_of(FORMAT, &["markdown", "text", "json"])),
+                ],
+                &["version"],
+            ),
+            read_version,
+        ),
+        change(
+            "restore_version",
+            "Restore a version",
+            "Makes a version the text of its document again. The text as it is now is kept as a version first, \
+so a restore can itself be taken back.",
+            true,
+            writes(
+                vec![
+                    (
+                        "version",
+                        integer("The id of the version, as list_versions gives it.", 0),
+                    ),
+                    (
+                        "document",
+                        string(
+                            "The document the version is expected to belong to (id or path): a check against restoring the wrong one.",
+                        ),
+                    ),
+                ],
+                &["version"],
+            ),
+            restore_version,
+        ),
+        // ----- export ----------------------------------------------------------------
+        change(
+            "export",
+            "Export to a file",
+            "Writes a document, or a folder as one file with its documents in the order of the library, to a \
+file on disk: Markdown, DOCX or plain text. Give exactly one of document and folder. Only reads the library, \
+so it works while the app is open. A file that exists is not replaced unless overwrite is true.",
+            true,
+            args::object(
+                vec![
+                    ("document", string("The document to export (id or path).")),
+                    (
+                        "folder",
+                        string(
+                            "The folder to export as one file (id or path; \"/\" is the whole library).",
+                        ),
+                    ),
+                    (
+                        "path",
+                        string(
+                            "The file to write. Use an absolute path; missing directories are created.",
+                        ),
+                    ),
+                    (
+                        "format",
+                        one_of(
+                            "The format. Default: by the ending of path (.md, .docx, .txt), else Markdown.",
+                            &["markdown", "docx", "text"],
+                        ),
+                    ),
+                    ("overwrite", boolean("Replace the file when it exists.")),
+                    (
+                        "dry_run",
+                        boolean("Report what would be written, and write nothing."),
+                    ),
+                ],
+                &["path"],
+            ),
+            export,
+        ),
+        // ----- for the command line only ---------------------------------------------
+        hidden(
+            "delete_document",
+            "Erase a document",
+            "Erases a document for good, with every version of it.",
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    ("permanently", boolean("The confirmation. Must be true.")),
+                ],
+                &["document"],
+            ),
+            delete_document,
+        ),
+        hidden(
+            "delete_folder",
+            "Erase a folder",
+            "Erases a folder for good, with every document in it.",
+            writes(
+                vec![
+                    ("folder", string(FOLDER)),
+                    ("permanently", boolean("The confirmation. Must be true.")),
+                ],
+                &["folder"],
+            ),
+            delete_folder,
+        ),
+        hidden(
+            "empty_trash",
+            "Empty the trash",
+            "Erases everything in the trash for good.",
+            writes(
+                vec![("permanently", boolean("The confirmation. Must be true."))],
+                &[],
+            ),
+            empty_trash,
+        ),
+    ]
+}
+
+/// The operations of one library.
+pub struct Toolbox {
+    library: Library,
+    operations: Vec<Operation>,
+    tools: Vec<ToolDef>,
+}
+
+impl Toolbox {
+    /// The operations on `library`.
+    pub fn new(library: Library) -> Toolbox {
+        let operations = operations();
+        let tools = operations
+            .iter()
+            .filter(|operation| operation.listed)
+            .map(|operation| ToolDef {
+                name: operation.name,
+                title: operation.title,
+                description: operation.description.to_string(),
+                input_schema: operation.schema.clone(),
+                effect: operation.effect,
+                idempotent: operation.idempotent,
+            })
+            .collect();
+        Toolbox {
+            library,
+            operations,
+            tools,
+        }
+    }
+
+    /// The library the operations work on.
+    pub fn library(&self) -> &Library {
+        &self.library
+    }
+
+    /// The names of all operations, the ones that are not tools included.
+    pub fn operation_names(&self) -> Vec<&'static str> {
+        self.operations
+            .iter()
+            .map(|operation| operation.name)
+            .collect()
+    }
+
+    /// Runs the operation `name`. `None` when there is no such operation. `client` is the
+    /// name of whoever asks, when it is known: it stands in for `author` when the
+    /// arguments name none.
+    pub fn run(
+        &self,
+        name: &str,
+        arguments: &Map<String, Value>,
+        client: Option<&str>,
+    ) -> Option<Result<Reply, Failure>> {
+        let operation = self
+            .operations
+            .iter()
+            .find(|operation| operation.name == name)?;
+        Some(self.run_operation(operation, arguments, client))
+    }
+
+    fn run_operation(
+        &self,
+        operation: &Operation,
+        arguments: &Map<String, Value>,
+        client: Option<&str>,
+    ) -> Result<Reply, Failure> {
+        let checked = args::check(&operation.schema, arguments)
+            .map_err(|problems| Failure::invalid(format!("{}: {problems}", operation.name)))?;
+        let mut arguments = checked.into_map();
+        let takes_author = operation.schema["properties"].get("author").is_some();
+        if takes_author
+            && !arguments.contains_key("author")
+            && let Some(client) = client.map(str::trim).filter(|client| !client.is_empty())
+        {
+            arguments.insert("author".into(), json!(client));
+        }
+        (operation.run)(&self.library, arguments).map_err(Failure::from)
+    }
+
+    /// The document or folder a name stands for, where either may be meant. With
+    /// `in_trash` the name is looked up among the entries of the trash.
+    pub fn resolve(&self, item: &str, in_trash: bool) -> Result<Item, Failure> {
+        self.library
+            .resolve(&Target::parse(item), in_trash)
+            .map_err(Failure::from)
+    }
+
+    /// Runs an operation on an item that may be a document or a folder: `document_operation`
+    /// with the item as its `document`, or `folder_operation` with the item as its
+    /// `folder`. `adapt` gets the arguments for the kind that was found and may rename
+    /// what the two operations call differently.
+    pub fn run_on_item(
+        &self,
+        item: &str,
+        in_trash: bool,
+        document_operation: &str,
+        folder_operation: &str,
+        arguments: &Map<String, Value>,
+        adapt: impl FnOnce(&Item, &mut Map<String, Value>) -> Result<(), Failure>,
+    ) -> Result<Reply, Failure> {
+        let found = self.resolve(item, in_trash)?;
+        let mut arguments = arguments.clone();
+        adapt(&found, &mut arguments)?;
+        let (name, key) = match &found {
+            Item::Document { .. } => (document_operation, "document"),
+            Item::Folder { .. } => (folder_operation, "folder"),
+        };
+        arguments.insert(key.into(), json!(found.target().to_string()));
+        self.run(name, &arguments, None).unwrap_or_else(|| {
+            Err(Failure::new(
+                ErrorKind::Failed,
+                format!("there is no operation {name}"),
+            ))
+        })
+    }
+}
+
+impl ToolHost for Toolbox {
+    fn tools(&self) -> &[ToolDef] {
+        &self.tools
+    }
+
+    fn call(
+        &mut self,
+        name: &str,
+        arguments: &Map<String, Value>,
+        client: Option<&str>,
+    ) -> Option<ToolOutput> {
+        let operation = self
+            .operations
+            .iter()
+            .find(|operation| operation.listed && operation.name == name)?;
+        Some(match self.run_operation(operation, arguments, client) {
+            Ok(reply) => ToolOutput::ok(reply.text, reply.data),
+            Err(failure) => {
+                ToolOutput::error(tool_error_text(&failure), json!({ "error": failure.data }))
+            }
+        })
+    }
+}
+
+/// The message of a failure as a model should read it in a tool result.
+fn tool_error_text(failure: &Failure) -> String {
+    match failure.kind {
+        ErrorKind::AppIsOpen => "The Writer is open, so nothing was changed. The app keeps the open document in \
+memory, and a change made behind its back would be lost or would overwrite the user's work. Tell the user \
+that The Writer has to be quit (Cmd-Q) for this change, and call this tool again once they have done so. \
+Everything that only reads (list_library, search_library, read_document, list_comments, export) works while \
+the app is open, and so does any tool with dry_run."
+            .to_string(),
+        _ => failure.message.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toolbox() -> (tempfile::TempDir, Toolbox) {
+        let dir = tempfile::tempdir().unwrap();
+        let toolbox = Toolbox::new(Library::at(dir.path()));
+        (dir, toolbox)
+    }
+
+    #[test]
+    fn every_tool_has_a_sound_definition() {
+        let (_dir, toolbox) = toolbox();
+        let mut names = std::collections::BTreeSet::new();
+        for operation in &toolbox.operations {
+            assert!(names.insert(operation.name), "{} twice", operation.name);
+            assert!(
+                operation
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{}: a tool name is lower case with underscores",
+                operation.name
+            );
+            assert!(operation.description.ends_with('.'), "{}", operation.name);
+            assert!(operation.description.is_ascii(), "{}", operation.name);
+            assert!(
+                !operation.description.contains("  "),
+                "{}: double space",
+                operation.name
+            );
+            assert_eq!(operation.schema["type"], "object", "{}", operation.name);
+            assert_eq!(
+                operation.schema["additionalProperties"], false,
+                "{}",
+                operation.name
+            );
+            let properties = operation.schema["properties"].as_object().unwrap();
+            for (name, property) in properties {
+                assert!(
+                    property["description"]
+                        .as_str()
+                        .is_some_and(|d| !d.is_empty()),
+                    "{}.{name}",
+                    operation.name
+                );
+                assert!(property["type"].is_string(), "{}.{name}", operation.name);
+            }
+            // What changes the library can be tried first and is signed.
+            if operation.effect != Effect::Read {
+                assert!(
+                    properties.contains_key("dry_run"),
+                    "{} has no dry_run",
+                    operation.name
+                );
+                assert_eq!(
+                    properties.contains_key("author"),
+                    operation.name != "export",
+                    "{}",
+                    operation.name
+                );
+            } else {
+                assert!(!properties.contains_key("dry_run"), "{}", operation.name);
+            }
+        }
+        assert_eq!(toolbox.tools().len(), 35);
+        // Nothing that erases for good is offered as a tool.
+        for tool in toolbox.tools() {
+            assert!(
+                !tool.name.starts_with("delete_d") && !tool.name.starts_with("delete_f"),
+                "{}",
+                tool.name
+            );
+            assert_ne!(tool.name, "empty_trash");
+            assert!(
+                !tool.input_schema["properties"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("permanently")
+            );
+        }
+        for hidden in ["delete_document", "delete_folder", "empty_trash"] {
+            assert!(toolbox.operation_names().contains(&hidden));
+        }
+    }
+
+    #[test]
+    fn bad_arguments_are_a_failure_that_names_the_tool_and_the_problem() {
+        let (_dir, mut toolbox) = toolbox();
+        let arguments = json!({ "document": "x", "old": "a" });
+        let failure = toolbox
+            .run("edit_document", arguments.as_object().unwrap(), None)
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(failure.kind, ErrorKind::Invalid);
+        assert!(
+            failure.message.starts_with("edit_document: "),
+            "{}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("There is no argument \"old\"."),
+            "{}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("\"old_text\" is required."),
+            "{}",
+            failure.message
+        );
+        assert_eq!(failure.data["code"], "invalid");
+
+        let output = toolbox
+            .call("edit_document", arguments.as_object().unwrap(), None)
+            .unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.structured["error"]["code"], "invalid");
+        assert!(
+            toolbox
+                .run("no_such_operation", &Map::new(), None)
+                .is_none()
+        );
+        assert!(
+            toolbox.call("delete_document", &Map::new(), None).is_none(),
+            "not a tool"
+        );
+        assert!(
+            toolbox.call("empty_trash", &Map::new(), None).is_none(),
+            "not a tool"
+        );
+    }
+
+    #[test]
+    fn placement_words_become_a_placement() {
+        let mut arguments = json!({ "first": true, "title": "x" })
+            .as_object()
+            .unwrap()
+            .clone();
+        placement(&mut arguments).unwrap();
+        assert_eq!(arguments["placement"], "first");
+        assert!(!arguments.contains_key("first"));
+        let mut arguments = json!({ "after": "Chapter 3", "first": false })
+            .as_object()
+            .unwrap()
+            .clone();
+        placement(&mut arguments).unwrap();
+        assert_eq!(arguments["placement"], json!({ "after": "Chapter 3" }));
+        let mut arguments = json!({ "after": "a", "before": "b" })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(placement(&mut arguments).is_err());
+        let mut arguments = Map::new();
+        placement(&mut arguments).unwrap();
+        assert!(arguments.is_empty());
+    }
+
+    #[test]
+    fn the_refusal_while_the_app_is_open_tells_the_model_what_to_tell_the_user() {
+        let failure = Failure::from(Error::AppIsOpen {
+            pid: Some(7),
+            data_dir: "/tmp/x".into(),
+        });
+        assert_eq!(failure.kind, ErrorKind::AppIsOpen);
+        assert_eq!(failure.data["code"], "app_is_open");
+        let text = tool_error_text(&failure);
+        assert!(text.contains("Tell the user"), "{text}");
+        assert!(text.contains("quit"), "{text}");
+        assert!(text.contains("call this tool again"), "{text}");
+        let other = Failure::invalid("no");
+        assert_eq!(tool_error_text(&other), "no");
+    }
+}

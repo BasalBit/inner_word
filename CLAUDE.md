@@ -198,8 +198,9 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   never the document, its title or the library, and it has no tools. Each answer has
   Replace Selection, Insert Below and Copy. `escape` closes it and ends its conversation.
 - **The side chat** (`cmd-3`, "Go to assistant" and "Show or hide assistant" in the
-  palette, View in the menu bar; `writer_assistant_ui::AssistantPanel`): a panel at the
-  right. With every message it sends the open document as it is in the editor at that
+  palette, View in the menu bar, and for the pointer the small sparkle at the end of the
+  status bar and "Assistant" in the menu of the title;
+  `writer_assistant_ui::AssistantPanel`): a panel at the right. With every message it sends the open document as it is in the editor at that
   moment (not as it was last saved), its title and its path in the library, and names the
   documents and folders the user added with "Add" (chips; `cmd-shift-a`). It reads them,
   and the rest of the library, through the library's own MCP server with only the

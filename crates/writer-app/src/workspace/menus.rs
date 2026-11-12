@@ -5,7 +5,8 @@
 //!
 //! | Where | How it opens | What it offers |
 //! |---|---|---|
-//! | The title above the text | right-click, or a click on the chevron beside it | rename, export, version history, document settings, reveal in the library |
+//! | The title above the text | right-click, or a click on the chevron beside it | rename, export, version history, document settings, reveal in the library, and the assistant's side chat while the assistant is shown |
+//! | The small sparkle at the right of the status bar (only while the assistant is shown) | click | shows or hides the assistant's side chat |
 //! | "Saved" in the status bar | click or right-click | save now, version history |
 //! | The counts in the status bar | click or right-click | which counts are shown, the character limit |
 //! | The page indicator | click turns page view off; right-click | page view, orientation, document settings |
@@ -146,14 +147,27 @@ impl Workspace {
         }
         let weak = cx.weak_entity();
         match kind {
-            MenuKind::Title => vec![
-                ContextMenuItem::action("Rename…", RenameDocument),
-                ContextMenuItem::action("Export…", Export),
-                ContextMenuItem::action("Version History…", ShowVersionHistory),
-                ContextMenuItem::action("Document Settings…", OpenDocumentSettings),
-                ContextMenuItem::separator(),
-                ContextMenuItem::action("Reveal in Library", RevealInLibrary),
-            ],
+            MenuKind::Title => {
+                let mut items = vec![
+                    ContextMenuItem::action("Rename…", RenameDocument),
+                    ContextMenuItem::action("Export…", Export),
+                    ContextMenuItem::action("Version History…", ShowVersionHistory),
+                    ContextMenuItem::action("Document Settings…", OpenDocumentSettings),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::action("Reveal in Library", RevealInLibrary),
+                ];
+                // The side chat is about this document: it opens from here
+                // too, while the assistant is shown.
+                if self.assistant_shown() {
+                    items.push(ContextMenuItem::separator());
+                    items.push(
+                        ContextMenuItem::action("Assistant", ToggleAssistant).checked(
+                            self.right_panel_shown() == Some(super::RightPanel::Assistant),
+                        ),
+                    );
+                }
+                items
+            }
             MenuKind::Save => vec![
                 ContextMenuItem::action("Save Now", SaveNow),
                 ContextMenuItem::action("Version History…", ShowVersionHistory),

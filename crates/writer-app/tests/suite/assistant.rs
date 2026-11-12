@@ -1011,6 +1011,8 @@ fn the_quick_chat_opens_in_every_way_and_sends_only_the_selection(cx: &mut TestA
         chat.read_with(vcx, |chat, _| chat.quote()),
         Some("keeper".to_string())
     );
+    // The bar has made way for the chat, which has the keyboard.
+    assert!(!tools.read_with(vcx, |tools, _| tools.format_bar_visible()));
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
 
@@ -2051,5 +2053,54 @@ fn a_launch_shows_the_assistant_at_once_where_it_was_found_before(cx: &mut TestA
     install(&again, vcx);
     let (workspace, at_once, vcx) = launch(&library, vcx);
     assert_eq!(at_once, (false, false, None));
+    assert!(!workspace.read_with(vcx, |w, _| w.assistant_shown()));
+}
+
+#[gpui::test]
+fn the_side_chat_is_reached_with_the_mouse_alone(cx: &mut TestAppContext) {
+    use writer_app::workspace::MenuKind;
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+
+    // A small control at the end of the status bar.
+    let control = vcx
+        .debug_bounds("status-assistant")
+        .expect("the status bar has the control");
+    vcx.simulate_click(control.center(), gpui::Modifiers::none());
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(side_has_keyboard(&workspace, vcx));
+    // The same control puts it away again.
+    let control = vcx.debug_bounds("status-assistant").unwrap();
+    vcx.simulate_click(control.center(), gpui::Modifiers::none());
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(editor_focused(&workspace, vcx));
+
+    // The menu of the title has it too, with a check mark while it is open.
+    let labels = |cx: &mut VisualTestContext| -> Vec<(String, Option<bool>)> {
+        workspace.update(cx, |w, cx| {
+            w.menu_items(MenuKind::Title, cx)
+                .iter()
+                .map(|item| (item.title().to_string(), item.is_checked()))
+                .collect()
+        })
+    };
+    assert!(labels(vcx).contains(&("Assistant".to_string(), Some(false))));
+    assert!(workspace.update_in(vcx, |w, window, cx| {
+        w.open_menu(MenuKind::Title, None, window, cx)
+    }));
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Assistant", window, cx)));
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(labels(vcx).contains(&("Assistant".to_string(), Some(true))));
+
+    // Switched off, neither is there.
+    workspace.update(vcx, |w, cx| {
+        w.write_setting(keys::ASSISTANT_ENABLED, &false, cx)
+    });
+    vcx.run_until_parked();
+    assert!(!labels(vcx).iter().any(|(label, _)| label == "Assistant"));
     assert!(!workspace.read_with(vcx, |w, _| w.assistant_shown()));
 }

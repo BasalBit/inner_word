@@ -650,6 +650,48 @@ impl Workspace {
             .children(counts)
             .on_click(opens_menu(MenuKind::Statistics))
         });
+        // The assistant's side chat, for the pointer: a small control at
+        // the end of the bar, lit while the side chat is in front. Only
+        // while the assistant is shown and a document is open.
+        let assistant = (self.assistant.shown && self.session.is_some()).then(|| {
+            let in_front = self.right.shown == Some(RightPanel::Assistant);
+            let hint = KeyHint::for_action(&crate::actions::FocusAssistant, cx);
+            div()
+                .id("status-assistant")
+                .debug_selector(|| "status-assistant".into())
+                .flex_none()
+                .h(px(20.))
+                .px(px(5.))
+                .flex()
+                .items_center()
+                .rounded(writer_ui::theme::RADIUS_SM)
+                .cursor_pointer()
+                .hover(|style| style.bg(colors.hover))
+                .when(tips, |el| {
+                    el.tooltip(
+                        Tooltip::new(if in_front {
+                            "Hide the assistant"
+                        } else {
+                            "Ask the assistant about this document"
+                        })
+                        .key_hint(hint)
+                        .build(),
+                    )
+                })
+                .child(
+                    Icon::new(IconName::Sparkle)
+                        .size(px(13.))
+                        .color(if in_front {
+                            colors.accent
+                        } else {
+                            colors.muted
+                        }),
+                )
+                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
+                    // What the command does.
+                    window.dispatch_action(Box::new(crate::actions::ToggleAssistant), cx);
+                }))
+        });
         let right = div()
             .flex()
             .items_center()
@@ -657,7 +699,8 @@ impl Workspace {
             .flex_none()
             .children(limit)
             .children(page)
-            .children(statistics);
+            .children(statistics)
+            .children(assistant);
 
         div()
             .id("status-bar")

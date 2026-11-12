@@ -128,11 +128,17 @@ fn settings_modal_is_keyboard_driven_and_applies_live(cx: &mut TestAppContext) {
     assert_eq!(workspace.update(vcx, |w, cx| w.status_line(cx)).reading, "");
     vcx.simulate_keystrokes("space");
     assert!(workspace.read_with(vcx, |w, _| w.settings().status_reading_time));
-    // With a document open the list goes on with that document's own
-    // settings; up goes back.
+    // The last row about the app leads to the keyboard shortcuts. With a
+    // document open the list goes on with that document's own settings;
+    // up goes back.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::KeyboardShortcuts));
+    // Left and right have nothing to step through on it.
+    vcx.simulate_keystrokes("right left");
+    assert_eq!(focused_row(&view, vcx), Some(SettingRow::KeyboardShortcuts));
     vcx.simulate_keystrokes("down");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::DocumentPageView));
-    vcx.simulate_keystrokes("up up up up up");
+    vcx.simulate_keystrokes("up up up up up up");
     assert_eq!(focused_row(&view, vcx), Some(SettingRow::Paper));
 
     // Escape closes and focus returns to the editor.

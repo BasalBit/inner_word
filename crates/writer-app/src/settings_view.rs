@@ -151,6 +151,9 @@ pub enum SettingRow {
     StatusCharacters,
     /// The reading time in the status bar.
     StatusReadingTime,
+    /// The keyboard shortcuts: opens the list they are looked up and
+    /// changed in.
+    KeyboardShortcuts,
     /// The assistant: on or off. Says which engine was found.
     Assistant,
     /// The assistant: the model of the quick chat.
@@ -193,7 +196,7 @@ pub enum SettingRow {
 
 impl SettingRow {
     /// The rows about the app, in order. They are always listed.
-    pub const APP: [SettingRow; 17] = [
+    pub const APP: [SettingRow; 18] = [
         SettingRow::Theme,
         SettingRow::VimMode,
         SettingRow::MarkdownShortcuts,
@@ -211,6 +214,7 @@ impl SettingRow {
         SettingRow::StatusWords,
         SettingRow::StatusCharacters,
         SettingRow::StatusReadingTime,
+        SettingRow::KeyboardShortcuts,
     ];
 
     /// The rows about the assistant, in order. Listed while its engine is
@@ -277,6 +281,7 @@ impl SettingRow {
             | SettingRow::StatusWords
             | SettingRow::StatusCharacters
             | SettingRow::StatusReadingTime => "Status bar",
+            SettingRow::KeyboardShortcuts => "Keyboard",
             SettingRow::Assistant
             | SettingRow::AssistantQuickModel
             | SettingRow::AssistantQuickEffort
@@ -305,6 +310,7 @@ impl SettingRow {
             SettingRow::StatusWords => "Word count",
             SettingRow::StatusCharacters => "Character count",
             SettingRow::StatusReadingTime => "Reading time",
+            SettingRow::KeyboardShortcuts => "Keyboard shortcuts",
             SettingRow::Assistant => "Assistant",
             SettingRow::AssistantQuickModel => "Quick chat model",
             SettingRow::AssistantQuickEffort => "Quick chat effort",
@@ -352,6 +358,11 @@ impl SettingRow {
             SettingRow::StatusWords => "Words in the document, or in the selection.",
             SettingRow::StatusCharacters => "Characters, spaces included.",
             SettingRow::StatusReadingTime => "Minutes at an unhurried pace.",
+            // How many are changed is added: see `SettingsView::description`.
+            SettingRow::KeyboardShortcuts => {
+                "Every key of the app in one list: look one up, give a command another key, \
+                 export and import them."
+            }
             // Says which engine was found: see `SettingsView::description`.
             SettingRow::Assistant => "",
             SettingRow::AssistantQuickModel => {
@@ -401,6 +412,10 @@ enum Control {
     Field {
         unit: Option<&'static str>,
     },
+    /// Nothing to set in the row itself: it opens something.
+    Open {
+        label: SharedString,
+    },
 }
 
 /// The settings modal. See the [module docs](self).
@@ -434,6 +449,8 @@ pub enum SettingsEvent {
     /// Open the searchable list of spelling languages for the app's
     /// setting or for the open document, and come back to its row.
     ChooseLanguage(LanguageTarget),
+    /// Open the list of keyboard shortcuts in the place of the settings.
+    OpenKeyboardShortcuts,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -824,6 +841,15 @@ impl SettingsView {
             SettingRow::SpellingLanguage => {
                 format!("{}{}", row.description(), whole_list_sentence(cx)).into()
             }
+            SettingRow::KeyboardShortcuts => match crate::keymap::changed_count(cx) {
+                0 => row.description().into(),
+                1 => format!("{} One command has a key of your own.", row.description()).into(),
+                count => format!(
+                    "{} {count} commands have keys of your own.",
+                    row.description()
+                )
+                .into(),
+            },
             row if SettingRow::LENGTHS.contains(&row) && focused => {
                 let unit = self
                     .document_settings(cx)
@@ -949,6 +975,9 @@ impl SettingsView {
                     ThemeMode::Light => 1,
                     ThemeMode::Dark => 2,
                 },
+            },
+            SettingRow::KeyboardShortcuts => Control::Open {
+                label: "Open".into(),
             },
             SettingRow::VimMode => Control::Switch(settings.vim_mode),
             SettingRow::MarkdownShortcuts => Control::Switch(settings.input_rules),
@@ -1159,7 +1188,7 @@ impl SettingsView {
                     self.write(keys::SPELLING_LANGUAGE, language.as_setting_str(), cx);
                 }
             }
-            SettingRow::Author => {}
+            SettingRow::Author | SettingRow::KeyboardShortcuts => {}
             SettingRow::Font => {
                 if let Some(font) = self.fonts.get(index).cloned() {
                     self.write(keys::NEW_DOCUMENT_FONT, &font, cx);
@@ -1321,7 +1350,7 @@ impl SettingsView {
                     self.choose(row, target as usize, cx);
                 }
             }
-            Control::Field { .. } => {}
+            Control::Field { .. } | Control::Open { .. } => {}
         }
     }
 
@@ -1333,6 +1362,10 @@ impl SettingsView {
             cx.emit(SettingsEvent::ChooseLanguage(target));
             return;
         }
+        if row == SettingRow::KeyboardShortcuts {
+            cx.emit(SettingsEvent::OpenKeyboardShortcuts);
+            return;
+        }
         match self.control(row, cx) {
             Control::Switch(on) => self.choose(row, usize::from(!on), cx),
             Control::Segments { options, selected } => {
@@ -1341,7 +1374,7 @@ impl SettingsView {
             Control::Stepper { index, count, .. } => {
                 self.choose(row, (index + 1) % count.max(1), cx)
             }
-            Control::Field { .. } => {}
+            Control::Field { .. } | Control::Open { .. } => {}
         }
     }
 
@@ -1515,6 +1548,23 @@ impl SettingsView {
                     .child(arrow("next", "›", index + 1 < count, 1))
                     .into_any_element()
             }
+            // What a click on the row does, as a small button of its own.
+            Control::Open { label } => div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(SPACE_1)
+                .h(px(26.))
+                .px(SPACE_3)
+                .rounded(RADIUS_MD)
+                .border_1()
+                .border_color(colors.hairline)
+                .bg(colors.hover)
+                .text_size(UI_TEXT_SM)
+                .whitespace_nowrap()
+                .child(label)
+                .child(div().text_color(colors.muted).child("›"))
+                .into_any_element(),
             Control::Field { unit: None } => div()
                 .w(px(220.))
                 .flex_none()
@@ -1652,14 +1702,18 @@ impl Render for SettingsView {
         let list_height = (f32::from(window.viewport_size().height) * 0.80 - 150.).max(160.);
         // What space does on the row the keyboard is on: the two language
         // rows open their list, every other row switches or steps.
-        let space_hint =
-            if self.handles.iter().any(|(row, handle)| {
-                Self::language_target(*row).is_some() && handle.is_focused(window)
-            }) {
-                "Whole list"
-            } else {
-                "Switch"
-            };
+        let on_row = |wanted: &dyn Fn(SettingRow) -> bool| {
+            self.handles
+                .iter()
+                .any(|(row, handle)| wanted(*row) && handle.is_focused(window))
+        };
+        let space_hint = if on_row(&|row| Self::language_target(row).is_some()) {
+            "Whole list"
+        } else if on_row(&|row| row == SettingRow::KeyboardShortcuts) {
+            "Open"
+        } else {
+            "Switch"
+        };
 
         // A scroll position asked for before the list was ever drawn is
         // worked out against a list at the top left of the window (GPUI

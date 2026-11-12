@@ -1045,3 +1045,1103 @@ fn runs_in_text(keys: &str, cx: &mut VisualTestContext) -> Option<String> {
             .map(|binding| binding.action().name().to_string())
     })
 }
+
+// ----- storage, the file -----------------------------------------------------------
+
+/// The keymap that runs, as text: every binding that is not the menu
+/// bar's own.
+fn installed(cx: &mut VisualTestContext) -> Vec<(String, String, Option<String>)> {
+    cx.update(|_, cx| {
+        cx.key_bindings()
+            .borrow()
+            .bindings()
+            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .map(|binding| {
+                (
+                    keys_of(binding),
+                    binding.action().name().to_string(),
+                    binding.predicate().map(|predicate| predicate.to_string()),
+                )
+            })
+            .collect()
+    })
+}
+
+fn stored_shortcuts(
+    library: &Entity<Library>,
+    cx: &mut VisualTestContext,
+) -> Option<serde_json::Value> {
+    library.read_with(cx, |library, _| {
+        library
+            .setting(setting_keys::KEYBOARD_SHORTCUTS)
+            .expect("the settings can be read")
+    })
+}
+
+/// A few changes of every kind: a key replaced, one removed, one given to
+/// a command that had none, and a key in two spellings moved.
+fn make_some_changes(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) {
+    change(workspace, cx, |keymap| {
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"));
+        keymap.remove_key(
+            &Target::new("editor::ToggleItalic", Some("Editor")),
+            &key("cmd-i"),
+        );
+        keymap.add_key(
+            &Target::new("workspace::ShowVersionHistory", None),
+            key("ctrl-alt-h"),
+        );
+        keymap.replace_key(
+            &Target::new("editor::ToggleNumberedList", Some("Editor")),
+            &key("cmd-shift-7"),
+            key("cmd-shift-1"),
+        );
+    });
+}
+
+#[gpui::test]
+fn the_changes_are_stored_in_the_library_and_survive_a_relaunch(cx: &mut TestAppContext) {
+    init(cx);
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("library.db");
+    let launch = |cx: &mut TestAppContext| {
+        let library = cx.new(|_| Library::open(&path).expect("the library opens"));
+        library.update(cx, |library, cx| {
+            library
+                .set_setting(setting_keys::WELCOME_CREATED, &true, cx)
+                .unwrap();
+        });
+        library
+    };
+
+    // The first launch: nothing stored, the default keys.
+    let library = launch(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Keys", "A paragraph with a few words in it."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert_eq!(stored_shortcuts(&library, vcx), None);
+    let defaults = installed(vcx);
+    make_some_changes(&workspace, vcx);
+    let changed = installed(vcx);
+    assert_ne!(changed, defaults);
+    // One setting, which holds only what differs from the defaults.
+    let stored = stored_shortcuts(&library, vcx).expect("the changes are stored");
+    assert_eq!(stored["version"], 1);
+    let entries = stored["changes"].as_array().expect("a list of changes");
+    assert_eq!(entries.len(), 4, "{stored}");
+    assert_eq!(entries[0]["command"], "editor::ToggleBold");
+    assert_eq!(entries[0]["context"], "Editor");
+    assert_eq!(entries[0]["default"], serde_json::json!(["cmd-b"]));
+    assert_eq!(entries[0]["keys"], serde_json::json!(["cmd-alt-b"]));
+    // The window goes, and with it the process, as far as a test can say:
+    // the keymap of the app is the default one again.
+    workspace.update(vcx, |workspace, cx| assert!(workspace.flush(cx)));
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
+    drop(library);
+    cx.update(|cx| {
+        writer_app::keymap::set_changes(writer_keymap::Changes::new(), cx);
+        assert_eq!(writer_app::keymap::changed_count(cx), 0);
+    });
+
+    // The second launch reads them before anything is drawn.
+    let library = launch(cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert_eq!(installed(vcx), changed);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 4);
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(
+        runs("cmd-alt-b", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(runs("cmd-b", vcx), None);
+    assert_eq!(runs("cmd-i", vcx), None);
+    assert_eq!(
+        runs("ctrl-alt-h", vcx).as_deref(),
+        Some("workspace::ShowVersionHistory")
+    );
+    assert_eq!(
+        runs("cmd-!", vcx).as_deref(),
+        Some("editor::ToggleNumberedList")
+    );
+    assert_eq!(
+        hint(&writer_editor::actions::ToggleBold, vcx).as_deref(),
+        Some("⌥⌘B")
+    );
+    assert_eq!(
+        menu_key(&writer_app::actions::ShowVersionHistory, vcx).as_deref(),
+        Some("ctrl-alt-h")
+    );
+    // Nothing was written by reading.
+    assert_eq!(stored_shortcuts(&library, vcx), Some(stored));
+
+    // Everything put back: the setting goes.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.reset_all_shortcuts_now(window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(installed(vcx), defaults);
+    assert_eq!(stored_shortcuts(&library, vcx), None);
+}
+
+/// A value another version stored: fields this one does not know, an
+/// entry for a command it does not have, an entry it cannot read. All of
+/// it is kept when this version writes the setting again.
+#[gpui::test]
+fn what_a_later_version_stored_is_not_lost(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Keys", "Some words."), cx);
+    let later = serde_json::json!({
+        "version": 1,
+        "profile": "travel keyboard",
+        "changes": [
+            {"command": "editor::ToggleBold", "context": "Editor",
+             "default": ["cmd-b"], "keys": ["cmd-alt-b"], "since": "0.9.0"},
+            {"command": "outline::ToggleOutline", "context": null,
+             "default": ["cmd-alt-o"], "keys": ["f6"]},
+            {"gesture": "three-finger swipe", "command": 7},
+        ],
+    });
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(setting_keys::KEYBOARD_SHORTCUTS, &later, cx)
+            .unwrap();
+    });
+    let (workspace, vcx) = open_workspace(&library, cx);
+    // What this version understands is in force.
+    assert_eq!(
+        runs("cmd-alt-b", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(runs("cmd-b", vcx), None);
+    assert_eq!(runs("f6", vcx), None);
+    vcx.update(|_, cx| {
+        assert_eq!(writer_app::keymap::changed_count(cx), 1);
+        let inactive = writer_app::keymap::effective(cx)
+            .unwrap()
+            .inactive()
+            .to_vec();
+        assert_eq!(inactive.len(), 2, "{inactive:?}");
+    });
+    assert!(
+        toasts(&workspace, vcx).is_empty(),
+        "nothing to complain about"
+    );
+
+    // The user changes another key: the setting is written again.
+    change(&workspace, vcx, |keymap| {
+        keymap.remove_key(
+            &Target::new("editor::ToggleItalic", Some("Editor")),
+            &key("cmd-i"),
+        )
+    });
+    let stored = stored_shortcuts(&library, vcx).expect("still stored");
+    assert_eq!(stored["profile"], "travel keyboard");
+    let entries = stored["changes"].as_array().unwrap();
+    assert_eq!(entries.len(), 4, "{stored}");
+    assert_eq!(entries[0]["since"], "0.9.0");
+    assert_eq!(entries[1]["command"], "outline::ToggleOutline");
+    assert_eq!(entries[1]["keys"], serde_json::json!(["f6"]));
+    assert_eq!(entries[2]["gesture"], "three-finger swipe");
+    assert_eq!(entries[3]["command"], "editor::ToggleItalic");
+
+    // A stored value that is no such thing at all: the default keys, a
+    // message, and the value is left alone until a key is changed.
+    let broken = serde_json::json!(["not", "an", "object"]);
+    library.update(vcx, |library, cx| {
+        library
+            .set_setting(setting_keys::KEYBOARD_SHORTCUTS, &broken, cx)
+            .unwrap();
+    });
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    assert_eq!(runs("cmd-b", vcx).as_deref(), Some("editor::ToggleBold"));
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter()
+            .any(|toast| toast.contains("keyboard shortcuts cannot be read")),
+        "{said:?}"
+    );
+    assert_eq!(stored_shortcuts(&library, vcx), Some(broken));
+}
+
+/// The shortcuts file of `workspace`, written through the save panel.
+fn export_to(path: &std::path::Path, cx: &mut VisualTestContext) -> serde_json::Value {
+    cx.dispatch_action(writer_app::actions::ExportShortcuts);
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path(), "the save panel is asked");
+    let target = path.to_path_buf();
+    cx.simulate_new_path_selection(move |_| Some(target));
+    cx.run_until_parked();
+    let text = std::fs::read_to_string(path).expect("the shortcuts file was written");
+    serde_json::from_str(&text).expect("the shortcuts file is JSON")
+}
+
+/// Chooses `path` in the place of the open panel and reads it.
+fn import_from(path: &std::path::Path, cx: &mut VisualTestContext) {
+    let path = path.to_path_buf();
+    cx.update(|_, cx| writer_app::workspace::choose_import_file_beforehand(Some(path), cx));
+    cx.dispatch_action(writer_app::actions::ImportShortcuts);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn an_exported_file_imported_into_another_library_gives_the_same_keymap(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("The Writer Shortcuts.json");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let defaults = installed(vcx);
+    make_some_changes(&workspace, vcx);
+    let changed = installed(vcx);
+
+    // The file is complete and reads like a list of all keys.
+    let json = export_to(&file, vcx);
+    assert_eq!(json["format"], "the-writer-shortcuts");
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["app_version"], env!("CARGO_PKG_VERSION"));
+    let shortcuts = json["shortcuts"].as_array().expect("a list");
+    let targets = vcx.update(|_, cx| {
+        writer_app::keymap::model(cx)
+            .unwrap()
+            .defaults()
+            .targets()
+            .len()
+    });
+    assert_eq!(shortcuts.len(), targets, "every command in every place");
+    let entry = |command: &str, context: serde_json::Value| {
+        shortcuts
+            .iter()
+            .find(|entry| entry["command"] == command && entry["context"] == context)
+            .unwrap_or_else(|| panic!("{command} is not in the file"))
+            .clone()
+    };
+    let in_file = entry("editor::ToggleBold", "Editor".into());
+    assert_eq!(in_file["title"], "Bold");
+    assert_eq!(in_file["where"], "In the text");
+    assert_eq!(in_file["default"], serde_json::json!(["cmd-b"]));
+    assert_eq!(in_file["keys"], serde_json::json!(["cmd-alt-b"]));
+    let history = entry("workspace::ShowVersionHistory", serde_json::Value::Null);
+    assert_eq!(history["title"], "Version history");
+    assert_eq!(history["where"], "Anywhere");
+    assert_eq!(history["default"], serde_json::json!([]));
+    assert_eq!(history["keys"], serde_json::json!(["ctrl-alt-h"]));
+    // A key without a descriptor has a name a person reads, and its place.
+    let word = entry("editor::MoveWordLeft", "Editor".into());
+    assert_eq!(word["title"], "Move word left");
+    assert_eq!(word["where"], "In the text");
+    // A key in two spellings is written once, in the readable one.
+    let numbered = entry("editor::ToggleNumberedList", "Editor".into());
+    assert_eq!(numbered["default"], serde_json::json!(["cmd-shift-7"]));
+    assert_eq!(numbered["keys"], serde_json::json!(["cmd-shift-1"]));
+    // Every entry says what and where in words.
+    for entry in shortcuts {
+        assert!(
+            entry["title"]
+                .as_str()
+                .is_some_and(|title| !title.is_empty())
+        );
+        assert!(
+            entry["where"]
+                .as_str()
+                .is_some_and(|place| !place.is_empty() && place != "Elsewhere"),
+            "{entry}"
+        );
+    }
+    assert!(
+        toasts(&workspace, vcx)
+            .iter()
+            .any(|toast| toast.starts_with("Exported the keyboard shortcuts to ")),
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
+
+    // Another library: the default keys, until the file is imported.
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Other", "Words."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert_eq!(installed(vcx), defaults);
+    import_from(&file, vcx);
+    // Nothing is applied by choosing the file: the list shows a preview.
+    let view = list(&workspace, vcx);
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    assert_eq!(installed(vcx), defaults);
+    let (title, says, choices) = question(&view, vcx);
+    assert!(says.contains('4'), "four commands change: {title}: {says}");
+    assert!(
+        choices.iter().any(|choice| choice == "Cancel"),
+        "{choices:?}"
+    );
+    let preview = view.read_with(vcx, |view, _| view.preview_rows());
+    assert!(
+        preview.iter().any(|row| row.contains("Bold")),
+        "{preview:?}"
+    );
+    // The user has no changes of their own here: one way to import.
+    let offered: Vec<Choice> = view.read_with(vcx, |view, _| {
+        view.choices()
+            .into_iter()
+            .map(|(choice, _)| choice)
+            .collect()
+    });
+    let way = offered
+        .iter()
+        .copied()
+        .find(|choice| matches!(choice, Choice::ImportReplace | Choice::ImportMerge))
+        .expect("the preview offers to import");
+    choose(&view, way, vcx);
+    assert_eq!(
+        installed(vcx),
+        changed,
+        "the same keymap as where it came from"
+    );
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 4);
+    assert!(stored_shortcuts(&library, vcx).is_some());
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter()
+            .any(|toast| toast == "Imported the keys of 4 commands"),
+        "{said:?}"
+    );
+
+    // Undo, offered by the toast, puts back what was there before.
+    press_toast_button(&workspace, "Undo", vcx);
+    assert_eq!(installed(vcx), defaults);
+    assert_eq!(stored_shortcuts(&library, vcx), None);
+    view.read_with(vcx, |view, _| assert_eq!(view.changed_count(), 0));
+}
+
+#[gpui::test]
+fn an_import_can_replace_the_users_changes_or_add_to_them(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("mine.json");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    // The file changes Bold; written by hand, with only what matters.
+    std::fs::write(
+        &file,
+        r#"{"format": "the-writer-shortcuts", "version": 1, "shortcuts": [
+            {"command": "editor::ToggleBold", "context": "Editor",
+             "default": ["cmd-b"], "keys": ["cmd-alt-b"]},
+            {"command": "editor::ToggleUnderline", "context": "Editor",
+             "default": ["cmd-u"], "keys": ["cmd-u"]}
+        ]}"#,
+    )
+    .unwrap();
+    let italic = Target::new("editor::ToggleItalic", Some("Editor"));
+    let own = |workspace: &Entity<Workspace>, cx: &mut VisualTestContext| {
+        change(workspace, cx, |keymap| {
+            keymap.set_changes(writer_keymap::Changes::new());
+            keymap.replace_key(&italic, &key("cmd-i"), key("cmd-alt-i"));
+            keymap.replace_key(&bold(), &key("cmd-b"), key("f5"));
+        });
+    };
+
+    // Added to the user's own: the file wins where both change a command,
+    // the rest of the user's changes stay.
+    own(&workspace, vcx);
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    let offered: Vec<Choice> = view.read_with(vcx, |view, _| {
+        view.choices()
+            .into_iter()
+            .map(|(choice, _)| choice)
+            .collect()
+    });
+    assert!(offered.contains(&Choice::ImportMerge), "{offered:?}");
+    assert!(offered.contains(&Choice::ImportReplace), "{offered:?}");
+    choose(&view, Choice::ImportMerge, vcx);
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
+    assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-alt-i"]);
+    press_toast_button(&workspace, "Undo", vcx);
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["f5"]);
+
+    // In the place of the user's own: only what the file changes differs
+    // from the defaults afterwards.
+    import_from(&file, vcx);
+    choose(&view, Choice::ImportReplace, vcx);
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
+    assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-i"]);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+
+    // Cancelled: nothing changes.
+    own(&workspace, vcx);
+    import_from(&file, vcx);
+    choose(&view, Choice::Cancel, vcx);
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["f5"]);
+    assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-alt-i"]);
+}
+
+#[gpui::test]
+fn a_file_with_things_this_version_cannot_take_says_which_and_why(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("from elsewhere.json");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    std::fs::write(
+        &file,
+        r#"{"format": "the-writer-shortcuts", "version": 1, "app_version": "9.0.0",
+            "shortcuts": [
+            {"command": "outline::ToggleOutline", "title": "Outline", "where": "Anywhere",
+             "context": null, "default": [], "keys": ["cmd-alt-o"]},
+            {"command": "editor::ToggleBold", "title": "Bold", "context": "Editor",
+             "default": ["cmd-b"], "keys": ["cmd-alt-b"]},
+            {"command": "editor::ToggleItalic", "title": "Italic", "context": "Editor",
+             "default": ["cmd-i"], "keys": ["cmd-hyper-nothing-i-j"]},
+            {"command": "editor::ToggleUnderline", "title": "Underline", "context": "Editor",
+             "default": ["cmd-u"], "keys": ["u"]}
+        ]}"#,
+    )
+    .unwrap();
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    let preview = view
+        .read_with(vcx, |view, _| view.preview_rows())
+        .join("\n");
+    // What changes, and each entry that is skipped with its reason: a
+    // command this version does not have, a key that cannot be read, a
+    // change a guard rail refuses.
+    assert!(preview.contains("Bold"), "{preview}");
+    assert!(preview.contains("Outline"), "{preview}");
+    assert!(preview.contains("Italic"), "{preview}");
+    assert!(preview.contains("Underline"), "{preview}");
+    let (title, says, _) = question(&view, vcx);
+    assert!(
+        says.contains('3') || preview.contains("3 "),
+        "three entries are skipped: {title}: {says}\n{preview}"
+    );
+    let offered: Vec<Choice> = view.read_with(vcx, |view, _| {
+        view.choices()
+            .into_iter()
+            .map(|(choice, _)| choice)
+            .collect()
+    });
+    let way = offered
+        .iter()
+        .copied()
+        .find(|choice| matches!(choice, Choice::ImportReplace | Choice::ImportMerge))
+        .expect("what can be taken is offered");
+    choose(&view, way, vcx);
+    // Only the change that can be taken was.
+    assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
+    assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-i"]);
+    assert_eq!(row_keys("Underline", Place::Text, vcx), ["cmd-u"]);
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 1);
+    assert!(
+        toasts(&workspace, vcx)
+            .iter()
+            .any(|toast| toast == "Imported the keys of one command"),
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+}
+
+#[gpui::test]
+fn a_file_that_is_not_a_shortcuts_file_is_said_to_be_so(cx: &mut TestAppContext) {
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let defaults = installed(vcx);
+
+    // Not JSON: what is wrong and where.
+    let notes = out.path().join("notes.txt");
+    std::fs::write(&notes, "Chapter one\nThe ferry came in late.\n").unwrap();
+    import_from(&notes, vcx);
+    let view = list(&workspace, vcx);
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.mode()),
+        ModeKind::Question
+    );
+    let (title, says, choices) = question(&view, vcx);
+    assert!(says.contains("not JSON"), "{title}: {says}");
+    assert!(says.contains("ine 1"), "the line is named: {says}");
+    assert_eq!(
+        choices,
+        ["Choose Another File…", "Close"],
+        "nothing to import"
+    );
+    choose(&view, Choice::Cancel, vcx);
+    assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
+
+    // JSON, of another kind.
+    let other = out.path().join("package.json");
+    std::fs::write(&other, r#"{"name": "something", "version": "1.0.0"}"#).unwrap();
+    import_from(&other, vcx);
+    let (_, says, _) = question(&view, vcx);
+    assert!(says.contains("not a shortcuts file"), "{says}");
+    choose(&view, Choice::Cancel, vcx);
+
+    // Not text at all.
+    let picture = out.path().join("cover.png");
+    std::fs::write(&picture, [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x01]).unwrap();
+    import_from(&picture, vcx);
+    let (_, says, _) = question(&view, vcx);
+    assert!(says.contains("not JSON"), "{says}");
+    choose(&view, Choice::Cancel, vcx);
+
+    // A file that is not there: said in a toast, the list stays as it is.
+    press(vcx, "escape");
+    assert!(!has_modal(&workspace, vcx));
+    import_from(&out.path().join("gone.json"), vcx);
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter()
+            .any(|toast| toast.starts_with("Could not read ")),
+        "{said:?}"
+    );
+    assert!(!has_modal(&workspace, vcx));
+    assert_eq!(installed(vcx), defaults, "nothing was changed by any of it");
+}
+
+// ----- precedence, and rows of several key contexts ---------------------------------
+
+/// The precedence facts of the keymap hold after a change: a changed key
+/// stands where its default stood.
+#[gpui::test]
+fn the_find_bar_still_beats_the_window_after_a_change(cx: &mut TestAppContext) {
+    use writer_editor_tools::ToolKind;
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    // The window's "show or hide comments" moves to the key of the find
+    // bar's "whole word".
+    let comments = Target::new("comments::ToggleComments", None);
+    assert!(change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&comments, &key("cmd-alt-c"), key("cmd-alt-w"))
+    }));
+    assert_eq!(
+        runs("cmd-alt-w", vcx).as_deref(),
+        Some("comments::ToggleComments")
+    );
+    assert_eq!(runs("cmd-alt-c", vcx), None);
+    vcx.simulate_keystrokes("cmd-f");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).is_open(ToolKind::Find)));
+    // In the bar its own key wins, as `cmd-alt-c` did before; and what
+    // was the window's key is the bar's alone now.
+    assert_eq!(
+        runs("cmd-alt-w", vcx).as_deref(),
+        Some("editor_tools::ToggleWholeWord")
+    );
+    assert_eq!(
+        runs("cmd-alt-c", vcx).as_deref(),
+        Some("editor_tools::ToggleCaseSensitive")
+    );
+    vcx.simulate_keystrokes("cmd-alt-w");
+    assert!(workspace.read_with(vcx, |w, cx| w.tools().read(cx).find_options().whole_word));
+    assert!(workspace.read_with(vcx, |w, cx| w.comments().read(cx).is_visible()));
+
+    // The bar's "case sensitive" is bound for the bar and for the field
+    // in it: one row, and a change of the row reaches both.
+    let rows: Vec<(String, usize)> = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .into_iter()
+            .filter(|shortcut| shortcut.action_name() == "editor_tools::ToggleCaseSensitive")
+            .map(|shortcut| (shortcut.place.label().to_string(), shortcut.targets.len()))
+            .collect()
+    });
+    assert_eq!(rows, [("In the find bar".to_string(), 2)]);
+    workspace
+        .update_in(vcx, |workspace, window, cx| {
+            workspace.set_keys_of_command(
+                "editor_tools::ToggleCaseSensitive",
+                None,
+                Some(&[key("cmd-alt-x")]),
+                window,
+                cx,
+            )
+        })
+        .expect("the command is listed");
+    vcx.run_until_parked();
+    assert_eq!(
+        runs("cmd-alt-x", vcx).as_deref(),
+        Some("editor_tools::ToggleCaseSensitive")
+    );
+    assert_eq!(runs("cmd-alt-c", vcx), None);
+    vcx.simulate_keystrokes("cmd-alt-x");
+    assert!(workspace.read_with(vcx, |w, cx| {
+        w.tools().read(cx).find_options().case_sensitive
+    }));
+    // No binding of the old key is left in either context.
+    vcx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let keys: Vec<String> = keymap
+            .bindings_for_action(&writer_editor_tools::actions::ToggleCaseSensitive)
+            .map(keys_of)
+            .collect();
+        assert_eq!(keys, ["alt-cmd-x", "alt-cmd-x"]);
+    });
+}
+
+/// The same through the list: the request the list makes for a row is
+/// carried out in every key context the row stands for.
+#[gpui::test]
+fn a_row_of_several_key_contexts_is_changed_as_one(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let (target, targets) = vcx.update(|_, cx| {
+        let row = collect_shortcuts(cx)
+            .into_iter()
+            .find(|shortcut| shortcut.action_name() == "editor_tools::ToggleWholeWord")
+            .expect("whole word is listed");
+        (row.target.clone().expect("a binding"), row.targets.clone())
+    });
+    assert_eq!(targets.len(), 2);
+    // The row stands for the field, where the keyboard is and where the
+    // key has to beat the window's.
+    assert_eq!(target.context.text(), Some("FindBar > TextField"));
+    let view = open_list_at(&workspace, &target, vcx);
+    press(vcx, "enter");
+    press(vcx, "cmd-alt-y");
+    choose(&view, Choice::UseKey, vcx);
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        for target in &targets {
+            let keys: Vec<String> = effective
+                .target(target)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|key| key.keys.to_string())
+                .collect();
+            assert_eq!(keys, ["cmd-alt-y"], "{target}");
+        }
+    });
+    // Back to the default, from the row: both again.
+    press(vcx, "cmd-d");
+    assert_eq!(vcx.update(|_, cx| writer_app::keymap::changed_count(cx)), 0);
+    // Removed from the row: from both.
+    press(vcx, "cmd-backspace");
+    vcx.update(|_, cx| {
+        let effective = writer_app::keymap::effective(cx).unwrap();
+        for target in &targets {
+            assert!(
+                effective.target(target).unwrap().keys.is_empty(),
+                "{target}"
+            );
+        }
+    });
+}
+
+// ----- the ways in, and what names a key --------------------------------------------
+
+#[gpui::test]
+fn the_list_is_reached_from_the_settings_the_palette_and_the_menu_bar(cx: &mut TestAppContext) {
+    use writer_app::settings_view::{SettingRow, SettingsView};
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let list_open = |cx: &mut VisualTestContext| {
+        workspace
+            .read_with(cx, |workspace, cx| workspace.shortcuts_list(cx))
+            .is_some()
+    };
+
+    // The settings have a row for it, with the keyboard and with a click.
+    vcx.simulate_keystrokes("cmd-,");
+    vcx.run_until_parked();
+    let settings = workspace
+        .read_with(vcx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<SettingsView>()
+        })
+        .expect("the settings are open");
+    let (rows, says) = settings.read_with(vcx, |settings, cx| {
+        (
+            settings.rows(cx),
+            settings
+                .description(SettingRow::KeyboardShortcuts, false, cx)
+                .to_string(),
+        )
+    });
+    let row = rows
+        .iter()
+        .position(|row| *row == SettingRow::KeyboardShortcuts)
+        .expect("the settings have a row for the keyboard shortcuts");
+    assert!(!says.contains("of your own"), "nothing is changed: {says}");
+    settings.update(vcx, |settings, cx| {
+        settings.activate(SettingRow::KeyboardShortcuts, cx)
+    });
+    vcx.run_until_parked();
+    assert!(
+        list_open(vcx),
+        "the row opens the list in the place of the settings"
+    );
+    press(vcx, "escape");
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+
+    // With the pointer; and the row says how many keys are the user's.
+    change(&workspace, vcx, |keymap| {
+        keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"))
+    });
+    vcx.simulate_keystrokes("cmd-,");
+    vcx.run_until_parked();
+    let settings = workspace
+        .read_with(vcx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<SettingsView>()
+        })
+        .expect("the settings are open");
+    let says = settings.read_with(vcx, |settings, cx| {
+        settings
+            .description(SettingRow::KeyboardShortcuts, false, cx)
+            .to_string()
+    });
+    assert!(
+        says.ends_with("One command has a key of your own."),
+        "{says}"
+    );
+    // The row is far down the list: the keyboard takes it into view.
+    for _ in 0..row {
+        vcx.simulate_keystrokes("down");
+    }
+    vcx.run_until_parked();
+    let selector: &'static str = Box::leak(format!("setting-{row}").into_boxed_str());
+    let at = vcx
+        .debug_bounds(selector)
+        .expect("the row is drawn")
+        .center();
+    vcx.simulate_click(at, gpui::Modifiers::default());
+    vcx.run_until_parked();
+    assert!(list_open(vcx), "a click on the row opens the list");
+    press(vcx, "escape");
+
+    // The palette has the list and what goes with it.
+    let titles: Vec<String> = vcx.update(|_, cx| {
+        writer_app::commands::all(cx)
+            .iter()
+            .map(|command| command.title.to_string())
+            .collect()
+    });
+    for title in [
+        "Keyboard shortcuts",
+        "Import keyboard shortcuts",
+        "Export keyboard shortcuts",
+        "Reset all keyboard shortcuts",
+        "Undo keyboard shortcuts import or reset",
+    ] {
+        assert!(titles.contains(&title.to_string()), "{title}");
+    }
+    vcx.dispatch_action(writer_app::actions::ShowShortcuts);
+    vcx.run_until_parked();
+    assert!(list_open(vcx));
+    // The same command closes it again.
+    vcx.dispatch_action(writer_app::actions::ShowShortcuts);
+    vcx.run_until_parked();
+    assert!(!has_modal(&workspace, vcx));
+
+    // The menu bar: The Writer has the four items, Help the list.
+    let all = menus::app_menus();
+    let app_menu: Vec<String> = all[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            gpui::MenuItem::Action { name, .. } => Some(name.to_string()),
+            _ => None,
+        })
+        .collect();
+    for item in [
+        "Keyboard Shortcuts…",
+        "Import Keyboard Shortcuts…",
+        "Export Keyboard Shortcuts…",
+        "Reset All Keyboard Shortcuts…",
+    ] {
+        assert!(
+            app_menu.contains(&item.to_string()),
+            "{item} in {app_menu:?}"
+        );
+    }
+    // Every one of them is enabled: its action has a handler wherever the
+    // keyboard is, also with the list open and with no document.
+    for place in ["cmd-1", "cmd-0", "cmd-/"] {
+        vcx.simulate_keystrokes(place);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            for action in [
+                &writer_app::actions::ShowShortcuts as &dyn Action,
+                &writer_app::actions::ImportShortcuts,
+                &writer_app::actions::ExportShortcuts,
+                &writer_app::actions::ResetAllShortcuts,
+            ] {
+                assert!(
+                    window.is_action_available(action, cx),
+                    "{} after {place}",
+                    action.name()
+                );
+            }
+        });
+    }
+}
+
+/// The texts of the app's own modals that name a key take it from the
+/// keymap: the footers, the tooltip of the close control, a sentence.
+#[gpui::test]
+fn the_footers_and_tooltips_of_the_modals_follow_the_keymap(cx: &mut TestAppContext) {
+    use writer_app::{agents_view, controls, keymap, settings_view, version_history};
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let texts = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            (
+                controls::close_key(cx).map(|hint| hint.text()),
+                keymap::keys_text_in(
+                    &[
+                        &version_history::SelectPrevious,
+                        &version_history::SelectNext,
+                    ],
+                    version_history::KEY_CONTEXT,
+                    cx,
+                ),
+                keymap::keys_text_in(&[&agents_view::CopyRow], agents_view::KEY_CONTEXT, cx),
+                keymap::keys_sentence_in(
+                    &settings_view::Activate,
+                    settings_view::ROW_KEY_CONTEXT,
+                    cx,
+                ),
+                keymap::hint_in(&version_history::Restore, version_history::KEY_CONTEXT, cx)
+                    .map(|hint| hint.text()),
+            )
+        })
+    };
+    assert_eq!(
+        texts(vcx),
+        (
+            Some("Esc".to_string()),
+            Some("↑ ↓".to_string()),
+            Some("⌘C".to_string()),
+            Some("↩ or Space".to_string()),
+            Some("↩".to_string()),
+        )
+    );
+
+    change(&workspace, vcx, |keymap| {
+        let version = |action: &str| Target::new(action, Some(version_history::KEY_CONTEXT));
+        keymap.replace_key(
+            &Target::new("modal::Dismiss", Some("ModalLayer")),
+            &key("escape"),
+            key("cmd-escape"),
+        );
+        keymap.replace_key(
+            &version("version_history::SelectNext"),
+            &key("down"),
+            key("j"),
+        );
+        keymap.remove_key(&version("version_history::SelectNext"), &key("ctrl-n"));
+        keymap.set_keys(&version("version_history::Restore"), &[key("cmd-r")]);
+        keymap.set_keys(
+            &Target::new("agents::CopyRow", Some(agents_view::KEY_CONTEXT)),
+            &[],
+        );
+        keymap.remove_key(
+            &Target::new("settings::Activate", Some(settings_view::ROW_KEY_CONTEXT)),
+            &key("enter"),
+        );
+    });
+    assert_eq!(
+        texts(vcx),
+        (
+            Some("⌘Esc".to_string()),
+            Some("↑ J".to_string()),
+            // A command without a key: the hint is left out.
+            None,
+            Some("Space".to_string()),
+            Some("⌘R".to_string()),
+        )
+    );
+}
+
+/// The key beside a menu bar item is the key the user gave its command,
+/// and none where the user took the key away or gave one the menu bar
+/// cannot draw.
+#[gpui::test]
+fn the_menu_bar_shows_the_keys_the_user_chose(cx: &mut TestAppContext) {
+    use writer_editor::actions as editor;
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let text = |action: &str| Target::new(action, Some("Editor"));
+    assert_eq!(menu_key(&editor::InsertPageBreak, vcx), None, "cmd-enter");
+    assert_eq!(menu_key(&editor::Indent, vcx).as_deref(), Some("cmd-]"));
+    change(&workspace, vcx, |keymap| {
+        // A key the menu bar can draw, for an item that showed none.
+        keymap.replace_key(
+            &text("editor::InsertPageBreak"),
+            &key("cmd-enter"),
+            key("cmd-alt-enter"),
+        );
+        keymap.add_key(&text("editor::InsertPageBreak"), key("f6"));
+        // A key with return in it, for an item that showed one.
+        keymap.replace_key(&text("editor::ToggleBold"), &key("cmd-b"), key("alt-enter"));
+        // The second key of an item goes: the first cannot be drawn.
+        keymap.remove_key(&text("editor::Indent"), &key("cmd-]"));
+        // The key of a command that is listed in another place too.
+        keymap.remove_key(
+            &Target::new("editor_tools::FindPrevious", Some("EditorTools")),
+            &key("cmd-shift-g"),
+        );
+    });
+    // The key hints show the last one bound, the menu bar the one it can
+    // draw.
+    assert_eq!(
+        row_keys("Page break", Place::Text, vcx),
+        ["cmd-alt-enter", "f6"]
+    );
+    assert_eq!(
+        menu_key(&editor::InsertPageBreak, vcx).as_deref(),
+        Some("f6")
+    );
+    assert_eq!(menu_key(&editor::ToggleBold, vcx), None);
+    assert_eq!(
+        runs("alt-enter", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(menu_key(&editor::Indent, vcx), None);
+    assert_eq!(runs("tab", vcx).as_deref(), Some("editor::Indent"));
+    // "Find Previous" keeps `shift-enter` in the find bar; the menu bar
+    // does not show that key for it (AppKit would run the item from
+    // anywhere on it).
+    assert_eq!(
+        menu_key(&writer_editor_tools::actions::FindPrevious, vcx),
+        None
+    );
+    // Every key the menu bar shows is a key that runs its item's command,
+    // as before the change.
+    vcx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        for (name, action) in menus::menu_actions(&menus::app_menus()) {
+            let Some(native) = menus::native_menu_binding(&keymap, action.as_ref()) else {
+                continue;
+            };
+            if native.keystrokes().len() > 1 {
+                continue;
+            }
+            assert!(
+                menus::menu_can_show(native),
+                "{name} shows {}",
+                keys_of(native)
+            );
+            let real: Vec<String> = keymap
+                .bindings_for_action(action.as_ref())
+                .filter(|binding| !menus::is_menu_key_binding(binding))
+                .map(keys_of)
+                .collect();
+            assert!(real.contains(&keys_of(native)), "{name}: {real:?}");
+        }
+    });
+}
+
+/// The steps of a scripted run: a key set without the list, and what the
+/// state line says.
+#[gpui::test]
+fn a_script_sets_keys_and_reads_the_state(cx: &mut TestAppContext) {
+    use writer_app::automation::{Script, ShortcutsStep, Step, describe_state};
+    let script = Script::parse(
+        "shortcut:editor::ToggleBold=cmd-alt-b; \
+         shortcut:editor::ToggleItalic = none; \
+         shortcut:spell::NextMisspelling=cmd-\\;|f7; \
+         shortcut:editor_tools::FindPrevious@In the find bar=default; \
+         shortcuts:import:/tmp/keys.json; shortcuts:press:Replace My Changes; \
+         shortcuts:reset; shortcuts:undo",
+    )
+    .expect("the steps parse");
+    assert_eq!(
+        script.steps,
+        [
+            Step::Shortcut {
+                action: "editor::ToggleBold".into(),
+                place: None,
+                keys: Some(vec![key("cmd-alt-b")]),
+            },
+            Step::Shortcut {
+                action: "editor::ToggleItalic".into(),
+                place: None,
+                keys: Some(Vec::new()),
+            },
+            Step::Shortcut {
+                action: "spell::NextMisspelling".into(),
+                place: None,
+                keys: Some(vec![key("cmd-;"), key("f7")]),
+            },
+            Step::Shortcut {
+                action: "editor_tools::FindPrevious".into(),
+                place: Some("In the find bar".into()),
+                keys: None,
+            },
+            Step::Shortcuts(ShortcutsStep::Import("/tmp/keys.json".into())),
+            Step::Shortcuts(ShortcutsStep::Press("Replace My Changes".into())),
+            Step::Shortcuts(ShortcutsStep::Reset),
+            Step::Shortcuts(ShortcutsStep::Undo),
+        ]
+    );
+    assert!(Script::parse("shortcut:editor::ToggleBold").is_err());
+    assert!(Script::parse("shortcut:editor::ToggleBold=cmd-").is_err());
+    assert!(Script::parse("shortcuts:dance").is_err());
+
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let state = |cx: &mut VisualTestContext| {
+        workspace.update_in(cx, |workspace, window, cx| {
+            let line = describe_state(workspace, window, cx);
+            let from = line.find("keys=[").expect("the state line has the keys");
+            let to = line.find(" words=").expect("the counts follow");
+            line[from..to].to_string()
+        })
+    };
+    assert_eq!(state(vcx), "keys=[changed=0]");
+    let set = |action: &str,
+               place: Option<&str>,
+               keys: Option<&[KeySequence]>,
+               cx: &mut VisualTestContext| {
+        let result = workspace.update_in(cx, |workspace, window, cx| {
+            workspace.set_keys_of_command(action, place, keys, window, cx)
+        });
+        cx.run_until_parked();
+        result
+    };
+    set("editor::ToggleBold", None, Some(&[key("cmd-alt-b")]), vcx).unwrap();
+    set("editor::ToggleItalic", None, Some(&[]), vcx).unwrap();
+    assert_eq!(state(vcx), "keys=[changed=2]");
+    assert_eq!(
+        runs("cmd-alt-b", vcx).as_deref(),
+        Some("editor::ToggleBold")
+    );
+    assert_eq!(runs("cmd-i", vcx), None);
+    // A command that is listed in two places: the first by default, the
+    // other by its name.
+    set(
+        "editor_tools::FindPrevious",
+        Some("In the find bar"),
+        Some(&[key("f3")]),
+        vcx,
+    )
+    .unwrap();
+    assert_eq!(row_keys("Find previous", Place::FindBar, vcx), ["f3"]);
+    assert_eq!(row_keys("Find previous", Place::Text, vcx), ["cmd-shift-g"]);
+    set("editor::ToggleBold", None, None, vcx).unwrap();
+    assert_eq!(state(vcx), "keys=[changed=2]");
+    assert!(set("editor::NoSuchThing", None, None, vcx).is_err());
+    assert!(set("editor::ToggleBold", Some("In the library"), None, vcx).is_err());
+
+    // With the list open the line says what it shows.
+    press(vcx, "cmd-/");
+    let line = state(vcx);
+    assert!(
+        line.starts_with("keys=[changed=2 list=[mode=list rows="),
+        "{line}"
+    );
+    assert!(line.contains(" changed=2 changed_only=false"), "{line}");
+    press(vcx, "enter");
+    assert!(
+        state(vcx).contains("list=[mode=recording"),
+        "{}",
+        state(vcx)
+    );
+    press(vcx, "cmd-alt-9");
+    let line = state(vcx);
+    assert!(line.contains("list=[mode=question"), "{line}");
+    assert!(line.contains("choices=[*Use ⌥⌘9"), "{line}");
+}

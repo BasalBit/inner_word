@@ -22,13 +22,15 @@
 //! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 //! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
 //! | `bar[:<button>]`      | shows the format bar over the selection, as a selection made with the mouse does; with a button (`bold`, `italic`, `highlight`, `turn-into`, `more`, `extra-0` ...) presses that button of the bar |
+//! | `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys are separated by a bar (`cmd-alt-b\|f5`), `none` leaves it without a key, `default` puts it back; `@In the find bar` names the place for a command that is listed in several |
+//! | `shortcuts:<what>`    | the keyboard shortcuts: `shortcuts:import:<path>` reads a shortcuts file and shows what it would change in the list (as choosing it in the open panel does), `shortcuts:press:<label>` presses a control of the open list by its label (`Import…`, `Export…`, `Reset All…`, `Changed Only`, `Close`, or a choice of its open question: `Replace My Changes`, `Use ⌥⌘B`, `Cancel`), `shortcuts:reset` puts every key back without asking, `shortcuts:undo` undoes the last import or reset |
 //! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
@@ -127,6 +129,15 @@ pub enum Step {
     Menu(crate::workspace::MenuKind),
     Choose(String),
     Bar(Option<String>),
+    Shortcut {
+        /// The name of the command's action.
+        action: String,
+        /// The place the command is listed in, where it has several.
+        place: Option<String>,
+        /// The keys it gets; `None` for its defaults.
+        keys: Option<Vec<writer_keymap::KeySequence>>,
+    },
+    Shortcuts(ShortcutsStep),
     Fake(FakeStep),
     Resize(f32, f32),
     Theme(ThemeMode),
@@ -142,6 +153,19 @@ pub enum Step {
     KeyCost(Vec<Keystroke>),
     Stall(Duration),
     Quit,
+}
+
+/// What a `shortcuts:` step does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShortcutsStep {
+    /// Read a shortcuts file and show what importing it would change.
+    Import(PathBuf),
+    /// Press a control of the open list by its label.
+    Press(String),
+    /// Put every key back to its default, without asking.
+    Reset,
+    /// Undo the last import or reset.
+    Undo,
 }
 
 /// What a `fake:` step does to the fake engine of the assistant.
@@ -282,6 +306,58 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             Step::Choose(unescape(arg))
         }
         "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
+        "shortcut" => {
+            let (command, keys) = arg
+                .split_once('=')
+                .ok_or_else(|| anyhow!("expected <action>=<keys>"))?;
+            let (action, place) = match command.split_once('@') {
+                Some((action, place)) => (action.trim(), Some(place.trim().to_string())),
+                None => (command.trim(), None),
+            };
+            if action.is_empty() {
+                bail!("expected the name of an action");
+            }
+            let keys = unescape(keys.trim());
+            let keys = match keys.as_str() {
+                "default" => None,
+                "none" | "" => Some(Vec::new()),
+                keys => Some(
+                    keys.split('|')
+                        .map(|key| {
+                            writer_keymap::KeySequence::parse(key.trim())
+                                .map_err(|error| anyhow!("{error}"))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            };
+            Step::Shortcut {
+                action: action.to_string(),
+                place,
+                keys,
+            }
+        }
+        "shortcuts" => {
+            let (what, rest) = arg.split_once(':').unwrap_or((arg, ""));
+            Step::Shortcuts(match what.trim() {
+                "import" => {
+                    if rest.trim().is_empty() {
+                        bail!("expected shortcuts:import:<path>");
+                    }
+                    ShortcutsStep::Import(PathBuf::from(unescape(rest.trim())))
+                }
+                "press" => {
+                    if rest.trim().is_empty() {
+                        bail!("expected shortcuts:press:<label>");
+                    }
+                    ShortcutsStep::Press(unescape(rest.trim()))
+                }
+                "reset" => ShortcutsStep::Reset,
+                "undo" => ShortcutsStep::Undo,
+                other => bail!(
+                    "unknown shortcuts step {other:?} (import:<path>, press:<label>, reset, undo)"
+                ),
+            })
+        }
         "fake" => {
             let (what, count) = arg.split_once(':').unwrap_or((arg, ""));
             Step::Fake(match what.trim() {
@@ -420,6 +496,10 @@ async fn execute(
                     "[automation] keys {text}: {}",
                     if handled { "handled" } else { "not handled" }
                 );
+                // A key a script presses comes without a release: the
+                // list of shortcuts would take the same key pressed again
+                // for a held one.
+                release_key_in_shortcuts_list(window, cx);
                 frame_pause(window, view, cx).await;
             }
         }
@@ -488,6 +568,71 @@ async fn execute(
                 }
                 (false, Some(button)) => {
                     bail!("the format bar is not showing a button {button:?} that can be pressed")
+                }
+            }
+            frame_pause(window, view, cx).await;
+        }
+        Step::Shortcut {
+            action,
+            place,
+            keys,
+        } => {
+            workspace_handle(window, cx)?
+                .update(cx, |workspace, window, cx| {
+                    workspace.set_keys_of_command(
+                        &action,
+                        place.as_deref(),
+                        keys.as_deref(),
+                        window,
+                        cx,
+                    )
+                })?
+                .map_err(|error| anyhow!("{error}"))?;
+            let now = match &keys {
+                None => "its default keys".to_string(),
+                Some(keys) if keys.is_empty() => "no key".to_string(),
+                Some(keys) => keys
+                    .iter()
+                    .map(|key| key.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            };
+            eprintln!("[automation] shortcut {action}: {now}");
+            frame_pause(window, view, cx).await;
+        }
+        Step::Shortcuts(step) => {
+            let workspace = workspace_handle(window, cx)?;
+            match step {
+                ShortcutsStep::Import(path) => {
+                    let path = absolute(path);
+                    workspace.update(cx, |workspace, window, cx| {
+                        workspace.import_shortcuts_file(&path, window, cx)
+                    })?;
+                    eprintln!("[automation] shortcuts: read {}", path.display());
+                }
+                ShortcutsStep::Press(label) => {
+                    let pressed = workspace.update(cx, |workspace, window, cx| {
+                        workspace
+                            .shortcuts_list(cx)
+                            .map(|list| list.update(cx, |list, cx| list.press(&label, window, cx)))
+                    })?;
+                    match pressed {
+                        Some(true) => eprintln!("[automation] shortcuts: pressed {label:?}"),
+                        Some(false) => bail!("the list has nothing {label:?} to press now"),
+                        None => bail!("the list of keyboard shortcuts is not open"),
+                    }
+                }
+                ShortcutsStep::Reset => {
+                    workspace.update(cx, |workspace, window, cx| {
+                        workspace.reset_all_shortcuts_now(window, cx)
+                    })?;
+                    eprintln!("[automation] shortcuts: every key is the default");
+                }
+                ShortcutsStep::Undo => {
+                    workspace.update(cx, |workspace, window, cx| {
+                        workspace.undo_shortcuts_change(window, cx)
+                    })?;
+                    eprintln!("[automation] shortcuts: undone");
                 }
             }
             frame_pause(window, view, cx).await;
@@ -873,6 +1018,20 @@ fn spelling_cost(window: AnyWindowHandle, cx: &mut AsyncApp) -> String {
     }
 }
 
+/// Tells the open list of keyboard shortcuts that the key just pressed
+/// was let go.
+fn release_key_in_shortcuts_list(window: AnyWindowHandle, cx: &mut AsyncApp) {
+    if let Ok(workspace) = workspace_handle(window, cx) {
+        workspace
+            .update(cx, |workspace, _, cx| {
+                if let Some(list) = workspace.shortcuts_list(cx) {
+                    list.update(cx, |list, _| list.key_released());
+                }
+            })
+            .ok();
+    }
+}
+
 /// How much of the document the `dump` step prints.
 const TEXT_DUMP_CHARS: usize = 400;
 
@@ -989,6 +1148,7 @@ pub fn describe_state(
         None => "none".to_string(),
     };
     let spelling = workspace.describe_spelling(cx);
+    let shortcuts = workspace.describe_shortcuts(cx);
     // The Agents panel, while it is open.
     let agents = workspace
         .modal_layer()
@@ -1014,7 +1174,7 @@ pub fn describe_state(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
          modal={} menu=[{menu}] sidebar={} page_view={} \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
-         words={:?} characters={:?} \
+         keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
          limit={:?}{agents}{assistant}",
         workspace.open_document_id().map(|id| id.0),

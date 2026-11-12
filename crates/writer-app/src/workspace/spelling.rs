@@ -354,6 +354,10 @@ impl Workspace {
             SettingsEvent::ChooseLanguage(target) => {
                 self.show_language_picker(*target, true, window, cx);
             }
+            // The list takes the place of the settings.
+            SettingsEvent::OpenKeyboardShortcuts => {
+                self.show_shortcuts(window, cx);
+            }
         }
     }
 

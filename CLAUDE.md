@@ -230,7 +230,11 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   "New Chat" also what was added.
 - **Model and effort** are chosen in each chat from two small pickers and remembered per
   chat; the settings show the same four choices. The app stores them as the engine names
-  them (`assistant/choices.rs`) and knows no engine's models.
+  them (`assistant/choices.rs`) and knows no engine's models. Each menu begins with the
+  engine's own default; the model's says which model that is where the engine tells
+  ("Claude Code's default (Fable 5.2)"), the effort's names none
+  (`Catalog::agent_default_effort_label`). Claude Code changes both in the running
+  conversation; an engine that cannot is started again and handed what was said.
 - **Privacy**: nothing is sent before the user sends a message. Until the first message
   both chats show a note that the text goes to the engine's vendor through the user's own
   sign-in; it is acknowledged once per library (`assistant.notice_accepted`).
@@ -240,6 +244,16 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
 - **Isolation** is the engine's: the agent runs in a neutral directory with the app's own
   system prompt, without the user's project instructions, hooks, skills, MCP servers or
   built-in file and shell tools, and leaves nothing in the user's session history.
+  Checked for 0.4.0 with ten real messages through the bundled app (the cheapest model):
+  `system/init` of every conversation named no tool but the twelve read-only ones of the
+  library (none at all in the quick chat), no server but the library's, no skill and no
+  command; no line was added to `~/.claude/history.jsonl`, no transcript and no project
+  folder was written. What the program itself still does: it overwrites one small file of
+  its own bookkeeping with the id of the last session
+  (`~/.claude/plugins/store/cc-plugin-agents-md_builtin-*.json`). The markers of an
+  enclosing Claude Code session are taken out of the environment (`claude/args.rs`,
+  `REMOVED_ENV`): they are there when the app is started from a terminal that Claude Code
+  runs, as every scripted run of an agent is.
 - **Settings** (in the library, like the others; section "Assistant" of the settings):
   `assistant.enabled` (bool, on by default: the switch), `assistant.quick.model`,
   `assistant.quick.effort`, `assistant.side.model`, `assistant.side.effort` (strings: the

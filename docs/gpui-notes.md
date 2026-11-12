@@ -210,6 +210,9 @@ its text) while the item beside them was a plain `div().size_full()`, and at the
 once that item held a `list`. `w_full()` on the wrapper changed nothing. Making the wrapper
 a flex column (`.flex().flex_col()`) stretches what is in it (`writer-assistant-ui`,
 `panel/render.rs`; the test `the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment`).
+The same one level down: the row inside the composer's box (the text and the Send
+control) stayed as wide as its content after the box itself filled the panel, so the
+control stood in the middle; the box is a flex column too (`composer.rs`).
 
 Three more from the assistant's crates (each read from gpui's source and seen in a test):
 an element's own mouse-down listeners run before the listener gpui adds for focus on

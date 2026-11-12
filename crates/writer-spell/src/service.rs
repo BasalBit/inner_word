@@ -107,6 +107,19 @@ pub struct SpellCheck {
     pub language: Option<String>,
 }
 
+/// The answer to [`SpellService::check_up_to`]: the result for the start
+/// of a text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpellCheckPart {
+    /// What was found in the first [`SpellCheckPart::covered`] bytes.
+    pub check: SpellCheck,
+    /// How many bytes of the text the result covers, from its start: the
+    /// length of the text when all of it was checked, else the end of the
+    /// last misspelled word that was looked for (a character boundary).
+    /// Check the rest by passing the text from there on.
+    pub covered: usize,
+}
+
 /// A spell checker.
 ///
 /// All methods take `&self`: a service is shared (`Rc<dyn SpellService>`)
@@ -122,6 +135,26 @@ pub trait SpellService: 'static {
     /// detects the language and reports it. Words that were learned, and
     /// words ignored in `document`, are not reported.
     fn check(&self, text: &str, language: &SpellLanguage, document: SpellDocument) -> SpellCheck;
+
+    /// Like [`SpellService::check`], but allowed to stop after
+    /// `max_misspelled` misspelled words (at least one): a service that
+    /// pays per misspelled word (the system checker with a fixed
+    /// language does) stops there and reports how far it came, so that a
+    /// caller with a time budget can go on later. The default checks
+    /// everything.
+    fn check_up_to(
+        &self,
+        text: &str,
+        max_misspelled: usize,
+        language: &SpellLanguage,
+        document: SpellDocument,
+    ) -> SpellCheckPart {
+        let _ = max_misspelled;
+        SpellCheckPart {
+            check: self.check(text, language, document),
+            covered: text.len(),
+        }
+    }
 
     /// Replacements for the misspelled word at `word` (a range a
     /// [`SpellService::check`] of the same `text` returned), best first.

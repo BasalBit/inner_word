@@ -52,10 +52,29 @@ pub use checker::{
 };
 pub use fake::{FAKE_LANGUAGE, FakeSpellService};
 pub use service::{
-    LanguageInfo, SpellCheck, SpellDocument, SpellLanguage, SpellService, language_choices,
-    language_name,
+    LanguageInfo, SpellCheck, SpellCheckPart, SpellDocument, SpellLanguage, SpellService,
+    language_choices, language_name,
 };
 pub use system::SystemSpellService;
+
+/// The byte ranges of `text` for UTF-16 ranges `(location, length)` given
+/// in rising order, as the system service converts what `NSSpellChecker`
+/// returns. For this crate's tests.
+#[doc(hidden)]
+pub fn byte_ranges_of_utf16(text: &str, ranges: &[(usize, usize)]) -> Vec<std::ops::Range<usize>> {
+    let mut map = system::Utf16Map::new(text);
+    ranges
+        .iter()
+        .map(|&(location, length)| map.byte_range(location, length))
+        .collect()
+}
+
+/// The UTF-16 range of a byte range of `text`, as the system service
+/// passes it to `NSSpellChecker`. For this crate's tests.
+#[doc(hidden)]
+pub fn utf16_range_of_bytes(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    system::utf16_range(text, range)
+}
 
 use writer_ui::CommandDescriptor;
 

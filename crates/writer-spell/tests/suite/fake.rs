@@ -149,3 +149,44 @@ fn setting_strings() {
     assert_eq!(SpellLanguage::fixed("de").identifier(), Some("de"));
     assert!(SpellLanguage::default().is_automatic());
 }
+
+#[test]
+fn automatic_cannot_tell_without_a_known_word() {
+    let service = FakeSpellService::with_words(["the", "ship"]).language("de", "German", ["das"]);
+    let check = service.check(
+        "Ths sentense",
+        &SpellLanguage::Automatic,
+        SpellDocument::NONE,
+    );
+    assert_eq!(check.language, None);
+    assert!(check.misspelled.is_empty());
+    let check = service.check("Ths ship", &SpellLanguage::Automatic, SpellDocument::NONE);
+    assert_eq!(check.language.as_deref(), Some("en"));
+    assert_eq!(check.misspelled, [0..3]);
+}
+
+#[test]
+fn bounded_checks_say_how_far_they_came() {
+    let service = FakeSpellService::with_words(["a", "b"]);
+    let fixed = SpellLanguage::fixed(FAKE_LANGUAGE);
+    let text = "a xx b yy a zz b ww a";
+    let whole = service.check(text, &fixed, SpellDocument::NONE);
+    assert_eq!(words(text, &whole.misspelled), ["xx", "yy", "zz", "ww"]);
+
+    let part = service.check_up_to(text, 3, &fixed, SpellDocument::NONE);
+    assert_eq!(words(text, &part.check.misspelled), ["xx", "yy", "zz"]);
+    assert_eq!(part.covered, text.find("zz").unwrap() + 2);
+    let rest = &text[part.covered..];
+    let part = service.check_up_to(rest, 3, &fixed, SpellDocument::NONE);
+    assert_eq!(words(rest, &part.check.misspelled), ["ww"]);
+    assert_eq!(
+        part.covered,
+        rest.len(),
+        "fewer than the limit: all of it was checked"
+    );
+    // Exactly the limit: the rest is checked by one more call.
+    let part = service.check_up_to(text, 4, &fixed, SpellDocument::NONE);
+    assert_eq!(part.check.misspelled.len(), 4);
+    assert!(part.covered < text.len());
+    assert_eq!(service.check_count(), 4);
+}

@@ -26,6 +26,12 @@
 //! - Automatic: the language in whose list most words of the text are
 //!   found; when several tie, the first of them in the order preferred
 //!   languages, then all languages. That language is reported as detected.
+//!   When no word of the text is in any list the language is not
+//!   identified and nothing is flagged (the system checker does the same
+//!   with a line of two misspelled words).
+//! - [`SpellService::check_up_to`] stops after the number of misspelled
+//!   words it was given and reports how far it came; every call counts as
+//!   a check.
 //! - Suggestions are scripted ([`FakeSpellService::suggest`]); a word
 //!   without a script has none.
 
@@ -34,7 +40,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use crate::service::{LanguageInfo, SpellCheck, SpellDocument, SpellLanguage, SpellService};
+use crate::service::{
+    LanguageInfo, SpellCheck, SpellCheckPart, SpellDocument, SpellLanguage, SpellService,
+};
 
 /// The identifier of the language [`FakeSpellService::with_words`] makes.
 pub const FAKE_LANGUAGE: &str = "en";
@@ -276,7 +284,8 @@ impl Inner {
         order
     }
 
-    /// The language most words of `text` belong to.
+    /// The language most words of `text` belong to; none when no word of
+    /// the text is in any list.
     fn detect(&self, text: &str) -> Option<String> {
         let words: Vec<String> = candidate_words(text)
             .into_iter()
@@ -286,7 +295,7 @@ impl Inner {
         for id in self.preferred_order() {
             let language = self.language(&id)?;
             let known = words.iter().filter(|w| language.words.contains(*w)).count();
-            if best.as_ref().is_none_or(|(most, _)| known > *most) {
+            if known > 0 && best.as_ref().is_none_or(|(most, _)| known > *most) {
                 best = Some((known, id));
             }
         }
@@ -313,16 +322,35 @@ impl Inner {
 
 impl SpellService for FakeSpellService {
     fn check(&self, text: &str, language: &SpellLanguage, document: SpellDocument) -> SpellCheck {
+        self.check_up_to(text, usize::MAX, language, document).check
+    }
+
+    fn check_up_to(
+        &self,
+        text: &str,
+        max_misspelled: usize,
+        language: &SpellLanguage,
+        document: SpellDocument,
+    ) -> SpellCheckPart {
         let started = Instant::now();
         let mut inner = self.inner.borrow_mut();
         inner.checks.push(text.to_string());
         let (id, detected) = inner.resolve(text, language);
+        let max = max_misspelled.max(1);
         let mut misspelled = Vec::new();
+        let mut covered = text.len();
         if let Some(language) = id.as_deref().and_then(|id| inner.language(id)) {
             for word in candidate_words(text) {
                 if !inner.is_accepted(&text[word.clone()], language, document) {
+                    covered = word.end;
                     misspelled.push(word);
+                    if misspelled.len() >= max {
+                        break;
+                    }
                 }
+            }
+            if misspelled.len() < max {
+                covered = text.len();
             }
         }
         let cost = inner.check_cost;
@@ -330,9 +358,12 @@ impl SpellService for FakeSpellService {
         while started.elapsed() < cost {
             std::hint::spin_loop();
         }
-        SpellCheck {
-            misspelled,
-            language: if detected { id } else { None },
+        SpellCheckPart {
+            check: SpellCheck {
+                misspelled,
+                language: if detected { id } else { None },
+            },
+            covered,
         }
     }
 

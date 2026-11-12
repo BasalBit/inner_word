@@ -342,8 +342,11 @@ impl MessageList {
     /// Shows `messages`: the transcript of the chat as it is now. Call it
     /// whenever the transcript changed. What is already shown is kept
     /// (answers keep their editors, the list its place) when the messages
-    /// continue the ones shown before; a different conversation starts at
-    /// its end.
+    /// continue the ones shown before, also after a long transcript has
+    /// dropped its oldest messages; otherwise the list starts at the end.
+    /// Messages are told apart by their ids, which every transcript counts
+    /// from one: before showing another conversation, call
+    /// [`clear`](Self::clear).
     pub fn set_messages(
         &mut self,
         messages: &[Message],
@@ -352,13 +355,26 @@ impl MessageList {
     ) {
         let old_ids: Vec<MessageId> = self.messages.iter().map(|message| message.id).collect();
         let new_ids: Vec<MessageId> = messages.iter().map(|message| message.id).collect();
-        let continues = new_ids.len() >= old_ids.len() && new_ids[..old_ids.len()] == old_ids[..];
+        // The messages shown before, without the oldest ones a long
+        // transcript has dropped since.
+        let dropped = new_ids
+            .first()
+            .and_then(|first| old_ids.iter().position(|id| id == first))
+            .unwrap_or(0);
+        let kept = &old_ids[dropped..];
+        let continues = !new_ids.is_empty()
+            && new_ids.len() >= kept.len()
+            && new_ids[..kept.len()] == *kept
+            && (dropped == 0 || !kept.is_empty());
         if continues {
-            let added = new_ids.len() - old_ids.len();
+            if dropped > 0 {
+                self.list.splice(0..dropped, 0);
+            }
+            let added = new_ids.len() - kept.len();
             if added > 0 {
-                self.list.splice(old_ids.len()..old_ids.len(), added);
+                self.list.splice(kept.len()..kept.len(), added);
                 // The user's own new message is always brought into view.
-                if messages[old_ids.len()..]
+                if messages[kept.len()..]
                     .iter()
                     .any(|message| message.role == Role::User)
                 {
@@ -461,6 +477,20 @@ impl MessageList {
             shown,
             _subscription: subscription,
         }
+    }
+
+    /// Forgets what is shown: the next [`set_messages`](Self::set_messages)
+    /// is another conversation (its message ids may be the same ones), and
+    /// starts at its end with nothing marked.
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.messages.clear();
+        self.views.clear();
+        self.list.reset(0);
+        self.selected = None;
+        self.selected_example = 0;
+        self.follow = true;
+        self.scrolled.set(false);
+        cx.notify();
     }
 
     /// The messages shown.

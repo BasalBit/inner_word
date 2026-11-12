@@ -23,7 +23,9 @@
 //! fails), `signout` / `signin` / `missing` (what "Check Again" finds, and
 //! what the panel is told now), `privacy`, `notice <text>`, `doc <1|2>`
 //! (another document), `attach` (two library items), `selection <on|off>`,
-//! `fill <n>` (n exchanges at once), `state` (one line about the panel).
+//! `fill <n>` (n exchanges at once), `answer` (script the next of the built-in
+//! answers), `reply <markdown>` (script this answer; `\n` is a line end),
+//! `state` (one line about the panel).
 
 mod automation;
 
@@ -375,6 +377,7 @@ impl Demo {
                 }
             }
             "answer" => self.script_next(),
+            "reply" => self.fake.push(FakeReply::text(arg.replace("\\n", "\n"))),
             "state" => {
                 let said = std::mem::take(&mut self.said).join(", ");
                 let state = self.panel.read(cx).debug_state(window, cx);

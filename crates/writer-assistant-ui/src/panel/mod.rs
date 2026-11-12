@@ -615,7 +615,8 @@ impl AssistantPanel {
         self.waiting_to_send = None;
         self.close_context_picker(window, cx);
         self.context_index = 0;
-        self.messages.update(cx, |list, cx| list.select(None, cx));
+        // Another conversation: its messages have the same ids.
+        self.messages.update(cx, |list, cx| list.clear(cx));
         self.sync(window, cx);
     }
 
@@ -809,6 +810,7 @@ impl AssistantPanel {
         }
         self.chat.prepared = false;
         self.context_index = 0;
+        self.messages.update(cx, |list, cx| list.clear(cx));
         self.sync(window, cx);
         if nothing_to_forget {
             return;
@@ -855,6 +857,7 @@ impl AssistantPanel {
             return false;
         };
         self.chat.session.replace_transcript(cleared.transcript);
+        self.messages.update(cx, |list, cx| list.clear(cx));
         self.sync(window, cx);
         self.report_transcript(cx);
         true
@@ -1243,6 +1246,8 @@ impl AssistantPanel {
             PanelArea::Messages,
             PanelArea::Composer,
         ];
+        // From an open picker: on from where the keyboard was before it.
+        self.close_context_picker(window, cx);
         let current = self
             .focused_area(window, cx)
             .and_then(|area| ORDER.iter().position(|candidate| *candidate == area));

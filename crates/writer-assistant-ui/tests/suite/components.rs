@@ -1016,3 +1016,103 @@ fn a_long_answer_streams_without_stalling(cx: &mut TestAppContext) {
         "a piece took {average:?} on average"
     );
 }
+
+#[gpui::test]
+fn a_transcript_that_drops_its_oldest_messages_keeps_the_place(cx: &mut TestAppContext) {
+    let (chat, cx) = open_chat(cx);
+    chat.fake.set_fallback(FakeReply::text(long_answer(3)));
+    chat.chat.update_in(cx, |chat, window, cx| {
+        for index in 0..12 {
+            chat.session.ask_quick(&format!("Question {index}"), None);
+        }
+        chat.sync(window, cx);
+    });
+    cx.run_until_parked();
+    let all = chat
+        .chat
+        .read_with(cx, |chat, _| chat.session.transcript().messages.clone());
+    assert_eq!(all.len(), 24);
+
+    // The user reads in the middle, with a message marked.
+    chat.messages.update_in(cx, |list, window, cx| {
+        list.focus(window, cx);
+        list.select(Some(all[16].id), cx);
+    });
+    cx.run_until_parked();
+    let editor = chat.messages.read_with(cx, |list, _| {
+        list.answer_editor(all[17].id).unwrap().clone()
+    });
+    assert!(!chat.messages.read_with(cx, |list, _| list.is_following()));
+    let top_before = bounds(format!("assistant-message-{}", all[16].id.0), cx).top();
+
+    // The transcript drops its first four messages.
+    chat.messages.update_in(cx, |list, window, cx| {
+        list.set_messages(&all[4..], window, cx)
+    });
+    cx.run_until_parked();
+    chat.messages.read_with(cx, |list, _| {
+        assert_eq!(list.messages().len(), 20);
+        assert_eq!(list.selected(), Some(all[16].id));
+        assert_eq!(
+            list.answer_editor(all[17].id),
+            Some(&editor),
+            "the same editor"
+        );
+        assert!(list.answer_editor(all[1].id).is_none());
+        assert!(!list.is_following());
+    });
+    let top_after = bounds(format!("assistant-message-{}", all[16].id.0), cx).top();
+    assert_eq!(top_after, top_before, "what was being read did not move");
+
+    // Another conversation is said to be one: it starts at its end.
+    chat.messages.update_in(cx, |list, window, cx| {
+        list.clear(cx);
+        list.set_messages(&all[..6], window, cx);
+    });
+    cx.run_until_parked();
+    chat.messages.read_with(cx, |list, _| {
+        assert_eq!(list.selected(), None);
+        assert!(list.is_following());
+        let (offset, max) = list.scroll_position();
+        assert_eq!(offset, max);
+    });
+}
+
+#[gpui::test]
+fn the_question_of_the_quick_chat_shows_what_it_is_about(cx: &mut TestAppContext) {
+    let (chat, cx) = open_chat(cx);
+    chat.fake.reply("Spent.");
+    chat.send("Another word?", cx);
+    let plain = chat.ids(cx)[0];
+    let plain_height = bounds(format!("assistant-message-{}", plain.0), cx)
+        .size
+        .height;
+
+    chat.chat.update(cx, |chat, _| {
+        chat.quote = Some("She was very tired after the long walk home.".into())
+    });
+    chat.fake.reply("Weary.");
+    chat.send("Another word?", cx);
+    let quoted = chat.ids(cx)[2];
+    chat.messages.read_with(cx, |list, _| {
+        assert_eq!(
+            list.message(quoted).unwrap().quote.as_deref(),
+            Some("She was very tired after the long walk home.")
+        );
+    });
+    let quoted_height = bounds(format!("assistant-message-{}", quoted.0), cx)
+        .size
+        .height;
+    assert!(
+        quoted_height > plain_height,
+        "the quoted selection is shown above the question"
+    );
+    assert!(quoted_height < plain_height + px(80.), "and is kept short");
+    // The agent got the selection with the question.
+    assert!(
+        chat.fake
+            .last_sent()
+            .unwrap()
+            .contains("She was very tired")
+    );
+}

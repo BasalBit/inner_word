@@ -572,6 +572,22 @@ fn library_items_are_added_to_the_context_and_removed(cx: &mut TestAppContext) {
     ws.panel
         .read_with(cx, |panel, _| assert!(panel.attachments().is_empty()));
 
+    // Moving on with tab closes an open picker.
+    ws.panel
+        .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-shift-a");
+    assert_eq!(ws.focus(cx), Focus::Picker);
+    cx.simulate_keystrokes("tab");
+    assert!(
+        ws.panel
+            .read_with(cx, |panel, _| panel.context_picker().is_none())
+    );
+    assert_eq!(ws.focus(cx), Focus::Panel(PanelArea::Header));
+    ws.editor
+        .update_in(cx, |editor, window, _| editor.focus(window));
+    cx.run_until_parked();
+
     // A click outside the open picker closes it.
     click("assistant-add-context", cx);
     assert!(

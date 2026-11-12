@@ -240,8 +240,8 @@ agent leaves show up in the comments of the document under the agent's name.
 
 If you would rather have agents wait until the app is closed, switch "Agents
 can make changes while The Writer is open" off in The Writer > Agents... .
-While the app is open they can then only read, and they are told to ask you
-to quit it before they change anything.
+While the app is open they can then only read, and to change something they
+are told to ask you to switch it on again, or to quit the app.
 
 The Writer > Agents... (Option-Command-A) shows the tool, has that switch,
 installs the skill that tells your agents about the tool, and lists the

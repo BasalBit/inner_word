@@ -1645,6 +1645,40 @@ fn agents_panel(desk: &Desk, cx: &mut VisualTestContext) -> Entity<AgentsView> {
         .expect("the Agents panel is open")
 }
 
+/// What the panel says an agent is told with the switch off is what the tool
+/// tells it: first to ask for the switch, under the name the panel shows,
+/// then to ask for the app to be quit.
+#[test]
+fn the_sentence_of_the_switch_and_the_tool_say_the_same_in_the_same_order() {
+    let told = writer_agent::Error::AppIsOpen {
+        pid: None,
+        data_dir: std::path::PathBuf::from("/library"),
+        why: writer_agent::Refusal::SwitchedOff,
+    }
+    .to_string();
+    let switch_on = told
+        .find(&format!(
+            "Ask the user to switch on \u{201c}{}\u{201d}",
+            live::SWITCH
+        ))
+        .unwrap_or_else(|| panic!("the tool names the switch as the panel does: {told}"));
+    let quit = told
+        .find("or to quit The Writer")
+        .unwrap_or_else(|| panic!("{told}"));
+    assert!(switch_on < quit, "{told}");
+
+    let panel = live::SWITCH_OFF;
+    assert!(
+        panel.ends_with("they are told to ask you to switch this on, or to quit The Writer."),
+        "{panel}"
+    );
+    assert!(!panel.contains("first"), "{panel}");
+    assert_eq!(
+        live::SWITCH,
+        "Agents can make changes while The Writer is open"
+    );
+}
+
 #[gpui::test]
 fn the_switch_is_in_the_agents_panel_for_keys_and_pointer(cx: &mut TestAppContext) {
     let (desk, _, cx) = desk_with_notes(cx);

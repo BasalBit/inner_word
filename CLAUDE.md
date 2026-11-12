@@ -400,7 +400,8 @@ open" below).
   - **The switch** "Agents can make changes while The Writer is open" is the setting
     `agents.changes_while_open` of the library (on unless switched off), in the Agents
     panel. Off is the rule of before 0.6.0: agents read (a `flush` is still answered) and
-    are told to ask for the app to be quit. `THE_WRITER_AGENT_CHANNEL=off` keeps a run from
+    are told to ask for the switch to be put on, or for the app to be quit (the tool's
+    refusal and the panel's sentence `live::SWITCH_OFF` say the same, in that order). `THE_WRITER_AGENT_CHANNEL=off` keeps a run from
     opening the channel at all, which is what a version before 0.6.0 looks like to a tool.
   - **Tests** (`tests/suite/live.rs`): `live::open` on a temporary data directory whose
     lock the test holds, the real client on a second thread, and the test's main thread

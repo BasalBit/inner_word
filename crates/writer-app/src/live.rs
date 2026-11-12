@@ -44,8 +44,9 @@
 //! "Agents can make changes while The Writer is open" ([`SWITCH`]) is a
 //! setting of the library, on unless it was switched off
 //! (`writer_agent::live::CHANGES_SETTING`); the Agents panel has it. Off
-//! means the rule of before: agents read at any time and are told to quit
-//! The Writer first when they want to change something. Saving on request
+//! means the rule of before: agents read at any time, and when they want to
+//! change something they are told to ask for the switch, or for the app to
+//! be quit ([`SWITCH_OFF`] says so in the panel). Saving on request
 //! (so that an agent reads the text as it is on screen) is not a change
 //! and goes on.
 
@@ -79,17 +80,21 @@ actions!(
     ]
 );
 
-/// What the owner's switch is called, in the Agents panel.
-pub const SWITCH: &str = "Agents can make changes while The Writer is open";
+/// What the owner's switch is called, in the Agents panel: the name the tool
+/// gives it when it tells an agent to ask for it.
+pub const SWITCH: &str = writer_agent::live::CHANGES_SWITCH;
 
 /// What the switch means while it is on.
 pub const SWITCH_ON: &str = "The Writer carries out what an agent asks for, shows it in the \
     window as it arrives and tells you in a note at the bottom. A version of the document from \
     before each change of its text is kept in its version history.";
 
-/// What the switch means while it is off.
+/// What the switch means while it is off. It says what the tool tells an
+/// agent then, in the tool's order: to ask for the switch, or for the app to
+/// be quit (`writer_agent::Refusal::SwitchedOff`; a test holds the two
+/// together).
 pub const SWITCH_OFF: &str = "While The Writer is open agents can only read. To change \
-    something they are told to ask you to quit The Writer first.";
+    something they are told to ask you to switch this on, or to quit The Writer.";
 
 /// How long a change waits for a text that is being composed with an input
 /// method before it is refused. The tool waits ten seconds for the app, so

@@ -82,6 +82,60 @@ pub enum LibraryEvent {
     },
 }
 
+/// One thing that was changed in the store by something other than a method of
+/// [`Library`]: see [`Library::change_outside`].
+///
+/// The app carries out the requests of agents (the `writer` command line tool, while the
+/// app is open) with code that works on a [`Store`] and knows nothing of this crate. That
+/// code says what it changed in these terms, and the library turns each into the
+/// [`LibraryEvent`] its own method would have emitted, so every view follows as if the
+/// user had made the change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OutsideChange {
+    /// A document was created ([`LibraryEvent::DocumentCreated`]).
+    DocumentCreated(DocumentId),
+    /// The stored content of a document was written: its text, its comments, its own
+    /// settings, and with them its counts, its edit time and perhaps its title
+    /// ([`LibraryEvent::DocumentSaved`], with `title_changed` worked out against the title
+    /// the tree had).
+    DocumentSaved(DocumentId),
+    /// A document was given a name ([`LibraryEvent::DocumentRenamed`]).
+    DocumentRenamed(DocumentId),
+    /// A document was moved to another folder or to another place in its folder
+    /// ([`LibraryEvent::DocumentMoved`]).
+    DocumentMoved(DocumentId),
+    /// A document was moved to the trash ([`LibraryEvent::DocumentTrashed`]).
+    DocumentTrashed(DocumentId),
+    /// A document was restored from the trash ([`LibraryEvent::DocumentRestored`]).
+    DocumentRestored(DocumentId),
+    /// A document was deleted for good ([`LibraryEvent::DocumentPurged`]). When it was a
+    /// live document until then, [`LibraryEvent::DocumentTrashed`] is emitted first: a
+    /// view that shows it closes it the way it does for the trash.
+    DocumentPurged(DocumentId),
+    /// A folder was created ([`LibraryEvent::FolderCreated`]).
+    FolderCreated(FolderId),
+    /// A folder was renamed ([`LibraryEvent::FolderRenamed`]).
+    FolderRenamed(FolderId),
+    /// A folder was moved ([`LibraryEvent::FolderMoved`]).
+    FolderMoved(FolderId),
+    /// A folder went to the trash with everything in it ([`LibraryEvent::FolderTrashed`];
+    /// the documents that went with it are read from the tree as it was).
+    FolderTrashed(FolderId),
+    /// A folder was restored from the trash ([`LibraryEvent::FolderRestored`]).
+    FolderRestored(FolderId),
+    /// A folder was deleted for good ([`LibraryEvent::FolderPurged`]). When it was live
+    /// until then, [`LibraryEvent::FolderTrashed`] is emitted first.
+    FolderPurged(FolderId),
+    /// The trash was emptied ([`LibraryEvent::TrashChanged`] alone, as
+    /// [`Library::empty_trash`] emits it).
+    TrashEmptied,
+    /// A version snapshot of this document was created or deleted
+    /// ([`LibraryEvent::SnapshotsChanged`]).
+    SnapshotsChanged(DocumentId),
+    /// A setting was written or removed ([`LibraryEvent::SettingChanged`]).
+    SettingChanged(String),
+}
+
 /// A live document with the names of the folders that lead to it, for quick open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DocumentEntry {
@@ -688,6 +742,144 @@ impl Library {
     /// input is safe; the last word is a prefix match. An empty query gives no hits.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         self.store.search(query, limit)
+    }
+
+    // ----- changes from outside -------------------------------------------------------
+
+    /// Lets `change` write to the store directly, and then does for the cache and the
+    /// subscribers what the methods of this type do: `change` returns what it changed
+    /// (besides its own result, which is handed back), the tree is read again once, and
+    /// each [`OutsideChange`] becomes the event its own method would have emitted, in
+    /// the order given, followed by one [`LibraryEvent::TrashChanged`] and one
+    /// [`LibraryEvent::TreeChanged`] when the trash listing or the tree changed.
+    ///
+    /// This is the one way around "every write goes through a method of `Library`". It
+    /// is for code that works on a [`Store`] and cannot know this crate: the app
+    /// carrying out the request of an agent with `writer-agent`. Nothing is emitted for
+    /// an empty list, and the store is not read again then.
+    ///
+    /// The second value is `Err` when the tree could not be read again (the events were
+    /// emitted all the same: the write did happen).
+    pub fn change_outside<R>(
+        &mut self,
+        change: impl FnOnce(&mut Store) -> (R, Vec<OutsideChange>),
+        cx: &mut Context<Self>,
+    ) -> (R, Result<()>) {
+        let (result, changes) = change(&mut self.store);
+        if changes.is_empty() {
+            return (result, Ok(()));
+        }
+        // What only the tree as it was can tell.
+        fn collect(node: &FolderNode, out: &mut Vec<DocumentId>) {
+            out.extend(node.documents.iter().map(|d| d.id));
+            for child in &node.folders {
+                collect(child, out);
+            }
+        }
+        let before = self.tree.clone();
+        let refreshed = self.reload_tree();
+        let mut trash_changed = false;
+        let mut tree_changed = false;
+        for change in changes {
+            match change {
+                OutsideChange::DocumentCreated(id) => {
+                    cx.emit(LibraryEvent::DocumentCreated(id));
+                    tree_changed = true;
+                }
+                OutsideChange::DocumentSaved(id) => {
+                    let was = before.find_document(id).map(|cached| cached.title.as_str());
+                    let now = self
+                        .tree
+                        .find_document(id)
+                        .map(|cached| cached.title.as_str());
+                    // A document in the trash is not in the tree: its row there may
+                    // show another title now.
+                    trash_changed |= now.is_none();
+                    let title_changed = now.is_some() && was != now;
+                    cx.emit(LibraryEvent::DocumentSaved { id, title_changed });
+                    tree_changed |= title_changed;
+                }
+                OutsideChange::DocumentRenamed(id) => {
+                    trash_changed |= self.tree.find_document(id).is_none();
+                    cx.emit(LibraryEvent::DocumentRenamed(id));
+                    tree_changed = true;
+                }
+                OutsideChange::DocumentMoved(id) => {
+                    cx.emit(LibraryEvent::DocumentMoved(id));
+                    tree_changed = true;
+                }
+                OutsideChange::DocumentTrashed(id) => {
+                    cx.emit(LibraryEvent::DocumentTrashed(id));
+                    trash_changed = true;
+                    tree_changed = true;
+                }
+                OutsideChange::DocumentRestored(id) => {
+                    cx.emit(LibraryEvent::DocumentRestored(id));
+                    trash_changed = true;
+                    tree_changed = true;
+                }
+                OutsideChange::DocumentPurged(id) => {
+                    if before.find_document(id).is_some() {
+                        cx.emit(LibraryEvent::DocumentTrashed(id));
+                        tree_changed = true;
+                    }
+                    cx.emit(LibraryEvent::DocumentPurged(id));
+                    trash_changed = true;
+                }
+                OutsideChange::FolderCreated(id) => {
+                    cx.emit(LibraryEvent::FolderCreated(id));
+                    tree_changed = true;
+                }
+                OutsideChange::FolderRenamed(id) => {
+                    trash_changed |= self.tree.find_folder(id).is_none();
+                    cx.emit(LibraryEvent::FolderRenamed(id));
+                    tree_changed = true;
+                }
+                OutsideChange::FolderMoved(id) => {
+                    cx.emit(LibraryEvent::FolderMoved(id));
+                    tree_changed = true;
+                }
+                OutsideChange::FolderTrashed(id) => {
+                    let mut documents = Vec::new();
+                    if let Some(node) = before.find_folder(id) {
+                        collect(node, &mut documents);
+                    }
+                    cx.emit(LibraryEvent::FolderTrashed { id, documents });
+                    trash_changed = true;
+                    tree_changed = true;
+                }
+                OutsideChange::FolderRestored(id) => {
+                    cx.emit(LibraryEvent::FolderRestored(id));
+                    trash_changed = true;
+                    tree_changed = true;
+                }
+                OutsideChange::FolderPurged(id) => {
+                    if let Some(node) = before.find_folder(id) {
+                        let mut documents = Vec::new();
+                        collect(node, &mut documents);
+                        cx.emit(LibraryEvent::FolderTrashed { id, documents });
+                        tree_changed = true;
+                    }
+                    cx.emit(LibraryEvent::FolderPurged(id));
+                    trash_changed = true;
+                }
+                OutsideChange::TrashEmptied => trash_changed = true,
+                OutsideChange::SnapshotsChanged(id) => {
+                    cx.emit(LibraryEvent::SnapshotsChanged(id));
+                }
+                OutsideChange::SettingChanged(key) => {
+                    cx.emit(LibraryEvent::SettingChanged { key: key.into() });
+                }
+            }
+        }
+        if trash_changed {
+            cx.emit(LibraryEvent::TrashChanged);
+        }
+        if tree_changed {
+            cx.emit(LibraryEvent::TreeChanged);
+        }
+        cx.notify();
+        (result, refreshed)
     }
 
     // ----- internals ------------------------------------------------------------------

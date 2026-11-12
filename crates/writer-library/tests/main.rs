@@ -992,3 +992,250 @@ fn a_save_through_another_connection_is_taken_in_place(cx: &mut TestAppContext) 
         assert_eq!(l.document(other).unwrap().meta.title, "Last words");
     });
 }
+
+#[gpui::test]
+fn changes_made_in_the_store_from_outside_reach_the_tree_and_the_subscribers(
+    cx: &mut TestAppContext,
+) {
+    use writer_library::OutsideChange;
+    let (library, events) = library(cx);
+    let (folder, kept, inside) = library.update(cx, |l, cx| {
+        let folder = l.create_folder(None, "Novel", cx).unwrap().id;
+        let kept = l
+            .create_document(None, &content("Kept", "a b"), cx)
+            .unwrap();
+        let inside = l
+            .create_document(Some(folder), &content("Inside", "c"), cx)
+            .unwrap();
+        (folder, kept.id, inside.id)
+    });
+    take(&events, cx);
+
+    // Nothing changed: nothing is emitted, the result comes back.
+    let (answer, refreshed) = library.update(cx, |l, cx| {
+        l.change_outside(|store| (store.documents().unwrap().len(), Vec::new()), cx)
+    });
+    assert_eq!(answer, 2);
+    refreshed.unwrap();
+    assert!(take(&events, cx).is_empty());
+
+    // Created, written (with another title), renamed, moved: one tree reload, the events
+    // of each in the order given, one TreeChanged at the end.
+    let (created, refreshed) = library.update(cx, |l, cx| {
+        l.change_outside(
+            |store| {
+                let created = store
+                    .create_document(Some(folder), &content("By an agent", "x y z"))
+                    .unwrap()
+                    .id;
+                let part = store.create_folder(Some(folder), "Part one").unwrap().id;
+                store
+                    .save_document(kept, &content("Kept and changed", "a b c d"))
+                    .unwrap();
+                store.rename_document(inside, "Renamed").unwrap();
+                store.move_document(inside, Some(part)).unwrap();
+                (
+                    created,
+                    vec![
+                        OutsideChange::DocumentCreated(created),
+                        OutsideChange::FolderCreated(part),
+                        OutsideChange::DocumentSaved(kept),
+                        OutsideChange::DocumentRenamed(inside),
+                        OutsideChange::DocumentMoved(inside),
+                    ],
+                )
+            },
+            cx,
+        )
+    });
+    refreshed.unwrap();
+    let part = library.read_with(cx, |l, _| {
+        let tree = l.tree();
+        assert_eq!(*tree, l.store().library_tree().unwrap());
+        assert_eq!(tree.find_document(kept).unwrap().word_count, 4);
+        assert_eq!(tree.find_document(inside).unwrap().title, "Renamed");
+        tree.folders[0].folders[0].folder.id
+    });
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::DocumentCreated(created),
+            LibraryEvent::FolderCreated(part),
+            LibraryEvent::DocumentSaved {
+                id: kept,
+                title_changed: true
+            },
+            LibraryEvent::DocumentRenamed(inside),
+            LibraryEvent::DocumentMoved(inside),
+            LibraryEvent::TreeChanged,
+        ]
+    );
+
+    // A save that keeps the title is a save and nothing else.
+    library
+        .update(cx, |l, cx| {
+            l.change_outside(
+                |store| {
+                    store
+                        .save_document(kept, &content("Kept and changed", "a"))
+                        .unwrap();
+                    ((), vec![OutsideChange::DocumentSaved(kept)])
+                },
+                cx,
+            )
+        })
+        .1
+        .unwrap();
+    assert_eq!(
+        take(&events, cx),
+        vec![LibraryEvent::DocumentSaved {
+            id: kept,
+            title_changed: false
+        }]
+    );
+    assert_eq!(
+        library.read_with(cx, |l, _| l.tree().find_document(kept).unwrap().word_count),
+        1
+    );
+
+    // A folder goes to the trash: the documents that went with it are named, from the
+    // tree as it was. A version kept and a setting written are passed on.
+    library
+        .update(cx, |l, cx| {
+            l.change_outside(
+                |store| {
+                    store.trash_folder(folder).unwrap();
+                    store.set_setting("some.key", &1).unwrap();
+                    (
+                        (),
+                        vec![
+                            OutsideChange::FolderTrashed(folder),
+                            OutsideChange::SnapshotsChanged(kept),
+                            OutsideChange::SettingChanged("some.key".into()),
+                        ],
+                    )
+                },
+                cx,
+            )
+        })
+        .1
+        .unwrap();
+    let seen = take(&events, cx);
+    assert_eq!(seen.len(), 5, "{seen:?}");
+    match &seen[0] {
+        LibraryEvent::FolderTrashed { id, documents } => {
+            assert_eq!(*id, folder);
+            let mut documents = documents.clone();
+            documents.sort();
+            let mut expected = vec![created, inside];
+            expected.sort();
+            assert_eq!(documents, expected);
+        }
+        other => panic!("expected FolderTrashed, got {other:?}"),
+    }
+    assert_eq!(
+        seen[1..],
+        [
+            LibraryEvent::SnapshotsChanged(kept),
+            LibraryEvent::SettingChanged {
+                key: "some.key".into()
+            },
+            LibraryEvent::TrashChanged,
+            LibraryEvent::TreeChanged,
+        ]
+    );
+    assert!(library.read_with(cx, |l, _| l.tree().folders.is_empty()));
+
+    // Restored, and a live document deleted for good: whoever shows it hears that it
+    // left the tree before it hears that it is gone.
+    library
+        .update(cx, |l, cx| {
+            l.change_outside(
+                |store| {
+                    store.restore_folder(folder).unwrap();
+                    store.trash_document(kept).unwrap();
+                    store.purge_document(kept).unwrap();
+                    (
+                        (),
+                        vec![
+                            OutsideChange::FolderRestored(folder),
+                            OutsideChange::DocumentPurged(kept),
+                        ],
+                    )
+                },
+                cx,
+            )
+        })
+        .1
+        .unwrap();
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::FolderRestored(folder),
+            LibraryEvent::DocumentTrashed(kept),
+            LibraryEvent::DocumentPurged(kept),
+            LibraryEvent::TrashChanged,
+            LibraryEvent::TreeChanged,
+        ]
+    );
+    library.read_with(cx, |l, _| {
+        assert_eq!(*l.tree(), l.store().library_tree().unwrap());
+        assert!(l.tree().find_document(kept).is_none());
+        assert!(l.tree().find_document(inside).is_some());
+    });
+
+    // A document in the trash that is written or deleted there: the trash listing
+    // changed, the tree did not.
+    library.update(cx, |l, cx| l.trash_document(inside, cx).unwrap());
+    take(&events, cx);
+    library
+        .update(cx, |l, cx| {
+            l.change_outside(
+                |store| {
+                    store
+                        .save_document(inside, &content("Other name", "c"))
+                        .unwrap();
+                    ((), vec![OutsideChange::DocumentSaved(inside)])
+                },
+                cx,
+            )
+        })
+        .1
+        .unwrap();
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::DocumentSaved {
+                id: inside,
+                title_changed: false
+            },
+            LibraryEvent::TrashChanged,
+        ]
+    );
+    library
+        .update(cx, |l, cx| {
+            l.change_outside(
+                |store| {
+                    store.purge_document(inside).unwrap();
+                    store.empty_trash().unwrap();
+                    (
+                        (),
+                        vec![
+                            OutsideChange::DocumentPurged(inside),
+                            OutsideChange::TrashEmptied,
+                        ],
+                    )
+                },
+                cx,
+            )
+        })
+        .1
+        .unwrap();
+    assert_eq!(
+        take(&events, cx),
+        vec![
+            LibraryEvent::DocumentPurged(inside),
+            LibraryEvent::TrashChanged,
+        ]
+    );
+}

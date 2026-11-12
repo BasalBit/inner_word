@@ -80,7 +80,7 @@
 mod library;
 mod panel;
 
-pub use library::{DocumentEntry, Library, LibraryEvent};
+pub use library::{DocumentEntry, Library, LibraryEvent, OutsideChange};
 pub use panel::{
     Collapse, CollapseAll, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash,
     Expand, ExpandAll, FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,

@@ -1228,10 +1228,12 @@ impl QuickChat {
         }
     }
 
-    /// After the popover's own prepaint: the conversation that is drawn
-    /// has been measured. When more of it is hidden than has to be (a
-    /// change the measuring before the frame did not see, or more growth
-    /// than its passes covered), the popover grows in the next frame.
+    /// After the popover's own prepaint, two things are looked at. Whether
+    /// the keyboard is still in the popover (see below). And the
+    /// conversation that is drawn, which has been measured by now: when
+    /// more of it is hidden than has to be (a change the measuring before
+    /// the frame did not see, or more growth than its passes covered), the
+    /// popover grows in the next frame.
     pub(crate) fn after_prepaint(chat: &Entity<Self>, window: &mut Window, cx: &mut App) {
         let this = chat.read(cx);
         let Some(open) = &this.open else {

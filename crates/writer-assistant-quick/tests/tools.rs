@@ -83,7 +83,7 @@ fn opening_closes_a_popup_tool_with_a_field(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_find_bar_stays_and_the_editor_keys_do_not_reach_the_text(cx: &mut TestAppContext) {
+fn editor_keys_in_the_composer_do_not_reach_the_text(cx: &mut TestAppContext) {
     let (fx, cx) = open_quick(paragraphs(&["The quick brown fox", "Next."]), cx);
     select(&fx.editor, TextRange::in_block(0, 4, 9), cx);
     fx.toggle(cx);

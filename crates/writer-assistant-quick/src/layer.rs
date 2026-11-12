@@ -7,8 +7,8 @@
 //! the popover out and hands it to the window to be drawn on top of
 //! everything (`Window::defer_draw`): the popover follows scrolling and
 //! edits in the same frame. In the paint that follows, when the popover's
-//! own prepaint has measured the conversation, it looks whether the
-//! conversation wants more room than it had.
+//! own prepaint has run, it looks whether the keyboard is still in the
+//! popover and whether the conversation wants more room than it had.
 
 use gpui::{
     App, Bounds, Element, ElementId, Entity, GlobalElementId, InspectorElementId, IntoElement,

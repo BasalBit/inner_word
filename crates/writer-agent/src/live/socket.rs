@@ -32,6 +32,12 @@ const REQUEST_LIMIT: Duration = Duration::from_secs(30);
 /// How long writing an answer may take.
 const ANSWER_LIMIT: Duration = Duration::from_secs(5);
 
+/// How often the listener renews the times of its socket. macOS clears out of the user's
+/// temporary directory, every night, what was not used for three days
+/// (`com.apple.bsd.dirhelper`, `CLEAN_FILES_OLDER_THAN_DAYS`), and a writer leaves the app
+/// open for longer than that; connecting to a socket does not count as using it.
+const KEEP_FRESH_EVERY: Duration = Duration::from_secs(3600);
+
 /// The user this process runs as.
 fn user_id() -> u32 {
     // SAFETY: `getuid` has no arguments and cannot fail.
@@ -220,6 +226,19 @@ fn say_quitting(stream: &mut UnixStream) {
     write_line(stream, &line, Duration::from_millis(100)).ok();
 }
 
+/// Sets the times of the file at `path` (a socket, a directory) to now.
+fn freshen(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: `path` is a string that ends in a zero byte, and no times are passed
+    // (which means: now).
+    unsafe {
+        libc::utimes(path.as_ptr(), std::ptr::null());
+    }
+}
+
 /// What the listener and its closers share.
 #[derive(Debug)]
 struct Shared {
@@ -227,13 +246,36 @@ struct Shared {
     path: PathBuf,
     data_dir: PathBuf,
     closed: AtomicBool,
+    /// Wakes the thread that keeps the socket fresh, so that it ends with the listener.
+    over: (Mutex<bool>, Condvar),
 }
 
 impl Shared {
+    /// Keeps the socket (and the directory it lies in) from looking unused, for as long
+    /// as the listener is open. Runs on a thread of its own.
+    fn keep_fresh(&self, every: Duration) {
+        let (over, wake) = &self.over;
+        let mut is_over = locked(over);
+        while !*is_over {
+            is_over = wake
+                .wait_timeout(is_over, every)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+            if !*is_over {
+                freshen(&self.path);
+                if let Some(dir) = self.path.parent() {
+                    freshen(dir);
+                }
+            }
+        }
+    }
+
     fn close(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
+        *locked(&self.over.0) = true;
+        self.over.1.notify_all();
         // From now on the tools are not sent here.
         instance_lock::announce_channel(&self.data_dir, None).ok();
         // Those that are waiting in the queue are told, so that none of them waits for
@@ -286,14 +328,21 @@ impl Listener {
             std::fs::remove_file(&path).ok();
             return Err(error);
         }
-        Ok(Listener {
-            shared: Arc::new(Shared {
-                listener,
-                path,
-                data_dir: data_dir.to_path_buf(),
-                closed: AtomicBool::new(false),
-            }),
-        })
+        let shared = Arc::new(Shared {
+            listener,
+            path,
+            data_dir: data_dir.to_path_buf(),
+            closed: AtomicBool::new(false),
+            over: (Mutex::new(false), Condvar::new()),
+        });
+        let kept = shared.clone();
+        // Without the thread the socket is as good as any file in a temporary directory:
+        // good for three days.
+        std::thread::Builder::new()
+            .name("writer-live-socket".into())
+            .spawn(move || kept.keep_fresh(KEEP_FRESH_EVERY))
+            .ok();
+        Ok(Listener { shared })
     }
 
     /// The path of the socket.
@@ -641,6 +690,72 @@ mod tests {
             io::ErrorKind::TimedOut
         );
         drop(writer);
+    }
+
+    /// The socket lies in a directory the system clears of what was not used for three
+    /// days: the listener renews its times, for as long as it is open.
+    #[test]
+    fn the_socket_is_kept_from_looking_unused() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::Builder::new()
+            .prefix("tw")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let path = dir.path().join("app.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let age = |path: &Path| {
+            let found = std::fs::metadata(path).unwrap();
+            (
+                found.modified().unwrap().elapsed().unwrap_or_default(),
+                found.accessed().unwrap().elapsed().unwrap_or_default(),
+            )
+        };
+        // Four days ago.
+        let make_old = |path: &Path| {
+            let then = libc::timeval {
+                tv_sec: (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    - 4 * 86_400) as libc::time_t,
+                tv_usec: 0,
+            };
+            let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: a path that ends in a zero byte and two times.
+            assert_eq!(
+                unsafe { libc::utimes(name.as_ptr(), [then, then].as_ptr()) },
+                0
+            );
+        };
+        let days = Duration::from_secs(3 * 86_400);
+        make_old(&path);
+        make_old(dir.path());
+        assert!(age(&path).0 > days && age(&path).1 > days);
+
+        let shared = Arc::new(Shared {
+            listener,
+            path: path.clone(),
+            data_dir: dir.path().to_path_buf(),
+            closed: AtomicBool::new(false),
+            over: (Mutex::new(false), Condvar::new()),
+        });
+        let kept = shared.clone();
+        let keeper = std::thread::spawn(move || kept.keep_fresh(Duration::from_millis(30)));
+        std::thread::sleep(Duration::from_millis(200));
+        let minute = Duration::from_secs(60);
+        assert!(
+            age(&path).0 < minute && age(&path).1 < minute,
+            "{:?}",
+            age(&path)
+        );
+        assert!(age(dir.path()).0 < minute, "{:?}", age(dir.path()));
+        // It ends with the listener, at once.
+        make_old(&path);
+        let started = Instant::now();
+        shared.close();
+        keeper.join().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(!path.exists());
     }
 
     #[test]

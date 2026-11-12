@@ -19,7 +19,13 @@
 //! than that. The tool finds it through the lock file of the data directory, whose second
 //! line names it (`writer_store::instance_lock::app_channel`). The lock says whether an app
 //! is running; a socket left behind by an app that crashed is never looked at, because the
-//! lock that app held is gone.
+//! lock that app held is gone. macOS clears out of that directory what was not used for
+//! three days, so the listener renews the times of its socket every hour.
+//!
+//! An app that holds the lock and names no socket is one that takes no changes (every
+//! version before 0.6.0), unless it has only just taken the lock: a tool waits for the
+//! channel of an app that started less than five seconds ago. A tool that finds an app
+//! with a channel hands it the change at once and never tries the app's lock.
 //!
 //! # The protocol
 //!

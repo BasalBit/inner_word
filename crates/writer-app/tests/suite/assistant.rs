@@ -842,3 +842,998 @@ fn a_replies_file_scripts_the_fake_engine() {
         Some(AssistantError::Network { .. })
     ));
 }
+
+// ----- the two chats in the workspace ----------------------------------------------
+
+use writer_app::workspace::{ASK_THE_ASSISTANT, RightPanel};
+use writer_assistant::{FakeReply, MessageState, Role};
+use writer_assistant_quick::{QuickAction, QuickChat};
+use writer_assistant_ui::{ApplyKind, AssistantPanel};
+
+fn quick(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Entity<QuickChat> {
+    workspace.read_with(cx, |w, _| w.quick_chat().expect("an engine").clone())
+}
+
+fn side(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Entity<AssistantPanel> {
+    workspace.read_with(cx, |w, _| w.side_chat().expect("an engine").clone())
+}
+
+fn quick_open(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    quick(workspace, cx).read_with(cx, |quick, _| quick.is_open())
+}
+
+fn right_panel(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Option<RightPanel> {
+    workspace.read_with(cx, |w, _| w.right_panel_shown())
+}
+
+fn side_has_keyboard(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    workspace.update_in(cx, |w, window, cx| w.assistant_panel_has_focus(window, cx))
+}
+
+/// Selects `range` in the text, as the keyboard would.
+fn select(workspace: &Entity<Workspace>, range: TextRange, cx: &mut VisualTestContext) {
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |editor, cx| {
+        editor.edit(|state| state.select_range(range), cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Runs the palette command titled `title`, as choosing it there does.
+fn run_palette_command(workspace: &Entity<Workspace>, title: &str, cx: &mut VisualTestContext) {
+    let command = cx.update(|_, cx| {
+        commands::all(cx)
+            .into_iter()
+            .find(|command| command.title.as_ref() == title)
+            .unwrap_or_else(|| panic!("no command {title:?} in the palette"))
+    });
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.run_command(&command, window, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// The text of the answers of `transcript`, in order.
+fn answers(transcript: &Transcript) -> Vec<String> {
+    transcript
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .map(|message| message.text.clone())
+        .collect()
+}
+
+#[gpui::test]
+fn the_quick_chat_opens_in_every_way_and_sends_only_the_selection(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    assert!(editor_focused(&workspace, vcx));
+    assert!(!quick_open(&workspace, vcx));
+
+    // The key, on a selection: "keeper" in the paragraph.
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    assert!(quick_open(&workspace, vcx));
+    let chat = quick(&workspace, vcx);
+    assert_eq!(
+        chat.read_with(vcx, |chat, _| chat.quote()),
+        Some("keeper".to_string())
+    );
+    // The keyboard is in its composer: what is typed is the question.
+    fake.reply("warden, *guardian*");
+    vcx.simulate_input("Another word?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.contains("keeper"), "{sent}");
+    assert!(sent.contains("Another word?"), "{sent}");
+    // Nothing else of the document, its title or the library went along.
+    assert!(!sent.contains("climbed"), "{sent}");
+    assert!(!sent.contains("Lighthouse"), "{sent}");
+    // No tools, and the quick chat's own model and effort.
+    let started = fake.last_started().expect("a conversation was started");
+    assert!(started.tools.is_none());
+    assert_eq!(started.selection, Selection::named("swift", "low"));
+    assert_eq!(
+        chat.read_with(vcx, |chat, _| answers(chat.transcript().unwrap())),
+        ["warden, *guardian*"]
+    );
+    // A second question goes on in the same conversation.
+    fake.reply("sentinel");
+    vcx.simulate_input("One more");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(fake.started().len(), 1);
+    assert_eq!(
+        chat.read_with(vcx, |chat, _| chat.transcript().unwrap().len()),
+        4
+    );
+
+    // The key again closes it, and the keyboard is back in the text.
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    assert!(!quick_open(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+
+    // With nothing selected it is the question alone.
+    select(&workspace, TextRange::empty(Position::new(1, 3)), vcx);
+    run_palette_command(&workspace, "Ask the assistant", vcx);
+    assert!(quick_open(&workspace, vcx));
+    assert_eq!(chat.read_with(vcx, |chat, _| chat.quote()), None);
+    fake.reply("Forty-two.");
+    vcx.simulate_input("What is six times seven?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        fake.last_sent().as_deref(),
+        Some("What is six times seven?")
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(!quick_open(&workspace, vcx));
+
+    // The text menu, from the keyboard: "Ask the Assistant" with its key.
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    let menu = vcx
+        .update(|window, cx| writer_ui::ContextMenu::current(window, cx))
+        .expect("the text menu is open");
+    assert!(
+        menu.read_with(vcx, |menu, _| menu.labels())
+            .contains(&ASK_THE_ASSISTANT.to_string())
+    );
+    assert!(
+        vcx.update(|window, cx| { writer_ui::ContextMenu::choose(ASK_THE_ASSISTANT, window, cx) })
+    );
+    vcx.run_until_parked();
+    assert!(quick_open(&workspace, vcx));
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+
+    // The format bar over a selection: a button beside "Add Comment".
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    let tools = workspace.read_with(vcx, |w, _| w.tools().clone());
+    assert!(tools.update_in(vcx, |tools, window, cx| tools.show_format_bar(window, cx)));
+    vcx.run_until_parked();
+    let button = tools
+        .read_with(vcx, |tools, cx| tools.format_bar_items(cx))
+        .into_iter()
+        .find(|item| item.label == ASK_THE_ASSISTANT)
+        .expect("the format bar has the button");
+    assert!(tools.update_in(vcx, |tools, window, cx| {
+        tools.press_format_bar_button(&button.id, window, cx)
+    }));
+    vcx.run_until_parked();
+    assert!(quick_open(&workspace, vcx));
+    assert_eq!(
+        chat.read_with(vcx, |chat, _| chat.quote()),
+        Some("keeper".to_string())
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+
+    // The menu bar's item is the same action.
+    vcx.dispatch_action(writer_app::actions::AskAssistant);
+    vcx.run_until_parked();
+    assert!(quick_open(&workspace, vcx));
+}
+
+#[gpui::test]
+fn a_quick_answer_replaces_the_selection_in_one_undo_step(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    let before = editor_text(&workspace, vcx);
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    fake.reply("**warden**");
+    vcx.simulate_input("Another word?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    let chat = quick(&workspace, vcx);
+    assert!(chat.update_in(vcx, |chat, window, cx| {
+        chat.apply_answer(QuickAction::Replace, window, cx)
+    }));
+    vcx.run_until_parked();
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.read_with(vcx, |editor, _| {
+        let block = &editor.document().blocks()[1];
+        assert_eq!(block.text(), "The warden climbed the stairs at dusk.");
+        assert!(block.attrs_at(5).unwrap().bold);
+    });
+    // The popover is gone, the text has the keyboard, the document is
+    // marked as edited.
+    assert!(!quick_open(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.save_state()),
+        Some(writer_app::SaveState::Edited)
+    );
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+}
+
+#[gpui::test]
+fn the_side_chat_opens_closes_and_takes_the_keyboard(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(vcx.debug_bounds("assistant-panel").is_none());
+
+    // cmd-3 opens it with the keyboard in its composer, and remembers.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(vcx.debug_bounds("assistant-panel").is_some());
+    assert!(side_has_keyboard(&workspace, vcx));
+    assert!(library.read_with(vcx, |library, _| {
+        library.setting_or(keys::ASSISTANT_PANEL_OPEN, false)
+    }));
+    assert!(side(&workspace, vcx).read_with(vcx, |side, _| side.is_shown()));
+
+    // Escape hands the keyboard back to the text; the panel stays.
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(editor_focused(&workspace, vcx));
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    // cmd-3 goes there again.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+
+    // "Show or hide assistant" hides it; the keyboard returns to the text.
+    run_palette_command(&workspace, "Show or hide assistant", vcx);
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(editor_focused(&workspace, vcx));
+    assert!(!library.read_with(vcx, |library, _| {
+        library.setting_or(keys::ASSISTANT_PANEL_OPEN, true)
+    }));
+    assert!(!side(&workspace, vcx).read_with(vcx, |side, _| side.is_shown()));
+    // And shows it again, ready to type.
+    vcx.dispatch_action(writer_app::actions::ToggleAssistant);
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(side_has_keyboard(&workspace, vcx));
+
+    // Its own close control closes it too.
+    side(&workspace, vcx).update_in(vcx, |side, window, cx| {
+        side.press_header(writer_assistant_ui::HeaderControl::Close, false, window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(editor_focused(&workspace, vcx));
+
+    // A command of the side chat chosen while it is closed brings it.
+    run_palette_command(&workspace, "New chat", vcx);
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+
+    // Without a document there is nothing to talk about: the panel goes
+    // with the document and comes back with the next one.
+    workspace.update_in(vcx, |w, window, cx| w.close_document(window, cx));
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), None);
+    workspace.update_in(vcx, |w, window, cx| {
+        let id = w.new_document(window, cx);
+        assert!(id.is_some());
+    });
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+}
+
+#[gpui::test]
+fn the_side_chat_sends_the_live_document_and_what_was_added(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    let library = library(cx);
+    let (folder, id, chapter) = library.update(cx, |library, cx| {
+        let folder = library.create_folder(None, "The Salt Road", cx).unwrap().id;
+        let form = StoredForm::of(
+            &simple_document("Chapter 1", "The road began at the sea."),
+            None,
+        );
+        let id = library
+            .create_document(Some(folder), &form.content(), cx)
+            .unwrap()
+            .id;
+        let form = StoredForm::of(&simple_document("Chapter 2", "Salt on every stone."), None);
+        let chapter = library
+            .create_document(Some(folder), &form.content(), cx)
+            .unwrap()
+            .id;
+        (folder, id, chapter)
+    });
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| w.open_document(id, true, window, cx));
+    vcx.run_until_parked();
+
+    // Typed a moment ago at the end of the paragraph, not saved yet.
+    select(&workspace, TextRange::empty(Position::new(1, 26)), vcx);
+    type_text(&workspace, " Nobody was on the quay.", vcx);
+    assert!(!stored_text(&library, id, vcx).contains("quay"));
+
+    // What the workspace hands over: the text as it is in the editor, the
+    // title and the path in the library.
+    let open = workspace
+        .read_with(vcx, |w, cx| w.assistant_open_document(cx))
+        .expect("a document is open");
+    assert_eq!(open.id, Some(id.0));
+    assert_eq!(open.title, "Chapter 1");
+    assert_eq!(open.path, "The Salt Road/Chapter 1");
+    assert!(open.markdown.contains("Nobody was on the quay."));
+
+    // The picker's list: the folder and the documents of the library.
+    let offered = library.read_with(vcx, |library, _| {
+        writer_app::workspace::library_attachments(library)
+    });
+    assert!(offered.contains(&Attachment::folder(
+        folder.0,
+        "The Salt Road",
+        "The Salt Road"
+    )));
+    assert!(offered.contains(&Attachment::document(
+        chapter.0,
+        "Chapter 2",
+        "The Salt Road/Chapter 2"
+    )));
+
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    // The open document itself is not offered as something to add.
+    let candidates = panel.read_with(vcx, |panel, cx| panel.context_candidates(cx));
+    assert!(!candidates.iter().any(|candidate| candidate.id == id.0
+        && candidate.kind == writer_assistant::AttachmentKind::Document));
+    assert!(panel.update(vcx, |panel, cx| {
+        panel.attach(
+            Attachment::document(chapter.0, "Chapter 2", "The Salt Road/Chapter 2"),
+            cx,
+        )
+    }));
+
+    // A message, from the keyboard.
+    fake.reply("It opens well.");
+    vcx.simulate_input("How does it open?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.contains("How does it open?"), "{sent}");
+    assert!(
+        sent.contains("The road began at the sea. Nobody was on the quay."),
+        "{sent}"
+    );
+    assert!(sent.contains("Chapter 1"), "{sent}");
+    assert!(sent.contains("The Salt Road/Chapter 1"), "{sent}");
+    // The added item is named; its text is for the tools to fetch.
+    assert!(sent.contains("Chapter 2"), "{sent}");
+    let started = fake.last_started().expect("a conversation was started");
+    assert_eq!(started.selection, Selection::named("deep", "medium"));
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["It opens well."]
+    );
+
+    // The next message has the text as it is then.
+    type_text(&workspace, " A gull watched.", vcx);
+    fake.reply("Better.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("And now?", window, cx));
+    vcx.run_until_parked();
+    let sent = fake.last_sent().unwrap();
+    assert!(sent.contains("A gull watched."), "{sent}");
+}
+
+#[gpui::test]
+fn the_side_chat_is_given_the_library_as_read_only_tools(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    // A library on disk, and the `writer` tool of this copy of the app.
+    let directory = tempfile::tempdir().unwrap();
+    let data_dir = directory.path().canonicalize().unwrap().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let tool = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("The Writer.app/Contents/MacOS/writer");
+    std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+    std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+    let home = directory.path().canonicalize().unwrap().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    cx.update(|cx| {
+        writer_app::agents::set_environment(
+            writer_app::agents::Environment::isolated(home, tool.clone()),
+            cx,
+        )
+    });
+    let library = cx.new(|_| Library::open(data_dir.join("library.db")).unwrap());
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
+    });
+    add_document(&library, None, &simple_document("Doc", "Text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.run_until_parked();
+
+    let server = library
+        .read_with(vcx, |library, cx| {
+            writer_app::workspace::library_tool_server(library, cx)
+        })
+        .expect("the tool and the library are there");
+    assert_eq!(server.command, tool);
+    assert_eq!(
+        server.args,
+        ["--library", data_dir.to_str().unwrap(), "mcp"]
+    );
+    // Reading only: nothing that writes is allowed, everything that
+    // writes is withheld.
+    assert!(server.allowed.iter().any(|tool| tool == "read_document"));
+    assert!(server.allowed.iter().any(|tool| tool == "search_library"));
+    for writes in ["create_document", "edit_document", "trash_document"] {
+        assert!(
+            !server.allowed.iter().any(|tool| tool == writes),
+            "{writes}"
+        );
+        assert!(server.denied.iter().any(|tool| tool == writes), "{writes}");
+    }
+
+    // A message of the side chat starts the engine with exactly that.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    side(&workspace, vcx).update_in(vcx, |panel, window, cx| panel.send("Hello", window, cx));
+    vcx.run_until_parked();
+    let started = fake.last_started().expect("a conversation was started");
+    assert_eq!(started.tools.as_ref(), Some(&server));
+    // The quick chat never has tools.
+    select(&workspace, TextRange::in_block(0, 0, 3), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    quick(&workspace, vcx).update_in(vcx, |quick, window, cx| quick.ask("Hm?", window, cx));
+    vcx.run_until_parked();
+    assert!(fake.last_started().unwrap().tools.is_none());
+}
+
+#[gpui::test]
+fn an_answer_of_the_side_chat_is_applied_to_the_text_and_undone(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    let before = editor_text(&workspace, vcx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    fake.reply("the *old* keeper");
+    panel.update_in(vcx, |panel, window, cx| panel.send("Who?", window, cx));
+    vcx.run_until_parked();
+    let answer = panel.read_with(vcx, |panel, _| {
+        panel.transcript().last_answer().expect("an answer").id
+    });
+
+    // Nothing is selected in the text: Replace Selection is not offered,
+    // and asking for it does nothing.
+    select(&workspace, TextRange::empty(Position::new(1, 0)), vcx);
+    assert!(!panel.update(vcx, |panel, cx| panel.apply(
+        ApplyKind::ReplaceSelection,
+        answer,
+        cx
+    )));
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // With a selection it replaces it, formatted, in one undo step.
+    select(&workspace, TextRange::in_block(1, 0, 10), vcx);
+    assert!(panel.update(vcx, |panel, cx| panel.apply(
+        ApplyKind::ReplaceSelection,
+        answer,
+        cx
+    )));
+    vcx.run_until_parked();
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.read_with(vcx, |editor, _| {
+        let block = &editor.document().blocks()[1];
+        assert_eq!(block.text(), "the old keeper climbed the stairs at dusk.");
+        assert!(block.attrs_at(4).unwrap().italic);
+        assert!(!block.attrs_at(9).unwrap().italic);
+    });
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.save_state()),
+        Some(writer_app::SaveState::Edited)
+    );
+    editor.update(vcx, |editor, cx| editor.edit(|state| state.undo(), cx));
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // Insert at Caret, from the keyboard in the side chat: cmd-enter acts
+    // on the latest answer.
+    select(&workspace, TextRange::empty(Position::new(1, 3)), vcx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        editor_text(&workspace, vcx).lines().nth(1),
+        Some("Thethe old keeper keeper climbed the stairs at dusk.")
+    );
+    editor.update(vcx, |editor, cx| editor.edit(|state| state.undo(), cx));
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+
+    // The assistant never changes the text by itself: two answers later
+    // the document is what it was.
+    fake.reply("# A heading\n\nAnd more.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("More", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+}
+
+#[gpui::test]
+fn each_document_keeps_its_conversation_across_switches_and_a_relaunch(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("library.db");
+    let open_library = |cx: &mut TestAppContext| {
+        let library = cx.new(|_| Library::open(&path).unwrap());
+        library.update(cx, |library, cx| {
+            library
+                .set_setting(keys::WELCOME_CREATED, &true, cx)
+                .unwrap();
+        });
+        library
+    };
+    let library = open_library(cx);
+    let first = add_document(&library, None, &simple_document("One", "First text."), cx);
+    let second = add_document(&library, None, &simple_document("Two", "Second text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(first, true, window, cx)
+    });
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    let conversation = |cx: &mut VisualTestContext| -> Vec<String> {
+        panel.read_with(cx, |panel, _| {
+            panel
+                .transcript()
+                .messages
+                .iter()
+                .map(|message| message.text.clone())
+                .collect()
+        })
+    };
+
+    fake.reply("About one.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("First question", window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(conversation(vcx), ["First question", "About one."]);
+    assert!(panel.update(vcx, |panel, cx| {
+        panel.attach(Attachment::document(second.0, "Two", "Two"), cx)
+    }));
+
+    // Another document: its own, empty conversation.
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(second, true, window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(conversation(vcx).is_empty());
+    assert!(panel.read_with(vcx, |panel, _| panel.attachments().is_empty()));
+    fake.reply("About two.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("Second question", window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(conversation(vcx), ["Second question", "About two."]);
+
+    // Back: the first conversation, with what was added to it.
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(first, true, window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(conversation(vcx), ["First question", "About one."]);
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel.attachments().len()),
+        1
+    );
+
+    // Clear removes the messages and keeps what was added; it is stored so.
+    panel.update_in(vcx, |panel, window, cx| panel.clear(window, cx));
+    vcx.run_until_parked();
+    assert!(conversation(vcx).is_empty());
+    library.read_with(vcx, |library, _| {
+        let stored = conversations::load(library, first);
+        assert!(stored.messages.is_empty());
+        assert_eq!(stored.attachments.len(), 1);
+        assert_eq!(conversations::load(library, second).messages.len(), 2);
+    });
+    // New Chat removes both, and then nothing is stored for the document.
+    fake.reply("Again.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("Once more", window, cx));
+    vcx.run_until_parked();
+    panel.update_in(vcx, |panel, window, cx| panel.new_chat(window, cx));
+    vcx.run_until_parked();
+    assert!(conversation(vcx).is_empty());
+    assert!(panel.read_with(vcx, |panel, _| panel.attachments().is_empty()));
+    library.read_with(vcx, |library, _| {
+        assert!(!conversations::is_stored(library, first))
+    });
+
+    // Quit and launch again: the second document's conversation is there,
+    // the side chat is open as it was left.
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(second, true, window, cx)
+    });
+    vcx.run_until_parked();
+    workspace.update(vcx, |w, cx| {
+        w.flush(cx);
+    });
+    drop(panel);
+    drop(workspace);
+    drop(library);
+    cx.run_until_parked();
+
+    let library = open_library(cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(second)
+    );
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    let panel = side(&workspace, vcx);
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel
+            .transcript()
+            .messages
+            .iter()
+            .map(|message| (message.text.clone(), message.state.clone()))
+            .collect::<Vec<_>>()),
+        [
+            ("Second question".to_string(), MessageState::Done),
+            ("About two.".to_string(), MessageState::Done),
+        ]
+    );
+    // The next message tells the engine what was said before.
+    fake.reply("Still two.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("And after the relaunch?", window, cx)
+    });
+    vcx.run_until_parked();
+    let started = fake.last_started().unwrap();
+    assert_eq!(started.history.len(), 2);
+    assert_eq!(started.history[0].text, "Second question");
+
+    // A document that is deleted for good takes its conversation along.
+    library.update(vcx, |library, cx| {
+        library.trash_document(second, cx).unwrap();
+    });
+    vcx.run_until_parked();
+    library.read_with(vcx, |library, _| {
+        assert!(conversations::is_stored(library, second))
+    });
+    library.update(vcx, |library, cx| {
+        library.purge_document(second, cx).unwrap();
+    });
+    vcx.run_until_parked();
+    library.read_with(vcx, |library, _| {
+        assert!(!conversations::is_stored(library, second))
+    });
+}
+
+#[gpui::test]
+fn the_comments_and_the_side_chat_share_the_slot_one_at_a_time(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    // (Whether something is drawn is asked of the workspace: the test
+    // window keeps the place of an element that is no longer drawn.)
+    let tabs =
+        |cx: &mut VisualTestContext| workspace.read_with(cx, |w, _| w.right_panel_has_tabs());
+
+    // Only the side chat: it has the slot to itself, without tabs.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(!tabs(vcx));
+
+    // A comment is added: the comments come forward (its composer has the
+    // keyboard), and the slot has two tabs.
+    vcx.simulate_keystrokes("escape");
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-alt-m");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Comments));
+    assert!(tabs(vcx));
+    assert!(vcx.debug_bounds("right-panel-tabs").is_some());
+    vcx.simulate_input("Check this");
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Comments));
+    assert!(!side(&workspace, vcx).read_with(vcx, |side, _| side.is_shown()));
+
+    // cmd-3 brings the side chat forward, cmd-2 the comments; the choice
+    // is remembered.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(side_has_keyboard(&workspace, vcx));
+    assert_eq!(
+        library.read_with(vcx, |library, _| library
+            .setting_or(keys::RIGHT_PANEL, String::new())),
+        "assistant"
+    );
+    vcx.simulate_keystrokes("cmd-2");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Comments));
+    assert!(workspace.update_in(vcx, |w, window, cx| {
+        w.comments().read(cx).has_focus(window, cx)
+    }));
+    assert_eq!(
+        library.read_with(vcx, |library, _| library
+            .setting_or(keys::RIGHT_PANEL, String::new())),
+        "comments"
+    );
+
+    // The tabs, with the mouse: a click brings the other panel forward,
+    // and the keyboard, which was in the slot, goes with it.
+    let tab = vcx
+        .debug_bounds(RightPanel::Assistant.tab_selector())
+        .expect("the tab is drawn");
+    vcx.simulate_click(tab.center(), gpui::Modifiers::none());
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(side_has_keyboard(&workspace, vcx));
+    let tab = vcx
+        .debug_bounds(RightPanel::Comments.tab_selector())
+        .expect("the tab is drawn");
+    vcx.simulate_click(tab.center(), gpui::Modifiers::none());
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Comments));
+
+    // Closing the side chat leaves the comments alone, without tabs.
+    vcx.dispatch_action(writer_app::actions::ToggleAssistant);
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    vcx.dispatch_action(writer_app::actions::ToggleAssistant);
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Comments));
+    assert!(!tabs(vcx));
+
+    // Hiding the comments (cmd-alt-c) with the side chat open leaves the
+    // side chat.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-alt-c");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(!tabs(vcx));
+}
+
+#[gpui::test]
+fn each_panel_at_the_right_keeps_a_width_of_its_own(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let width = |cx: &mut VisualTestContext| {
+        f32::from(
+            cx.debug_bounds("right-panel")
+                .expect("the slot is drawn")
+                .size
+                .width,
+        )
+    };
+    assert_eq!(
+        width(vcx),
+        writer_app::workspace::DEFAULT_ASSISTANT_PANEL_WIDTH
+    );
+
+    // Dragging the edge of the slot to the left makes the panel wider.
+    let handle = vcx
+        .debug_bounds("right-panel-resize")
+        .expect("the edge can be dragged");
+    let from = handle.center();
+    let to = gpui::point(from.x - gpui::px(60.), from.y);
+    vcx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
+    vcx.simulate_mouse_move(to, Some(gpui::MouseButton::Left), gpui::Modifiers::none());
+    vcx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    vcx.run_until_parked();
+    let dragged = width(vcx);
+    assert!((dragged - 440.).abs() < 2., "{dragged}");
+    assert_eq!(
+        library.read_with(vcx, |library, _| library
+            .setting_or(keys::ASSISTANT_PANEL_WIDTH, 0.0_f32)),
+        workspace.read_with(vcx, |w, _| w.right_panel_width_of(RightPanel::Assistant))
+    );
+    // The comments keep theirs.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.right_panel_width_of(RightPanel::Comments)),
+        writer_app::workspace::DEFAULT_RIGHT_PANEL_WIDTH
+    );
+    // A double click on the edge brings the default back.
+    let handle = vcx.debug_bounds("right-panel-resize").unwrap();
+    vcx.simulate_event(gpui::MouseDownEvent {
+        position: handle.center(),
+        modifiers: gpui::Modifiers::none(),
+        button: gpui::MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    vcx.simulate_mouse_up(
+        handle.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    vcx.run_until_parked();
+    assert_eq!(
+        width(vcx),
+        writer_app::workspace::DEFAULT_ASSISTANT_PANEL_WIDTH
+    );
+}
+
+#[gpui::test]
+fn the_note_about_where_the_text_goes_is_shown_once(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    assert!(workspace.read_with(vcx, |w, cx| w.assistant_notice_pending(cx)));
+    let panel = side(&workspace, vcx);
+    let chat = quick(&workspace, vcx);
+    // Both chats show it before anything was sent.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.shows_privacy_notice()));
+    assert!(chat.read_with(vcx, |chat, _| chat.shows_privacy_notice()));
+    assert!(fake.sent().is_empty());
+
+    // The first message acknowledges it: it is gone from both, for good.
+    fake.reply("Yes.");
+    vcx.simulate_input("Is this a good opening?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(fake.sent().len(), 1);
+    assert!(!panel.read_with(vcx, |panel, _| panel.shows_privacy_notice()));
+    assert!(!chat.read_with(vcx, |chat, _| chat.shows_privacy_notice()));
+    assert!(!workspace.read_with(vcx, |w, cx| w.assistant_notice_pending(cx)));
+    assert!(library.read_with(vcx, |library, _| {
+        library.setting_or(keys::ASSISTANT_NOTICE_ACCEPTED, false)
+    }));
+
+    // A workspace opened on the same library later does not show it.
+    drop(panel);
+    drop(chat);
+    let (workspace, vcx) = open_workspace(&library, vcx);
+    vcx.run_until_parked();
+    assert!(!side(&workspace, vcx).read_with(vcx, |panel, _| panel.shows_privacy_notice()));
+    assert!(!quick(&workspace, vcx).read_with(vcx, |chat, _| chat.shows_privacy_notice()));
+}
+
+#[gpui::test]
+fn what_is_chosen_in_a_chat_is_what_the_settings_show(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    // The model picker of the side chat: "Swift" instead of "Deep".
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.open_picker(writer_assistant_ui::PickerKind::Model, true, window, cx);
+    });
+    vcx.run_until_parked();
+    assert!(
+        vcx.update(|window, cx| writer_ui::ContextMenu::is_open(window, cx)),
+        "the model picker is a menu"
+    );
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Swift", window, cx)));
+    vcx.run_until_parked();
+    assert_eq!(
+        library.read_with(vcx, |library, _| library
+            .setting_or(keys::ASSISTANT_SIDE_MODEL, String::new())),
+        "swift"
+    );
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.settings().assistant.side_model.clone()),
+        Some("swift".to_string())
+    );
+    // The quick chat's choice is its own.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.settings().assistant.quick_model.clone()),
+        None
+    );
+
+    // A change in the settings reaches the chats at once.
+    library.update(vcx, |library, cx| {
+        library
+            .set_setting(keys::ASSISTANT_QUICK_MODEL, "deep", cx)
+            .unwrap();
+        library
+            .set_setting(keys::ASSISTANT_QUICK_EFFORT, "high", cx)
+            .unwrap();
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        quick(&workspace, vcx).read_with(vcx, |chat, _| chat.selection().clone()),
+        Selection::named("deep", "high")
+    );
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    quick(&workspace, vcx).update_in(vcx, |quick, window, cx| quick.ask("Hm?", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(
+        fake.last_started().unwrap().selection,
+        Selection::named("deep", "high")
+    );
+}
+
+#[gpui::test]
+fn errors_of_the_engine_are_said_in_plain_words(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    let info = writer_assistant::fake_info();
+
+    // The usage limit, with the time it resets.
+    let resets_at = writer_assistant::time::now_seconds() + 2 * 60 * 60;
+    fake.fail(AssistantError::UsageLimit {
+        resets_at: Some(resets_at),
+        detail: String::new(),
+    });
+    panel.update_in(vcx, |panel, window, cx| panel.send("One", window, cx));
+    vcx.run_until_parked();
+    let error = panel.read_with(vcx, |panel, _| {
+        panel.transcript().last_answer().unwrap().error().cloned()
+    });
+    let text = error.expect("the answer failed").text(&info);
+    assert_eq!(
+        text.headline,
+        "You have reached the usage limit of your Fake Agent plan."
+    );
+    assert!(text.advice.starts_with("It resets "), "{}", text.advice);
+
+    // The program crashed: the conversation is kept and the next message
+    // starts it again.
+    fake.push(
+        FakeReply::text("Half an").then_fail(AssistantError::Exited {
+            code: Some(1),
+            detail: "boom".into(),
+        }),
+    );
+    panel.update_in(vcx, |panel, window, cx| panel.send("Two", window, cx));
+    vcx.run_until_parked();
+    let last = panel.read_with(vcx, |panel, _| {
+        panel.transcript().last_answer().cloned().unwrap()
+    });
+    assert_eq!(last.text, "Half an");
+    assert_eq!(
+        last.error().unwrap().text(&info).headline,
+        "Fake Agent stopped unexpectedly."
+    );
+    assert_eq!(panel.read_with(vcx, |panel, _| panel.transcript().len()), 4);
+
+    // Not signed in: the engine says so, the host learns it, and the
+    // settings say how to sign in.
+    fake.set_sign_in(writer_assistant::SignIn::SignedOut);
+    fake.fail(AssistantError::NotSignedIn);
+    panel.update_in(vcx, |panel, window, cx| panel.send("Three", window, cx));
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-,");
+    vcx.run_until_parked();
+    let host = workspace.read_with(vcx, |w, _| w.assistant_host().unwrap().clone());
+    assert!(host.read_with(vcx, |host, _| host.is_signed_out()));
+    // Still shown: the feature is there and says what to do.
+    assert!(workspace.read_with(vcx, |w, _| w.assistant_shown()));
+    assert!(
+        panel
+            .read_with(vcx, |panel, _| panel.availability().cloned())
+            .is_some_and(|availability| availability.is_signed_out())
+    );
+}

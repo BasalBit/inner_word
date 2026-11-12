@@ -18,7 +18,7 @@ use writer_comments as comments;
 use writer_editor::actions as editor;
 use writer_spell::actions as spell;
 
-use super::{EditCommand, KEY_CONTEXT, MenuKind, SaveState, Workspace};
+use super::{EditCommand, KEY_CONTEXT, MenuKind, RightPanel, SaveState, Workspace};
 use crate::{
     actions::{FocusLibrary, NewDocument, QuickOpen, ToggleCommandPalette},
     character_limit::LimitCounter,
@@ -988,22 +988,31 @@ impl Render for Workspace {
             // crate handles them globally). Behind an open modal they
             // would move the keyboard or the caret out of sight: the
             // modal closes first.
+            // They also bring the comments in front of the side chat,
+            // with which they share the slot at the right.
             .capture_action(cx.listener(|this, _: &comments::AddComment, window, cx| {
                 this.close_modal_first(window, cx);
+                this.choose_right_panel(RightPanel::Comments, cx);
             }))
             .capture_action(
                 cx.listener(|this, _: &comments::FocusComments, window, cx| {
                     this.close_modal_first(window, cx);
+                    this.choose_right_panel(RightPanel::Comments, cx);
                 }),
             )
             .capture_action(cx.listener(|this, _: &comments::NextComment, window, cx| {
                 this.close_modal_first(window, cx);
+                this.choose_right_panel(RightPanel::Comments, cx);
             }))
             .capture_action(
                 cx.listener(|this, _: &comments::PreviousComment, window, cx| {
                     this.close_modal_first(window, cx);
+                    this.choose_right_panel(RightPanel::Comments, cx);
                 }),
             )
+            .capture_action(cx.listener(|this, _: &comments::GoToThread, _, cx| {
+                this.choose_right_panel(RightPanel::Comments, cx);
+            }))
             .capture_action(
                 cx.listener(|this, _: &comments::ToggleComments, window, cx| {
                     this.close_modal_first(window, cx);

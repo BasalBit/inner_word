@@ -115,6 +115,73 @@ fn automatic_picks_the_language_of_most_words() {
 }
 
 #[test]
+fn a_preferred_list_that_names_most_languages_is_not_a_choice() {
+    let names = |service: &FakeSpellService| -> Vec<String> {
+        language_choices(service)
+            .into_iter()
+            .map(|l| l.name)
+            .collect()
+    };
+    let service = || {
+        FakeSpellService::with_words(["the"])
+            .language("en_GB", "English (United Kingdom)", ["the"])
+            .language("cs", "Czech", ["a"])
+            .language("da", "Danish", ["og"])
+            .language("de", "German", ["das"])
+            .language("es", "Spanish", ["el"])
+            .language("nl", "Dutch", ["de"])
+            .language("sv", "Swedish", ["och"])
+    };
+    // What a Mac left on "Automatic by Language" reports: the user's own
+    // language, then nearly everything else in the order of the
+    // identifiers. Only the first is the user's; the rest go by name.
+    let automatic = service().prefer(["en_GB", "cs", "da", "de", "es", "nl"]);
+    assert_eq!(
+        names(&automatic),
+        [
+            "English (United Kingdom)",
+            "Czech",
+            "Danish",
+            "Dutch",
+            "English",
+            "German",
+            "Spanish",
+            "Swedish"
+        ]
+    );
+    // A short list is the user's own choice and keeps its order.
+    let chosen = service().prefer(["de", "en_GB", "sv"]);
+    assert_eq!(
+        names(&chosen),
+        [
+            "German",
+            "English (United Kingdom)",
+            "Swedish",
+            "Czech",
+            "Danish",
+            "Dutch",
+            "English",
+            "Spanish"
+        ]
+    );
+    // The service's own list is not touched.
+    assert_eq!(automatic.preferred_languages().len(), 6);
+
+    assert_eq!(
+        writer_spell::system::display_name("en", "English".into()),
+        "English (United States)"
+    );
+    assert_eq!(
+        writer_spell::system::display_name("en_GB", "English (United Kingdom)".into()),
+        "English (United Kingdom)"
+    );
+    assert_eq!(
+        writer_spell::system::display_name("de", "German".into()),
+        "German"
+    );
+}
+
+#[test]
 fn ranges_are_on_character_boundaries() {
     let service = FakeSpellService::with_words(["café", "naïve", "a"]);
     let fixed = SpellLanguage::fixed(FAKE_LANGUAGE);

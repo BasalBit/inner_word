@@ -71,13 +71,19 @@ fn system_languages() {
     assert!(languages.iter().any(|l| l.id.starts_with("en")));
     assert!(languages.iter().all(|l| !l.name.is_empty()));
     assert_eq!(choices.len(), languages.len());
-    for (index, id) in preferred
+    // The user's first language leads; the whole list only when it is
+    // short enough to be a choice (see `language_choices`).
+    if let Some(first) = preferred
         .iter()
-        .filter(|id| languages.iter().any(|l| &l.id == *id))
-        .enumerate()
+        .find(|id| languages.iter().any(|l| &l.id == *id))
     {
-        assert_eq!(&choices[index].id, id);
+        assert_eq!(&choices[0].id, first);
     }
+    assert!(
+        languages
+            .iter()
+            .any(|l| l.id == "en" && l.name == "English (United States)")
+    );
 }
 
 #[test]

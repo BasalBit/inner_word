@@ -136,8 +136,8 @@ pub use checker::{
 };
 pub use fake::{FAKE_LANGUAGE, FakeSpellService};
 pub use service::{
-    LanguageInfo, SpellCheck, SpellCheckPart, SpellDocument, SpellLanguage, SpellService,
-    language_choices, language_name,
+    LanguageInfo, OWN_CHOICE_LIMIT, SpellCheck, SpellCheckPart, SpellDocument, SpellLanguage,
+    SpellService, language_choices, language_name,
 };
 pub use system::SystemSpellService;
 

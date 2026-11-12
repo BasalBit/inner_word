@@ -122,6 +122,19 @@ pub(crate) fn utf16_range(text: &str, range: Range<usize>) -> Range<usize> {
     start..start + utf16_len(&text[range])
 }
 
+/// The name a language is listed under. The system's names are kept, with
+/// one exception: the checker's plain `en` is its American dictionary
+/// ("harbour" is misspelled under it), and the system calls it just
+/// "English" in a list with nine entries like "English (United Kingdom)".
+/// Nobody looking for American English would find it under that name.
+pub fn display_name(id: &str, system_name: String) -> String {
+    if id == "en" && system_name == "English" {
+        "English (United States)".to_string()
+    } else {
+        system_name
+    }
+}
+
 /// The system spell checker. Create it on the main thread and use it
 /// there (see the [module docs](self)).
 pub struct SystemSpellService {
@@ -699,6 +712,7 @@ mod imp {
                             })
                             .filter(|name| !name.trim().is_empty())
                             .unwrap_or_else(|| id.clone());
+                        let name = super::display_name(&id, name);
                         LanguageInfo { id, name }
                     })
                     .collect()

@@ -236,9 +236,19 @@ pub trait SpellService: 'static {
 /// The languages for a settings row or a picker: the user's preferred
 /// languages first, in their order, then every other language sorted by
 /// its display name.
+///
+/// A preferred list that names most of what the service offers is not a
+/// choice anybody made: a Mac left on "Automatic by Language" reports
+/// every language it can tell apart (34 of 44 on the Mac this was written
+/// on), the user's own first and the rest in the order of their
+/// identifiers. Then only the first entry says something about the user,
+/// and the others are sorted by name with the rest ([`OWN_CHOICE_LIMIT`]).
 pub fn language_choices(service: &dyn SpellService) -> Vec<LanguageInfo> {
     let all = service.languages();
-    let preferred = service.preferred_languages();
+    let mut preferred = service.preferred_languages();
+    if preferred.len() > OWN_CHOICE_LIMIT && preferred.len() * 2 > all.len() {
+        preferred.truncate(1);
+    }
     let mut first: Vec<LanguageInfo> = Vec::new();
     for id in &preferred {
         if first.iter().any(|l| &l.id == id) {
@@ -261,6 +271,11 @@ pub fn language_choices(service: &dyn SpellService) -> Vec<LanguageInfo> {
     first.extend(rest);
     first
 }
+
+/// Up to this many preferred languages are always taken as the user's own
+/// choice and listed first by [`language_choices`]; a longer list only
+/// when it names no more than half of the languages there are.
+pub const OWN_CHOICE_LIMIT: usize = 4;
 
 /// The display name of the language `id` ("British English"), or the
 /// identifier itself when the service does not know it.

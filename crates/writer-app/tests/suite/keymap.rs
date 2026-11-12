@@ -10,7 +10,7 @@ use writer_editor_tools::ToolKind;
 use super::*;
 
 /// Keys that work anywhere in the window.
-const GLOBAL: &[(&str, &str)] = &[
+pub(super) const GLOBAL: &[(&str, &str)] = &[
     ("cmd-shift-p", "workspace::ToggleCommandPalette"),
     ("cmd-p", "workspace::QuickOpen"),
     ("cmd-n", "workspace::NewDocument"),
@@ -29,6 +29,8 @@ const GLOBAL: &[(&str, &str)] = &[
     ("cmd-alt-p", "workspace::TogglePageView"),
     ("cmd-alt-v", "workspace::ToggleVimMode"),
     ("cmd-alt-a", "workspace::ShowAgents"),
+    ("cmd-j", "workspace::AskAssistant"),
+    ("cmd-3", "workspace::FocusAssistant"),
     ("cmd-alt-c", "comments::ToggleComments"),
     ("cmd-alt-m", "comments::AddComment"),
     ("cmd-alt-]", "comments::NextComment"),
@@ -153,7 +155,7 @@ fn winner(keys: &str, cx: &mut VisualTestContext) -> Option<String> {
 }
 
 #[track_caller]
-fn assert_table(table: &[(&str, &str)], place: &str, cx: &mut VisualTestContext) {
+pub(super) fn assert_table(table: &[(&str, &str)], place: &str, cx: &mut VisualTestContext) {
     let wrong: Vec<String> = table
         .iter()
         .filter_map(|(keys, expected)| {

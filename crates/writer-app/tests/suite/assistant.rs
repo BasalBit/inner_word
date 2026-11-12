@@ -1837,3 +1837,144 @@ fn errors_of_the_engine_are_said_in_plain_words(cx: &mut TestAppContext) {
             .is_some_and(|availability| availability.is_signed_out())
     );
 }
+
+#[gpui::test]
+fn the_keys_of_the_chats_and_of_the_window_work_in_both_chats(cx: &mut TestAppContext) {
+    use super::keymap::{GLOBAL, assert_table};
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+
+    // The composer of the side chat.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    assert_table(GLOBAL, "the side chat", vcx);
+    assert_table(
+        &[
+            ("escape", "assistant::DismissChat"),
+            ("cmd-.", "assistant::StopAnswer"),
+            ("cmd-enter", "assistant::InsertAtCaret"),
+            ("cmd-shift-enter", "assistant::ReplaceSelection"),
+            ("cmd-shift-c", "assistant::CopyAnswer"),
+            ("cmd-alt-n", "assistant::NewChat"),
+            ("cmd-alt-k", "assistant::ClearChat"),
+            ("cmd-shift-m", "assistant::ChooseModel"),
+            ("cmd-alt-e", "assistant::ChooseEffort"),
+            ("cmd-shift-a", "assistant::AddContext"),
+            ("tab", "assistant::FocusNextArea"),
+        ],
+        "the side chat",
+        vcx,
+    );
+
+    // The composer of the quick chat.
+    vcx.simulate_keystrokes("escape");
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    assert!(
+        quick(&workspace, vcx).update_in(vcx, |quick, window, cx| quick.has_keyboard(window, cx))
+    );
+    assert_table(GLOBAL, "the quick chat", vcx);
+    assert_table(
+        &[
+            ("escape", "assistant::DismissChat"),
+            ("cmd-.", "assistant::StopAnswer"),
+            ("cmd-enter", "quick_chat::InsertBelow"),
+            ("cmd-shift-enter", "assistant::ReplaceSelection"),
+            ("cmd-shift-c", "assistant::CopyAnswer"),
+            ("cmd-shift-m", "assistant::ChooseModel"),
+            ("cmd-alt-e", "assistant::ChooseEffort"),
+        ],
+        "the quick chat",
+        vcx,
+    );
+    // cmd-3 from the quick chat goes to the side chat; the popover, which
+    // lost the keyboard, closes.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    assert!(!quick_open(&workspace, vcx));
+
+    // Without the assistant the two keys do nothing at all.
+    workspace.update(vcx, |w, cx| {
+        w.write_setting(keys::ASSISTANT_ENABLED, &false, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), None);
+    workspace.update_in(vcx, |w, window, cx| w.focus_editor(window, cx));
+    vcx.simulate_keystrokes("cmd-j cmd-3");
+    vcx.run_until_parked();
+    assert!(!quick_open(&workspace, vcx));
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(editor_focused(&workspace, vcx));
+}
+
+#[gpui::test]
+fn the_shortcuts_overlay_lists_the_assistant_only_while_it_is_shown(cx: &mut TestAppContext) {
+    use writer_app::shortcuts::{Place, collect_shortcuts};
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    let listed = |cx: &mut VisualTestContext| -> Vec<(String, Place, String)> {
+        cx.update(|_, cx| {
+            collect_shortcuts(cx)
+                .into_iter()
+                .map(|shortcut| (shortcut.title.to_string(), shortcut.place, shortcut.keys))
+                .collect()
+        })
+    };
+    let rows = listed(vcx);
+    let row = |title: &str, place: Place, keys: &str| (title.to_string(), place, keys.to_string());
+    // The two keys of the window.
+    assert!(
+        rows.contains(&row("Ask the assistant", Place::Anywhere, "⌘J")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&row("Go to assistant", Place::Anywhere, "⌘3")),
+        "{rows:?}"
+    );
+    // The keys inside the chats, under a place of their own.
+    for (title, keys) in [
+        ("New chat", "⌥⌘N"),
+        ("Clear chat", "⌥⌘K"),
+        ("Choose model", "⇧⌘M"),
+        ("Choose effort", "⌥⌘E"),
+        ("Add context", "⇧⌘A"),
+        ("Insert answer at caret", "⌘↩"),
+        ("Stop the answer", "⌘."),
+        ("Insert below", "⌘↩"),
+    ] {
+        assert!(
+            rows.contains(&row(title, Place::AssistantChat, keys)),
+            "{title} {keys} in {rows:?}"
+        );
+    }
+    // Nothing of the chats is filed under "Elsewhere" or "In the text".
+    assert!(
+        !rows
+            .iter()
+            .any(|(title, place, _)| *place == Place::Elsewhere && title.contains("chat"))
+    );
+    assert_eq!(
+        Place::AssistantChat.heading("Assistant"),
+        "In the assistant's chats"
+    );
+
+    // Switched off: none of it is listed.
+    workspace.update(vcx, |w, cx| {
+        w.write_setting(keys::ASSISTANT_ENABLED, &false, cx)
+    });
+    vcx.run_until_parked();
+    let rows = listed(vcx);
+    assert!(
+        !rows
+            .iter()
+            .any(|(_, place, _)| *place == Place::AssistantChat),
+        "{rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|(title, _, _)| title.contains("assistant")),
+        "{rows:?}"
+    );
+}

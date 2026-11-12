@@ -32,7 +32,7 @@ pub type ShortcutsOverlay = Picker<ShortcutsDelegate>;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 9] = [
+const KEY_GROUPS: [(&str, &str); 11] = [
     ("editor", "Moving and selecting"),
     ("editor_tools", ""),
     ("comments", ""),
@@ -41,10 +41,19 @@ const KEY_GROUPS: [(&str, &str); 9] = [
     ("settings", ""),
     ("version_history", ""),
     ("agents", ""),
+    // The chats of the assistant: listed only while the assistant is shown
+    // (see `ASSISTANT_NAMESPACES`).
+    ("assistant", ""),
+    ("quick_chat", ""),
     // `ctrl-enter` (and `shift-f10`) in the library, the comment list and a
     // text field.
     ("context_menu", ""),
 ];
+
+/// The action namespaces of the assistant's chats. Their keys are left out
+/// of the list while the assistant is not shown (its engine is not
+/// installed, or it is switched off), like its commands.
+const ASSISTANT_NAMESPACES: [&str; 2] = ["assistant", "quick_chat"];
 
 /// Commands that are started by typing a character, not by a key binding,
 /// so the keymap does not know them: the action, the character, and where
@@ -94,6 +103,9 @@ pub enum Place {
     VersionHistory,
     /// In the Agents panel.
     Agents,
+    /// In one of the assistant's chats: the quick chat at the selection,
+    /// the side chat beside the text.
+    AssistantChat,
     /// In a dialog.
     Dialog,
     /// In a text field.
@@ -118,6 +130,7 @@ impl Place {
             Place::Settings => "In settings",
             Place::VersionHistory => "In the version history",
             Place::Agents => "In the agents panel",
+            Place::AssistantChat => "In the assistant's chats",
             Place::Dialog => "In a dialog",
             Place::TextField => "In a text field",
             Place::Elsewhere => "Elsewhere",
@@ -151,6 +164,11 @@ impl Place {
             Place::VersionHistory
         } else if has("AgentsView") {
             Place::Agents
+        } else if has("QuickChat") || has("Assistant") || has("assistant") {
+            // The side chat (`AssistantPanel`, `AssistantMessages`, ...),
+            // the quick chat's popover, and the editors of both (the
+            // composer and the answers: `Editor && assistant...`).
+            Place::AssistantChat
         } else if has("Picker") {
             Place::List
         } else if [
@@ -180,6 +198,7 @@ impl Place {
         match self {
             Place::Library => Some("Library"),
             Place::CommentList => Some("Comments"),
+            Place::AssistantChat => Some(crate::actions::CATEGORY_ASSISTANT),
             _ => None,
         }
     }
@@ -359,7 +378,11 @@ pub fn collect_shortcuts(cx: &App) -> Vec<Shortcut> {
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
     let mut undescribed: Vec<Box<dyn Action>> = Vec::new();
+    let assistant_hidden = commands::category_hidden(crate::actions::CATEGORY_ASSISTANT, cx);
     for (namespace, category) in KEY_GROUPS {
+        if assistant_hidden && ASSISTANT_NAMESPACES.contains(&namespace) {
+            continue;
+        }
         let prefix = format!("{namespace}::");
         let mut seen: HashSet<&'static str> = HashSet::new();
         for binding in keymap.bindings() {

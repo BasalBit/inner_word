@@ -515,12 +515,23 @@ for b in keymap.bindings() {          // insertion order; later = higher precede
     b.keystrokes() /* &[KeybindingKeystroke] */; b.action().name(); b.predicate() /* Option<Rc<..>>, Display */;
 }
 keymap.bindings_for_action(&action)   // compares action VALUES (data-sensitive), last = preferred
-window.bindings_for_action(&action)   // only those valid in the focused context stack
+window.bindings_for_action(&action)   // NOT the focused element's: see below
 window.highest_precedence_binding_for_action(&action);  window.bindings_for_action_in(&action, &focus_handle)
 cx.all_action_names(); cx.action_documentation() /* HashMap<&str, &str> from doc comments */
 window.available_actions(cx)          // actions with listeners on the focused path
 cx.build_action("editor::Bold", None) // by name; fails for no_json actions with fields
 ```
+
+`Window::bindings_for_action` and `Window::highest_precedence_binding_for_action` (and so
+`Window::keystroke_text_for` and writer-ui's `KeyHint::for_action_focused`) answer from
+`dispatch_tree.context_stack`, which outside a draw is the build stack left over from the
+last frame: the key contexts of the element that was painted last, not of the focused one,
+and often empty (then only bindings without a key context are found). To ask for a place,
+use `bindings_for_action_in(&action, &focus_handle)` (writer-ui: `KeyHint::for_action_at`,
+`for_action_here`). Held by `a_hint_is_asked_in_the_place_it_applies` in
+`crates/writer-ui/tests/widgets/rebinding.rs`. `Window::context_stack()` debug-asserts that
+a frame was drawn when nothing in the last frame is focused: not from `render`, and not on
+the first frame of a window.
 
 Taking the keymap apart and putting it back (the user's own shortcuts; tested in
 `crates/writer-app/tests/suite/keybindings.rs`, and every suite of the app runs on a keymap
@@ -799,6 +810,7 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), the open context menu, Vim mode and command line, open tool and find count, the format bar, comment threads, spelling (`on language=<id\|auto> (app\|document) [detected=<id>] marks=N pending=N`), status bar |
 | `book:<blocks>` | creates and opens a generated document; prints what opening cost and how long it took until the text on screen was checked for spelling |
 | `savecost[:<rounds>]`, `limitcost[:<rounds>]` | time a synchronous save part by part, and the character-limit count |
+| `keyscost[:<rounds>]` | times a change of a keyboard shortcut (the key of Bold, there and back, as the list makes it: keymap installed, menu bar built again, change stored), the frame after it, and the parts of installing the keymap alone. Release build of 0.5.0: 6 to 14 ms for a change; of the install, `clear_key_bindings` and `bind_keys` of 452 bindings take under 0.1 ms, building the bindings about 1 ms, `set_menus` 1 to 5 ms |
 | `typecost:<text>`, `keycost:<keystrokes>` | press the keys at a writer's pace (one every 80 ms) and time each: dispatch, the frame after it, and how long the main thread kept a 4 ms timer waiting in between; ends with the spell checker's slices |
 | `stall:<ms>` | watches the main thread for that long without pressing anything (the background pass of the spell checker, events posted from outside): timer waits, frame costs, slices |
 | `dump` | the first 400 characters of the text in the editor |
@@ -861,6 +873,34 @@ default, its key has return in it) has `f6` (seen in a run of the debug build).
 it panics; the app names the file beforehand, `workspace::choose_import_file_beforehand`),
 and the system dialog of "Reset All Keyboard Shortcuts…" in a scripted run (a test answers
 it with `simulate_prompt_answer`).
+
+Real key and pointer events for a window in the background (used for 0.5.0 on the list of
+keyboard shortcuts; the tool is `scratchpad/v050/tool/poster.swift`, first written for the
+mouse in 0.2.0): `CGEvent.postToPid(pid)` delivers a key or mouse event to one process, and
+the app's background window gets it through AppKit (`performKeyEquivalent:`, `keyDown:`,
+`keyUp:`, hover, clicks), which a `keys:` step does not go through. Seen that way: a click
+on the key of a row starts the waiting, the next real key is taken (`cmd-alt-b`, `cmd-w`,
+`cmd-,`, `cmd-i`, `f5`, which arrives as plain `f5`), a held key (auto-repeat events, then
+a key-up) starts the waiting once and is recorded once, a click on a choice takes it, the
+controls of a row that is not selected come up under the pointer and work, a right-click
+opens the row menu. **What it cannot show: the keys of the application menu.** A background
+app has no active window, `App::is_action_available` then only knows actions with app-wide
+handlers, so of the menu bar's items only Quit, Hide and Hide Others are enabled, and
+AppKit runs an enabled item from the menu bar before the window sees the key. A posted
+`cmd-q` quit the app while the list waited for a key; `cmd-h` and `cmd-alt-h` ran too.
+**Do not post `cmd-h`, `cmd-alt-h`, `cmd-m` or `cmd-q` to the app: Hide Others hides every
+other application of the person at the Mac** (undone with `NSRunningApplication.unhide()`
+for each hidden app). In an active window AppKit asks the key window first, where GPUI's
+interceptor takes the key (read from `handle_key_event` in gpui's mac `window.rs`); that
+needs a person at the keyboard.
+
+Two layout facts from the list of keyboard shortcuts: `.truncate()` drew no ellipsis in a
+flex row there, `.line_clamp(1).text_ellipsis()` does (seen in captures). And a toast with
+a button, shown while a modal that fills most of the window's height is open, lies over the
+modal's lower part (toasts sit 44 px above the bottom edge and take clicks): the list
+leaves room for one toast under itself and the app shows one toast about the shortcuts at a
+time. `WindowHandle<V>::update` leases the root view, so `window.dispatch_keystroke` inside
+it panics when the key's action updates that view: dispatch through the `AnyWindowHandle`.
 
 A library the `writer` tool made is a library like any other: build one with the tool
 (`THE_WRITER_DATA_DIR=$QA/data target/debug/writer create ...`), then start the app on the

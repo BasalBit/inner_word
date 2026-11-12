@@ -96,6 +96,8 @@ it is open, the side chat while it is in the right panel), `dump`, `log:<text>`,
 `book:<blocks>` (creates and opens a generated document, and says how long it took until
 the text on screen was checked for spelling), `savecost[:<rounds>]` (every part of a
 synchronous save, timed), `limitcost[:<rounds>]` (the character-limit count),
+`keyscost[:<rounds>]` (what a change of a keyboard shortcut costs: the whole change as the
+list makes it, the frame after it, the parts of installing the keymap),
 `typecost:<text>` and `keycost:<keystrokes>` (press the keys at a writer's pace and time
 each: dispatch, the frame after it, how long the main thread kept a timer waiting, the
 spell checker's slices) and `stall:<ms>` (watches the main thread without pressing
@@ -134,6 +136,17 @@ Measure in a release build (`cargo build --release -p writer-app`, then
 THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; savecost:7; type:a; wait:1600; state; quit"
 # savecost: the synchronous save, part by part (about 70 ms, the library write is 60 of them)
 # state:    last_save=[main 0.7 ms, background 90 ms, ...] for the autosave after "a"
+```
+
+What a change of a key costs (measured for 0.5.0 in the release build: 6 to 14 ms for the
+whole change, of which installing the 452 bindings is under 3 ms and the menu bar 1 to 5;
+launch takes the same 250 ms with no change, five changes and 136 changed commands
+stored):
+
+```bash
+THE_WRITER_AUTOMATION="wait:5000; keyscost:15; keys:cmd-/; wait:1000; keyscost:15; quit"
+# keyscost: a change of a key, 30 times: 9.10 ms (worst 12.57)
+# keyscost: installing 452 bindings: what to bind 1.00 ms, building them 1.29 ms, clear and bind 0.09 ms, the menu bar 4.82 ms
 ```
 
 What spell checking costs in a book (measured for 0.2.0: the text on screen is checked
@@ -615,6 +628,31 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   else (a binding added later is lost at the next change), and never compare against a key
   or keep a `KeyHint`: ask the keymap when the key arrives or the hint is drawn
   (`writer_ui::keymap`, `KeyHint::for_action`, `writer_app::keymap::hint_in`).
+- **A hint for a command bound in several places is asked in its own place.**
+  `KeyHint::for_action` and `CommandDescriptor::key_hint` answer keymap-wide (the binding
+  added last), which is another place's key once the user changed one of them. A control
+  asks where it is (`KeyHint::for_action_at` with its focus handle, `for_action_here`,
+  `keymap::hint_in`). `Window::bindings_for_action` and `KeyHint::for_action_focused` do
+  not answer for the focused element in gpui 0.2.2 (`docs/gpui-notes.md`).
+- **In a list, `enter` is the list's `Confirm` and nothing else.** The query field of a
+  picker, of the format menu and of the font picker leaves its submit key to the parent
+  (`TextField::set_submit_to_parent`), so a key given to `picker::Confirm` is the key, and
+  the old one stops. The filter field of the library and the fields of the settings and of
+  the list of shortcuts keep `enter` as the field's own Submit.
+- **`escape` closes at several levels**, each a binding of its own: `text_field::Cancel`,
+  `picker::Dismiss`, `editor_tools::CloseTool`, `modal::Dismiss` ("Dismiss", in a dialog).
+  Taking the key from the dialog's Dismiss leaves the settings, the version history and
+  the Agents panel without a key that closes them (the pointer still does, and opening the
+  palette or the list of shortcuts takes their place); the palette and the pickers close
+  on their own Dismiss, and the list of shortcuts closes on `escape` whatever is bound.
+- **Real key events posted to the app in the background do not go the way a key press in
+  an active window goes.** A background app has no active window, so GPUI validates only
+  the menu bar items whose actions have app-wide handlers (Quit, Hide, Hide Others), and
+  AppKit runs those from the menu bar before the window sees the key. A posted `cmd-q`
+  quits while the list of shortcuts waits for a key, where `cmd-w` and `cmd-,` are
+  recorded. **Never post `cmd-h`, `cmd-alt-h` or `cmd-m` to the app**: Hide Others hides
+  every other application of whoever is at the Mac (it happened while 0.5.0 was verified,
+  and was undone with `NSRunningApplication.unhide`).
 
 A layout fact that bites: text that wraps (or has several lines) inside a `flex_col`
 container that is itself the growing child (`flex_1`) of a flex row is measured at no
@@ -646,11 +684,48 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
   from what is installed: the commands of the palette in their categories, then the keys
   without a command (moving the caret, the keys of a text field, of the dialogs and of the
   list itself), named after their actions.
-- **Not changeable**, and the list says so: the grammar of Vim mode (it is not made of
-  bindings; with Vim mode on, a key Vim uses in the current mode never reaches a binding),
-  the `/` that opens the insert menu (typed into the text; the command can be given a real
-  key besides), and the two keys of the message window that stands in when the library
-  cannot be opened.
+- **Not changeable**, and the list says so in three lines above its rows
+  (`shortcuts::MENUS_NOTE`, `workspace::NOT_CHANGEABLE_NOTE`, `workspace::ALSO_FIXED_NOTE`) and
+  the read-me in a paragraph. The whole list of keys that are not bindings:
+  - the grammar of Vim mode, the keys its mode menu shows (`Esc`, `i`, `:`, `/`) and its
+    command line;
+  - the `/` that opens the insert menu (typed into the text; the list has it as a row that
+    says "Fixed", and the command can be given a real key besides) and `tab`, which takes
+    the marked row of that menu (the other keys of the open menu are the list's:
+    `picker::SelectPrev`, `SelectNext`, `Confirm`, `Dismiss`, so `ctrl-p` / `ctrl-n` move in
+    it too);
+  - everything inside an open context menu (`writer_ui::context_menu`, `handle_keystroke`:
+    arrows, `ctrl-p` / `ctrl-n`, `home` / `end` / the page keys, `enter` and `space`, `left`
+    / `right` for a submenu, `escape`, letters for type-ahead): the menu never has the
+    keyboard, so no binding can apply in it, and its way out must not depend on the keymap.
+    Only the key that opens it is a binding (any action named `OpenContextMenu`). While a
+    menu is open a chord with `cmd` closes it and then runs; any other shortcut is swallowed;
+  - what the pointer does with a key held: `cmd`-click opens a link, `shift`-click extends
+    the selection, `ctrl`-click is a right-click;
+  - `escape` in the list of keyboard shortcuts itself when its `Close` has no key (so the
+    list can always be left), and the two keys of the message window that stands in when
+    the library cannot be opened (the changes live in the library);
+  - what macOS keeps (`cmd-tab` and the like never reach the app).
+- **Vim mode sees the keys of the text first.** With Vim mode on, every key without `cmd`
+  (and that is no function key and no option chord) goes to the Vim engine before any
+  binding, in the text and for commands that work anywhere while the keyboard is in the
+  text; where Vim has a command on it (in Normal and Visual mode: `ctrl-b`, `ctrl-y`, the
+  arrows and many more) the shortcut never runs. The keymap as data does not know this, so
+  the app tells the list (`Listing::takes_keys_first`, `workspace::VIM_TAKES_KEYS_FIRST`,
+  `vim_leaves`) and the question about such a key says so while Vim mode is on. The other
+  way round nothing is eaten: a bare character is refused as a shortcut where text is
+  typed, and the one key that is let through to the editor although Vim has a command on
+  it is the key of the text's context menu.
+- **What the user is told counts rows.** "3 keys changed" in the list, the row of the
+  settings, both questions of "reset all", the preview of an import and its toast count a
+  command that is bound in several key contexts of one place once
+  (`Listing::changed_commands`, `Listing::commands_among`,
+  `workspace::changed_command_count`); `keymap::changed_count` counts key contexts and is
+  for tests.
+- **One toast about the shortcuts at a time** (`Workspace::say_about_shortcuts`): the list
+  stays open under the toast that offers Undo, the list leaves room for one toast under
+  itself (`ROOM_BELOW` in `writer-keymap-ui/src/render.rs`), and a second one would lie
+  over the choices of a question.
 - **Guard rails** (`writer_keymap::check`, asked by the list before anything changes): a
   bare character or shift with one is refused where text is typed; a key macOS keeps
   (`cmd-tab`, `cmd-alt-escape`, ...) is refused, one it uses unless switched off

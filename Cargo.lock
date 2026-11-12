@@ -6899,6 +6899,8 @@ dependencies = [
  "unicode-segmentation",
  "writer-agent-setup",
  "writer-assistant",
+ "writer-assistant-quick",
+ "writer-assistant-ui",
  "writer-comments",
  "writer-core",
  "writer-editor",
@@ -6927,8 +6929,11 @@ name = "writer-assistant-quick"
 version = "0.3.0"
 dependencies = [
  "gpui",
+ "writer-assistant",
+ "writer-assistant-ui",
  "writer-core",
  "writer-editor",
+ "writer-editor-tools",
  "writer-export",
  "writer-ui",
  "writer-vim",

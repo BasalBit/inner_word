@@ -668,15 +668,37 @@ fn splice_block(
             new = new.with_span(&text[..end - span.start], attrs.clone());
         }
     }
-    let around = merged(&InlineAttrs::default(), &base, exact);
+    // The new text, cut where its own formatting changes.
+    let plain = InlineAttrs::default();
+    let mut incoming: Vec<(&str, &InlineAttrs)> = Vec::new();
     if !lead.is_empty() {
-        new = new.with_span(lead, around.clone());
+        incoming.push((lead, &plain));
     }
     for (_, text, attrs) in piece.text_spans() {
-        new = new.with_span(text, merged(attrs, &base, exact));
+        incoming.push((text, attrs));
     }
     if !trail.is_empty() {
-        new = new.with_span(trail, around);
+        incoming.push((trail, &plain));
+    }
+    if exact {
+        for (text, attrs) in incoming {
+            new = new.with_span(text, merged(attrs, &base, true));
+        }
+    } else {
+        // Each part of the new text takes the formatting of the old text it stands for.
+        let text: String = incoming.iter().map(|(text, _)| *text).collect();
+        let bases = formatting_to_take(&old, from..to, &text);
+        let mut at = 0;
+        for (text, attrs) in incoming {
+            let end = at + text.len();
+            for (part, base) in &bases {
+                let (start, stop) = (part.start.max(at), part.end.min(end));
+                if start < stop {
+                    new = new.with_span(&text[start - at..stop - at], merged(attrs, base, false));
+                }
+            }
+            at = end;
+        }
     }
     for (span, text, attrs) in old.text_spans() {
         if span.end > to {
@@ -685,6 +707,68 @@ fn splice_block(
         }
     }
     edit_block(ed, index, &new);
+}
+
+/// The formatting that the text `new_text` takes where it replaces `range` of the block
+/// `old`: for each part of the new text (a byte range of it, the parts in order and
+/// without gaps) the formatting of the old text it stands for.
+///
+/// What the old and the new text begin with in common and what they end with in common
+/// is the same text: an agent quotes words around the one it changes so that the place is
+/// found once, and those words keep the formatting each of them has (a word in bold, a
+/// link). Only what differs in between is new, and takes the formatting of what it
+/// replaces: of the first character that went, or, where nothing went, of the character
+/// before it, as typed text does.
+fn formatting_to_take(
+    old: &Block,
+    range: Range<usize>,
+    new_text: &str,
+) -> Vec<(Range<usize>, InlineAttrs)> {
+    let was = &old.text()[range.clone()];
+    let mut prefix = 0;
+    for (a, b) in was.chars().zip(new_text.chars()) {
+        if a != b {
+            break;
+        }
+        prefix += a.len_utf8();
+    }
+    let mut suffix = 0;
+    for (a, b) in was[prefix..]
+        .chars()
+        .rev()
+        .zip(new_text[prefix..].chars().rev())
+    {
+        if a != b {
+            break;
+        }
+        suffix += a.len_utf8();
+    }
+    let attrs = |offset: usize| old.attrs_at(offset).cloned().unwrap_or_default();
+    let mut parts: Vec<(Range<usize>, InlineAttrs)> = Vec::new();
+    // The runs of the old text between `start` and `end`, as parts of the new text that
+    // begin at `at`.
+    let kept =
+        |parts: &mut Vec<(Range<usize>, InlineAttrs)>, start: usize, end: usize, at: usize| {
+            for (span, run) in old.spans() {
+                let (from, to) = (span.start.max(start), span.end.min(end));
+                if from < to {
+                    parts.push((at + from - start..at + to - start, run.clone()));
+                }
+            }
+        };
+    kept(&mut parts, range.start, range.start + prefix, 0);
+    let middle = prefix..new_text.len() - suffix;
+    if !middle.is_empty() {
+        let gone = range.start + prefix..range.end - suffix;
+        let base = if !gone.is_empty() || prefix == 0 {
+            attrs(gone.start)
+        } else {
+            old.attrs_before(gone.start).cloned().unwrap_or_default()
+        };
+        parts.push((middle.clone(), base));
+    }
+    kept(&mut parts, range.end - suffix, range.end, middle.end);
+    parts
 }
 
 /// Replaces `range`, which runs across blocks, with the text of the paragraph `piece`

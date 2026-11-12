@@ -432,6 +432,97 @@ fn an_edit_replaces_exactly_the_text_it_names() {
 }
 
 #[test]
+fn words_quoted_around_a_change_keep_the_formatting_each_has() {
+    // An agent quotes more of the text than it changes, so that the place is found once.
+    // What it quotes and leaves as it is must keep what it has: a word in bold, a link.
+    let fx = fixture();
+    let doc = fx.create(
+        None,
+        "The boats came in. **Nobody** on the quay counted them, and *she* said so. A [link](https://example.com/a) here.\n",
+    );
+    // The bold word changes, the plain words after it are only quoted.
+    edit(&fx, doc.id, "Nobody on the quay", "No one on the quay").unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(
+        markdown.contains("**No one** on the quay counted"),
+        "{markdown}"
+    );
+    // Words added after a quoted italic word are typed after plain words: plain.
+    edit(&fx, doc.id, "she said so", "she said so twice").unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(markdown.contains("and *she* said so twice."), "{markdown}");
+    // A link in the quoted words stays a link.
+    edit(&fx, doc.id, "A link here", "A link there").unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(
+        markdown.contains("A [link](https://example.com/a) there."),
+        "{markdown}"
+    );
+    // A comma goes between two plain words; the italic word after them is untouched.
+    edit(&fx, doc.id, "counted them, and she", "counted them and she").unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(
+        markdown.contains("counted them and *she* said"),
+        "{markdown}"
+    );
+    // Words put in front of a quoted formatted word take its formatting, as the words
+    // that replace a formatted word do; words put behind it are typed behind it.
+    edit(&fx, doc.id, "she said", "only she said").unwrap();
+    edit(&fx, doc.id, "link", "link text").unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(
+        markdown.contains("and *only she* said so twice"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("A [link text](https://example.com/a) there."),
+        "{markdown}"
+    );
+    // Markup in the new text comes on top of what the quoted words have.
+    edit(
+        &fx,
+        doc.id,
+        "No one on the quay",
+        "No one on the *old* quay",
+    )
+    .unwrap();
+    let markdown = fx.markdown(doc.id);
+    assert!(
+        markdown.contains("**No one** on the *old* quay counted"),
+        "{markdown}"
+    );
+    // A comment on a quoted word stays where it is.
+    fx.library
+        .add_comment(&AddCommentRequest {
+            document: doc.id.into(),
+            quote: "quay".into(),
+            body: "Which one?".into(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    let changed = edit(&fx, doc.id, "old quay counted", "old quay never counted").unwrap();
+    assert!(changed.comments_detached.is_empty());
+    let threads = fx
+        .library
+        .comments(&ListCommentsRequest {
+            document: doc.id.into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .threads;
+    assert_eq!(threads[0].anchored_text.as_deref(), Some("quay"));
+    // Accents: the common beginning and end are cut between characters, not inside one.
+    let accents = fx.create(None, "Le **café** était fermé.\n");
+    edit(&fx, accents.id, "café était", "cafè était").unwrap();
+    assert!(
+        fx.markdown(accents.id).contains("Le **cafè** était fermé."),
+        "{}",
+        fx.markdown(accents.id)
+    );
+}
+
+#[test]
 fn an_edit_keeps_the_formatting_and_reads_markdown() {
     let fx = fixture();
     let doc = fx.create(None, CHAPTER);

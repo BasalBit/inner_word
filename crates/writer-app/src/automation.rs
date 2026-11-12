@@ -19,7 +19,7 @@
 //! | `keys:<keystrokes>`   | GPUI keystrokes separated by spaces: `keys:cmd-shift-p escape`; the key `;` is written `\;` (`keys:cmd-\;`) |
 //! | `type:<text>`         | types each character (escapes: `\;` `\n` `\t` `\s` `\\`)     |
 //! | `action:<name>`       | dispatches a registered action by name: `action:app::Quit`   |
-//! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
+//! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`, `zoom` |
 //! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
 //! | `menukey:<title>`     | prints the key the native menu bar has beside the item with that title (`menukey:Bold`), read from AppKit's own menu |
 //! | `bar[:<button>]`      | shows the format bar over the selection, as a selection made with the mouse does; with a button (`bold`, `italic`, `highlight`, `turn-into`, `more`, `extra-0` ...) presses that button of the bar |
@@ -28,12 +28,14 @@
 //! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
 //! | `agents:<n>[:<ms>]`   | waits until agents have made `n` changes through this app since it opened (the `writer` tool, run from outside while the script waits), for at most `ms` milliseconds (10000 unless given); fails when they did not come |
 //! | `agents:on`, `agents:off` | sets the switch "Agents can make changes while The Writer is open", as its button in the Agents panel does |
+//! | `zoom:<what>`         | the zoom of the text: `in`, `out`, `actual` (100 %), `fit` (the width), `page` (a whole page), `life` (the size of the paper), a percentage (`zoom:125`), `by:<factor>` (what a pinch at the middle of the text does) and `sideways:<pixels>` (scrolls a sheet that is wider than its room); prints the zoom afterwards |
+//! | `pagefit:<font>\|<size>\|<line spacing>\|<a4 or letter>\|<file>` | lays the text of the file out as one paragraph in page view at those settings (2.54 cm margins) and prints what the page holds: the rows of the paragraph, the characters in a full row (mean, least, most), the rows on the first page |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts and what its button offers), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts and what its button offers), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |

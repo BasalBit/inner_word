@@ -484,7 +484,8 @@ fonts, the recently used families, every family by name, without the hidden syst
 families). `left` / `right` step through the families by name; `enter`, `space` or a click
 on the row opens the searchable list (`font_choice::FontChoicePicker`, each family with a
 sample in its own face), which takes the place of the settings as the list of spelling
-languages does and comes back to the row, chosen or not. A font that is set but not on this
+languages does and comes back to the row after a choice and after `escape` (a click outside
+the list closes all of it, as it does for the languages). A font that is set but not on this
 Mac (a library from another one) stays set until another is chosen: the row says so, and it
 is the first row of the list, marked "Not on this Mac".
 

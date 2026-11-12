@@ -442,6 +442,48 @@ fn install(cx: &mut App) {
     cx.bind_keys(for_menus.into_iter().chain(effective));
 }
 
+/// What installing the keymap costs, part by part ([`measure_install`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InstallCost {
+    /// Working out what to bind from the defaults and the changes.
+    pub effective: std::time::Duration,
+    /// Building every GPUI binding from its parts, and the menu bar's.
+    pub build: std::time::Duration,
+    /// Clearing GPUI's keymap and binding it again.
+    pub bind: std::time::Duration,
+    /// Building the native menu bar again.
+    pub menus: std::time::Duration,
+    /// How many bindings were bound.
+    pub bindings: usize,
+}
+
+/// Installs the keymap as it is once more and says what each part cost:
+/// what [`set_changes`] does for a change, without a change. For the
+/// `keyscost` step of a scripted run.
+pub fn measure_install(cx: &mut App) -> Option<InstallCost> {
+    use std::time::Instant;
+    let start = Instant::now();
+    let effective = cx.try_global::<AppKeymap>()?.model.effective();
+    let after_effective = Instant::now();
+    cx.global_mut::<AppKeymap>().effective = effective;
+    let effective = effective_bindings(cx.global::<AppKeymap>(), cx);
+    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()));
+    let bindings = effective.len() + for_menus.len();
+    let after_build = Instant::now();
+    cx.clear_key_bindings();
+    cx.bind_keys(for_menus.into_iter().chain(effective));
+    let after_bind = Instant::now();
+    menus::install(cx);
+    let after_menus = Instant::now();
+    Some(InstallCost {
+        effective: after_effective - start,
+        build: after_build - after_effective,
+        bind: after_bind - after_build,
+        menus: after_menus - after_bind,
+        bindings,
+    })
+}
+
 /// The keys of a binding as text GPUI parses again (`cmd-shift-p`, and
 /// `ctrl-x ctrl-s` for a sequence).
 pub fn keys_of(binding: &KeyBinding) -> String {

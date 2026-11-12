@@ -2156,6 +2156,10 @@ fn a_script_sets_keys_and_reads_the_state(cx: &mut TestAppContext) {
     assert!(Script::parse("shortcut:editor::ToggleBold").is_err());
     assert!(Script::parse("shortcut:editor::ToggleBold=cmd-").is_err());
     assert!(Script::parse("shortcuts:dance").is_err());
+    assert!(matches!(
+        Script::parse("keyscost; keyscost:3").unwrap().steps[..],
+        [Step::KeysCost(7), Step::KeysCost(3)]
+    ));
 
     let (_library, workspace, vcx) = workspace_in_the_text(cx);
     let state = |cx: &mut VisualTestContext| {

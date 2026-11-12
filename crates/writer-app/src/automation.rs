@@ -36,6 +36,7 @@
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
 //! | `savecost[:<rounds>]` | times each part of a save of the open document on the main thread |
 //! | `limitcost[:<rounds>]` | times the character-limit count: whole text against block by block |
+//! | `keyscost[:<rounds>]` | times a change of a keyboard shortcut (the key of Bold, there and back): the whole change as the list makes it (install, menu bar, store), the frame after it, and the parts of installing the keymap |
 //! | `typecost:<text>`     | types the text at a writer's pace (a key every 80 ms) and times every key: its dispatch and the frame after it, and how long the main thread kept a 4 ms timer waiting between the keys |
 //! | `keycost:<keystrokes>` | the same for keystrokes (`keycost:pagedown pagedown`)       |
 //! | `stall:<ms>`          | watches the main thread for that long without pressing anything (after `book:`, during the background pass of the spell checker, while events are posted from outside): how long a 4 ms timer was kept waiting, and what the frames cost |
@@ -151,6 +152,7 @@ pub enum Step {
     Book(usize),
     SaveCost(usize),
     LimitCost(usize),
+    KeysCost(usize),
     TypeCost(String),
     KeyCost(Vec<Keystroke>),
     Stall(Duration),
@@ -407,6 +409,11 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         }),
         "limitcost" => Step::LimitCost(if arg.is_empty() {
             5
+        } else {
+            arg.parse().context("expected a number of rounds")?
+        }),
+        "keyscost" => Step::KeysCost(if arg.is_empty() {
+            7
         } else {
             arg.parse().context("expected a number of rounds")?
         }),
@@ -804,6 +811,11 @@ async fn execute(
                 eprintln!("[automation] limitcost: {line}");
             }
         }
+        Step::KeysCost(rounds) => {
+            for line in measure_keys_cost(rounds.max(1), window, view, cx).await? {
+                eprintln!("[automation] keyscost: {line}");
+            }
+        }
         Step::TypeCost(text) => {
             let keys = text.chars().map(keystroke_for_char).collect();
             for line in measure_keys(keys, window, view, cx).await? {
@@ -1035,6 +1047,85 @@ fn spelling_cost(window: AnyWindowHandle, cx: &mut AsyncApp) -> String {
         Ok(None) => "spell checker: none".to_string(),
         Err(error) => format!("spell checker: {error:#}"),
     }
+}
+
+/// What a change of a keyboard shortcut costs: the key of Bold is changed
+/// and put back `rounds` times the way the list does it
+/// ([`Workspace::set_keys_of_command`]: the keymap installed, the menu bar
+/// built again, the change stored, the open list refreshed), with the
+/// frame after each change, and then the parts of installing the keymap
+/// alone ([`crate::keymap::measure_install`]). Medians and the worst.
+async fn measure_keys_cost(
+    rounds: usize,
+    window: AnyWindowHandle,
+    view: Option<screenshot::NativeView>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<String>> {
+    use std::time::Instant;
+    fn ms(duration: Duration) -> f64 {
+        duration.as_secs_f64() * 1000.
+    }
+    fn summary(mut values: Vec<f64>) -> String {
+        values.sort_by(|a, b| a.total_cmp(b));
+        let median = values[values.len() / 2];
+        let worst = values[values.len() - 1];
+        format!("{median:.2} ms (worst {worst:.2})")
+    }
+    let workspace = workspace_handle(window, cx)?;
+    let other = [writer_keymap::KeySequence::parse("cmd-alt-b").map_err(|e| anyhow!("{e}"))?];
+    let mut changes = Vec::new();
+    let mut frames = Vec::new();
+    for round in 0..rounds * 2 {
+        let keys = (round % 2 == 0).then_some(other.as_slice());
+        let start = Instant::now();
+        workspace
+            .update(cx, |workspace, window, cx| {
+                workspace.set_keys_of_command("editor::ToggleBold", None, keys, window, cx)
+            })?
+            .map_err(|error| anyhow!("{error}"))?;
+        changes.push(ms(start.elapsed()));
+        let start = Instant::now();
+        draw_frame(window, view, cx);
+        frames.push(ms(start.elapsed()));
+        cx.background_executor()
+            .timer(Duration::from_millis(40))
+            .await;
+    }
+    let mut parts: [Vec<f64>; 4] = Default::default();
+    let mut bindings = 0;
+    for _ in 0..rounds {
+        let cost = cx
+            .update(crate::keymap::measure_install)?
+            .ok_or_else(|| anyhow!("the app has no keymap"))?;
+        bindings = cost.bindings;
+        for (part, value) in
+            parts
+                .iter_mut()
+                .zip([cost.effective, cost.build, cost.bind, cost.menus])
+        {
+            part.push(ms(value));
+        }
+        draw_frame(window, view, cx);
+        cx.background_executor()
+            .timer(Duration::from_millis(40))
+            .await;
+    }
+    let [effective, build, bind, menus] = parts;
+    Ok(vec![
+        format!(
+            "a change of a key, {} times: {}",
+            rounds * 2,
+            summary(changes)
+        ),
+        format!("the frame after it: {}", summary(frames)),
+        format!(
+            "installing {bindings} bindings: what to bind {}, building them {}, clear and bind {}, the menu bar {}",
+            summary(effective),
+            summary(build),
+            summary(bind),
+            summary(menus)
+        ),
+    ])
 }
 
 /// Tells the open list of keyboard shortcuts that the key just pressed

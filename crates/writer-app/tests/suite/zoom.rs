@@ -1438,3 +1438,43 @@ fn a_pinch_is_a_factor_at_a_place() {
     assert!((factor - 1.1 * 1.1 * 0.95).abs() < 1e-5, "{factor}");
     assert_eq!((x, y), (108., 300.));
 }
+
+#[gpui::test]
+fn life_size_follows_the_display_the_window_is_on(cx: &mut TestAppContext) {
+    init(cx);
+    // The built-in display at its default scaling: 127.5 pixels to the
+    // inch.
+    cx.update(|cx| zoom::set_display_density(Some(127.5), cx));
+    let (library, workspace, cx) = open_document(&manuscript(true), cx);
+    assert_eq!(zoom_of(&workspace, cx), Zoom::FitWidthUpTo(177));
+    // The same display at "More Space" (or the window on another one):
+    // 151 pixels to the inch. The window hears of it when it is moved or
+    // resized, and the page that was never given a zoom follows.
+    cx.update(|_, cx| zoom::set_display_density(Some(151.4), cx));
+    cx.simulate_resize(size(px(1890.), px(1100.)));
+    cx.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |w, _| w.life_size()), Some(210));
+    assert_eq!(zoom_of(&workspace, cx), Zoom::FitWidthUpTo(210));
+    assert!(workspace.update_in(cx, |w, window, cx| {
+        w.open_menu(MenuKind::Zoom, None, window, cx)
+    }));
+    cx.run_until_parked();
+    assert!(
+        menu_labels(cx)
+            .unwrap()
+            .contains(&"Life Size (210 %)".to_string())
+    );
+    click_item("Life Size (210 %)", cx);
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(210));
+    let_it_be_stored(cx);
+    assert_eq!(stored(&library, PAGE_ZOOM_KEY, cx), Some("210".to_string()));
+    // A zoom the writer chose stays what it is on any display.
+    cx.update(|_, cx| zoom::set_display_density(Some(109.), cx));
+    cx.simulate_resize(size(px(1900.), px(1100.)));
+    cx.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |w, _| w.life_size()), Some(151));
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(210));
+    // "Life size" from the palette asks the display again.
+    run_command(&workspace, "Zoom to life size", cx);
+    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(151));
+}

@@ -402,6 +402,45 @@ open" below).
     lock the test holds, the real client on a second thread, and the test's main thread
     letting the app work until the answer is there (`ask`). The app's timers run on the
     test clock: a wait for a composition needs `advance_clock`.
+  - **The tool's half** (`crates/writer-agent/src/live/`, no GPUI). One table,
+    `src/operations.rs`, gives every operation that writes its method on `Library`, its
+    name on the channel and the function that carries it out in a `Session`; `Library::write`
+    is called from nowhere else, so **a new operation that writes goes into that table and
+    is routed by that** (a test fails for a public method of `Library` that is neither in
+    the table nor a known reader). `Library::write` hands the operation to an app whose
+    lock file names a channel, at once and without trying the lock; otherwise it takes the
+    lock and writes. `live::execute` runs the same function on the store the app hands in.
+    One request and one answer per connection, each one line of JSON with a version
+    (`{"version":1,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
+    result as the direct write gives it, the error as it was (`WireError`), or a
+    `Refusal`.
+  - **Where the socket is.** `the-writer-<uid>/<pid>-<n>.sock` in the user's temporary
+    directory (mode 0700, the socket 0600, the peer's user checked): a socket path holds
+    about a hundred bytes and a data directory can be longer. The lock file of the data
+    directory names it in a second line (`channel <path>`,
+    `writer_store::instance_lock::announce_channel` / `app_channel`), which older versions
+    read past. The lock says whether an app runs, so a socket or a line left by a crash
+    misleads nobody.
+  - **What bites there.** macOS refuses `setsockopt` on a socket whose other end is closed
+    (`EINVAL`): an answer from an app that hung up at once was taken for lost until
+    `read_line` learned to read without a timeout then. macOS clears out of the temporary
+    directory, every night, what was not used for three days (`com.apple.bsd.dirhelper`):
+    the listener renews the times of its socket every hour. An app that holds the lock and
+    names no channel is "a version that takes no changes" only when the lock file is older
+    than five seconds (`live::STARTING_GRACE`, `instance_lock::held_since`): a tool waits
+    that long for an app that has just started, so **a test that stands for an old app
+    sets the lock file's time back** (`age_the_lock`,
+    `Sandbox::open_an_app_that_takes_no_changes`). A `Target::Path("1984")` is written
+    `{"path":"1984"}` in JSON, or it would arrive as the id 1984.
+  - **Its tests** need no app: a thread holds the lock, binds the real listener and calls
+    `execute` (`StandIn` in `crates/writer-agent/tests/suite/live.rs`, `LiveApp` in
+    `crates/writer-cli/tests/suite/harness.rs`). Every operation is run both ways and the
+    two libraries are compared row by row; the whole suite of `writer-agent` runs a second
+    time with an app on every library (a child run with
+    `WRITER_AGENT_TESTS_THROUGH_THE_APP`, where `fixture()` opens a stand-in and
+    `closed_fixture()` is for the tests about a closed app); `writer-cli` runs every
+    command whose help says that it changes the library, and every tool the server lists
+    as changing something, against a stand-in, and fails when a new one is not run there.
 - **The safety net** is in `writer-agent` too: a version snapshot before an agent changes
   the text of a document or deletes a comment (labelled "Before an edit by Claude" with the
   `--author` given; the app's version history shows the label in the row, read through
@@ -419,7 +458,17 @@ open" below).
   ("occurrence", "permanently"). The command line adds the option to type next
   (`writer-cli/src/main.rs`, `hint`: `--occurrence`, `--all`, `--overwrite`,
   `--permanently`, `writer find`), the MCP server names the tool (`writer-mcp/src/tools.rs`,
-  `tool_text`: `restore_version` where the shared text says `writer history restore`). The
+  `tool_text`: `restore_version` where the shared text says `writer history restore`).
+  Exit code 5 (`app_is_open`) has one sentence per reason (`Refusal`, worded in
+  `writer-agent/src/error.rs`, `app_is_open_message`): it says "nothing was changed"
+  exactly when that is certain (not when the app took the change up and its answer did
+  not arrive) and ends with what to do; as data the reason is `error.refusal.why` with
+  `error.nothing_changed` beside it. The command line adds what goes on working (reading,
+  `--dry-run`, `writer status`), the server the tools that do (`WHILE_OPEN`). The switch
+  has one name everywhere, "Agents can make changes while The Writer is open": the tool's
+  message, the skill and the panel (a test of `writer-cli` holds the first two together).
+  The skill carries the version of the app (`writer_agent_setup::APP_VERSION`), so a skill
+  an older version installed is offered for update without anything else being done. The
   skill's list of exit codes is tested against the help of the built tool
   (`writer-agent-setup/tests/skill_against_binary.rs`): a new exit code fails that test
   until the skill explains it.

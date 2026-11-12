@@ -441,9 +441,15 @@ pub fn humanize_action_name(name: &str) -> String {
 }
 
 /// A title made from an action name, in the words the rest of the app
-/// uses: the code says "thread" where the interface says "comment".
+/// uses: the code says "thread" where the interface says "comment", and
+/// "prev" where it says "previous".
 fn plain_words(title: &str) -> String {
-    title.replace(" thread", " comment")
+    title
+        .replace(" thread", " comment")
+        .split(' ')
+        .map(|word| if word == "prev" { "previous" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The title of a command that has no descriptor, from its action's name.

@@ -21,6 +21,7 @@
 //! | `action:<name>`       | dispatches a registered action by name: `action:app::Quit`   |
 //! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 //! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
+//! | `menukey:<title>`     | prints the key the native menu bar has beside the item with that title (`menukey:Bold`), read from AppKit's own menu |
 //! | `bar[:<button>]`      | shows the format bar over the selection, as a selection made with the mouse does; with a button (`bold`, `italic`, `highlight`, `turn-into`, `more`, `extra-0` ...) presses that button of the bar |
 //! | `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys are separated by a bar (`cmd-alt-b\|f5`), `none` leaves it without a key, `default` puts it back; `@In the find bar` names the place for a command that is listed in several |
 //! | `shortcuts:<what>`    | the keyboard shortcuts: `shortcuts:import:<path>` reads a shortcuts file and shows what it would change in the list (as choosing it in the open panel does), `shortcuts:press:<label>` presses a control of the open list by its label (`Import…`, `Export…`, `Reset All…`, `Changed Only`, `Close`, or a choice of its open question: `Replace My Changes`, `Use ⌥⌘B`, `Cancel`), `shortcuts:reset` puts every key back without asking, `shortcuts:undo` undoes the last import or reset |
@@ -128,6 +129,7 @@ pub enum Step {
     Action(String),
     Menu(crate::workspace::MenuKind),
     Choose(String),
+    MenuKey(String),
     Bar(Option<String>),
     Shortcut {
         /// The name of the command's action.
@@ -304,6 +306,12 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 bail!("expected the label of a menu item");
             }
             Step::Choose(unescape(arg))
+        }
+        "menukey" => {
+            if arg.is_empty() {
+                bail!("expected the title of a menu bar item");
+            }
+            Step::MenuKey(unescape(arg))
         }
         "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
         "shortcut" => {
@@ -546,6 +554,17 @@ async fn execute(
             }
             eprintln!("[automation] chose {label:?}");
             frame_pause(window, view, cx).await;
+        }
+        Step::MenuKey(title) => {
+            // The menu bar is built in an effect of the change before it.
+            frame_pause(window, view, cx).await;
+            match cx.update(|_| crate::menus::native_key_of(&title))? {
+                Some(key) if key.is_empty() => {
+                    eprintln!("[automation] menu key {title:?}: none")
+                }
+                Some(key) => eprintln!("[automation] menu key {title:?}: {key}"),
+                None => bail!("the menu bar has no item {title:?}"),
+            }
         }
         Step::Bar(button) => {
             let done = workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {

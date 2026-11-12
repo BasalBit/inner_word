@@ -791,6 +791,7 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `info` | print window bounds, viewport, scale, appearance, active, focused, theme |
 | `menu:<name>` | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 | `choose:<label>` | chooses that item of the open context menu, as a click on it would |
+| `menukey:<title>` | prints the key the native menu bar has beside the item with that title, read from AppKit's own `NSMenu` (`menukey:Bold` → `cmd-b`, `none` for an item without a key) |
 | `bar[:<button>]` | shows the format bar over the selection, as a mouse selection does; `bar:bold`, `bar:extra-0`, `bar:more` press a button of it |
 | `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list of keyboard shortcuts: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys with a bar between them, `none`, `default`; `@In the find bar` for a command that is listed in several places |
 | `shortcuts:import:<path>`, `shortcuts:press:<label>`, `shortcuts:reset`, `shortcuts:undo` | the keyboard shortcuts: read a shortcuts file and show the preview in the list (the open panel cannot be driven), press a control of the open list or a choice of its question by its label, put every key back without asking, undo the last import or reset |
@@ -848,6 +849,12 @@ changed=N selected="..." keys=[...] default=[...] question="..." says="..." choi
 (`dispatch_keystroke` sends no key-up), and the list takes the same key pressed again for a
 held one: the `keys:` step tells the open list that the key was let go
 (`KeymapView::key_released`); a headless test sends a `KeyUpEvent` after each key.
+The native menu bar exists in a scripted run although the app is never activated
+(`cx.set_menus` sets `NSApplication.mainMenu` either way), and `menukey:<title>` reads an
+item's `keyEquivalent` and `keyEquivalentModifierMask` from it: after
+`shortcut:editor::ToggleBold=cmd-alt-b` the item "Bold" has `cmd-alt-b`, after `=none` it
+has none, after `shortcut:editor::InsertPageBreak=f6` "Page Break" (which shows no key by
+default, its key has return in it) has `f6` (seen in a run of the debug build).
 `action:workspace::ExportShortcuts` writes "The Writer Shortcuts.json" into
 `THE_WRITER_EXPORT_DIR`. What neither a script nor a test can drive: the open panel
 (`cx.prompt_for_paths` is `unimplemented!()` on the test platform, so a test that reaches

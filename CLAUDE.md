@@ -80,6 +80,8 @@ THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/som
 Steps: `wait:<ms>`, `keys:<keystrokes>` (the key `;` is written `\;`: `keys:cmd-\;`), `type:<text>`, `action:<name>`, `menu:<name>` (opens
 a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit`),
 `choose:<label>` (chooses that item of the open context menu, as a click would),
+`menukey:<title>` (prints the key the native menu bar has beside that item, read from
+AppKit's own menu: `menukey:Bold`),
 `bar` (shows the format bar over the selection, as a selection made with the mouse does;
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
 it), `shortcut:<action>=<keys>` and `shortcuts:<what>` (the keyboard shortcuts, see "Changing
@@ -689,8 +691,10 @@ the last row of the settings). Three crates: `writer-keymap` knows what a change
   control of the open list by its label (a choice of the preview: `Import`, or `Add to My
   Changes` and `Replace My Changes` when the user has changes of their own, `Cancel`; a
   control of the list: `Import…`, `Export…`, `Reset All…`, `Changed Only`),
-  `shortcuts:reset` and `shortcuts:undo` do what they say. An export goes to `THE_WRITER_EXPORT_DIR`. A test names the file an "Import…"
-  takes with `workspace::choose_import_file_beforehand`.
+  `shortcuts:reset` and `shortcuts:undo` do what they say. `menukey:Bold` prints the key
+  the real menu bar shows for an item, before and after a change. An export goes to
+  `THE_WRITER_EXPORT_DIR`. A test names the file an "Import…" takes with
+  `workspace::choose_import_file_beforehand`.
 
 ## Mouse
 

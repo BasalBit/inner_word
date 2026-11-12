@@ -665,3 +665,104 @@ fn set_native_state(title: &str, on: bool) {
 
 #[cfg(not(target_os = "macos"))]
 fn set_native_state(_title: &str, _on: bool) {}
+
+/// The key AppKit has beside the menu bar item titled `title` (submenus
+/// included), in GPUI's spelling (`cmd-alt-b`): `Some("")` for an item
+/// without a key, `None` when the menu bar has no such item. Read from
+/// the native menu itself, so it says what the user sees and what AppKit
+/// answers to. For scripted runs (the `menukey:` step); only call it in a
+/// process that runs an `NSApplication`, on the main thread.
+#[cfg(target_os = "macos")]
+// objc 0.2's msg_send! expands to a `cfg(feature = "cargo-clippy")` check.
+#[allow(unexpected_cfgs)]
+pub fn native_key_of(title: &str) -> Option<String> {
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+    use std::{ffi::CStr, os::raw::c_char};
+
+    /// SAFETY: `string` is a live `NSString` (or nil).
+    unsafe fn text(string: *mut Object) -> Option<String> {
+        if string.is_null() {
+            return None;
+        }
+        unsafe {
+            let utf8: *const c_char = msg_send![string, UTF8String];
+            (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
+        }
+    }
+
+    /// SAFETY: `menu` is a live `NSMenu` (or nil); only AppKit accessors
+    /// are called, on the main thread, and nothing is kept.
+    unsafe fn walk(menu: *mut Object, title: &str) -> Option<String> {
+        if menu.is_null() {
+            return None;
+        }
+        unsafe {
+            let count: isize = msg_send![menu, numberOfItems];
+            for ix in 0..count {
+                let item: *mut Object = msg_send![menu, itemAtIndex: ix];
+                if item.is_null() {
+                    continue;
+                }
+                let submenu: *mut Object = msg_send![item, submenu];
+                if !submenu.is_null() {
+                    if let Some(found) = walk(submenu, title) {
+                        return Some(found);
+                    }
+                    continue;
+                }
+                let name: *mut Object = msg_send![item, title];
+                if text(name).as_deref() != Some(title) {
+                    continue;
+                }
+                let key: *mut Object = msg_send![item, keyEquivalent];
+                let key = text(key).unwrap_or_default();
+                if key.is_empty() {
+                    return Some(String::new());
+                }
+                // NSEventModifierFlags: shift, control, option, command.
+                let mask: usize = msg_send![item, keyEquivalentModifierMask];
+                let mut out = String::new();
+                for (bit, name) in [(18, "ctrl-"), (20, "cmd-"), (19, "alt-"), (17, "shift-")] {
+                    if mask & (1 << bit) != 0 {
+                        out.push_str(name);
+                    }
+                }
+                // A key that is not a character is one of AppKit's
+                // function-key code points (NSUpArrowFunctionKey = 0xF700,
+                // NSF1FunctionKey = 0xF704).
+                match key.chars().next().map(|ch| (ch, ch as u32)) {
+                    Some((_, 0xF700)) => out.push_str("up"),
+                    Some((_, 0xF701)) => out.push_str("down"),
+                    Some((_, 0xF702)) => out.push_str("left"),
+                    Some((_, 0xF703)) => out.push_str("right"),
+                    Some((_, code @ 0xF704..=0xF726)) => {
+                        out.push_str(&format!("f{}", code - 0xF703))
+                    }
+                    Some((ch, code)) if ch.is_control() || code >= 0xF700 => {
+                        out.push_str(&format!("U+{code:04X}"))
+                    }
+                    Some(_) => out.push_str(&key),
+                    None => {}
+                }
+                return Some(out);
+            }
+            None
+        }
+    }
+
+    // SAFETY: called on the main thread of a process that runs an
+    // NSApplication (a scripted run of the app).
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return None;
+        }
+        let menu: *mut Object = msg_send![app, mainMenu];
+        walk(menu, title)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn native_key_of(_title: &str) -> Option<String> {
+    None
+}

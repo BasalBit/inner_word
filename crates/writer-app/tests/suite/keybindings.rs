@@ -2119,7 +2119,7 @@ fn a_script_sets_keys_and_reads_the_state(cx: &mut TestAppContext) {
          shortcut:spell::NextMisspelling=cmd-\\;|f7; \
          shortcut:editor_tools::FindPrevious@In the find bar=default; \
          shortcuts:import:/tmp/keys.json; shortcuts:press:Replace My Changes; \
-         shortcuts:reset; shortcuts:undo",
+         shortcuts:reset; shortcuts:undo; menukey:Version History…",
     )
     .expect("the steps parse");
     assert_eq!(
@@ -2149,8 +2149,10 @@ fn a_script_sets_keys_and_reads_the_state(cx: &mut TestAppContext) {
             Step::Shortcuts(ShortcutsStep::Press("Replace My Changes".into())),
             Step::Shortcuts(ShortcutsStep::Reset),
             Step::Shortcuts(ShortcutsStep::Undo),
+            Step::MenuKey("Version History…".into()),
         ]
     );
+    assert!(Script::parse("menukey").is_err());
     assert!(Script::parse("shortcut:editor::ToggleBold").is_err());
     assert!(Script::parse("shortcut:editor::ToggleBold=cmd-").is_err());
     assert!(Script::parse("shortcuts:dance").is_err());

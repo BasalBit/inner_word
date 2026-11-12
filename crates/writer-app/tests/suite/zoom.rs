@@ -560,7 +560,7 @@ fn the_status_bar_shows_the_zoom_and_its_menu_sets_it(cx: &mut TestAppContext) {
 fn cmd_with_the_wheel_zooms_under_the_pointer_and_is_stored_once(cx: &mut TestAppContext) {
     init(cx);
     let (library, workspace, cx) = open_document(&manuscript(true), cx);
-    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
+    assert_eq!(percent_of(&workspace, cx), 100.);
     let editor = workspace.read_with(cx, |w, _| w.editor().clone());
     let at = position_bounds(&workspace, Position::new(2, 40), cx).center();
     let under = |cx: &mut VisualTestContext| {
@@ -683,8 +683,8 @@ fn each_view_keeps_its_zoom_and_it_comes_back_after_a_relaunch(cx: &mut TestAppC
     vcx.simulate_keystrokes("cmd-alt-p");
     vcx.run_until_parked();
     assert_eq!(
-        zoom_of(&workspace, vcx),
-        Zoom::Percent(100),
+        percent_of(&workspace, vcx),
+        100.,
         "page view has a zoom of its own"
     );
     set_zoom(&workspace, Zoom::FitWidth, vcx);
@@ -849,8 +849,21 @@ fn a_page_opens_as_large_as_its_paper_until_a_zoom_is_chosen(cx: &mut TestAppCon
 fn on_a_display_that_does_not_say_its_size_a_page_opens_at_100(cx: &mut TestAppContext) {
     init(cx);
     let (_library, workspace, cx) = open_document(&manuscript(true), cx);
-    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
+    assert_eq!(zoom_of(&workspace, cx), Zoom::FitWidthUpTo(100));
+    assert_eq!(percent_of(&workspace, cx), 100.);
     assert_eq!(workspace.read_with(cx, |w, _| w.life_size()), None);
+    // As before there was a zoom: in a window too narrow for the sheet
+    // the sheet is as wide as its room, and nothing scrolls sideways.
+    cx.simulate_resize(size(px(760.), px(700.)));
+    cx.run_until_parked();
+    let narrow = percent_of(&workspace, cx);
+    assert!(narrow < 100., "{narrow}");
+    workspace.read_with(cx, |w, cx| {
+        assert_eq!(w.editor().read(cx).max_horizontal_scroll(), px(0.));
+    });
+    cx.simulate_resize(size(px(1900.), px(1100.)));
+    cx.run_until_parked();
+    assert_eq!(percent_of(&workspace, cx), 100.);
     // There is no life size to offer, and the command says why.
     assert!(workspace.update_in(cx, |w, window, cx| w.open_menu(
         MenuKind::Zoom,
@@ -863,7 +876,7 @@ fn on_a_display_that_does_not_say_its_size_a_page_opens_at_100(cx: &mut TestAppC
     assert!(!labels.iter().any(|label| label.starts_with("Life Size")));
     escape(cx);
     run_command(&workspace, "Zoom to life size", cx);
-    assert_eq!(zoom_of(&workspace, cx), Zoom::Percent(100));
+    assert_eq!(zoom_of(&workspace, cx), Zoom::FitWidthUpTo(100));
     let said = workspace.read_with(cx, |w, cx| {
         w.toast_layer()
             .read(cx)
@@ -902,7 +915,7 @@ fn what_is_stored_is_read_leniently(cx: &mut TestAppContext) {
     assert_eq!(zoom::life_size_of(109.), Some(151));
     assert_eq!(zoom::life_size_of(20.), None);
     assert_eq!(zoom::first_page_zoom(Some(177)), Zoom::FitWidthUpTo(177));
-    assert_eq!(zoom::first_page_zoom(None), Zoom::Percent(100));
+    assert_eq!(zoom::first_page_zoom(None), Zoom::FitWidthUpTo(100));
 
     // A library that holds something this version cannot read: the views
     // have the zoom they start with, and what is there is left alone

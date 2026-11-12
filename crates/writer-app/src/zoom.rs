@@ -32,8 +32,9 @@
 //!
 //! So a page that was never given a zoom opens as large as its paper, or
 //! as wide as the window where the window is narrower than that
-//! ([`first_page_zoom`]); from the first zoom the writer chooses, page
-//! view shows what they chose last. Flow view starts at 100 %, the size
+//! ([`first_page_zoom`]; at 100 % where the display does not say how
+//! large it is); from the first zoom the writer chooses, page view shows
+//! what they chose last. Flow view starts at 100 %, the size
 //! its column was made to be read at.
 
 use gpui::{Action, App, Global, KeyBinding, Menu, MenuItem, Window, actions};
@@ -268,12 +269,10 @@ pub fn from_stored(text: &str) -> Option<Zoom> {
 /// What page view shows before the writer has chosen a zoom for it: the
 /// sheet as large as the paper it stands for, and as wide as its room
 /// where the window is narrower than that. On a display that does not say
-/// how large it is: 100 %.
+/// how large it is the sheet is at 100 %, and likewise never wider than
+/// its room (which is all a page did before it could be zoomed).
 pub fn first_page_zoom(life_size: Option<u16>) -> Zoom {
-    match life_size {
-        Some(percent) => Zoom::FitWidthUpTo(percent),
-        None => Zoom::Percent(100),
-    }
+    Zoom::FitWidthUpTo(life_size.unwrap_or(100))
 }
 
 // ----- the display ------------------------------------------------------------------

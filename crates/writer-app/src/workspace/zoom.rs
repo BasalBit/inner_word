@@ -422,7 +422,7 @@ impl Workspace {
         self.zoom.life_size = life_size;
         if self.zoom.stored[slot(true)].is_none() {
             let [flow, page] = self.view_zooms(cx);
-            if matches!(page, Zoom::FitWidthUpTo(_)) || page == Zoom::Percent(100) {
+            if matches!(page, Zoom::FitWidthUpTo(_)) {
                 let page = zoom::first_page_zoom(life_size);
                 self.editor
                     .update(cx, |editor, cx| editor.set_view_zooms(flow, page, cx));

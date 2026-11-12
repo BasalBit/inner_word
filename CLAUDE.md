@@ -1066,8 +1066,9 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   display's: `CGDisplayScreenSize` and the display's width in pixels give pixels to the
   inch, over 72 (177 % on this Mac's built-in display at its default scaling, 210 % at
   "More Space"). `main` asks this Mac (`zoom::use_this_mac`); a test names a density
-  (`zoom::set_display_density`) or has none, and with none a page opens at 100 % and there
-  is no "Life Size" to choose.
+  (`zoom::set_display_density`) or has none, and with none a page opens at 100 % (still
+  as wide as its room where the window is narrower, which is all a page did before 0.6.0)
+  and there is no "Life Size" to choose.
 - **How it is reached.** Keys: zoom in `cmd-+` (and `cmd-=`), zoom out `cmd--`, actual
   size `cmd-shift-0` (bound in both spellings: `cmd-)` is what a real keyboard reports).
   Palette: "Zoom in", "Zoom out", "Actual size", "Zoom to fit width", "Zoom to fit page",

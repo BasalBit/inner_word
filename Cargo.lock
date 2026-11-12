@@ -6955,6 +6955,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-mcp"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "writer-spell"
 version = "0.2.0"
 dependencies = [
@@ -6972,6 +6979,7 @@ dependencies = [
 name = "writer-store"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

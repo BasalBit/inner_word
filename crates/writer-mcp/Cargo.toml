@@ -1,0 +1,9 @@
+[package]
+name = "writer-mcp"
+description = "The Model Context Protocol server of The Writer: the library's operations as tools over stdio."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true

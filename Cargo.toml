@@ -20,6 +20,12 @@ writer-vim-mode = { path = "crates/writer-vim-mode" }
 writer-comments = { path = "crates/writer-comments" }
 writer-library = { path = "crates/writer-library" }
 writer-spell = { path = "crates/writer-spell" }
+# Agents: the command layer, the MCP protocol layer, and what is known about
+# the agents on a Mac (none of them depends on GPUI). The command line tool
+# `writer` is the binary of crates/writer-cli; it ships inside the app bundle.
+writer-agent = { path = "crates/writer-agent" }
+writer-mcp = { path = "crates/writer-mcp" }
+writer-agent-setup = { path = "crates/writer-agent-setup" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

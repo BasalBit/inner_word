@@ -347,6 +347,7 @@ impl Workspace {
             // returned future only 100ms.
             cx.on_app_quit(|this, cx| {
                 this.flush(cx);
+                this.store_assistant_conversation(cx);
                 this.save_window_bounds(cx);
                 async {}
             }),
@@ -375,6 +376,7 @@ impl Workspace {
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |this, cx| {
                 this.flush(cx);
+                this.store_assistant_conversation(cx);
                 this.save_window_bounds(cx);
             })
             .ok();
@@ -1707,6 +1709,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.flush(cx);
+        self.store_assistant_conversation(cx);
         self.window_bounds = Some(window.window_bounds());
         self.save_window_bounds(cx);
         window.remove_window();

@@ -2104,3 +2104,33 @@ fn the_side_chat_is_reached_with_the_mouse_alone(cx: &mut TestAppContext) {
     assert!(!labels(vcx).iter().any(|(label, _)| label == "Assistant"));
     assert!(!workspace.read_with(vcx, |w, _| w.assistant_shown()));
 }
+
+#[gpui::test]
+fn an_answer_cut_short_by_quitting_is_there_after_the_relaunch(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (library, id, workspace, vcx) = workspace_with(&fake, cx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    // The answer arrives piece by piece; the app is closed after three.
+    fake.hold();
+    fake.push(FakeReply::pieces(["One ", "two ", "three ", "four."]));
+    panel.update_in(vcx, |panel, window, cx| panel.send("Count", window, cx));
+    vcx.run_until_parked();
+    // Ready, Started, and three pieces of text.
+    fake.advance(5);
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.is_answering()));
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["One two three "]
+    );
+    // cmd-w closes the window as quitting does.
+    vcx.simulate_keystrokes("cmd-w");
+    vcx.run_until_parked();
+
+    let stored = library.read_with(vcx, |library, _| conversations::load(library, id));
+    assert_eq!(stored.messages.len(), 2);
+    assert_eq!(stored.messages[1].text, "One two three ");
+    assert_eq!(stored.messages[1].state, MessageState::Stopped);
+}

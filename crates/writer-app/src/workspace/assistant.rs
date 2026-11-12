@@ -504,6 +504,25 @@ impl Workspace {
         });
     }
 
+    /// Stores the side chat's conversation about the open document as it
+    /// is right now. The side chat reports its changes as they happen (a
+    /// message sent, an answer ended); this is for the moment the window
+    /// closes or the app quits in the middle of an answer, so that what
+    /// had been written of it is there after the relaunch (as an answer
+    /// that was stopped).
+    pub(crate) fn store_assistant_conversation(&mut self, cx: &mut Context<Self>) {
+        let (Some(side), Some(id)) = (self.assistant.side.clone(), self.open_document_id()) else {
+            return;
+        };
+        let transcript = side.read(cx).transcript().clone();
+        let stored = conversations::load(self.library.read(cx), id);
+        if conversations::bounded(&transcript) != stored
+            && (!transcript.is_empty() || conversations::is_stored(self.library.read(cx), id))
+        {
+            conversations::store(&self.library, id, &transcript, cx);
+        }
+    }
+
     /// A document was deleted for good: its conversation goes with it.
     pub(crate) fn forget_assistant_conversation(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         conversations::forget(&self.library, id, cx);

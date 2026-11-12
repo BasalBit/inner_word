@@ -556,7 +556,7 @@ impl Workspace {
     ) {
         match event {
             AssistantPanelEvent::Apply { kind, markdown, .. } => {
-                self.apply_answer(*kind, markdown, cx)
+                self.apply_answer(*kind, markdown, window, cx)
             }
             AssistantPanelEvent::CopyText(text) => {
                 self.copy_from_assistant(ClipboardItem::new_string(text.clone()), cx)
@@ -582,8 +582,17 @@ impl Workspace {
         }
     }
 
-    /// Does what a button under an answer of the side chat asks for.
-    fn apply_answer(&mut self, kind: ApplyKind, markdown: &str, cx: &mut Context<Self>) {
+    /// Does what a button under an answer of the side chat asks for. An
+    /// answer that went into the text leaves the keyboard in the text, at
+    /// what was put in: `cmd-z` right after it takes the answer out again
+    /// (in the chat's composer the key would have undone typing there).
+    fn apply_answer(
+        &mut self,
+        kind: ApplyKind,
+        markdown: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if kind == ApplyKind::Copy {
             // The Markdown for other apps, the formatted text for a
             // document of this one.
@@ -616,7 +625,9 @@ impl Workspace {
             }
             ApplyKind::Copy => false,
         };
-        if !done {
+        if done {
+            self.focus_editor(window, cx);
+        } else {
             self.show_toast(Toast::new("The answer has no text to put in"), cx);
         }
     }

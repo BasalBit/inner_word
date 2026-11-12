@@ -2091,3 +2091,365 @@ fn an_answer_cut_short_by_quitting_is_there_after_the_relaunch(cx: &mut TestAppC
     assert_eq!(stored.messages[1].text, "One two three ");
     assert_eq!(stored.messages[1].state, MessageState::Stopped);
 }
+
+// ----- what the final check of 0.4.0 added ----------------------------------------
+//
+// The brief of the assistant, point by point, where the assembled app had no test of
+// its own yet: stopping an answer, the pointer on the chats' own controls, a change
+// of model in the middle of a conversation, and every kind of failure in both chats.
+
+/// Clicks the control drawn under `selector`.
+fn click(selector: &'static str, cx: &mut VisualTestContext) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("nothing is drawn as {selector:?}"));
+    cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn an_answer_is_stopped_with_the_key_and_with_the_pointer(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+
+    // The side chat: an answer that arrives piece by piece.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    fake.hold();
+    fake.push(FakeReply::pieces(["One ", "two ", "three ", "four."]));
+    vcx.simulate_input("Count");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    fake.advance(4);
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.is_answering()));
+    // cmd-. stops it: what was written stays, as a stopped answer.
+    vcx.simulate_keystrokes("cmd-.");
+    vcx.run_until_parked();
+    assert_eq!(fake.stops(), 1);
+    assert!(!panel.read_with(vcx, |panel, _| panel.is_answering()));
+    let last = panel.read_with(vcx, |panel, _| {
+        panel.transcript().last_answer().cloned().unwrap()
+    });
+    assert_eq!(last.text, "One two ");
+    assert_eq!(last.state, MessageState::Stopped);
+    // The keyboard is still in the composer and the conversation goes on.
+    assert!(side_has_keyboard(&workspace, vcx));
+
+    // The same with the pointer: the Stop control stands where Send was.
+    fake.push(FakeReply::pieces(["Five ", "six ", "seven."]));
+    vcx.simulate_input("Go on");
+    click("assistant-send", vcx);
+    // Started and one piece (the conversation is the one that was started).
+    fake.advance(2);
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.is_answering()));
+    click("assistant-stop", vcx);
+    assert_eq!(fake.stops(), 2);
+    assert!(!panel.read_with(vcx, |panel, _| panel.is_answering()));
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["One two ", "Five "]
+    );
+    // A third message is answered to its end, in the conversation that was
+    // stopped twice.
+    fake.release();
+    fake.reply("Eight.");
+    vcx.simulate_input("And then?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["One two ", "Five ", "Eight."]
+    );
+    assert_eq!(fake.started().len(), 1);
+}
+
+#[gpui::test]
+fn escape_in_the_quick_chat_stops_the_answer_first_and_closes_then(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    let chat = quick(&workspace, vcx);
+    fake.hold();
+    fake.push(FakeReply::pieces(["warden, ", "guardian, ", "sentinel"]));
+    vcx.simulate_input("Another word?");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    fake.advance(3);
+    vcx.run_until_parked();
+    assert!(chat.read_with(vcx, |chat, _| chat.is_answering()));
+
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert_eq!(fake.stops(), 1);
+    assert!(quick_open(&workspace, vcx), "the first escape only stops");
+    assert!(!chat.read_with(vcx, |chat, _| chat.is_answering()));
+    let last = chat.read_with(vcx, |chat, _| {
+        chat.transcript().unwrap().last_answer().cloned().unwrap()
+    });
+    assert_eq!(last.text, "warden, ");
+    assert_eq!(last.state, MessageState::Stopped);
+
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(!quick_open(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+    // Closing ended the conversation: nothing of it is alive.
+    assert_eq!(fake.alive(), 0);
+}
+
+#[gpui::test]
+fn the_controls_of_the_side_chat_take_the_pointer(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    let before = editor_text(&workspace, vcx);
+    // The caret at the end of the paragraph, then the side chat from the
+    // status bar.
+    let end = "The keeper climbed the stairs at dusk.".len();
+    select(&workspace, TextRange::empty(Position::new(1, end)), vcx);
+    click("status-assistant", vcx);
+    let panel = side(&workspace, vcx);
+    assert!(side_has_keyboard(&workspace, vcx));
+
+    // Typed, and sent with the Send control.
+    fake.reply("He was *late*.");
+    vcx.simulate_input("What comes next?");
+    click("assistant-send", vcx);
+    assert_eq!(fake.sent().len(), 1);
+    let answer = panel.read_with(vcx, |panel, _| panel.transcript().last_answer().unwrap().id);
+
+    // Insert at Caret under the answer: one paragraph joins the text.
+    let insert: &'static str =
+        Box::leak(format!("assistant-action-insert-{}", answer.0).into_boxed_str());
+    click(insert, vcx);
+    let after = editor_text(&workspace, vcx);
+    assert!(after.contains("at dusk.He was late."), "{after}");
+    // The text has the keyboard now, so the next key undoes the answer.
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+    // The same from the keyboard in the chat: cmd-enter, then cmd-z.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    assert_ne!(editor_text(&workspace, vcx), before);
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.run_until_parked();
+    assert_eq!(editor_text(&workspace, vcx), before);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+
+    // Clear in the header empties the conversation; Close puts the panel away
+    // and the text has the keyboard again.
+    click("assistant-clear", vcx);
+    assert_eq!(panel.read_with(vcx, |panel, _| panel.transcript().len()), 0);
+    click("assistant-close", vcx);
+    assert_eq!(right_panel(&workspace, vcx), None);
+    assert!(editor_focused(&workspace, vcx));
+}
+
+#[gpui::test]
+fn a_model_chosen_in_the_middle_of_a_conversation_answers_the_next_message(
+    cx: &mut TestAppContext,
+) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    fake.reply("First.");
+    vcx.simulate_input("One");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        fake.last_started().unwrap().selection,
+        Selection::named("deep", "medium")
+    );
+
+    // The model from the picker's key, the effort from its own.
+    vcx.simulate_keystrokes("cmd-shift-m");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Swift", window, cx)));
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-alt-e");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Low", window, cx)));
+    vcx.run_until_parked();
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel.selection().clone()),
+        Selection::named("swift", "low")
+    );
+
+    // The next message is answered by that model, and the conversation is
+    // the same one for the user (the fake engine starts anew and is handed
+    // what was said).
+    fake.reply("Second.");
+    vcx.simulate_input("Two");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let started = fake.last_started().unwrap();
+    assert_eq!(started.selection, Selection::named("swift", "low"));
+    assert!(
+        started
+            .history
+            .iter()
+            .any(|message| message.text.contains("First.")),
+        "{:?}",
+        started.history
+    );
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["First.", "Second."]
+    );
+
+    // With an engine that changes it in the running conversation (as Claude
+    // Code does) nothing is started again: the conversation that begins after
+    // this takes the next change as it runs.
+    fake.set_live_selection(true);
+    vcx.simulate_keystrokes("cmd-shift-m");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Deep", window, cx)));
+    vcx.run_until_parked();
+    fake.reply("Third.");
+    vcx.simulate_input("Three");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let conversations = fake.started().len();
+    vcx.simulate_keystrokes("cmd-shift-m");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| writer_ui::ContextMenu::choose("Swift", window, cx)));
+    vcx.run_until_parked();
+    fake.reply("Fourth.");
+    vcx.simulate_input("Four");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(fake.started().len(), conversations);
+    assert_eq!(
+        fake.selections()
+            .last()
+            .map(|(_, selection)| selection.model.clone()),
+        Some(ModelChoice::Named("swift".to_string()))
+    );
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| answers(panel.transcript())),
+        ["First.", "Second.", "Third.", "Fourth."]
+    );
+}
+
+#[gpui::test]
+fn every_failure_is_said_in_both_chats_and_the_next_message_goes_through(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    let (_library, _id, workspace, vcx) = workspace_with(&fake, cx);
+    let info = writer_assistant::fake_info();
+    let failures = || {
+        vec![
+            AssistantError::NotSignedIn,
+            AssistantError::UsageLimit {
+                resets_at: None,
+                detail: String::new(),
+            },
+            AssistantError::Network {
+                detail: "no route".into(),
+            },
+            AssistantError::Unavailable {
+                detail: "overloaded".into(),
+            },
+            AssistantError::Exited {
+                code: Some(1),
+                detail: "boom".into(),
+            },
+            AssistantError::Outdated {
+                found: "1.0.0".into(),
+                needed: "2.0.0".into(),
+            },
+            AssistantError::NotInstalled,
+        ]
+    };
+
+    // The side chat.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    for error in failures() {
+        fake.set_sign_in(writer_assistant::SignIn::SignedIn { account: None });
+        fake.fail(error.clone());
+        panel.update_in(vcx, |panel, window, cx| panel.send("Hm?", window, cx));
+        vcx.run_until_parked();
+        let last = panel.read_with(vcx, |panel, _| {
+            panel.transcript().last_answer().cloned().unwrap()
+        });
+        assert_eq!(last.error(), Some(&error), "the side chat: {error:?}");
+        let text = error.text(&info);
+        assert!(
+            !text.headline.is_empty() && !text.advice.is_empty(),
+            "{error:?}: {text:?}"
+        );
+        // The row of the failed answer is drawn.
+        let row: &'static str =
+            Box::leak(format!("assistant-failed-{}", last.id.0).into_boxed_str());
+        assert!(vcx.debug_bounds(row).is_some(), "no row for {error:?}");
+    }
+    fake.set_sign_in(writer_assistant::SignIn::SignedIn { account: None });
+    panel.update_in(vcx, |panel, window, cx| panel.recheck(window, cx));
+    vcx.run_until_parked();
+    fake.reply("Here again.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("Now?", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel
+            .transcript()
+            .last_answer()
+            .unwrap()
+            .text
+            .clone()),
+        "Here again."
+    );
+
+    // The quick chat.
+    vcx.simulate_keystrokes("cmd-1");
+    select(&workspace, TextRange::in_block(1, 4, 10), vcx);
+    vcx.simulate_keystrokes("cmd-j");
+    vcx.run_until_parked();
+    let chat = quick(&workspace, vcx);
+    assert!(quick_open(&workspace, vcx));
+    for error in failures() {
+        fake.set_sign_in(writer_assistant::SignIn::SignedIn { account: None });
+        chat.update_in(vcx, |chat, window, cx| chat.recheck(window, cx));
+        vcx.run_until_parked();
+        fake.fail(error.clone());
+        chat.update_in(vcx, |chat, window, cx| chat.ask("Hm?", window, cx));
+        vcx.run_until_parked();
+        let last = chat.read_with(vcx, |chat, _| {
+            chat.transcript().unwrap().last_answer().cloned().unwrap()
+        });
+        assert_eq!(last.error(), Some(&error), "the quick chat: {error:?}");
+        assert!(
+            quick_open(&workspace, vcx),
+            "a failure does not close the chat"
+        );
+    }
+    fake.set_sign_in(writer_assistant::SignIn::SignedIn { account: None });
+    chat.update_in(vcx, |chat, window, cx| chat.recheck(window, cx));
+    vcx.run_until_parked();
+    fake.reply("warden");
+    chat.update_in(vcx, |chat, window, cx| chat.ask("Now?", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(
+        chat.read_with(vcx, |chat, _| {
+            chat.transcript()
+                .unwrap()
+                .last_answer()
+                .unwrap()
+                .text
+                .clone()
+        }),
+        "warden"
+    );
+}

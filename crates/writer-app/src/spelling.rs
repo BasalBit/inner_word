@@ -25,7 +25,7 @@ use std::rc::Rc;
 use gpui::{App, Context, Global, SharedString, WeakEntity, Window};
 use writer_core::SpellingLanguage;
 use writer_spell::{LanguageInfo, SpellLanguage, SpellService};
-use writer_ui::{IconName, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings};
+use writer_ui::{Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings};
 
 use crate::{settings_view::SettingRow, workspace::Workspace};
 
@@ -34,6 +34,9 @@ pub const AUTOMATIC_LABEL: &str = "Automatic";
 /// What the "This document" settings and the picker call "no language of
 /// its own".
 pub const FOLLOW_APP_LABEL: &str = "Follow the app setting";
+
+/// What the picker writes beside the choice that applies now.
+pub const IN_USE_LABEL: &str = "in use";
 
 /// The spell service the workspaces of this app use.
 struct ServiceGlobal(Rc<dyn SpellService>);
@@ -160,7 +163,8 @@ pub struct LanguagePickerDelegate {
     /// Reopen the settings at the language row after a choice or a
     /// dismissal: the picker was opened from there.
     back_to_settings: bool,
-    /// What is in force now: the row that carries the check mark.
+    /// What is in force now: the row that says so, and the one the
+    /// picker opens on.
     current: Choice,
     /// Every choice with its label and detail.
     choices: Vec<(Choice, String, String)>,
@@ -224,6 +228,15 @@ impl LanguagePickerDelegate {
     /// Whose language is chosen.
     pub fn target(&self) -> LanguageTarget {
         self.target
+    }
+
+    /// The label of the choice that applies now, if it is listed.
+    pub fn current_label(&self) -> Option<String> {
+        self.rows
+            .iter()
+            .map(|(ix, _)| &self.choices[*ix])
+            .find(|(choice, _, _)| *choice == self.current)
+            .map(|(_, label, _)| label.clone())
     }
 
     /// The labels of the listed rows, in order.
@@ -291,14 +304,18 @@ impl PickerDelegate for LanguagePickerDelegate {
     fn entry(&self, ix: usize, _: &App) -> PickerEntry {
         let (choice_ix, positions) = &self.rows[ix];
         let (choice, label, detail) = &self.choices[*choice_ix];
-        let item = PickerItem::new(label.clone())
-            .positions(positions.clone())
-            .detail(detail.clone());
-        if *choice == self.current {
-            item.icon(IconName::Check).into()
+        // The choice in force says so beside its name (an icon on one row
+        // only would push its label out of line with the others); it is
+        // also the row the picker opens on.
+        let detail = if *choice == self.current {
+            format!("{detail} \u{b7} {IN_USE_LABEL}")
         } else {
-            item.into()
-        }
+            detail.clone()
+        };
+        PickerItem::new(label.clone())
+            .positions(positions.clone())
+            .detail(detail)
+            .into()
     }
 
     fn initial_selection(&self, query: &str) -> Option<usize> {

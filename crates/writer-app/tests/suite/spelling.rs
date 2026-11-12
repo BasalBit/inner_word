@@ -724,6 +724,15 @@ fn the_document_language_overrides_the_app_language_and_both_are_kept(cx: &mut T
                 "German"
             ]
         );
+        // It opens on the choice that applies now: this document follows
+        // the app.
+        assert_eq!(
+            picker.read_with(cx, |picker, _| (
+                picker.delegate.current_label(),
+                picker.selected_index()
+            )),
+            (Some(spelling::FOLLOW_APP_LABEL.to_string()), Some(0))
+        );
         cx.simulate_input("brit");
         cx.simulate_keystrokes("enter");
         settle(cx);

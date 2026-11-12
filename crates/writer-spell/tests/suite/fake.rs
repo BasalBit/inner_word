@@ -190,3 +190,25 @@ fn bounded_checks_say_how_far_they_came() {
     assert!(part.covered < text.len());
     assert_eq!(service.check_count(), 4);
 }
+
+#[test]
+fn a_text_that_cannot_be_placed_is_judged_by_all_languages() {
+    let service = FakeSpellService::with_words(["a", "the", "ship", "came", "in"])
+        .language("id", "Indonesian", ["teh"])
+        .place_from(3);
+    let auto = SpellLanguage::Automatic;
+    // One known English word is not enough to call it English: "teh" is
+    // a word somewhere, "wrod" is not.
+    let text = "A teh wrod";
+    let check = service.check(text, &auto, SpellDocument::NONE);
+    assert_eq!(check.language, None);
+    assert_eq!(words(text, &check.misspelled), ["wrod"]);
+    // Enough words: English, and "teh" is not English.
+    let text = "The ship came in teh";
+    let check = service.check(text, &auto, SpellDocument::NONE);
+    assert_eq!(check.language.as_deref(), Some("en"));
+    assert_eq!(words(text, &check.misspelled), ["teh"]);
+    // Nothing known at all: nothing is said.
+    let check = service.check("Ths sentense", &auto, SpellDocument::NONE);
+    assert_eq!((check.language, check.misspelled.len()), (None, 0));
+}

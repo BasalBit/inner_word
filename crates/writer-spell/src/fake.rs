@@ -28,7 +28,12 @@
 //!   languages, then all languages. That language is reported as detected.
 //!   When no word of the text is in any list the language is not
 //!   identified and nothing is flagged (the system checker does the same
-//!   with a line of two misspelled words).
+//!   with a line of two misspelled words). With
+//!   [`FakeSpellService::place_from`] a text needs more known words than
+//!   one to be placed; below that no language is named, a word is right
+//!   when any language knows it and the others are flagged (what the
+//!   system checker does with a short line, or with a language it has no
+//!   dictionary for).
 //! - [`SpellService::check_up_to`] stops after the number of misspelled
 //!   words it was given and reports how far it came; every call counts as
 //!   a check.
@@ -62,6 +67,7 @@ struct Inner {
     open: BTreeSet<SpellDocument>,
     next_tag: i64,
     check_cost: Duration,
+    place_from: usize,
     checks: Vec<String>,
     suggestion_calls: usize,
     warm_ups: usize,
@@ -84,6 +90,7 @@ impl FakeSpellService {
         FakeSpellService {
             inner: RefCell::new(Inner {
                 next_tag: 1,
+                place_from: 1,
                 ..Inner::default()
             }),
         }
@@ -157,6 +164,16 @@ impl FakeSpellService {
     /// time budget.
     pub fn check_cost(self, cost: Duration) -> Self {
         self.inner.borrow_mut().check_cost = cost;
+        self
+    }
+
+    /// With automatic detection, a text is only placed when one language
+    /// knows at least `words` of its words (1 unless set). A text with
+    /// fewer is judged the way the system checker judges what it cannot
+    /// place: no language is named, a word is right when any language
+    /// knows it, and the others are flagged.
+    pub fn place_from(self, words: usize) -> Self {
+        self.inner.borrow_mut().place_from = words.max(1);
         self
     }
 
@@ -284,9 +301,9 @@ impl Inner {
         order
     }
 
-    /// The language most words of `text` belong to; none when no word of
-    /// the text is in any list.
-    fn detect(&self, text: &str) -> Option<String> {
+    /// The language most words of `text` belong to, and how many of them
+    /// it knows; none when no word of the text is in any list.
+    fn detect(&self, text: &str) -> Option<(String, usize)> {
         let words: Vec<String> = candidate_words(text)
             .into_iter()
             .map(|r| normalized(&text[r]))
@@ -299,14 +316,24 @@ impl Inner {
                 best = Some((known, id));
             }
         }
-        best.map(|(_, id)| id)
+        best.map(|(known, id)| (id, known))
     }
 
-    fn resolve(&self, text: &str, language: &SpellLanguage) -> (Option<String>, bool) {
-        match language {
-            SpellLanguage::Automatic => (self.detect(text), true),
-            SpellLanguage::Fixed(id) => (Some(id.clone()), false),
-        }
+    /// Whether any language knows `word`.
+    fn known_somewhere(&self, word: &str) -> bool {
+        let word = normalized(word);
+        self.languages
+            .iter()
+            .any(|language| language.words.contains(&word))
+    }
+
+    fn is_personal(&self, word: &str, document: SpellDocument) -> bool {
+        let word = normalized(word);
+        self.learned.contains(&word)
+            || self
+                .ignored
+                .get(&document)
+                .is_some_and(|words| words.contains(&word))
     }
 
     fn is_accepted(&self, word: &str, language: &FakeLanguage, document: SpellDocument) -> bool {
@@ -335,13 +362,38 @@ impl SpellService for FakeSpellService {
         let started = Instant::now();
         let mut inner = self.inner.borrow_mut();
         inner.checks.push(text.to_string());
-        let (id, detected) = inner.resolve(text, language);
+        // How a word is judged: by one language, or (a text that cannot
+        // be placed) by all of them together.
+        enum Judge {
+            Language(String),
+            Any,
+            Nobody,
+        }
+        let (judge, detected) = match language {
+            SpellLanguage::Fixed(id) => (Judge::Language(id.clone()), None),
+            SpellLanguage::Automatic => match inner.detect(text) {
+                Some((id, known)) if known >= inner.place_from => {
+                    (Judge::Language(id.clone()), Some(id))
+                }
+                Some(_) => (Judge::Any, None),
+                None => (Judge::Nobody, None),
+            },
+        };
         let max = max_misspelled.max(1);
         let mut misspelled = Vec::new();
         let mut covered = text.len();
-        if let Some(language) = id.as_deref().and_then(|id| inner.language(id)) {
+        let judged_by = match &judge {
+            Judge::Language(id) => inner.language(id),
+            _ => None,
+        };
+        if judged_by.is_some() || matches!(judge, Judge::Any) {
             for word in candidate_words(text) {
-                if !inner.is_accepted(&text[word.clone()], language, document) {
+                let piece = &text[word.clone()];
+                let accepted = match judged_by {
+                    Some(language) => inner.is_accepted(piece, language, document),
+                    None => inner.known_somewhere(piece) || inner.is_personal(piece, document),
+                };
+                if !accepted {
                     covered = word.end;
                     misspelled.push(word);
                     if misspelled.len() >= max {
@@ -361,7 +413,7 @@ impl SpellService for FakeSpellService {
         SpellCheckPart {
             check: SpellCheck {
                 misspelled,
-                language: if detected { id } else { None },
+                language: detected,
             },
             covered,
         }

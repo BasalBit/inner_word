@@ -54,7 +54,7 @@ mod work;
 pub use checker::{
     EDIT_PAUSE, IDLE_PAUSE, IGNORE_SPELLING, LEARN_SPELLING, MAX_SUGGESTIONS, NO_GUESSES,
     SEEK_LIMIT, SLICE_BUDGET, SLICE_PAUSE, SpellChecker, SpellEvent, TYPING_PAUSE,
-    UNLEARN_SPELLING, handle_actions,
+    UNLEARN_SPELLING, WARM_UP_DELAY, handle_actions,
 };
 pub use fake::{FAKE_LANGUAGE, FakeSpellService};
 pub use service::{

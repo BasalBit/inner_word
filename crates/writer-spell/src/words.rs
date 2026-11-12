@@ -418,7 +418,10 @@ impl SpellChecker {
                 Some(Tag::Detected(language)) => self
                     .variant_of(&language)
                     .map_or(SpellLanguage::Automatic, SpellLanguage::Fixed),
-                Some(Tag::Fallback(Some(language))) => SpellLanguage::Fixed(language.to_string()),
+                Some(Tag::Unplaced {
+                    checked_in: Some(language),
+                    ..
+                }) => SpellLanguage::Fixed(language.to_string()),
                 _ => SpellLanguage::Automatic,
             },
         };

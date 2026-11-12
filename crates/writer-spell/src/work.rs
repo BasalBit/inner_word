@@ -35,13 +35,19 @@
 //! # Automatic language
 //!
 //! The service identifies the language of each piece. When it cannot (a
-//! heading of two words) and marks nothing, the piece is checked in the
-//! language most blocks of the document were identified as, in the
-//! user's own variant of it; before any block was identified, in the
-//! user's first language. When more blocks came back "no language, but
-//! marked words" than identified (a document in a language the Mac has no
-//! dictionary for), such lines are left alone. Lines checked that way are
-//! checked again when the document's language turns out to be another.
+//! heading of two words), the piece is checked in the language most
+//! blocks of the document were identified as, in the user's own variant
+//! of it; before any block was identified, in the user's first language.
+//! (Left to itself the system checker accepts, in a text it cannot place,
+//! every word that any of the user's languages knows: "teh" passes as
+//! Indonesian.) Lines checked that way are checked again when the
+//! document's language turns out to be another.
+//!
+//! A document in a language the Mac has no dictionary for shows as blocks
+//! in which the service marked words without naming a language. When
+//! there are at least three of them and more than blocks of the most
+//! frequent identified language, nothing is forced on such text: the
+//! service's own answer stands.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -65,6 +71,10 @@ pub(crate) const MISSPELLED_PER_CALL: usize = 16;
 /// A change of more blocks than this is not remembered block by block:
 /// the background pass goes back to where it starts.
 const SMALL_SPLICE: usize = 64;
+/// With automatic detection: from this many blocks in which the service
+/// marked words without naming a language, the document may count as
+/// written in a language it has no dictionary for.
+const UNPLACED_BLOCKS: usize = 3;
 /// A slice checks at most this many blocks, whatever the clock says.
 const SLICE_BLOCKS: usize = 2000;
 
@@ -350,13 +360,6 @@ impl SpellChecker {
     /// One slice, as the worker runs it. Returns whether there is more to
     /// do right away.
     fn run_slice(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.warmed_up {
-            // The first call into the system checker is the slow one: it
-            // is made here, on the worker's first turn, and not under a
-            // keystroke or a right-click.
-            self.warmed_up = true;
-            self.service.warm_up();
-        }
         let started = Instant::now();
         let more = self.slice(Some(started + SLICE_BUDGET), false, cx);
         let took = started.elapsed();
@@ -491,10 +494,15 @@ impl SpellChecker {
                 self.recheck.pop_front();
                 continue;
             }
-            if !self.check_within(index, budget, cx) {
-                return false;
+            let go_on = self.check_within(index, budget, cx);
+            // Done unless it was interrupted in the middle (then the
+            // unfinished check is kept and the block stays first).
+            if self.partial.is_none() {
+                self.recheck.pop_front();
             }
-            self.recheck.pop_front();
+            if !go_on {
+                return self.recheck.is_empty();
+            }
         }
         true
     }
@@ -654,29 +662,38 @@ impl SpellChecker {
                 part.covered,
                 Some(Tag::Detected(self.interned(&language))),
             ),
-            // No language, but an opinion: a language without a
-            // dictionary. The service's answer stands.
-            None if !part.check.misspelled.is_empty() => {
-                (part.check.misspelled, part.covered, Some(Tag::Unidentified))
-            }
-            // The service could not tell: the language of the text
-            // around it.
-            None => match self.fallback.clone() {
-                Some(fallback) => {
-                    let part = self.service.check_up_to(
-                        piece,
-                        MISSPELLED_PER_CALL,
-                        &SpellLanguage::Fixed(fallback.to_string()),
-                        self.document,
-                    );
-                    (
+            // The service could not place the text. In the language of
+            // the text around it, when there is one; else its own answer
+            // stands.
+            None => {
+                let flagged = !part.check.misspelled.is_empty();
+                match self.fallback.clone() {
+                    Some(fallback) => {
+                        let fixed = self.service.check_up_to(
+                            piece,
+                            MISSPELLED_PER_CALL,
+                            &SpellLanguage::Fixed(fallback.to_string()),
+                            self.document,
+                        );
+                        (
+                            fixed.check.misspelled,
+                            fixed.covered,
+                            Some(Tag::Unplaced {
+                                flagged,
+                                checked_in: Some(fallback),
+                            }),
+                        )
+                    }
+                    None => (
                         part.check.misspelled,
                         part.covered,
-                        Some(Tag::Fallback(Some(fallback))),
-                    )
+                        Some(Tag::Unplaced {
+                            flagged,
+                            checked_in: None,
+                        }),
+                    ),
                 }
-                None => (Vec::new(), piece.len(), Some(Tag::Fallback(None))),
-            },
+            }
         }
     }
 
@@ -706,12 +723,14 @@ impl SpellChecker {
                     *count = count.saturating_sub(1);
                 }
             }
-            Some(Tag::Unidentified) => self.unidentified = self.unidentified.saturating_sub(1),
+            Some(Tag::Unplaced { flagged: true, .. }) => {
+                self.unidentified = self.unidentified.saturating_sub(1)
+            }
             _ => {}
         }
         match tag {
             Some(Tag::Detected(language)) => *self.detected.entry(language).or_insert(0) += 1,
-            Some(Tag::Unidentified) => self.unidentified += 1,
+            Some(Tag::Unplaced { flagged: true, .. }) => self.unidentified += 1,
             _ => {}
         }
     }
@@ -751,12 +770,14 @@ impl SpellChecker {
             .filter(|(_, count)| **count > 0)
             .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
             .map(|(language, count)| (language.to_string(), *count));
+        // Blocks the service marked words in without naming a language
+        // speak for a document in a language it has no dictionary for;
+        // one or two can be short lines with a slip of the pen.
+        let foreign = self.unidentified >= UNPLACED_BLOCKS;
         match most {
-            // Mostly a language the service has no name for: such a line
-            // is left alone.
-            Some((_, count)) if self.unidentified > count => None,
+            Some((_, count)) if foreign && self.unidentified > count => None,
             Some((language, _)) => self.variant_of(&language),
-            None if self.unidentified > 0 => None,
+            None if foreign => None,
             None => self.known_languages().0.first().cloned(),
         }
     }
@@ -778,7 +799,9 @@ impl SpellChecker {
         let stale: Vec<BlockId> = self
             .tags
             .iter()
-            .filter(|(_, tag)| matches!(tag, Tag::Fallback(used) if *used != now))
+            .filter(
+                |(_, tag)| matches!(tag, Tag::Unplaced { checked_in, .. } if *checked_in != now),
+            )
             .map(|(id, _)| *id)
             .collect();
         if stale.is_empty() {

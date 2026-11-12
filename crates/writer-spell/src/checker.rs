@@ -57,6 +57,9 @@ pub const IDLE_PAUSE: Duration = Duration::from_millis(300);
 /// How long after the last edit the word the caret is in gets its mark,
 /// when the caret has not left it before.
 pub const TYPING_PAUSE: Duration = Duration::from_millis(1000);
+/// How long after a checker was made its service is warmed up
+/// ([`SpellService::warm_up`]): after the first marks are on screen.
+pub const WARM_UP_DELAY: Duration = Duration::from_millis(400);
 /// How long "next misspelling" may check ahead in a document that is not
 /// fully checked before it says that it has found nothing yet.
 pub const SEEK_LIMIT: Duration = Duration::from_millis(200);
@@ -102,13 +105,18 @@ pub enum SpellEvent {
 pub(crate) enum Tag {
     /// The service identified this language.
     Detected(Rc<str>),
-    /// The service could not name a language but marked words all the
-    /// same (a text in a language it has no dictionary for).
-    Unidentified,
-    /// The service could not tell and marked nothing (too little text):
-    /// the block was checked in this language instead, the language of
-    /// the text around it. `None`: it was left alone.
-    Fallback(Option<Rc<str>>),
+    /// The service could not name a language (too little text, or a
+    /// language it has no dictionary for).
+    Unplaced {
+        /// It marked words all the same: with a text it cannot place the
+        /// system checker accepts a word that any of the user's languages
+        /// knows and marks the others.
+        flagged: bool,
+        /// The language the block was checked in instead: the language
+        /// of the text around it. `None`: the service's own answer
+        /// stands.
+        checked_in: Option<Rc<str>>,
+    },
 }
 
 /// A block whose check was interrupted by the end of a slice.
@@ -152,8 +160,8 @@ pub struct SpellChecker {
     /// Whether the worker task is running.
     pub(crate) working: bool,
     pub(crate) worker: Option<Task<()>>,
-    /// Whether the service has been warmed up.
-    pub(crate) warmed_up: bool,
+    /// Warms the service up a moment after the checker was made.
+    pub(crate) warm_up: Option<Task<()>>,
     /// Every block before this index is checked, or waits in `waiting` or
     /// `recheck`: where the background pass goes on.
     pub(crate) scan: usize,
@@ -182,7 +190,8 @@ pub struct SpellChecker {
     pub(crate) tags: HashMap<BlockId, Tag>,
     /// How many blocks were identified as each language.
     pub(crate) detected: HashMap<Rc<str>, usize>,
-    /// How many blocks have [`Tag::Unidentified`].
+    /// How many blocks the service marked words in without naming a
+    /// language.
     pub(crate) unidentified: usize,
     /// The language a text is checked in when the service cannot tell.
     pub(crate) fallback: Option<Rc<str>>,
@@ -234,7 +243,7 @@ impl SpellChecker {
             was_active: false,
             working: false,
             worker: None,
-            warmed_up: false,
+            warm_up: None,
             scan: 0,
             waiting: HashSet::new(),
             recheck: VecDeque::new(),
@@ -259,6 +268,20 @@ impl SpellChecker {
         };
         this.was_active = this.is_active(cx);
         this.start_worker(cx);
+        // What is slow the first time (starting the system checker for
+        // suggestions, loading the dictionaries it consults for a text it
+        // cannot place) happens once, a moment after the first marks are
+        // on screen, and not under a keystroke or a right-click later.
+        this.warm_up = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(WARM_UP_DELAY).await;
+            this.update(cx, |this, _| {
+                this.warm_up = None;
+                if this.enabled {
+                    this.service.warm_up();
+                }
+            })
+            .ok();
+        }));
         this
     }
 
@@ -342,8 +365,14 @@ impl SpellChecker {
     pub fn detected_language(&self, block: usize, cx: &App) -> Option<String> {
         let id = self.editor.read(cx).document().block(block)?.id();
         match self.tags.get(&id)? {
-            Tag::Detected(language) | Tag::Fallback(Some(language)) => Some(language.to_string()),
-            Tag::Unidentified | Tag::Fallback(None) => None,
+            Tag::Detected(language)
+            | Tag::Unplaced {
+                checked_in: Some(language),
+                ..
+            } => Some(language.to_string()),
+            Tag::Unplaced {
+                checked_in: None, ..
+            } => None,
         }
     }
 

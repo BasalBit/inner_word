@@ -27,9 +27,16 @@ objc.workspace = true
 [dev-dependencies]
 # Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
 gpui = { workspace = true, features = ["test-support"] }
-# The demo example captures its own window for visual QA (the NSWindow
+# The demo example: the real text menu around the editor (the way the app
+# mounts the two), and its own window captured for visual QA (the NSWindow
 # number behind a GPUI window), as the other demos do.
+writer-editor-tools.workspace = true
 raw-window-handle.workspace = true
+anyhow.workspace = true
+
+[[example]]
+name = "spell_demo"
+path = "examples/spell_demo/main.rs"
 
 [[test]]
 name = "main"

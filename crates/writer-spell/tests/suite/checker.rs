@@ -43,10 +43,14 @@ fn marks_appear_for_misspellings(cx: &mut TestAppContext) {
         assert_eq!(editor.spelling_mark_count(), 5);
         assert!(editor.spelling_checked(2));
     });
-    // Every block was asked about once (the empty one not at all), and
-    // the service was warmed up before the first of them.
+    // Every block was asked about once (the empty one not at all). The
+    // service is warmed up a moment later, once.
     assert_eq!(service.check_count(), 3);
+    assert_eq!(service.warm_up_count(), 0);
+    wait(writer_spell::WARM_UP_DELAY, cx);
+    wait(writer_spell::WARM_UP_DELAY, cx);
     assert_eq!(service.warm_up_count(), 1);
+    assert_eq!(service.check_count(), 3);
     checker.read_with(cx, |checker, cx| {
         assert_eq!(
             checker
@@ -513,4 +517,75 @@ fn another_document_starts_clean(cx: &mut TestAppContext) {
     cx.update(|_, _| {});
     cx.run_until_parked();
     assert_eq!(service.open_documents(), [second]);
+}
+
+#[gpui::test]
+fn automatic_does_not_let_a_short_line_pass_as_some_other_language(cx: &mut TestAppContext) {
+    setup(cx);
+    // As on a Mac with many languages: "teh" is a word in one of them, and
+    // a line of three words is too short to be placed.
+    let service = Rc::new(
+        english()
+            .language("id", "Indonesian", ["teh"])
+            .place_from(3),
+    );
+    let document = paragraphs(&[
+        "The ship came in this morning and nobody expected it.",
+        "A teh wrod",
+        "Ths sentense",
+    ]);
+    let (checker, editor, cx) = open_in(
+        document,
+        &service,
+        SpellLanguage::Automatic,
+        EditorConfig::full(),
+        cx,
+    );
+    settle(&checker, cx);
+    // Left to itself the service would mark "wrod" alone in the second
+    // line and nothing in the third.
+    assert_eq!(marked(&checker, cx), ["teh", "wrod", "Ths", "sentense"]);
+    checker.read_with(cx, |checker, cx| {
+        assert_eq!(checker.detected_language(0, cx).as_deref(), Some("en"));
+        assert_eq!(checker.detected_language(1, cx).as_deref(), Some("en"));
+    });
+    // The suggestions are asked for in that language too.
+    assert_eq!(
+        checker.update(cx, |checker, cx| checker
+            .suggestions_at(Position::new(1, 3), cx)),
+        ["the", "ten", "tea"]
+    );
+
+    // A document in a language without a list: its paragraphs come back
+    // without a language but with marks. Nothing is forced on it: the
+    // service's own answer stands, and a line it says nothing about is
+    // left alone.
+    editor.update(cx, |editor, cx| {
+        editor.set_document(
+            paragraphs(&[
+                "Anija mberriti ne port kete mengjes the.",
+                "Askush nuk e priste ate in.",
+                "Dhe porti ishte bosh a.",
+                "Kapitulli pare",
+                "Nje dite me pare of.",
+            ]),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    settle(&checker, cx);
+    let words = marked(&checker, cx);
+    assert!(!words.contains(&"Kapitulli".to_string()), "{words:?}");
+    assert!(words.contains(&"Anija".to_string()) && words.contains(&"Askush".to_string()));
+    // Not checked as English: the English words in it are words.
+    assert!(
+        !words
+            .iter()
+            .any(|word| ["the", "in", "a", "of"].contains(&word.as_str())),
+        "{words:?}"
+    );
+    checker.read_with(cx, |checker, cx| {
+        assert_eq!(checker.detected_language(0, cx), None);
+        assert_eq!(checker.detected_language(3, cx), None);
+    });
 }

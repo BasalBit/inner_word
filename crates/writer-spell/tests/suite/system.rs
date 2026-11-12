@@ -544,3 +544,47 @@ fn system_first_call() {
     service.preferred_languages();
     println!("languages: {:?}", started.elapsed());
 }
+
+/// What automatic detection costs for texts it can and cannot place.
+#[test]
+#[ignore = "calls the real system spell checker"]
+fn system_cost_of_texts_the_checker_cannot_place() {
+    let _guard = serial();
+    let service = SystemSpellService::new();
+    service.warm_up();
+    let texts = [
+        "The ship came in this morning and nobody expected it at all.",
+        " A teh",
+        " A teh wrod ",
+        "Ths sentense",
+        "Teh",
+        "T",
+        "Chaptr One",
+        "Kapitel Eins",
+        "Anija mbërriti në port këtë mëngjes dhe askush nuk e priste atë.",
+        "Buy mlik",
+        "Yes, she said.",
+    ];
+    for round in 0..3 {
+        for text in texts {
+            let started = Instant::now();
+            let check = service.check(text, &SpellLanguage::Automatic, SpellDocument::NONE);
+            let automatic = started.elapsed();
+            let started = Instant::now();
+            let fixed = service.check(text, &SpellLanguage::fixed("en_GB"), SpellDocument::NONE);
+            let fixed_time = started.elapsed();
+            if round != 1 {
+                println!(
+                    "round {round} {text:?}: automatic {automatic:?} detected {:?} flagged {:?} | en_GB {fixed_time:?} flagged {}",
+                    check.language,
+                    check
+                        .misspelled
+                        .iter()
+                        .map(|r| &text[r.clone()])
+                        .collect::<Vec<_>>(),
+                    fixed.misspelled.len()
+                );
+            }
+        }
+    }
+}

@@ -6958,11 +6958,13 @@ dependencies = [
 name = "writer-spell"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui",
  "objc",
  "raw-window-handle",
  "writer-core",
  "writer-editor",
+ "writer-editor-tools",
  "writer-ui",
 ]
 

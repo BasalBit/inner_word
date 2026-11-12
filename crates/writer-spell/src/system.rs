@@ -252,6 +252,7 @@ mod imp {
     use std::ops::Range;
     use std::os::raw::{c_char, c_void};
     use std::ptr;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use objc::rc::{StrongPtr, autoreleasepool};
     use objc::runtime::{BOOL, NO, Object};
@@ -720,8 +721,14 @@ mod imp {
     }
 
     pub(super) fn warm_up() {
+        // Once per process: it is the process that is cold.
+        static DONE: AtomicBool = AtomicBool::new(false);
+        if DONE.swap(true, Ordering::Relaxed) {
+            return;
+        }
         // A check and a guess start the spell server and load the
-        // dictionary of the user's first language.
+        // dictionary of the user's first language (about 10 ms in a
+        // running app).
         let text = "Teh";
         let language = preferred_languages()
             .into_iter()
@@ -730,6 +737,17 @@ mod imp {
             .unwrap_or(SpellLanguage::Automatic);
         check(text, usize::MAX, &language, SpellDocument::NONE);
         suggestions(text, 0..text.len(), &language, SpellDocument::NONE);
+        // A sentence in a language the Mac has no dictionary for: to place
+        // it the checker consults the dictionaries of all the user's
+        // languages, and loads them (30 to 70 ms the first time, which
+        // would otherwise be paid under the first short line somebody
+        // types).
+        check(
+            "Anija mb\u{eb}rriti n\u{eb} port k\u{eb}t\u{eb} m\u{eb}ngjes dhe askush nuk e priste.",
+            usize::MAX,
+            &SpellLanguage::Automatic,
+            SpellDocument::NONE,
+        );
     }
 }
 

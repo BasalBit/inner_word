@@ -38,3 +38,7 @@ objc.workspace = true
 [[test]]
 name = "main"
 path = "tests/main.rs"
+
+[[example]]
+name = "assistant"
+path = "examples/assistant/main.rs"

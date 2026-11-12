@@ -368,3 +368,305 @@ pub fn choose(title: &str, cx: &mut VisualTestContext) {
     assert!(chosen, "the menu has no item {title:?}");
     cx.run_until_parked();
 }
+
+// ----- the side chat in a workspace ------------------------------------------------
+
+use std::collections::HashMap;
+
+use writer_assistant::{Attachment, Availability, Backend, OpenDocument, Transcript};
+use writer_assistant_ui::{
+    AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
+};
+use writer_core::{Block, Document};
+use writer_editor::{Editor, EditorConfig};
+use writer_ui::ToastLayer;
+
+/// Width of the slot the workspace gives the panel (the app's default).
+pub const PANEL_WIDTH: Pixels = px(380.);
+
+/// A window as the app has it: the text, and the side chat in a slot at
+/// its right. The host's side of the panel is here: it stores the
+/// conversations per document, hands the open document over when a message
+/// is sent, lists the library for the picker, and notes what it is asked
+/// to do with an answer.
+pub struct Workspace {
+    pub editor: Entity<Editor>,
+    pub panel: Entity<AssistantPanel>,
+    pub toasts: Entity<ToastLayer>,
+    pub events: Vec<AssistantPanelEvent>,
+    pub stored: HashMap<Option<i64>, Transcript>,
+    pub panel_open: bool,
+    pub panel_width: Pixels,
+}
+
+impl Render for Workspace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context("Workspace")
+            .relative()
+            .flex()
+            .size_full()
+            .child(div().flex_1().min_w_0().h_full().child(self.editor.clone()))
+            .when(self.panel_open, |root| {
+                root.child(
+                    div()
+                        .debug_selector(|| "panel-slot".into())
+                        .w(self.panel_width)
+                        .h_full()
+                        .flex_none()
+                        .child(self.panel.clone()),
+                )
+            })
+            // The toast layer draws the toasts and the open context menu.
+            .child(self.toasts.clone())
+    }
+}
+
+pub struct PanelFixture {
+    pub workspace: Entity<Workspace>,
+    pub editor: Entity<Editor>,
+    pub panel: Entity<AssistantPanel>,
+    pub fake: FakeBackend,
+}
+
+pub fn chapter(number: i64) -> Document {
+    Document::from_blocks(vec![
+        Block::paragraph(&format!("Chapter {number} begins here.")),
+        Block::paragraph("A second paragraph with more words in it."),
+    ])
+}
+
+pub fn chapter_ref(number: i64) -> DocumentRef {
+    DocumentRef::new(number, format!("Chapter {number}"))
+}
+
+pub fn library() -> Vec<Attachment> {
+    vec![
+        Attachment::folder(10, "The Salt Road", "The Salt Road"),
+        Attachment::folder(11, "Notes", "The Salt Road/Notes"),
+        Attachment::document(1, "Chapter 1", "The Salt Road/Chapter 1"),
+        Attachment::document(2, "Chapter 2", "The Salt Road/Chapter 2"),
+        Attachment::document(3, "Characters", "The Salt Road/Notes/Characters"),
+        Attachment::document(4, "Timeline", "The Salt Road/Notes/Timeline"),
+    ]
+}
+
+/// Opens an active window with the text of chapter 1 and the side chat
+/// beside it, on a new fake backend. The keyboard is in the text.
+pub fn open_panel(cx: &mut TestAppContext) -> (PanelFixture, &mut VisualTestContext) {
+    setup(cx);
+    open_panel_on(FakeBackend::new(), AssistantPanelOptions::default(), cx)
+}
+
+pub fn open_panel_on(
+    fake: FakeBackend,
+    options: AssistantPanelOptions,
+    cx: &mut TestAppContext,
+) -> (PanelFixture, &mut VisualTestContext) {
+    let backend: Arc<dyn Backend> = Arc::new(fake.clone());
+    let availability = fake.availability();
+    let (workspace, cx) = cx.add_window_view(move |window, cx| {
+        let editor = cx.new(|cx| Editor::new(chapter(1), EditorConfig::full(), window, cx));
+        let toasts = cx.new(|_| ToastLayer::new());
+        ToastLayer::set_global(&toasts, cx);
+        let panel = cx.new(|cx| {
+            let options = AssistantPanelOptions {
+                availability: options.availability.clone().or(Some(availability)),
+                ..options
+            };
+            let mut panel = AssistantPanel::new(backend, options, window, cx);
+            panel.set_document_source({
+                let editor = editor.downgrade();
+                move |cx| {
+                    let editor = editor.upgrade()?;
+                    let markdown = editor.read(cx).plain_text();
+                    let title = markdown.lines().next().unwrap_or_default().to_string();
+                    let id = title
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|number| number.parse().ok());
+                    Some(OpenDocument {
+                        id,
+                        title,
+                        path: "The Salt Road".into(),
+                        markdown,
+                    })
+                }
+            });
+            panel.set_library_source(|_| library());
+            panel.set_document(Some(chapter_ref(1)), None, window, cx);
+            panel
+        });
+        cx.subscribe(
+            &panel,
+            |this: &mut Workspace, _, event: &AssistantPanelEvent, cx| {
+                if let AssistantPanelEvent::TranscriptChanged {
+                    document,
+                    transcript,
+                } = event
+                {
+                    this.stored.insert(*document, transcript.clone());
+                }
+                if matches!(event, AssistantPanelEvent::CloseRequested) {
+                    this.panel_open = false;
+                }
+                this.events.push(event.clone());
+                cx.notify();
+            },
+        )
+        .detach();
+        editor.read(cx).focus(window);
+        Workspace {
+            editor,
+            panel,
+            toasts,
+            events: Vec::new(),
+            stored: HashMap::new(),
+            panel_open: true,
+            panel_width: PANEL_WIDTH,
+        }
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let (editor, panel) = workspace.read_with(cx, |workspace, _| {
+        (workspace.editor.clone(), workspace.panel.clone())
+    });
+    (
+        PanelFixture {
+            workspace,
+            editor,
+            panel,
+            fake,
+        },
+        cx,
+    )
+}
+
+/// Where the keyboard is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focus {
+    Text,
+    Panel(writer_assistant_ui::PanelArea),
+    Picker,
+    Elsewhere,
+}
+
+impl PanelFixture {
+    /// Moves the keyboard into the composer, types a message and sends it.
+    pub fn send(&self, text: &str, cx: &mut VisualTestContext) {
+        self.panel
+            .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+        cx.run_until_parked();
+        cx.simulate_input(text);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+    }
+
+    pub fn focus(&self, cx: &mut VisualTestContext) -> Focus {
+        cx.update(|window, cx| {
+            let panel = self.panel.read(cx);
+            if self.editor.read(cx).is_focused(window) {
+                Focus::Text
+            } else if let Some(area) = panel.focused_area(window, cx) {
+                Focus::Panel(area)
+            } else if panel.contains_focus(window, cx) {
+                Focus::Picker
+            } else {
+                Focus::Elsewhere
+            }
+        })
+    }
+
+    pub fn events(&self, cx: &mut VisualTestContext) -> Vec<AssistantPanelEvent> {
+        self.workspace
+            .read_with(cx, |workspace, _| workspace.events.clone())
+    }
+
+    /// The events since the last call, without the stored conversations.
+    pub fn take_events(&self, cx: &mut VisualTestContext) -> Vec<AssistantPanelEvent> {
+        self.workspace.update(cx, |workspace, _| {
+            std::mem::take(&mut workspace.events)
+                .into_iter()
+                .filter(|event| !matches!(event, AssistantPanelEvent::TranscriptChanged { .. }))
+                .collect()
+        })
+    }
+
+    pub fn stored(&self, document: i64, cx: &mut VisualTestContext) -> Transcript {
+        self.workspace.read_with(cx, |workspace, _| {
+            workspace
+                .stored
+                .get(&Some(document))
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// Opens another chapter the way the app does: the text first, then
+    /// the panel is told, with the conversation the host has stored.
+    pub fn open_chapter(&self, number: i64, cx: &mut VisualTestContext) {
+        let stored = self.workspace.read_with(cx, |workspace, _| {
+            workspace.stored.get(&Some(number)).cloned()
+        });
+        self.editor
+            .update(cx, |editor, cx| editor.set_document(chapter(number), cx));
+        self.panel.update_in(cx, |panel, window, cx| {
+            panel.set_document(Some(chapter_ref(number)), stored, window, cx)
+        });
+        cx.run_until_parked();
+    }
+
+    pub fn message_ids(&self, cx: &mut VisualTestContext) -> Vec<MessageId> {
+        self.panel.read_with(cx, |panel, _| {
+            panel
+                .transcript()
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect()
+        })
+    }
+
+    pub fn texts(&self, cx: &mut VisualTestContext) -> Vec<String> {
+        self.panel.read_with(cx, |panel, _| {
+            panel
+                .transcript()
+                .messages
+                .iter()
+                .map(|message| message.text.clone())
+                .collect()
+        })
+    }
+
+    pub fn availability(&self) -> Availability {
+        self.fake.availability()
+    }
+
+    /// Lets held events of the fake agent through, one at a time, until
+    /// the conversation that is shown is as `done` wants it. (How many
+    /// events come before the first piece of an answer depends on whether
+    /// the agent was started ahead of the message.)
+    pub fn advance_until(&self, cx: &mut VisualTestContext, done: impl Fn(&Transcript) -> bool) {
+        for _ in 0..200 {
+            let reached = self
+                .panel
+                .read_with(cx, |panel, _| done(panel.transcript()));
+            if reached {
+                return;
+            }
+            assert_eq!(self.fake.advance(1), 1, "the agent has nothing more to say");
+            cx.run_until_parked();
+        }
+        panic!("the conversation never got there");
+    }
+
+    /// Lets held events through until the latest answer reads `text`.
+    pub fn advance_to_text(&self, text: &str, cx: &mut VisualTestContext) {
+        self.advance_until(cx, |transcript| {
+            transcript
+                .messages
+                .last()
+                .is_some_and(|message| message.text == text)
+        });
+    }
+}

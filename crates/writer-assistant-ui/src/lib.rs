@@ -123,6 +123,7 @@ pub mod controls;
 pub mod markdown;
 pub mod messages;
 pub mod notice;
+pub mod panel;
 pub mod pickers;
 
 pub use actions::{
@@ -138,6 +139,11 @@ pub use composer::{COMPOSER_MAX_HEIGHT, Composer, ComposerEvent, ComposerOptions
 pub use markdown::{AnswerFont, AnswerStyle, answer_document, answer_plain_text};
 pub use messages::{AnswerAction, EmptyState, MessageList, MessageListEvent, MessageListOptions};
 pub use notice::{Notice, NoticeKind, NoticeRow, notice_row};
+pub use panel::{
+    ACTION_COPY, ACTION_INSERT, ACTION_REPLACE, ApplyKind, AssistantPanel, AssistantPanelEvent,
+    AssistantPanelOptions, DocumentRef, HeaderControl, PanelArea, PanelNotice,
+    context::{ContextPicker, ContextPickerDelegate},
+};
 pub use pickers::{
     ControlBounds, PickerKind, open_picker_menu, picker_button, picker_has_choices, picker_label,
     picker_menu_items,
@@ -172,4 +178,5 @@ impl ChatKeys {
 /// bindings at the same depth the later one wins.
 pub fn init(cx: &mut App) {
     cx.bind_keys(actions::key_bindings());
+    panel::global_actions(cx);
 }

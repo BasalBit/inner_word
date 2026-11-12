@@ -412,30 +412,54 @@ impl Render for Composer {
             .text_size(UI_TEXT_BASE)
             .line_height(UI_LINE_HEIGHT)
             .text_color(colors.ink)
-            .child(
-                // A plain block: the editor measures itself at the width
-                // it is given.
-                div().pt(SPACE_2).px(px(10.)).child(self.editor.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(SPACE_1)
-                    .pl(px(6.))
-                    .pr(px(6.))
-                    .pt(SPACE_1)
-                    .pb(px(6.))
+            .map(|composer| match accessory {
+                // With controls of the host under the field: the text
+                // above, a row with the controls and the button below.
+                Some(accessory) => composer
+                    .child(
+                        // A plain block: the editor measures itself at the
+                        // width it is given.
+                        div().pt(SPACE_2).px(px(10.)).child(self.editor.clone()),
+                    )
                     .child(
                         div()
                             .flex()
                             .items_center()
+                            .justify_between()
                             .gap(SPACE_1)
-                            .min_w_0()
-                            .children(accessory),
-                    )
-                    .child(button),
-            )
+                            .px(px(6.))
+                            .pt(SPACE_1)
+                            .pb(px(6.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(SPACE_1)
+                                    .min_w_0()
+                                    .child(accessory),
+                            )
+                            .child(button),
+                    ),
+                // Alone: the button beside the text, at its last line.
+                None => composer.child(
+                    div()
+                        .flex()
+                        .items_end()
+                        .gap(SPACE_2)
+                        .pl(px(10.))
+                        .pr(px(6.))
+                        .py(px(6.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                // The text sits on the middle line of the
+                                // button while it is one line.
+                                .py(px(3.))
+                                .child(self.editor.clone()),
+                        )
+                        .child(button),
+                ),
+            })
     }
 }

@@ -15,7 +15,9 @@
 //! | [`insert_below`] | "Insert Below": whole blocks under the selection, which stays as it is |
 
 use gpui::{App, Entity};
-use writer_core::{Block, Document, Fragment, Selection, TextRange};
+use writer_core::{
+    Block, BlockKind, Document, EditorState, Fragment, InlineAttrs, Position, TextRange,
+};
 use writer_editor::Editor;
 use writer_export::{
     ExportSource, MarkdownFrontMatter, MarkdownImportOptions, MarkdownOptions, from_markdown,
@@ -94,13 +96,27 @@ pub fn has_selection(editor: &Entity<Editor>, cx: &App) -> bool {
 /// Inserts `markdown` as formatted text at the caret, replacing the
 /// selection when there is one (as typing would). One undo step. Returns
 /// whether anything was inserted.
+///
+/// An answer of one paragraph is running text: it goes into the block the
+/// caret is in, which keeps its kind, and takes the character formatting
+/// typed text would take there, with the answer's own emphasis on top. An
+/// answer of anything else (several blocks, a heading, a list, a quote,
+/// code) goes in as whole blocks at the caret: an empty block there is
+/// replaced by them, a block with the caret inside it is split around
+/// them, and nothing of the answer is merged into the neighbouring text.
 pub fn insert_at_caret(editor: &Entity<Editor>, markdown: &str, cx: &mut App) -> bool {
     let fragment = markdown_fragment(markdown);
     if fragment.is_empty() || !can_edit(editor, cx) {
         return false;
     }
     editor.update(cx, |editor, cx| {
-        editor.edit(|state| state.grouped(|state| state.paste(&fragment)), cx)
+        editor.edit(
+            |state| {
+                state.break_undo_group();
+                state.grouped(|state| insert_fragment(state, &fragment))
+            },
+            cx,
+        )
     })
 }
 
@@ -114,44 +130,109 @@ pub fn replace_selection(editor: &Entity<Editor>, markdown: &str, cx: &mut App) 
     insert_at_caret(editor, markdown, cx)
 }
 
-/// Replaces `range` of the document (the selection the question was asked
-/// about, kept by whoever asked) with `markdown` as formatted text, when
-/// the text in that range is still `expected`. One undo step.
-///
-/// The quick chat keeps the range of the selection it was opened on: the
-/// selection itself may be gone by the time the answer is applied (a click
-/// in the text), and the answer still belongs to those words. When the
-/// words are no longer there (the text was edited meanwhile) nothing is
-/// replaced and `false` is returned.
-pub fn replace_range(
-    editor: &Entity<Editor>,
-    range: TextRange,
-    expected: &str,
-    markdown: &str,
-    cx: &mut App,
-) -> bool {
-    let fragment = markdown_fragment(markdown);
-    if fragment.is_empty() || !can_edit(editor, cx) {
-        return false;
+/// Puts `fragment` where the selection of `state` is. See
+/// [`insert_at_caret`].
+fn insert_fragment(state: &mut EditorState, fragment: &Fragment) -> bool {
+    let start = state.selection().start();
+    let in_code = state
+        .document()
+        .block(start.block)
+        .is_some_and(|block| block.kind().is_code());
+    let running_text =
+        fragment.is_inline() && matches!(fragment.blocks()[0].kind(), BlockKind::Paragraph);
+    if in_code {
+        // Code takes the answer as plain text, as it takes a paste.
+        return state.paste(fragment);
     }
-    let still_there = {
-        let document = editor.read(cx).document();
-        document.fragment(range).to_plain_text() == expected
+    if running_text {
+        let base = typed_formatting(state);
+        return state.paste(&with_formatting_of(fragment, &base));
+    }
+
+    // Whole blocks. What is selected goes first, as with typing.
+    if !state.selection().is_collapsed() {
+        state.delete_selection();
+    }
+    let caret = state.selection().head;
+    let (is_void, is_empty, length) = match state.document().block(caret.block) {
+        Some(block) => (block.is_void(), block.is_empty(), block.len()),
+        None => return false,
     };
-    if !still_there {
+    let replaces_empty = !is_void && is_empty;
+    let index = if is_void || (caret.offset >= length && !replaces_empty) {
+        caret.block + 1
+    } else if caret.offset == 0 {
+        caret.block
+    } else {
+        // In the middle of a block: the answer goes between its halves.
+        state.insert_paragraph_break();
+        caret.block + 1
+    };
+    if !state.insert_blocks_at(index, fragment) {
         return false;
     }
-    editor.update(cx, |editor, cx| {
-        editor.edit(
-            |state| {
-                state.grouped(|state| {
-                    state.set_selection(Selection::from_range(range));
-                    state.paste(&fragment)
-                })
+    let count = fragment.blocks().len();
+    let last = index + count - 1;
+    let end = Position::new(
+        last,
+        state.document().block(last).map_or(0, |block| block.len()),
+    );
+    if replaces_empty {
+        // The empty block the caret was in is now under the answer: it
+        // goes, the answer has taken its place.
+        state.delete_range(TextRange::new(end, Position::new(last + 1, 0)));
+    }
+    state.select_range(TextRange::empty(end));
+    true
+}
+
+/// The character formatting text typed at the selection of `state` would
+/// take: that of the first character a selection replaces, or of the
+/// character before a caret. A link is not carried on (an answer put after
+/// a link is not part of it), and comment anchors never travel.
+fn typed_formatting(state: &EditorState) -> InlineAttrs {
+    let selection = state.selection();
+    let start = selection.start();
+    let Some(block) = state.document().block(start.block) else {
+        return InlineAttrs::default();
+    };
+    let attrs = if selection.is_collapsed() {
+        block.attrs_before(start.offset)
+    } else {
+        block.attrs_at(start.offset)
+    };
+    let mut base = attrs.cloned().unwrap_or_default();
+    base.comments.clear();
+    base.link = None;
+    base
+}
+
+/// The single text block of `fragment` as a paragraph whose text carries
+/// `base` under its own formatting: a style either has is on; a colour, a
+/// font, a highlight or a link of the answer's own wins.
+fn with_formatting_of(fragment: &Fragment, base: &InlineAttrs) -> Fragment {
+    let Some(source) = fragment.blocks().first() else {
+        return fragment.clone();
+    };
+    let mut block = Block::paragraph("");
+    for (_, text, own) in source.text_spans() {
+        block = block.with_span(
+            text,
+            InlineAttrs {
+                bold: own.bold || base.bold,
+                italic: own.italic || base.italic,
+                underline: own.underline || base.underline,
+                strikethrough: own.strikethrough || base.strikethrough,
+                code: own.code || base.code,
+                highlight: own.highlight.or(base.highlight),
+                color: own.color.or(base.color),
+                font: own.font.clone().or_else(|| base.font.clone()),
+                link: own.link.clone(),
+                comments: Default::default(),
             },
-            cx,
-        )
-    })
+        );
+    }
+    Fragment::new(vec![block])
 }
 
 /// Inserts `markdown` as whole blocks under the block the selection (or
@@ -165,7 +246,10 @@ pub fn insert_below(editor: &Entity<Editor>, markdown: &str, cx: &mut App) -> bo
     editor.update(cx, |editor, cx| {
         let index = editor.selection().end().block + 1;
         editor.edit(
-            |state| state.grouped(|state| state.insert_blocks_at(index, &fragment)),
+            |state| {
+                state.break_undo_group();
+                state.grouped(|state| state.insert_blocks_at(index, &fragment))
+            },
             cx,
         )
     })

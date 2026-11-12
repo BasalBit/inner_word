@@ -50,8 +50,85 @@ use crate::actions::*;
 /// context that does.
 pub const MENU_KEY_CONTEXT: &str = "Pane";
 
-/// The menus of the app.
+/// The menus of the app, with the assistant's items.
 pub fn app_menus() -> Vec<Menu> {
+    app_menus_with(true)
+}
+
+/// The menus of the app. `assistant` is whether the assistant is shown
+/// (its engine is installed and the setting is on): without it the menu
+/// bar has none of its items, as the rest of the window has nothing of it.
+pub fn app_menus_with(assistant: bool) -> Vec<Menu> {
+    let mut menus = base_menus();
+    if assistant {
+        add_assistant_items(&mut menus);
+    }
+    menus
+}
+
+/// The name of the menu the quick chat is in.
+const EDIT_MENU: &str = "Edit";
+/// The name of the menu the side chat is in.
+const VIEW_MENU: &str = "View";
+
+/// Puts the assistant's items where a writer looks for them: asking about
+/// the selection is something done to the text (Edit, after Find), the
+/// side chat is a panel like the library and the comments (View).
+fn add_assistant_items(menus: &mut [Menu]) {
+    for menu in menus {
+        match menu.name.as_ref() {
+            EDIT_MENU => {
+                let at = menu
+                    .items
+                    .iter()
+                    .position(|item| {
+                        matches!(item, MenuItem::Submenu(submenu) if submenu.name.as_ref() == "Spelling")
+                    })
+                    .unwrap_or(menu.items.len());
+                menu.items
+                    .insert(at, MenuItem::action("Ask the Assistant…", AskAssistant));
+                menu.items.insert(at + 1, MenuItem::separator());
+            }
+            VIEW_MENU => {
+                let toggle = menu
+                    .items
+                    .iter()
+                    .position(|item| {
+                        matches!(item, MenuItem::Action { name, .. } if name.as_ref() == "Show or Hide Comments")
+                    })
+                    .map_or(menu.items.len(), |ix| ix + 1);
+                menu.items.insert(
+                    toggle,
+                    MenuItem::action("Show or Hide Assistant", ToggleAssistant),
+                );
+                let go = menu
+                    .items
+                    .iter()
+                    .position(|item| {
+                        matches!(item, MenuItem::Action { name, .. } if name.as_ref() == "Go to Comments")
+                    })
+                    .map_or(menu.items.len(), |ix| ix + 1);
+                menu.items
+                    .insert(go, MenuItem::action("Go to Assistant", FocusAssistant));
+                let end = menu
+                    .items
+                    .iter()
+                    .position(|item| {
+                        matches!(item, MenuItem::Action { name, .. } if name.as_ref() == "Command Palette…")
+                    })
+                    .unwrap_or(menu.items.len());
+                menu.items
+                    .insert(end, MenuItem::action("New Chat", NewAssistantChat));
+                menu.items
+                    .insert(end + 1, MenuItem::action("Clear Chat", ClearAssistantChat));
+                menu.items.insert(end + 2, MenuItem::separator());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn base_menus() -> Vec<Menu> {
     vec![
         Menu {
             name: "The Writer".into(),
@@ -337,9 +414,36 @@ pub fn native_menu_binding<'a>(
 /// Installs the menu bar. Call after the key bindings are in place: the
 /// shortcuts in the menus are read from the keymap at this moment.
 pub fn install(cx: &mut App) {
-    cx.set_menus(app_menus());
+    let assistant = assistant_shown(cx);
+    cx.set_menus(app_menus_with(assistant));
     // A new menu bar has new items: their check marks go on again.
     apply_check_marks(cx);
+}
+
+// ----- the assistant's items -----------------------------------------------------
+
+/// Whether the menu bar has the assistant's items.
+#[derive(Default)]
+struct AssistantItems(bool);
+
+impl gpui::Global for AssistantItems {}
+
+/// Whether the menu bar has the assistant's items right now.
+pub fn assistant_shown(cx: &App) -> bool {
+    cx.try_global::<AssistantItems>()
+        .is_some_and(|items| items.0)
+}
+
+/// Gives the menu bar the assistant's items or takes them out, and builds
+/// it again when that changed. The workspace calls this when it learns
+/// whether the assistant's engine is installed, and when the setting that
+/// switches the assistant off changes.
+pub fn set_assistant_shown(shown: bool, cx: &mut App) {
+    if assistant_shown(cx) == shown {
+        return;
+    }
+    cx.set_global(AssistantItems(shown));
+    install(cx);
 }
 
 // ----- check marks -------------------------------------------------------------

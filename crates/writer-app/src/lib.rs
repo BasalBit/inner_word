@@ -154,6 +154,10 @@ fn register_commands(cx: &mut App) {
     commands::register(commands::in_sentence_case(writer_spell::commands()), cx);
     commands::register(actions::spelling_commands(), cx);
     commands::register(writer_comments::commands(), cx);
+    // The assistant's commands are listed only while the assistant is
+    // shown: hidden until a workspace learns that its engine is there.
+    commands::register(actions::assistant_commands(), cx);
+    commands::set_category_hidden(actions::CATEGORY_ASSISTANT, true, cx);
     commands::register(
         writer_vim_mode::commands()
             .into_iter()

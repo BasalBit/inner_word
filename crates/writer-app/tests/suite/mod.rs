@@ -3,6 +3,7 @@
 
 mod agents;
 mod assembly;
+mod assistant;
 mod commands;
 mod context_menus;
 mod export;

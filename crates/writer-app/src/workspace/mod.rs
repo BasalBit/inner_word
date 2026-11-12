@@ -59,6 +59,7 @@
 //! takes focus (format menu, link popover, font picker, find bar) and the
 //! modals get their keys directly.
 
+mod assistant;
 mod measure;
 mod menus;
 mod render;
@@ -185,6 +186,8 @@ pub struct Workspace {
     /// comments and the assistant's side chat): which is in front, their
     /// widths.
     pub(crate) right: right_panel::RightSlot,
+    /// The assistant: its engine and whether it is shown.
+    pub(crate) assistant: assistant::AssistantState,
     /// The panel beside the text that was used last: it keeps its place in
     /// a window too narrow for both.
     pub(crate) last_side_panel: SidePanel,
@@ -378,6 +381,7 @@ impl Workspace {
 
         let saver = saver::Saver::new(library.read(cx));
         let right = right_panel::RightSlot::load(library.read(cx));
+        let assistant = assistant::AssistantState::new(cx);
         let mut this = Self {
             library,
             editor,
@@ -399,6 +403,7 @@ impl Workspace {
             right_panel: None,
             right_panel_width: px(DEFAULT_RIGHT_PANEL_WIDTH),
             right,
+            assistant,
             last_side_panel: SidePanel::Right,
             strips: vec![(VIM_COMMAND_LINE_KEY.into(), vim_command_line.into())],
             vim_status_id: vim_status.entity_id(),
@@ -418,6 +423,7 @@ impl Workspace {
         this.restore_session(window, cx);
         this.offer_agents_hint(cx);
         this.sync_right_panel(cx);
+        this.look_for_assistant(cx);
         this.apply_vim_setting(cx);
         this.apply_spelling(cx);
         this.focus_editor(window, cx);
@@ -859,6 +865,9 @@ impl Workspace {
             let author = new.comment_author.clone();
             self.comments
                 .update(cx, |comments, _| comments.set_author(author));
+        }
+        if old.assistant != new.assistant {
+            self.apply_assistant(cx);
         }
         if old.character_limit != new.character_limit {
             self.character_count = None;

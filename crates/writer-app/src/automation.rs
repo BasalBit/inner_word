@@ -22,6 +22,7 @@
 //! | `menu:<name>`         | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
 //! | `choose:<label>`      | chooses the item with that label in the open context menu, as a click on it would |
 //! | `bar[:<button>]`      | shows the format bar over the selection, as a selection made with the mouse does; with a button (`bold`, `italic`, `highlight`, `turn-into`, `more`, `extra-0` ...) presses that button of the bar |
+//! | `fake:<what>`         | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`, see [`crate::assistant::fake`]): `fake:hold` holds its events back, `fake:advance:<n>` lets the next `n` through (an answer half written), `fake:release` lets everything through from now on |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
@@ -126,6 +127,7 @@ pub enum Step {
     Menu(crate::workspace::MenuKind),
     Choose(String),
     Bar(Option<String>),
+    Fake(FakeStep),
     Resize(f32, f32),
     Theme(ThemeMode),
     Screenshot(PathBuf),
@@ -140,6 +142,17 @@ pub enum Step {
     KeyCost(Vec<Keystroke>),
     Stall(Duration),
     Quit,
+}
+
+/// What a `fake:` step does to the fake engine of the assistant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FakeStep {
+    /// Hold every event back.
+    Hold,
+    /// Let the next events through.
+    Advance(usize),
+    /// Stop holding.
+    Release,
 }
 
 /// A parsed script.
@@ -269,6 +282,20 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             Step::Choose(unescape(arg))
         }
         "bar" => Step::Bar((!arg.is_empty()).then(|| arg.to_string())),
+        "fake" => {
+            let (what, count) = arg.split_once(':').unwrap_or((arg, ""));
+            Step::Fake(match what.trim() {
+                "hold" => FakeStep::Hold,
+                "release" => FakeStep::Release,
+                "advance" => FakeStep::Advance(
+                    count
+                        .trim()
+                        .parse()
+                        .context("expected fake:advance:<events>")?,
+                ),
+                other => bail!("unknown fake step {other:?} (hold, advance:<n>, release)"),
+            })
+        }
         "resize" => {
             let (w, h) = arg
                 .split_once(['x', 'X'])
@@ -461,6 +488,33 @@ async fn execute(
                 }
                 (false, Some(button)) => {
                     bail!("the format bar is not showing a button {button:?} that can be pressed")
+                }
+            }
+            frame_pause(window, view, cx).await;
+        }
+        Step::Fake(step) => {
+            let fake = cx
+                .update(|cx| crate::assistant::fake::installed(cx))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "this run has no fake engine: set {}",
+                        crate::assistant::FAKE_ENV
+                    )
+                })?;
+            match step {
+                FakeStep::Hold => {
+                    fake.hold();
+                    eprintln!("[automation] fake engine: holding its events");
+                }
+                FakeStep::Advance(count) => {
+                    let delivered = fake.advance(count);
+                    eprintln!(
+                        "[automation] fake engine: let {delivered} of {count} events through"
+                    );
+                }
+                FakeStep::Release => {
+                    fake.release();
+                    eprintln!("[automation] fake engine: released");
                 }
             }
             frame_pause(window, view, cx).await;

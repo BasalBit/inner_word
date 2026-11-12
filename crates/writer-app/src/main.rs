@@ -48,6 +48,16 @@ fn main() {
             // What the Agents panel looks at and writes to: this Mac. A
             // scripted run gets a home directory of its own or none.
             writer_app::agents::use_this_mac(script.is_some(), cx);
+            // The assistant runs on Claude Code with the login the user
+            // has in it. A scripted run never gets it (a script must not
+            // be able to send a message: each one spends the user's own
+            // allowance); it gets the fake engine when it asks for one,
+            // and no assistant otherwise.
+            if script.is_none() {
+                writer_app::assistant::use_claude_code(cx);
+            } else if let Some(fake) = writer_app::assistant::fake::from_env() {
+                writer_app::assistant::fake::install(fake, cx);
+            }
             // A scripted run stays in the background, also when it finds
             // another copy running.
             let may_activate = script.is_none() || automation::foreground_requested();

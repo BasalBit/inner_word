@@ -63,8 +63,13 @@ a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `
 it), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 Vim, tool, the format bar, comments, spelling, status bar), `dump`, `log:<text>`, `quit`, and for measuring
-`book:<blocks>` (creates and opens a generated document), `savecost[:<rounds>]` (every part
-of a synchronous save, timed) and `limitcost[:<rounds>]` (the character-limit count). Useful
+`book:<blocks>` (creates and opens a generated document, and says how long it took until
+the text on screen was checked for spelling), `savecost[:<rounds>]` (every part of a
+synchronous save, timed), `limitcost[:<rounds>]` (the character-limit count),
+`typecost:<text>` and `keycost:<keystrokes>` (press the keys at a writer's pace and time
+each: dispatch, the frame after it, how long the main thread kept a timer waiting, the
+spell checker's slices) and `stall:<ms>` (watches the main thread without pressing
+anything). Useful
 lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a palette command
 `keys:cmd-shift-p; type:version history; keys:enter`; the settings of the open document
 `keys:cmd-shift-p; type:document settings; keys:enter`; a context menu `keys:ctrl-enter`
@@ -95,6 +100,16 @@ Measure in a release build (`cargo build --release -p writer-app`, then
 THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; savecost:7; type:a; wait:1600; state; quit"
 # savecost: the synchronous save, part by part (about 70 ms, the library write is 60 of them)
 # state:    last_save=[main 0.7 ms, background 90 ms, ...] for the autosave after "a"
+```
+
+What spell checking costs in a book (measured for 0.2.0: the text on screen is checked
+about 20 ms after the first frame, the whole book in about 20 s of idle time in slices of
+4 to 6 ms, a key reaches the screen in 6 to 8 ms while the pass waits for the writer):
+
+```bash
+THE_WRITER_AUTOMATION="wait:1500; book:10000; stall:3000; typecost:Teh quick brown fox.; keycost:pageup pageup pageup; stall:20000; state; quit"
+# run it a second time with "keys:cmd-shift-p; type:check spelling while typing; keys:enter" first:
+# single waits of 20 to 40 ms turn up with the checker off too (docs/gpui-notes.md, Visual QA)
 ```
 
 The story test (`crates/writer-app/tests/suite/story.rs`) walks through the whole product
@@ -220,8 +235,12 @@ language of each paragraph). A document can carry a language of its own
 (`DocumentSettings::spelling_language`, "Spelling language" in the "This document"
 settings: follow the app setting, Automatic, or a language), which overrides the app's and
 becomes the proofing language of a DOCX export. `left` / `right` step through the
-languages (the user's preferred ones first); `enter` on either row, or the palette command
-"Spelling language" (for the open document), opens a searchable list.
+languages; `enter` or `space` on either row, or the palette command "Spelling language"
+(for the open document), opens a searchable list. The list is the Mac's
+(`writer_spell::language_choices`): the user's own language first, the others by name; a
+Mac left on "Automatic by Language" reports nearly every language as preferred, which is
+then not taken as a choice. The checker's plain `en` is American English and is named so.
+Compact editors (the comment composer) and read-only ones are not checked.
 
 Global (work anywhere in the window):
 

@@ -73,6 +73,25 @@ opens a short introduction.
 From the keyboard, Control-Return opens the same menus as a right-click, and
 so does Shift-F10.
 
+
+Spelling
+--------
+
+The Writer marks misspelled words with a wavy red line as you write, using
+the spell checker of your Mac (the same one Mail and Notes use; The Writer
+brings no dictionary of its own). Right-click a marked word for suggestions,
+or to teach your Mac the word (Learn Spelling: it is then known in your
+other apps too) or to let it pass in this document until you close it
+(Ignore Spelling). Command-; goes to the next marked word and
+Shift-Command-; to the previous one. Code is not checked.
+
+The language is found by itself, paragraph by paragraph. To check in one
+language only, choose it in the settings (Command-,) under "Spelling
+language", or for a single document in the same window under "This
+document". The languages on offer are those of your Mac. A text in a
+language your Mac has no dictionary for gets many marks: switch "Check
+spelling while typing" off in the settings, or under Edit > Spelling.
+
 If The Writer says that it is already open, another copy of it is running
 with your library (for example an older copy that was not quit). Switch to
 that copy, or quit it and open The Writer again. Two copies never work on one

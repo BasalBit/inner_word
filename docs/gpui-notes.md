@@ -717,14 +717,21 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | step | effect |
 |---|---|
 | `wait:<ms>` | sleep |
-| `keys:<keystrokes>` | GPUI keystrokes, space separated (`keys:cmd-shift-p escape`); logs handled / not handled |
+| `keys:<keystrokes>` | GPUI keystrokes, space separated (`keys:cmd-shift-p escape`); logs handled / not handled. The key `;` is written `\;` (`keys:cmd-\;`), because `;` separates steps |
 | `type:<text>` | one keystroke per character (bindings first, then the focused input handler). Escapes `\;` `\n` `\t` `\s` `\\`. **The argument is trimmed: write a leading or trailing space as `\s`** |
 | `action:<name>` | dispatch a registered action by name (`action:app::Quit`) |
 | `resize:<w>x<h>` | resize window content (overridden by the tiling window manager here) |
 | `theme:<light\|dark\|system>` | switch theme mode |
 | `screenshot:<path>` | draw a fresh frame, wait 250ms, capture this window to PNG (Retina 2×) |
 | `info` | print window bounds, viewport, scale, appearance, active, focused, theme |
-| `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), Vim mode and command line, open tool and find count, comment threads, status bar |
+| `menu:<name>` | opens a menu of the workspace at its control: `title`, `save`, `statistics`, `page`, `limit` |
+| `choose:<label>` | chooses that item of the open context menu, as a click on it would |
+| `bar[:<button>]` | shows the format bar over the selection, as a mouse selection does; `bar:bold`, `bar:extra-0`, `bar:more` press a button of it |
+| `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), the open context menu, Vim mode and command line, open tool and find count, the format bar, comment threads, spelling (`on language=<id\|auto> (app\|document) [detected=<id>] marks=N pending=N`), status bar |
+| `book:<blocks>` | creates and opens a generated document; prints what opening cost and how long it took until the text on screen was checked for spelling |
+| `savecost[:<rounds>]`, `limitcost[:<rounds>]` | time a synchronous save part by part, and the character-limit count |
+| `typecost:<text>`, `keycost:<keystrokes>` | press the keys at a writer's pace (one every 80 ms) and time each: dispatch, the frame after it, and how long the main thread kept a 4 ms timer waiting in between; ends with the spell checker's slices |
+| `stall:<ms>` | watches the main thread for that long without pressing anything (the background pass of the spell checker, events posted from outside): timer waits, frame costs, slices |
 | `dump` | the first 400 characters of the text in the editor |
 | `log:<text>` | print |
 | `quit` | quit through `cx.quit()` (runs on_app_quit hooks) |
@@ -777,6 +784,16 @@ Notes:
 - Scripts must not write the system clipboard (copy, cut, "Copy as Markdown", Vim's `"+`
   register): it is the user's clipboard.
 - The window is placed by the tiling window manager at ~1489×1672 points (2978×3344 px PNG).
+- **A stall of almost exactly one second while frames are forced is not the spell
+  checker.** With real scroll events posted to the background window and a frame forced
+  every 16 ms (`stall:`), one frame or timer wait of 1005 to 1015 ms showed up about once a
+  run, with spell checking off as well as on (seen 4 times in 5 runs, release build). The
+  cause was not tracked down; the length points at Metal's `nextDrawable`, which gives up
+  after one second when the window server hands no drawable back, as it may for a window
+  it is not showing. Not seen without posted scroll events.
+- Measure in a release build, and run a second time with spell checking off (palette
+  "Check spelling while typing" first): this Mac has other work, and single waits of 20 to
+  40 ms turn up in both runs.
 - If a capture ever comes back black/wallpaper-only or `screencapture` fails with a permission
   error, the Screen Recording permission was revoked for the launching terminal. Do not try to
   change system settings; fall back to headless tests and ask the user.
@@ -797,6 +814,7 @@ t.colors.ink / muted / faint / on_accent; hairline / border_strong
 t.colors.accent / accent_hover / accent_subtle; selection / selection_inactive (translucent) / caret
 t.highlight(HighlightColor::Yellow); t.colors.comment / comment_active / comment_underline
 t.colors.find_match / find_match_current (translucent); danger(_subtle) / success(_subtle); overlay_backdrop
+t.colors.spelling                                   // the wavy underline of a misspelled word (a quiet red)
 t.shadow_overlay() / shadow_popover() / shadow_page() -> Vec<BoxShadow>
 t.ui_font() / document_font() / mono_font() -> Font;  t.fonts.{ui, document, mono}: SharedString
 theme::{UI_FONT_FAMILY, UI_TEXT_XS..UI_TEXT_TITLE, DOCUMENT_TEXT_SIZE (17px), DOCUMENT_LINE_HEIGHT_RATIO (1.6),

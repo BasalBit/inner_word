@@ -641,6 +641,28 @@ fn lists() {
     assert_eq!(out, "- [ ] open\n- [x] done\n- plain\n");
 }
 
+/// Text is escaped by what is written around it, not by where formatting
+/// that is not written (a colour, by default) happens to begin: the same
+/// text gives the same Markdown however its runs are cut.
+#[test]
+fn unwritten_formatting_does_not_change_the_escapes() {
+    let mut ink = plain();
+    ink.color = Some(Rgb::new(10, 20, 30));
+    let cut = Document::from_blocks(vec![p(&[("k", ink), ("_a_# x", plain())])]);
+    let whole = Document::from_blocks(vec![p(&[("k_a_# x", plain())])]);
+    let default = MarkdownOptions::default();
+    assert_eq!(round_trip_with(&cut, &default), "k_a_# x\n");
+    assert_eq!(round_trip_with(&whole, &default), "k_a_# x\n");
+    let colors = MarkdownOptions {
+        colors: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        round_trip_with(&cut, &colors),
+        "<span style=\"color:#0a141e\">k</span>\\_a\\_# x\n"
+    );
+}
+
 /// `- |` under the text of the item above would be the delimiter row of a
 /// table, with that text as its header.
 #[test]

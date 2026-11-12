@@ -879,6 +879,11 @@ fn long_lines_and_large_texts() {
     let start = std::time::Instant::now();
     let imported = import(&md);
     let took = start.elapsed();
+    println!(
+        "imported {} bytes, {} blocks in {took:?}",
+        md.len(),
+        3_000 * 8
+    );
     assert_eq!(imported.document.block_count(), 3_000 * 8);
     assert_eq!(imported.warnings, []);
     assert!(took.as_secs() < 20, "importing took {took:?}");
@@ -1001,6 +1006,71 @@ fn fragments() {
     assert_eq!(texts, ["Title", "Section", "a", "b", "End."]);
     assert_eq!(editor.document().blocks()[2].kind(), &BlockKind::BulletItem);
     editor.document().check_invariants().unwrap();
+}
+
+#[test]
+fn things_that_become_text_keep_their_place() {
+    // Inside a list item they are blocks of the item.
+    let (b, w) = warned(
+        "- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n\n  <div>\n  raw\n  </div>\n\n  ## Heading\n\n  ---\n- next\n",
+    );
+    assert_eq!(
+        b,
+        [
+            "bullet: item",
+            "code+1: | a   | b   |\\n| --- | --- |\\n| 1   | 2   |",
+            "code(html)+1: <div>\\nraw\\n</div>",
+            "h2+1: Heading",
+            "divider+1",
+            "bullet: next",
+        ]
+    );
+    assert_eq!(w, [ImportWarningKind::Table, ImportWarningKind::HtmlBlock]);
+    let once = export(
+        &import("- item\n\n  | a | b |\n  |---|---|\n\n  ## Heading\n\n  ---\n- next\n").document,
+    );
+    assert_eq!(
+        once,
+        "- item\n\n  ```\n  | a   | b   |\n  | --- | --- |\n  ```\n\n  ## Heading\n\n  ---\n\n- next\n"
+    );
+    assert_eq!(export(&import(&once).document), once);
+    // A footnote that opens with a code block, and one with nothing.
+    let (b, _) = warned("[^a]:\n    ```\n    code\n    ```\n\n[^b]:\n\nText[^a][^b]\n");
+    assert_eq!(b, ["p: [^a]:", "code: code", "p: [^b]:", "p: Text[^a][^b]"]);
+}
+
+#[test]
+fn white_space_that_is_meant_stays() {
+    // A paragraph of a no-break space is someone's spacer.
+    assert_eq!(blocks("a\n\n&nbsp;\n\nb"), ["p: a", "p: \u{a0}", "p: b"]);
+    assert_eq!(
+        blocks("a&nbsp;&nbsp;b\u{3000}c"),
+        ["p: a\u{a0}\u{a0}b\u{3000}c"]
+    );
+    // Tabs and runs of spaces inside a line are kept; the edges are not.
+    assert_eq!(blocks("a  b\tc \n  d"), ["p: a  b\\tc d"]);
+    assert_eq!(blocks("a <br> b<br>"), ["p: a\\nb"]);
+    assert_eq!(blocks("`  two  `"), ["p: [C| two ]"]);
+    // The line separators of Unicode are line breaks, in code as a space.
+    assert_eq!(blocks("a\u{2028}b `c\u{2028}d`"), ["p: a\\nb [C|c d]"]);
+}
+
+#[test]
+fn a_byte_order_mark_never_comes_back() {
+    for md in [
+        "\u{feff}text",
+        "&#xFEFF;text",
+        " \u{a0}\u{feff} text",
+        "\u{feff}\u{feff}text",
+    ] {
+        assert_eq!(blocks(md), ["p: text"], "{md:?}");
+    }
+    // Elsewhere the character is text like any other.
+    assert_eq!(
+        blocks("a\u{feff}b\n\n- \u{feff}c"),
+        ["p: a\u{feff}b", "bullet: \u{feff}c"]
+    );
+    assert_eq!(blocks("**\u{feff}b**"), ["p: [B|\u{feff}b]"]);
 }
 
 // ----- round trips ------------------------------------------------------------------------
@@ -1435,11 +1505,17 @@ fn markdown_is_stable_from_the_second_pass() {
             front_matter: MarkdownFrontMatter::CodeBlock,
             ..Default::default()
         },
+        MarkdownImportOptions {
+            highlight_equals: true,
+            leading_heading: MarkdownLeadingHeading::Title,
+            front_matter: MarkdownFrontMatter::Markdown,
+            ..Default::default()
+        },
     ];
     for seed in 1..=seeds(3000) {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let source = markdown_soup(&mut rng);
-        let options = &all[(seed % 2) as usize];
+        let options = &all[(seed % 3) as usize];
         let first = import_with(&source, options);
         let once = export(&first.document);
         let second = import(&once);
@@ -1455,5 +1531,89 @@ fn markdown_is_stable_from_the_second_pass() {
         // and it stays: a third pass reads the same blocks.
         let third = import(&twice);
         assert_eq!(describe(&second), describe(&third), "seed {seed}");
+    }
+}
+
+/// Any string is some Markdown: text made of arbitrary characters imports
+/// to a valid document, whatever the options, and what it exports to is
+/// stable.
+#[test]
+fn arbitrary_text_imports() {
+    const CHARS: &[char] = &[
+        'a',
+        'b',
+        ' ',
+        ' ',
+        '\n',
+        '\n',
+        '\t',
+        '\r',
+        '*',
+        '_',
+        '`',
+        '~',
+        '[',
+        ']',
+        '(',
+        ')',
+        '<',
+        '>',
+        '!',
+        '#',
+        '-',
+        '+',
+        '=',
+        '|',
+        ':',
+        '\\',
+        '&',
+        ';',
+        '/',
+        '"',
+        '\'',
+        '.',
+        '1',
+        '0',
+        '^',
+        '$',
+        '{',
+        '}',
+        '@',
+        'é',
+        '日',
+        'ש',
+        '😀',
+        '\u{a0}',
+        '\u{200d}',
+        '\u{feff}',
+        '\u{0}',
+        '\u{1b}',
+        '\u{85}',
+        '\u{2028}',
+        '\u{202e}',
+        '\u{fffd}',
+        '\u{10ffff}',
+    ];
+    let all = [
+        MarkdownImportOptions::default(),
+        MarkdownImportOptions {
+            soft_breaks: MarkdownSoftBreaks::LineBreak,
+            front_matter: MarkdownFrontMatter::CodeBlock,
+            highlight_equals: true,
+            leading_heading: MarkdownLeadingHeading::Title,
+            ..Default::default()
+        },
+    ];
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let n = rng.below(60);
+        let source: String = (0..n).map(|_| CHARS[rng.below(CHARS.len())]).collect();
+        let first = import_with(&source, &all[(seed % 2) as usize]);
+        let once = export(&first.document);
+        let twice = export(&import(&once).document);
+        assert_eq!(once, twice, "seed {seed}: not stable for {source:?}");
+        // Plain text takes anything too.
+        let plain = writer_export::from_plain_text(&source, &Default::default());
+        plain.document.check_invariants().unwrap();
     }
 }

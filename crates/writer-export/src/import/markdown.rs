@@ -95,7 +95,7 @@ use pulldown_cmark::{
 };
 use writer_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, Highlight, InlineAttrs, MAX_INDENT,
-    Rgb,
+    Rgb, text::normalize_input,
 };
 
 use super::html::{self, Tag as HtmlTag};
@@ -231,10 +231,27 @@ pub fn from_markdown(markdown: &str, options: &MarkdownImportOptions) -> Importe
         drafts, warnings, ..
     } = importer;
 
+    let mut drafts = join_empty_items(drafts);
+
+    // The title the text names.
+    let heading_title = drafts
+        .get(front_blocks)
+        .filter(|d| d.kind == BlockKind::heading(1))
+        .map(Draft::one_line)
+        .filter(|t| !t.is_empty());
+    let title = match options.leading_heading {
+        MarkdownLeadingHeading::Title if heading_title.is_some() => {
+            drafts.remove(front_blocks);
+            heading_title
+        }
+        MarkdownLeadingHeading::Title => front_title,
+        MarkdownLeadingHeading::Keep => front_title.or(heading_title),
+    };
+
     let mut blocks: Vec<Block> = Vec::with_capacity(drafts.len());
     // Whether nothing that shows has been imported yet.
     let mut opening = true;
-    for draft in join_empty_items(drafts) {
+    for draft in drafts {
         if let Some(block) = draft.finish(options, opening) {
             opening &= !block.kind().is_list_item()
                 && !block.is_void()
@@ -243,21 +260,6 @@ pub fn from_markdown(markdown: &str, options: &MarkdownImportOptions) -> Importe
             blocks.push(block);
         }
     }
-
-    // The title the text names.
-    let heading_title = blocks
-        .get(front_blocks)
-        .filter(|b| b.kind().heading_level() == Some(1))
-        .map(|b| b.text().split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|t| !t.is_empty());
-    let title = match options.leading_heading {
-        MarkdownLeadingHeading::Title if heading_title.is_some() => {
-            blocks.remove(front_blocks);
-            heading_title
-        }
-        MarkdownLeadingHeading::Title => front_title,
-        MarkdownLeadingHeading::Keep => front_title.or(heading_title),
-    };
 
     let has_content = !blocks.is_empty();
     Imported {
@@ -417,14 +419,29 @@ impl Draft {
         }
     }
 
+    /// Adds text. It is brought into the form a document holds here
+    /// (control characters removed, the Unicode line separators as line
+    /// breaks), so that what is tidied afterwards is the final text.
     fn push(&mut self, text: &str, attrs: InlineAttrs) {
+        let mut text = normalize_input(text);
+        if attrs.code && text.contains('\n') {
+            // Inline code is one line (a line end in a code span is a
+            // space to Markdown too).
+            text = text.replace('\n', " ").into();
+        }
         if text.is_empty() {
             return;
         }
         match self.spans.last_mut() {
-            Some((last, a)) if *a == attrs => last.push_str(text),
-            _ => self.spans.push((text.to_string(), attrs)),
+            Some((last, a)) if *a == attrs => last.push_str(&text),
+            _ => self.spans.push((text.into_owned(), attrs)),
         }
+    }
+
+    /// The text on one line, white space collapsed.
+    fn one_line(&self) -> String {
+        let text: String = self.spans.iter().map(|(t, _)| t.as_str()).collect();
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     fn is_item(&self) -> bool {

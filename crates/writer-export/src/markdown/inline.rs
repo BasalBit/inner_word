@@ -556,10 +556,12 @@ fn pieces(tokens: &[Token], ivs: &[Interval], strings: &[String]) -> Vec<Piece> 
 
 /// How many underscores could open or close emphasis: all but those
 /// between two letters or digits, which never do.
-fn lone_underscores(cells: &[Cell]) -> usize {
-    // A neighbour in another attribute run may be separated by markup.
+fn lone_underscores(cells: &[Cell], spans: &[[Option<Mark>; FAMILIES]]) -> usize {
+    // A neighbour with other marks may be separated by markup. (Runs that
+    // differ only in what is not written, a colour for one, are written
+    // as one piece of text.)
     let word = |c: Option<&Cell>, span: usize| {
-        c.is_some_and(|c| !c.code && c.span == span && c.ch.is_alphanumeric())
+        c.is_some_and(|c| !c.code && spans[c.span] == spans[span] && c.ch.is_alphanumeric())
     };
     (0..cells.len())
         .filter(|&i| {
@@ -615,7 +617,7 @@ pub(crate) fn render_inline(
     let ctx = TextContext {
         stars: has(&Mark::Bold) || has(&Mark::Italic) || literal('*') > 1,
         underscores: if prepared.anchors.is_empty() {
-            lone_underscores(&prepared.cells) > 1
+            lone_underscores(&prepared.cells, &span_marks) > 1
         } else {
             literal('_') > 1
         },

@@ -22,7 +22,28 @@
 //! `esc` for `escape` and `return` for `enter`. They are never written.
 //!
 //! Not read: a keystroke without a key (`cmd-`), two keys in one keystroke
-//! (`cmd-a-b`), an empty text.
+//! (`cmd-a-b`), a word before the key that is no modifier (`hyper-e`), an
+//! empty text.
+//!
+//! # What a person wrote
+//!
+//! GPUI takes any word as the name of a key (`cmd-entr` is the key "entr"
+//! with command), and so does [`Keystroke::parse`], which has to read
+//! whatever a keyboard reports. A text a person typed into the shortcuts
+//! file is read with [`KeySequence::parse_written`], which reads the same
+//! and then refuses what no keyboard sends: a key whose name is not one
+//! ([`KeystrokeProblem::UnknownKey`]) and a modifier without a key
+//! ([`KeystrokeProblem::ModifierAlone`]). Every [`KeystrokeError`] says
+//! what is wrong in words for whoever edits the file.
+//!
+//! # Glyphs
+//!
+//! [`Keystroke::glyphs`] and [`KeySequence::glyphs`] write a key the way
+//! the app shows keys ("⇧⌘P", "⌃↩", "G G"): the modifiers in the order of
+//! the macOS menus (⌃⌥⇧⌘), then the key. It is the same text
+//! `writer_ui::key_hint::format_keystrokes` gives (a test of the app holds
+//! the two against each other for every key of the keymap); it is here so
+//! that a sentence made without GPUI names a key as the list does.
 //!
 //! # What is written (the normal form)
 //!
@@ -100,6 +121,77 @@ pub enum KeystrokeProblem {
     MoreThanOneKey,
     /// White space inside one keystroke.
     Space,
+    /// A word before the key that is not a modifier (`hyper-e`, `ctl-s`).
+    UnknownModifier,
+    /// The key has a name no key has (`cmd-entr`, `cmd+b`). Only
+    /// [`KeySequence::parse_written`] says this: GPUI takes any name.
+    UnknownKey,
+    /// Modifiers and no key (`shift`, `cmd-shift`), which GPUI reads as a
+    /// key and no keyboard sends. Only [`KeySequence::parse_written`] says
+    /// this.
+    ModifierAlone,
+}
+
+/// The modifiers as a person may write them, for a sentence.
+const MODIFIERS_IN_WORDS: &str = "cmd, ctrl, alt (the option key), shift and fn";
+
+/// The names of the keys that are not one character, for a sentence.
+const KEY_NAMES_IN_WORDS: &str = "enter, tab, space, escape, backspace, delete, insert, up, down, \
+    left, right, home, end, pageup, pagedown, or a function key like f5";
+
+/// The names a key that is not one character can have: what GPUI's macOS
+/// events report (gpui 0.2.2, `parse_keystroke`), and the two read in
+/// addition.
+const KEY_NAMES: [&str; 17] = [
+    "space",
+    "enter",
+    "return",
+    "tab",
+    "backspace",
+    "escape",
+    "esc",
+    "delete",
+    "insert",
+    "up",
+    "down",
+    "left",
+    "right",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+];
+
+/// Whether `word` (in lower case) is one of the spellings of a modifier.
+fn is_modifier_word(word: &str) -> bool {
+    matches!(
+        word,
+        "ctrl"
+            | "control"
+            | "alt"
+            | "opt"
+            | "option"
+            | "shift"
+            | "fn"
+            | "cmd"
+            | "command"
+            | "super"
+            | "win"
+            | "secondary"
+    )
+}
+
+/// Whether `name` (in lower case) is the name of a key: one character, a
+/// function key (`f` and a number from 1; a Mac reports up to `f35`, and
+/// a higher number is taken as written), or one of [`KEY_NAMES`].
+fn is_key_name(name: &str) -> bool {
+    single_char(name).is_some()
+        || KEY_NAMES.contains(&name)
+        || name
+            .strip_prefix('f')
+            .filter(|number| number.chars().all(|digit| digit.is_ascii_digit()))
+            .and_then(|number| number.parse::<u16>().ok())
+            .is_some_and(|number| number >= 1)
 }
 
 /// A text that is not a keystroke, with the reason.
@@ -111,23 +203,86 @@ pub struct KeystrokeError {
     pub problem: KeystrokeProblem,
 }
 
+impl KeystrokeError {
+    /// The words of the text between its `-`, without the empty ones.
+    fn words(&self) -> impl Iterator<Item = &str> {
+        self.text.split('-').filter(|word| !word.is_empty())
+    }
+}
+
 impl fmt::Display for KeystrokeError {
+    /// What is wrong, for a person who wrote the text by hand: the text in
+    /// quotes, the part of it that is wrong, and how it is written right.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = &self.text;
         match self.problem {
-            KeystrokeProblem::Empty => write!(f, "there is no key"),
+            KeystrokeProblem::Empty => write!(
+                f,
+                "an empty text stands where a key should (a key is written like cmd-shift-p; \
+                 a command without a key has an empty list)"
+            ),
             KeystrokeProblem::NoKey => write!(
                 f,
-                "\"{}\" has no key after its modifiers (a key is written like cmd-shift-p)",
-                self.text
+                "\"{text}\" has no key after its modifiers (a key is written like cmd-shift-p)"
             ),
-            KeystrokeProblem::MoreThanOneKey => write!(
+            KeystrokeProblem::ModifierAlone => write!(
                 f,
-                "\"{}\" has more than one key (modifiers and one key are joined by -, \
-                 keys pressed one after the other are separated by a space)",
-                self.text
+                "\"{text}\" is modifiers alone, without a key (a key is written like \
+                 cmd-shift-p)"
             ),
+            KeystrokeProblem::UnknownModifier => {
+                match self
+                    .words()
+                    .find(|word| !is_modifier_word(&word.to_ascii_lowercase()))
+                {
+                    Some(word) => write!(
+                        f,
+                        "\"{text}\": \"{word}\" is not a modifier (the modifiers are \
+                         {MODIFIERS_IN_WORDS})"
+                    ),
+                    None => write!(
+                        f,
+                        "\"{text}\" has a modifier that is none (the modifiers are \
+                         {MODIFIERS_IN_WORDS})"
+                    ),
+                }
+            }
+            KeystrokeProblem::UnknownKey => {
+                let name = self.words().last().unwrap_or(text);
+                if name.contains('+') {
+                    write!(
+                        f,
+                        "\"{text}\" is joined with +: modifiers and a key are joined by - \
+                         (a key is written like cmd-shift-p)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "\"{text}\": \"{name}\" is not the name of a key (a key is one \
+                         character, or one of {KEY_NAMES_IN_WORDS})"
+                    )
+                }
+            }
+            KeystrokeProblem::MoreThanOneKey => {
+                let keys: Vec<String> = self
+                    .words()
+                    .filter(|word| !is_modifier_word(&word.to_ascii_lowercase()))
+                    .map(|word| format!("\"{word}\""))
+                    .collect();
+                let named = match keys.as_slice() {
+                    [] | [_] => String::new(),
+                    [first, second] => format!(": {first} and {second}"),
+                    many => format!(": {}", many.join(", ")),
+                };
+                write!(
+                    f,
+                    "\"{text}\" has more than one key in one keystroke{named} (modifiers and \
+                     one key are joined by -, keys pressed one after the other are separated \
+                     by a space)"
+                )
+            }
             KeystrokeProblem::Space => {
-                write!(f, "\"{}\" has a space inside one keystroke", self.text)
+                write!(f, "\"{text}\" has a space inside one keystroke")
             }
         }
     }
@@ -322,8 +477,13 @@ impl Keystroke {
                     if parts.peek().is_some() {
                         return Err(error(KeystrokeProblem::MoreThanOneKey));
                     }
-                } else {
+                } else if is_key_name(&lower) || part.is_empty() {
+                    // A key, and more after it.
                     return Err(error(KeystrokeProblem::MoreThanOneKey));
+                } else {
+                    // A word before the key that is no key either: it was
+                    // meant as a modifier.
+                    return Err(error(KeystrokeProblem::UnknownModifier));
                 }
             }
 
@@ -469,6 +629,40 @@ impl Keystroke {
         None
     }
 
+    /// Whether the key has a name a key can have: one character, a
+    /// function key (`f1`, `f2`, ...), or one of the named keys a Mac
+    /// keyboard reports (`enter`, `tab`, `space`, `escape`, `backspace`,
+    /// `delete`, `insert`, the arrows, `home`, `end`, `pageup`,
+    /// `pagedown`). GPUI reads any word as a key; a word that is none of
+    /// these is a key no keyboard sends.
+    pub fn has_known_key(&self) -> bool {
+        is_key_name(&self.key)
+    }
+
+    /// The key as the app shows keys: the modifiers as glyphs in the order
+    /// of the macOS menus (⌃⌥⇧⌘, "fn " before them), then the key ("⇧⌘P",
+    /// "⌃↩", "F5", "Esc"). See the [module docs](self).
+    pub fn glyphs(&self) -> String {
+        let mut out = String::new();
+        if self.modifiers.function {
+            out.push_str("fn ");
+        }
+        if self.modifiers.control {
+            out.push('\u{2303}');
+        }
+        if self.modifiers.alt {
+            out.push('\u{2325}');
+        }
+        if self.modifiers.shift {
+            out.push('\u{21e7}');
+        }
+        if self.modifiers.command {
+            out.push('\u{2318}');
+        }
+        out.push_str(&key_glyph(&self.key));
+        out
+    }
+
     /// Every spelling that has to be bound for this key to work, each one
     /// a text GPUI reads: for shift with a digit or a punctuation key the
     /// character a keyboard sends, then the readable form
@@ -485,6 +679,46 @@ impl Keystroke {
         }
         vec![readable]
     }
+}
+
+/// The glyph of a key by its GPUI name: `enter` is "↩", `a` is "A", `f5`
+/// is "F5". Escape is written "Esc" (its glyph reads as an undo arrow at
+/// interface sizes), as the app's key hints write it.
+fn key_glyph(key: &str) -> String {
+    let glyph = match key {
+        "enter" => "\u{21a9}",
+        "backspace" => "\u{232b}",
+        "delete" => "\u{2326}",
+        "escape" => "Esc",
+        "tab" => "\u{21e5}",
+        "space" => "Space",
+        "up" => "\u{2191}",
+        "down" => "\u{2193}",
+        "left" => "\u{2190}",
+        "right" => "\u{2192}",
+        "pageup" => "\u{21de}",
+        "pagedown" => "\u{21df}",
+        "home" => "\u{2196}",
+        "end" => "\u{2198}",
+        "insert" => "Ins",
+        _ => {
+            return if key.chars().count() == 1 {
+                key.to_uppercase()
+            } else if let Some(number) = key
+                .strip_prefix('f')
+                .filter(|number| number.parse::<u8>().is_ok())
+            {
+                format!("F{number}")
+            } else {
+                let mut chars = key.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            };
+        }
+    };
+    glyph.to_string()
 }
 
 fn write(modifiers: Modifiers, key: &str) -> String {
@@ -543,6 +777,41 @@ impl KeySequence {
             });
         }
         Ok(Self(strokes))
+    }
+
+    /// Reads keystrokes a person wrote (an entry of the shortcuts file):
+    /// what [`KeySequence::parse`] reads, without the two things GPUI
+    /// reads and no keyboard sends. A key whose name is none
+    /// ([`KeystrokeProblem::UnknownKey`]: `cmd-entr`, `cmd+b`) and
+    /// modifiers without a key ([`KeystrokeProblem::ModifierAlone`]:
+    /// `shift`) are errors here. The error has the keystroke that is
+    /// wrong as its text.
+    pub fn parse_written(text: &str) -> Result<Self, KeystrokeError> {
+        let sequence = Self::parse(text)?;
+        for (stroke, written) in sequence.0.iter().zip(text.split_whitespace()) {
+            let problem = if stroke.is_modifier_alone() {
+                KeystrokeProblem::ModifierAlone
+            } else if !stroke.has_known_key() {
+                KeystrokeProblem::UnknownKey
+            } else {
+                continue;
+            };
+            return Err(KeystrokeError {
+                text: written.to_string(),
+                problem,
+            });
+        }
+        Ok(sequence)
+    }
+
+    /// The keys as the app shows them, one after the other: "⇧⌘P",
+    /// "G G". See [`Keystroke::glyphs`].
+    pub fn glyphs(&self) -> String {
+        self.0
+            .iter()
+            .map(Keystroke::glyphs)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// A sequence of one keystroke.
@@ -759,6 +1028,129 @@ mod tests {
                 .to_string()
                 .contains("cmd-a-b")
         );
+        // A word before the key that is neither a modifier nor a key.
+        assert_eq!(problem("hyper-e"), KeystrokeProblem::UnknownModifier);
+        assert_eq!(problem("cmd-meta-e"), KeystrokeProblem::UnknownModifier);
+        assert_eq!(problem("ctl-s"), KeystrokeProblem::UnknownModifier);
+        // A key and one more: two keys.
+        assert_eq!(problem("enter-b"), KeystrokeProblem::MoreThanOneKey);
+        assert_eq!(problem("f5-f6"), KeystrokeProblem::MoreThanOneKey);
+    }
+
+    /// Each way a key text can be wrong is said in its own words, with the
+    /// part that is wrong named: this is what a person who edited the
+    /// shortcuts file by hand reads.
+    #[test]
+    fn every_way_a_written_key_can_be_wrong_is_said_in_its_own_words() {
+        let says = |text: &str| KeySequence::parse_written(text).unwrap_err().to_string();
+        let problem = |text: &str| KeySequence::parse_written(text).unwrap_err().problem;
+
+        // A modifier the app does not know: one key, not several.
+        assert_eq!(problem("hyper-e"), KeystrokeProblem::UnknownModifier);
+        assert_eq!(
+            says("hyper-e"),
+            "\"hyper-e\": \"hyper\" is not a modifier (the modifiers are cmd, ctrl, alt (the \
+             option key), shift and fn)"
+        );
+        assert!(!says("hyper-e").contains("more than one key"));
+        assert!(says("cmd-meta-e").contains("\"meta\" is not a modifier"));
+
+        // A key name no key has.
+        assert_eq!(problem("cmd-entr"), KeystrokeProblem::UnknownKey);
+        assert_eq!(
+            says("cmd-entr"),
+            "\"cmd-entr\": \"entr\" is not the name of a key (a key is one character, or one \
+             of enter, tab, space, escape, backspace, delete, insert, up, down, left, right, \
+             home, end, pageup, pagedown, or a function key like f5)"
+        );
+        assert_eq!(problem("cmd-f0"), KeystrokeProblem::UnknownKey);
+        assert_eq!(problem("f5x"), KeystrokeProblem::UnknownKey);
+        // Joined with a plus sign, as other programs write keys.
+        assert_eq!(problem("cmd+b"), KeystrokeProblem::UnknownKey);
+        assert_eq!(
+            says("cmd+b"),
+            "\"cmd+b\" is joined with +: modifiers and a key are joined by - (a key is written \
+             like cmd-shift-p)"
+        );
+
+        // An empty text.
+        assert_eq!(problem(""), KeystrokeProblem::Empty);
+        assert_eq!(problem("   "), KeystrokeProblem::Empty);
+        assert_eq!(
+            says(""),
+            "an empty text stands where a key should (a key is written like cmd-shift-p; a \
+             command without a key has an empty list)"
+        );
+
+        // Modifiers and no key.
+        assert_eq!(problem("cmd-"), KeystrokeProblem::NoKey);
+        assert_eq!(
+            says("cmd-"),
+            "\"cmd-\" has no key after its modifiers (a key is written like cmd-shift-p)"
+        );
+        assert_eq!(problem("shift"), KeystrokeProblem::ModifierAlone);
+        assert_eq!(problem("cmd-shift"), KeystrokeProblem::ModifierAlone);
+        assert_eq!(
+            says("cmd-shift"),
+            "\"cmd-shift\" is modifiers alone, without a key (a key is written like cmd-shift-p)"
+        );
+
+        // Two keys in one keystroke.
+        assert_eq!(problem("cmd-a-b"), KeystrokeProblem::MoreThanOneKey);
+        assert_eq!(
+            says("cmd-a-b"),
+            "\"cmd-a-b\" has more than one key in one keystroke: \"a\" and \"b\" (modifiers and \
+             one key are joined by -, keys pressed one after the other are separated by a space)"
+        );
+
+        // In a sequence the keystroke that is wrong is the one named.
+        assert_eq!(problem("cmd-k hyper-e"), KeystrokeProblem::UnknownModifier);
+        assert!(says("cmd-k hyper-e").starts_with("\"hyper-e\": "));
+        assert!(says("cmd-k entr").starts_with("\"entr\": "));
+
+        // Several keystrokes in one text are a sequence, and read.
+        for text in [
+            "g g",
+            "cmd-k cmd-b",
+            "cmd-shift-p",
+            "Cmd-Opt-S",
+            "esc",
+            "cmd-return",
+            "cmd--",
+            "cmd-&",
+            "ö",
+            "f35",
+            "ctrl-f91",
+            "shift-f10",
+            "ctrl-insert",
+        ] {
+            assert_eq!(
+                KeySequence::parse_written(text).ok(),
+                KeySequence::parse(text).ok(),
+                "{text}"
+            );
+            assert!(KeySequence::parse_written(text).is_ok(), "{text}");
+        }
+    }
+
+    #[test]
+    fn glyphs_are_written_as_the_app_shows_keys() {
+        let glyphs = |text: &str| KeySequence::parse(text).unwrap().glyphs();
+        assert_eq!(glyphs("cmd-shift-p"), "⇧⌘P");
+        assert_eq!(glyphs("cmd-alt-b"), "⌥⌘B");
+        assert_eq!(glyphs("ctrl-cmd-alt-shift-f5"), "⌃⌥⇧⌘F5");
+        assert_eq!(glyphs("fn-f"), "fn F");
+        assert_eq!(glyphs("cmd-&"), "⇧⌘7");
+        assert_eq!(glyphs("i"), "I");
+        assert_eq!(glyphs("g g"), "G G");
+        assert_eq!(glyphs("ctrl-enter"), "⌃↩");
+        assert_eq!(glyphs("cmd-tab"), "⌘⇥");
+        assert_eq!(glyphs("escape"), "Esc");
+        assert_eq!(glyphs("cmd-space"), "⌘Space");
+        assert_eq!(glyphs("alt-up"), "⌥↑");
+        assert_eq!(glyphs("cmd-backspace"), "⌘⌫");
+        assert_eq!(glyphs("shift-pagedown"), "⇧⇟");
+        assert_eq!(key("cmd-shift-7").glyphs(), "⇧⌘7");
     }
 
     #[test]

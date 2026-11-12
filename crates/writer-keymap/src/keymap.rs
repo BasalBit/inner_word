@@ -5,13 +5,14 @@ use crate::changes::{Changes, StoredError};
 use crate::context::Places;
 use crate::defaults::{Command, Defaults, Target};
 use crate::effective::{Effective, apply};
-use crate::file::{Catalogue, ImportError, ImportMode, ImportPlan, export, plan_import};
+use crate::file::{Catalogue, ImportError, ImportMode, ImportPlan, export, plan_import_among};
 use crate::keystroke::KeySequence;
-use crate::verdict::{Collision, Holder, Verdict, check, collisions};
+use crate::verdict::{Absent, Collision, Holder, Verdict, check_among, collisions_among};
 
 /// The keymap of the app as data: what every crate bound, what the caller
 /// says about the places of the window, and what the user changed. Every
-/// method is one of the crate's functions with these three filled in.
+/// method is one of the crate's functions with these three filled in, and
+/// with the commands that are not there right now ([`Keymap::set_absent`]).
 ///
 /// ```
 /// use writer_keymap::{DefaultBinding, Defaults, KeySequence, Keymap, Places, Target};
@@ -36,6 +37,7 @@ pub struct Keymap {
     defaults: Defaults,
     places: Places,
     changes: Changes,
+    absent: Absent,
 }
 
 impl Keymap {
@@ -45,6 +47,7 @@ impl Keymap {
             defaults,
             places,
             changes: Changes::new(),
+            absent: Absent::new(),
         }
     }
 
@@ -84,6 +87,31 @@ impl Keymap {
         &self.changes
     }
 
+    /// Says which commands are not there right now (a part of the app
+    /// that is not shown on this Mac, such as the assistant without its
+    /// engine), by their targets. Their keys then count for nothing in
+    /// [`Keymap::check`], [`Keymap::collisions`] and the conflicts of
+    /// [`Keymap::plan_import`]: see [`crate::verdict`]. Nothing else
+    /// changes: they are in [`Keymap::effective`] and in the exported
+    /// file, and the user's changes to them are kept. Returns whether the
+    /// set changed.
+    pub fn set_absent(&mut self, absent: impl IntoIterator<Item = Target>) -> bool {
+        let absent: Absent = absent.into_iter().collect();
+        let changed = absent != self.absent;
+        self.absent = absent;
+        changed
+    }
+
+    /// The commands that are not there right now ([`Keymap::set_absent`]).
+    pub fn absent(&self) -> &Absent {
+        &self.absent
+    }
+
+    /// Whether `target` is a command that is not there right now.
+    pub fn is_absent(&self, target: &Target) -> bool {
+        self.absent.contains(target)
+    }
+
     /// Puts other changes in the place of the user's and returns the old
     /// ones (carrying out an import, undoing one).
     pub fn set_changes(&mut self, changes: Changes) -> Changes {
@@ -103,26 +131,28 @@ impl Keymap {
     }
 
     /// What would happen if `target` got `key`, in the place of its key
-    /// `replacing` or as one more: see [`check`].
+    /// `replacing` or as one more: see [`check`](crate::check).
     pub fn check(
         &self,
         target: &Target,
         key: &KeySequence,
         replacing: Option<&KeySequence>,
     ) -> Verdict {
-        check(
+        check_among(
             &self.defaults,
             &self.changes,
             &self.places,
+            &self.absent,
             target,
             key,
             replacing,
         )
     }
 
-    /// The conflicts in the keymap as it is: see [`collisions`].
+    /// The conflicts in the keymap as it is: see
+    /// [`collisions`](crate::collisions).
     pub fn collisions(&self) -> Vec<Collision> {
-        collisions(&self.defaults, &self.changes, &self.places)
+        collisions_among(&self.defaults, &self.changes, &self.places, &self.absent)
     }
 
     /// "Take it from that command": removes the key from a holder a
@@ -176,10 +206,16 @@ impl Keymap {
         export(&self.defaults, &self.changes, catalogue, app_version)
     }
 
-    /// Reads a shortcuts file and plans its import: see [`plan_import`].
-    /// Nothing is changed.
+    /// Reads a shortcuts file and plans its import: see
+    /// [`plan_import`](crate::plan_import). Nothing is changed.
     pub fn plan_import(&self, text: &str) -> Result<ImportPlan, ImportError> {
-        plan_import(text, &self.defaults, &self.changes, &self.places)
+        plan_import_among(
+            text,
+            &self.defaults,
+            &self.changes,
+            &self.places,
+            &self.absent,
+        )
     }
 
     /// Carries a plan out and returns the changes as they were, for Undo

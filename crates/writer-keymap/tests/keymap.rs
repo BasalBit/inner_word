@@ -1179,11 +1179,25 @@ fn entries_that_are_skipped_say_why() {
         "Entry 4 (editor::ToggleBold): a key cannot be read: \"cmd-\" has no key after its \
          modifiers (a key is written like cmd-shift-p)"
     );
-    assert!(plan.skipped[5].to_string().contains("b is a character"));
+    // A key that was read is named as the list names keys: in glyphs.
+    assert_eq!(
+        plan.skipped[5].to_string(),
+        "Entry 6 (editor::ToggleBold): B is a character, and text is typed where the command \
+         applies"
+    );
     assert!(
         plan.skipped[6]
             .to_string()
-            .contains("macOS keeps cmd-tab for itself: it switches between apps")
+            .contains("macOS keeps ⌘⇥ for itself: it switches between apps")
+    );
+    assert_eq!(
+        plan.skipped[4].to_string(),
+        "Entry 5 (editor::ToggleBold): its \"keys\" is not a list of keys in quotes (like \
+         [\"cmd-b\", \"f5\"])"
+    );
+    assert_eq!(
+        plan.skipped[7].to_string(),
+        "Entry 8 (app::QuickOpen): its \"context\" is not a text in quotes"
     );
     assert_eq!(
         plan.skipped[1].to_string(),
@@ -1205,6 +1219,295 @@ fn entries_that_are_skipped_say_why() {
         outcome.changes.keys_of(keymap.defaults(), &find),
         keys(&["cmd-f", "cmd-alt-g"])
     );
+}
+
+/// A key that cannot be read is skipped with what is wrong with it, for
+/// each way a key text can be wrong, in words for whoever edited the
+/// file. (The report that found this: "hyper-e", one key with a modifier
+/// the app does not know, was said to have "more than one key".)
+#[test]
+fn a_key_that_cannot_be_read_says_what_is_wrong_with_it() {
+    let reason = |written: Value| -> String {
+        let text = file(json!([
+            {"command": "editor::ToggleBold", "context": "Editor", "default": ["cmd-b"], "keys": [written]},
+        ]));
+        let plan = keymap().plan_import(&text).unwrap();
+        assert_eq!(plan.skipped.len(), 1, "{written}");
+        assert!(plan.changes.is_empty(), "{written}");
+        plan.skipped[0].reason.to_string()
+    };
+    assert_eq!(
+        reason(json!("hyper-e")),
+        "a key cannot be read: \"hyper-e\": \"hyper\" is not a modifier (the modifiers are cmd, \
+         ctrl, alt (the option key), shift and fn)"
+    );
+    assert_eq!(
+        reason(json!("cmd-entr")),
+        "a key cannot be read: \"cmd-entr\": \"entr\" is not the name of a key (a key is one \
+         character, or one of enter, tab, space, escape, backspace, delete, insert, up, down, \
+         left, right, home, end, pageup, pagedown, or a function key like f5)"
+    );
+    assert_eq!(
+        reason(json!("cmd+b")),
+        "a key cannot be read: \"cmd+b\" is joined with +: modifiers and a key are joined by - \
+         (a key is written like cmd-shift-p)"
+    );
+    assert_eq!(
+        reason(json!("")),
+        "a key cannot be read: an empty text stands where a key should (a key is written like \
+         cmd-shift-p; a command without a key has an empty list)"
+    );
+    assert_eq!(
+        reason(json!("cmd-")),
+        "a key cannot be read: \"cmd-\" has no key after its modifiers (a key is written like \
+         cmd-shift-p)"
+    );
+    assert_eq!(
+        reason(json!("cmd-shift")),
+        "a key cannot be read: \"cmd-shift\" is modifiers alone, without a key (a key is \
+         written like cmd-shift-p)"
+    );
+    assert_eq!(
+        reason(json!("cmd-a-b")),
+        "a key cannot be read: \"cmd-a-b\" has more than one key in one keystroke: \"a\" and \
+         \"b\" (modifiers and one key are joined by -, keys pressed one after the other are \
+         separated by a space)"
+    );
+    // One keystroke of a sequence that is wrong: that keystroke is named.
+    assert_eq!(
+        reason(json!("cmd-k hyper-e")),
+        "a key cannot be read: \"hyper-e\": \"hyper\" is not a modifier (the modifiers are cmd, \
+         ctrl, alt (the option key), shift and fn)"
+    );
+    // Not a text at all.
+    assert_eq!(
+        reason(json!(7)),
+        "its \"keys\" is not a list of keys in quotes (like [\"cmd-b\", \"f5\"])"
+    );
+    // A sequence is supported, and read.
+    let text = file(json!([
+        {"command": "editor::ToggleBold", "context": "Editor", "default": ["cmd-b"], "keys": ["cmd-k cmd-b"]},
+    ]));
+    let plan = keymap().plan_import(&text).unwrap();
+    assert!(plan.skipped.is_empty());
+    assert_eq!(plan.changes[0].keys, keys(&["cmd-k cmd-b"]));
+    // A key in the entry's "default" is read the same way.
+    let text = file(json!([
+        {"command": "editor::ToggleBold", "context": "Editor", "default": ["hyper-b"], "keys": ["cmd-b"]},
+    ]));
+    let plan = keymap().plan_import(&text).unwrap();
+    assert!(matches!(
+        plan.skipped[0].reason,
+        SkipReason::UnreadableKey {
+            field: "default",
+            ..
+        }
+    ));
+}
+
+/// The commands of a part of the app that is not there (the assistant
+/// without its engine) hold no key: a key of theirs is free, no conflict
+/// with them is reported, an import counts none. Their own keys and the
+/// user's changes to them are untouched, and when they are there again
+/// the same keymap says what collides.
+#[test]
+fn the_keys_of_commands_that_are_not_there_count_for_nothing() {
+    let quit = Target::new("app::Quit", None);
+    let palette = Target::new("app::CommandPalette", None);
+    let page = Target::new("editor::InsertPageBreak", Some("Editor"));
+    let mut keymap = keymap();
+
+    // All there: the palette's key is taken, and bold on the page
+    // break's key too.
+    assert_eq!(
+        keymap.check(&quit, &key("cmd-shift-p"), None).kind(),
+        VerdictKind::Taken
+    );
+    assert_eq!(
+        keymap.check(&bold(), &key("cmd-enter"), None).kind(),
+        VerdictKind::Taken
+    );
+
+    // The palette and the page break are not there.
+    assert!(keymap.set_absent([palette.clone(), page.clone()]));
+    assert!(!keymap.set_absent([palette.clone(), page.clone()]));
+    assert!(keymap.is_absent(&palette));
+    assert!(!keymap.is_absent(&quit));
+    let verdict = keymap.check(&quit, &key("cmd-shift-p"), None);
+    assert_eq!(verdict.kind(), VerdictKind::Fine, "{verdict:?}");
+    let verdict = keymap.check(&bold(), &key("cmd-enter"), None);
+    // The find bar's field has the key in another place, as before.
+    assert_eq!(verdict.kind(), VerdictKind::UsedElsewhere);
+    assert!(verdict.taken.is_empty());
+    assert!(
+        verdict.elsewhere.iter().all(|holder| holder.target != page),
+        "{verdict:?}"
+    );
+
+    // The user takes both keys. No collision is reported ...
+    assert!(keymap.add_key(&quit, key("cmd-shift-p")));
+    assert!(keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-enter")));
+    assert!(keymap.collisions().is_empty());
+    // ... the absent commands keep their keys, bound as before ...
+    let effective = keymap.effective();
+    assert_eq!(
+        effective.target(&palette).unwrap().keys[0].keys,
+        key("cmd-shift-p")
+    );
+    assert!(!effective.target(&palette).unwrap().changed);
+    assert!(
+        effective
+            .bindings()
+            .iter()
+            .any(|binding| binding.target == page && binding.keys == key("cmd-enter"))
+    );
+    // ... and a change the user made to one of them before is kept, in
+    // what is stored and in the exported file.
+    let mut with_a_change = keymap.clone();
+    assert!(with_a_change.replace_key(&palette, &key("cmd-shift-p"), key("f1")));
+    let stored = with_a_change.stored().unwrap();
+    assert!(stored.contains("app::CommandPalette"), "{stored}");
+    let exported: Value =
+        serde_json::from_str(&with_a_change.export(&catalogue(), "0.5.1")).unwrap();
+    let entry = exported["shortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"] == "app::CommandPalette")
+        .expect("an absent command is in the file");
+    assert_eq!(entry["keys"], json!(["f1"]));
+
+    // They are there again: the keymap as it is says what collides.
+    assert!(keymap.set_absent([]));
+    let collisions = keymap.collisions();
+    assert_eq!(collisions.len(), 2, "{collisions:#?}");
+    assert!(
+        collisions
+            .iter()
+            .any(|collision| collision.target == quit && collision.holder.target == palette)
+    );
+    assert!(
+        collisions
+            .iter()
+            .any(|collision| collision.target == bold() && collision.holder.target == page)
+    );
+    assert_eq!(
+        keymap.check(&history(), &key("cmd-shift-p"), None).kind(),
+        VerdictKind::Taken
+    );
+}
+
+/// An import counts no collision with a command that is not there, takes
+/// the file's changes to such a command like every other, and lists the
+/// collision once the command is there.
+#[test]
+fn an_import_counts_no_collision_with_a_command_that_is_not_there() {
+    let palette = Target::new("app::CommandPalette", None);
+    let text = file(json!([
+        {"command": "app::VersionHistory", "context": null, "default": [], "keys": ["cmd-shift-p"]},
+        {"command": "app::CommandPalette", "context": null, "default": ["cmd-shift-p"], "keys": ["cmd-shift-p", "f1"]},
+    ]));
+    let mut keymap = keymap();
+    keymap.set_absent([palette.clone()]);
+    let plan = keymap.plan_import(&text).unwrap();
+    assert!(plan.skipped.is_empty());
+    let outcome = plan.outcome(ImportMode::Merge);
+    // Both changes are taken: the file means the same on every Mac.
+    assert_eq!(outcome.differences.len(), 2);
+    assert!(
+        outcome
+            .differences
+            .iter()
+            .any(|difference| difference.target == palette)
+    );
+    assert!(outcome.conflicts.is_empty(), "{:#?}", outcome.conflicts);
+
+    keymap.set_absent([]);
+    let plan = keymap.plan_import(&text).unwrap();
+    let conflicts = &plan.outcome(ImportMode::Merge).conflicts;
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    assert_eq!(conflicts[0].target, history());
+    assert_eq!(conflicts[0].holder.target, palette);
+}
+
+/// One rule for the question about a key and for the plan of an import:
+/// for every command and every key of the keymap, the import of that one
+/// change lists a collision exactly when the question would say "taken",
+/// and with the same commands.
+#[test]
+fn the_question_about_a_key_and_the_plan_of_an_import_agree() {
+    // The tools are only around the text, as in the app.
+    let places = places().around("EditorTools", "Editor");
+    let keymap = Keymap::new(defaults(), places);
+    let effective = keymap.effective();
+    let mut all_keys: Vec<KeySequence> = effective
+        .bindings()
+        .iter()
+        .map(|binding| binding.keys.clone())
+        .collect();
+    all_keys.sort();
+    all_keys.dedup();
+    let mut taken_somewhere = 0;
+    for state in effective.targets() {
+        let target = &state.target;
+        let default: Vec<String> = state.default_keys.iter().map(|k| k.to_string()).collect();
+        for proposed in &all_keys {
+            let verdict = keymap.check(target, proposed, None);
+            if matches!(verdict.refusal, Some(Refusal::AlreadyHasKey)) {
+                continue;
+            }
+            let mut with_it = default.clone();
+            with_it.push(proposed.to_string());
+            let text = file(json!([{
+                "command": target.command.action,
+                "context": target.context.text(),
+                "default": default,
+                "keys": with_it,
+            }]));
+            let plan = keymap.plan_import(&text).unwrap();
+            if verdict.refusal.is_some() {
+                // What the question refuses, the import skips.
+                assert_eq!(plan.skipped.len(), 1, "{target} {proposed}");
+                continue;
+            }
+            assert!(plan.skipped.is_empty(), "{target} {proposed}");
+            let mut asked: Vec<(Target, KeySequence)> = verdict
+                .taken
+                .iter()
+                .map(|holder| (holder.target.clone(), holder.keys.clone()))
+                .collect();
+            let mut planned: Vec<(Target, KeySequence)> = plan
+                .outcome(ImportMode::Merge)
+                .conflicts
+                .iter()
+                .map(|collision| {
+                    assert_eq!(collision.target, *target, "{target} {proposed}");
+                    assert_eq!(collision.key, *proposed);
+                    (
+                        collision.holder.target.clone(),
+                        collision.holder.keys.clone(),
+                    )
+                })
+                .collect();
+            asked.sort();
+            planned.sort();
+            assert_eq!(asked, planned, "{target} with {proposed}");
+            taken_somewhere += usize::from(!asked.is_empty());
+        }
+    }
+    assert!(taken_somewhere > 20, "{taken_somewhere}");
+
+    // The pair the report named: a command of the text on a key of the
+    // tools around the text. Taken, and the import says the same.
+    let find = Target::new("tools::Find", Some("EditorTools"));
+    let verdict = keymap.check(&bold(), &key("cmd-f"), None);
+    assert_eq!(verdict.kind(), VerdictKind::Taken);
+    assert_eq!(verdict.taken[0].target, find);
+    assert_eq!(verdict.taken[0].overlap, Overlap::SamePlace);
+    // The other way round too: a tool on a key of the text.
+    let verdict = keymap.check(&find, &key("cmd-b"), None);
+    assert_eq!(verdict.kind(), VerdictKind::Taken);
+    assert_eq!(verdict.taken[0].target, bold());
 }
 
 #[test]

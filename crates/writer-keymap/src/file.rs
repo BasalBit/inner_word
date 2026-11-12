@@ -82,7 +82,7 @@ use crate::context::{Context, Places};
 use crate::defaults::{Command, Defaults, Target};
 use crate::effective::apply;
 use crate::keystroke::{KeySequence, KeystrokeError};
-use crate::verdict::{Collision, Refusal, collisions_in, guard};
+use crate::verdict::{Absent, Collision, Refusal, collisions_in, guard};
 
 /// The `format` of a shortcuts file.
 pub const FILE_FORMAT: &str = "the-writer-shortcuts";
@@ -353,20 +353,30 @@ impl fmt::Display for SkipReason {
             SkipReason::UnknownPlace => {
                 write!(f, "this version does not have the command in that place")
             }
-            SkipReason::BadField { field } => write!(f, "its \"{field}\" cannot be read"),
-            SkipReason::UnreadableKey { error, .. } => write!(f, "a key cannot be read: {error}"),
-            SkipReason::Refused { key, refusal } => match refusal {
-                Refusal::TypesText => write!(
+            SkipReason::BadField { field } => match *field {
+                "keys" | "default" => write!(
                     f,
-                    "{key} is a character, and text is typed where the command applies"
+                    "its \"{field}\" is not a list of keys in quotes (like [\"cmd-b\", \"f5\"])"
                 ),
-                Refusal::SystemKeeps(system) => {
-                    write!(f, "macOS keeps {key} for itself: it {}", system.what)
-                }
-                Refusal::AlreadyHasKey | Refusal::UnknownCommand => {
-                    write!(f, "{key} cannot be given to the command")
-                }
+                _ => write!(f, "its \"{field}\" is not a text in quotes"),
             },
+            SkipReason::UnreadableKey { error, .. } => write!(f, "a key cannot be read: {error}"),
+            // A key that was read is named as the list names keys.
+            SkipReason::Refused { key, refusal } => {
+                let key = key.glyphs();
+                match refusal {
+                    Refusal::TypesText => write!(
+                        f,
+                        "{key} is a character, and text is typed where the command applies"
+                    ),
+                    Refusal::SystemKeeps(system) => {
+                        write!(f, "macOS keeps {key} for itself: it {}", system.what)
+                    }
+                    Refusal::AlreadyHasKey | Refusal::UnknownCommand => {
+                        write!(f, "{key} cannot be given to the command")
+                    }
+                }
+            }
             SkipReason::Duplicate => write!(f, "an earlier entry is about the same command"),
         }
     }
@@ -509,6 +519,22 @@ pub fn plan_import(
     changes: &Changes,
     places: &Places,
 ) -> Result<ImportPlan, ImportError> {
+    plan_import_among(text, defaults, changes, places, &Absent::new())
+}
+
+/// [`plan_import`] while the commands of `absent` are not there (see
+/// [`crate::verdict`]). The file's changes to them are taken like the
+/// others, and are among the differences: a file means the same on every
+/// Mac. Only the conflicts are counted without them, by the one rule
+/// [`crate::check_among`] judges a single key with: what the plan lists
+/// as a conflict is what the question about that key would call taken.
+pub fn plan_import_among(
+    text: &str,
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    absent: &Absent,
+) -> Result<ImportPlan, ImportError> {
     let value: Value = serde_json::from_str(text).map_err(|error| ImportError::NotJson {
         line: error.line(),
         column: error.column(),
@@ -619,8 +645,8 @@ pub fn plan_import(
                 });
             }
         }
-        let already = collisions_in(&before, places);
-        let conflicts = collisions_in(&after, places)
+        let already = collisions_in(&before, places, absent);
+        let conflicts = collisions_in(&after, places, absent)
             .into_iter()
             .filter(|collision| {
                 let touched = |target: &Target| {
@@ -706,7 +732,8 @@ fn read_entry(
         let mut keys = Vec::with_capacity(list.len());
         for item in list {
             let text = item.as_str().ok_or(SkipReason::BadField { field })?;
-            let key = KeySequence::parse(text)
+            // As a person wrote it: a name no key has is not a key.
+            let key = KeySequence::parse_written(text)
                 .map_err(|error| SkipReason::UnreadableKey { field, error })?;
             if !keys.contains(&key) {
                 keys.push(key);

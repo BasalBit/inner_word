@@ -45,6 +45,13 @@
 //!   other places too).
 //! - A binding without a context applies everywhere; every context is
 //!   inside it.
+//! - A context the caller declared as only **around** another
+//!   ([`Places::around`]: the tools around the text) is that other's place.
+//!   Its bindings also apply in whatever else lies inside it, but that is
+//!   not where anybody presses their keys: to the user its commands are
+//!   commands of the place it is around, and are listed there. So the two
+//!   are the same place, and of two commands on one key there the one
+//!   bound on the inner context always runs: the other has lost its key.
 //!
 //! Who gets a key where two bindings both apply (GPUI's rule, as far as
 //! this description can follow it): the one that lies deeper; a binding
@@ -473,6 +480,8 @@ pub struct Places {
     /// Inner name to the names it can lie inside.
     inside: BTreeMap<String, BTreeSet<String>>,
     containers: BTreeSet<String>,
+    /// A name to the name it is only around.
+    around: BTreeMap<String, String>,
 }
 
 impl Places {
@@ -508,6 +517,43 @@ impl Places {
     pub fn container(mut self, name: &str) -> Self {
         self.containers.insert(name.to_string());
         self
+    }
+
+    /// Says that the context `outer` is only around the context `inner`:
+    /// it has no place of its own. Its bindings are keys of the place of
+    /// `inner` (the tools around the text bind "Find" and "Add link" on a
+    /// context of their own, around the editor, and both are commands "in
+    /// the text"). `outer` never has the keyboard itself, and `inner` lies
+    /// inside it; both are declared with this, as [`Places::container`]
+    /// and [`Places::inside`] would.
+    ///
+    /// Two commands on one key, one bound on `inner` and one on `outer`,
+    /// are in the **same place**, and the one on `inner` is the one that
+    /// runs there (it lies deeper). Without this the two would only
+    /// overlap, and a key of the one could be given to the other as if
+    /// both kept working.
+    pub fn around(mut self, outer: &str, inner: &str) -> Self {
+        self.around.insert(outer.to_string(), inner.to_string());
+        self.inside(inner, outer).container(outer)
+    }
+
+    /// `shape` with every name that is only around another replaced by
+    /// that other; `None` when it has no such name.
+    fn brought_inside(&self, shape: &Shape) -> Option<Shape> {
+        if !shape
+            .names
+            .iter()
+            .any(|name| self.around.contains_key(name))
+        {
+            return None;
+        }
+        let mut inner = shape.clone();
+        inner.names = shape
+            .names
+            .iter()
+            .map(|name| self.around.get(name).unwrap_or(name).clone())
+            .collect();
+        Some(inner)
     }
 
     /// Every name `name` lies inside, directly or through others.
@@ -597,6 +643,25 @@ impl Places {
                 (false, false) => Extent::Overlapping,
             };
             return relation(extent, Rank::LaterWins);
+        }
+        // One of them is only around the other's context: one place, and
+        // the one that is really on that context lies deeper.
+        let same_depth_extent =
+            |a: &Shape, b: &Shape| match (a.asks_for_all_of(b), b.asks_for_all_of(a)) {
+                (true, true) => Extent::Same,
+                (true, false) => Extent::FirstInsideSecond,
+                (false, true) => Extent::SecondInsideFirst,
+                (false, false) => Extent::Overlapping,
+            };
+        if let Some(inner) = self.brought_inside(&b)
+            && !a.names.is_disjoint(&inner.names)
+        {
+            return relation(same_depth_extent(&a, &inner), Rank::FirstWins);
+        }
+        if let Some(inner) = self.brought_inside(&a)
+            && !b.names.is_disjoint(&inner.names)
+        {
+            return relation(same_depth_extent(&inner, &b), Rank::SecondWins);
         }
         // Deeper by its own text: always inside.
         if !a.outer.is_disjoint(&b.names) {
@@ -818,6 +883,52 @@ mod tests {
         let composer = relation("Editor", "CommentsPanel");
         assert_eq!(composer.extent, Extent::Overlapping);
         assert_eq!(composer.rank, Rank::FirstWins);
+    }
+
+    /// The tools around the text bind their commands on a context of
+    /// their own, around the editor. To the user both are "in the text":
+    /// one place, where the editor's own binding is the one that runs.
+    #[test]
+    fn a_context_that_is_only_around_another_is_that_other_s_place() {
+        let places = the_app()
+            .inside("FindBar", "EditorTools")
+            .around("EditorTools", "Editor");
+        let relation = |a: &str, b: &str| places.relation(&context(a), &context(b));
+        assert_eq!(
+            relation("Editor", "EditorTools"),
+            Relation {
+                extent: Extent::Same,
+                rank: Rank::FirstWins
+            }
+        );
+        assert_eq!(
+            relation("EditorTools", "Editor"),
+            Relation {
+                extent: Extent::Same,
+                rank: Rank::SecondWins
+            }
+        );
+        // An editor with a condition is a part of that place.
+        let narrower = relation("Editor && read_only", "EditorTools");
+        assert_eq!(narrower.extent, Extent::FirstInsideSecond);
+        assert_eq!(narrower.rank, Rank::FirstWins);
+        // What else lies inside the tools still only overlaps with them.
+        let field = relation("FindBar > TextField", "EditorTools");
+        assert_eq!(field.extent, Extent::Overlapping);
+        assert_eq!(field.rank, Rank::FirstWins);
+        // It never has the keyboard itself: a window-wide key beats it.
+        let window = places.relation(&Context::anywhere(), &context("EditorTools"));
+        assert_eq!(window.rank, Rank::FirstWins);
+        // And text is typed in its place.
+        assert!(places.is_typing(&context("EditorTools")));
+        // Without the declaration the two only overlap.
+        let before = the_app().inside("Editor", "EditorTools");
+        assert_eq!(
+            before
+                .relation(&context("Editor"), &context("EditorTools"))
+                .extent,
+            Extent::Overlapping
+        );
     }
 
     #[test]

@@ -25,12 +25,31 @@
 //! [`Places`]; what that assumes is written in [`crate::context`]. The
 //! order of the keymap that would result is taken into account: the
 //! verdict is about the keymap [`crate::apply`] would build.
+//!
+//! # Commands that are not there
+//!
+//! A part of the app can be absent on a Mac (the assistant without its
+//! engine): its commands are listed nowhere and its keys do nothing. The
+//! caller names their targets ([`Absent`]), and they are then nobody's
+//! holders: a key of theirs is free for every other command, no row is
+//! warned about them, an import counts no collision with them
+//! ([`check_among`], [`collisions_among`], [`crate::plan_import_among`]).
+//! Nothing about them is changed or forgotten: their keys stay bound and
+//! the user's changes to them stay stored, so the day the part is there
+//! again the same functions, asked without them in [`Absent`], say what
+//! collides.
+
+use std::collections::BTreeSet;
 
 use crate::changes::Changes;
 use crate::context::{Context, Extent, Places, Rank};
 use crate::defaults::{Defaults, Target};
 use crate::effective::{Effective, Origin, apply};
 use crate::keystroke::{KeySequence, SystemUse};
+
+/// The commands that are not there right now, by their targets: see the
+/// [module docs](self). Empty when everything is there.
+pub type Absent = BTreeSet<Target>;
 
 /// Why a key cannot be given.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,6 +240,29 @@ pub fn check(
     key: &KeySequence,
     replacing: Option<&KeySequence>,
 ) -> Verdict {
+    check_among(
+        defaults,
+        changes,
+        places,
+        &Absent::new(),
+        target,
+        key,
+        replacing,
+    )
+}
+
+/// [`check`] while the commands of `absent` are not there: they hold no
+/// key, so a key of theirs is free, taken by nobody and used nowhere
+/// else. See the [module docs](self).
+pub fn check_among(
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    absent: &Absent,
+    target: &Target,
+    key: &KeySequence,
+    replacing: Option<&KeySequence>,
+) -> Verdict {
     let mut verdict = Verdict {
         key: key.clone(),
         refusal: None,
@@ -262,7 +304,7 @@ pub fn check(
         .iter()
         .rposition(|binding| binding.target == *target && binding.keys == *key);
     if let Some(position) = position {
-        for holder in holders(&effective, places, position) {
+        for holder in holders(&effective, places, absent, position) {
             if holder.overlap.is_taken() {
                 verdict.taken.push(holder);
             } else {
@@ -276,8 +318,14 @@ pub fn check(
 /// Every other command that has the key of the binding at `position` (or
 /// a key that collides with it), with how the two get along. The binding
 /// at `position` is "the proposed key". Bindings of the same command in
-/// other contexts are not holders: the same thing runs either way.
-pub(crate) fn holders(effective: &Effective, places: &Places, position: usize) -> Vec<Holder> {
+/// other contexts are not holders: the same thing runs either way. Nor are
+/// the bindings of a command that is not there (`absent`).
+pub(crate) fn holders(
+    effective: &Effective,
+    places: &Places,
+    absent: &Absent,
+    position: usize,
+) -> Vec<Holder> {
     let bindings = effective.bindings();
     let proposed = &bindings[position];
     // The last binding of each (target, key): a key in two spellings is
@@ -286,6 +334,7 @@ pub(crate) fn holders(effective: &Effective, places: &Places, position: usize) -
     for (index, binding) in bindings.iter().enumerate() {
         if binding.target.command == proposed.target.command
             || !binding.keys.collides_with(&proposed.keys)
+            || absent.contains(&binding.target)
         {
             continue;
         }
@@ -341,14 +390,30 @@ pub struct Collision {
 /// design; those are not reported). Each pair once. For marking rows, and
 /// for what an import leaves behind.
 pub fn collisions(defaults: &Defaults, changes: &Changes, places: &Places) -> Vec<Collision> {
-    collisions_in(&apply(defaults, changes), places)
+    collisions_among(defaults, changes, places, &Absent::new())
 }
 
-pub(crate) fn collisions_in(effective: &Effective, places: &Places) -> Vec<Collision> {
+/// [`collisions`] while the commands of `absent` are not there: a pair
+/// with one of them is not a conflict now (the absent command cannot be
+/// run, and its key does nothing). See the [module docs](self).
+pub fn collisions_among(
+    defaults: &Defaults,
+    changes: &Changes,
+    places: &Places,
+    absent: &Absent,
+) -> Vec<Collision> {
+    collisions_in(&apply(defaults, changes), places, absent)
+}
+
+pub(crate) fn collisions_in(
+    effective: &Effective,
+    places: &Places,
+    absent: &Absent,
+) -> Vec<Collision> {
     let bindings = effective.bindings();
     let mut found: Vec<Collision> = Vec::new();
     for (position, binding) in bindings.iter().enumerate() {
-        if !binding.origin.is_users() {
+        if !binding.origin.is_users() || absent.contains(&binding.target) {
             continue;
         }
         // The last binding of a key in two spellings speaks for both.
@@ -358,7 +423,7 @@ pub(crate) fn collisions_in(effective: &Effective, places: &Places) -> Vec<Colli
         if !is_last {
             continue;
         }
-        for holder in holders(effective, places, position) {
+        for holder in holders(effective, places, absent, position) {
             if !holder.overlap.is_taken() {
                 continue;
             }

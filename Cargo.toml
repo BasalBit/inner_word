@@ -33,6 +33,7 @@ writer-assistant = { path = "crates/writer-assistant" }
 writer-assistant-ui = { path = "crates/writer-assistant-ui" }
 writer-assistant-quick = { path = "crates/writer-assistant-quick" }
 writer-keymap = { path = "crates/writer-keymap" }
+writer-keymap-ui = { path = "crates/writer-keymap-ui" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

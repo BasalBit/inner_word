@@ -70,6 +70,10 @@
 //!   moves. Toggling one also ends the typing undo group.
 //! - Comment anchors never travel through [`Fragment`]s; links do.
 //! - Settings changes ([`EditorState::set_settings`]) are not undoable.
+//! - The language a document is spell-checked in is a document setting
+//!   ([`DocumentSettings::spelling_language`], a [`SpellingLanguage`];
+//!   `None` follows the application). This crate only stores it: checking
+//!   is done elsewhere.
 //!
 //! # Where to start
 //!

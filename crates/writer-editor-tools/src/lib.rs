@@ -117,6 +117,17 @@
 //!   in `"EditorTools"` to [`actions::CloseTool`], which passes the key on
 //!   when nothing is open; it only gets there from the document (text
 //!   fields, an open insert menu and Vim mode take `escape` first).
+//! - **A keymap that is rebuilt while the app runs** (the user's own
+//!   shortcuts: GPUI's keymap is cleared and bound again with other keys)
+//!   is obeyed and shown at once. No key is written in this crate apart
+//!   from its default bindings: the keys beside the controls are asked of
+//!   the keymap when they are drawn, also the ones the fields of the tools
+//!   take themselves (`enter` is a text field's submit, see `tip.rs`); the
+//!   rows of an open format or insert menu are made again when the keymap
+//!   under them changed; and the open insert menu, which takes the keys of
+//!   a list from the editor before the editor's bindings, asks the keymap
+//!   which keys those are (`writer_ui::keymap`). One key stays as written:
+//!   `tab` takes the marked row of the insert menu.
 //! - **The insert menu's trigger** is `EditorEvent::TextInput` with the
 //!   text `/`: the menu opens for a slash that was typed (on any keyboard
 //!   layout, also in Vim's insert mode), never for one that was pasted,

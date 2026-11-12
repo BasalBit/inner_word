@@ -31,10 +31,10 @@ use writer_ui::{
 
 use crate::{
     actions::{
-        FIND_BAR_CONTEXT, FindAndReplace, FindNext, FindPrevious, ReplaceAll, ToggleCaseSensitive,
-        ToggleWholeWord,
+        FIND_BAR_CONTEXT, FindAndReplace, FindNext, FindPrevious, ReplaceAll, ReplaceCurrent,
+        ToggleCaseSensitive, ToggleWholeWord,
     },
-    tip::tip,
+    tip::{apply_hint, close_hint, tip},
     tools::{EditorTools, ToolKind, ToolsEvent},
 };
 
@@ -134,6 +134,13 @@ fn previous_match(matches: &[TextRange], selection: TextRange) -> Option<usize> 
     })
 }
 
+/// The key that replaces the current match: the one of [`ReplaceCurrent`]
+/// when the keymap has one, else the key the replace field submits on
+/// (which is what replaces while the keyboard is in that field).
+fn replace_hint(cx: &App) -> Option<KeyHint> {
+    KeyHint::for_action(&ReplaceCurrent, cx).or_else(|| apply_hint(cx))
+}
+
 impl EditorTools {
     // -----------------------------------------------------------------
     // State, for hosts and tests
@@ -199,8 +206,8 @@ impl EditorTools {
             "find-word" => ("Whole word", KeyHint::for_action(&ToggleWholeWord, cx)),
             "find-previous" => ("Previous match", KeyHint::for_action(&FindPrevious, cx)),
             "find-next" => ("Next match", KeyHint::for_action(&FindNext, cx)),
-            "find-close" => ("Close", KeyHint::parse("escape")),
-            "find-replace-one" => ("Replace this match", KeyHint::parse("enter")),
+            "find-close" => ("Close", close_hint(cx)),
+            "find-replace-one" => ("Replace this match", replace_hint(cx)),
             "find-replace-all" => ("Replace all matches", KeyHint::for_action(&ReplaceAll, cx)),
             _ => return None,
         })
@@ -971,7 +978,7 @@ impl EditorTools {
                     .child(div().text_color(colors.ink).child(label))
             };
             let replace = text_button(self.bar_button("find-replace-one", cx), "Replace")
-                .children(hint(KeyHint::parse("enter")))
+                .children(hint(replace_hint(cx)))
                 .on_click(cx.listener(|this, _, window, cx| this.replace_current(window, cx)));
             let replace_all = text_button(
                 self.bar_button("find-replace-all", cx),

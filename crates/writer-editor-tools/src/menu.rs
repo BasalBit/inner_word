@@ -90,9 +90,14 @@ pub(crate) struct MenuOptions {
     /// Reserve the mark column.
     pub(crate) marks: bool,
     pub(crate) empty_text: SharedString,
-    /// Key hints under the list ("⌘↩ Set as document font").
-    pub(crate) footer: Vec<(KeyHint, SharedString)>,
+    /// Key hints under the list ("Set as document font ⌘↩").
+    pub(crate) footer: Vec<(FooterKey, SharedString)>,
 }
+
+/// The key of a footer entry: asked of the keymap each time the menu is
+/// drawn, never kept (the keymap can be rebuilt while a menu is open). An
+/// entry whose key is bound to nothing is not shown.
+pub(crate) type FooterKey = fn(&App) -> Option<KeyHint>;
 
 const ROW_HEIGHT: Pixels = px(28.);
 /// The slot of the font sample at the right of a font picker row.
@@ -108,7 +113,7 @@ pub(crate) struct Menu {
     max_rows: usize,
     marks: bool,
     empty_text: SharedString,
-    footer: Vec<(KeyHint, SharedString)>,
+    footer: Vec<(FooterKey, SharedString)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -161,6 +166,14 @@ impl Menu {
             footer: options.footer,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// What the footer shows now: each entry's words and its key.
+    pub(crate) fn footer(&self, cx: &App) -> Vec<(SharedString, KeyHint)> {
+        self.footer
+            .iter()
+            .filter_map(|(key, label)| Some((label.clone(), key(cx)?)))
+            .collect()
     }
 
     /// The text of the query field (empty without a field).
@@ -531,7 +544,12 @@ impl Render for Menu {
                 .child(Icon::new(IconName::Search).color(colors.muted))
                 .child(div().flex_1().min_w_0().child(field))
         });
-        let footer = (!self.footer.is_empty()).then(|| {
+        let footer_keys: Vec<KeyLabel> = self
+            .footer(cx)
+            .into_iter()
+            .map(|(label, key)| KeyLabel::new(label, key))
+            .collect();
+        let footer = (!footer_keys.is_empty()).then(|| {
             div()
                 .flex()
                 .flex_none()
@@ -543,11 +561,7 @@ impl Render for Menu {
                 .text_color(colors.muted)
                 // The kit's one way to show a key: what it does, then the
                 // key.
-                .children(
-                    self.footer
-                        .iter()
-                        .map(|(hint, label)| KeyLabel::new(label.clone(), hint.clone())),
-                )
+                .children(footer_keys)
         });
 
         div()

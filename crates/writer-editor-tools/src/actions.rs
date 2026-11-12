@@ -70,10 +70,11 @@ actions!(
 ///
 /// `enter` and `escape` inside the tools are not bindings of this crate:
 /// they arrive through the text fields (`TextField` submits on `enter` and
-/// cancels on `escape`) and, for the insert menu, through the editor's key
-/// interception. The `escape` bound here is the one pressed in the
-/// document: it closes the find bar (or what `cmd-g` is showing) from
-/// there.
+/// cancels on `escape`; those are the field's bindings) and, for the
+/// insert menu, through the editor's key interception, which asks the
+/// keymap for the keys of a list (`writer_ui::picker`). The `escape` bound
+/// here is the one pressed in the document: it closes the find bar (or
+/// what `cmd-g` is showing) from there.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let tools = Some(KEY_CONTEXT);
     let find = Some(FIND_BAR_CONTEXT);

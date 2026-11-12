@@ -11,6 +11,7 @@ mod layout;
 mod link;
 mod mouse;
 mod perf;
+mod rebinding;
 mod support;
 mod text_menu;
 mod util;

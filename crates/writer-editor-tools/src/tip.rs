@@ -6,9 +6,11 @@
 use gpui::{AnyView, App, AppContext, Context, IntoElement, Render, SharedString, Window, div, px};
 use gpui::{InteractiveElement, ParentElement, Styled};
 use writer_ui::{
-    KeyHint,
+    KeyHint, picker, text_field,
     theme::{ActiveTheme, RADIUS_MD, UI_TEXT_SM, UI_TEXT_XS},
 };
+
+use crate::actions::CloseTool;
 
 /// A small floating label with an optional key hint.
 pub(crate) struct Tip {
@@ -43,6 +45,32 @@ impl Render for Tip {
                 .children(self.hint.clone().map(|hint| hint.size(UI_TEXT_XS))),
         )
     }
+}
+
+/// The key that applies what a field of the tools holds (the address in
+/// the link field, the row marked in a menu with a filter field, the text
+/// in the replace field): whatever the keymap binds a text field's submit
+/// to. The fields of the tools take that key themselves, so no binding of
+/// this crate says it, and none is written here either: the keymap can be
+/// rebuilt with other keys.
+pub(crate) fn apply_hint(cx: &App) -> Option<KeyHint> {
+    KeyHint::for_action(&text_field::Submit, cx)
+        .or_else(|| KeyHint::for_action(&picker::Confirm, cx))
+}
+
+/// The key that closes the open tool: the one of [`CloseTool`], which
+/// works from the document and from a field of the tools alike (a field
+/// has no binding of its own for a key that was given to `CloseTool`), or
+/// else the key a text field cancels on.
+pub(crate) fn close_hint(cx: &App) -> Option<KeyHint> {
+    KeyHint::for_action(&CloseTool, cx).or_else(|| KeyHint::for_action(&text_field::Cancel, cx))
+}
+
+/// The second way of taking a row of a menu with a filter field (the font
+/// picker's "Set as document font"): the key of the picker's second
+/// confirm.
+pub(crate) fn secondary_hint(cx: &App) -> Option<KeyHint> {
+    KeyHint::for_action(&picker::SecondaryConfirm, cx)
 }
 
 /// A tooltip builder for `.tooltip(..)`: `label`, followed by `hint`.

@@ -2,15 +2,18 @@
 //! opens a list at the caret, filtered by what is typed after the slash.
 //!
 //! Focus stays in the editor. While the menu is open a key interceptor at
-//! overlay priority takes `up` / `down` / `enter` / `tab` / `escape`;
-//! every other key keeps reaching the document, and the menu follows the
-//! document through the editor's events: the query is the text between the
-//! slash and the caret.
+//! overlay priority takes the keys of a list (`up` / `down` / `enter` /
+//! `escape` and `ctrl-p` / `ctrl-n` by default; asked of the keymap, see
+//! [`InsertMenuKey`]) and `tab`; every other key keeps reaching the
+//! document, and the menu follows the document through the editor's
+//! events: the query is the text between the slash and the caret.
 
-use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Window, px};
+use gpui::{
+    Action, App, AppContext, Context, Entity, Keystroke, SharedString, Subscription, Window, px,
+};
 use writer_core::{BlockId, BlockKind, Position, TextRange};
 use writer_editor::{InterceptPriority, KeyDisposition, PopupAnchor, actions as editor};
-use writer_ui::KeyHint;
+use writer_ui::{KeyHint, keymap, picker};
 
 use crate::{
     actions::{InsertDate, OpenLink},
@@ -73,6 +76,51 @@ impl InsertMenu {
                 })
             })
             .collect()
+    }
+}
+
+/// What a key does to the open insert menu.
+///
+/// The insert menu is a list like the other menus of the tools, but the
+/// keyboard stays in the document while it is open (what is typed after the
+/// slash is its filter), so the keys of a list do not reach it as actions:
+/// it takes them from the editor, before the editor's own bindings. Which
+/// keys those are is asked of the keymap each time, in the place the other
+/// lists are in (`Picker`): the keys of "previous", "next", "confirm" and
+/// "dismiss" there, whatever they are bound to now. One key is the menu's
+/// own and is not a binding: `tab` takes the marked row, as it completes a
+/// word elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InsertMenuKey {
+    Previous,
+    Next,
+    /// Take the marked row.
+    Take,
+    Close,
+}
+
+impl InsertMenuKey {
+    fn of(keystroke: &Keystroke, cx: &App) -> Option<Self> {
+        let of_action = |action: &dyn Action| {
+            let action = action.as_any();
+            if action.is::<picker::SelectPrev>() {
+                Some(Self::Previous)
+            } else if action.is::<picker::SelectNext>() {
+                Some(Self::Next)
+            } else if action.is::<picker::Confirm>() {
+                Some(Self::Take)
+            } else if action.is::<picker::Dismiss>() {
+                Some(Self::Close)
+            } else {
+                None
+            }
+        };
+        let list = [keymap::context(picker::KEY_CONTEXT)];
+        keymap::action_for_keystroke_in(keystroke, &list, cx, |action| of_action(action).is_some())
+            .and_then(|action| of_action(action.as_ref()))
+            .or_else(|| {
+                (keystroke.key == "tab" && !keystroke.modifiers.modified()).then_some(Self::Take)
+            })
     }
 }
 
@@ -286,12 +334,10 @@ impl EditorTools {
             .intercept_keys(InterceptPriority::OVERLAY, {
                 let tools = cx.weak_entity();
                 move |key, window, cx| {
-                    let is_menu_key = !key.modifiers.modified()
-                        && matches!(key.key.as_str(), "up" | "down" | "enter" | "tab" | "escape");
-                    if !is_menu_key {
+                    let Some(menu_key) = InsertMenuKey::of(key, cx) else {
                         return KeyDisposition::Pass;
-                    }
-                    match tools.update(cx, |tools, cx| tools.insert_menu_key(&key.key, window, cx))
+                    };
+                    match tools.update(cx, |tools, cx| tools.insert_menu_key(menu_key, window, cx))
                     {
                         Ok(true) => KeyDisposition::Consumed,
                         _ => KeyDisposition::Pass,
@@ -319,16 +365,21 @@ impl EditorTools {
 
     /// A menu key while the insert menu is open. Returns whether the key
     /// was used (otherwise it goes on to the document).
-    fn insert_menu_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn insert_menu_key(
+        &mut self,
+        key: InsertMenuKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(PopupTool::Insert(tool)) = &self.popup else {
             return false;
         };
         let menu = tool.menu.clone();
         match key {
-            "up" => menu.update(cx, |menu, cx| menu.select_prev(cx)),
-            "down" => menu.update(cx, |menu, cx| menu.select_next(cx)),
-            "escape" => self.close_popup(false, window, cx),
-            _ => {
+            InsertMenuKey::Previous => menu.update(cx, |menu, cx| menu.select_prev(cx)),
+            InsertMenuKey::Next => menu.update(cx, |menu, cx| menu.select_next(cx)),
+            InsertMenuKey::Close => self.close_popup(false, window, cx),
+            InsertMenuKey::Take => {
                 if menu.read(cx).selected_item().is_none() {
                     // Nothing to apply: the key belongs to the document.
                     self.close_popup(false, window, cx);
@@ -338,6 +389,16 @@ impl EditorTools {
             }
         }
         true
+    }
+
+    /// The keymap changed under an open insert menu: the keys its rows
+    /// show are asked again.
+    pub(crate) fn rekey_insert_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(PopupTool::Insert(tool)) = &mut self.popup else {
+            return;
+        };
+        tool.items = insert_items(cx);
+        self.sync_insert_menu(window, cx);
     }
 
     /// Brings the open insert menu in line with the document: recomputes

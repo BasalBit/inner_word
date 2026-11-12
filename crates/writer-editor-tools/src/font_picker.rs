@@ -21,7 +21,8 @@ use writer_editor::PopupAnchor;
 use writer_ui::{ContextMenu, ContextMenuItem, KeyHint, fuzzy};
 
 use crate::{
-    menu::{Mark, Menu, MenuEntry, MenuItem, MenuOptions},
+    menu::{FooterKey, Mark, Menu, MenuEntry, MenuItem, MenuOptions},
+    tip::{apply_hint, secondary_hint},
     tools::{EditorTools, PopupTool},
 };
 
@@ -258,10 +259,10 @@ impl EditorTools {
                     max_rows: 10,
                     marks: true,
                     empty_text: "No matching font".into(),
-                    footer: [("enter", "Apply"), ("cmd-enter", "Set as document font")]
-                        .into_iter()
-                        .filter_map(|(keys, label)| Some((KeyHint::parse(keys)?, label.into())))
-                        .collect(),
+                    footer: vec![
+                        (apply_hint as FooterKey, "Apply".into()),
+                        (secondary_hint as FooterKey, "Set as document font".into()),
+                    ],
                 },
                 window,
                 cx,
@@ -341,7 +342,7 @@ impl EditorTools {
         };
         let collapsed = self.editor.read(cx).selection().is_collapsed();
         let this = cx.weak_entity();
-        let item = |label: &'static str, as_body_font: bool, keys: &str| {
+        let item = |label: &'static str, as_body_font: bool, key: Option<KeyHint>| {
             let this = this.clone();
             ContextMenuItem::new(label, move |window, cx| {
                 this.update(cx, |tools, cx| {
@@ -349,7 +350,7 @@ impl EditorTools {
                 })
                 .ok();
             })
-            .key_hint(KeyHint::parse(keys))
+            .key_hint(key)
         };
         ContextMenu::open(
             position,
@@ -361,9 +362,9 @@ impl EditorTools {
                         "Apply to the Selection"
                     },
                     false,
-                    "enter",
+                    apply_hint(cx),
                 ),
-                item("Set as Document Font", true, "cmd-enter"),
+                item("Set as Document Font", true, secondary_hint(cx)),
             ],
             window,
             cx,

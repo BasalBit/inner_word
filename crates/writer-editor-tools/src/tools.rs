@@ -2,7 +2,7 @@
 
 use gpui::{
     AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement,
-    Render, Subscription, WeakEntity, Window, div, prelude::*,
+    KeymapVersion, Render, Subscription, WeakEntity, Window, div, prelude::*,
 };
 use writer_editor::{Editor, EditorEvent, PopupAnchor, PopupPlacement};
 use writer_ui::theme::GlobalTheme;
@@ -136,6 +136,9 @@ pub struct EditorTools {
     pub(crate) format_bar: FormatBar,
     /// This view, for the handlers of menu items.
     pub(crate) this: WeakEntity<Self>,
+    /// The keymap the rows of an open popup took their key hints from (see
+    /// [`EditorTools::follow_the_keymap`]).
+    keymap_version: KeymapVersion,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -184,7 +187,34 @@ impl EditorTools {
             text_menu_leading_extension: None,
             format_bar: FormatBar::default(),
             this: cx.weak_entity(),
+            keymap_version: cx.key_bindings().borrow().version(),
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// The keymap can be rebuilt while the app runs (the user's own
+    /// shortcuts). Everything this view draws asks the keymap for its keys
+    /// when it is drawn, with one exception: the rows of an open format
+    /// menu or insert menu are made when the menu opens, each with the key
+    /// of its command. GPUI redraws every window when the keymap changes
+    /// and has no other way of saying so; this is called on each draw,
+    /// sees that the keymap is another one, and has the open menu make its
+    /// rows again.
+    fn follow_the_keymap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let version = cx.key_bindings().borrow().version();
+        if version == self.keymap_version {
+            return;
+        }
+        self.keymap_version = version;
+        if matches!(
+            self.popup,
+            Some(PopupTool::Format(_)) | Some(PopupTool::Insert(_))
+        ) {
+            // Not during the draw: the menu is another view.
+            cx.defer_in(window, |this, window, cx| {
+                this.retheme_format_menu(cx);
+                this.rekey_insert_menu(window, cx);
+            });
         }
     }
 
@@ -238,6 +268,20 @@ impl EditorTools {
         self.close_find_bar(cx);
         self.end_find_flash(cx);
         self.editor.read(cx).focus(window);
+    }
+
+    /// The key hints under the list of the open menu, as the menu shows
+    /// them now: what each key does, and the key as text ("Apply", "↩").
+    /// Only the font picker has any. For tests and automation.
+    pub fn menu_footer(&self, cx: &App) -> Vec<(String, String)> {
+        let Some(menu) = self.popup.as_ref().and_then(PopupTool::menu) else {
+            return Vec::new();
+        };
+        menu.read(cx)
+            .footer(cx)
+            .into_iter()
+            .map(|(label, key)| (label.to_string(), key.text()))
+            .collect()
     }
 
     /// The rows of the open menu (format menu, insert menu or font picker),
@@ -536,6 +580,7 @@ impl EditorTools {
 
 impl Render for EditorTools {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow_the_keymap(window, cx);
         let bar = self.render_find_bar(window, cx);
         let (top, bottom) = match self.find_placement {
             FindBarPlacement::Top => (bar, None),

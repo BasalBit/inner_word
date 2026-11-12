@@ -17,7 +17,7 @@ use writer_ui::{
 
 use crate::{
     actions::{LINK_CONTEXT, OpenLinkInBrowser, RemoveLink},
-    tip::tip,
+    tip::{apply_hint, close_hint, tip},
     tools::{EditorTools, PopupTool},
     util::normalize_url,
 };
@@ -88,13 +88,24 @@ impl LinkPopover {
         }
     }
 
+    /// The key beside `button` (a debug selector of the footer), asked of
+    /// the keymap as it is now.
+    pub(crate) fn action_key(&self, button: &str, cx: &App) -> Option<KeyHint> {
+        match button {
+            "link-apply" => apply_hint(cx),
+            "link-open" => KeyHint::for_action(&OpenLinkInBrowser, cx),
+            "link-remove" => KeyHint::for_action(&RemoveLink, cx),
+            "link-cancel" => close_hint(cx),
+            _ => None,
+        }
+    }
+
     /// A button of the footer: its key, its name, and a tooltip that says
     /// what it does. A button that cannot be used now is dimmed and does
     /// not react.
     fn footer_action(
         &self,
         id: &'static str,
-        hint: Option<KeyHint>,
         label: &'static str,
         tooltip: &'static str,
         event: LinkEvent,
@@ -102,6 +113,7 @@ impl LinkPopover {
     ) -> impl IntoElement + use<> {
         let colors = cx.theme().colors;
         let enabled = self.action_enabled(id, cx);
+        let hint = self.action_key(id, cx);
         div()
             .id(id)
             .debug_selector(|| id.to_string())
@@ -134,7 +146,6 @@ impl Render for LinkPopover {
         let font = theme.fonts.ui.clone();
         let apply = self.footer_action(
             "link-apply",
-            KeyHint::parse("enter"),
             "Apply",
             if self.has_link && !self.has_url(cx) {
                 "Remove the link"
@@ -146,7 +157,6 @@ impl Render for LinkPopover {
         );
         let open = self.footer_action(
             "link-open",
-            KeyHint::for_action(&OpenLinkInBrowser, cx),
             "Open",
             "Open the address in the browser",
             LinkEvent::Open,
@@ -155,7 +165,6 @@ impl Render for LinkPopover {
         let remove = self.has_link.then(|| {
             self.footer_action(
                 "link-remove",
-                KeyHint::for_action(&RemoveLink, cx),
                 "Remove",
                 "Remove the link, keep the text",
                 LinkEvent::Remove,
@@ -164,7 +173,6 @@ impl Render for LinkPopover {
         });
         let cancel = self.footer_action(
             "link-cancel",
-            KeyHint::parse("escape"),
             "Cancel",
             "Close without changing the link",
             LinkEvent::Cancel,
@@ -353,6 +361,20 @@ impl EditorTools {
     pub fn link_button_enabled(&self, button: &str, cx: &App) -> Option<bool> {
         match &self.popup {
             Some(PopupTool::Link(tool)) => Some(tool.popover.read(cx).action_enabled(button, cx)),
+            _ => None,
+        }
+    }
+
+    /// The key the open link popover shows beside a button (see
+    /// [`EditorTools::link_button_enabled`] for the names), as text. `None`
+    /// when the popover is closed or the keymap has no key for it.
+    pub fn link_button_key(&self, button: &str, cx: &App) -> Option<String> {
+        match &self.popup {
+            Some(PopupTool::Link(tool)) => tool
+                .popover
+                .read(cx)
+                .action_key(button, cx)
+                .map(|hint| hint.text()),
             _ => None,
         }
     }

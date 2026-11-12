@@ -628,6 +628,7 @@ impl KeymapView {
         }
         let height = ROW_HEIGHT * rows.min(self.visible_rows) as f32;
         div()
+            .flex_none()
             .py(px(4.))
             .child(
                 uniform_list(
@@ -686,6 +687,7 @@ impl KeymapView {
     fn render_lines(lines: &[Line], under: Tone, colors: &ThemeColors) -> impl IntoElement {
         let indented = under != Tone::Plain;
         div()
+            .debug_selector(|| "keymap-question-lines".into())
             .flex()
             .flex_col()
             .gap(px(4.))
@@ -728,8 +730,13 @@ impl KeymapView {
     /// the key that takes it.
     fn render_choices(&self, question: &Question, cx: &mut Context<Self>) -> impl IntoElement {
         let choose = hint_in(&Choose, &CHOICES_STACK, cx);
-        div().flex().flex_wrap().justify_end().gap(px(8.)).children(
-            question.choices.iter().enumerate().map(|(ix, button)| {
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .justify_end()
+            .gap(px(8.))
+            .children(question.choices.iter().enumerate().map(|(ix, button)| {
                 let marked = ix == question.selected;
                 let choice = button.choice;
                 let hint: Option<KeyHint> = if marked {
@@ -756,16 +763,17 @@ impl KeymapView {
                                 this.choose(choice, window, cx);
                             })),
                     )
-            }),
-        )
+            }))
     }
 
     /// The band under the list: waiting for a key, or a question.
     fn render_band(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let colors = cx.theme().colors;
+        // The band keeps its height, except for a question about a key:
+        // there it gives way when the window is too small for all it has
+        // to say, and its sentences scroll above the choices, which stay.
         let band = div()
             .debug_selector(|| "keymap-band".into())
-            .flex_none()
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -788,7 +796,8 @@ impl KeymapView {
                     None => format!("Press one more key for \u{201c}{title}\u{201d} ({place})"),
                 };
                 Some(
-                    band.track_focus(&self.capture_focus)
+                    band.flex_none()
+                        .track_focus(&self.capture_focus)
                         .key_context(RECORDING_KEY_CONTEXT)
                         .child(
                             div()
@@ -832,17 +841,30 @@ impl KeymapView {
                 Some(
                     band.track_focus(&self.choices_focus)
                         .key_context(CHOICES_KEY_CONTEXT)
-                        .when(!preview, |el| {
-                            el.child(Self::render_title(
-                                question.title.clone(),
-                                question.tone,
-                                &colors,
-                            ))
-                            .child(Self::render_lines(
-                                &question.lines,
-                                question.tone,
-                                &colors,
-                            ))
+                        .map(|el| {
+                            if preview {
+                                return el.flex_none();
+                            }
+                            el.min_h_0().child(
+                                div()
+                                    .id("keymap-question-text")
+                                    .debug_selector(|| "keymap-question-text".into())
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .child(Self::render_title(
+                                        question.title.clone(),
+                                        question.tone,
+                                        &colors,
+                                    ))
+                                    .child(Self::render_lines(
+                                        &question.lines,
+                                        question.tone,
+                                        &colors,
+                                    )),
+                            )
                         })
                         .child(self.render_choices(question, cx))
                         .into_any_element(),
@@ -1203,6 +1225,13 @@ impl KeymapView {
     }
 }
 
+/// The margin the modal layer (`writer_ui::ModalLayer`) keeps at each side
+/// of what it shows.
+const LAYER_MARGIN: Pixels = px(16.);
+/// The share of the window's height the modal layer has for what it shows
+/// (it keeps the top 12% free).
+const LAYER_SHARE: f32 = 0.88;
+
 /// What the panel leaves free under itself, where the window has it: a
 /// host says what an import or a reset did in a toast at the bottom of the
 /// window (with its Undo), while the list stays open, and that toast must
@@ -1223,20 +1252,35 @@ impl Render for KeymapView {
         self.more_bounds.set(None);
 
         // As many rows as the window has room for under the modal's top
-        // margin, with the band when it is shown.
-        let band_room = if matches!(self.mode, Mode::List) {
-            0.
+        // margin, with the band when it is shown. While the view waits for
+        // a key or asks about one, the row it is about is what has to be
+        // seen: a small window then keeps two rows and leaves the rest to
+        // the band.
+        let (band_room, fewest) = if matches!(self.mode, Mode::List) {
+            (0., 4)
         } else {
-            150.
+            (150., 2)
         };
-        let room = f32::from(window.viewport_size().height) * 0.88
+        let viewport = window.viewport_size();
+        // What the modal layer leaves the panel: the window without the
+        // layer's margin at each side, and without the top eighth it keeps
+        // free. The panel takes its width and its greatest height from
+        // here and not from a percentage: its sentences wrap, and how tall
+        // they are has to be found for the width it really has (laid out
+        // as 680 wide and then squeezed by a `max_w_full`, a narrow window
+        // had the band of a question a line too short and its choices over
+        // the hints below).
+        let width = WIDTH.min(viewport.width - LAYER_MARGIN * 2.).max(px(0.));
+        let tallest = viewport.height * LAYER_SHARE - px(8.);
+        let room = f32::from(viewport.height) * LAYER_SHARE
             - ROOM_BELOW
             - 48.
             - 36.
             - 32.
             - 16.
             - band_room;
-        self.visible_rows = ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(4, 20) as usize;
+        self.visible_rows =
+            ((room / f32::from(ROW_HEIGHT)).floor() as isize).clamp(fewest, 20) as usize;
 
         let preview = match &self.mode {
             Mode::Asking(question) => match &question.subject {
@@ -1334,8 +1378,9 @@ impl Render for KeymapView {
                     cx.stop_propagation();
                 }
             }))
-            .w(WIDTH)
+            .w(width)
             .max_w_full()
+            .max_h(tallest)
             .flex()
             .flex_col()
             .overflow_hidden()

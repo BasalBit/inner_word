@@ -560,3 +560,98 @@ fn a_whole_key_lists_the_rows_that_have_exactly_that_key(cx: &mut TestAppContext
         "{found:?}"
     );
 }
+
+/// A question with much to say still ends inside the smallest window,
+/// with its choices in view: the list gives up rows for it, and what does
+/// not fit even then scrolls above the choices. (With Esc for a command of
+/// the text the choices of the released list stood over the hints at the
+/// bottom in a window of 640 by 480.)
+#[gpui::test]
+fn a_long_question_fits_the_smallest_window(cx: &mut TestAppContext) {
+    fn leaves(_: &KeySequence) -> bool {
+        false
+    }
+    let (host, view, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(640.), px(480.)));
+    cx.run_until_parked();
+    let check = |cx: &mut VisualTestContext| {
+        assert_eq!(
+            view.read_with(cx, |view, _| view.mode()),
+            ModeKind::Question
+        );
+        let window = cx.update(|window, _| window.viewport_size());
+        let panel = bounds(cx, "keymap-panel");
+        assert!(
+            panel.top() >= px(0.) && panel.bottom() <= window.height,
+            "the panel reaches from {:?} to {:?} in a window of {:?}",
+            panel.top(),
+            panel.bottom(),
+            window.height
+        );
+        let band = bounds(cx, "keymap-band");
+        assert!(band.bottom() <= panel.bottom());
+        // Every choice whole, inside the band, under what the band says.
+        let text = bounds(cx, "keymap-question-text");
+        assert!(text.top() >= band.top() && text.bottom() <= band.bottom());
+        let count = view.read_with(cx, |view, _| view.choices().len());
+        for ix in 0..count {
+            let choice = bounds(cx, selector(format!("keymap-choice-{ix}")));
+            assert!(
+                choice.top() >= text.bottom() && choice.bottom() <= band.bottom(),
+                "choice {ix}: {choice:?} under {text:?} in {band:?}"
+            );
+            assert!(choice.left() >= panel.left() && choice.right() <= panel.right());
+        }
+        // The row the question is about is shown above it.
+        let row = view.read_with(cx, |view, _| view.row_of(&bold()).unwrap());
+        let row = bounds(cx, selector(format!("keymap-row-{row}")));
+        let toolbar = bounds(cx, "keymap-changed");
+        assert!(
+            row.top() >= toolbar.bottom() && row.bottom() <= band.top(),
+            "{row:?} between {toolbar:?} and {band:?}"
+        );
+        text
+    };
+
+    // Esc is a key of many places: several sentences.
+    select(&view, &bold(), cx);
+    press(cx, "enter escape");
+    let lines = view.read_with(cx, |view, _| view.question_lines());
+    assert!(lines.len() >= 2, "{lines:?}");
+    let text = check(cx);
+    // All of it is in view here, nothing has to scroll: the band is as
+    // tall as what it says at the width it has (two rows of the list made
+    // room for it).
+    let title = bounds(cx, "keymap-question-title");
+    let sentences = bounds(cx, "keymap-question-lines");
+    assert!(title.top() >= text.top());
+    assert!(
+        sentences.bottom() <= text.bottom(),
+        "the sentences end at {:?}, what shows them at {:?}",
+        sentences.bottom(),
+        text.bottom()
+    );
+    press(cx, "escape");
+
+    // And with far more to say than any window of that size holds: the
+    // sentences scroll, the choices stay.
+    let listing = host
+        .read_with(cx, |host, _| host.listing())
+        .sees_keys_first(
+            "Something",
+            ["Editor"],
+            leaves,
+            "It sees this key before any shortcut does. ".repeat(24),
+        );
+    view.update_in(cx, |view, window, cx| view.set_listing(listing, window, cx));
+    cx.run_until_parked();
+    select(&view, &bold(), cx);
+    press(cx, "enter escape");
+    let text = check(cx);
+    assert!(
+        text.size.height < px(260.),
+        "what the band says is as tall as the window lets it be: {:?}",
+        text.size
+    );
+    assert!(text.size.height >= px(40.), "{:?}", text.size);
+}

@@ -159,6 +159,9 @@
 //! `keymap-close`, `keymap-changed` (the count of changed commands),
 //! `keymap-record-cancel`, `keymap-record-help`, `keymap-question-title`,
 //! `keymap-question-mark` (the sign beside the heading of a question),
+//! `keymap-question-lines` (its sentences), `keymap-question-text` (the
+//! heading and the sentences: the part that scrolls when a small window
+//! has no room for all of it),
 //! `keymap-choice-<n>`, `keymap-preview-rows` (the part of the import
 //! preview that scrolls), `keymap-preview-row-<n>`,
 //! `keymap-preview-name-<n>` and `keymap-preview-reason-<n>` (the two

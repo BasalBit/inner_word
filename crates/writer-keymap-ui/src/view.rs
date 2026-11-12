@@ -1122,6 +1122,7 @@ impl KeymapView {
             held: window.modifiers(),
             problem: None,
         });
+        self.keep_selected_row_in_view();
         window.focus(&self.capture_focus);
         cx.notify();
     }
@@ -1238,9 +1239,18 @@ impl KeymapView {
     // Questions
     // ---------------------------------------------------------------------
 
+    /// The list shows fewer rows in a small window while the band under
+    /// it is shown: the row the band is about stays among them.
+    fn keep_selected_row_in_view(&self) {
+        if let Some(row) = self.selected {
+            self.scroll.scroll_to_item(row, ScrollStrategy::Top);
+        }
+    }
+
     fn ask(&mut self, question: Question, window: &mut Window, cx: &mut Context<Self>) {
         ContextMenu::dismiss(window, cx);
         self.mode = Mode::Asking(question);
+        self.keep_selected_row_in_view();
         window.focus(&self.choices_focus);
         cx.notify();
     }

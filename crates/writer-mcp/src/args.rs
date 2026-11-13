@@ -24,6 +24,16 @@ pub fn integer(description: &str, minimum: i64) -> Value {
     json!({ "type": "integer", "minimum": minimum, "description": description })
 }
 
+/// An integer property from `minimum` to `maximum`, both included.
+pub fn integer_between(description: &str, minimum: i64, maximum: i64) -> Value {
+    json!({
+        "type": "integer",
+        "minimum": minimum,
+        "maximum": maximum,
+        "description": description,
+    })
+}
+
 /// A boolean property. Leaving it out means `false`.
 pub fn boolean(description: &str) -> Value {
     json!({ "type": "boolean", "description": description })
@@ -193,18 +203,30 @@ fn coerce(property: &Value, value: &Value) -> Result<Value, String> {
         },
         Some("integer") => {
             let minimum = property.get("minimum").and_then(Value::as_i64);
+            let maximum = property.get("maximum").and_then(Value::as_i64);
             let number = match value {
                 Value::Number(number) => number.as_i64(),
                 Value::String(digits) => digits.trim().parse::<i64>().ok(),
                 _ => None,
             };
-            match (number, minimum) {
-                (Some(number), Some(minimum)) if number < minimum => {
-                    Err(format!("a whole number, {minimum} or more"))
+            // One sentence for the whole range, whichever end was passed.
+            let expected = match (minimum, maximum) {
+                (Some(minimum), Some(maximum)) => {
+                    format!("a whole number from {minimum} to {maximum}")
                 }
-                (Some(number), _) => Ok(json!(number)),
-                (None, Some(minimum)) => Err(format!("a whole number, {minimum} or more")),
-                (None, None) => Err("a whole number".into()),
+                (Some(minimum), None) => format!("a whole number, {minimum} or more"),
+                (None, Some(maximum)) => format!("a whole number, {maximum} or less"),
+                (None, None) => "a whole number".into(),
+            };
+            match number {
+                Some(number)
+                    if minimum.is_some_and(|minimum| number < minimum)
+                        || maximum.is_some_and(|maximum| number > maximum) =>
+                {
+                    Err(expected)
+                }
+                Some(number) => Ok(json!(number)),
+                None => Err(expected),
             }
         }
         Some("boolean") => match value {
@@ -293,6 +315,27 @@ mod tests {
         assert_eq!(args.count("limit"), Some(7));
         assert!(args.flag("all"));
         assert!(!args.has("format"));
+    }
+
+    #[test]
+    fn a_range_is_in_the_schema_and_both_ends_are_refused_with_one_sentence() {
+        let property = integer_between("How wide.", 5, 100);
+        assert_eq!(property["minimum"], json!(5));
+        assert_eq!(property["maximum"], json!(100));
+        let schema = object(vec![("width", property)], &[]);
+        for (given, taken) in [(json!(5), true), (json!(100), true), (json!("50"), true)] {
+            assert_eq!(
+                check(&schema, &arguments(json!({ "width": given }))).is_ok(),
+                taken
+            );
+        }
+        for wrong in [json!(4), json!(101), json!(200), json!("wide")] {
+            let error = check(&schema, &arguments(json!({ "width": wrong }))).unwrap_err();
+            assert!(
+                error.contains("\"width\" must be a whole number from 5 to 100."),
+                "{error}"
+            );
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ use writer_agent::{
     TreeRequest,
 };
 
-use crate::args::{self, boolean, integer, one_of, string};
+use crate::args::{self, boolean, integer, integer_between, one_of, string};
 use crate::protocol::{Effect, ToolDef, ToolHost, ToolOutput};
 use crate::render;
 
@@ -864,9 +864,10 @@ a version first.",
                     ),
                     (
                         "width_percent",
-                        integer(
+                        integer_between(
                             "How wide it is drawn: a share of the text column in percent, 5 to 100. Default: its own size.",
                             5,
+                            100,
                         ),
                     ),
                     (
@@ -1646,6 +1647,12 @@ mod tests {
             .find(|tool| tool.name == "add_image")
             .expect("add_image is a tool");
         assert_eq!(add_image.effect, Effect::Add);
+        // Both ends of the width are in its schema, as its description says them.
+        let width = &add_image.input_schema["properties"]["width_percent"];
+        assert_eq!(
+            (&width["minimum"], &width["maximum"]),
+            (&json!(5), &json!(100))
+        );
     }
 
     #[test]

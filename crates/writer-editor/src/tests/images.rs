@@ -1272,6 +1272,9 @@ fn dragging_a_picture_moves_its_block(cx: &mut TestAppContext) {
             "{line:?}"
         );
         assert_eq!(line.size.height, px(2.));
+        // It keeps its outline and has no handles meanwhile.
+        assert!(editor.painted_images[0].outline.is_some());
+        assert!(editor.painted_images[0].handles.is_empty());
         // The surface's colour at half strength over the picture: that
         // is what dims it.
         assert_eq!(

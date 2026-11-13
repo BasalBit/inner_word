@@ -64,6 +64,14 @@
 //! A scripted run does not activate the app, so it never takes the keyboard
 //! (set `THE_WRITER_AUTOMATION_FOREGROUND=1` for a normal activation).
 //!
+//! The sample document has pictures in it (painted by the demo, see
+//! `pictures.rs`: a landscape, a small stamp, a tall "phone screenshot" and
+//! one image without bytes), and the demo's editor has an image provider
+//! that keeps them in memory, so pictures can be pasted, dropped and
+//! inserted (`editor::InsertImage` has no panel here: use the `insert:`
+//! step). `THE_WRITER_DEMO_IMAGES=20` puts a picture after every twentieth
+//! block of whatever document is opened (a book of pictures).
+//!
 //! Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`,
 //! `typeslow:<text>` (one key per frame, prints what dispatching a key
 //! costs), `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`,
@@ -71,8 +79,24 @@
 //! whatever the window shows, written as a PDF with a picture of each page
 //! beside it, and one line about it (pages, rows, how many rows the PDF
 //! writer set at another width than the layout measured, the fonts).
+//!
+//! GPUI cannot be handed pointer events from outside, so what the pointer
+//! does to an image has steps of its own, which call what the editor's
+//! mouse listeners call: `press:picture:<n>` (the left button goes down on
+//! the n-th picture on screen, from 1: it is selected), `press:handle:<c>`
+//! (on a handle of the selected image: 0 to 3 for top left, top right,
+//! bottom left, bottom right), `drag:<dx>,<dy>` (the pointer moves by that
+//! much with the button held), `drag:block:<index>` (to the upper part of
+//! that block), `release`, `filedrag:block:<index>` and `filedrag:off`
+//! (files are dragged over the upper part of that block, and away),
+//! `drop:<index>:<path>` (a PNG, JPEG or GIF file is dropped there) and
+//! `insert:<path>` (what Insert > Image… does once a file is chosen).
+//! `zoom:<percent>` sets the zoom of the view, `image:<n>` puts the caret
+//! on the n-th image of the document (it is selected and brought into
+//! view).
 
 mod automation;
+mod pictures;
 mod textfile;
 
 use std::time::{Duration, Instant};
@@ -122,10 +146,10 @@ actions!(
 );
 
 /// A document that contains every block kind and every inline attribute.
-fn sample_document() -> Document {
+fn sample_document(pictures: &pictures::Pictures) -> Document {
     let plain = InlineAttrs::default;
     let style = |style: InlineStyle| InlineAttrs::default().with(style);
-    let blocks = vec![
+    let mut blocks = vec![
         Block::with_text(BlockKind::heading(1), "The Writer editor demo"),
         Block::new(BlockKind::Paragraph)
             .with_span("Inline attributes: ", plain())
@@ -220,9 +244,12 @@ fn sample_document() -> Document {
         .with_alignment(Alignment::Justify),
         Block::paragraph("A paragraph with a larger block text size.").with_text_size(Some(24.)),
         Block::paragraph("A soft line break follows\nand this is the second line of the block."),
+    ];
+    blocks.extend(pictures.blocks());
+    blocks.extend([
         Block::new(BlockKind::PageBreak),
         Block::paragraph("Text after the page break. Unicode: naïve café, 日本語, emoji 👩‍👩‍👧."),
-    ];
+    ]);
     // Comment anchors only exist together with their threads, so they are
     // added through the engine.
     let mut state = EditorState::new(Document::from_blocks(blocks));
@@ -464,7 +491,7 @@ fn one_block(kind: BlockKind, bytes: usize, blob: bool) -> Document {
 /// The document the demo opens: the sample, a text file
 /// (`THE_WRITER_DEMO_FILE`, see `textfile`), or a book of
 /// `THE_WRITER_DEMO_BLOCKS` blocks.
-fn initial_document() -> Document {
+fn initial_document(pictures: &pictures::Pictures) -> Document {
     let from_file = std::env::var("THE_WRITER_DEMO_FILE").ok().and_then(|path| {
         textfile::load(&path)
             .map_err(|err| eprintln!("[demo] reading {path}: {err}"))
@@ -489,9 +516,24 @@ fn initial_document() -> Document {
             } else if std::env::var_os("THE_WRITER_DEMO_SPELLING").is_some() {
                 spelling_document()
             } else {
-                sample_document()
+                sample_document(pictures)
             }
         }
+    };
+    // A picture after every so many blocks, in turns the landscape and the
+    // tall one.
+    let document = match number("THE_WRITER_DEMO_IMAGES").filter(|every| *every > 0) {
+        Some(every) => {
+            let mut blocks = Vec::with_capacity(document.block_count() * 2);
+            for (index, block) in document.blocks().iter().enumerate() {
+                blocks.push(block.clone());
+                if (index + 1) % every == 0 {
+                    blocks.push(pictures.for_book(index / every));
+                }
+            }
+            Document::from_blocks(blocks).with_settings(document.settings().clone())
+        }
+        None => document,
     };
     if std::env::var("THE_WRITER_DEMO_PAGE_VIEW").is_ok() {
         document.with_settings(DocumentSettings {
@@ -554,19 +596,44 @@ struct Demo {
     /// (prepaint, paint) of the editor's frames since the last print.
     frames: Vec<(Duration, Duration)>,
     frames_seen: u64,
+    /// The pictures of the document and who supplies them to the editor.
+    pictures: pictures::Pictures,
+    /// Where the scripted pointer is.
+    pointer: gpui::Point<gpui::Pixels>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// What a scripted run makes the pointer do (see the crate docs).
+#[derive(Clone, Debug)]
+pub enum PointerStep {
+    /// Not the pointer: the zoom of the view, in percent.
+    Zoom(u16),
+    /// Not the pointer: the caret goes onto the n-th image of the
+    /// document (from 1).
+    SelectImage(usize),
+    PressPicture(usize),
+    PressHandle(usize),
+    DragBy(f32, f32),
+    DragToBlock(usize),
+    Release,
+    FileDrag(Option<usize>),
+    Drop(usize, std::path::PathBuf),
+    Insert(std::path::PathBuf),
 }
 
 impl Demo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let opened = Instant::now();
+        let pictures = pictures::Pictures::paint();
         let editor = cx.new(|cx| {
-            Editor::new(
-                initial_document(),
+            let mut editor = Editor::new(
+                initial_document(&pictures),
                 EditorConfig::full().placeholder("Start writing"),
                 window,
                 cx,
-            )
+            );
+            editor.set_image_provider(Some(pictures.provider.clone()), cx);
+            editor
         });
         let composer = cx.new(|cx| {
             Editor::new(
@@ -632,6 +699,8 @@ impl Demo {
             settled_logged: false,
             frames: Vec::new(),
             frames_seen: 0,
+            pictures,
+            pointer: gpui::Point::default(),
             _subscriptions: subscriptions,
         };
         if let Some(words) = demo.spelling.clone() {
@@ -994,6 +1063,7 @@ impl Demo {
     fn print_to(&self, path: &std::path::Path, window: &Window, cx: &App) -> String {
         let started = Instant::now();
         let mut pass = self.editor.read(cx).print_pass(window, cx);
+        pass.set_images(self.pictures.bytes());
         let paper = pass.paper();
         let pages = pass.run_to_end();
         let laid_out = started.elapsed();
@@ -1057,9 +1127,27 @@ impl Demo {
             })
             .take(8)
             .collect();
+        // The images: how many, and the one the caret is on.
+        let images = editor.document().images().count();
+        let image = editor.selected_image().map(|(block, image)| {
+            format!(
+                " image=[block={block} width={}% natural={}x{}@{} {:?} bounds={:?}]",
+                image.width.percent(),
+                image.pixels.0,
+                image.pixels.1,
+                image.density,
+                editor.image_status(image.id),
+                editor.image_bounds(block).map(|bounds| (
+                    f32::from(bounds.left()).round(),
+                    f32::from(bounds.top()).round(),
+                    f32::from(bounds.size.width).round(),
+                    f32::from(bounds.size.height).round(),
+                )),
+            )
+        });
         format!(
             "selection {}:{}-{}:{} selected {:?} scroll {:.0} page_view {} tip {:?} todos [{}] \
-             viewport {:?} last_event {}",
+             viewport {:?} images={images}{} last_event {}",
             selection.anchor.block,
             selection.anchor.offset,
             selection.head.block,
@@ -1077,8 +1165,120 @@ impl Demo {
                     f32::from(viewport.bottom()),
                 )
             }),
+            image.unwrap_or_default(),
             self.last_event,
         )
+    }
+
+    /// What a scripted run makes the pointer do to the editor. Returns
+    /// what happened, as a few words.
+    pub fn pointer_step(
+        &mut self,
+        step: PointerStep,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> String {
+        // The upper part of a block: where a picture that is dragged, or a
+        // file, goes before it.
+        // (Only a block that is on screen: a pointer outside the viewport
+        // scrolls the view for as long as it stays there.)
+        let over_block = |editor: &Editor, index: usize, x: gpui::Pixels| {
+            let line = editor.position_bounds(Position::new(index, 0))?;
+            let viewport = editor.viewport_bounds()?;
+            let at = gpui::point(x.max(line.left() + px(40.)), line.top() + px(2.));
+            viewport.contains(&at).then_some(at)
+        };
+        let pointer = self.pointer;
+        let (at, said) = self.editor.update(cx, |editor, cx| match step {
+            PointerStep::Zoom(percent) => {
+                editor.set_zoom(writer_editor::Zoom::Percent(percent), cx);
+                (None, format!("zoom {percent} %"))
+            }
+            PointerStep::SelectImage(number) => {
+                let block = editor
+                    .document()
+                    .images()
+                    .nth(number.saturating_sub(1))
+                    .map(|(block, _)| block);
+                match block {
+                    Some(block) => {
+                        editor.edit(|state| state.set_caret(Position::new(block, 0)), cx);
+                        (None, format!("image {number} is block {block}"))
+                    }
+                    None => (None, format!("the document has no image {number}")),
+                }
+            }
+            PointerStep::PressPicture(number) => {
+                let picture = editor
+                    .document()
+                    .images()
+                    .filter_map(|(block, _)| editor.image_bounds(block))
+                    .filter(|bounds| {
+                        editor
+                            .viewport_bounds()
+                            .is_some_and(|viewport| viewport.intersects(bounds))
+                    })
+                    .nth(number.saturating_sub(1));
+                match picture {
+                    Some(bounds) => {
+                        let at = bounds.center();
+                        editor.pointer_press(at, 1, false, window, cx);
+                        (Some(at), format!("pressed picture {number}"))
+                    }
+                    None => (None, format!("no picture {number} on screen")),
+                }
+            }
+            PointerStep::PressHandle(corner) => match editor.image_handle_bounds() {
+                Some(handles) if corner < 4 => {
+                    let at = handles[corner].center();
+                    editor.pointer_press(at, 1, false, window, cx);
+                    (Some(at), format!("pressed handle {corner}"))
+                }
+                _ => (None, "no image is selected".to_string()),
+            },
+            PointerStep::DragBy(dx, dy) => {
+                let at = pointer + gpui::point(px(dx), px(dy));
+                editor.pointer_drag_to(at, cx);
+                (Some(at), format!("dragged by {dx}, {dy}"))
+            }
+            PointerStep::DragToBlock(index) => match over_block(editor, index, pointer.x) {
+                Some(at) => {
+                    editor.pointer_drag_to(at, cx);
+                    (Some(at), format!("dragged to block {index}"))
+                }
+                None => (None, format!("block {index} is not on screen")),
+            },
+            PointerStep::Release => {
+                editor.pointer_release(cx);
+                (None, "released".to_string())
+            }
+            PointerStep::FileDrag(None) => {
+                editor.pointer_drags_files(None, cx);
+                (None, "the files left".to_string())
+            }
+            PointerStep::FileDrag(Some(index)) => match over_block(editor, index, pointer.x) {
+                Some(at) => {
+                    editor.pointer_drags_files(Some(at), cx);
+                    (Some(at), format!("files over block {index}"))
+                }
+                None => (None, format!("block {index} is not on screen")),
+            },
+            PointerStep::Drop(index, path) => match over_block(editor, index, pointer.x) {
+                Some(at) => {
+                    editor.drop_files(&[path], at, window, cx);
+                    (Some(at), format!("dropped before block {index}"))
+                }
+                None => (None, format!("block {index} is not on screen")),
+            },
+            PointerStep::Insert(path) => {
+                editor.insert_image_files(vec![path], window, cx);
+                (None, "inserted".to_string())
+            }
+        });
+        if let Some(at) = at {
+            self.pointer = at;
+        }
+        said
     }
 
     /// The window point in the middle of the row at a position (`where`).

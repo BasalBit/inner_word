@@ -48,7 +48,8 @@
 //! | Mark misspelled words (a spell checker) | [`Editor::set_spelling_marks`] per block and block revision with a [`SpellingMarksOutcome`], [`Editor::spelling_checked`], [`Editor::first_unchecked_spelling_block`], [`Editor::spelling_marks`], [`Editor::spelling_mark_at`], [`Editor::next_spelling_mark`], [`Editor::previous_spelling_mark`], [`Editor::spelling_mark_count`], [`Editor::invalidate_spelling_marks`], [`Editor::clear_spelling_marks`], [`Editor::set_spelling_marks_visible`], [`ContextMenuRequest::spelling_mark`] |
 //! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`], [`EditorEvent::StatsChanged`], [`EditorEvent::LayoutSettled`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
-//! | Print | [`Editor::print_pass`]: a [`PrintPass`] that lays the document out as page view does and hands out its pages as data ([`writer_print::Page`]) in slices ([`PrintPass::advance`], [`PrintPass::progress`], [`PrintPass::paper`]) |
+//! | Print | [`Editor::print_pass`]: a [`PrintPass`] that lays the document out as page view does and hands out its pages as data ([`writer_print::Page`]) in slices ([`PrintPass::advance`], [`PrintPass::progress`], [`PrintPass::paper`]); the bytes of its pictures come from [`PrintPass::set_images`] ([`PrintPass::images`] says which) |
+//! | Images | an [`ImageProvider`] per editor ([`Editor::set_image_provider`], [`Editor::images_changed`]); [`Editor::selected_image`], [`Editor::image_bounds`], [`Editor::image_handle_bounds`], [`Editor::image_status`] with an [`ImageStatus`]; the ways in: [`actions::InsertImage`], [`Editor::insert_image_files`], [`Editor::drop_files`], `Paste`, and [`Editor::can_paste`]; the size: [`actions::ImageWidth25`] and its siblings, [`actions::ImageOriginalSize`], and "larger" / "smaller" on a selected image; everything else through [`Editor::edit`] (`state.set_image_description(..)`); [`FakeImages`] for tests |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
 //! | A view of rich text in a panel (an answer of the assistant) | [`CompactOptions::formatted`] with [`EditorConfig::read_only`]: sized like a small input, set with the typography of its document, headings at [`FORMATTED_HEADING_SCALE`] |
@@ -105,6 +106,41 @@
 //! the pages stay page view's by construction. Making a PDF of the pages
 //! and handing it to the system is `writer-print`'s and the app's.
 //!
+//! ## Images
+//!
+//! An image is a block of its own, a void block like a divider
+//! (`writer_core::BlockKind::Image`): no text, one caret position. **It is
+//! selected when the caret is on its block** ([`Editor::selected_image`]):
+//! the arrows stop on it once, a click on the picture puts the caret
+//! there, and it then shows an outline and four corner handles instead of
+//! a caret. Everything that means "the caret" ([`Editor::caret_bounds`],
+//! popups, the context menu from the keyboard) is the picture's box then.
+//! `Backspace` and `Delete` remove it, typing and `Newline` start a
+//! paragraph under it and `InsertSoftBreak` one above it (writer-core's
+//! rules for a void block), `MoveBlockUp` / `MoveBlockDown` move it, the
+//! alignment commands place it on its line, and "larger" / "smaller" step
+//! its width.
+//!
+//! Its width is a share of the text column and its height follows from
+//! the pixel size the block carries, so the layout never waits for bytes:
+//! the box is right from the first frame, in both views, and no picture is
+//! taller than a page's text area (in flow view: than the same proportion
+//! of the column). The bytes come from an [`ImageProvider`] the owner of
+//! the library sets ([`Editor::set_image_provider`]): the editor asks it
+//! for what is on screen, decodes in the background at the size it draws,
+//! and shows a placeholder of the same size meanwhile (and for an image
+//! the provider does not have, or whose bytes do not decode:
+//! [`Editor::image_status`]). The same provider stores what is pasted,
+//! dropped or chosen and asks for files. Without one, every image is a
+//! placeholder and nothing can be inserted.
+//!
+//! With the pointer: a drag of a corner handle resizes the selected image
+//! (the text under it moves while the button is held; the document
+//! changes once, on the release), a drag of the picture moves its block to
+//! the boundary a line shows, files dragged in from Finder land where
+//! their line shows, and `escape` cancels a resize or a move. The module
+//! `images` says where each part lives.
+//!
 //! ## Zoom
 //!
 //! Each view has a zoom ([`Zoom`]: a percentage, or one that follows the
@@ -150,11 +186,12 @@
 //! | `paint` | one visual row in a view: where its backgrounds, underlines and strikethroughs are (for the screen and for paper), and painting it |
 //! | `decorations` | what a block kind shows besides its text (markers, quote bar, code panel, rules) as neutral shapes for a sink: the frame's, or the print pass's |
 //! | `print` | the print pass: the document laid out as page view lays it out, as pages of data for a PDF writer |
+//! | `images` | images: the seam to whoever keeps their bytes ([`ImageProvider`], [`FakeImages`]), `images::cache` (decoded pictures by image and size, within a budget), `images::insert` (chosen files, paste, copy, cut, drop) |
 //! | `input` | platform input handler (typing, IME) |
 //! | `actions`, `handlers` | actions and key bindings; what each action does |
 //! | `commands` | command descriptors for the palette |
 //! | `movement` | the visual-row oracle |
-//! | `mouse` | click, drag, checkboxes, links, the context menu request, wheel, scroll bar drag |
+//! | `mouse` | click, drag, checkboxes, links, resizing and moving an image, the context menu request, wheel, scroll bar drag |
 //! | `link_tip` | the tooltip of a link under the pointer |
 //! | `scroll` | scroll position, requests, autoscroll, the overlay scroll bar |
 //! | `geometry` | positions to window rectangles and back |
@@ -183,7 +220,8 @@
 //! Everything in the text can be done with the pointer alone: click,
 //! shift-click, drag (which scrolls at the edges), double and triple
 //! click, the to-do checkboxes, `cmd`-click on a link (resting on a link
-//! shows its address and says so), the wheel and the scroll bar. A
+//! shows its address and says so), selecting, resizing and moving an
+//! image, dropping picture files, the wheel and the scroll bar. A
 //! right-click or `ctrl`-click, and `ctrl-enter` from the keyboard, ask
 //! for the context menu: the editor adjusts the selection as a macOS text
 //! view does and emits [`EditorEvent::ContextMenuRequested`] with a

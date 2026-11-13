@@ -987,8 +987,18 @@ impl DocumentLayout {
             let Some(index) = self.slots.iter().position(|slot| slot.id == id) else {
                 continue;
             };
-            // An image's measure needs no shaping: it is known at once.
-            self.measure_only(index, document);
+            if document.block(index).is_some_and(|block| block.id() == id) {
+                // An image's measure needs no shaping: it is known at
+                // once.
+                self.measure_only(index, document);
+            } else if std::mem::take(&mut self.slots[index].measured) {
+                // The slots are behind the document (they are brought in
+                // line before the next question is answered): the block
+                // is measured again then.
+                self.unmeasured += 1;
+                self.placed = self.placed.min(index.saturating_sub(KEEP_LOOKAHEAD));
+                self.refine_cursor = self.refine_cursor.min(index);
+            }
         }
     }
 

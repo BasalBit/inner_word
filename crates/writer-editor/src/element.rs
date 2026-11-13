@@ -859,7 +859,9 @@ impl Editor {
                         {
                             painted.outline = Some(color);
                         }
-                        if live && !self.config.read_only && !compact {
+                        // (Not while it is dragged elsewhere: there is
+                        // nothing to take hold of then.)
+                        if live && !self.config.read_only && !compact && moving.is_none() {
                             let handles = handles_of(bounds);
                             for (corner, handle) in handles.iter().enumerate() {
                                 plan.front.push(

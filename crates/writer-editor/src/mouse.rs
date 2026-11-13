@@ -663,6 +663,67 @@ impl Editor {
     }
 }
 
+// --- The pointer without a pointer ------------------------------------------------
+
+impl Editor {
+    /// A press of the left button at a window point, as the element's
+    /// mouse listener hands it on. For scripted visual QA (the demo
+    /// example, a scripted run of the app): GPUI cannot be handed pointer
+    /// events from outside, so a run that wants to look at what the
+    /// pointer does (an image being resized or moved) calls what the
+    /// pointer calls. Not a seam for consumers.
+    #[doc(hidden)]
+    pub fn pointer_press(
+        &mut self,
+        at: Point<Pixels>,
+        clicks: usize,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let event = MouseDownEvent {
+            button: gpui::MouseButton::Left,
+            position: at,
+            modifiers: gpui::Modifiers {
+                shift,
+                ..gpui::Modifiers::default()
+            },
+            click_count: clicks.max(1),
+            first_mouse: false,
+        };
+        self.mouse_down(&event, window, cx);
+    }
+
+    /// The pointer moved to a window point with the left button held
+    /// (see [`Editor::pointer_press`]).
+    #[doc(hidden)]
+    pub fn pointer_drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let event = MouseMoveEvent {
+            position: at,
+            pressed_button: Some(gpui::MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        };
+        self.mouse_dragged(&event, cx);
+    }
+
+    /// The left button was let go (see [`Editor::pointer_press`]).
+    #[doc(hidden)]
+    pub fn pointer_release(&mut self, cx: &mut Context<Self>) {
+        self.mouse_up(cx);
+    }
+
+    /// Files are dragged over the window at a window point, or (`None`)
+    /// left it again (see [`Editor::pointer_press`]). What is dropped is
+    /// [`Editor::drop_files`].
+    #[doc(hidden)]
+    pub fn pointer_drags_files(&mut self, at: Option<Point<Pixels>>, cx: &mut Context<Self>) {
+        match at {
+            Some(at) => self.file_drag_moved(at, cx),
+            None => self.set_file_drop(None, cx),
+        }
+    }
+}
+
 // --- Images: resize and move ---------------------------------------------------
 
 impl Editor {

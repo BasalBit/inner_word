@@ -3,7 +3,11 @@
 //! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `typeslow:<text>`,
 //! `bench:<count> <keystrokes>`, `theme:<light|dark|system>`,
 //! `screenshot:<path>`, `print:<path>` (the document as a PDF, as the
-//! print pass lays it out), `log:<text>`, `quit`, and for runs that post real
+//! print pass lays it out), `log:<text>`, `quit`, the pointer on an image
+//! (`press:picture:<n>`, `press:handle:<corner>`, `drag:<dx>,<dy>`,
+//! `drag:block:<index>`, `release`, `filedrag:block:<index>`,
+//! `filedrag:off`, `drop:<index>:<path>`, `insert:<path>`; see the demo's
+//! own docs), and for runs that post real
 //! mouse events to the process: `frame` (draw one; a background window
 //! draws none by itself), `state` (selection, selected text, scroll,
 //! link tooltip, to-dos, last event) and `where:<block>:<offset>` (the
@@ -40,6 +44,7 @@ enum Step {
     Frame,
     State,
     Where(usize, usize),
+    Pointer(crate::PointerStep),
     Quit,
 }
 
@@ -87,6 +92,39 @@ fn parse(source: &str) -> Result<Vec<Step>> {
                     .ok_or_else(|| anyhow!("where needs <block>:<offset>"))?;
                 Step::Where(block.trim().parse()?, offset.trim().parse()?)
             }
+            "press" => Step::Pointer(match arg.trim().split_once(':') {
+                Some(("picture", number)) => {
+                    crate::PointerStep::PressPicture(number.trim().parse()?)
+                }
+                Some(("handle", corner)) => crate::PointerStep::PressHandle(corner.trim().parse()?),
+                _ => bail!("press needs picture:<n> or handle:<corner>"),
+            }),
+            "drag" => Step::Pointer(match arg.trim().split_once(':') {
+                Some(("block", index)) => crate::PointerStep::DragToBlock(index.trim().parse()?),
+                _ => {
+                    let (dx, dy) = arg
+                        .split_once(',')
+                        .ok_or_else(|| anyhow!("drag needs <dx>,<dy> or block:<index>"))?;
+                    crate::PointerStep::DragBy(dx.trim().parse()?, dy.trim().parse()?)
+                }
+            }),
+            "release" => Step::Pointer(crate::PointerStep::Release),
+            "zoom" => Step::Pointer(crate::PointerStep::Zoom(arg.trim().parse()?)),
+            "image" => Step::Pointer(crate::PointerStep::SelectImage(arg.trim().parse()?)),
+            "filedrag" => Step::Pointer(match arg.trim().split_once(':') {
+                Some(("block", index)) => crate::PointerStep::FileDrag(Some(index.trim().parse()?)),
+                _ => crate::PointerStep::FileDrag(None),
+            }),
+            "drop" => {
+                let (index, path) = arg
+                    .split_once(':')
+                    .ok_or_else(|| anyhow!("drop needs <index>:<path>"))?;
+                Step::Pointer(crate::PointerStep::Drop(
+                    index.trim().parse()?,
+                    PathBuf::from(path.trim()),
+                ))
+            }
+            "insert" => Step::Pointer(crate::PointerStep::Insert(PathBuf::from(arg.trim()))),
             "quit" => Step::Quit,
             other => bail!("unknown step {other:?}"),
         });
@@ -282,6 +320,17 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                             }
                             None => eprintln!("[automation] where {block}:{offset} unknown"),
                         }
+                    }
+                    Step::Pointer(step) => {
+                        let said = window.update(cx, |root, window, cx| {
+                            root.downcast::<crate::Demo>()
+                                .map(|demo| {
+                                    demo.update(cx, |demo, cx| demo.pointer_step(step, window, cx))
+                                })
+                                .unwrap_or_default()
+                        })?;
+                        draw_frame(window, view, cx);
+                        eprintln!("[automation] pointer: {said}");
                     }
                     Step::Quit => return Ok(true),
                 }

@@ -40,6 +40,12 @@ writer-print = { path = "crates/writer-print" }
 # Image files: bytes as they come to bytes as the library stores them (no GPUI;
 # the app and the command layer for agents make the same thing of the same file).
 writer-image = { path = "crates/writer-image" }
+# Pages: an HTML page (with its CSS, scripts, fonts, pictures, sounds) made into the
+# files the library keeps, every piece from the web fetched once (no GPUI, no WebKit).
+writer-page = { path = "crates/writer-page" }
+# Pages in WebKit: the view in the window, the offline check of a page, a page printed
+# to a PDF (no GPUI; Objective-C through `objc`).
+writer-web = { path = "crates/writer-web" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

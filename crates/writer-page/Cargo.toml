@@ -1,0 +1,31 @@
+[package]
+name = "writer-page"
+description = "Pages for The Writer: an HTML file or folder made into the files the library keeps, every piece it names on the web fetched once, the check of whole or nothing as data, the manifest of a page."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No GPUI and no WebKit: a pure crate (`CARGO_TARGET_DIR=target-pure`), used by the
+# command layer for agents and by the app. It depends on nothing of ours.
+[lib]
+# Every test is in tests/main.rs (one test binary); the library has no unit tests and
+# no examples in its docs.
+test = false
+doctest = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# A blob is named by the first 16 bytes of its SHA-256 (the rule of writer_store's ids);
+# the fingerprint of an input is a SHA-256 too.
+sha2 = "0.10"
+# The query of an address in the name of its stored copy (the scheme of archive.py).
+sha1_smol = "1.0"
+# The bytes of a prepared page as they travel in JSON.
+base64 = "0.22"
+# Addresses: parsing, joining a reference to its base, the normal form of a source.
+url = "2.5"
+percent-encoding = "2.3"
+
+[dev-dependencies]
+tempfile.workspace = true

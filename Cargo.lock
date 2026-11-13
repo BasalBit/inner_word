@@ -7094,6 +7094,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-page"
+version = "0.7.0"
+dependencies = [
+ "base64",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "writer-print"
 version = "0.7.0"
 dependencies = [
@@ -7158,6 +7172,16 @@ dependencies = [
  "writer-editor",
  "writer-ui",
  "writer-vim",
+]
+
+[[package]]
+name = "writer-web"
+version = "0.7.0"
+dependencies = [
+ "block",
+ "dispatch",
+ "objc",
+ "serde_json",
 ]
 
 [[package]]

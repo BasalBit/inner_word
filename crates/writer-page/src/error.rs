@@ -127,7 +127,13 @@ fn io_words(error: &io::Error) -> String {
     }
 }
 
+/// The text with its first letter upper case, unless it begins with an address or a
+/// file name ("https://…", "index.html names …"), which are written as they are.
 pub(crate) fn capitalized(text: &str) -> String {
+    let first_word = text.split(' ').next().unwrap_or("");
+    if first_word.contains([':', '/', '.']) {
+        return text.to_string();
+    }
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

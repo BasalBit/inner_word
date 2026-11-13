@@ -277,8 +277,8 @@ impl Fetcher for CurlFetcher {
                             // A redirect led there: the address the page names is said,
                             // and where it was sent.
                             error.reason = format!("it is sent on to {}, which {}", error.url, error.reason);
-                            error.url = url.to_string();
                         }
+                        error.url = url.to_string();
                         return Err(error);
                     }
                 };

@@ -200,35 +200,24 @@ pub fn read_check_dir(dir: &Path) -> io::Result<(CheckRequest, BTreeMap<String, 
 
 /// The fake check (tests, and THE_WRITER_PAGE_CHECK=fake in a debug build only): the
 /// entry's text with its tags and the contents of script, style, template and noscript
-/// taken out, its <title>, nothing blocked. Never a fallback for a run without WebKit.
+/// taken out, its <title>, nothing blocked; every other HTML file of the page read the
+/// same way, as the real check loads them. Never a fallback for a run without WebKit.
 pub fn static_check(bundle: &Bundle) -> CheckReport {
-    let Some(entry) = bundle.served_file(&bundle.entry) else {
-        return CheckReport {
-            engine: STATIC_ENGINE.to_string(),
-            elapsed_ms: 0,
-            loads: vec![LoadReport {
-                path: bundle.entry.clone(),
-                navigation_error: Some("the entry is not among the files".to_string()),
+    let mut loads = Vec::new();
+    for path in bundle.html_paths() {
+        match bundle.served_file(&path) {
+            Some(file) => {
+                let (title, first_heading, text) = static_text(&file.bytes);
+                loads.push(LoadReport { path, title, first_heading, text, finished: true, requests: 1, ..LoadReport::default() });
+            }
+            None => loads.push(LoadReport {
+                path,
+                navigation_error: Some("it is not among the files of the page".to_string()),
                 ..LoadReport::default()
-            }],
-            failure: None,
-        };
-    };
-    let (title, first_heading, text) = static_text(&entry.bytes);
-    CheckReport {
-        engine: STATIC_ENGINE.to_string(),
-        elapsed_ms: 0,
-        loads: vec![LoadReport {
-            path: bundle.entry.clone(),
-            title,
-            first_heading,
-            text,
-            finished: true,
-            requests: 1,
-            ..LoadReport::default()
-        }],
-        failure: None,
+            }),
+        }
     }
+    CheckReport { engine: STATIC_ENGINE.to_string(), elapsed_ms: 0, loads, failure: None }
 }
 
 /// The `<title>` of an HTML file, trimmed, at most MAX_TITLE_CHARS.
@@ -305,7 +294,7 @@ fn static_text(bytes: &[u8]) -> (String, String, String) {
 }
 
 fn collapse(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) fn clip_title(text: &str) -> String {

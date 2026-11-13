@@ -276,7 +276,7 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
 
     let mut warnings = input.warnings.clone();
     warnings.extend(not_kept(&locals, &pieces));
-    if locals.iter().any(|l| l.scan.is_some() && (find(&l.bytes, b"window.claude").is_some() || find(&l.bytes, b"claude.use(").is_some())) {
+    if locals.iter().any(|l| l.scan.is_some() && uses_claude(&l.bytes)) {
         warnings.push(
             "it uses claude.ai's storage (window.claude): what it saved there is not in this copy".to_string(),
         );
@@ -567,6 +567,20 @@ fn rewrite(
     }
     out.extend_from_slice(&bytes[at..]);
     Some(out)
+}
+
+/// Whether a file uses claude.ai's storage or tools (`window.claude`, `claude.use(`). The
+/// hook claude.ai calls when a page is republished (`window.claude.hot`, as in `const hot
+/// = window.claude && window.claude.hot`) keeps nothing, and is not counted.
+fn uses_claude(bytes: &[u8]) -> bool {
+    if find(bytes, b"claude").is_none() {
+        return false;
+    }
+    let mut text = String::from_utf8_lossy(bytes).into_owned();
+    for hook in ["window.claude && window.claude.hot", "window.claude?.hot", "window.claude.hot"] {
+        text = text.replace(hook, "");
+    }
+    text.contains("window.claude") || text.contains("claude.use(")
 }
 
 /// The most addresses not kept that are named one by one.

@@ -282,5 +282,7 @@ pub(crate) fn plan_block(
             });
         }
         BlockKind::Paragraph | BlockKind::Heading { .. } => {}
+        // An image has no decoration: the picture itself is painted elsewhere.
+        BlockKind::Image(_) => {}
     }
 }

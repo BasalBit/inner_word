@@ -7,12 +7,20 @@
 //! A [`Document`] is an ordered, never-empty list of [`Block`]s plus
 //! [`CommentThread`]s and [`DocumentSettings`]. A block has a stable
 //! [`BlockId`], a [`BlockKind`] (paragraph, heading 1–6, bullet / numbered /
-//! to-do item, quote, code block, divider, page break), an [`Alignment`], an
-//! indent level `0..=8`, an optional text size override, and text with
-//! run-length encoded [`InlineAttrs`] ([`Run`]s). A `\n` inside block text
-//! is a soft line break; a code block is one block with multi-line text.
-//! Dividers and page breaks are *void* blocks: they have no text and a
-//! single caret position, offset 0.
+//! to-do item, quote, code block, divider, page break, image), an
+//! [`Alignment`], an indent level `0..=8`, an optional text size override,
+//! and text with run-length encoded [`InlineAttrs`] ([`Run`]s). A `\n`
+//! inside block text is a soft line break; a code block is one block with
+//! multi-line text. Dividers, page breaks and images are *void* blocks:
+//! they have no text and a single caret position, offset 0.
+//!
+//! An image is a block on a line of its own ([`BlockKind::Image`], an
+//! [`Image`]): the name of its stored bytes ([`ImageId`], made from the
+//! bytes by whoever stores them; this crate never sees them), their pixel
+//! size and density, how wide it is drawn as a share of the text column
+//! ([`ImageWidth`]) and a description. Its place on the line is the
+//! block's alignment (left, centre or right); it has no indent and no
+//! text size. [`Document::images`] lists them.
 //!
 //! Positions are `(block index, byte offset)` ([`Position`]). Offsets are
 //! UTF-8 byte offsets on char boundaries; caret positions are also on
@@ -48,9 +56,9 @@
 //! - Positions are block indices plus byte offsets; re-read
 //!   [`EditorState::selection`] after every command instead of keeping old
 //!   positions. [`BlockId`]s are the stable handle.
-//! - A void block (divider, page break) has one position, offset 0. A range
-//!   with a void block at either end includes that block: deleting or
-//!   copying it takes the divider along, and block commands touch it.
+//! - A void block (divider, page break, image) has one position, offset 0.
+//!   A range with a void block at either end includes that block: deleting
+//!   or copying it takes the divider along, and block commands touch it.
 //! - A range that ends at offset 0 of a later text block does not include
 //!   that block: block commands do not touch it
 //!   ([`EditorState::touched_blocks`]), and when the range also starts at
@@ -182,8 +190,8 @@ pub mod text;
 
 pub use attrs::{CommentId, Highlight, InlineAttrs, InlineStyle, Rgb};
 pub use block::{
-    Alignment, Block, BlockId, BlockKind, MAX_INDENT, MAX_TEXT_SIZE, MIN_TEXT_SIZE,
-    TEXT_SIZE_SCALE, sanitize_text_size,
+    Alignment, Block, BlockId, BlockKind, Image, ImageId, ImageWidth, MAX_INDENT, MAX_TEXT_SIZE,
+    MIN_TEXT_SIZE, TEXT_SIZE_SCALE, sanitize_text_size,
 };
 pub use comments::{CommentThread, Reply, ReplyId, Timestamp};
 pub use document::{Document, TITLE_MAX_CHARS, TITLE_SENTENCE_CHARS, TITLE_TEXT_CHARS};

@@ -439,6 +439,8 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
                 }
                 MarkdownPageBreak::Omit => continue,
             },
+            // The generators of these tests make no image.
+            BlockKind::Image(_) => continue,
         };
         let text = match block.kind() {
             BlockKind::CodeBlock { .. } => {

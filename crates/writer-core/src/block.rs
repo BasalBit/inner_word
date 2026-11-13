@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use crate::attrs::{CommentId, InlineAttrs};
 use crate::runs::{self, Run};
+use crate::settings::PageSetup;
 use crate::text::{self, CharFix};
 
 /// Stable identifier of a block, unique within its document.
@@ -28,6 +29,300 @@ impl fmt::Display for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "b{}", self.0)
     }
+}
+
+/// Stored image bytes, named by their content: the first 16 bytes of the
+/// SHA-256 of the stored bytes. Written as 32 lowercase hex digits (in the
+/// serialised document, in Markdown, in the library).
+///
+/// This crate never sees the bytes: it has no IO. Whoever stores them makes
+/// the id, and the same bytes always have the same id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ImageId([u8; 16]);
+
+impl ImageId {
+    /// The id with these 16 bytes.
+    pub fn from_bytes(id: [u8; 16]) -> ImageId {
+        ImageId(id)
+    }
+
+    /// Reads an id as [`Display`](fmt::Display) writes it: exactly 32 hex
+    /// digits, in either case, and nothing else (no spaces, no prefix).
+    pub fn parse(text: &str) -> Option<ImageId> {
+        let digits = text.as_bytes();
+        if digits.len() != 32 {
+            return None;
+        }
+        let value = |digit: u8| -> Option<u8> {
+            match digit {
+                b'0'..=b'9' => Some(digit - b'0'),
+                b'a'..=b'f' => Some(digit - b'a' + 10),
+                b'A'..=b'F' => Some(digit - b'A' + 10),
+                _ => None,
+            }
+        };
+        let mut id = [0u8; 16];
+        for (byte, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
+            *byte = value(pair[0])? << 4 | value(pair[1])?;
+        }
+        Some(ImageId(id))
+    }
+
+    /// The 16 bytes.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// 32 lowercase hex digits.
+impl fmt::Display for ImageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// How wide an image is drawn: a share of the text column, in thousandths
+/// (`500` is half the column). Always within [`ImageWidth::MIN`] and
+/// [`ImageWidth::FULL`].
+///
+/// A share and not a length, because the column is not the same everywhere
+/// (the two views, another paper, an export): half the column is half the
+/// column in all of them. An integer, because [`BlockKind`] is hashed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ImageWidth(u16);
+
+impl ImageWidth {
+    /// The narrowest an image is drawn: a twentieth of the column.
+    pub const MIN: ImageWidth = ImageWidth(50);
+    /// The whole column.
+    pub const FULL: ImageWidth = ImageWidth(1000);
+    /// What "larger" and "smaller" step through, in thousandths.
+    pub const STEPS: [u16; 13] = [
+        100, 150, 200, 250, 333, 400, 500, 600, 667, 750, 800, 900, 1000,
+    ];
+
+    /// A width of so many thousandths of the column, clamped to
+    /// [`MIN`](ImageWidth::MIN)..=[`FULL`](ImageWidth::FULL).
+    pub fn new(thousandths: u16) -> ImageWidth {
+        ImageWidth(thousandths.clamp(ImageWidth::MIN.0, ImageWidth::FULL.0))
+    }
+
+    /// A width from a share of the column (`0.5` is half of it), rounded to
+    /// a thousandth and clamped. Something that is no number is the whole
+    /// column.
+    pub fn from_fraction(fraction: f32) -> ImageWidth {
+        if fraction.is_nan() {
+            return ImageWidth::FULL;
+        }
+        // The cast saturates, so any share beyond the ends is clamped.
+        ImageWidth::new((f64::from(fraction) * 1000.0).round() as u16)
+    }
+
+    /// A width from a percentage of the column, clamped.
+    pub fn from_percent(percent: u16) -> ImageWidth {
+        ImageWidth::new(percent.saturating_mul(10))
+    }
+
+    /// The width in thousandths of the column, `50..=1000`.
+    pub fn thousandths(self) -> u16 {
+        self.0
+    }
+
+    /// The width as a share of the column, `0.05..=1.0`.
+    pub fn fraction(self) -> f32 {
+        f32::from(self.0) / 1000.0
+    }
+
+    /// The width as a percentage of the column, rounded: what is shown as
+    /// "62 %".
+    pub fn percent(self) -> u16 {
+        (self.0 + 5) / 10
+    }
+
+    /// The share at which something `natural` points wide is drawn at its
+    /// own size in a column of `column` points; [`FULL`](ImageWidth::FULL)
+    /// when it is wider than the column (or the column has no width).
+    pub fn natural(natural: f32, column: f32) -> ImageWidth {
+        if !column.is_finite() || column <= 0.0 {
+            return ImageWidth::FULL;
+        }
+        ImageWidth::from_fraction(natural / column)
+    }
+
+    /// The next of [`STEPS`](ImageWidth::STEPS) above (`steps > 0`) or below
+    /// (`steps < 0`) this width, as many times as `steps` says. It stays at
+    /// the ends: nothing is above the last step, and nothing below the
+    /// first (a width that is narrower than the first step already stays
+    /// what it is). From a width between two steps the first step lands on
+    /// the neighbour.
+    pub fn stepped(self, steps: i32) -> ImageWidth {
+        let mut width = self.0;
+        for _ in 0..steps.unsigned_abs() {
+            let next = if steps > 0 {
+                ImageWidth::STEPS.iter().copied().find(|&s| s > width)
+            } else {
+                ImageWidth::STEPS.iter().copied().rev().find(|&s| s < width)
+            };
+            match next {
+                Some(next) => width = next,
+                None => break,
+            }
+        }
+        ImageWidth::new(width)
+    }
+}
+
+/// An image in a document: which stored bytes, what is known about them
+/// without reading them, and how they are shown.
+///
+/// The bytes are not here. They are kept by whoever keeps the document
+/// (the library), under [`Image::id`]; the pixel size and the density are
+/// copied into the document so that layout, page breaks and exports never
+/// have to ask for the bytes to know how large the picture is. The id is
+/// made from the bytes, so what is copied here cannot go stale.
+///
+/// An image is the [`BlockKind::Image`] of a block on a line of its own;
+/// the block's [`Alignment`] says where on the line it stands.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Image {
+    /// The stored bytes.
+    pub id: ImageId,
+    /// Pixel size of the stored bytes, upright, `(width, height)`. Never
+    /// zero. Layout takes the aspect ratio from here and never asks the
+    /// library.
+    pub pixels: (u32, u32),
+    /// Pixels per inch the file declares (72 when it says nothing; 144 for
+    /// a Retina screenshot). Within
+    /// [`MIN_DENSITY`](Image::MIN_DENSITY)..=[`MAX_DENSITY`](Image::MAX_DENSITY).
+    pub density: u16,
+    /// How wide the image is drawn.
+    pub width: ImageWidth,
+    /// What the image shows, for exports, agents and whoever cannot see it.
+    /// One line, no control characters, at most
+    /// [`MAX_DESCRIPTION_CHARS`](Image::MAX_DESCRIPTION_CHARS) characters,
+    /// trimmed; may be empty.
+    pub description: String,
+}
+
+impl Image {
+    /// The density of a file that declares none, in pixels per inch.
+    pub const DEFAULT_DENSITY: u16 = 72;
+    /// The lowest density an image keeps, in pixels per inch.
+    pub const MIN_DENSITY: u16 = 36;
+    /// The highest density an image keeps, in pixels per inch.
+    pub const MAX_DENSITY: u16 = 1200;
+    /// The longest description, in characters.
+    pub const MAX_DESCRIPTION_CHARS: usize = 1000;
+
+    /// An image as wide as the column and without a description. A pixel
+    /// size of zero becomes one, the density is clamped.
+    pub fn new(id: ImageId, pixels: (u32, u32), density: u16) -> Image {
+        Image {
+            id,
+            pixels,
+            density,
+            width: ImageWidth::FULL,
+            description: String::new(),
+        }
+        .sanitized()
+    }
+
+    /// The size of the image at its own density, in points
+    /// (`pixels * 72 / density`): 1600 × 1067 pixels at 144 to the inch
+    /// are 800 × 533.5 points.
+    pub fn natural_points(&self) -> (f32, f32) {
+        let density = self.density.clamp(Image::MIN_DENSITY, Image::MAX_DENSITY);
+        let points = |pixels: u32| (f64::from(pixels.max(1)) * 72.0 / f64::from(density)) as f32;
+        (points(self.pixels.0), points(self.pixels.1))
+    }
+
+    /// Height over width.
+    pub fn aspect(&self) -> f32 {
+        (f64::from(self.pixels.1.max(1)) / f64::from(self.pixels.0.max(1))) as f32
+    }
+
+    /// The widest this image is drawn on `page`: the whole column, or less
+    /// where it would then be taller than the page's text area (an image
+    /// is never cut in two by a page break, so it has to fit on one page).
+    ///
+    /// With `(w, h)` the text area of the page
+    /// ([`PageSetup::content_size`]) the width is
+    /// `floor(1000 * min(1, floor(h) / (aspect * w)))` thousandths, and at
+    /// least [`ImageWidth::MIN`]. Both roundings go down, so the image is
+    /// a little lower than the text area and never a little higher.
+    pub fn max_width(&self, page: &PageSetup) -> ImageWidth {
+        let (w, h) = page.content_size();
+        let height_at_full = f64::from(self.aspect()) * f64::from(w);
+        if height_at_full.is_nan() || height_at_full <= 0.0 {
+            return ImageWidth::FULL;
+        }
+        let share = (f64::from(h.floor()) / height_at_full).min(1.0);
+        ImageWidth::new((1000.0 * share).floor() as u16)
+    }
+
+    /// "Original size": the share of the column at which the image has its
+    /// own size on `page` ([`ImageWidth::natural`] of its natural width in
+    /// the page's text area), and not more than
+    /// [`max_width`](Image::max_width). The one definition for the app, the
+    /// importer and agents.
+    pub fn original_width(&self, page: &PageSetup) -> ImageWidth {
+        let (w, _) = page.content_size();
+        ImageWidth::natural(self.natural_points().0, w).min(self.max_width(page))
+    }
+
+    /// Repairs out-of-range data: a pixel size of zero, the density, the
+    /// width, the description.
+    pub(crate) fn sanitized(mut self) -> Image {
+        self.pixels = (self.pixels.0.max(1), self.pixels.1.max(1));
+        self.density = self.density.clamp(Image::MIN_DENSITY, Image::MAX_DENSITY);
+        self.width = ImageWidth::new(self.width.0);
+        if !is_clean_description(&self.description) {
+            self.description = clean_description(&self.description);
+        }
+        self
+    }
+}
+
+/// A description as an image keeps it: one line (every control character,
+/// line and paragraph separators among them, becomes a space, several in a
+/// row one space), trimmed, and cut to
+/// [`Image::MAX_DESCRIPTION_CHARS`] characters.
+fn clean_description(text: &str) -> String {
+    let mut line = String::with_capacity(text.len());
+    let mut after_control = false;
+    for c in text.chars() {
+        if breaks_a_description(c) {
+            if !after_control {
+                line.push(' ');
+            }
+            after_control = true;
+        } else {
+            line.push(c);
+            after_control = false;
+        }
+    }
+    let line = line.trim();
+    let cut = match line.char_indices().nth(Image::MAX_DESCRIPTION_CHARS) {
+        Some((end, _)) => &line[..end],
+        None => line,
+    };
+    cut.trim_end().to_string()
+}
+
+/// Whether [`clean_description`] would leave `text` as it is.
+fn is_clean_description(text: &str) -> bool {
+    text.trim() == text
+        && !text.chars().any(breaks_a_description)
+        && text.chars().count() <= Image::MAX_DESCRIPTION_CHARS
+}
+
+/// The characters a description cannot hold: the control characters and
+/// the two separators that end a line.
+fn breaks_a_description(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 /// The kind of a block.
@@ -62,6 +357,10 @@ pub enum BlockKind {
     Divider,
     /// A page break. A void block: its text is always empty.
     PageBreak,
+    /// An image on a line of its own. A void block: its text is always
+    /// empty, and so are its indent and its text size; its alignment is
+    /// left, centre or right.
+    Image(Image),
 }
 
 impl BlockKind {
@@ -82,9 +381,25 @@ impl BlockKind {
         BlockKind::CodeBlock { language: None }
     }
 
-    /// Void blocks (divider, page break) have no text.
+    /// Void blocks (divider, page break, image) have no text.
     pub fn is_void(&self) -> bool {
-        matches!(self, BlockKind::Divider | BlockKind::PageBreak)
+        matches!(
+            self,
+            BlockKind::Divider | BlockKind::PageBreak | BlockKind::Image(_)
+        )
+    }
+
+    /// Whether this is an image.
+    pub fn is_image(&self) -> bool {
+        matches!(self, BlockKind::Image(_))
+    }
+
+    /// The image, if this is one.
+    pub fn image(&self) -> Option<&Image> {
+        match self {
+            BlockKind::Image(image) => Some(image),
+            _ => None,
+        }
     }
 
     /// Bullet, numbered and to-do items.
@@ -122,7 +437,7 @@ impl BlockKind {
 
     /// A short stable name (`"paragraph"`, `"heading"`, `"bullet"`,
     /// `"numbered"`, `"todo"`, `"quote"`, `"code"`, `"divider"`,
-    /// `"page_break"`), used in the serialised format.
+    /// `"page_break"`, `"image"`), used in the serialised format.
     pub fn name(&self) -> &'static str {
         match self {
             BlockKind::Paragraph => "paragraph",
@@ -134,13 +449,16 @@ impl BlockKind {
             BlockKind::CodeBlock { .. } => "code",
             BlockKind::Divider => "divider",
             BlockKind::PageBreak => "page_break",
+            BlockKind::Image(_) => "image",
         }
     }
 
-    /// Repairs out-of-range data (heading level, empty language).
+    /// Repairs out-of-range data (heading level, empty language, what an
+    /// image holds).
     pub(crate) fn sanitized(self) -> BlockKind {
         match self {
             BlockKind::Heading { level } => BlockKind::heading(level),
+            BlockKind::Image(image) => BlockKind::Image(image.sanitized()),
             BlockKind::CodeBlock { language } => BlockKind::CodeBlock {
                 language: language
                     .map(|l| l.trim().to_string())
@@ -211,7 +529,8 @@ pub fn sanitize_text_size(size: Option<f32>) -> Option<f32> {
 /// Fields are private so that the invariants hold: text is normalised (no
 /// control characters other than `\n` and `\t`), runs are normalised, void
 /// blocks have no text, code blocks carry no formatting, the indent is at
-/// most [`MAX_INDENT`].
+/// most [`MAX_INDENT`]. An image block has, besides no text, no indent and
+/// no text size, and is never justified (asked for, that is left).
 ///
 /// Blocks are built with the constructors and `with_*` builders and turned
 /// into a document with [`Document::from_blocks`](crate::Document::from_blocks),
@@ -273,6 +592,11 @@ impl Block {
         Block::with_text(BlockKind::Paragraph, text)
     }
 
+    /// An image block (flush left; see [`Block::with_alignment`]).
+    pub fn image(image: Image) -> Block {
+        Block::new(BlockKind::Image(image))
+    }
+
     /// Builder: appends `text` with `attrs` (normalised; code blocks keep only
     /// comment anchors; ignored for void kinds).
     pub fn with_span(mut self, text: &str, attrs: InlineAttrs) -> Block {
@@ -287,21 +611,26 @@ impl Block {
         self
     }
 
-    /// Builder: sets the alignment.
+    /// Builder: sets the alignment (an image cannot be justified: it is
+    /// then flush left).
     pub fn with_alignment(mut self, alignment: Alignment) -> Block {
         self.alignment = alignment;
+        self.hold_image_invariants();
         self
     }
 
-    /// Builder: sets the indent level (clamped to [`MAX_INDENT`]).
+    /// Builder: sets the indent level (clamped to [`MAX_INDENT`]; an image
+    /// has none).
     pub fn with_indent(mut self, indent: u8) -> Block {
         self.indent = indent.min(MAX_INDENT);
+        self.hold_image_invariants();
         self
     }
 
-    /// Builder: sets the text size override (clamped).
+    /// Builder: sets the text size override (clamped; an image has none).
     pub fn with_text_size(mut self, size: Option<f32>) -> Block {
         self.text_size = sanitize_text_size(size);
+        self.hold_image_invariants();
         self
     }
 
@@ -361,9 +690,14 @@ impl Block {
         self.text.is_empty()
     }
 
-    /// Whether this is a void block (divider, page break).
+    /// Whether this is a void block (divider, page break, image).
     pub fn is_void(&self) -> bool {
         self.kind.is_void()
+    }
+
+    /// The image, if this is an image block.
+    pub fn as_image(&self) -> Option<&Image> {
+        self.kind.image()
     }
 
     /// The normalised attribute runs.
@@ -426,13 +760,28 @@ impl Block {
         self.revision = 0;
     }
 
+    /// What an image block cannot have, besides text: an indent, a text
+    /// size, justified alignment. Called wherever one of the three, or the
+    /// kind, is set; does nothing to any other block.
+    fn hold_image_invariants(&mut self) {
+        if self.kind.is_image() {
+            self.indent = 0;
+            self.text_size = None;
+            if self.alignment == Alignment::Justify {
+                self.alignment = Alignment::Left;
+            }
+        }
+    }
+
     /// Changes the kind, keeping text; void kinds drop the text, code blocks
-    /// drop formatting.
+    /// drop formatting, an image also drops the indent and the text size
+    /// and is flush left where the block was justified.
     pub(crate) fn set_kind(&mut self, kind: BlockKind) {
         self.kind = kind.sanitized();
         if self.kind.is_void() {
             self.text.clear();
             self.runs.clear();
+            self.hold_image_invariants();
         } else if self.kind.is_code() {
             for r in &mut self.runs {
                 r.attrs = r.attrs.code_block_subset();
@@ -444,16 +793,19 @@ impl Block {
 
     pub(crate) fn set_alignment(&mut self, a: Alignment) {
         self.alignment = a;
+        self.hold_image_invariants();
         self.mark_dirty();
     }
 
     pub(crate) fn set_indent(&mut self, indent: u8) {
         self.indent = indent.min(MAX_INDENT);
+        self.hold_image_invariants();
         self.mark_dirty();
     }
 
     pub(crate) fn set_text_size(&mut self, size: Option<f32>) {
         self.text_size = sanitize_text_size(size);
+        self.hold_image_invariants();
         self.mark_dirty();
     }
 
@@ -634,7 +986,10 @@ impl Block {
 
     /// Repairs every invariant of a block that may come from untrusted
     /// input. A void block that carries text keeps the void and moves the
-    /// text into a following paragraph, which is returned.
+    /// text into a following paragraph, which is returned (with the
+    /// alignment and the indent the block came with). An image block is
+    /// then left without indent and text size, and flush left where it was
+    /// justified.
     pub(crate) fn repair(&mut self) -> Option<Block> {
         self.kind = self.kind.clone().sanitized();
         self.indent = self.indent.min(MAX_INDENT);
@@ -658,8 +1013,10 @@ impl Block {
             p.runs = std::mem::take(&mut self.runs);
             p.alignment = self.alignment;
             p.indent = self.indent;
+            self.hold_image_invariants();
             return Some(p);
         }
+        self.hold_image_invariants();
         if self.kind.is_code() {
             let kind = self.kind.clone();
             self.set_kind(kind);
@@ -720,6 +1077,32 @@ impl Block {
         }
         if self.text_size != sanitize_text_size(self.text_size) {
             return Err(format!("block {}: bad text size", self.id));
+        }
+        if let BlockKind::Image(image) = &self.kind {
+            if self.indent != 0 {
+                return Err(format!("block {}: image block has an indent", self.id));
+            }
+            if self.text_size.is_some() {
+                return Err(format!("block {}: image block has a text size", self.id));
+            }
+            if self.alignment == Alignment::Justify {
+                return Err(format!("block {}: image block is justified", self.id));
+            }
+            if image.pixels.0 == 0 || image.pixels.1 == 0 {
+                return Err(format!("block {}: image has no pixels", self.id));
+            }
+            if !(Image::MIN_DENSITY..=Image::MAX_DENSITY).contains(&image.density) {
+                return Err(format!("block {}: image density out of range", self.id));
+            }
+            if image.width < ImageWidth::MIN || image.width > ImageWidth::FULL {
+                return Err(format!("block {}: image width out of range", self.id));
+            }
+            if !is_clean_description(&image.description) {
+                return Err(format!(
+                    "block {}: image description is not one clean line",
+                    self.id
+                ));
+            }
         }
         if self.kind != self.kind.clone().sanitized() {
             return Err(format!("block {}: unsanitised kind", self.id));
@@ -1037,5 +1420,716 @@ mod tests {
         let extra = d.repair().expect("text moved out");
         assert!(d.is_empty());
         assert_eq!(extra.text(), "oops");
+    }
+
+    fn an_id() -> ImageId {
+        ImageId::parse("3f2a9c1b5d6e7f80a1b2c3d4e5f60718").expect("an id")
+    }
+
+    /// 1600 × 1067 at 144 to the inch: a photograph, 800 points wide.
+    fn wide() -> Image {
+        Image::new(an_id(), (1600, 1067), 144)
+    }
+
+    /// 300 × 200 at 72: narrower than any column.
+    fn small() -> Image {
+        Image::new(an_id(), (300, 200), 72)
+    }
+
+    /// 1170 × 2532 at 72: a phone screenshot, far taller than wide.
+    fn phone() -> Image {
+        Image::new(an_id(), (1170, 2532), 72)
+    }
+
+    #[test]
+    fn an_image_id_is_32_hex_digits_and_nothing_else() {
+        let text = "3f2a9c1b5d6e7f80a1b2c3d4e5f60718";
+        let id = ImageId::parse(text).expect("32 hex digits");
+        assert_eq!(id.to_string(), text);
+        assert_eq!(
+            id.as_bytes(),
+            &[
+                0x3f, 0x2a, 0x9c, 0x1b, 0x5d, 0x6e, 0x7f, 0x80, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6,
+                0x07, 0x18
+            ]
+        );
+        assert_eq!(ImageId::from_bytes(*id.as_bytes()), id);
+        // Either case is read, lower case is written.
+        let upper = ImageId::parse("3F2A9C1B5D6E7F80A1B2C3D4E5F60718").expect("upper case");
+        assert_eq!(upper, id);
+        assert_eq!(upper.to_string(), text);
+        assert_eq!(
+            ImageId::parse("3f2A9c1B5d6E7f80a1B2c3D4e5F60718"),
+            Some(id),
+            "mixed case"
+        );
+        // Every byte value comes back as it went.
+        let mut bytes = [0u8; 16];
+        for first in 0..=255u8 {
+            for (i, byte) in bytes.iter_mut().enumerate() {
+                *byte = first.wrapping_add((i as u8).wrapping_mul(37));
+            }
+            let id = ImageId::from_bytes(bytes);
+            let written = id.to_string();
+            assert_eq!(written.len(), 32);
+            assert!(
+                written
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "{written}"
+            );
+            assert_eq!(ImageId::parse(&written), Some(id));
+        }
+        assert_eq!(
+            ImageId::from_bytes([0; 16]).to_string(),
+            "00000000000000000000000000000000"
+        );
+        // Nothing else is an id.
+        for not_an_id in [
+            "",
+            "3f2a9c1b5d6e7f80a1b2c3d4e5f6071",        // 31 digits
+            "3f2a9c1b5d6e7f80a1b2c3d4e5f607180",      // 33
+            "3f2a9c1b5d6e7f80a1b2c3d4e5f6071g",       // not hex
+            " 3f2a9c1b5d6e7f80a1b2c3d4e5f6071",       // a space for a digit
+            "3f2a9c1b5d6e7f80a1b2c3d4e5f60718 ",      // a space after 32 digits
+            "0x3f2a9c1b5d6e7f80a1b2c3d4e5f607",       // a prefix
+            "+f2a9c1b5d6e7f80a1b2c3d4e5f60718",       // a sign, which a number parser takes
+            "3f2a9c1b-5d6e-7f80-a1b2-c3d4e5f6",       // 32 bytes of a UUID
+            "3f2a9c1b5d6e7f80a1b2c3d4e5f6071\u{663}", // 32 characters, the last an Arabic digit
+            "\u{ff13}f2a9c1b5d6e7f80a1b2c3d4e5f6071", // a full-width digit: 32 bytes are not at issue
+            "éf2a9c1b5d6e7f80a1b2c3d4e5f6071",        // 32 bytes, 31 characters
+        ] {
+            assert_eq!(ImageId::parse(not_an_id), None, "{not_an_id:?}");
+        }
+    }
+
+    #[test]
+    fn an_image_width_is_a_share_of_the_column_within_its_ends() {
+        assert_eq!(ImageWidth::MIN.thousandths(), 50);
+        assert_eq!(ImageWidth::FULL.thousandths(), 1000);
+        assert_eq!(ImageWidth::new(500).thousandths(), 500);
+        assert_eq!(ImageWidth::new(0), ImageWidth::MIN);
+        assert_eq!(ImageWidth::new(49), ImageWidth::MIN);
+        assert_eq!(ImageWidth::new(50), ImageWidth::MIN);
+        assert_eq!(ImageWidth::new(1000), ImageWidth::FULL);
+        assert_eq!(ImageWidth::new(1001), ImageWidth::FULL);
+        assert_eq!(ImageWidth::new(u16::MAX), ImageWidth::FULL);
+        assert!(ImageWidth::new(333) < ImageWidth::new(334));
+
+        assert_eq!(ImageWidth::from_fraction(0.5).thousandths(), 500);
+        assert_eq!(ImageWidth::from_fraction(0.6204).thousandths(), 620);
+        assert_eq!(ImageWidth::from_fraction(0.6206).thousandths(), 621);
+        assert_eq!(ImageWidth::from_fraction(1.0), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_fraction(3.0), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_fraction(1.0e30), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_fraction(f32::INFINITY), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_fraction(0.0), ImageWidth::MIN);
+        assert_eq!(ImageWidth::from_fraction(0.01), ImageWidth::MIN);
+        assert_eq!(ImageWidth::from_fraction(-2.0), ImageWidth::MIN);
+        assert_eq!(
+            ImageWidth::from_fraction(f32::NEG_INFINITY),
+            ImageWidth::MIN
+        );
+        assert_eq!(ImageWidth::from_fraction(f32::NAN), ImageWidth::FULL);
+
+        assert_eq!(ImageWidth::from_percent(62).thousandths(), 620);
+        assert_eq!(ImageWidth::from_percent(100), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_percent(250), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_percent(u16::MAX), ImageWidth::FULL);
+        assert_eq!(ImageWidth::from_percent(5), ImageWidth::MIN);
+        assert_eq!(ImageWidth::from_percent(0), ImageWidth::MIN);
+
+        assert_eq!(ImageWidth::new(500).fraction(), 0.5);
+        assert_eq!(ImageWidth::FULL.fraction(), 1.0);
+        assert_eq!(ImageWidth::MIN.fraction(), 0.05);
+        assert_eq!(ImageWidth::new(620).percent(), 62);
+        assert_eq!(ImageWidth::new(624).percent(), 62);
+        assert_eq!(ImageWidth::new(625).percent(), 63);
+        assert_eq!(ImageWidth::new(333).percent(), 33);
+        assert_eq!(ImageWidth::new(667).percent(), 67);
+        assert_eq!(ImageWidth::FULL.percent(), 100);
+        assert_eq!(ImageWidth::MIN.percent(), 5);
+        // A percentage shown is the percentage taken.
+        for percent in 5..=100 {
+            assert_eq!(ImageWidth::from_percent(percent).percent(), percent);
+        }
+        // A share and its thousandths say the same.
+        for thousandths in 50..=1000 {
+            let width = ImageWidth::new(thousandths);
+            assert_eq!(ImageWidth::from_fraction(width.fraction()), width);
+        }
+    }
+
+    #[test]
+    fn the_natural_width_is_the_share_of_the_column_a_length_takes() {
+        assert_eq!(ImageWidth::natural(350.0, 700.0).thousandths(), 500);
+        assert_eq!(ImageWidth::natural(300.0, 451.276).thousandths(), 665);
+        assert_eq!(ImageWidth::natural(233.0, 700.0).thousandths(), 333);
+        // As wide as the column or wider: the whole column.
+        assert_eq!(ImageWidth::natural(700.0, 700.0), ImageWidth::FULL);
+        assert_eq!(ImageWidth::natural(800.0, 451.276), ImageWidth::FULL);
+        // A speck is still to be seen.
+        assert_eq!(ImageWidth::natural(1.0, 700.0), ImageWidth::MIN);
+        assert_eq!(ImageWidth::natural(0.0, 700.0), ImageWidth::MIN);
+        assert_eq!(ImageWidth::natural(-5.0, 700.0), ImageWidth::MIN);
+        // A column without a width has no share to give.
+        assert_eq!(ImageWidth::natural(300.0, 0.0), ImageWidth::FULL);
+        assert_eq!(ImageWidth::natural(300.0, -1.0), ImageWidth::FULL);
+        assert_eq!(ImageWidth::natural(300.0, f32::NAN), ImageWidth::FULL);
+        assert_eq!(ImageWidth::natural(300.0, f32::INFINITY), ImageWidth::FULL);
+        assert_eq!(ImageWidth::natural(f32::NAN, 700.0), ImageWidth::FULL);
+    }
+
+    #[test]
+    fn larger_and_smaller_step_through_the_steps() {
+        let stepped = |from: u16, steps: i32| ImageWidth::new(from).stepped(steps).thousandths();
+        // The steps are in order and within the ends, the last is the whole column.
+        assert!(ImageWidth::STEPS.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(ImageWidth::STEPS[0] >= ImageWidth::MIN.thousandths());
+        assert_eq!(ImageWidth::STEPS[12], ImageWidth::FULL.thousandths());
+        // From a step: its neighbours.
+        assert_eq!(stepped(500, 1), 600);
+        assert_eq!(stepped(500, -1), 400);
+        assert_eq!(stepped(333, 1), 400);
+        assert_eq!(stepped(333, -1), 250);
+        assert_eq!(stepped(500, 2), 667);
+        assert_eq!(stepped(500, -3), 250);
+        assert_eq!(stepped(500, 0), 500);
+        // Up through all of them and down again.
+        let mut width = ImageWidth::new(ImageWidth::STEPS[0]);
+        for &step in &ImageWidth::STEPS[1..] {
+            width = width.stepped(1);
+            assert_eq!(width.thousandths(), step);
+        }
+        for &step in ImageWidth::STEPS[..12].iter().rev() {
+            width = width.stepped(-1);
+            assert_eq!(width.thousandths(), step);
+        }
+        // From between two steps the first step lands on the neighbour.
+        assert_eq!(stepped(550, 1), 600);
+        assert_eq!(stepped(550, -1), 500);
+        assert_eq!(stepped(665, 1), 667);
+        assert_eq!(stepped(665, -1), 600);
+        assert_eq!(stepped(713, 1), 750);
+        assert_eq!(stepped(713, -1), 667);
+        assert_eq!(stepped(550, 2), 667);
+        assert_eq!(stepped(550, -2), 400);
+        assert_eq!(stepped(999, 1), 1000);
+        assert_eq!(stepped(101, -1), 100);
+        // It stays at the ends.
+        assert_eq!(stepped(1000, 1), 1000);
+        assert_eq!(stepped(1000, 5), 1000);
+        assert_eq!(stepped(900, 5), 1000);
+        assert_eq!(stepped(100, -1), 100);
+        assert_eq!(stepped(150, -5), 100);
+        assert_eq!(stepped(500, i32::MAX), 1000);
+        assert_eq!(stepped(500, i32::MIN), 100);
+        // Narrower than the first step: larger goes to it, smaller changes nothing.
+        assert_eq!(stepped(50, 1), 100);
+        assert_eq!(stepped(75, 1), 100);
+        assert_eq!(stepped(50, -1), 50);
+        assert_eq!(stepped(75, -1), 75);
+        assert_eq!(stepped(75, -4), 75);
+    }
+
+    #[test]
+    fn a_new_image_is_as_wide_as_the_column_and_within_range() {
+        let image = wide();
+        assert_eq!(image.id, an_id());
+        assert_eq!(image.pixels, (1600, 1067));
+        assert_eq!(image.density, 144);
+        assert_eq!(image.width, ImageWidth::FULL);
+        assert_eq!(image.description, "");
+        assert_eq!(image.natural_points(), (800.0, 533.5));
+        assert_eq!(image.aspect(), (1067.0_f64 / 1600.0) as f32);
+        assert_eq!(small().natural_points(), (300.0, 200.0));
+        assert_eq!(small().aspect(), (200.0_f64 / 300.0) as f32);
+        assert_eq!(
+            Image::new(an_id(), (600, 300), 300).natural_points(),
+            (144.0, 72.0)
+        );
+        // What a file cannot mean is put right.
+        assert_eq!(Image::new(an_id(), (0, 0), 72).pixels, (1, 1));
+        assert_eq!(Image::new(an_id(), (0, 40), 72).pixels, (1, 40));
+        assert_eq!(Image::new(an_id(), (40, 0), 72).pixels, (40, 1));
+        assert_eq!(Image::new(an_id(), (10, 10), 0).density, Image::MIN_DENSITY);
+        assert_eq!(Image::new(an_id(), (10, 10), 35).density, 36);
+        assert_eq!(Image::new(an_id(), (10, 10), 36).density, 36);
+        assert_eq!(Image::new(an_id(), (10, 10), 1200).density, 1200);
+        assert_eq!(Image::new(an_id(), (10, 10), u16::MAX).density, 1200);
+        assert_eq!(Image::DEFAULT_DENSITY, 72);
+        // The largest pixel size there is still has a size and a shape.
+        let huge = Image::new(an_id(), (u32::MAX, 1), 72);
+        assert!(huge.natural_points().0.is_finite());
+        assert!(huge.aspect() > 0.0);
+        let tall = Image::new(an_id(), (1, u32::MAX), 72);
+        assert!(tall.aspect().is_finite());
+    }
+
+    #[test]
+    fn the_widest_an_image_is_drawn_fits_on_one_page() {
+        use crate::settings::{Margins, Orientation, PaperSize};
+        // A4 with an inch on every side: a text area of 451.276 × 697.89 points.
+        let page = PageSetup::default();
+        assert_eq!(page.paper, PaperSize::A4);
+        assert_eq!(page.margins, Margins::uniform(72.0));
+        let (w, h) = page.content_size();
+        assert!((w - 451.276).abs() < 0.001 && (h - 697.89).abs() < 0.001);
+        let height_at = |image: &Image, width: ImageWidth, page: &PageSetup| {
+            width.fraction() * page.content_size().0 * image.aspect()
+        };
+
+        // A photograph: the whole column is 301 points high.
+        assert_eq!(wide().max_width(&page), ImageWidth::FULL);
+        // It is 800 points wide by itself, more than the column.
+        assert_eq!(wide().original_width(&page), ImageWidth::FULL);
+
+        // A small picture may be as wide as the column, and has its own
+        // size at 300 of 451.276 points.
+        assert_eq!(small().max_width(&page), ImageWidth::FULL);
+        assert_eq!(small().original_width(&page).thousandths(), 665);
+
+        // A phone screenshot as wide as the column would be 977 points
+        // high. The widest it goes is what makes it 697 points high (the
+        // text area in whole points), rounded down: 713 thousandths.
+        assert_eq!(phone().max_width(&page).thousandths(), 713);
+        let widest = phone().max_width(&page);
+        assert!(height_at(&phone(), widest, &page) <= 697.0);
+        assert!(height_at(&phone(), ImageWidth::new(714), &page) > 697.0);
+        // By itself it is 1170 points wide: original size is the widest it goes.
+        assert_eq!(phone().original_width(&page).thousandths(), 713);
+        // At a density that makes it narrower than that, its own size.
+        let dense = Image::new(an_id(), (1170, 2532), 460);
+        assert_eq!(dense.natural_points().0, (1170.0_f64 * 72.0 / 460.0) as f32);
+        assert_eq!(dense.max_width(&page).thousandths(), 713);
+        assert_eq!(dense.original_width(&page).thousandths(), 406);
+
+        // After a change of margins: half an inch, a text area of
+        // 523.276 × 769.89 points.
+        let narrow_margins = PageSetup {
+            margins: Margins::uniform(36.0),
+            ..page
+        };
+        assert_eq!(wide().max_width(&narrow_margins), ImageWidth::FULL);
+        assert_eq!(wide().original_width(&narrow_margins), ImageWidth::FULL);
+        assert_eq!(small().original_width(&narrow_margins).thousandths(), 573);
+        assert_eq!(phone().max_width(&narrow_margins).thousandths(), 679);
+        assert_eq!(phone().original_width(&narrow_margins).thousandths(), 679);
+        assert!(height_at(&phone(), ImageWidth::new(679), &narrow_margins) <= 769.0);
+        assert!(height_at(&phone(), ImageWidth::new(680), &narrow_margins) > 769.0);
+        // Wide margins at the sides only: the column is narrow and the
+        // screenshot fits whole.
+        let narrow_column = PageSetup {
+            margins: Margins {
+                left: 150.0,
+                right: 150.0,
+                ..Margins::uniform(72.0)
+            },
+            ..page
+        };
+        assert_eq!(phone().max_width(&narrow_column), ImageWidth::FULL);
+
+        // The sheet on its side: the photograph no longer fits at the whole
+        // column (697.89 points wide would be 465 high, the text area is 451).
+        let landscape = PageSetup {
+            orientation: Orientation::Landscape,
+            ..page
+        };
+        assert_eq!(wide().max_width(&landscape).thousandths(), 969);
+        assert_eq!(wide().original_width(&landscape).thousandths(), 969);
+        assert_eq!(small().original_width(&landscape).thousandths(), 430);
+
+        // Never narrower than the narrowest, however tall the picture.
+        let strip = Image::new(an_id(), (10, 100_000), 72);
+        assert_eq!(strip.max_width(&page), ImageWidth::MIN);
+        assert_eq!(strip.original_width(&page), ImageWidth::MIN);
+        // A width on every paper the settings can hold, for every shape.
+        for paper in [
+            PaperSize::A4,
+            PaperSize::UsLetter,
+            PaperSize::Custom {
+                width: 72.0,
+                height: 72.0,
+            },
+            PaperSize::Custom {
+                width: 5000.0,
+                height: 100.0,
+            },
+        ] {
+            for margins in [0.0, 36.0, 72.0, 400.0] {
+                let page = PageSetup {
+                    paper,
+                    margins: Margins::uniform(margins),
+                    ..page
+                }
+                .sanitized();
+                for image in [wide(), small(), phone(), strip.clone()] {
+                    let widest = image.max_width(&page);
+                    let original = image.original_width(&page);
+                    assert!(widest >= ImageWidth::MIN && widest <= ImageWidth::FULL);
+                    assert!(original >= ImageWidth::MIN && original <= widest);
+                    // (A hundredth of a point for the arithmetic of the
+                    // check itself, where the text area is whole points.)
+                    assert!(
+                        widest == ImageWidth::MIN
+                            || height_at(&image, widest, &page) <= page.content_size().1 + 0.01,
+                        "{image:?} on {page:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_description_is_one_clean_line() {
+        let described = |text: &str| {
+            let mut image = small();
+            image.description = text.to_string();
+            match Block::image(image).kind() {
+                BlockKind::Image(image) => image.description.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(described("The harbour at dusk"), "The harbour at dusk");
+        assert_eq!(described("  The harbour at dusk \n"), "The harbour at dusk");
+        assert_eq!(described("The harbour\nat dusk"), "The harbour at dusk");
+        assert_eq!(described("The harbour\r\nat dusk"), "The harbour at dusk");
+        assert_eq!(described("The\tharbour"), "The harbour");
+        assert_eq!(
+            described("a\u{2028}b\u{2029}c\u{85}d\u{0}e\u{7}f"),
+            "a b c d e f"
+        );
+        assert_eq!(described("\n\n"), "");
+        assert_eq!(described(""), "");
+        // What is no control character stays: two spaces, an emoji, an accent.
+        assert_eq!(described("a  b"), "a  b");
+        assert_eq!(
+            described("Zoë \u{1F469}\u{200D}\u{1F467}"),
+            "Zoë \u{1F469}\u{200D}\u{1F467}"
+        );
+        // Cut to a thousand characters, counted as characters.
+        let long = "é".repeat(1500);
+        let cut = described(&long);
+        assert_eq!(cut.chars().count(), 1000);
+        assert_eq!(cut.len(), 2000);
+        assert_eq!(described(&"x".repeat(1000)).len(), 1000);
+        // A cut that ends on a space leaves no space at the end.
+        let spaced = format!("{} tail", "y".repeat(999));
+        assert_eq!(described(&spaced), "y".repeat(999));
+        // Cleaning twice changes nothing more.
+        for text in [
+            "  a\r\n\r\nb  ",
+            "\u{7}",
+            &long,
+            &spaced,
+            " \u{2028} x \t ",
+            "plain",
+        ] {
+            let once = clean_description(text);
+            assert!(is_clean_description(&once), "{once:?}");
+            assert_eq!(clean_description(&once), once);
+        }
+    }
+
+    #[test]
+    fn an_image_block_holds_no_text_indent_text_size_or_justify() {
+        let bold = InlineAttrs {
+            bold: true,
+            ..Default::default()
+        };
+        let as_built = |block: &Block| {
+            assert!(block.check().is_ok(), "{:?}", block.check());
+            assert!(block.is_void());
+            assert!(block.is_empty());
+            assert!(block.runs().is_empty());
+            assert_eq!(block.indent(), 0);
+            assert_eq!(block.text_size(), None);
+            assert_ne!(block.alignment(), Alignment::Justify);
+        };
+
+        let block = Block::image(wide());
+        assert_eq!(block.kind(), &BlockKind::Image(wide()));
+        assert_eq!(block.as_image(), Some(&wide()));
+        assert_eq!(block.kind().image(), Some(&wide()));
+        assert!(block.kind().is_image());
+        assert!(block.kind().is_void());
+        assert!(!block.kind().is_list_item() && !block.kind().is_code());
+        assert_eq!(block.kind().name(), "image");
+        assert_eq!(block.alignment(), Alignment::Left);
+        as_built(&block);
+        // No other kind is an image.
+        for kind in [
+            BlockKind::Paragraph,
+            BlockKind::heading(2),
+            BlockKind::BulletItem,
+            BlockKind::NumberedItem,
+            BlockKind::todo(),
+            BlockKind::Quote,
+            BlockKind::code(),
+            BlockKind::Divider,
+            BlockKind::PageBreak,
+        ] {
+            assert!(!kind.is_image(), "{kind:?}");
+            assert_eq!(kind.image(), None);
+            assert_eq!(Block::new(kind.clone()).as_image(), None);
+            assert_ne!(kind.name(), "image");
+            assert!(!kind.same_type(&BlockKind::Image(wide())));
+        }
+        // Two images are the same kind of block, whatever they show.
+        assert!(BlockKind::Image(wide()).same_type(&BlockKind::Image(phone())));
+
+        // The builders.
+        let block = Block::with_text(BlockKind::Image(wide()), "a caption")
+            .with_span("more", bold.clone())
+            .with_indent(3)
+            .with_text_size(Some(24.0))
+            .with_alignment(Alignment::Justify);
+        as_built(&block);
+        assert_eq!(block.alignment(), Alignment::Left);
+        for alignment in [Alignment::Left, Alignment::Center, Alignment::Right] {
+            let block = Block::image(wide()).with_alignment(alignment);
+            assert_eq!(block.alignment(), alignment);
+            as_built(&block);
+        }
+
+        // The setters the editing engine uses.
+        let mut block = Block::image(wide()).with_alignment(Alignment::Center);
+        block.insert(0, "text", &bold);
+        block.insert_content(0, &Block::paragraph("content"));
+        block.append(&Block::paragraph("more"));
+        block.replace_text(0..0, "typed", &bold);
+        block.set_indent(4);
+        block.set_text_size(Some(30.0));
+        as_built(&block);
+        assert_eq!(block.alignment(), Alignment::Center);
+        block.set_alignment(Alignment::Right);
+        assert_eq!(block.alignment(), Alignment::Right);
+        block.set_alignment(Alignment::Justify);
+        assert_eq!(block.alignment(), Alignment::Left);
+        as_built(&block);
+        // Its halves and its copies are images too, with nothing more.
+        as_built(&block.slice(0..0));
+        as_built(&block.split_off(0));
+        as_built(&block);
+
+        // A block of text that becomes an image loses all four.
+        let mut block = Block::paragraph("A paragraph ")
+            .with_span("with bold", bold.clone())
+            .with_indent(2)
+            .with_text_size(Some(20.0))
+            .with_alignment(Alignment::Justify);
+        block.set_kind(BlockKind::Image(wide()));
+        as_built(&block);
+        assert_eq!(block.alignment(), Alignment::Left);
+        assert_eq!(block.as_image(), Some(&wide()));
+        // Centred or flush right, it stays so.
+        let mut block = Block::paragraph("x").with_alignment(Alignment::Right);
+        block.set_kind(BlockKind::Image(wide()));
+        assert_eq!(block.alignment(), Alignment::Right);
+        // And an image that becomes a paragraph is an empty one that can
+        // have all of them again.
+        block.set_kind(BlockKind::Paragraph);
+        block.set_indent(2);
+        block.set_text_size(Some(20.0));
+        block.set_alignment(Alignment::Justify);
+        block.insert(0, "text", &bold);
+        assert_eq!(
+            (
+                block.indent(),
+                block.text_size(),
+                block.alignment(),
+                block.text()
+            ),
+            (2, Some(20.0), Alignment::Justify, "text")
+        );
+        assert!(block.check().is_ok());
+
+        // What an image holds is put right on the way into a block: by
+        // the constructor and by a change of kind.
+        let broken = Image {
+            id: an_id(),
+            pixels: (0, 0),
+            density: 5,
+            width: ImageWidth(0),
+            description: " two\nlines ".to_string(),
+        };
+        let mended = Image {
+            id: an_id(),
+            pixels: (1, 1),
+            density: 36,
+            width: ImageWidth::MIN,
+            description: "two lines".to_string(),
+        };
+        assert_eq!(Block::image(broken.clone()).as_image(), Some(&mended));
+        let mut block = Block::paragraph("x");
+        block.set_kind(BlockKind::Image(broken));
+        assert_eq!(block.as_image(), Some(&mended));
+        as_built(&block);
+
+        // The other void kinds keep an indent as they did.
+        let divider = Block::new(BlockKind::Divider)
+            .with_indent(2)
+            .with_alignment(Alignment::Justify);
+        assert_eq!(
+            (divider.indent(), divider.alignment()),
+            (2, Alignment::Justify)
+        );
+    }
+
+    #[test]
+    fn repair_mends_every_broken_invariant_of_an_image_and_check_names_it() {
+        let good = || Block::image(wide()).with_alignment(Alignment::Center);
+        assert!(good().check().is_ok());
+        let named = |block: &Block, words: &str| {
+            let said = block.check().expect_err(words);
+            assert!(said.contains(words), "{said:?} does not say {words:?}");
+        };
+        let mended = |mut block: Block| {
+            assert!(block.repair().is_none());
+            assert!(block.check().is_ok(), "{:?}", block.check());
+            block
+        };
+
+        // An indent.
+        let mut block = good();
+        block.indent = 3;
+        named(&block, "image block has an indent");
+        let block = mended(block);
+        assert_eq!(block.indent(), 0);
+        assert_eq!(block, good());
+
+        // A text size.
+        let mut block = good();
+        block.text_size = Some(24.0);
+        named(&block, "image block has a text size");
+        assert_eq!(mended(block), good());
+
+        // Justified: read as left.
+        let mut block = good();
+        block.alignment = Alignment::Justify;
+        named(&block, "image block is justified");
+        let block = mended(block);
+        assert_eq!(block.alignment(), Alignment::Left);
+        assert_eq!(block.as_image(), Some(&wide()));
+
+        // No pixels.
+        for pixels in [(0, 0), (0, 5), (5, 0)] {
+            let mut block = good();
+            block.kind = BlockKind::Image(Image { pixels, ..wide() });
+            named(&block, "image has no pixels");
+            let block = mended(block);
+            let now = block.as_image().expect("an image").pixels;
+            assert_eq!(now, (pixels.0.max(1), pixels.1.max(1)));
+        }
+
+        // A density no file has.
+        for (density, repaired) in [(0, 36), (35, 36), (1201, 1200), (u16::MAX, 1200)] {
+            let mut block = good();
+            block.kind = BlockKind::Image(Image { density, ..wide() });
+            named(&block, "image density out of range");
+            assert_eq!(
+                mended(block).as_image().expect("an image").density,
+                repaired
+            );
+        }
+
+        // A width beyond the ends.
+        for (width, repaired) in [(0, 50), (49, 50), (1001, 1000), (u16::MAX, 1000)] {
+            let mut block = good();
+            block.kind = BlockKind::Image(Image {
+                width: ImageWidth(width),
+                ..wide()
+            });
+            named(&block, "image width out of range");
+            let block = mended(block);
+            assert_eq!(
+                block.as_image().expect("an image").width.thousandths(),
+                repaired
+            );
+        }
+
+        // A description that is not one clean line.
+        for (description, repaired) in [
+            ("two\nlines", "two lines".to_string()),
+            (" spaces around ", "spaces around".to_string()),
+            ("a bell\u{7}", "a bell".to_string()),
+            (&"z".repeat(1001) as &str, "z".repeat(1000)),
+        ] {
+            let mut block = good();
+            block.kind = BlockKind::Image(Image {
+                description: description.to_string(),
+                ..wide()
+            });
+            named(&block, "image description is not one clean line");
+            let block = mended(block);
+            assert_eq!(block.as_image().expect("an image").description, repaired);
+        }
+
+        // Text: the image stays, the text goes into a paragraph after it.
+        let mut block = good();
+        block.text = "a caption".to_string();
+        block.runs = vec![Run {
+            len: 9,
+            attrs: InlineAttrs::default(),
+        }];
+        named(&block, "void block has text");
+        let after = block.repair().expect("the text moved out");
+        assert!(block.check().is_ok(), "{:?}", block.check());
+        assert_eq!(block, good());
+        assert_eq!(after.kind(), &BlockKind::Paragraph);
+        assert_eq!(after.text(), "a caption");
+        assert!(after.check().is_ok());
+
+        // Everything at once, as a file written by something else could
+        // have it. The paragraph takes the alignment and the indent the
+        // block came with, as it does after a divider.
+        let mut block = Block::image(wide());
+        block.kind = BlockKind::Image(Image {
+            id: an_id(),
+            pixels: (0, 7),
+            density: 9000,
+            width: ImageWidth(7),
+            description: "\tA\r\nB ".to_string(),
+        });
+        block.text = "text".to_string();
+        block.runs = vec![Run {
+            len: 4,
+            attrs: InlineAttrs::default(),
+        }];
+        block.indent = 200;
+        block.text_size = Some(f32::NAN);
+        block.alignment = Alignment::Justify;
+        assert!(block.check().is_err());
+        let after = block.repair().expect("the text moved out");
+        assert!(block.check().is_ok(), "{:?}", block.check());
+        assert_eq!(
+            block.as_image(),
+            Some(&Image {
+                id: an_id(),
+                pixels: (1, 7),
+                density: 1200,
+                width: ImageWidth::MIN,
+                description: "A B".to_string(),
+            })
+        );
+        assert_eq!(
+            (
+                block.indent(),
+                block.text_size(),
+                block.alignment(),
+                block.text()
+            ),
+            (0, None, Alignment::Left, "")
+        );
+        assert_eq!(
+            (after.text(), after.indent(), after.alignment()),
+            ("text", MAX_INDENT, Alignment::Justify)
+        );
+        assert!(after.check().is_ok());
+
+        // An image that is as it should be is left as it is.
+        let mut block = good();
+        assert!(block.repair().is_none());
+        assert_eq!(block, good());
     }
 }

@@ -484,7 +484,9 @@ fn kind_names(kind: Option<&BlockKind>) -> (&'static str, &'static str) {
         Some(BlockKind::TodoItem { .. }) => ("To-do list", "To-do"),
         Some(BlockKind::Quote) => ("Quote", "Quote"),
         Some(BlockKind::CodeBlock { .. }) => ("Code block", "Code"),
-        Some(BlockKind::Divider | BlockKind::PageBreak) => ("Turn into", "Turn into"),
+        Some(BlockKind::Divider | BlockKind::PageBreak | BlockKind::Image(_)) => {
+            ("Turn into", "Turn into")
+        }
     }
 }
 

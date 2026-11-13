@@ -741,7 +741,8 @@ impl Builder<'_> {
                     para.style = Some("ListParagraph");
                     para.indent = Some((item_left, gutter));
                 }
-                BlockKind::PageBreak => {}
+                // (An image is an empty paragraph here.)
+                BlockKind::PageBreak | BlockKind::Image(_) => {}
             }
             if block.kind().is_list_item() && !next_in_list {
                 // The last item of a list is followed by a paragraph's

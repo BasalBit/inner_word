@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 
 use crate::attrs::CommentId;
-use crate::block::{Block, BlockId, BlockKind};
+use crate::block::{Block, BlockId, BlockKind, Image};
 use crate::comments::CommentThread;
 use crate::position::{Position, Selection, TextRange};
 use crate::settings::DocumentSettings;
@@ -269,6 +269,22 @@ impl Document {
     /// The index of the block with `id`. This is a linear scan.
     pub fn block_index(&self, id: BlockId) -> Option<usize> {
         self.blocks.iter().position(|b| b.id == id)
+    }
+
+    /// Every image of the document in order, each with the index of its
+    /// block. One image can be there several times (the same stored bytes
+    /// in several blocks). This walks every block.
+    pub fn images(&self) -> impl Iterator<Item = (usize, &Image)> + '_ {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| block.as_image().map(|image| (index, image)))
+    }
+
+    /// Whether the document holds an image. This walks the blocks up to
+    /// the first one.
+    pub fn has_images(&self) -> bool {
+        self.blocks.iter().any(|block| block.kind.is_image())
     }
 
     /// The document settings.
@@ -816,6 +832,89 @@ mod tests {
 
     fn numbered(indent: u8) -> Block {
         Block::with_text(BlockKind::NumberedItem, "x").with_indent(indent)
+    }
+
+    #[test]
+    fn images_lists_every_image_with_the_index_of_its_block() {
+        use crate::block::{Alignment, ImageId, ImageWidth};
+        let id = |last: u8| {
+            let mut bytes = [0x5a; 16];
+            bytes[15] = last;
+            ImageId::from_bytes(bytes)
+        };
+        let harbour = Image::new(id(1), (1600, 1067), 144);
+        let mut map = Image::new(id(2), (300, 200), 72);
+        map.width = ImageWidth::new(500);
+        map.description = "A map of the bay".to_string();
+
+        let none = Document::from_blocks(vec![
+            Block::paragraph("Only text"),
+            Block::new(BlockKind::Divider),
+            Block::new(BlockKind::PageBreak),
+        ]);
+        assert!(!none.has_images());
+        assert_eq!(none.images().count(), 0);
+        assert!(!Document::new().has_images());
+
+        let d = Document::from_blocks(vec![
+            Block::paragraph("Before"),
+            Block::image(harbour.clone()),
+            Block::new(BlockKind::Divider),
+            Block::image(map.clone()).with_alignment(Alignment::Center),
+            Block::paragraph("Between"),
+            // The same stored bytes a second time.
+            Block::image(harbour.clone()),
+        ]);
+        assert!(d.check_invariants().is_ok(), "{:?}", d.check_invariants());
+        assert!(d.has_images());
+        assert_eq!(
+            d.images().collect::<Vec<_>>(),
+            vec![(1, &harbour), (3, &map), (5, &harbour)]
+        );
+        for (index, image) in d.images() {
+            assert_eq!(d.blocks()[index].as_image(), Some(image));
+            // A void block: one position, and no text for the title,
+            // the plain text or the counts to see.
+            assert_eq!(d.blocks()[index].len(), 0);
+        }
+        assert_eq!(d.blocks()[3].alignment(), Alignment::Center);
+        assert_eq!(d.plain_text(), "Before\n\n\n\nBetween\n");
+        assert_eq!(d.title().as_deref(), Some("Before"));
+        // An image as the only block is a document, and the first image
+        // is found without walking on.
+        let alone = Document::from_blocks(vec![Block::image(map.clone())]);
+        assert!(alone.check_invariants().is_ok());
+        assert!(alone.has_images());
+        assert_eq!(alone.images().collect::<Vec<_>>(), vec![(0, &map)]);
+
+        // What a document is built from is repaired: an image that came
+        // with text, an indent, a text size and justified keeps none of
+        // them, and the text stands in a paragraph after it.
+        let mut broken = Block::image(harbour.clone());
+        broken.text = "caption".to_string();
+        broken.runs = vec![crate::runs::Run {
+            len: 7,
+            attrs: InlineAttrs::default(),
+        }];
+        broken.indent = 2;
+        broken.text_size = Some(30.0);
+        broken.alignment = Alignment::Justify;
+        let d = Document::from_blocks(vec![broken]);
+        assert!(d.check_invariants().is_ok(), "{:?}", d.check_invariants());
+        assert_eq!(d.block_count(), 2);
+        assert_eq!(d.images().collect::<Vec<_>>(), vec![(0, &harbour)]);
+        let image = &d.blocks()[0];
+        assert_eq!(
+            (
+                image.indent(),
+                image.text_size(),
+                image.alignment(),
+                image.text()
+            ),
+            (0, None, Alignment::Left, "")
+        );
+        assert_eq!(d.blocks()[1].text(), "caption");
+        assert_eq!(d.blocks()[1].kind(), &BlockKind::Paragraph);
     }
 
     #[test]

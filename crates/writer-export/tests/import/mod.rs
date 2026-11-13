@@ -27,6 +27,7 @@ fn describe_block(b: &Block) -> String {
         BlockKind::CodeBlock { language: Some(l) } => format!("code({l})"),
         BlockKind::Divider => "divider".to_string(),
         BlockKind::PageBreak => "pagebreak".to_string(),
+        BlockKind::Image(image) => format!("image({})", image.id),
     };
     if b.indent() > 0 {
         head.push_str(&format!("+{}", b.indent()));

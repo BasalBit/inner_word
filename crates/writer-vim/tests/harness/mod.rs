@@ -463,12 +463,12 @@ fn render_block(b: &Block, caret: Option<usize>, anchor: Option<usize>) -> Strin
         }
     };
     match b.kind() {
-        BlockKind::Divider | BlockKind::PageBreak => {
+        BlockKind::Divider | BlockKind::PageBreak | BlockKind::Image(_) => {
             mark(&mut out, 0);
-            out.push_str(if *b.kind() == BlockKind::Divider {
-                "---"
-            } else {
-                "==="
+            out.push_str(match b.kind() {
+                BlockKind::Divider => "---",
+                BlockKind::Image(_) => "[image]",
+                _ => "===",
             });
             return out;
         }

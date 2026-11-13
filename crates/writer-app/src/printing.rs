@@ -266,7 +266,18 @@ pub struct NativeWindow(usize);
 /// foreground task, between two awaits): AppKit calls the window's
 /// delegate while the sheet comes up, and that re-enters GPUI. The window
 /// must still be open.
+///
+/// **No test and no scripted run calls this**: nothing but a person can
+/// answer a print panel.
 pub fn show_panel(job: &PrintJob, window: NativeWindow, end: PanelEnd) -> Result<(), PrintError> {
+    // A message this macOS does not understand would end the app: ask
+    // the runtime first, and say that there is no panel instead.
+    if let Err(missing) = writer_print::check_selectors() {
+        return Err(PrintError::Failed(format!(
+            "This macOS does not have what the print panel is asked for: {}",
+            missing.join(", ")
+        )));
+    }
     // SAFETY: `window` came from `native_window` for a window that is
     // still open (the caller's promise, as is the main thread and being
     // outside an update). The closure only notes the answer and wakes a

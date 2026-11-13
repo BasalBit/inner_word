@@ -1126,3 +1126,32 @@ fn the_welcome_document_says_where_print_is() {
         "{text}"
     );
 }
+
+/// Everything the print panel is asked for is in the Objective-C runtime
+/// of the app as it is built (PDFKit is linked in): what `show_panel`
+/// asks before it sends a message. The panel itself is never opened here.
+#[test]
+fn the_app_has_what_the_print_panel_is_asked_for() {
+    assert_eq!(writer_print::check_selectors(), Ok(()));
+}
+
+/// The end of a panel reaches whoever waits for it: the answer that was
+/// sent, and "not printed" when the panel went away without one.
+#[gpui::test]
+async fn the_end_of_a_panel_is_heard(cx: &mut TestAppContext) {
+    let (end, ended) = printing::panel_end();
+    let waiting = cx.foreground_executor().spawn(ended);
+    cx.run_until_parked();
+    end.send(true);
+    assert!(waiting.await);
+
+    let (end, ended) = printing::panel_end();
+    end.send(false);
+    assert!(!ended.await);
+
+    let (end, ended) = printing::panel_end();
+    let waiting = cx.foreground_executor().spawn(ended);
+    cx.run_until_parked();
+    drop(end);
+    assert!(!waiting.await);
+}

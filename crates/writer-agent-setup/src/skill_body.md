@@ -29,7 +29,7 @@ While the app is open, a change is not written behind its back: the tool hands i
 
 Exit code 5 means that the app is open and did not make the change. The message says which case it is and what to do:
 
-- Changes by agents are switched off in the app (the switch "Agents can make changes while The Writer is open" in its Agents panel), or the app is a version before 0.6.0. Nothing was changed. Do not retry, and do not quit the app yourself: tell the user what the message says, and wait. Reading in the meantime is fine.
+- Changes by agents are switched off in the app (the switch "Agents can make changes while The Writer is open" in its Agents panel), or the app is another version than this tool (one before 0.6.0 takes no changes at all). Nothing was changed. Do not retry, and do not quit the app yourself: tell the user what the message says, and wait. Reading in the meantime is fine.
 - The app was busy for a moment (the user is in the middle of typing a character, a dialog is open, the app is quitting). Nothing was changed: run the command again after a few seconds.
 - The message says that it is not known whether the change was made. Read the document again before you repeat anything.
 

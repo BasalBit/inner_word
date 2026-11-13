@@ -232,8 +232,8 @@ when that is a pipe or a file.\n",
         out.push_str(
             "\nThis command changes the library. While The Writer is open the app makes the change\n\
 and shows it to the user at once. Exit code 5: the app is open and did not make it (the\n\
-message says why: changes by agents are switched off in the app, or it is a version\n\
-before 0.6.0, or it did not answer).\n",
+message says why: changes by agents are switched off in the app, or it is another\n\
+version than this tool, or it did not answer).\n",
         );
     }
     if spec

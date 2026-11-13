@@ -607,13 +607,29 @@ open" below).
 ## Document model in one paragraph
 
 A document is an ordered list of blocks. A block has a stable id, a kind (paragraph,
-heading 1–6, bullet / numbered / todo list item, quote, code block, divider, page break),
-alignment, indent level, an optional block-level text size, and text with inline spans.
-Inline attributes: bold, italic, underline, strikethrough, code, highlight, text colour,
-font family, link, and comment anchors. A `\n` inside a block's text is a soft line break
-(shift-enter); a code block is one block with multi-line text. Font *family* is inline;
+heading 1–6, bullet / numbered / todo list item, quote, code block, divider, page break,
+image), alignment, indent level, an optional block-level text size, and text with inline
+spans. Inline attributes: bold, italic, underline, strikethrough, code, highlight, text
+colour, font family, link, and comment anchors. A `\n` inside a block's text is a soft line
+break (shift-enter); a code block is one block with multi-line text. Font *family* is inline;
 font *size* is per block (GPUI shapes a line at a single size). Comment threads are anchored
 to text through span attributes so they move with edits.
+
+A divider, a page break and an image are *void* blocks: no text, one caret position. An
+image block (`BlockKind::Image`, an `Image`) holds the id of its stored bytes (`ImageId`:
+the first 16 bytes of their SHA-256, 32 hex digits; `writer-core` never sees the bytes), their
+pixel size and density, its width as a share of the text column in thousandths
+(`ImageWidth`, 5 % to 100 %, never stored wider than a page of the document allows) and a
+one-line description. It stands left, centred or right (never justified) and has no indent
+and no text size. The caret on an image is "the image is selected"
+(`EditorState::selected_image`): copy and cut take the image then. On a void block typing
+and `enter` start a paragraph below it and `shift-enter` one above it; `backspace` and
+`delete` on it remove it. `backspace` at the start of the paragraph below an image, and
+`delete` at the end of the block above one, select the image first and delete it at the
+second press (a divider goes at the first). In the document's JSON an image is
+`{"type":"image","image":"<id>","px":[w,h],"ppi":144,"width":500,"alt":"..."}`; a document
+that holds one is written as format version 2, any other as version 1 as before
+(`writer_core::serial`).
 
 ## Default keymap
 

@@ -4,9 +4,9 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, Focusable, FontWeight, KeyContext,
-    MouseButton, MouseDownEvent, Pixels, Window, anchored, canvas, deferred, div, point,
-    prelude::*, px, uniform_list,
+    AnyElement, Bounds, ClickEvent, Context, DispatchPhase, DragMoveEvent, ExternalPaths,
+    FileDropEvent, Focusable, FontWeight, KeyContext, MouseButton, MouseDownEvent, Pixels, Window,
+    anchored, canvas, deferred, div, point, prelude::*, px, uniform_list,
 };
 use writer_ui::theme::{
     ActiveTheme, RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, UI_TEXT_BASE, UI_TEXT_SM, UI_TEXT_XS,
@@ -14,7 +14,7 @@ use writer_ui::theme::{
 use writer_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
 use super::controls::{ICON_BUTTON, hover_fill, icon_button, rest_fill, text_button};
-use super::drag::{DragPreview, DraggedItem, DropTarget};
+use super::drag::{DragPreview, DraggedItem, DropTarget, item_icon};
 use super::menu::MenuKind;
 use super::rows::{count_documents, grouped, label_around_match};
 use super::{
@@ -213,6 +213,17 @@ impl Render for LibraryPanel {
             .on_action(cx.listener(Self::on_expand_all))
             .on_action(cx.listener(Self::on_collapse_all))
             .on_action(cx.listener(Self::on_open_context_menu))
+            // Files dragged in from outside the app (the Finder) can be dropped anywhere on
+            // the panel; the app decides what to take (`LibraryPanelEvent::DropPaths`).
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                    let position = event.event.position;
+                    this.files_dragged_over(position, event.bounds.contains(&position), cx);
+                },
+            ))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.files_dropped(paths.paths().to_vec(), window.mouse_position(), cx)
+            }))
             // A drag that leaves the tree (over the filter, out of the sidebar) has no
             // place to land any more. Listeners of the parts inside run after this one.
             .on_drag_move::<DraggedItem>(cx.listener(
@@ -241,6 +252,28 @@ impl Render for LibraryPanel {
                     .absolute()
                     .size_0(),
             )
+            // Files dragged from outside that leave the window end their drag without a
+            // drop, and without a frame that would clear the mark of where they would go.
+            .child({
+                let panel = cx.entity().downgrade();
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let panel = panel.clone();
+                        window.on_mouse_event(move |event: &FileDropEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Bubble
+                                && matches!(event, FileDropEvent::Exited)
+                            {
+                                panel
+                                    .update(cx, |panel, cx| panel.clear_drop_target(cx))
+                                    .ok();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0()
+            })
             .child(header)
             .children(root_row)
             .child(body)
@@ -636,12 +669,7 @@ impl LibraryPanel {
                             this.click_disclosure(ix, cx);
                         }))
                 });
-            let icon = Icon::new(match row.item {
-                LibraryItem::Folder(_) if row.expanded => IconName::FolderOpen,
-                LibraryItem::Folder(_) => IconName::Folder,
-                LibraryItem::Document(_) => IconName::Document,
-            })
-            .color(if active {
+            let icon = Icon::new(item_icon(row.item, row.page, row.expanded)).color(if active {
                 colors.accent
             } else if selected || drop_into {
                 colors.ink
@@ -767,6 +795,7 @@ impl LibraryPanel {
                             DraggedItem {
                                 item: row.item,
                                 label: row.label.clone(),
+                                page: row.page,
                             },
                             |dragged, grabbed_at, _, cx| {
                                 cx.new(|_| DragPreview::new(dragged.clone(), grabbed_at))
@@ -1069,15 +1098,8 @@ impl LibraryPanel {
                                 (selected && panel_focused).then(|| focus_mark(colors.accent)),
                             )
                             .child(
-                                Icon::new(match row.item {
-                                    LibraryItem::Folder(_) => IconName::Folder,
-                                    LibraryItem::Document(_) => IconName::Document,
-                                })
-                                .color(if selected {
-                                    colors.ink
-                                } else {
-                                    colors.muted
-                                }),
+                                Icon::new(item_icon(row.item, row.page, false))
+                                    .color(if selected { colors.ink } else { colors.muted }),
                             )
                             .child(
                                 // Absolutely placed lines, so both truncate with an

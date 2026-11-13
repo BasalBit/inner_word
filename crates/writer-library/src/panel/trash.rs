@@ -1,7 +1,7 @@
 //! The rows of the trash view, built from the library's trash listing.
 
 use gpui::SharedString;
-use writer_store::{FolderId, TrashEntry};
+use writer_store::{DocumentKind, FolderId, TrashEntry};
 
 use super::LibraryItem;
 use super::rows::{UNTITLED, plural};
@@ -20,6 +20,8 @@ pub(super) struct TrashRow {
     pub location: SharedString,
     /// Folders: what went to the trash with it ("3 documents, 1 subfolder").
     pub contents: Option<SharedString>,
+    /// A page rather than a text. Always false for folders.
+    pub page: bool,
 }
 
 /// Reads the trash and describes each entry. One store query plus one cached-tree walk per
@@ -40,6 +42,7 @@ pub(super) fn build_trash_rows(library: &Library) -> Vec<TrashRow> {
                     },
                     location: location_label(library, meta.folder_id),
                     contents: None,
+                    page: meta.kind == DocumentKind::Page,
                 }
             }
             TrashEntry::Folder {
@@ -57,6 +60,7 @@ pub(super) fn build_trash_rows(library: &Library) -> Vec<TrashRow> {
                     label: folder.name.clone().into(),
                     location: location_label(library, folder.parent_id),
                     contents: Some(contents.into()),
+                    page: false,
                 }
             }
         })

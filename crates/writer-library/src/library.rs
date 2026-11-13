@@ -9,9 +9,9 @@ use gpui::{Context, EventEmitter, SharedString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use writer_store::{
-    Clock, Document, DocumentContent, DocumentId, DocumentMeta, EmptiedTrash, Folder, FolderId,
-    FolderNode, ImageId, ImageInfo, LibraryTree, NewImage, Result, SearchHit, Snapshot, SnapshotId,
-    SnapshotMeta, Store, TrashEntry,
+    Clock, Document, DocumentContent, DocumentId, DocumentKind, DocumentMeta, EmptiedTrash,
+    FileInfo, Folder, FolderId, FolderNode, ImageId, ImageInfo, LibraryTree, NewImage, PageContent,
+    Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, Store, TrashEntry,
 };
 
 /// A change made through a [`Library`].
@@ -143,6 +143,9 @@ pub struct DocumentEntry {
     pub meta: DocumentMeta,
     /// Folder names from the root down to the document's folder. Empty for a root document.
     pub folder_path: Vec<String>,
+    /// What kind of item it is: a text, or a page (the same as `meta.kind`, here so that a
+    /// listing can tell the two apart without looking into the metadata).
+    pub kind: DocumentKind,
 }
 
 impl DocumentEntry {
@@ -404,12 +407,66 @@ impl Library {
     ) -> Result<DocumentMeta> {
         // The title before the save: from the cache for a live document, from the store
         // for one that is in the trash (or missing, which is the error to return).
-        let same_title = match self.tree.find_document(id) {
-            Some(cached) => cached.title == content.title,
-            None => self.store.document_meta(id)?.title == content.title,
-        };
+        let same_title = self.has_title(id, content.title)?;
         let meta = self.store.save_document(id, content)?;
-        let title_changed = !same_title;
+        self.content_saved(meta, !same_title, cx)
+    }
+
+    /// Creates a page at the end of `folder` (`None` is the root), as
+    /// [`create_document`](Self::create_document) creates a text: the caller supplies the
+    /// manifest JSON, the rendered text and its counts, and every file the manifest names
+    /// is stored already ([`Store::put_file`]; the store refuses with
+    /// [`StoreError::FilesMissing`](writer_store::StoreError::FilesMissing) otherwise and
+    /// writes nothing). Emits the events of a new document: `DocumentCreated`,
+    /// `TreeChanged`.
+    pub fn create_page(
+        &mut self,
+        folder: Option<FolderId>,
+        page: &PageContent<'_>,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentMeta> {
+        let meta = self.store.create_page(folder, page)?;
+        self.changed(cx, [LibraryEvent::DocumentCreated(meta.id)], false, true)?;
+        Ok(meta)
+    }
+
+    /// Saves a page's manifest with its title, rendered text, counts and source address,
+    /// as [`save_document`](Self::save_document) saves a text, with the same events:
+    /// `DocumentSaved`, and `TreeChanged` when the title changed on a live page. The tree
+    /// is not reloaded; the page's entry is replaced in place. Refuses a text with
+    /// [`StoreError::WrongKind`](writer_store::StoreError::WrongKind) and a manifest that
+    /// names a file the library does not have with `FilesMissing`; neither changes
+    /// anything or emits anything. Works on a trashed page.
+    pub fn save_page(
+        &mut self,
+        id: DocumentId,
+        page: &PageContent<'_>,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentMeta> {
+        let same_title = self.has_title(id, page.title)?;
+        let meta = self.store.save_page(id, page)?;
+        self.content_saved(meta, !same_title, cx)
+    }
+
+    /// Whether the item `id` has the title `title` now: from the cache for a live item,
+    /// from the store for one that is in the trash (or missing, which is the error).
+    fn has_title(&self, id: DocumentId, title: &str) -> Result<bool> {
+        Ok(match self.tree.find_document(id) {
+            Some(cached) => cached.title == title,
+            None => self.store.document_meta(id)?.title == title,
+        })
+    }
+
+    /// What follows a successful save of a text or a page: the cached entry replaced in
+    /// place (or the tree read again where the cache does not have it), `DocumentSaved`,
+    /// and `TreeChanged` when the title changed on a live item.
+    fn content_saved(
+        &mut self,
+        meta: DocumentMeta,
+        title_changed: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentMeta> {
+        let id = meta.id;
         let live = meta.trashed_at.is_none();
         // A trashed document is not in the tree. For a live one, a reload is only needed
         // if the cache does not hold the document where the store says it is.
@@ -573,6 +630,7 @@ impl Library {
             .documents()?
             .into_iter()
             .map(|meta| DocumentEntry {
+                kind: meta.kind,
                 folder_path: meta
                     .folder_id
                     .and_then(|id| paths.get(&id).cloned())
@@ -618,6 +676,17 @@ impl Library {
     /// [`put_image`](Self::put_image).
     pub fn touch_image(&mut self, id: &ImageId) -> Result<Option<ImageInfo>> {
         self.store.touch_image(id)
+    }
+
+    /// Stores the bytes of a file of a page once, under the hash of the bytes
+    /// ([`Store::put_file`]). Committed before it returns. No event, as for
+    /// [`put_image`](Self::put_image): **store every file of a page before the page that
+    /// names them** ([`create_page`](Self::create_page), [`save_page`](Self::save_page)
+    /// refuse a manifest that names a file the library does not have). Many or large
+    /// files are stored in the background through a [`writer_store::ImageFile`] of their
+    /// own instead.
+    pub fn put_file(&mut self, bytes: &[u8]) -> Result<FileInfo> {
+        self.store.put_file(bytes)
     }
 
     // ----- trash ----------------------------------------------------------------------

@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use gpui::SharedString;
-use writer_store::{DocumentMeta, FolderId, FolderNode, LibraryTree};
+use writer_store::{DocumentKind, DocumentMeta, FolderId, FolderNode, LibraryTree};
 
 use super::LibraryItem;
 
@@ -32,6 +32,9 @@ pub(super) struct Row {
     pub word_count: u64,
     /// Folders: live documents in the whole subtree.
     pub document_count: usize,
+    /// A page (an HTML page kept in the library) rather than a text. Always false for
+    /// folders.
+    pub page: bool,
 }
 
 /// A name filter: every whitespace-separated word must occur in the name, ignoring case.
@@ -104,6 +107,7 @@ fn document_row(
         updated_at: document.updated_at,
         word_count: document.word_count,
         document_count: 0,
+        page: document.kind == DocumentKind::Page,
     }
 }
 
@@ -126,6 +130,7 @@ fn folder_row(
         updated_at: node.folder.updated_at,
         word_count: 0,
         document_count: count_documents(node),
+        page: false,
     }
 }
 

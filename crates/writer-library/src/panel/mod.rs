@@ -30,7 +30,7 @@ use writer_store::{DocumentContent, DocumentId, FolderId, Result};
 use writer_ui::context_menu::OpenContextMenu;
 use writer_ui::toast::show_toast;
 use writer_ui::{
-    CommandDescriptor, ConfirmDialog, FieldAppearance, ModalLayer, Picker, TextField,
+    CommandDescriptor, ConfirmDialog, FieldAppearance, IconName, ModalLayer, Picker, TextField,
     TextFieldEvent, Toast,
 };
 
@@ -409,7 +409,8 @@ enum View {
 /// # What it shows
 ///
 /// - A filter field (`/`), which narrows the tree by name as you type.
-/// - The tree: nested folders first, then documents, in the user's own order. Folders
+/// - The tree: nested folders first, then documents, in the user's own order. A page (an
+///   HTML page kept in the library) is a document row with a globe for its icon. Folders
 ///   expand and collapse. The document open in the editor is marked. Each document row has
 ///   a muted detail: how long ago it was edited, or its word count
 ///   ([`RowDetail`], switched with `i`).
@@ -472,6 +473,12 @@ enum View {
 ///   the keys make (`m`, `alt-up` / `alt-down`, `cmd-backspace`) and `cmd-z` takes them
 ///   back. Under a filter only moves into folders are offered. Close to the top or
 ///   bottom edge of the list a drag scrolls it.
+/// - Files dragged in from outside the app (the Finder) can be dropped anywhere on the
+///   panel: the panel takes none of them itself and emits
+///   [`LibraryPanelEvent::DropPaths`] with the folder they were dropped into (a folder
+///   row: that folder; a document row: its folder; the "Library" row: the top level;
+///   anywhere else: the folder selected, else the top level), which is marked while they
+///   are over it. The app decides what to take (`.html` files and folders become pages).
 /// - The trash view has its actions as buttons under the list, and "Back" above it; the
 ///   empty library offers "New document" and "New folder" as buttons.
 ///
@@ -1001,6 +1008,16 @@ impl LibraryPanel {
             library.set_setting(ROW_DETAIL_SETTING, &detail, cx)
         });
         cx.notify();
+    }
+
+    /// The icon drawn on the row of `item`, in the tree as it is shown, else in the trash:
+    /// a folder, a text, or the globe of a page. `None` when the item has no row.
+    pub fn item_icon(&self, item: LibraryItem) -> Option<IconName> {
+        if let Some(row) = self.rows.iter().find(|row| row.item == item) {
+            return Some(drag::item_icon(row.item, row.page, row.expanded));
+        }
+        let row = self.trash_rows.iter().find(|row| row.item == item)?;
+        Some(drag::item_icon(row.item, row.page, false))
     }
 
     /// The muted detail drawn at the right of a visible row: for a document its edit time

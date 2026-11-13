@@ -5,6 +5,7 @@
 //! The moves go through the same [`Library`](crate::Library) calls as the keyboard paths
 //! (`m`, `alt-up` / `alt-down`) and are recorded for `cmd-z` in the same way.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{Context, IntoElement, Pixels, Render, SharedString, Window, div, prelude::*, px};
@@ -14,18 +15,32 @@ use writer_ui::toast::show_toast;
 use writer_ui::{Icon, IconName, Toast};
 
 use super::rows::{ancestors, place_of};
-use super::{LibraryItem, LibraryPanel, ROW_HEIGHT, View};
+use super::{LibraryItem, LibraryPanel, LibraryPanelEvent, ROW_HEIGHT, View};
 
 /// How long a drag rests on a collapsed folder before the folder opens.
 pub(super) const EXPAND_ON_HOVER: Duration = Duration::from_millis(650);
 /// How close to the top or bottom edge of the list a drag scrolls it.
 const SCROLL_EDGE: Pixels = px(18.);
 
+/// The icon of an item of the library, wherever the panel draws one (a row of the tree, a
+/// row of the trash, the ghost of a drag): a folder (open or closed), a text, or a page,
+/// which has the globe.
+pub(super) fn item_icon(item: LibraryItem, page: bool, open: bool) -> IconName {
+    match item {
+        LibraryItem::Folder(_) if open => IconName::FolderOpen,
+        LibraryItem::Folder(_) => IconName::Folder,
+        LibraryItem::Document(_) if page => IconName::Globe,
+        LibraryItem::Document(_) => IconName::Document,
+    }
+}
+
 /// What a drag out of the tree carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DraggedItem {
     pub item: LibraryItem,
     pub label: SharedString,
+    /// The item is a page: the ghost shows the globe.
+    pub page: bool,
 }
 
 /// What follows the pointer during a drag: the icon and name of the dragged item, a little
@@ -66,11 +81,8 @@ impl Render for DragPreview {
             .text_size(UI_TEXT_BASE)
             .text_color(colors.ink)
             .child(
-                Icon::new(match self.dragged.item {
-                    LibraryItem::Folder(_) => IconName::Folder,
-                    LibraryItem::Document(_) => IconName::Document,
-                })
-                .color(colors.muted),
+                Icon::new(item_icon(self.dragged.item, self.dragged.page, false))
+                    .color(colors.muted),
             )
             .child(div().min_w_0().truncate().child(self.dragged.label.clone()));
         div()
@@ -299,6 +311,78 @@ impl LibraryPanel {
         let y = position.y - list.top() - handle.offset().y;
         let ix = (y / ROW_HEIGHT).floor();
         (ix >= 0. && (ix as usize) < self.rows.len()).then_some(ix as usize)
+    }
+
+    /// The folder that files dropped at `position` (window coordinates) go into, as
+    /// [`LibraryPanelEvent::DropPaths`] names it: the folder of a folder row; the folder a
+    /// document row is in (`None` at the top level); the top level on the "Library" row;
+    /// anywhere else on the panel (the empty area under the rows, the filter, the trash
+    /// row, the trash view) the folder selected, else the top level.
+    pub(super) fn folder_for_files_at(&self, position: gpui::Point<Pixels>) -> Option<FolderId> {
+        if self.view == View::Tree {
+            if let Some(row) = self.row_at(position).and_then(|ix| self.rows.get(ix)) {
+                return match row.item {
+                    LibraryItem::Folder(id) => Some(id),
+                    LibraryItem::Document(_) => row.parent,
+                };
+            }
+            if self.anchors.root_row.get().contains(&position) {
+                return None;
+            }
+        }
+        self.selected_folder()
+    }
+
+    /// Files from outside the app are dragged over the panel at `position`: the place they
+    /// would go is marked as a dragged row's is (the folder's row, or the "Library" row),
+    /// and a collapsed folder under them opens after a moment.
+    pub(super) fn files_dragged_over(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        inside: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !inside {
+            self.clear_drop_target(cx);
+            return;
+        }
+        let target = DropTarget::Into(self.folder_for_files_at(position));
+        self.set_drop_target(Some(target), cx);
+        // Only a folder under the pointer opens by itself, not the selected one the files
+        // would go to from the empty area.
+        let on_a_folder_row = self.view == View::Tree
+            && self
+                .row_at(position)
+                .and_then(|ix| self.rows.get(ix))
+                .is_some_and(|row| matches!(row.item, LibraryItem::Folder(_)));
+        if !on_a_folder_row {
+            self.drop_expand = None;
+        }
+    }
+
+    /// Files from outside the app were dropped on the panel at `position` (window
+    /// coordinates): emits [`LibraryPanelEvent::DropPaths`] with the folder under them
+    /// ([`folder_for_files_at`](Self::folder_for_files_at)). The panel takes none of them
+    /// itself; the app decides what to do with which. Nothing is emitted for no paths.
+    ///
+    /// This is what the panel's drop listener calls. It is public so that a headless test
+    /// can drop real paths: GPUI's `ExternalPaths` cannot be built outside GPUI with
+    /// paths in it. Not part of the API.
+    #[doc(hidden)]
+    pub fn files_dropped(
+        &mut self,
+        paths: Vec<PathBuf>,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let folder = self.folder_for_files_at(position);
+        self.drop_target = None;
+        self.drop_expand = None;
+        cx.notify();
+        if paths.is_empty() {
+            return;
+        }
+        cx.emit(LibraryPanelEvent::DropPaths { paths, folder });
     }
 
     /// The dragged item was dropped: move it to where the indicator was. The panel takes

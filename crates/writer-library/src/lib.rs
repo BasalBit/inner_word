@@ -20,6 +20,12 @@
 //! Errors are returned as [`StoreError`] (`Result<T>`), never panics. A failed call changes
 //! nothing and emits nothing.
 //!
+//! A library item is a text or a page ([`DocumentKind`]): a page is an HTML page kept whole
+//! in the library, created and saved with [`Library::create_page`] and
+//! [`Library::save_page`] (the same events as a text), and shown in the sidebar with a
+//! globe. The panel does not open pages itself: it emits
+//! [`LibraryPanelEvent::OpenDocument`] for either kind, and the app looks at the kind.
+//!
 //! The bytes of the images that documents hold are stored through the library too
 //! ([`Library::put_image`], [`Library::touch_image`]; the reads go through
 //! [`Library::store`]). Storing bytes emits no event: nothing anybody shows changes.
@@ -116,6 +122,10 @@ pub use writer_store::{
     NewImage, Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart,
     StoreError, TrashEntry, data_dir, database_path,
 };
+/// The kinds of library item (a text, a page) and what a page is made of, as the store has
+/// them: a page's content ([`Library::create_page`], [`Library::save_page`]) and the files
+/// its manifest names (stored in `images.db` beside the pictures).
+pub use writer_store::{DocumentKind, FileId, FileInfo, PageContent};
 
 /// Installs the key bindings of the library panel. Call once at startup, after the app's
 /// own context-free bindings (a later binding wins at equal context depth).

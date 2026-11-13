@@ -48,6 +48,15 @@ pub(crate) fn render(document: &Document, title: &str, format: TextFormat) -> St
     }
 }
 
+/// The line `image` is in the Markdown of a document, as [`render`] writes it: the
+/// exporter's own line, so that the description is escaped as it is there.
+pub(crate) fn image_markdown(image: &writer_core::Image) -> String {
+    let document = Document::from_blocks(vec![Block::image(image.clone())]);
+    render(&document, "", TextFormat::Markdown)
+        .trim()
+        .to_string()
+}
+
 /// An image block as a result shows it; `None` for a block that is no image. `index` is
 /// the place of the block in its document, whose page is `page`.
 fn image_summary(
@@ -70,6 +79,7 @@ fn image_summary(
         align: block.alignment().name().to_string(),
         description: image.description.clone(),
         missing: stored.is_none(),
+        markdown: image_markdown(image),
     }))
 }
 
@@ -610,6 +620,7 @@ pub(crate) fn add_image(
         align: after.blocks()[index].alignment().name().to_string(),
         description: image.description.clone(),
         missing: false,
+        markdown: image_markdown(image),
     });
     finish_change(
         session,

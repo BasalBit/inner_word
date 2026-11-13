@@ -983,6 +983,12 @@ pub struct ImageSummary {
     /// Whether the library does not have the picture the document names. The image
     /// stays in the document all the same, and the app shows a placeholder for it.
     pub missing: bool,
+    /// The line the image is in the Markdown of the document, as the document's Markdown
+    /// has it: `![description](image:<id>)`, with whatever in the description Markdown
+    /// would read as formatting escaped, so that the line written back is this image.
+    /// Empty from an app of a version that did not send it.
+    #[serde(default)]
+    pub markdown: String,
 }
 
 /// A request to find a piece of text in a document: where an edit or a comment with this

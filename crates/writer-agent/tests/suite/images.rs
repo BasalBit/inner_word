@@ -160,6 +160,7 @@ fn an_image_is_added_from_a_file_and_read_as_a_line_of_markdown() {
         align: "center".into(),
         description: DUSK.into(),
         missing: false,
+        markdown: line(DUSK, &id),
     };
     assert_eq!(added.image, Some(image.clone()));
     // The text as it was is kept, as before every change of an agent's.
@@ -1688,4 +1689,46 @@ fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing() {
         );
     }
     assert!(!out.exists(), "an export without its pictures was written");
+}
+
+/// The line a result gives for an image is the line the document's Markdown has: a
+/// description with what Markdown reads as formatting in it is escaped, and the line
+/// written back is the same image with the same description.
+#[test]
+fn the_line_of_an_image_with_markup_in_its_description_is_the_image_written_back() {
+    let fx = fixture();
+    let description = "Scores: 3 ] vs [ 4, *best* run_1_ `x` <b> a\\b";
+    let doc = fx.create(None, "# Scores\n\nBefore.\n");
+    let file = fx.picture("scores.png", (40, 30), [200, 20, 20]);
+    let added = fx
+        .library
+        .add_image(&AddImageRequest {
+            document: doc.id.into(),
+            path: path_of(&file),
+            description: description.into(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    let from_add = added.image.expect("the image").markdown;
+    let read = fx
+        .library
+        .read(&ReadRequest {
+            document: doc.id.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let listed = &read.images[0].markdown;
+    assert_eq!(&from_add, listed);
+    assert!(
+        read.content.lines().any(|line| line == listed),
+        "{listed} is not a line of\n{}",
+        read.content
+    );
+    // Written back alone in place of the document's text, it is the image it was.
+    let back = replace(&fx, doc.id, &format!("# Scores\n\nBefore.\n\n{listed}\n"));
+    assert_eq!((back.images_added, back.images_removed), (0, 0), "{back:?}");
+    let images = fx.images(doc.id);
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].1.description, description);
 }

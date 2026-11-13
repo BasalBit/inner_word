@@ -967,13 +967,15 @@ fn image_line(image: &ImageSummary) -> String {
         "right" => "at the right",
         _ => "at the left",
     };
-    let mut line = format!(
-        "![{}](image:{}), {} x {} pixels",
-        one_line(&image.description),
-        image.id,
-        image.pixels.0,
-        image.pixels.1
-    );
+    // The line as the document's Markdown has it (the description escaped), so that the
+    // line written back is this image; an app of a version that did not send it gets
+    // the line as it was put together before.
+    let markdown = if image.markdown.is_empty() {
+        format!("![{}](image:{})", one_line(&image.description), image.id)
+    } else {
+        image.markdown.clone()
+    };
+    let mut line = format!("{markdown}, {} x {} pixels", image.pixels.0, image.pixels.1);
     if let Some(format) = &image.format {
         line.push_str(&format!(" ({})", format.to_ascii_uppercase()));
     }
@@ -1148,6 +1150,8 @@ mod tests {
             align: "center".into(),
             description: "The harbour\nat dusk".into(),
             missing: false,
+            // From an app that did not send the line: it is put together here.
+            markdown: String::new(),
         };
         assert_eq!(
             image_line(&image),
@@ -1167,6 +1171,19 @@ mod tests {
              column wide, at the right; the library does not have the picture itself"
         );
         assert!(image_line(&image).is_ascii());
+        // The line the library gives is the one said, escaped as the document has it.
+        let escaped = ImageSummary {
+            description: "Fig. 3] *draft*".into(),
+            markdown: "![Fig. 3\\] \\*draft\\*](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)".into(),
+            ..image.clone()
+        };
+        assert!(
+            image_line(&escaped).starts_with(
+                "![Fig. 3\\] \\*draft\\*](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718), 1600 x 1067"
+            ),
+            "{}",
+            image_line(&escaped)
+        );
     }
 
     #[test]

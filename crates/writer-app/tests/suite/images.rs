@@ -2160,3 +2160,72 @@ fn the_welcome_document_says_how_a_picture_comes_in(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// The read of `NSPasteboard` itself, against a pasteboard of the test's
+/// own that is filled the way other apps fill the general one. The
+/// general pasteboard (the user's clipboard) is neither read nor written.
+#[test]
+fn the_app_reads_a_real_pasteboard_the_way_it_decides() {
+    use pasteboard::{FILE_URL, PLAIN_TEXT, private::Pasteboard};
+    let files = tempfile::tempdir().unwrap();
+    let bytes = png(64, 48, RED);
+    let path = file_in(files.path(), "copied in Finder.png", &bytes);
+    let fresh = || Pasteboard::new().expect("a pasteboard of the test's own");
+
+    // An empty pasteboard has nothing.
+    assert_eq!(fresh().read(), None);
+
+    // The Finder: the file's address (with its space escaped, as an
+    // address has it), and the file's name as text.
+    let finder = fresh();
+    let address = format!(
+        "file://{}",
+        path.to_string_lossy().replace(' ', "%20")
+    );
+    assert!(finder.add_text(FILE_URL, &address));
+    assert!(finder.add_text(PLAIN_TEXT, "copied in Finder.png"));
+    match finder.read() {
+        Some(NewImageSource::File(read)) => assert_eq!(
+            read.canonicalize().unwrap(),
+            path.canonicalize().unwrap(),
+            "the path the address names"
+        ),
+        other => panic!("a file copied in the Finder reads as {other:?}"),
+    }
+    // A file that is no image is not a picture.
+    let other = fresh();
+    assert!(other.add_text(FILE_URL, "file:///etc/hosts"));
+    assert!(other.add_text(PLAIN_TEXT, "hosts"));
+    assert_eq!(other.read(), None);
+
+    // A browser's "Copy Image": the picture, and its address as text.
+    let browser = fresh();
+    assert!(browser.add_data("public.png", &bytes));
+    assert!(browser.add_text(PLAIN_TEXT, "https://example.com/harbour.png"));
+    assert_eq!(browser.read(), Some(NewImageSource::Bytes(bytes.clone())));
+
+    // Cells of a spreadsheet: a picture of them beside their text. Text.
+    let cells = fresh();
+    assert!(cells.add_data("public.png", &bytes));
+    assert!(cells.add_text(PLAIN_TEXT, "Month\tSalt\nMay\t12"));
+    assert_eq!(cells.read(), None);
+
+    // A photo of a kind GPUI does not know, and no text: its data, as it
+    // is on the pasteboard (what it is, is for `writer_image::prepare`).
+    let photo = fresh();
+    assert!(photo.add_data("public.heic", b"not really a HEIC"));
+    assert_eq!(
+        photo.read(),
+        Some(NewImageSource::Bytes(b"not really a HEIC".to_vec()))
+    );
+    // And of two kinds the one the library stores as it is.
+    let two = fresh();
+    assert!(two.add_data("public.tiff", b"a TIFF"));
+    assert!(two.add_data("public.png", &bytes));
+    assert_eq!(two.read(), Some(NewImageSource::Bytes(bytes)));
+
+    // Plain text.
+    let words = fresh();
+    assert!(words.add_text(PLAIN_TEXT, "The boats came by road."));
+    assert_eq!(words.read(), None);
+}

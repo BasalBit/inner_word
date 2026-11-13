@@ -211,7 +211,7 @@ impl Pictures {
 
     /// One of the two large pictures, for a generated book: full width.
     pub fn for_book(&self, index: usize) -> Block {
-        let image = if index % 2 == 0 {
+        let image = if index.is_multiple_of(2) {
             &self.landscape
         } else {
             &self.phone

@@ -47,6 +47,14 @@ pub(crate) const BUDGET_BYTES: usize = 128 * 1024 * 1024;
 /// atlas.
 pub(crate) const MAX_SIDE: u32 = 8192;
 
+#[cfg(test)]
+thread_local! {
+    /// How many textures editors that went away handed back to their
+    /// window.
+    pub(crate) static RELEASED_TEXTURES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Why there is no picture for an image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {

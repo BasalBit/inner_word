@@ -2291,7 +2291,12 @@ fn an_editor_that_cannot_be_changed_or_holds_plain_text_takes_no_pictures(cx: &m
     editor.update_in(cx, |editor, window, cx| {
         editor.file_drag_moved(point(px(400.), px(60.)), cx);
         assert_eq!(editor.file_drop, None);
-        editor.drop_files(&[path.clone()], point(px(400.), px(60.)), window, cx);
+        editor.drop_files(
+            std::slice::from_ref(&path),
+            point(px(400.), px(60.)),
+            window,
+            cx,
+        );
         editor.insert_image_files(vec![path.clone()], window, cx);
     });
     cx.run_until_parked();
@@ -2323,7 +2328,12 @@ fn an_editor_that_cannot_be_changed_or_holds_plain_text_takes_no_pictures(cx: &m
     images.set_pasteboard(Some(NewImageSource::File(path.clone())));
     cx.simulate_keystrokes("cmd-v");
     composer.update_in(cx, |editor, window, cx| {
-        editor.drop_files(&[path.clone()], point(px(40.), px(10.)), window, cx);
+        editor.drop_files(
+            std::slice::from_ref(&path),
+            point(px(40.), px(10.)),
+            window,
+            cx,
+        );
         editor.insert_image_files(vec![path.clone()], window, cx);
         // The pasteboard's picture does not count for it.
         cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
@@ -2824,6 +2834,72 @@ fn decoded_pictures_stay_within_their_budget_and_their_textures_go_with_them(
     assert!(painted_at(&editor, 0, cx).level.is_some());
     let again = images.asked().split_off(asked);
     assert!(again.contains(&pictures[0].id), "{again:?}");
+}
+
+/// A view that shows an editor until it lets go of it.
+struct Holder {
+    editor: Option<Entity<Editor>>,
+}
+
+impl Render for Holder {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().children(self.editor.clone())
+    }
+}
+
+#[gpui::test]
+fn an_editor_that_goes_away_takes_its_textures_out_of_the_window(cx: &mut TestAppContext) {
+    setup(cx);
+    let images = FakeImages::new();
+    let pictures = [images.add_png(300, 200), images.add_png(200, 300)];
+    let (holder, cx) = cx.add_window_view(|window, cx| {
+        let editor = cx.new(|cx| {
+            let mut editor = Editor::new(
+                flow(vec![
+                    picture(&pictures[0], 300, Alignment::Left),
+                    picture(&pictures[1], 200, Alignment::Left),
+                    paragraph(0),
+                ]),
+                EditorConfig::full(),
+                window,
+                cx,
+            );
+            editor.set_image_provider(Some(images.clone()), cx);
+            editor
+        });
+        Holder {
+            editor: Some(editor),
+        }
+    });
+    cx.run_until_parked();
+    let shown = holder.read_with(cx, |holder, cx| {
+        holder
+            .editor
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .painted_images
+            .len()
+    });
+    assert_eq!(shown, 2);
+    let before = crate::images::RELEASED_TEXTURES.with(|count| count.get());
+    // The window stays, the editor goes. (The window holds on to what the
+    // last frames registered, the editor's listeners among it, for two
+    // frames more.)
+    holder.update(cx, |holder, cx| {
+        holder.editor = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    for _ in 0..2 {
+        holder.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        crate::images::RELEASED_TEXTURES.with(|count| count.get()),
+        before + 2,
+        "the pictures of an editor that went away are still in the window's atlas"
+    );
 }
 
 // ---------------------------------------------------------------------------

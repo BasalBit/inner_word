@@ -47,6 +47,8 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 use gpui::{App, AppContext, Bounds, Context, Pixels, Task, Window, point, px, size};
 use writer_core::{Image, ImageId};
 
+#[cfg(test)]
+pub(crate) use cache::RELEASED_TEXTURES;
 pub(crate) use cache::{Failure, Pictures, decode};
 pub use fake::FakeImages;
 pub(crate) use insert::drop_line;

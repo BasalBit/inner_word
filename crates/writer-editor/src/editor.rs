@@ -356,7 +356,11 @@ impl Editor {
             // go when the editor goes.
             cx.on_release_in(window, |this, window, _| {
                 for picture in this.images.drain() {
-                    window.drop_image(picture).ok();
+                    let _dropped = window.drop_image(picture).is_ok();
+                    #[cfg(test)]
+                    if _dropped {
+                        crate::images::RELEASED_TEXTURES.with(|count| count.set(count.get() + 1));
+                    }
                 }
             }),
         ];

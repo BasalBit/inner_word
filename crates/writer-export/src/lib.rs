@@ -54,7 +54,13 @@
 //! Both return an [`Imported`]: the document, a [`Fragment`] of the same
 //! blocks to insert into a document that exists, the title the text
 //! names, and an [`ImportWarning`] for everything the document cannot hold
-//! as written (tables, images, raw HTML), which is kept as readable text.
+//! as written (tables, footnotes, raw HTML), which is kept as readable text.
+//!
+//! An image in Markdown becomes an image of the document when the caller
+//! can say which stored image it is: [`from_markdown_with_images`] asks an
+//! [`ImageResolver`] for every image ([`KnownImages`] answers for the
+//! images a document already holds). [`from_markdown`] has no resolver and
+//! keeps every image as a link.
 //!
 //! [`Fragment`]: writer_core::Fragment
 //!
@@ -95,9 +101,11 @@ use writer_core::{Document, ImageId};
 
 pub use docx::{DocxOptions, to_docx};
 pub use import::{
-    ImportWarning, ImportWarningKind, Imported, MarkdownFrontMatter, MarkdownImportOptions,
-    MarkdownLeadingHeading, MarkdownSoftBreaks, PlainTextImportOptions, PlainTextLines,
-    from_markdown, from_plain_text, summarize_warnings,
+    ImageProblem, ImageResolution, ImageResolver, ImportWarning, ImportWarningKind, Imported,
+    KnownImages, MarkdownFrontMatter, MarkdownImportOptions, MarkdownLeadingHeading,
+    MarkdownSoftBreaks, PlainTextImportOptions, PlainTextLines, from_markdown,
+    from_markdown_with_images, from_plain_text, image_reference, markdown_image_sources,
+    summarize_warnings,
 };
 pub use markdown::{
     MarkdownComments, MarkdownHighlight, MarkdownImages, MarkdownOptions, MarkdownPageBreak,

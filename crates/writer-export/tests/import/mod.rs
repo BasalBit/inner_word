@@ -7,9 +7,12 @@
 //! comparison it shares.
 
 use super::*;
+use writer_core::{DocumentSettings, Margins, PageSetup, PaperSize};
 use writer_export::{
-    ImportWarningKind, Imported, MarkdownFrontMatter, MarkdownImportOptions,
-    MarkdownLeadingHeading, MarkdownSoftBreaks, from_markdown, summarize_warnings,
+    ImageProblem, ImageResolution, ImageResolver, ImportWarningKind, Imported, KnownImages,
+    MarkdownFrontMatter, MarkdownImportOptions, MarkdownLeadingHeading, MarkdownSoftBreaks,
+    from_markdown, from_markdown_with_images, image_reference, markdown_image_sources,
+    summarize_warnings,
 };
 
 // ----- a readable form of a document ------------------------------------------------------
@@ -27,13 +30,22 @@ fn describe_block(b: &Block) -> String {
         BlockKind::CodeBlock { language: Some(l) } => format!("code({l})"),
         BlockKind::Divider => "divider".to_string(),
         BlockKind::PageBreak => "pagebreak".to_string(),
-        BlockKind::Image(image) => format!("image({})", image.id),
+        // The first digits of the id and the width in thousandths; the
+        // description is shown as the text of the block.
+        BlockKind::Image(image) => format!(
+            "image({} {})",
+            &image.id.to_string()[..4],
+            image.width.thousandths()
+        ),
     };
     if b.indent() > 0 {
         head.push_str(&format!("+{}", b.indent()));
     }
     if b.alignment() != Alignment::Left {
         head.push_str(&format!(" ({})", b.alignment().name()));
+    }
+    if let Some(image) = b.as_image().filter(|i| !i.description.is_empty()) {
+        return format!("{head}: {}", image.description);
     }
     if b.text().is_empty() {
         return head;
@@ -639,6 +651,960 @@ fn images_become_links() {
     assert_eq!(w, [ImportWarningKind::Image]);
 }
 
+// ----- images -----------------------------------------------------------------------------
+
+/// A library for the tests: what a caller of the importer knows about the
+/// destinations of images, and a record of what it was asked.
+#[derive(Default)]
+struct Library {
+    /// The images of the document that is being written into.
+    known: KnownImages,
+    asked: Vec<String>,
+}
+
+/// A photograph, 1600 × 1067 pixels at 144 to the inch: wider than a page.
+fn harbour() -> Image {
+    Image::new(image_id("3f2a"), (1600, 1067), 144)
+}
+
+/// 800 × 500 pixels at 144 to the inch: 400 × 250 points.
+fn drawing() -> Image {
+    Image::new(image_id("00ff"), (800, 500), 144)
+}
+
+/// A screenshot of a phone, 1170 × 2532 pixels: as wide as a page it
+/// would be taller than one.
+fn phone() -> Image {
+    Image::new(image_id("abcd"), (1170, 2532), 144)
+}
+
+const SVG: &str =
+    "drawing.svg is an SVG file. Images can be PNG, JPEG, GIF, HEIC, TIFF, WebP or BMP.";
+
+impl ImageResolver for Library {
+    fn resolve(&mut self, source: &str) -> ImageResolution {
+        self.asked.push(source.to_string());
+        if let Some(known) = self.known.known(source) {
+            return known;
+        }
+        let stored = |image: Image| ImageResolution::Stored {
+            image,
+            width: None,
+            alignment: None,
+        };
+        match source {
+            "harbour.jpg" | "my pictures/harbour (1).jpg" => stored(harbour()),
+            "drawing.png" => stored(drawing()),
+            "phone.png" => stored(phone()),
+            // A resolver that knows how the image should be shown.
+            "placed.png" => ImageResolution::Stored {
+                image: Image {
+                    description: "What the library says it shows".into(),
+                    ..drawing()
+                },
+                width: Some(ImageWidth::from_percent(40)),
+                alignment: Some(Alignment::Center),
+            },
+            "gone.png" | "/Users/someone/gone.png" => ImageResolution::NotFound,
+            "drawing.svg" => ImageResolution::Unsupported(SVG.to_string()),
+            _ => ImageResolution::Remote,
+        }
+    }
+}
+
+fn import_images_with(
+    markdown: &str,
+    options: &MarkdownImportOptions,
+    resolver: &mut dyn ImageResolver,
+) -> Imported {
+    let imported = from_markdown_with_images(markdown, options, resolver);
+    imported
+        .document
+        .check_invariants()
+        .unwrap_or_else(|e| panic!("{e}\nfor:\n{markdown}"));
+    assert_eq!(imported.document.settings(), &options.settings);
+    assert_eq!(imported.is_empty(), imported.fragment().blocks().is_empty());
+    assert_eq!(imported.blocks().len(), imported.fragment().blocks().len());
+    imported
+}
+
+/// The blocks and the kinds of the warnings of Markdown imported with the
+/// test library, which must have been asked for every image in order.
+#[track_caller]
+fn with_library(markdown: &str) -> (Vec<String>, Vec<ImportWarningKind>) {
+    let mut library = Library::default();
+    let imported = import_images_with(markdown, &MarkdownImportOptions::default(), &mut library);
+    assert_eq!(
+        library.asked,
+        markdown_image_sources(markdown),
+        "{markdown}"
+    );
+    let kinds = imported.warnings.iter().map(|w| w.kind).collect();
+    (describe(&imported), kinds)
+}
+
+#[test]
+fn an_image_alone_in_its_paragraph_is_an_image() {
+    let (b, w) = with_library("Before.\n\n![The harbour at dusk](harbour.jpg)\n\nAfter.\n");
+    assert_eq!(
+        b,
+        [
+            "p: Before.",
+            "image(3f2a 1000): The harbour at dusk",
+            "p: After."
+        ]
+    );
+    assert_eq!(w, []);
+    // The only thing in the text; without a description; with spaces and
+    // line ends around it.
+    assert_eq!(with_library("![](harbour.jpg)").0, ["image(3f2a 1000)"]);
+    assert_eq!(
+        with_library("\n\n   ![ The harbour ](harbour.jpg)   \n\n").0,
+        ["image(3f2a 1000): The harbour"]
+    );
+    // Markup around it and inside its description leaves nothing behind.
+    let (b, w) = with_library("**![The *harbour* at `dusk`](harbour.jpg)**\n");
+    assert_eq!(b, ["image(3f2a 1000): The harbour at dusk"]);
+    assert_eq!(w, []);
+    // Two paragraphs, two images; one image used twice.
+    assert_eq!(
+        with_library("![a](harbour.jpg)\n\n![b](drawing.png)\n\n![c](harbour.jpg)\n").0,
+        [
+            "image(3f2a 1000): a",
+            "image(00ff 886): b",
+            "image(3f2a 1000): c"
+        ]
+    );
+    // A destination in angle brackets, with a space and brackets in it.
+    let (b, w) = with_library("![Harbour](<my pictures/harbour (1).jpg>)\n");
+    assert_eq!(b, ["image(3f2a 1000): Harbour"]);
+    assert_eq!(w, []);
+    // A reference-style image.
+    let (b, w) = with_library("![Harbour][h]\n\n[h]: harbour.jpg\n");
+    assert_eq!(b, ["image(3f2a 1000): Harbour"]);
+    assert_eq!(w, []);
+    // The blocks around it are what they were.
+    let (b, w) = with_library(
+        "# Title\n\n![a](harbour.jpg)\n\n- one\n- two\n\n![b](harbour.jpg)\n\n- three\n\n> quote\n\n![c](harbour.jpg)\n\n---\n",
+    );
+    assert_eq!(
+        b,
+        [
+            "h1: Title",
+            "image(3f2a 1000): a",
+            "bullet: one",
+            "bullet: two",
+            "image(3f2a 1000): b",
+            "bullet: three",
+            "quote: quote",
+            "image(3f2a 1000): c",
+            "divider"
+        ]
+    );
+    assert_eq!(w, []);
+}
+
+#[test]
+fn an_image_inside_a_line_of_text_goes_onto_a_line_of_its_own() {
+    let (b, w) = with_library("See ![the harbour](harbour.jpg) at dusk.\n");
+    assert_eq!(
+        b,
+        ["p: See", "image(3f2a 1000): the harbour", "p: at dusk."]
+    );
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // Text only before it, and only after it.
+    let (b, w) = with_library("Figure 1: ![the harbour](harbour.jpg)\n");
+    assert_eq!(b, ["p: Figure 1:", "image(3f2a 1000): the harbour"]);
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    let (b, w) = with_library("![the harbour](harbour.jpg)\nFigure 1\n");
+    assert_eq!(b, ["image(3f2a 1000): the harbour", "p: Figure 1"]);
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // Two images in one line, and the formatting that runs across them.
+    let (b, w) = with_library("**a ![x](harbour.jpg) b ![y](drawing.png) c**\n");
+    assert_eq!(
+        b,
+        [
+            "p: [B|a]",
+            "image(3f2a 1000): x",
+            "p: [B|b]",
+            "image(00ff 886): y",
+            "p: [B|c]"
+        ]
+    );
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // Two images side by side with nothing else: two images, no text.
+    let (b, w) = with_library("![x](harbour.jpg) ![y](drawing.png)\n");
+    assert_eq!(b, ["image(3f2a 1000): x", "image(00ff 886): y"]);
+    assert_eq!(w, []);
+    // An aligned paragraph keeps its alignment on both sides, and gives it
+    // to the image.
+    let (b, w) = with_library("<div align=\"center\">\n\nleft ![x](harbour.jpg) right\n\n</div>\n");
+    assert_eq!(
+        b,
+        [
+            "p (center): left",
+            "image(3f2a 1000) (center): x",
+            "p (center): right"
+        ]
+    );
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // The lines of the warnings are the lines of the images.
+    let mut library = Library::default();
+    let imported = import_images_with(
+        "text\n\na ![x](harbour.jpg)\nb ![y](harbour.jpg) c\n\n![alone](harbour.jpg)\n\nd ![z](harbour.jpg)\n",
+        &MarkdownImportOptions::default(),
+        &mut library,
+    );
+    let lines: Vec<(ImportWarningKind, usize)> =
+        imported.warnings.iter().map(|w| (w.kind, w.line)).collect();
+    assert_eq!(
+        lines,
+        [
+            (ImportWarningKind::ImageInText, 3),
+            (ImportWarningKind::ImageInText, 4),
+            (ImportWarningKind::ImageInText, 8)
+        ]
+    );
+    assert_eq!(
+        summarize_warnings(&imported.warnings),
+        ["3 images inside lines of text were put on lines of their own: lines 3, 4 and 8"]
+    );
+}
+
+#[test]
+fn an_image_in_a_list_item() {
+    // All the item holds: the image stands in its place.
+    let (b, w) = with_library("- one\n- ![x](harbour.jpg)\n- three\n");
+    assert_eq!(b, ["bullet: one", "image(3f2a 1000): x", "bullet: three"]);
+    assert_eq!(w, []);
+    let (b, w) = with_library("1. ![x](harbour.jpg)\n");
+    assert_eq!(b, ["image(3f2a 1000): x"]);
+    assert_eq!(w, []);
+    // With text in the item: the item keeps what came before the image,
+    // and what came after is a paragraph under it.
+    let (b, w) = with_library("- one ![x](harbour.jpg) more\n- two\n");
+    assert_eq!(
+        b,
+        [
+            "bullet: one",
+            "image(3f2a 1000): x",
+            "p+1: more",
+            "bullet: two"
+        ]
+    );
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // A to-do keeps its box, and the caller is told that the image left it.
+    let (b, w) = with_library("- [x] ![x](harbour.jpg)\n");
+    assert_eq!(b, ["todo[x]", "image(3f2a 1000): x"]);
+    assert_eq!(w, [ImportWarningKind::ImageInText]);
+    // A paragraph of its own inside an item: the item stays, the image
+    // has no indent.
+    let (b, w) = with_library("- one\n\n  ![x](harbour.jpg)\n\n  more\n- two\n");
+    assert_eq!(
+        b,
+        [
+            "bullet: one",
+            "image(3f2a 1000): x",
+            "p+1: more",
+            "bullet: two"
+        ]
+    );
+    assert_eq!(w, []);
+    // An item that was empty before any image came stays what it was.
+    let (b, w) = with_library("-\n\n![x](harbour.jpg)\n");
+    assert_eq!(b, ["bullet", "image(3f2a 1000): x"]);
+    assert_eq!(w, []);
+}
+
+#[test]
+fn an_image_where_none_can_stand_stays_a_link() {
+    // A heading, a quote, a table: as before there were images, whatever
+    // the library knows.
+    let (b, w) = with_library("# Title ![logo](harbour.jpg)\n");
+    assert_eq!(b, ["h1: Title [L=harbour.jpg|logo]"]);
+    assert_eq!(w, [ImportWarningKind::Image]);
+    let (b, w) = with_library("> ![in a quote](harbour.jpg)\n");
+    assert_eq!(b, ["quote: [L=harbour.jpg|in a quote]"]);
+    assert_eq!(w, [ImportWarningKind::Image]);
+    let (b, w) = with_library("| a | b |\n|---|---|\n| ![cell](harbour.jpg) | x |\n");
+    assert_eq!(
+        b,
+        [
+            "code: | a                  | b   |\\n| ------------------ | --- |\\n| cell (harbour.jpg) | x   |"
+        ]
+    );
+    assert_eq!(w, [ImportWarningKind::Table]);
+    // An image inside the description of an image is part of the
+    // description.
+    let (b, w) = with_library("![outer ![inner](drawing.png) text](harbour.jpg)\n");
+    assert_eq!(b, ["image(3f2a 1000): outer inner text"]);
+    assert_eq!(w, []);
+    // Inside a list in a quote the quote is gone already, and the image
+    // can stand.
+    let (b, w) = with_library("> - ![x](harbour.jpg)\n");
+    assert_eq!(b, ["image(3f2a 1000): x"]);
+    assert_eq!(w, [ImportWarningKind::QuotedBlock]);
+    assert_eq!(
+        summarize_warnings(&from_markdown("# ![a](b.png)", &Default::default()).warnings),
+        [
+            "an image was kept as a link to it (it is at an address on the network, or inside a heading, a quote or a table): line 1"
+        ]
+    );
+}
+
+#[test]
+fn a_link_around_an_image_is_left_out() {
+    let (b, w) = with_library("[![The harbour](harbour.jpg)](https://example.com)\n");
+    assert_eq!(b, ["image(3f2a 1000): The harbour"]);
+    assert_eq!(w, [ImportWarningKind::ImageLink]);
+    // The text of the link keeps the link.
+    let (b, w) = with_library("[see ![The harbour](harbour.jpg) here](https://example.com)\n");
+    assert_eq!(
+        b,
+        [
+            "p: [L=https://example.com|see]",
+            "image(3f2a 1000): The harbour",
+            "p: [L=https://example.com|here]"
+        ]
+    );
+    assert_eq!(
+        w,
+        [ImportWarningKind::ImageLink, ImportWarningKind::ImageInText]
+    );
+    let (b, w) = with_library("<a href=\"https://example.com\">![x](harbour.jpg)</a>\n");
+    assert_eq!(b, ["image(3f2a 1000): x"]);
+    assert_eq!(w, [ImportWarningKind::ImageLink]);
+    // An image that stays a link inside a link is the link it was before.
+    let (b, w) = with_library("[![badge](https://ci/badge.svg)](https://ci)\n");
+    assert_eq!(b, ["p: [L=https://ci/badge.svg|badge]"]);
+    assert_eq!(w, [ImportWarningKind::Image]);
+}
+
+#[test]
+fn the_description_of_an_imported_image() {
+    // The alternative text; the title when there is no other; what the
+    // library says when the text says nothing.
+    assert_eq!(
+        with_library("![Alt text](drawing.png)").0,
+        ["image(00ff 886): Alt text"]
+    );
+    let (b, w) = with_library("![](drawing.png \"A title\")");
+    assert_eq!(b, ["image(00ff 886): A title"]);
+    assert_eq!(w, []);
+    let (b, w) = with_library("![Alt text](drawing.png \"A title\")");
+    assert_eq!(b, ["image(00ff 886): Alt text"]);
+    assert_eq!(w, [ImportWarningKind::LinkTitle]);
+    assert_eq!(
+        with_library("![](placed.png)").0,
+        ["image(00ff 400) (center): What the library says it shows"]
+    );
+    assert_eq!(
+        with_library("![What the text says](placed.png)").0,
+        ["image(00ff 400) (center): What the text says"]
+    );
+    // One line, whatever the Markdown has: a line end, a hard break, a tag.
+    assert_eq!(
+        with_library("![two\nlines](drawing.png)").0,
+        ["image(00ff 886): two lines"]
+    );
+    assert_eq!(
+        with_library("![hard\\\nbreak and<br>a tag <b>bold</b>](drawing.png)").0,
+        ["image(00ff 886): hard break and a tag bold"]
+    );
+    // Escapes and entities are read as in any text.
+    assert_eq!(
+        with_library("![a \\] b \\[ c &amp; \\*d\\*](drawing.png)").0,
+        ["image(00ff 886): a ] b [ c & *d*"]
+    );
+    // Longer than a description can be: cut by the block.
+    let long = "word ".repeat(400);
+    let mut library = Library::default();
+    let imported = import_images_with(
+        &format!("![{long}](drawing.png)"),
+        &MarkdownImportOptions::default(),
+        &mut library,
+    );
+    let description = &imported.document.blocks()[0]
+        .as_image()
+        .unwrap()
+        .description;
+    assert_eq!(
+        description.chars().count(),
+        Image::MAX_DESCRIPTION_CHARS - 1
+    );
+    assert!(description.ends_with("word"));
+}
+
+#[test]
+fn an_image_without_a_width_gets_its_original_size_on_the_page() {
+    let width_on = |source: &str, page: PageSetup| {
+        let options = MarkdownImportOptions {
+            settings: DocumentSettings {
+                page,
+                ..DocumentSettings::default()
+            },
+            ..Default::default()
+        };
+        let mut library = Library::default();
+        let imported = import_images_with(&format!("![]({source})"), &options, &mut library);
+        let block = &imported.document.blocks()[0];
+        // Left, unless the resolver says where.
+        let expected = if source == "placed.png" {
+            Alignment::Center
+        } else {
+            Alignment::Left
+        };
+        assert_eq!(block.alignment(), expected);
+        block.as_image().unwrap().width.thousandths()
+    };
+    let a4 = PageSetup::default();
+    // 400 points in a column of 451.276.
+    assert_eq!(width_on("drawing.png", a4), 886);
+    assert_eq!(drawing().original_width(&a4).thousandths(), 886);
+    // Wider than the column: the column.
+    assert_eq!(width_on("harbour.jpg", a4), 1000);
+    // As wide as the column it would be taller than the page: the share at
+    // which it fits.
+    assert_eq!(width_on("phone.png", a4), 713);
+    assert_eq!(phone().max_width(&a4).thousandths(), 713);
+    // Another page, another share: US Letter with half-inch margins has a
+    // column of 540 points and a text area 720 high.
+    let letter = PageSetup {
+        paper: PaperSize::UsLetter,
+        margins: Margins::uniform(36.0),
+        ..PageSetup::default()
+    };
+    assert_eq!(width_on("drawing.png", letter), 741);
+    assert_eq!(width_on("phone.png", letter), 616);
+    assert_eq!(phone().original_width(&letter).thousandths(), 616);
+    // A resolver that says the width is taken at its word.
+    assert_eq!(width_on("placed.png", a4), 400);
+    assert_eq!(width_on("placed.png", letter), 400);
+}
+
+#[test]
+fn images_that_could_not_be_used_stay_links_and_say_why() {
+    let markdown = "![Gone](gone.png)\n\n![A drawing](drawing.svg) in text\n\n![Far](https://example.com/far.png)\n\n\
+                    ![Unknown](image:3f2a0000000000000000000000000000)\n\n![](</Users/someone/gone.png>)\n";
+    let mut library = Library::default();
+    let imported = import_images_with(markdown, &MarkdownImportOptions::default(), &mut library);
+    assert_eq!(
+        describe(&imported),
+        [
+            "p: [L=gone.png|Gone]",
+            "p: [L=drawing.svg|A drawing] in text",
+            "p: [L=https://example.com/far.png|Far]",
+            "p: [L=image:3f2a0000000000000000000000000000|Unknown]",
+            "p: [L=/Users/someone/gone.png|/Users/someone/gone.png]",
+        ]
+    );
+    let warnings: Vec<(ImportWarningKind, usize)> =
+        imported.warnings.iter().map(|w| (w.kind, w.line)).collect();
+    assert_eq!(
+        warnings,
+        [
+            (ImportWarningKind::ImageNotFound, 1),
+            (ImportWarningKind::ImageUnsupported, 3),
+            (ImportWarningKind::Image, 5),
+            (ImportWarningKind::Image, 7),
+            (ImportWarningKind::ImageNotFound, 9),
+        ]
+    );
+    assert_eq!(
+        imported.image_problems,
+        [
+            ImageProblem {
+                source: "gone.png".into(),
+                line: 1,
+                sentence: None
+            },
+            ImageProblem {
+                source: "drawing.svg".into(),
+                line: 3,
+                sentence: Some(SVG.into())
+            },
+            ImageProblem {
+                source: "/Users/someone/gone.png".into(),
+                line: 9,
+                sentence: None
+            },
+        ]
+    );
+    assert_eq!(
+        summarize_warnings(&imported.warnings),
+        [
+            "2 image files were not found and were kept as links: lines 1 and 9",
+            "an image file could not be used and was kept as a link: line 3",
+            "2 images were kept as links to them (they are at addresses on the network, or inside headings, quotes or tables): lines 5 and 7",
+        ]
+    );
+    assert_eq!(library.asked, markdown_image_sources(markdown));
+    // Without a resolver every image is a link and nothing is a problem.
+    let plain = import(markdown);
+    assert_eq!(describe(&plain), describe(&imported));
+    assert!(
+        plain
+            .warnings
+            .iter()
+            .all(|w| w.kind == ImportWarningKind::Image)
+    );
+    assert_eq!(plain.image_problems, []);
+    // A file that is not found in a heading is still a file that is not
+    // found.
+    let mut library = Library::default();
+    let imported = import_images_with("# ![x](gone.png)", &Default::default(), &mut library);
+    assert_eq!(imported.warnings[0].kind, ImportWarningKind::ImageNotFound);
+    assert_eq!(imported.image_problems.len(), 1);
+}
+
+#[test]
+fn the_images_of_a_text_are_listed_as_the_resolver_is_asked() {
+    let markdown = "![a](one.png) and ![b](<my pictures/two (2).jpg>) and ![c](three\\(3\\).gif \"title\")\n\n\
+                    # ![d](image:00ff0000000000000000000000000000)\n\n> ![e](https://example.com/e.png?x=1&amp;y=2)\n\n\
+                    | ![f](in/a/table.png) |\n|---|\n\n- [![g](linked.png)](https://example.com)\n\n\
+                    ![h ![i](inner.png)](outer.png)\n\n![j][ref] and ![k](one.png)\n\n```\n![not](code.png)\n```\n\n\
+                    `![not](code-span.png)` \\![not](escaped.png) <img src=\"not.png\">\n\n[ref]: by/reference.png\n";
+    let expected = [
+        "one.png",
+        "my pictures/two (2).jpg",
+        "three(3).gif",
+        "image:00ff0000000000000000000000000000",
+        "https://example.com/e.png?x=1&y=2",
+        "in/a/table.png",
+        "linked.png",
+        "outer.png",
+        "inner.png",
+        "by/reference.png",
+        "one.png",
+    ];
+    assert_eq!(markdown_image_sources(markdown), expected);
+    // The resolver hears the same, whatever becomes of each image.
+    let mut library = Library::default();
+    import_images_with(markdown, &MarkdownImportOptions::default(), &mut library);
+    assert_eq!(library.asked, expected);
+    // Line ends of every kind, a byte order mark, front matter.
+    assert_eq!(
+        markdown_image_sources(
+            "\u{feff}---\r\ntitle: ![no](front.png)\r\n---\r\n\r\n![yes](body.png)\r\n"
+        ),
+        ["body.png"]
+    );
+    assert_eq!(markdown_image_sources(""), Vec::<String>::new());
+    assert_eq!(
+        markdown_image_sources("no images [here](link.png)"),
+        Vec::<String>::new()
+    );
+    assert_eq!(image_reference(expected[3]), Some(image_id("00ff")));
+}
+
+/// A document with every way an image can be held, as an agent meets it.
+fn album() -> Document {
+    let small = Image {
+        width: ImageWidth::from_percent(25),
+        description: "The harbour, small".into(),
+        ..harbour()
+    };
+    let large = Image {
+        width: ImageWidth::from_percent(75),
+        description: "The harbour, large".into(),
+        ..harbour()
+    };
+    let plain = Image {
+        width: ImageWidth::from_percent(50),
+        ..drawing()
+    };
+    Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Album"),
+        Block::image(small),
+        Block::paragraph("Between."),
+        Block::image(large).with_alignment(Alignment::Center),
+        Block::image(plain).with_alignment(Alignment::Right),
+    ])
+}
+
+#[test]
+fn an_image_the_document_holds_comes_back_as_it_was() {
+    let doc = album();
+    let markdown = export(&doc);
+    assert_eq!(
+        markdown,
+        "# Album\n\n![The harbour, small](image:3f2a0000000000000000000000000000)\n\nBetween.\n\n\
+         ![The harbour, large](image:3f2a0000000000000000000000000000)\n\n![](image:00ff0000000000000000000000000000)\n"
+    );
+    // Width, alignment and description are in no Markdown; the pixel size
+    // and the density neither.
+    let mut known = KnownImages::of(&doc);
+    let imported = import_images_with(&markdown, &MarkdownImportOptions::default(), &mut known);
+    assert_eq!(imported.warnings, []);
+    assert_eq!(
+        describe(&imported),
+        [
+            "h1: Album",
+            "image(3f2a 250): The harbour, small",
+            "p: Between.",
+            "image(3f2a 750) (center): The harbour, large",
+            "image(00ff 500) (right)"
+        ]
+    );
+    for (before, after) in doc.blocks().iter().zip(imported.document.blocks()) {
+        assert_eq!(before.kind(), after.kind());
+        assert_eq!(before.alignment(), after.alignment());
+    }
+
+    // The same picture twice: the first reference is the first use, the
+    // second the second, and a third the second again.
+    let rewritten = "![](image:3f2a0000000000000000000000000000)\n\n![Now described](image:3f2a0000000000000000000000000000)\n\n\
+                     New text.\n\n![](image:3f2a0000000000000000000000000000)\n";
+    known.rewind();
+    let imported = import_images_with(rewritten, &MarkdownImportOptions::default(), &mut known);
+    assert_eq!(
+        describe(&imported),
+        [
+            // No description in the text: the one it had.
+            "image(3f2a 250): The harbour, small",
+            "image(3f2a 750) (center): Now described",
+            "p: New text.",
+            "image(3f2a 750) (center): The harbour, large",
+        ]
+    );
+    assert_eq!(imported.warnings, []);
+
+    // The two in the other order are the two in the other order: what the
+    // n-th reference is goes by the document, not by the description.
+    let swapped = "![The harbour, large](image:3f2a0000000000000000000000000000)\n\n![The harbour, small](image:3f2a0000000000000000000000000000)\n";
+    known.rewind();
+    let imported = import_images_with(swapped, &MarkdownImportOptions::default(), &mut known);
+    assert_eq!(
+        describe(&imported),
+        [
+            "image(3f2a 250): The harbour, large",
+            "image(3f2a 750) (center): The harbour, small"
+        ]
+    );
+
+    // An id the document does not hold is not this resolver's to answer.
+    let imported = import_images_with(
+        "![Other](image:abcd0000000000000000000000000000)",
+        &MarkdownImportOptions::default(),
+        &mut known,
+    );
+    assert_eq!(
+        describe(&imported),
+        ["p: [L=image:abcd0000000000000000000000000000|Other]"]
+    );
+    assert_eq!(imported.warnings[0].kind, ImportWarningKind::Image);
+}
+
+#[test]
+fn what_the_text_says_about_alignment_wins_and_a_text_that_says_nothing_keeps_it() {
+    let doc = album();
+    let reference = "![x](image:3f2a0000000000000000000000000000)";
+    let centred = "![x](image:00ff0000000000000000000000000000)";
+    let alignments = |markdown: &str| -> Vec<&'static str> {
+        let mut known = KnownImages::of(&doc);
+        let imported = import_images_with(markdown, &MarkdownImportOptions::default(), &mut known);
+        assert_eq!(imported.warnings, [], "{markdown}");
+        imported
+            .document
+            .blocks()
+            .iter()
+            .filter(|b| b.kind().is_image())
+            .map(|b| b.alignment().name())
+            .collect()
+    };
+    // Nothing said: left, centre as the document had them (the first and
+    // the second use of the harbour), right for the drawing.
+    assert_eq!(
+        alignments(&format!("{reference}\n\n{reference}\n\n{centred}\n")),
+        ["left", "center", "right"]
+    );
+    // A div around a known image says where it stands now.
+    assert_eq!(
+        alignments(&format!(
+            "<div align=\"right\">\n\n{reference}\n\n</div>\n\n<div align=\"left\">\n\n{reference}\n\n</div>\n\n\
+             <div align=\"center\">\n\n{centred}\n\n</div>\n"
+        )),
+        ["right", "left", "center"]
+    );
+    // An image cannot be justified: a div that says so says nothing.
+    assert_eq!(
+        alignments(&format!(
+            "<div align=\"justify\">\n\n{reference}\n\n{reference}\n\n</div>\n"
+        )),
+        ["left", "center"]
+    );
+    // What the exporter writes with alignment kept reads back.
+    let options = MarkdownOptions {
+        alignment: true,
+        ..Default::default()
+    };
+    let markdown = to_markdown(&ExportSource::from(&doc), &options);
+    assert!(markdown.contains("<div align=\"center\">\n\n![The harbour, large]"));
+    assert_eq!(alignments(&markdown), ["left", "center", "right"]);
+}
+
+/// Inserts images between the top-level blocks of `doc`: where the
+/// exporter writes them and a reader finds them again.
+fn with_images(doc: &Document, rng: &mut Rng) -> Document {
+    let mut blocks: Vec<Block> = Vec::new();
+    let image = |rng: &mut Rng| {
+        let base = [harbour(), drawing(), phone()][rng.below(3)].clone();
+        let pieces = rng.below(4);
+        let description = match rng.below(3) {
+            0 => String::new(),
+            1 => clean_words(rng, pieces.max(1)),
+            _ => adv_text(rng, pieces),
+        };
+        let alignment = [Alignment::Left, Alignment::Center, Alignment::Right][rng.below(3)];
+        Block::image(Image {
+            width: ImageWidth::new(50 + rng.below(951) as u16),
+            description,
+            ..base
+        })
+        .with_alignment(alignment)
+    };
+    for block in doc.blocks() {
+        if block.indent() == 0 {
+            while rng.chance(30) {
+                blocks.push(image(rng));
+            }
+        }
+        blocks.push(block.clone());
+    }
+    while rng.chance(40) {
+        blocks.push(image(rng));
+    }
+    Document::from_blocks(blocks)
+}
+
+/// A document with images that is exported and imported, with the
+/// document's own images known, comes back block for block: every image
+/// with its id, pixel size, density, width, alignment and description.
+#[test]
+fn exported_documents_with_images_come_back() {
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0xD6E8_FEB8_6659_FD93) | 1);
+        let doc = with_images(&clean_document(&mut rng), &mut rng);
+        // With the alignment written, and without (where the text blocks
+        // lose theirs and the images keep it through what is known).
+        let written = seed % 2 == 0;
+        let options = MarkdownOptions {
+            alignment: written,
+            ..full_options()
+        };
+        let markdown = to_markdown(&ExportSource::from(&doc), &options);
+        let mut known = KnownImages::of(&doc);
+        let imported = import_images_with(&markdown, &MarkdownImportOptions::default(), &mut known);
+        let back = &imported.document;
+        let fail = |what: &str| -> ! {
+            panic!(
+                "seed {seed}: {what}\n--- markdown ---\n{markdown}\n--- document ---\n{}\n--- came back ---\n{}",
+                doc.blocks()
+                    .iter()
+                    .map(describe_block)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                back.blocks()
+                    .iter()
+                    .map(describe_block)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        };
+        if !imported.warnings.is_empty() {
+            fail(&format!("warnings {:?}", imported.warnings));
+        }
+        if back.block_count() != doc.block_count() {
+            fail("another number of blocks");
+        }
+        for (a, b) in doc.blocks().iter().zip(back.blocks()) {
+            let aligned = written || a.kind().is_image();
+            if a.kind() != b.kind()
+                || a.indent() != b.indent()
+                || (aligned && a.alignment() != b.alignment())
+                || a.text() != b.text()
+                || cells(a) != cells(b)
+            {
+                fail(&format!(
+                    "{} came back as {}",
+                    describe_block(a),
+                    describe_block(b)
+                ));
+            }
+        }
+        let again = to_markdown(&ExportSource::from(back), &options);
+        if again != markdown {
+            fail(&format!("exported again:\n{again}"));
+        }
+    }
+}
+
+/// A resolver for which every destination is a stored image, named after
+/// the destination: every image of a text that can stand becomes one.
+#[derive(Default)]
+struct Everything {
+    asked: Vec<String>,
+}
+
+impl ImageResolver for Everything {
+    fn resolve(&mut self, source: &str) -> ImageResolution {
+        self.asked.push(source.to_string());
+        let mut id = [0u8; 16];
+        for (i, byte) in source.bytes().enumerate() {
+            id[i % 16] = id[i % 16].wrapping_mul(31).wrapping_add(byte);
+        }
+        ImageResolution::Stored {
+            image: Image::new(ImageId::from_bytes(id), (640, 480), 72),
+            width: None,
+            alignment: None,
+        }
+    }
+}
+
+/// Markdown of every shape with images in every place, all of them
+/// resolved: the resolver is asked for each image once and in order, the
+/// result is a valid document, and writing it and reading it again (with
+/// the images it holds known) is stable.
+#[test]
+fn markdown_with_images_everywhere_is_stable_from_the_second_pass() {
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut source = markdown_soup(&mut rng);
+        // More images than the soup has by itself, in more places.
+        for _ in 0..rng.below(4) {
+            let image = rng.pick(&[
+                "![x](a.png)",
+                "\n\n![alone](b.png)\n\n",
+                "- ![in an item](c.png)\n",
+                "[![linked](d.png)](u:2)",
+                "![](<e f.png>)",
+                "> ![quoted](g.png)\n",
+                "# ![heading](h.png)\n",
+                "![a ![b](i.png) c](j.png \"t\")",
+                "<div align=\"right\">\n\n![r](k.png)\n\n</div>\n\n",
+                "![*styled* `alt`](l.png) text",
+            ]);
+            let mut at = rng.below(source.len() + 1);
+            while !source.is_char_boundary(at) {
+                at -= 1;
+            }
+            source.insert_str(at, image);
+        }
+        let mut everything = Everything::default();
+        let first = import_images_with(&source, &MarkdownImportOptions::default(), &mut everything);
+        assert_eq!(
+            everything.asked,
+            markdown_image_sources(&source),
+            "seed {seed}:\n{source}"
+        );
+        assert_eq!(first.image_problems, [], "seed {seed}");
+        let once = export(&first.document);
+        let mut known = KnownImages::of(&first.document);
+        let second = import_images_with(&once, &MarkdownImportOptions::default(), &mut known);
+        let twice = export(&second.document);
+        if once != twice {
+            panic!(
+                "seed {seed}: not stable\n--- source ---\n{source}\n--- first pass ---\n{once}\n--- second pass ---\n{twice}\n--- first document ---\n{}\n--- second document ---\n{}",
+                describe(&first).join("\n"),
+                describe(&second).join("\n"),
+            );
+        }
+        // Every image of the first document is in the second as it was.
+        let images = |imported: &Imported| -> Vec<(Image, Alignment)> {
+            imported
+                .blocks()
+                .iter()
+                .filter_map(|b| Some((b.as_image()?.clone(), b.alignment())))
+                .collect()
+        };
+        assert_eq!(
+            images(&first),
+            images(&second),
+            "seed {seed}:\n{source}\n---\n{once}"
+        );
+        // Without a resolver the same text has no image and is what it
+        // always was.
+        let plain = import(&source);
+        assert!(plain.blocks().iter().all(|b| !b.kind().is_image()));
+    }
+}
+
+/// Any string is some Markdown, also for an importer that is told that
+/// every image is stored: text made of the characters of image syntax
+/// imports to a valid document, the resolver hears of every image the
+/// listing names, and what comes out is stable from the second pass on.
+#[test]
+fn arbitrary_text_with_images_imports() {
+    const CHARS: &[&str] = &[
+        "!",
+        "!",
+        "[",
+        "[",
+        "]",
+        "]",
+        "(",
+        "(",
+        ")",
+        ")",
+        "<",
+        ">",
+        " ",
+        " ",
+        "\n",
+        "\n",
+        "a",
+        "b",
+        "\"",
+        "\\",
+        "-",
+        "#",
+        "> ",
+        "*",
+        "|",
+        "`",
+        "![",
+        "](",
+        "![](",
+        "x.png",
+        ")\n",
+        "\n\n",
+        "1. ",
+        "- ",
+        "---",
+        "é",
+        "\t",
+        "\r\n",
+        "</div>",
+        "<div align=\"center\">",
+    ];
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
+        let source: String = (0..rng.below(60)).map(|_| rng.pick(CHARS)).collect();
+        let mut everything = Everything::default();
+        let first = import_images_with(&source, &MarkdownImportOptions::default(), &mut everything);
+        assert_eq!(
+            everything.asked,
+            markdown_image_sources(&source),
+            "seed {seed}: {source:?}"
+        );
+        let once = export(&first.document);
+        let mut known = KnownImages::of(&first.document);
+        let second = import_images_with(&once, &MarkdownImportOptions::default(), &mut known);
+        let twice = export(&second.document);
+        assert_eq!(once, twice, "seed {seed}: {source:?}");
+        // The second document is the first as far as Markdown can tell (a
+        // paragraph of a list item that an image came before is no longer
+        // under the item), and it stays.
+        known.rewind();
+        let third = import_images_with(&twice, &MarkdownImportOptions::default(), &mut known);
+        assert_eq!(
+            describe(&second),
+            describe(&third),
+            "seed {seed}: {source:?}\n{once}"
+        );
+    }
+}
+
 #[test]
 fn footnotes_become_text() {
     let (b, w) = warned(
@@ -986,7 +1952,7 @@ fn warnings_carry_lines_and_summaries() {
     assert_eq!(summary.len(), 5);
     assert_eq!(
         summary[1],
-        "2 images were kept as links to them (documents have no images): lines 5 and 16"
+        "2 images were kept as links to them (they are at addresses on the network, or inside headings, quotes or tables): lines 5 and 16"
     );
     // The same lines with Windows line ends.
     let crlf = import(&md.replace('\n', "\r\n"));

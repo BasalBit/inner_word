@@ -94,6 +94,7 @@ pub fn from_plain_text(text: &str, options: &PlainTextImportOptions) -> Imported
         title: None,
         front_matter: None,
         warnings: Vec::new(),
+        image_problems: Vec::new(),
         has_content,
     }
 }

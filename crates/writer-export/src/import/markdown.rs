@@ -34,6 +34,8 @@
 //!   on a line of their own are page breaks.
 //! - `<div align="center">` … `</div>` around blocks (blank lines inside,
 //!   as the exporter writes it) sets their alignment.
+//! - `![description](image:<id>)` on a line of its own is an image, when
+//!   the caller can say which one (see "Images" below).
 //! - `==text==` is a highlight when
 //!   [`MarkdownImportOptions::highlight_equals`] is on.
 //! - `<!-- -->`, the exporter's filler in an empty to-do item, leaves
@@ -49,8 +51,8 @@
 //! [`ImportWarning`]:
 //!
 //! - A table becomes a code block holding the table as aligned text.
-//! - An image becomes a link to the image; its text is the alternative
-//!   text, or the address when there is none.
+//! - An image that nobody resolved (below) becomes a link to the image;
+//!   its text is the alternative text, or the address when there is none.
 //! - A footnote reference stays `[^1]` in the text, and the note becomes a
 //!   paragraph `[^1]: …` where it was defined.
 //! - A block of raw HTML becomes a code block with the language `html`. An
@@ -59,6 +61,34 @@
 //! - A numbered list is numbered from 1 whatever its first number.
 //! - Lists inside a quote, quotes inside a quote and nesting beyond nine
 //!   levels are flattened as [`ImportWarningKind`] describes.
+//!
+//! # Images
+//!
+//! A document holds an image as a block of its own that names stored
+//! bytes. Markdown names an address. [`from_markdown_with_images`] asks an
+//! [`ImageResolver`] what each address is, once for every image and in the
+//! order of the text; [`from_markdown`] asks nobody, and every image is a
+//! link. This module stores nothing and reads no file: a resolver does
+//! what its caller allows ([`markdown_image_sources`] lists the addresses
+//! beforehand, for a caller that has files to prepare).
+//!
+//! - An image the resolver says is stored, **alone in its paragraph**,
+//!   becomes an image block. Its description is the alternative text (or,
+//!   when there is none, the title, or what the stored image had), its
+//!   width what the resolver says or its original size on the page of
+//!   [`MarkdownImportOptions::settings`], its alignment what a
+//!   `<div align="…">` around it says, or else what the resolver says.
+//! - **Inside a line of text** it is put on a line of its own: the text
+//!   before it, the image and the text after it are three blocks
+//!   ([`ImportWarningKind::ImageInText`]). In a bullet or numbered item
+//!   that holds nothing else, the image takes the item's place.
+//! - A link around it is left out ([`ImportWarningKind::ImageLink`]).
+//! - In a heading, a quote or a table there is no place for an image, and
+//!   it stays a link ([`ImportWarningKind::Image`]). So does an image at an
+//!   address on the network, one whose file was not found
+//!   ([`ImportWarningKind::ImageNotFound`]) and one whose file is no image
+//!   the library holds ([`ImportWarningKind::ImageUnsupported`]; the
+//!   reasons are in [`Imported::image_problems`]).
 //!
 //! # What is put into the document's own form
 //!
@@ -112,12 +142,15 @@ use pulldown_cmark::{
     Alignment as ColumnAlignment, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd,
 };
 use writer_core::{
-    Alignment, Block, BlockKind, Document, DocumentSettings, Highlight, InlineAttrs, MAX_INDENT,
-    Rgb, text::normalize_input,
+    Alignment, Block, BlockKind, Document, DocumentSettings, Highlight, Image, ImageWidth,
+    InlineAttrs, MAX_INDENT, Rgb, text::normalize_input,
 };
 
 use super::html::{self, Tag as HtmlTag};
-use super::{ImportWarning, ImportWarningKind, Imported};
+use super::images::NoImages;
+use super::{
+    ImageProblem, ImageResolution, ImageResolver, ImportWarning, ImportWarningKind, Imported,
+};
 
 /// What happens to a level-1 heading that opens the Markdown.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -182,7 +215,8 @@ pub struct MarkdownImportOptions {
     pub highlight_equals: bool,
     /// The settings of the imported document (page setup, typography,
     /// language). Pass the settings of the document whose content is being
-    /// replaced to keep them.
+    /// replaced to keep them. An image that comes in without a width gets
+    /// its original size on this page.
     pub settings: DocumentSettings,
 }
 
@@ -208,6 +242,96 @@ pub struct MarkdownImportOptions {
 /// assert!(blocks[0].attrs_at(0).unwrap().italic);
 /// ```
 pub fn from_markdown(markdown: &str, options: &MarkdownImportOptions) -> Imported {
+    from_markdown_with_images(markdown, options, &mut NoImages)
+}
+
+/// The extensions of Markdown the importer reads.
+fn parser_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+}
+
+/// The destinations of the images in `markdown`, in the order of the text
+/// and as [`ImageResolver::resolve`] is given them (without the angle
+/// brackets and backslashes of the syntax), so that a caller can prepare
+/// local files before it imports. Every image is listed, also one in a
+/// place where it will stay a link, and one address as often as it is
+/// used.
+///
+/// Front matter is skipped, as an import with the default options skips
+/// it.
+///
+/// ```
+/// use writer_export::markdown_image_sources;
+///
+/// let markdown = "![A](one.png) and ![B](<my pictures/two.jpg>)\n\n# ![C](image:00ff)\n";
+/// assert_eq!(
+///     markdown_image_sources(markdown),
+///     ["one.png", "my pictures/two.jpg", "image:00ff"]
+/// );
+/// ```
+pub fn markdown_image_sources(markdown: &str) -> Vec<String> {
+    let source = normalize_source(markdown);
+    let body_start = find_front_matter(&source).map_or(0, |front| front.end);
+    Parser::new_ext(&source[body_start..], parser_options())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Imports Markdown as [`from_markdown`] does, with someone to say which
+/// stored image each image of the text is. See "Images" in the
+/// [module documentation](self) for what becomes of an image, and
+/// [`KnownImages`](super::KnownImages) for the resolver that knows the
+/// images of a document.
+///
+/// `images` is asked once for every image of the Markdown, in the order of
+/// the text.
+///
+/// ```
+/// use writer_core::{Image, ImageId};
+/// use writer_export::{
+///     ImageResolution, ImageResolver, MarkdownImportOptions, from_markdown_with_images,
+/// };
+///
+/// /// A library of one picture.
+/// struct OnePicture(Image);
+/// impl ImageResolver for OnePicture {
+///     fn resolve(&mut self, source: &str) -> ImageResolution {
+///         if source == "harbour.jpg" {
+///             ImageResolution::Stored { image: self.0.clone(), width: None, alignment: None }
+///         } else {
+///             ImageResolution::NotFound
+///         }
+///     }
+/// }
+///
+/// let id = ImageId::parse("3f2a9c1b5d6e7f80a1b2c3d4e5f60718").unwrap();
+/// let mut library = OnePicture(Image::new(id, (800, 500), 144));
+/// let imported = from_markdown_with_images(
+///     "Arrival.\n\n![The harbour](harbour.jpg)\n\n![The ship](ship.jpg)\n",
+///     &MarkdownImportOptions::default(),
+///     &mut library,
+/// );
+/// let blocks = imported.document.blocks();
+/// let harbour = blocks[1].as_image().unwrap();
+/// assert_eq!((harbour.id, harbour.description.as_str()), (id, "The harbour"));
+/// // 400 points wide in a column of 451: its original size.
+/// assert_eq!(harbour.width.thousandths(), 886);
+/// // The picture that is not there stays a link, and the caller is told.
+/// assert_eq!(blocks[2].text(), "The ship");
+/// assert_eq!(imported.image_problems[0].source, "ship.jpg");
+/// assert_eq!(imported.image_problems[0].line, 5);
+/// ```
+pub fn from_markdown_with_images(
+    markdown: &str,
+    options: &MarkdownImportOptions,
+    images: &mut dyn ImageResolver,
+) -> Imported {
     let source = normalize_source(markdown);
     let mut warnings: Vec<ImportWarning> = Vec::new();
     let mut drafts: Vec<Draft> = Vec::new();
@@ -236,19 +360,24 @@ pub fn from_markdown(markdown: &str, options: &MarkdownImportOptions) -> Importe
     }
     let front_blocks = drafts.len();
 
-    let mut importer = Importer::new(&source, options, drafts, warnings);
-    let parser_options = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
-    for (event, range) in Parser::new_ext(&source[body_start..], parser_options).into_offset_iter()
+    let mut importer = Importer::new(&source, options, drafts, warnings, images);
+    for (event, range) in
+        Parser::new_ext(&source[body_start..], parser_options()).into_offset_iter()
     {
         importer.event(event, body_start + range.start);
     }
+    // (A text that ends inside a block has ended it.)
+    importer.settle_images();
     let Importer {
-        drafts, warnings, ..
+        mut drafts,
+        warnings,
+        problems,
+        ..
     } = importer;
 
+    // What an image left empty when it took a line of its own (a bullet or
+    // numbered item that held nothing else: the image stands in its place).
+    drafts.retain(|draft| !draft.left_to_an_image);
     let mut drafts = join_empty_items(drafts);
 
     // The title the text names.
@@ -285,6 +414,7 @@ pub fn from_markdown(markdown: &str, options: &MarkdownImportOptions) -> Importe
         title,
         front_matter: front_text,
         warnings,
+        image_problems: problems,
         has_content,
     }
 }
@@ -424,6 +554,11 @@ struct Draft {
     /// An empty paragraph that is there on purpose (it keeps two lists
     /// apart).
     keep_empty: bool,
+    /// What an image left empty when it went onto a line of its own: a
+    /// bullet or numbered item whose own text was the image and nothing
+    /// else, or the paragraph for the rest of a line that had no rest.
+    /// Such a block is not part of the text.
+    left_to_an_image: bool,
 }
 
 impl Draft {
@@ -434,6 +569,7 @@ impl Draft {
             alignment: Alignment::Left,
             spans: Vec::new(),
             keep_empty: false,
+            left_to_an_image: false,
         }
     }
 
@@ -913,9 +1049,56 @@ impl Table {
     }
 }
 
+/// What becomes of an image that is being read.
+enum Fate {
+    /// It stays a link, as every image did before documents had images: the
+    /// text inside it is the link's text.
+    Link,
+    /// It becomes a block. The text inside it is its description.
+    Block(Box<Placed>),
+    /// It stands inside the alternative text of an image that becomes a
+    /// block: only its text counts, as part of that description.
+    Inside,
+}
+
+/// An image that becomes a block, while its alternative text is read.
+struct Placed {
+    image: Image,
+    width: Option<ImageWidth>,
+    alignment: Option<Alignment>,
+    /// The alternative text so far.
+    alt: String,
+    title: String,
+    /// Where the image begins in the source.
+    offset: usize,
+    /// It stands inside a link.
+    linked: bool,
+}
+
+/// An image that has begun and not ended.
+struct OpenImage {
+    /// How many pieces of text had been written when it began.
+    texts: u64,
+    fate: Fate,
+}
+
+/// The images that one run of inline content (a paragraph, the text of a
+/// list item) was split at.
+struct Split {
+    /// The draft that holds what came before the first image.
+    first: usize,
+    /// For each image: where its warning goes among the warnings, should
+    /// the run turn out to hold text as well, and where the image begins.
+    images: Vec<(usize, usize)>,
+}
+
 struct Importer<'a> {
     source: &'a str,
     options: &'a MarkdownImportOptions,
+    /// Who says what the images are.
+    resolver: &'a mut dyn ImageResolver,
+    /// The images whose files could not be used.
+    problems: Vec<ImageProblem>,
     /// The byte offset of every line start, for line numbers.
     line_starts: Vec<usize>,
     drafts: Vec<Draft>,
@@ -940,9 +1123,10 @@ struct Importer<'a> {
     links: Vec<String>,
     /// Open inline HTML tags, by name.
     html: Vec<(String, Effect)>,
-    /// For each open image: how many pieces of text had been written when
-    /// it began.
-    images: Vec<u64>,
+    /// The images that have begun and not ended, the outermost first.
+    images: Vec<OpenImage>,
+    /// Where the block being read was split at images.
+    split: Option<Split>,
     texts: u64,
     /// The alignment set by an enclosing `<div align>` and the tag name
     /// that ends it.
@@ -960,12 +1144,15 @@ impl<'a> Importer<'a> {
         options: &'a MarkdownImportOptions,
         drafts: Vec<Draft>,
         warnings: Vec<ImportWarning>,
+        resolver: &'a mut dyn ImageResolver,
     ) -> Importer<'a> {
         let mut line_starts = vec![0];
         line_starts.extend(source.match_indices('\n').map(|(i, _)| i + 1));
         Importer {
             source,
             options,
+            resolver,
+            problems: Vec::new(),
             line_starts,
             drafts,
             warnings,
@@ -981,6 +1168,7 @@ impl<'a> Importer<'a> {
             links: Vec::new(),
             html: Vec::new(),
             images: Vec::new(),
+            split: None,
             texts: 0,
             align: None,
             html_block: None,
@@ -1017,6 +1205,7 @@ impl<'a> Importer<'a> {
 
     /// Ends the block that takes inline content.
     fn close_inline(&mut self) {
+        self.settle_images();
         self.cur = None;
         self.fresh_item = false;
         self.html.clear();
@@ -1235,6 +1424,10 @@ impl<'a> Importer<'a> {
     /// Adds text to the open block, opening a paragraph when there is
     /// none (text directly inside a list item after its first block).
     fn text(&mut self, text: &str, code: bool) {
+        if let Some(alt) = self.open_description() {
+            alt.push_str(text);
+            return;
+        }
         let block = match self.cur {
             Some(block) => block,
             None => {
@@ -1249,6 +1442,15 @@ impl<'a> Importer<'a> {
     }
 
     fn inline_html(&mut self, raw: &str, offset: usize) {
+        if let Some(alt) = self.open_description() {
+            // A description is plain text: of a tag only a line break
+            // leaves something behind.
+            if matches!(html::parse_tag(raw), Some((HtmlTag::Open { name, .. }, _)) if name == "br")
+            {
+                alt.push(' ');
+            }
+            return;
+        }
         match html::parse_tag(raw) {
             Some((HtmlTag::Comment(inner), used)) if used == raw.len() => {
                 if !inner.is_empty() {
@@ -1279,6 +1481,242 @@ impl<'a> Importer<'a> {
         }
         self.warn(ImportWarningKind::InlineHtml, offset);
         self.text(raw, false);
+    }
+
+    // ----- images ---------------------------------------------------------------------
+
+    /// The description being read: the alternative text of the outermost
+    /// open image that becomes a block.
+    fn open_description(&mut self) -> Option<&mut String> {
+        self.images
+            .iter_mut()
+            .find_map(|open| match &mut open.fate {
+                Fate::Block(placed) => Some(&mut placed.alt),
+                _ => None,
+            })
+    }
+
+    /// Whether an image can stand where the text is now: in a paragraph or
+    /// in the text of a list item, and not inside another image.
+    fn image_can_stand_here(&mut self) -> bool {
+        if !self.images.is_empty() {
+            return false;
+        }
+        let block = match self.cur {
+            Some(block) => block,
+            // Directly inside a list item, after its first block.
+            None => {
+                let block = self.start_paragraph();
+                self.cur = Some(block);
+                block
+            }
+        };
+        let kind = &self.drafts[block].kind;
+        *kind == BlockKind::Paragraph || kind.is_list_item()
+    }
+
+    fn start_image(&mut self, destination: &str, title: &str, offset: usize) {
+        // Every image of the text is asked for, in its order, whatever
+        // becomes of it.
+        let resolution = self.resolver.resolve(destination);
+        let inside = self
+            .images
+            .iter()
+            .any(|open| !matches!(open.fate, Fate::Link));
+        let fate = if inside {
+            Fate::Inside
+        } else {
+            match resolution {
+                ImageResolution::Stored {
+                    image,
+                    width,
+                    alignment,
+                } if self.image_can_stand_here() => {
+                    let linked = self.links.iter().any(|link| !link.is_empty())
+                        || self.attrs(false).link.is_some();
+                    Fate::Block(Box::new(Placed {
+                        image,
+                        width,
+                        alignment,
+                        alt: String::new(),
+                        title: title.to_string(),
+                        offset,
+                        linked,
+                    }))
+                }
+                // Stored, where no image can stand; or not for us to read.
+                ImageResolution::Stored { .. } | ImageResolution::Remote => {
+                    self.warn(ImportWarningKind::Image, offset);
+                    Fate::Link
+                }
+                ImageResolution::NotFound => {
+                    self.warn(ImportWarningKind::ImageNotFound, offset);
+                    self.problem(destination, offset, None);
+                    Fate::Link
+                }
+                ImageResolution::Unsupported(sentence) => {
+                    self.warn(ImportWarningKind::ImageUnsupported, offset);
+                    self.problem(destination, offset, Some(sentence));
+                    Fate::Link
+                }
+            }
+        };
+        if matches!(fate, Fate::Link) {
+            self.links.push(destination.trim().to_string());
+        }
+        self.images.push(OpenImage {
+            texts: self.texts,
+            fate,
+        });
+    }
+
+    fn problem(&mut self, destination: &str, offset: usize, sentence: Option<String>) {
+        self.problems.push(ImageProblem {
+            source: destination.to_string(),
+            line: self.line_of(offset.min(self.source.len())),
+            sentence,
+        });
+    }
+
+    fn end_image(&mut self) {
+        let Some(open) = self.images.pop() else {
+            return;
+        };
+        match open.fate {
+            Fate::Inside => {}
+            Fate::Link => {
+                // An image without alternative text shows its address.
+                let url = self.links.last().cloned().unwrap_or_default();
+                if open.texts == self.texts && !url.is_empty() {
+                    self.text(&url, false);
+                }
+                self.links.pop();
+            }
+            Fate::Block(placed) => self.place_image(*placed),
+        }
+    }
+
+    /// Puts an image on a line of its own: the block that was being read
+    /// ends before it, and what follows goes into a new paragraph after it.
+    fn place_image(&mut self, placed: Placed) {
+        let Placed {
+            image,
+            width,
+            alignment,
+            alt,
+            title,
+            offset,
+            linked,
+        } = placed;
+        // What the text says about the image wins over what the resolver
+        // knows of it; a text that says nothing keeps that.
+        // (The description is kept character for character, so that an
+        // image that is written out and read back is the image it was; the
+        // block cleans what a description cannot hold.)
+        let description = if !alt.trim().is_empty() {
+            if !title.trim().is_empty() {
+                self.warn(ImportWarningKind::LinkTitle, offset);
+            }
+            alt
+        } else if !title.trim().is_empty() {
+            title
+        } else {
+            image.description.clone()
+        };
+        let width = width.unwrap_or_else(|| image.original_width(&self.options.settings.page));
+        let around = self
+            .align
+            .as_ref()
+            .map(|(alignment, _)| *alignment)
+            .filter(|a| *a != Alignment::Justify);
+        let alignment = around.or(alignment).unwrap_or(Alignment::Left);
+        if linked {
+            self.warn(ImportWarningKind::ImageLink, offset);
+        }
+
+        let before = self.cur;
+        let mut block = Draft::new(BlockKind::Image(Image {
+            width,
+            description,
+            ..image
+        }));
+        block.alignment = alignment;
+        self.drafts.push(block);
+        // The rest of the line. A paragraph that nothing is put into is
+        // dropped when the blocks are made.
+        let mut rest = Draft::new(BlockKind::Paragraph);
+        rest.indent = self.child_indent();
+        rest.alignment = match before.map(|b| &self.drafts[b]) {
+            Some(draft) if !draft.is_item() => draft.alignment,
+            _ => self.align.as_ref().map_or(Alignment::Left, |(a, _)| *a),
+        };
+        self.drafts.push(rest);
+        self.cur = Some(self.drafts.len() - 1);
+        self.fresh_item = false;
+
+        let first = before.unwrap_or(self.drafts.len() - 2);
+        let at = self.warnings.len();
+        self.split
+            .get_or_insert(Split {
+                first,
+                images: Vec::new(),
+            })
+            .images
+            .push((at, offset));
+    }
+
+    /// Called when a run of inline content ends: says, for the images it
+    /// was split at, whether they stood inside a line of text.
+    fn settle_images(&mut self) {
+        let Some(split) = self.split.take() else {
+            return;
+        };
+        let mut in_text = false;
+        for draft in &mut self.drafts[split.first..] {
+            if draft.kind.is_void() {
+                continue;
+            }
+            if !draft.is_blank() {
+                in_text = true;
+            } else if draft.kind == BlockKind::Paragraph && !draft.is_item() {
+                // Nothing came before the image, or after it.
+                draft.left_to_an_image = !draft.keep_empty;
+            }
+        }
+        let first = &mut self.drafts[split.first];
+        if first.is_item() && first.is_blank() {
+            match first.kind {
+                // The image was all the item held: it takes its place.
+                BlockKind::BulletItem | BlockKind::NumberedItem => first.left_to_an_image = true,
+                // A to-do keeps its box, on a line without the image.
+                _ => in_text = true,
+            }
+        }
+        if !in_text {
+            return;
+        }
+        // Each warning goes where the warnings stood when its image was
+        // read, so that they stay in the order of the text.
+        let mut last_line = None;
+        let mut added: Vec<(usize, ImportWarning)> = Vec::new();
+        for (at, offset) in split.images {
+            let line = self.line_of(offset.min(self.source.len()));
+            // Two images on one line are one thing to tell.
+            if last_line == Some(line) {
+                continue;
+            }
+            last_line = Some(line);
+            added.push((
+                at,
+                ImportWarning {
+                    kind: ImportWarningKind::ImageInText,
+                    line,
+                },
+            ));
+        }
+        for (at, warning) in added.into_iter().rev() {
+            self.warnings.insert(at.min(self.warnings.len()), warning);
+        }
     }
 
     // ----- tables ---------------------------------------------------------------------
@@ -1335,6 +1773,11 @@ impl<'a> Importer<'a> {
 
     fn event(&mut self, event: Event<'_>, offset: usize) {
         if self.table.is_some() {
+            // A table is kept as text, its images with it. The resolver is
+            // asked all the same: it hears of every image of the text.
+            if let Event::Start(Tag::Image { dest_url, .. }) = &event {
+                self.resolver.resolve(dest_url);
+            }
             if self.table_event(event)
                 && let Some(table) = self.table.take()
             {
@@ -1483,11 +1926,9 @@ impl<'a> Importer<'a> {
                     _ => url.to_string(),
                 });
             }
-            Tag::Image { dest_url, .. } => {
-                self.warn(ImportWarningKind::Image, offset);
-                self.links.push(dest_url.trim().to_string());
-                self.images.push(self.texts);
-            }
+            Tag::Image {
+                dest_url, title, ..
+            } => self.start_image(&dest_url, &title, offset),
             // Extensions that are not switched on; their content is read
             // as what it holds.
             Tag::TableHead
@@ -1543,14 +1984,7 @@ impl<'a> Importer<'a> {
             TagEnd::Link => {
                 self.links.pop();
             }
-            TagEnd::Image => {
-                // An image without alternative text shows its address.
-                let url = self.links.last().cloned().unwrap_or_default();
-                if self.images.pop() == Some(self.texts) && !url.is_empty() {
-                    self.text(&url, false);
-                }
-                self.links.pop();
-            }
+            TagEnd::Image => self.end_image(),
             TagEnd::Table
             | TagEnd::TableHead
             | TagEnd::TableRow

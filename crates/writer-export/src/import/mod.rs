@@ -7,13 +7,17 @@
 //! - [`from_markdown`] reads CommonMark with the GitHub extensions the
 //!   exporter writes, and the exporter's own conventions for what Markdown
 //!   has no syntax for. See [`markdown`] for the mapping.
+//! - [`from_markdown_with_images`] is the same with someone to say which
+//!   stored image an image of the Markdown is (an [`ImageResolver`]; see
+//!   [`KnownImages`]). Without one, an image is a link to its address.
 //! - [`from_plain_text`] reads paragraphs separated by blank lines.
 //!
-//! Both return an [`Imported`]: the document, the title and front matter the
+//! All return an [`Imported`]: the document, the title and front matter the
 //! text named, and [`ImportWarning`]s for everything the document model
-//! could not hold as written (a table, an image, raw HTML). Nothing is
-//! dropped silently: such constructs are kept as readable text and
-//! reported, so the caller can tell whoever wrote the text.
+//! could not hold as written (a table, a footnote, raw HTML, an image
+//! nobody could resolve). Nothing is dropped silently: such constructs are
+//! kept as readable text and reported, so the caller can tell whoever
+//! wrote the text.
 //!
 //! No importer can fail: any string is some Markdown.
 //!
@@ -41,6 +45,7 @@
 //! ```
 
 mod html;
+mod images;
 pub mod markdown;
 pub mod plain;
 
@@ -48,9 +53,10 @@ use std::fmt;
 
 use writer_core::{Block, Document, Fragment};
 
+pub use images::{ImageProblem, ImageResolution, ImageResolver, KnownImages, image_reference};
 pub use markdown::{
     MarkdownFrontMatter, MarkdownImportOptions, MarkdownLeadingHeading, MarkdownSoftBreaks,
-    from_markdown,
+    from_markdown, from_markdown_with_images, markdown_image_sources,
 };
 pub use plain::{PlainTextImportOptions, PlainTextLines, from_plain_text};
 
@@ -71,6 +77,13 @@ pub struct Imported {
     pub front_matter: Option<String>,
     /// What could not be imported as written, in the order of the text.
     pub warnings: Vec<ImportWarning>,
+    /// The images of a Markdown text whose file could not be used, in the
+    /// order of the text: what the resolver was asked and what it said.
+    /// Each was kept as a link and has a warning
+    /// ([`ImportWarningKind::ImageNotFound`],
+    /// [`ImportWarningKind::ImageUnsupported`]); this is for a caller that
+    /// wants to name the file and say why. Empty without a resolver.
+    pub image_problems: Vec<ImageProblem>,
     /// Whether the text produced any block at all.
     pub(crate) has_content: bool,
 }
@@ -117,8 +130,11 @@ impl Imported {
 pub enum ImportWarningKind {
     /// A table. Kept as an aligned text table in a code block.
     Table,
-    /// An image. Kept as a link to the image, with its alternative text
-    /// (or its address) as the link text.
+    /// An image that could not become an image of the document: it is at
+    /// an address on the network (or one nobody resolved), or it stands
+    /// where the document has no place for an image (a heading, a quote, a
+    /// table). Kept as a link to the image, with its alternative text (or
+    /// its address) as the link text.
     Image,
     /// A footnote reference or definition. Kept as literal text: `[^1]` in
     /// the text and a paragraph `[^1]: …` where the note was defined.
@@ -145,8 +161,22 @@ pub enum ImportWarningKind {
     QuotedBlock,
     /// A block quote inside a block quote. Kept as one level of quote.
     NestedQuote,
-    /// The title of a link (`[text](url "title")`). Left out.
+    /// The title of a link (`[text](url "title")`), or of an image that
+    /// has alternative text as well. Left out.
     LinkTitle,
+    /// An image inside a line of text. A document holds an image on a line
+    /// of its own: the text before it, the image and the text after it
+    /// became three blocks.
+    ImageInText,
+    /// An image whose local file was not found or could not be read. Kept
+    /// as a link, like [`Image`](ImportWarningKind::Image).
+    ImageNotFound,
+    /// An image whose file is there but is no image the library can hold.
+    /// Kept as a link; [`Imported::image_problems`] says why.
+    ImageUnsupported,
+    /// A link around an image (`[![alt](image)](url)`). The image was kept
+    /// and the link left out: an image of a document links nowhere.
+    ImageLink,
 }
 
 impl ImportWarningKind {
@@ -154,7 +184,8 @@ impl ImportWarningKind {
     /// `"image"`, `"footnote"`, `"html_block"`, `"inline_html"`,
     /// `"html_comment"`, `"front_matter"`, `"list_start"`,
     /// `"nesting_too_deep"`, `"quoted_block"`, `"nested_quote"`,
-    /// `"link_title"`.
+    /// `"link_title"`, `"image_in_text"`, `"image_not_found"`,
+    /// `"image_unsupported"`, `"image_link"`.
     pub fn code(self) -> &'static str {
         match self {
             ImportWarningKind::Table => "table",
@@ -169,6 +200,10 @@ impl ImportWarningKind {
             ImportWarningKind::QuotedBlock => "quoted_block",
             ImportWarningKind::NestedQuote => "nested_quote",
             ImportWarningKind::LinkTitle => "link_title",
+            ImportWarningKind::ImageInText => "image_in_text",
+            ImportWarningKind::ImageNotFound => "image_not_found",
+            ImportWarningKind::ImageUnsupported => "image_unsupported",
+            ImportWarningKind::ImageLink => "image_link",
         }
     }
 
@@ -180,7 +215,7 @@ impl ImportWarningKind {
                 "a table was kept as text in a code block (documents have no tables)"
             }
             ImportWarningKind::Image => {
-                "an image was kept as a link to it (documents have no images)"
+                "an image was kept as a link to it (it is at an address on the network, or inside a heading, a quote or a table)"
             }
             ImportWarningKind::Footnote => {
                 "a footnote was kept as literal text (documents have no footnotes)"
@@ -202,6 +237,16 @@ impl ImportWarningKind {
             }
             ImportWarningKind::NestedQuote => "a quote inside a quote was kept as one quote",
             ImportWarningKind::LinkTitle => "the title of a link was left out",
+            ImportWarningKind::ImageInText => {
+                "an image inside a line of text was put on a line of its own"
+            }
+            ImportWarningKind::ImageNotFound => {
+                "an image file was not found and was kept as a link"
+            }
+            ImportWarningKind::ImageUnsupported => {
+                "an image file could not be used and was kept as a link"
+            }
+            ImportWarningKind::ImageLink => "the link around an image was left out",
         }
     }
 
@@ -215,7 +260,7 @@ impl ImportWarningKind {
                 "tables were kept as text in code blocks (documents have no tables)"
             }
             ImportWarningKind::Image => {
-                "images were kept as links to them (documents have no images)"
+                "images were kept as links to them (they are at addresses on the network, or inside headings, quotes or tables)"
             }
             ImportWarningKind::Footnote => {
                 "footnote marks and notes were kept as literal text (documents have no footnotes)"
@@ -237,6 +282,15 @@ impl ImportWarningKind {
             }
             ImportWarningKind::NestedQuote => "quotes inside quotes were kept as one quote",
             ImportWarningKind::LinkTitle => "link titles were left out",
+            ImportWarningKind::ImageInText => {
+                "images inside lines of text were put on lines of their own"
+            }
+            ImportWarningKind::ImageNotFound => "image files were not found and were kept as links",
+            ImportWarningKind::ImageUnsupported => {
+                "image files could not be used and were kept as links"
+            }
+            // (After a number: "2 links around images were left out".)
+            ImportWarningKind::ImageLink => "links around images were left out",
         };
         format!("{count} {rest}")
     }
@@ -273,9 +327,9 @@ impl fmt::Display for ImportWarning {
 const SUMMARY_LINES: usize = 8;
 
 /// The warnings as a few sentences, one per kind in the order each kind
-/// first appears: `"2 images were kept as links to them (documents have no
-/// images): lines 4 and 9"`. For a caller that reports to a person or an
-/// agent and does not want one line per occurrence.
+/// first appears: `"2 tables were kept as text in code blocks (documents
+/// have no tables): lines 4 and 9"`. For a caller that reports to a person
+/// or an agent and does not want one line per occurrence.
 ///
 /// ```
 /// use writer_export::{MarkdownImportOptions, from_markdown, summarize_warnings};
@@ -286,7 +340,8 @@ const SUMMARY_LINES: usize = 8;
 /// );
 /// assert_eq!(
 ///     summarize_warnings(&imported.warnings),
-///     ["2 images were kept as links to them (documents have no images): lines 1 and 5"]
+///     ["2 images were kept as links to them (they are at addresses on the network, \
+///       or inside headings, quotes or tables): lines 1 and 5"]
 /// );
 /// ```
 pub fn summarize_warnings(warnings: &[ImportWarning]) -> Vec<String> {
@@ -339,6 +394,52 @@ mod tests {
     }
 
     #[test]
+    fn the_sentences_about_images() {
+        let all = [
+            (
+                ImportWarningKind::Image,
+                "image",
+                "an image was kept as a link to it (it is at an address on the network, or inside a heading, a quote or a table)",
+                "2 images were kept as links to them (they are at addresses on the network, or inside headings, quotes or tables)",
+            ),
+            (
+                ImportWarningKind::ImageInText,
+                "image_in_text",
+                "an image inside a line of text was put on a line of its own",
+                "2 images inside lines of text were put on lines of their own",
+            ),
+            (
+                ImportWarningKind::ImageNotFound,
+                "image_not_found",
+                "an image file was not found and was kept as a link",
+                "2 image files were not found and were kept as links",
+            ),
+            (
+                ImportWarningKind::ImageUnsupported,
+                "image_unsupported",
+                "an image file could not be used and was kept as a link",
+                "2 image files could not be used and were kept as links",
+            ),
+            (
+                ImportWarningKind::ImageLink,
+                "image_link",
+                "the link around an image was left out",
+                "2 links around images were left out",
+            ),
+        ];
+        for (kind, code, one, two) in all {
+            assert_eq!(kind.code(), code);
+            assert_eq!(kind.description(), one);
+            assert_eq!(kind.description_of(1), one);
+            assert_eq!(kind.description_of(2), two);
+            assert_eq!(
+                summarize_warnings(&[w(kind, 2), w(kind, 7)]),
+                [format!("{two}: lines 2 and 7")]
+            );
+        }
+    }
+
+    #[test]
     fn summaries_group_by_kind() {
         assert!(summarize_warnings(&[]).is_empty());
         let warnings = [
@@ -350,7 +451,7 @@ mod tests {
         assert_eq!(
             summarize_warnings(&warnings),
             [
-                "3 images were kept as links to them (documents have no images): lines 3 and 9",
+                "3 images were kept as links to them (they are at addresses on the network, or inside headings, quotes or tables): lines 3 and 9",
                 "a table was kept as text in a code block (documents have no tables): line 5",
             ]
         );

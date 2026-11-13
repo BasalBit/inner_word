@@ -256,7 +256,18 @@ fn assert_on_their_sheets(pages: &[Page]) {
                     assert!(row.runs.windows(2).all(|pair| pair[0].end < pair[1].end));
                 }
                 Item::Label(label) => assert!(on_sheet(label.x, label.baseline)),
-                Item::Image(_) => panic!("no picture is in these documents"),
+                Item::Image(image) => {
+                    assert!(
+                        on_sheet(image.x, image.y)
+                            && on_sheet(image.x + image.width, image.y + image.height),
+                        "page {number}: a picture at {} {} of {} x {}",
+                        image.x,
+                        image.y,
+                        image.width,
+                        image.height
+                    );
+                    assert!(image.width > 0. && image.height > 0.);
+                }
             }
         }
     }

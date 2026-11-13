@@ -423,4 +423,77 @@ mod tests {
         assert_eq!(level_for((100, 20000), 100.), 2);
         assert_eq!(level_for((8192, 8192), 8192.), 0);
     }
+
+    fn encoded(picture: &image::RgbaImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let picture = image::DynamicImage::ImageRgba8(picture.clone());
+        let picture = match format {
+            // A JPEG has no alpha.
+            image::ImageFormat::Jpeg => image::DynamicImage::ImageRgb8(picture.into_rgb8()),
+            _ => picture,
+        };
+        picture
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .expect("encoded in memory");
+        bytes
+    }
+
+    #[test]
+    fn stored_bytes_decode_to_bgra_at_the_level_that_is_asked_for() {
+        // Red at the left, blue at the right, half transparent below.
+        let picture = image::RgbaImage::from_fn(64, 40, |x, y| {
+            let alpha = if y < 20 { 255 } else { 128 };
+            if x < 32 {
+                image::Rgba([255, 0, 0, alpha])
+            } else {
+                image::Rgba([0, 0, 255, alpha])
+            }
+        });
+        let png = encoded(&picture, image::ImageFormat::Png);
+
+        let whole = decode(&png, 0).expect("a PNG");
+        assert_eq!(whole.frame_count(), 1);
+        assert_eq!((whole.size(0).width.0, whole.size(0).height.0), (64, 40));
+        let pixels = whole.as_bytes(0).unwrap();
+        // Blue, green, red, alpha; the alpha as it is (not multiplied in).
+        assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+        assert_eq!(&pixels[63 * 4..64 * 4], &[255, 0, 0, 255]);
+        let below = 30 * 64 * 4;
+        assert_eq!(&pixels[below..below + 4], &[0, 0, 255, 128]);
+
+        // Halved twice: a quarter of each side, the same picture.
+        let small = decode(&png, 2).expect("a PNG");
+        assert_eq!((small.size(0).width.0, small.size(0).height.0), (16, 10));
+        let pixels = small.as_bytes(0).unwrap();
+        assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+        assert_eq!(&pixels[15 * 4..16 * 4], &[255, 0, 0, 255]);
+        // Never smaller than one pixel.
+        let dot = decode(&png, 20).expect("a PNG");
+        assert_eq!((dot.size(0).width.0, dot.size(0).height.0), (1, 1));
+
+        // A JPEG, and of a GIF with several frames the first.
+        let jpeg = decode(&encoded(&picture, image::ImageFormat::Jpeg), 1).expect("a JPEG");
+        assert_eq!((jpeg.size(0).width.0, jpeg.size(0).height.0), (32, 20));
+        let mut gif = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut gif);
+            let green = image::RgbaImage::from_pixel(64, 40, image::Rgba([0, 255, 0, 255]));
+            encoder
+                .encode_frames([image::Frame::new(picture.clone()), image::Frame::new(green)])
+                .expect("two frames");
+        }
+        let first = decode(&gif, 0).expect("a GIF");
+        assert_eq!(first.frame_count(), 1);
+        assert_eq!((first.size(0).width.0, first.size(0).height.0), (64, 40));
+        let pixels = first.as_bytes(0).unwrap();
+        assert!(
+            pixels[2] > 200 && pixels[1] < 60,
+            "red, not the second frame's green"
+        );
+
+        // What is no picture, or only the beginning of one.
+        assert!(decode(b"not a picture", 0).is_none());
+        assert!(decode(&png[..png.len() / 2], 0).is_none());
+        assert!(decode(&[], 0).is_none());
+    }
 }

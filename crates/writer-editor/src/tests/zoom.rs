@@ -13,7 +13,8 @@ use gpui::{
     TestAppContext, TouchPhase, VisualTestContext, Window, div, point, prelude::*, px, size,
 };
 use writer_core::{
-    Block, BlockKind, Document, DocumentSettings, InlineAttrs, Position, Selection, TextRange,
+    Alignment, Block, BlockKind, Document, DocumentSettings, Image, ImageId, ImageWidth,
+    InlineAttrs, Position, Selection, TextRange,
 };
 
 use super::slice::{open, setup};
@@ -53,8 +54,9 @@ fn with_view(document: Document, page_view: bool) -> Document {
     })
 }
 
-/// A document with every kind of block and enough text for a dozen
-/// sheets.
+/// A document with every kind of block (an image among them, at another
+/// width and place in every chapter, and every third one as tall as a page
+/// lets it be) and enough text for a dozen sheets.
 fn manuscript(page_view: bool) -> Document {
     let sentence = "The quick brown fox jumps over the lazy dog, and keeps on running. ";
     let code = InlineAttrs {
@@ -101,6 +103,21 @@ fn manuscript(page_view: bool) -> Document {
             BlockKind::code(),
             "fn main() {\n    println!(\"a line of code that is long enough to wrap in a column\");\n}",
         ));
+        let mut image = Image::new(
+            ImageId::from_bytes([chapter as u8 + 1; 16]),
+            if chapter % 3 == 2 {
+                (900, 2400)
+            } else {
+                (1600, 1067)
+            },
+            144,
+        );
+        image.width = ImageWidth::new(250 + chapter as u16 * 75);
+        blocks.push(Block::image(image).with_alignment(match chapter % 3 {
+            0 => Alignment::Left,
+            1 => Alignment::Center,
+            _ => Alignment::Right,
+        }));
         if chapter % 4 == 3 {
             blocks.push(Block::with_text(BlockKind::PageBreak, ""));
         }

@@ -876,6 +876,111 @@ unless it says "read".
   (`SF Mono`, which this Mac does not have as a family) because the test platform lists
   no installed fonts, so the PDF writer reports it missing and sets code in Helvetica.
 
+## Images
+
+From images in the editor (`writer-editor`, `src/images.rs`, `src/images/cache.rs`,
+`src/element.rs`). "tested" is the editor's headless tests on the test atlas, "seen" is the
+editor's demo in a real window (`cargo run -p writer-editor --example demo`).
+
+- **Painting.** `window.paint_image(bounds, corner_radii, Arc<RenderImage>, frame_index,
+  grayscale) -> Result<()>` (`$G/src/window.rs:3129-3175`), paint phase only. It puts the
+  frame into the sprite atlas the first time it is painted (keyed by the `RenderImage`'s
+  own id and the frame index), floors the origin and ceils the size to device pixels, and
+  draws inside the current content mask. Later paint calls are on top of it like on top of
+  anything, so a quad painted after it tints it (a translucent selection colour over a
+  picture: tested, seen). Call it with `.ok()`: a frame the atlas cannot take is an `Err`
+  from the allocation, not a panic.
+- **`RenderImage` is BGRA with straight alpha** (`$G/src/assets.rs:42-68`):
+  `RenderImage::new(frames: impl Into<SmallVec<[image::Frame; 1]>>)`, each frame an
+  `image::Frame` over an `RgbaImage` whose bytes were swapped to blue, green, red, alpha.
+  The alpha is not multiplied in (GPUI's own decoder only swaps the two channels,
+  `$G/src/platform.rs`, `Image::to_image_data`; tested: a half transparent pixel decodes
+  to `[b, g, r, 128]` and is what the frame hands the atlas). Every `RenderImage` gets a
+  new id (a static counter), so two of them never share a texture; keep the `Arc` for as
+  long as the picture is on screen. `image` 0.25 and `smallvec` 1 are the versions gpui
+  itself builds with: naming them in a crate's manifest compiles nothing new.
+- **The atlas: 16384 pixels a side at most, and no mip maps.** A texture larger than
+  `MAX_ATLAS_SIZE` cannot be allocated (`$G/src/platform/mac/metal_atlas.rs:117-131`), and
+  the sprite shader samples with `mag_filter::linear, min_filter::linear` and nothing else
+  (`$G/src/platform/mac/shaders.metal:703-706`). A picture drawn at less than half its
+  size therefore looks rough: scale it on the CPU first. The editor decodes a picture at
+  its natural size halved as often as it can be while it stays at least as wide as the
+  device pixels it is drawn on (`bounds.size.width * window.scale_factor()`), and never
+  over 8192 pixels a side (`images::cache::level_for`); seen sharp at 100 % and 200 %.
+- **A texture stays in the atlas until it is dropped.** `window.drop_image(Arc<RenderImage>)
+  -> Result<()>` (`$G/src/window.rs:3198-3209`) removes the tiles of every frame; it does
+  not need a draw phase. `cx.drop_image(image, Some(window))` (`$G/src/app.rs:2071-2081`)
+  does the same in every window. Dropping the `Arc` alone frees the pixels and leaves the
+  texture: a cache that evicts must hand what it evicts to a window (the editor does it at
+  the start of its prepaint, and in `cx.on_release_in(window, ..)` for an editor that goes
+  away; the count is tested).
+- **GPUI's own image path is not for a custom element with many large pictures.** `img()`,
+  `ImageSource`, `Image::use_render_image` and `window.use_asset` decode at natural size
+  and keep every decoded image in the app until `remove_asset` is called: no sizes, no
+  budget (source).
+- **A custom element cannot paint an image half transparent.** `paint_image` has no opacity
+  argument. It draws with the opacity of the element that is being painted
+  (`$G/src/window.rs:3160`, `element_opacity()`), and only GPUI's own elements can set
+  that: `with_element_opacity` is `pub(crate)` (`:2433`). What dims a picture in a custom
+  element is a quad of the colour of the surface under it at 50 % alpha, painted over it
+  (the editor's picture while it is dragged; seen in Paper and Night).
+- **The clipboard is text or one picture, never both.** Reading
+  (`$G/src/platform/mac/platform.rs:1102-1137`): when the pasteboard has
+  `public.utf8-plain-text` the string is the answer and no image is looked for; otherwise
+  PNG, JPEG, WebP, GIF, SVG, BMP, TIFF are tried in that order and the first found comes
+  back as `ClipboardEntry::Image(gpui::Image { format, bytes, .. })`. So a screenshot and
+  "Copy" in Preview arrive as pictures, while a file copied in Finder (its name) and "Copy
+  Image" in a browser (its address) arrive as their text: pictures of that kind need the
+  app's own read of `NSPasteboard`. An empty string on the pasteboard reads as an item
+  with an empty text, not as nothing (source). Writing (`:1027-1090`): an item with one
+  entry is written as that string (with its metadata) or as that image
+  (`ClipboardItem::new_image(&gpui::Image::from_bytes(ImageFormat::Png, bytes))`); with
+  several entries the strings are joined and images are left out. `gpui::Image::id()` is a
+  hash of the bytes: the way to recognise a picture one has written oneself when it comes
+  back. The test platform keeps the item as it was written, so both directions are
+  testable headlessly (tested).
+- **Drops from outside are files, and they reach an element as a drag of
+  `ExternalPaths`.** The window registers for `NSFilenamesPboardType` only
+  (`$G/src/platform/mac/window.rs:670-674`): files from Finder arrive, a picture dragged
+  out of a browser or Photos does not. GPUI turns the drag into its own
+  (`$G/src/window.rs:3622-3661`): on `FileDropEvent::Entered` the app's active drag becomes
+  an `ExternalPaths` and a mouse move with the left button is dispatched, `Pending` is
+  another such move, `Submit` a mouse up, and `Exited` drops the drag and is itself
+  dispatched as a mouse event. An element takes part through a div:
+  `.on_drag_move::<ExternalPaths>(|event: &DragMoveEvent<ExternalPaths>, window, cx| ..)`
+  (every move while such a drag is active, inside or outside the div, in the capture
+  phase; `event.event.position`), `.on_drop::<ExternalPaths>(|paths: &ExternalPaths,
+  window, cx| ..)` (`paths.paths() -> &[PathBuf]`; the pointer is
+  `window.mouse_position()`), and `window.on_mouse_event(|event: &FileDropEvent, ..|)` in a
+  custom element's paint to learn that the drag left the window. The moves of such a drag
+  reach window-wide mouse listeners too, as moves with the left button held: a listener
+  that follows its own drags must know it has none. `ExternalPaths` cannot be built
+  outside gpui (its field is `pub(crate)`), so a headless test calls what the two div
+  listeners call; **the listeners themselves were compiled and not run** (nothing can
+  drag from Finder but a hand).
+- **The open panel has no file type filter.** `PathPromptOptions` is `files`,
+  `directories`, `multiple`, `prompt` and nothing else (`$G/src/platform.rs:1330-1339`):
+  any file can be chosen, and whoever asked has to say what is wrong with one that is not
+  a picture.
+- **gpui 0.2.2 has no accessibility interface.** Nothing in its source implements
+  `NSAccessibility` or names it (searched): no part of a GPUI window reaches VoiceOver, so
+  neither does the description of an image. The description serves where it can (a DOCX's
+  alternative text, Markdown's alt text, agents, the placeholder).
+- **Decode off the main thread, and repaint when it is there**: `cx.spawn(async move
+  |this, cx| { let picture = cx.background_spawn(async move { decode(..) }).await;
+  this.update(cx, |this, cx| { ..; cx.notify() }) })`. `AsyncApp::background_spawn` needs
+  `gpui::AppContext` in scope. `image::load_from_memory` gives the first frame of a GIF;
+  `DynamicImage::thumbnail_exact` scales down by whole blocks, which is what halving
+  wants. On the test executor the decode runs inside `cx.run_until_parked()`, and a dirty
+  window is drawn again in the same call (tested).
+- **A pointer in a scripted run.** `Window::dispatch_event` cannot be called from outside
+  gpui (see "Actions and keys"), so a scripted run cannot press a button. What it can do
+  is call what the element's mouse listeners call: the editor has four doc-hidden methods
+  for that (`Editor::pointer_press`, `pointer_drag_to`, `pointer_release`,
+  `pointer_drags_files`), and the demo's script steps over them (`press:handle:3;
+  drag:40,10; screenshot:..; release`). A pointer that is put outside the viewport that
+  way scrolls the view for as long as it stays there, as a real one does.
+
 ## Testing
 
 Source: `$G/src/app/test_context.rs`, `$G/src/platform/test/`, `$G/../gpui-macros-0.2.2/src/test.rs`.

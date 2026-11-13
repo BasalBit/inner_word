@@ -311,11 +311,18 @@ fn a_version_1_library_file_is_upgraded_on_open() {
         store.close().unwrap();
         (folder.id, big, small)
     };
-    // Put the file back to what version 1 of the app wrote: no listing index, version 1.
+    // Put the file back to what version 1 of the app wrote: no listing index, no columns
+    // of pages, version 1.
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch("DROP INDEX documents_meta; PRAGMA user_version = 1;")
-            .unwrap();
+        conn.execute_batch(
+            "DROP INDEX documents_meta;
+             DROP INDEX documents_by_source_url;
+             ALTER TABLE documents DROP COLUMN source_url;
+             ALTER TABLE documents DROP COLUMN kind;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
     }
     // A day later the app with schema 2 opens it: a backup of the old file first, then
     // the upgrade, and everything is where it was.

@@ -1,4 +1,4 @@
-//! The bytes of the images that documents hold.
+//! The bytes of the images that documents hold, and of the files of pages.
 //!
 //! A document names an image by the hash of its bytes ([`ImageId`]); the bytes are stored
 //! once, in a second SQLite file beside the library database (`images.db`,
@@ -13,9 +13,11 @@
 //! The parts:
 //!
 //! - [`ImageFile`] (`file.rs`): `images.db` by itself, one connection, its schema and
-//!   pragmas. A [`Store`] holds one and opens it at the first use.
-//! - `scan.rs`: which images stored content names. The one thing the store reads in a
-//!   document's content.
+//!   pragmas. A [`Store`] holds one and opens it at the first use. Since version 2 of the
+//!   file it has a second table, `files`: the bytes of the files of pages ([`FileId`],
+//!   [`FileInfo`]), stored once each under their hash, as the pictures are.
+//! - `scan.rs`: which images and which files stored content names. The one thing the
+//!   store reads in a document's content or a page's manifest.
 //! - [`collect_unused_images`], [`mark_unused_images`] (`collect.rs`): the collector, the
 //!   only thing that ever deletes the bytes of an image.
 //! - [`back_up_images`] (`copy.rs`): the one copy of the pictures in the backups
@@ -83,10 +85,7 @@ pub struct ImageId(pub [u8; 16]);
 impl ImageId {
     /// The id of these bytes.
     pub fn of(bytes: &[u8]) -> ImageId {
-        let digest = Sha256::digest(bytes);
-        let mut id = [0u8; 16];
-        id.copy_from_slice(&digest[..16]);
-        ImageId(id)
+        ImageId(hash16(bytes))
     }
 
     /// Reads exactly 32 hex digits, in either case. Anything else is `None`.
@@ -96,33 +95,12 @@ impl ImageId {
 
     /// The id as 32 lowercase hex digits. [`fmt::Display`] writes the same.
     pub fn to_hex(&self) -> String {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(32);
-        for byte in self.0 {
-            hex.push(DIGITS[usize::from(byte >> 4)] as char);
-            hex.push(DIGITS[usize::from(byte & 0x0f)] as char);
-        }
-        hex
+        hex16(&self.0)
     }
 
     /// 32 hex digits as bytes of text. The scan of stored content reads ids with it.
     pub(crate) fn from_hex(digits: &[u8]) -> Option<ImageId> {
-        fn value(digit: u8) -> Option<u8> {
-            match digit {
-                b'0'..=b'9' => Some(digit - b'0'),
-                b'a'..=b'f' => Some(digit - b'a' + 10),
-                b'A'..=b'F' => Some(digit - b'A' + 10),
-                _ => None,
-            }
-        }
-        if digits.len() != 32 {
-            return None;
-        }
-        let mut id = [0u8; 16];
-        for (byte, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
-            *byte = (value(pair[0])? << 4) | value(pair[1])?;
-        }
-        Some(ImageId(id))
+        parse16(digits).map(ImageId)
     }
 }
 
@@ -130,6 +108,95 @@ impl fmt::Display for ImageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_hex())
     }
+}
+
+/// The name of the stored bytes of a file of a page (a style sheet, a font, a picture, a
+/// sound): the first 16 bytes of their SHA-256, the rule of [`ImageId`], in a type of its
+/// own so that the two are never mixed. Written as 32 lowercase hex digits wherever it is
+/// text: the column of `files`, and the `"file"` key of a page's manifest, the one token
+/// the store reads in it ([`Store::referenced_files`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileId(pub [u8; 16]);
+
+impl FileId {
+    /// The id of these bytes.
+    pub fn of(bytes: &[u8]) -> FileId {
+        FileId(hash16(bytes))
+    }
+
+    /// Reads exactly 32 hex digits, in either case. Anything else is `None`.
+    pub fn parse(text: &str) -> Option<FileId> {
+        Self::from_hex(text.as_bytes())
+    }
+
+    /// The id as 32 lowercase hex digits. [`fmt::Display`] writes the same.
+    pub fn to_hex(&self) -> String {
+        hex16(&self.0)
+    }
+
+    /// 32 hex digits as bytes of text. The scan of stored content reads ids with it.
+    pub(crate) fn from_hex(digits: &[u8]) -> Option<FileId> {
+        parse16(digits).map(FileId)
+    }
+}
+
+impl fmt::Display for FileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// What the library knows about the stored bytes of a file of a page without reading them.
+/// No media type: the same bytes can be served under two paths with two types, and the
+/// manifest of the page says the type of each path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileInfo {
+    /// The name of the bytes.
+    pub id: FileId,
+    /// How many bytes there are.
+    pub byte_len: u64,
+    /// When the bytes were first stored, unix ms.
+    pub created_at: i64,
+}
+
+/// The first 16 bytes of the SHA-256 of `bytes`: the name of stored bytes, an image's or a
+/// file's.
+pub(crate) fn hash16(bytes: &[u8]) -> [u8; 16] {
+    let digest = Sha256::digest(bytes);
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&digest[..16]);
+    id
+}
+
+/// 16 bytes as 32 lowercase hex digits.
+fn hex16(id: &[u8; 16]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(32);
+    for byte in id {
+        hex.push(DIGITS[usize::from(byte >> 4)] as char);
+        hex.push(DIGITS[usize::from(byte & 0x0f)] as char);
+    }
+    hex
+}
+
+/// Exactly 32 hex digits, in either case, as 16 bytes.
+pub(crate) fn parse16(digits: &[u8]) -> Option<[u8; 16]> {
+    fn value(digit: u8) -> Option<u8> {
+        match digit {
+            b'0'..=b'9' => Some(digit - b'0'),
+            b'a'..=b'f' => Some(digit - b'a' + 10),
+            b'A'..=b'F' => Some(digit - b'A' + 10),
+            _ => None,
+        }
+    }
+    if digits.len() != 32 {
+        return None;
+    }
+    let mut id = [0u8; 16];
+    for (byte, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
+        *byte = (value(pair[0])? << 4) | value(pair[1])?;
+    }
+    Some(id)
 }
 
 /// What kind of file stored image bytes are. The library stores these three and nothing
@@ -299,6 +366,69 @@ impl Store {
     /// only keeps an image alive.
     pub fn referenced_images(&self) -> Result<HashSet<ImageId>> {
         scan::referenced(&self.conn)
+    }
+
+    /// Stores the bytes of a file of a page once: the id is their hash ([`FileId::of`]),
+    /// and bytes that are there already are not written again. Either way the file counts
+    /// as used from now (the collector's stamp on it is cleared). Committed before it
+    /// returns. Creates `images.db` when it is not there.
+    ///
+    /// Store every file of a page before the page that names them is created or saved
+    /// ([`Store::create_page`], [`Store::save_page`] refuse a manifest that names a file
+    /// the library does not have).
+    pub fn put_file(&mut self, bytes: &[u8]) -> Result<FileInfo> {
+        let now = self.now();
+        self.images.put_file_at(bytes, now)
+    }
+
+    /// For a file id that should be there: the file counts as used from now (the
+    /// collector's stamp on it is cleared). `None` when the library does not have it.
+    /// Writes nothing when there is no stamp to clear. A file that only the copy in the
+    /// backups directory has is brought back from there.
+    pub fn touch_file(&mut self, id: &FileId) -> Result<Option<FileInfo>> {
+        self.images.touch_file(id)
+    }
+
+    /// What is known about the stored bytes of a file of a page; `None` when the library
+    /// does not have them. Reads no bytes (unless only the copy in the backups directory
+    /// has the file, which is then brought back).
+    pub fn file_info(&self, id: &FileId) -> Result<Option<FileInfo>> {
+        self.images.file_info(id)
+    }
+
+    /// The bytes of a file of a page; `None` when the library does not have them. As
+    /// [`Store::image_bytes`]: from `images.db`, else from the copy in the backups
+    /// directory (and written back, unless this store is read-only or in a dry run); bytes
+    /// that are not the ones the id names are not believed.
+    pub fn file_bytes(&self, id: &FileId) -> Result<Option<Vec<u8>>> {
+        self.images.file_bytes(id)
+    }
+
+    /// How many files of pages `images.db` holds; 0 when there is no such file.
+    pub fn file_count(&self) -> Result<u64> {
+        self.images.file_count()
+    }
+
+    /// Every file id that stored content names: the `content` of every row of
+    /// `documents` (live and trashed) and of `snapshots`, read as the images are
+    /// ([`Store::referenced_images`]): every `"file"`, optional white space, `:`, optional
+    /// white space, `"`, 32 hex digits, `"`. That is the key a page's manifest writes the
+    /// id of each of its files under, so the key must keep its name.
+    pub fn referenced_files(&self) -> Result<HashSet<FileId>> {
+        scan::referenced_files(&self.conn)
+    }
+
+    /// The files a manifest names that the library does not have, in order; each one it
+    /// has counts as used from now ([`Store::touch_file`]), so that no run of the
+    /// collector takes it between this look and the save that names it.
+    pub(crate) fn files_missing(&mut self, manifest: &str) -> Result<Vec<FileId>> {
+        let mut missing = Vec::new();
+        for id in scan::files_in(manifest) {
+            if self.images.touch_file(&id)?.is_none() {
+                missing.push(id);
+            }
+        }
+        Ok(missing)
     }
 }
 

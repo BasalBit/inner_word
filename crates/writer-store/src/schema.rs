@@ -19,7 +19,7 @@ pub(crate) const APPLICATION_ID: i32 = 0x5752_4954;
 /// The newest schema version this build creates and understands.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 const V1: &str = r#"
 CREATE TABLE folders (
@@ -123,6 +123,27 @@ const V3: &str = r#"
 SELECT 1;
 "#;
 
+/// Version 4: library items may be pages (kind 'page'; their files are in images.db).
+///
+/// Two columns: `kind` (`'text'` for every row there is, `'page'` for a page) and
+/// `source_url` (the address a page came from). The covering index of the listings is
+/// made again with both, so that listings still never read the text, and an index of the
+/// addresses answers the lookup of a page that is added again. No `CHECK` on `kind`: an
+/// unknown value is an error of that row when it is read. A version that does not know
+/// pages refuses the library ([`StoreError::SchemaTooNew`]) instead of showing a page's
+/// manifest as text and saving that over it.
+const V4: &str = r#"
+ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE documents ADD COLUMN source_url TEXT;
+DROP INDEX documents_meta;
+CREATE INDEX documents_meta ON documents(
+    trashed_at, position, id, folder_id, title, word_count, char_count, created_at,
+    updated_at, kind, source_url
+);
+CREATE INDEX documents_by_source_url ON documents(source_url)
+    WHERE source_url IS NOT NULL;
+"#;
+
 /// Applies the per-connection pragmas that do not modify the file: busy timeout, foreign
 /// keys, in-memory temp storage.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -187,10 +208,16 @@ fn inspect_as(conn: &Connection, supported: i64) -> Result<Header> {
 
 /// Runs every migration step the database has not seen yet.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
+    migrate_to(conn, SCHEMA_VERSION)
+}
+
+/// Runs the migration steps the database has not seen yet, up to version `target`.
+fn migrate_to(conn: &mut Connection, target: i64) -> Result<()> {
     let header = inspect(conn)?;
     for (index, step) in MIGRATIONS
         .iter()
         .enumerate()
+        .take(usize::try_from(target).unwrap_or(0))
         .skip(header.user_version as usize)
     {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -248,7 +275,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 3);
+        assert_eq!(SCHEMA_VERSION, 4);
         let (title, words): (String, i64) = conn
             .query_row("SELECT title, word_count FROM documents", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -276,33 +303,41 @@ mod tests {
         conn
     }
 
+    /// Every row of `sql`, each cell as SQLite has it.
+    fn rows_of(conn: &Connection, sql: &str) -> Vec<String> {
+        let mut rows = Vec::new();
+        let mut stmt = conn.prepare(sql).unwrap();
+        let columns = stmt.column_count();
+        let mut found = stmt.query([]).unwrap();
+        while let Some(row) = found.next().unwrap() {
+            let cells: Vec<String> = (0..columns)
+                .map(|i| format!("{:?}", row.get::<_, rusqlite::types::Value>(i).unwrap()))
+                .collect();
+            rows.push(cells.join("|"));
+        }
+        rows
+    }
+
+    /// The documents as a version up to 3 has them, column for column.
+    const DOCUMENTS_UP_TO_3: &str = "SELECT id, folder_id, title, content, plain_text,
+            word_count, char_count, position, created_at, updated_at, view_state, trashed_at
+         FROM documents ORDER BY id";
+
     /// Step 3 changes nothing a version-2 library holds: it only moves the version on.
     #[test]
     fn version_2_upgrades_to_3_and_its_documents_are_unchanged() {
         fn everything(conn: &Connection) -> Vec<String> {
-            let mut rows = Vec::new();
-            for sql in [
-                "SELECT id, folder_id, title, content, plain_text, word_count, char_count,
-                        position, created_at, updated_at, view_state, trashed_at
-                 FROM documents ORDER BY id",
+            let mut rows = rows_of(conn, DOCUMENTS_UP_TO_3);
+            rows.extend(rows_of(
+                conn,
                 "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name",
-            ] {
-                let mut stmt = conn.prepare(sql).unwrap();
-                let columns = stmt.column_count();
-                let mut found = stmt.query([]).unwrap();
-                while let Some(row) = found.next().unwrap() {
-                    let cells: Vec<String> = (0..columns)
-                        .map(|i| format!("{:?}", row.get::<_, rusqlite::types::Value>(i).unwrap()))
-                        .collect();
-                    rows.push(cells.join("|"));
-                }
-            }
+            ));
             rows
         }
         let mut conn = version_2();
         let before = everything(&conn);
         assert!(before.iter().any(|row| row.contains("Kept")));
-        migrate(&mut conn).unwrap();
+        migrate_to(&mut conn, 3).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
@@ -317,7 +352,7 @@ mod tests {
     fn a_build_that_knows_schema_2_refuses_a_library_of_schema_3() {
         let mut conn = version_2();
         assert!(inspect_as(&conn, 2).is_ok());
-        migrate(&mut conn).unwrap();
+        migrate_to(&mut conn, 3).unwrap();
         match inspect_as(&conn, 2) {
             Err(StoreError::SchemaTooNew { found, supported }) => {
                 assert_eq!((found, supported), (3, 2));
@@ -327,7 +362,83 @@ mod tests {
                 other.map(|h| h.user_version)
             ),
         }
-        assert_eq!(inspect(&conn).unwrap().user_version, 3);
+        assert_eq!(inspect_as(&conn, 3).unwrap().user_version, 3);
+    }
+
+    /// A database as version 3 of the app (0.7.0) left it, with one document.
+    fn version_3() -> Connection {
+        let mut conn = version_2();
+        migrate_to(&mut conn, 3).unwrap();
+        conn
+    }
+
+    /// Step 4 adds the two columns of pages; every document there is stays as it was, a
+    /// text without an address, and the search index finds it as before.
+    #[test]
+    fn version_3_upgrades_to_4_and_its_documents_are_unchanged() {
+        let mut conn = version_3();
+        let before = rows_of(&conn, DOCUMENTS_UP_TO_3);
+        assert!(before.iter().any(|row| row.contains("Kept")));
+        migrate(&mut conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        assert_eq!(rows_of(&conn, DOCUMENTS_UP_TO_3), before);
+        assert_eq!(
+            rows_of(&conn, "SELECT kind, source_url FROM documents ORDER BY id"),
+            vec![r#"Text("text")|Null"#.to_owned()]
+        );
+        let meta = conn
+            .query_row(
+                &format!("SELECT {} FROM documents", crate::documents::DOC_META_COLS),
+                [],
+                crate::documents::meta_from_row,
+            )
+            .unwrap();
+        assert_eq!(meta.kind, crate::DocumentKind::Text);
+        assert_eq!(meta.source_url, None);
+        assert_eq!((meta.title.as_str(), meta.word_count), ("Kept", 2));
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH 'kept'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+        // The index of the addresses is there, and only for rows that have one.
+        let indexes = rows_of(
+            &conn,
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'documents'
+             ORDER BY name",
+        );
+        assert!(
+            indexes
+                .iter()
+                .any(|name| name.contains("documents_by_source_url"))
+        );
+        assert!(indexes.iter().any(|name| name.contains("documents_meta")));
+        migrate(&mut conn).unwrap();
+    }
+
+    /// What step 4 is for: a build whose newest schema is 3 (0.7.0, the app and the
+    /// `writer` tool) refuses a library that may hold pages, and one that knows 4 opens it.
+    #[test]
+    fn a_build_that_knows_schema_3_refuses_a_library_of_schema_4() {
+        let mut conn = version_3();
+        assert!(inspect_as(&conn, 3).is_ok());
+        migrate(&mut conn).unwrap();
+        match inspect_as(&conn, 3) {
+            Err(StoreError::SchemaTooNew { found, supported }) => {
+                assert_eq!((found, supported), (4, 3));
+            }
+            other => panic!(
+                "expected SchemaTooNew, got {:?}",
+                other.map(|h| h.user_version)
+            ),
+        }
+        assert_eq!(inspect(&conn).unwrap().user_version, 4);
     }
 
     /// The listings must be answered from the index alone: a plan that visits the table
@@ -350,5 +461,33 @@ mod tests {
                 "ORDER BY {order}: {plan}"
             );
         }
+        // The list of pages, live and trashed, is answered from the index too.
+        let plan = plan(
+            &conn,
+            &format!(
+                "SELECT {cols} FROM documents INDEXED BY documents_meta
+                 WHERE kind = 'page' ORDER BY updated_at DESC, id DESC"
+            ),
+        );
+        assert!(plan.contains("COVERING INDEX documents_meta"), "{plan}");
+    }
+
+    /// A page that is added again is looked up by its address through the index of the
+    /// addresses, not by reading every row.
+    #[test]
+    fn a_page_is_found_by_its_address_through_the_index() {
+        let mut conn = version_1();
+        migrate(&mut conn).unwrap();
+        let plan = plan(
+            &conn,
+            &format!(
+                "SELECT {} FROM documents
+                 WHERE source_url = 'https://claude.ai/artifact/x' AND kind = 'page'
+                   AND trashed_at IS NULL
+                 ORDER BY updated_at DESC, id DESC LIMIT 1",
+                crate::documents::DOC_META_COLS
+            ),
+        );
+        assert!(plan.contains("documents_by_source_url"), "{plan}");
     }
 }

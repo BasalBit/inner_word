@@ -288,8 +288,9 @@ impl Store {
     /// Copies a live folder with everything live inside it (subfolders and documents, at
     /// any depth) next to the original: same parent, directly after it, named
     /// `"<name> copy"`. Inside the copy every name, title and order is kept. Documents are
-    /// copied as [`Store::duplicate_document`] copies them (content, plain text, counts and
-    /// view state; no snapshots), and the copies are stamped with the current time. Trashed
+    /// copied as [`Store::duplicate_document`] copies them (content, plain text, counts,
+    /// view state and kind, a page without its address; no snapshots), and the copies are
+    /// stamped with the current time. Trashed
     /// items inside the folder are not copied. One transaction: all of it or nothing.
     /// Returns the new folder.
     pub fn duplicate_folder(&mut self, id: FolderId) -> Result<Folder> {
@@ -308,12 +309,13 @@ impl Store {
                 params![parent, name, position, now],
             )?;
             let copied = FolderId(conn.last_insert_rowid());
+            // A page is copied as a page, without its address (as duplicate_document).
             conn.execute(
                 "INSERT INTO documents
                      (folder_id, title, content, plain_text, word_count, char_count, position,
-                      created_at, updated_at, view_state)
+                      created_at, updated_at, view_state, kind)
                  SELECT ?2, title, content, plain_text, word_count, char_count, position,
-                        ?3, ?3, view_state
+                        ?3, ?3, view_state, kind
                  FROM documents WHERE folder_id = ?1 AND trashed_at IS NULL",
                 params![source, copied, now],
             )?;

@@ -1,4 +1,10 @@
 //! `images.db` by itself: the file, its schema and pragmas, and one connection to it.
+//!
+//! The file holds two tables of stored bytes, each row named by the hash of its bytes:
+//! `images` (the pictures of documents) and, since version 2 of the file, `files` (the
+//! files of pages: HTML, style sheets, scripts, fonts, pictures, sounds). Everything that
+//! keeps the file safe (its making, WAL with a sync on every commit, damage and moving
+//! aside, the copy among the backups, the collector) works per file and covers both.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::HashSet;
@@ -9,7 +15,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior, params};
 
-use super::{ImageFormat, ImageId, ImageInfo, NewImage, copy};
+use super::{FileId, FileInfo, ImageFormat, ImageId, ImageInfo, NewImage, copy, hash16};
 use crate::clock::Clock;
 use crate::error::{Result, StoreError};
 use crate::paths::{images_backup_path, images_path};
@@ -18,8 +24,18 @@ use crate::paths::{images_backup_path, images_path};
 /// ("WRIT"), so neither file is taken for the other.
 pub(crate) const IMAGES_APPLICATION_ID: i32 = 0x5749_4D47;
 
-/// The schema version of an images database, in its `user_version`.
-pub(crate) const IMAGES_SCHEMA_VERSION: i64 = 1;
+/// The schema version of an images database, in its `user_version`: 1 had the table
+/// `images`; 2 has `files` too.
+///
+/// A file of version 1 is brought to 2 (the table `files` made, in one transaction with
+/// the version) by the first connection that opens it for writing ([`Mode::Write`],
+/// [`Mode::Create`]). A connection for reading takes a file of version 1 as it is: it has
+/// no files of pages, and every question about one is answered "not there" without asking
+/// SQLite about a table the file does not have.
+pub(crate) const IMAGES_SCHEMA_VERSION: i64 = 2;
+
+/// The version from which an images database has the table `files`.
+const FILES_SINCE: i64 = 2;
 
 /// How long a connection waits for another one that is writing. The `Store` of the app
 /// and a background [`ImageFile`] of the same process wait for each other.
@@ -41,8 +57,79 @@ CREATE TABLE images (
 );
 "#;
 
+/// The table of version 2: the bytes of the files of pages, stored once each under their
+/// hash, as the pictures are. No media type: the manifest of a page says the type of each
+/// path, and the same bytes can be served under two.
+const FILES_SCHEMA: &str = r#"
+CREATE TABLE files (
+    id                 TEXT    NOT NULL UNIQUE,  -- 32 lowercase hex digits (FileId)
+    byte_len           INTEGER NOT NULL,
+    created_at         INTEGER NOT NULL,         -- unix ms
+    unreferenced_since INTEGER,                  -- the collector's stamp, as for images
+    bytes              BLOB    NOT NULL          -- last, as in `images`
+);
+"#;
+
 /// The columns of an [`ImageInfo`], in the order [`info_from_row`] reads them.
 pub(crate) const INFO_COLS: &str = "id, format, width, height, density, byte_len, created_at";
+
+/// The columns of a [`FileInfo`], in the order [`file_info_from_row`] reads them.
+pub(crate) const FILE_INFO_COLS: &str = "id, byte_len, created_at";
+
+/// The two tables of stored bytes. What the collector, the copy and the salvage of a
+/// damaged file do, they do to each in the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Table {
+    /// `images`: the pictures of documents.
+    Images,
+    /// `files`: the files of pages (version 2 of the file).
+    Files,
+}
+
+impl Table {
+    /// Both tables, images first.
+    pub(crate) const BOTH: [Table; 2] = [Table::Images, Table::Files];
+
+    /// The name of the table.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Table::Images => "images",
+            Table::Files => "files",
+        }
+    }
+
+    /// The index SQLite made for the `UNIQUE` id.
+    fn id_index(self) -> &'static str {
+        match self {
+            Table::Images => "sqlite_autoindex_images_1",
+            Table::Files => "sqlite_autoindex_files_1",
+        }
+    }
+
+    /// The columns before `bytes`, as they are copied column for column.
+    pub(crate) fn info_cols(self) -> &'static str {
+        match self {
+            Table::Images => INFO_COLS,
+            Table::Files => FILE_INFO_COLS,
+        }
+    }
+
+    /// Whether the file `conn` has open holds this table: `images` always, `files` from
+    /// version 2.
+    pub(crate) fn is_in(self, conn: &Connection) -> Result<bool> {
+        match self {
+            Table::Images => Ok(true),
+            Table::Files => has_files(conn),
+        }
+    }
+}
+
+/// Whether the images database `conn` has open has the table `files` (version 2). Asked
+/// of the header, never of the table, so a file of version 1 gives no error.
+pub(crate) fn has_files(conn: &Connection) -> Result<bool> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    Ok(version >= FILES_SINCE)
+}
 
 /// Making the file (the pragmas that write its header, the table) is done by one
 /// connection of this process at a time: two that find an empty file at the same moment
@@ -55,14 +142,20 @@ static MAKING: Mutex<()> = Mutex::new(());
 pub(crate) enum Mode {
     /// For reading. Nothing is created or changed.
     Read,
-    /// For reading and writing a file that is there. Nothing is created.
+    /// For reading and writing a file that is there. Nothing is created; a file of an
+    /// older version is brought to this one.
     Write,
-    /// For writing: the directory, the file and the table are made when they are missing.
+    /// For reading and writing a file that is there, as it is: nothing is created and
+    /// nothing is brought to this version. For a connection in a dry run, which writes
+    /// nothing.
+    AsItIs,
+    /// For writing: the directory, the file and the tables are made when they are
+    /// missing, and a file of an older version is brought to this one.
     Create,
 }
 
 /// Opens the images database at `path`. `None` when there is nothing to read there and
-/// nothing is to be made: no file, or a file without the table (one that was left behind
+/// nothing is to be made: no file, or a file without the tables (one that was left behind
 /// when the making of it was interrupted).
 pub(crate) fn open(path: &Path, mode: Mode) -> Result<Option<Connection>> {
     if mode != Mode::Create && !path.exists() {
@@ -89,7 +182,7 @@ fn making() -> std::sync::MutexGuard<'static, ()> {
 
 /// [`open`] for writing, by whoever holds [`MAKING`].
 fn open_making(path: &Path, mode: Mode) -> Result<Option<Connection>> {
-    if mode == Mode::Write && !path.exists() {
+    if mode != Mode::Create && !path.exists() {
         return Ok(None);
     }
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -102,7 +195,8 @@ fn open_making(path: &Path, mode: Mode) -> Result<Option<Connection>> {
     let conn = Connection::open_with_flags(path, flags)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
-    if !is_made(&conn)? {
+    let version = made_version(&conn)?;
+    if version == 0 {
         if mode != Mode::Create {
             return Ok(None);
         }
@@ -115,22 +209,29 @@ fn open_making(path: &Path, mode: Mode) -> Result<Option<Connection>> {
     }
     // Every commit is on disk when it returns: a document may name the bytes right after.
     conn.pragma_update(None, "synchronous", "FULL")?;
-    if mode == Mode::Create {
+    if version < IMAGES_SCHEMA_VERSION && mode != Mode::AsItIs {
         make(&conn)?;
     }
     Ok(Some(conn))
 }
 
-/// A database in memory with the table, for a library in memory.
+/// A database in memory with the tables, for a library in memory.
 fn open_in_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     make(&conn)?;
     Ok(conn)
 }
 
-/// Whether the file holds the table. An empty file does not; a file that is not an images
-/// database, or one of a newer version, is an error.
+/// Whether the file holds the tables of a version this build reads (1 or 2). An empty
+/// file does not; a file that is not an images database, or one of a newer version, is an
+/// error.
 fn is_made(conn: &Connection) -> Result<bool> {
+    Ok(made_version(conn)? > 0)
+}
+
+/// The version of the images database `conn` has open, 0 for an empty file; a file that
+/// is not an images database, or one of a newer version, is an error.
+fn made_version(conn: &Connection) -> Result<i64> {
     let application_id: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if user_version == 0 && application_id == 0 {
@@ -140,7 +241,7 @@ fn is_made(conn: &Connection) -> Result<bool> {
             |r| r.get(0),
         )?;
         return if tables == 0 {
-            Ok(false)
+            Ok(0)
         } else {
             Err(StoreError::NotALibrary)
         };
@@ -154,16 +255,23 @@ fn is_made(conn: &Connection) -> Result<bool> {
             supported: IMAGES_SCHEMA_VERSION,
         });
     }
-    Ok(true)
+    Ok(user_version)
 }
 
-/// Creates the table in a file that does not have it yet, with the two header fields that
-/// say what the file is, in one transaction.
+/// Creates the tables a file does not have yet, with the two header fields that say what
+/// the file is, in one transaction: both in an empty file, `files` in a file of version 1.
+/// Whoever calls it holds [`MAKING`], or has the only connection (a database in memory).
 fn make(conn: &Connection) -> Result<()> {
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    // Read again inside the write lock: another connection may have made it meanwhile.
     let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version == 0 {
         tx.execute_batch(SCHEMA)?;
+    }
+    if version < FILES_SINCE {
+        tx.execute_batch(FILES_SCHEMA)?;
+    }
+    if version < IMAGES_SCHEMA_VERSION {
         tx.pragma_update(None, "user_version", IMAGES_SCHEMA_VERSION)?;
         tx.pragma_update(None, "application_id", IMAGES_APPLICATION_ID)?;
     }
@@ -260,6 +368,72 @@ pub(crate) fn write_row(conn: &Connection, info: &ImageInfo, bytes: &[u8]) -> Re
     Ok(())
 }
 
+/// One row of `files` as a [`FileInfo`] (the columns of [`FILE_INFO_COLS`], starting at
+/// `first`).
+pub(crate) fn file_info_from_row(row: &Row<'_>, first: usize) -> rusqlite::Result<FileInfo> {
+    let id = row.get_ref(first)?.as_str()?;
+    let id = FileId::parse(id).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            first,
+            rusqlite::types::Type::Text,
+            "not the id of a file".into(),
+        )
+    })?;
+    let byte_len: i64 = row.get(first + 1)?;
+    Ok(FileInfo {
+        id,
+        byte_len: u64::try_from(byte_len)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(first + 1, byte_len))?,
+        created_at: row.get(first + 2)?,
+    })
+}
+
+/// What a connection knows about a file, and the collector's stamp on it. The connection
+/// is to a file that has the table `files` ([`has_files`]).
+pub(crate) fn read_file_info(
+    conn: &Connection,
+    id: &FileId,
+) -> Result<Option<(FileInfo, Option<i64>)>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {FILE_INFO_COLS}, unreferenced_since FROM files WHERE id = ?1"),
+            [id.to_hex()],
+            |row| Ok((file_info_from_row(row, 0)?, row.get(3)?)),
+        )
+        .optional()?)
+}
+
+/// The bytes of a file as a connection has them (one to a file with the table `files`).
+pub(crate) fn read_file_bytes(conn: &Connection, id: &FileId) -> Result<Option<Vec<u8>>> {
+    Ok(conn
+        .query_row(
+            "SELECT bytes FROM files WHERE id = ?1",
+            [id.to_hex()],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// [`write_row`] for a file of a page: a row unless one with this id is there; a row that
+/// is there loses the collector's stamp, and gets these bytes when the ones it has are
+/// others.
+pub(crate) fn write_file_row(conn: &Connection, info: &FileInfo, bytes: &[u8]) -> Result<()> {
+    conn.execute(
+        "INSERT INTO files (id, byte_len, created_at, unreferenced_since, bytes)
+         VALUES (?1, ?2, ?3, NULL, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+             unreferenced_since = NULL, bytes = excluded.bytes, byte_len = excluded.byte_len
+             WHERE unreferenced_since IS NOT NULL OR bytes IS NOT excluded.bytes",
+        params![
+            info.id.to_hex(),
+            i64::try_from(info.byte_len).unwrap_or(i64::MAX),
+            info.created_at,
+            bytes,
+        ],
+    )?;
+    Ok(())
+}
+
 // ----- a damaged file ---------------------------------------------------------------------
 
 /// Which file a path names at a moment: a file that is moved aside, deleted or replaced
@@ -308,8 +482,14 @@ pub(crate) fn is_damaged(path: &Path) -> bool {
         let Some(conn) = open(path, Mode::Read)? else {
             return Ok(false);
         };
-        {
-            let mut stmt = conn.prepare("SELECT id, unreferenced_since FROM images")?;
+        for table in Table::BOTH {
+            if !table.is_in(&conn)? {
+                continue;
+            }
+            let mut stmt = conn.prepare(&format!(
+                "SELECT id, unreferenced_since FROM {}",
+                table.name()
+            ))?;
             let mut rows = stmt.query([])?;
             while rows.next()?.is_some() {}
         }
@@ -390,8 +570,9 @@ fn move_aside(path: &Path) -> Result<PathBuf> {
 }
 
 /// What can be read of the damaged file at `damaged` and `other` does not have, into
-/// `into`. Answers how many images were saved. Nothing that goes wrong here is an error:
-/// what cannot be read is lost to this file and stays in the one moved aside.
+/// `into`, of both tables. Answers how many rows (images and files) were saved. Nothing
+/// that goes wrong here is an error: what cannot be read is lost to this file and stays in
+/// the one moved aside.
 fn salvage(damaged: &Path, into: &Connection, other: &Path) -> u64 {
     let Ok(old) = Connection::open_with_flags(
         damaged,
@@ -404,14 +585,19 @@ fn salvage(damaged: &Path, into: &Connection, other: &Path) -> u64 {
     // this; with it, the pages that are there are read. Nothing is written to it.
     let _ = old.pragma_update(None, "writable_schema", true);
     // Every row as far as it can be read, by the index of the ids and by the table: a
-    // page of the one can be lost where the other is whole.
-    let ids = |conn: &Connection| -> Result<Vec<(i64, String)>> {
+    // page of the one can be lost where the other is whole. A table the file does not
+    // have (`files` in a file of version 1) has no rows.
+    let ids = |conn: &Connection, table: Table| -> Vec<(i64, String)> {
         let mut found = std::collections::BTreeMap::new();
         for sql in [
-            "SELECT rowid, id FROM images INDEXED BY sqlite_autoindex_images_1",
-            "SELECT rowid, id FROM images NOT INDEXED",
+            format!(
+                "SELECT rowid, id FROM {} INDEXED BY {}",
+                table.name(),
+                table.id_index()
+            ),
+            format!("SELECT rowid, id FROM {} NOT INDEXED", table.name()),
         ] {
-            let Ok(mut stmt) = conn.prepare(sql) else {
+            let Ok(mut stmt) = conn.prepare(&sql) else {
                 continue;
             };
             let Ok(mut rows) = stmt.query([]) else {
@@ -423,46 +609,62 @@ fn salvage(damaged: &Path, into: &Connection, other: &Path) -> u64 {
                 }
             }
         }
-        Ok(found.into_iter().collect())
+        found.into_iter().collect()
     };
-    let known: HashSet<String> = open(other, Mode::Read)
-        .ok()
-        .flatten()
-        .and_then(|conn| ids(&conn).ok())
-        .map(|rows| rows.into_iter().map(|(_, id)| id).collect())
-        .unwrap_or_default();
-    let Ok(rows) = ids(&old) else {
-        return 0;
-    };
+    let other = open(other, Mode::Read).ok().flatten();
     let mut saved = 0;
-    for (rowid, hex) in rows {
-        if known.contains(&hex) {
-            continue;
-        }
-        let row = old.query_row(
-            &format!("SELECT {INFO_COLS}, bytes FROM images WHERE rowid = ?1"),
-            [rowid],
-            |row| Ok((info_from_row(row, 0)?, row.get::<_, Vec<u8>>(7)?)),
-        );
-        let Ok((info, bytes)) = row else {
-            continue;
-        };
-        if ImageId::of(&bytes) == info.id && write_row(into, &info, &bytes).is_ok() {
-            saved += 1;
+    for table in Table::BOTH {
+        let known: HashSet<String> = other
+            .as_ref()
+            .map(|conn| ids(conn, table).into_iter().map(|(_, id)| id).collect())
+            .unwrap_or_default();
+        for (rowid, hex) in ids(&old, table) {
+            if !known.contains(&hex) && salvage_row(&old, into, table, rowid) {
+                saved += 1;
+            }
         }
     }
     saved
+}
+
+/// Copies one row of `table` of the damaged file into `into`, when it can be read and its
+/// bytes are the ones its id names.
+fn salvage_row(old: &Connection, into: &Connection, table: Table, rowid: i64) -> bool {
+    match table {
+        Table::Images => {
+            let row = old.query_row(
+                &format!("SELECT {INFO_COLS}, bytes FROM images WHERE rowid = ?1"),
+                [rowid],
+                |row| Ok((info_from_row(row, 0)?, row.get::<_, Vec<u8>>(7)?)),
+            );
+            let Ok((info, bytes)) = row else {
+                return false;
+            };
+            ImageId::of(&bytes) == info.id && write_row(into, &info, &bytes).is_ok()
+        }
+        Table::Files => {
+            let row = old.query_row(
+                &format!("SELECT {FILE_INFO_COLS}, bytes FROM files WHERE rowid = ?1"),
+                [rowid],
+                |row| Ok((file_info_from_row(row, 0)?, row.get::<_, Vec<u8>>(3)?)),
+            );
+            let Ok((info, bytes)) = row else {
+                return false;
+            };
+            FileId::of(&bytes) == info.id && write_file_row(into, &info, &bytes).is_ok()
+        }
+    }
 }
 
 // ----- the file by itself -------------------------------------------------------------------
 
 /// `images.db` by itself: one connection, for a thread of its own.
 ///
-/// The image methods of a [`crate::Store`] go through the one it holds. Whoever reads or
-/// writes pictures in the background (16 MB should never be hashed, written or read on
-/// the main thread of an app) has another, on the same file: the two wait for each other.
-/// A library in memory has no file a second connection could see; there everything goes
-/// through the `Store`.
+/// The image and file methods of a [`crate::Store`] go through the one it holds. Whoever
+/// reads or writes pictures or the files of pages in the background (16 MB, or a page of
+/// 64 MB, should never be hashed, written or read on the main thread of an app) has
+/// another, on the same file: the two wait for each other. A library in memory has no file
+/// a second connection could see; there everything goes through the `Store`.
 ///
 /// **A damaged file** (its header or a page is not what SQLite wrote) is no reason to
 /// lose a picture or to refuse a new one. A read answers from the copy of the pictures
@@ -490,6 +692,20 @@ struct Kept {
     conn: Connection,
     /// `None` in memory.
     file: Option<FileIdentity>,
+    /// Whether the file is known to have the table `files` (version 2). A connection that
+    /// opened a file of version 1 asks the header again until another connection brought
+    /// the file to version 2; a version never goes down.
+    files: Cell<bool>,
+}
+
+impl Kept {
+    /// Whether the file has the table `files`; asked of the header while it is not known.
+    fn has_files(&self) -> Result<bool> {
+        if !self.files.get() && has_files(&self.conn)? {
+            self.files.set(true);
+        }
+        Ok(self.files.get())
+    }
 }
 
 enum Place {
@@ -582,6 +798,130 @@ impl ImageFile {
             return Ok(Some(bytes));
         }
         Ok(self.out_of_the_copy(id).map(|(_, bytes)| bytes))
+    }
+
+    /// Stores the bytes of a file of a page once, as [`crate::Store::put_file`] does,
+    /// stamped with the system's time. Committed before it returns; makes the file when it
+    /// is not there.
+    pub fn put_file(&mut self, bytes: &[u8]) -> Result<FileInfo> {
+        self.put_file_at(bytes, Clock::system().now_ms())
+    }
+
+    /// What is known about the stored bytes of a file of a page; `None` when the library
+    /// does not have them. Reads no bytes, unless only the copy in the backups directory
+    /// has the file (it is then brought back, as for an image).
+    pub fn file_info(&self, id: &FileId) -> Result<Option<FileInfo>> {
+        if let Some((info, _)) = self.read_files(|conn| read_file_info(conn, id))? {
+            return Ok(Some(info));
+        }
+        Ok(self.file_out_of_the_copy(id).map(|(info, _)| info))
+    }
+
+    /// The bytes of a file of a page; `None` when the library does not have them. As for
+    /// an image ([`bytes`](Self::bytes)): a file that only the copy in the backups
+    /// directory has is read from there and written back, and so are bytes that are not
+    /// the ones the id names.
+    pub fn file_bytes(&self, id: &FileId) -> Result<Option<Vec<u8>>> {
+        if let Some(bytes) = self.read_files(|conn| read_file_bytes(conn, id))?
+            && FileId::of(&bytes) == *id
+        {
+            return Ok(Some(bytes));
+        }
+        Ok(self.file_out_of_the_copy(id).map(|(_, bytes)| bytes))
+    }
+
+    /// How many files of pages the file holds; 0 when there is no file, or it is of
+    /// version 1.
+    pub(crate) fn file_count(&self) -> Result<u64> {
+        let count = self.read_files(|conn| {
+            let count: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0))?;
+            Ok(Some(count))
+        })?;
+        Ok(count
+            .and_then(|count| u64::try_from(count).ok())
+            .unwrap_or(0))
+    }
+
+    pub(crate) fn put_file_at(&self, bytes: &[u8], now_ms: i64) -> Result<FileInfo> {
+        if self.read_only {
+            return Err(read_only_error());
+        }
+        let info = FileInfo {
+            id: FileId(hash16(bytes)),
+            byte_len: bytes.len() as u64,
+            created_at: now_ms,
+        };
+        // The usual second put (a font that another page has): nothing is written, unless
+        // the bytes that are there are not these any more.
+        let there = self.read_files(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!(
+                        "SELECT {FILE_INFO_COLS}, unreferenced_since, bytes = ?2 FROM files WHERE id = ?1"
+                    ),
+                    params![info.id.to_hex(), bytes],
+                    |row| {
+                        Ok((
+                            file_info_from_row(row, 0)?,
+                            row.get::<_, Option<i64>>(3)?,
+                            row.get::<_, bool>(4)?,
+                        ))
+                    },
+                )
+                .optional()?)
+        })?;
+        if let Some((stored, None, true)) = there {
+            return Ok(stored);
+        }
+        let write = || -> Result<FileInfo> {
+            let conn = self.writer()?;
+            write_file_row(&conn, &info, bytes)?;
+            match read_file_info(&conn, &info.id)? {
+                Some((stored, _)) => Ok(stored),
+                None => Err(StoreError::Sqlite(rusqlite::Error::QueryReturnedNoRows)),
+            }
+        };
+        match write() {
+            Err(error) if is_damage(&error) => {
+                if self.repair()? {
+                    write()
+                } else {
+                    Err(error)
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// For a file id that should be there: the file counts as used from now (the
+    /// collector's stamp on it is cleared), as [`touch_image`](Self::touch_image) does for
+    /// an image. `None` when the library does not have it. Writes nothing when there is no
+    /// stamp to clear.
+    pub(crate) fn touch_file(&self, id: &FileId) -> Result<Option<FileInfo>> {
+        if self.read_only {
+            return Err(read_only_error());
+        }
+        let found = self.read_files(|conn| {
+            let Some((info, stamp)) = read_file_info(conn, id)? else {
+                return Ok(None);
+            };
+            if stamp.is_some() {
+                // The collector's delete needs the stamp it read: when it came between,
+                // the row is gone and nothing is changed.
+                let changed = conn.execute(
+                    "UPDATE files SET unreferenced_since = NULL WHERE id = ?1",
+                    [id.to_hex()],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(info))
+        })?;
+        if found.is_some() {
+            return Ok(found);
+        }
+        Ok(self.file_out_of_the_copy(id).map(|(info, _)| info))
     }
 
     /// How many images the file holds; 0 when there is no file.
@@ -721,9 +1061,29 @@ impl ImageFile {
     /// copy), after the file was replaced where this connection may do that and `read`
     /// was run once more on the new one.
     fn read<T>(&self, mut read: impl FnMut(&Connection) -> Result<Option<T>>) -> Result<Option<T>> {
+        self.read_kept(|kept| read(&kept.conn))
+    }
+
+    /// [`read`](Self::read) of the table `files`: `None` without running `read` while the
+    /// file has no such table (version 1), so a reader of an older file gets "not there"
+    /// and no error.
+    fn read_files<T>(
+        &self,
+        mut read: impl FnMut(&Connection) -> Result<Option<T>>,
+    ) -> Result<Option<T>> {
+        self.read_kept(|kept| {
+            if kept.has_files()? {
+                read(&kept.conn)
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    fn read_kept<T>(&self, mut read: impl FnMut(&Kept) -> Result<Option<T>>) -> Result<Option<T>> {
         for first in [true, false] {
             let outcome = match self.reader() {
-                Ok(Some(conn)) => read(&conn),
+                Ok(Some(kept)) => read(&kept),
                 Ok(None) => return Ok(None),
                 Err(error) => Err(error),
             };
@@ -762,7 +1122,10 @@ impl ImageFile {
     /// remembered, so a file that appears later (the first put of another connection,
     /// the tool) is found by the next read; nor is a file that went, so a new file at the
     /// path (one that replaced a damaged one) is the one that is read.
-    fn reader(&self) -> Result<Option<Ref<'_, Connection>>> {
+    ///
+    /// A connection in a dry run opens the file as it is ([`Mode::AsItIs`]): a file of
+    /// version 1 is brought to version 2 by the first write after it.
+    fn reader(&self) -> Result<Option<Ref<'_, Kept>>> {
         if let Place::Disk { path, .. } = &self.place {
             let gone =
                 matches!(&*self.conn.borrow(), Some(kept) if file_identity(path) != kept.file);
@@ -774,6 +1137,7 @@ impl ImageFile {
             let opened = match &self.place {
                 Place::Memory => Some(open_in_memory()?),
                 Place::Disk { path, .. } if self.read_only => open(path, Mode::Read)?,
+                Place::Disk { path, .. } if self.query_only.get() => open(path, Mode::AsItIs)?,
                 Place::Disk { path, .. } => open(path, Mode::Write)?,
             };
             let Some(conn) = opened else {
@@ -781,28 +1145,38 @@ impl ImageFile {
             };
             self.keep(conn)?;
         }
-        Ok(self.kept())
+        Ok(Ref::filter_map(self.conn.borrow(), Option::as_ref).ok())
     }
 
-    /// The connection for a write, making the file when it is not there.
+    /// The connection for a write, making the file when it is not there, and bringing a
+    /// file of version 1 that a dry run opened as it was to this version.
     fn writer(&self) -> Result<Ref<'_, Connection>> {
         if self.read_only {
             return Err(read_only_error());
         }
-        if let Some(conn) = self.reader()? {
-            return Ok(conn);
+        if self.reader()?.is_none() {
+            let Place::Disk { path, .. } = &self.place else {
+                unreachable!("a library in memory always has its connection");
+            };
+            if self.query_only.get() {
+                // A dry run creates nothing.
+                return Err(read_only_error());
+            }
+            let Some(conn) = open(path, Mode::Create)? else {
+                unreachable!("a file that is created is opened");
+            };
+            self.keep(conn)?;
         }
-        let Place::Disk { path, .. } = &self.place else {
-            unreachable!("a library in memory always has its connection");
-        };
-        if self.query_only.get() {
-            // A dry run creates nothing.
-            return Err(read_only_error());
+        if let Some(kept) = &*self.conn.borrow()
+            && !kept.has_files()?
+        {
+            if self.query_only.get() {
+                return Err(read_only_error());
+            }
+            let _making = making();
+            make(&kept.conn)?;
+            kept.files.set(true);
         }
-        let Some(conn) = open(path, Mode::Create)? else {
-            unreachable!("a file that is created is opened");
-        };
-        self.keep(conn)?;
         Ok(self.kept().expect("the connection was just kept"))
     }
 
@@ -814,7 +1188,11 @@ impl ImageFile {
             Place::Disk { path, .. } => file_identity(path),
             Place::Memory => None,
         };
-        *self.conn.borrow_mut() = Some(Kept { conn, file });
+        *self.conn.borrow_mut() = Some(Kept {
+            conn,
+            file,
+            files: Cell::new(false),
+        });
         Ok(())
     }
 
@@ -841,6 +1219,20 @@ impl ImageFile {
             let _ = self
                 .writer()
                 .and_then(|conn| write_row(&conn, &info, &bytes));
+        }
+        Some((info, bytes))
+    }
+
+    /// [`out_of_the_copy`](Self::out_of_the_copy) for a file of a page.
+    fn file_out_of_the_copy(&self, id: &FileId) -> Option<(FileInfo, Vec<u8>)> {
+        let Place::Disk { copy, .. } = &self.place else {
+            return None;
+        };
+        let (info, bytes) = copy::read_file_from_copy(copy, id)?;
+        if !self.read_only && !self.query_only.get() {
+            let _ = self
+                .writer()
+                .and_then(|conn| write_file_row(&conn, &info, &bytes));
         }
         Some((info, bytes))
     }

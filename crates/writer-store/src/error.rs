@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use crate::documents::DocumentKind;
+use crate::images::FileId;
+
 /// The kind of library item an error refers to.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ItemKind {
@@ -82,6 +85,50 @@ pub enum StoreError {
     /// Neither `THE_WRITER_DATA_DIR` nor `HOME` is set, so no data directory can be chosen.
     #[error("cannot find the data directory: neither THE_WRITER_DATA_DIR nor HOME is set")]
     NoDataDirectory,
+    /// Content of one kind was to be saved over an item of the other: a text over a page
+    /// ([`crate::Store::save_document`]) or a page over a text
+    /// ([`crate::Store::save_page`]). Nothing was written.
+    #[error("{}", wrong_kind_message(*.id, *.kind))]
+    WrongKind {
+        /// The raw id of the item.
+        id: i64,
+        /// What the item is.
+        kind: DocumentKind,
+    },
+    /// The manifest of a page names files whose bytes the library does not have
+    /// (`images.db`, nor the copy among the backups). Nothing was written.
+    #[error("{}", files_missing_message(.ids))]
+    FilesMissing {
+        /// The files that are not there, in order.
+        ids: Vec<FileId>,
+    },
+}
+
+fn wrong_kind_message(id: i64, kind: DocumentKind) -> String {
+    match kind {
+        DocumentKind::Page => {
+            format!(
+                "item {id} of the library is a page, and the text of a document cannot be saved over it"
+            )
+        }
+        DocumentKind::Text => {
+            format!("item {id} of the library is a document, and a page cannot be saved over it")
+        }
+    }
+}
+
+fn files_missing_message(ids: &[FileId]) -> String {
+    let shown: Vec<String> = ids.iter().take(3).map(FileId::to_hex).collect();
+    let more = ids.len().saturating_sub(shown.len());
+    let mut message = match ids.len() {
+        1 => "the page names a file that the library does not have: ".to_owned(),
+        n => format!("the page names {n} files that the library does not have: "),
+    };
+    message.push_str(&shown.join(", "));
+    if more > 0 {
+        message.push_str(&format!(" and {more} more"));
+    }
+    message
 }
 
 /// Shorthand for `Result<T, StoreError>`.

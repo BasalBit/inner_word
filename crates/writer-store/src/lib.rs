@@ -10,6 +10,14 @@
 //!   thing in it: the token an image block names its bytes with, `"image":"<32 hex
 //!   digits>"` ([`Store::referenced_images`]). A separate opaque
 //!   view-state JSON (caret, scroll, toggles) is stored without touching `updated_at`.
+//! - **Pages** ([`DocumentKind::Page`], [`PageContent`]): an HTML page kept whole, an item
+//!   of the library beside the documents (a row of the same table, of another kind), in
+//!   the same tree, trash, versions and search. Its content is the page's manifest, which
+//!   names the bytes of each of its files (`"file":"<32 hex digits>"`,
+//!   [`Store::referenced_files`]); its plain text is what the page showed. A page
+//!   remembers the address it came from ([`Store::page_by_source_url`]). The store refuses
+//!   a text saved over a page and a page saved over a text ([`StoreError::WrongKind`]),
+//!   and a page that names a file it does not have ([`StoreError::FilesMissing`]).
 //! - **The library tree** ([`LibraryTree`]) for the sidebar, in one call.
 //! - **Trash** ([`TrashEntry`]): deletes are soft; a folder takes its subtree with it.
 //! - **Version snapshots** ([`SnapshotMeta`], [`Snapshot`]) with a pruning policy
@@ -27,6 +35,10 @@
 //!   ([`collect_unused_images`], [`mark_unused_images`]): an image goes only after no
 //!   document, live or trashed, and no version has named it for 30 days, and no kept
 //!   backup can name it.
+//! - **The files of pages** ([`FileId`], [`FileInfo`]): their bytes, stored once each under
+//!   the hash of their bytes as the pictures are, in a second table of the same
+//!   `images.db` ([`Store::put_file`]); the copy, the damaged-file handling and the
+//!   collector cover them as they cover the pictures.
 //!
 //! What a backup holds: a daily backup (and [`Store::backup_to`]) is a copy of the library
 //! database, so it holds **the documents only**: folders, documents, versions, settings.
@@ -44,10 +56,13 @@
 //! comes from the other file. Bytes whose hash is not their id are not believed in
 //! either file, and are written over with the right ones where those are found.
 //!
-//! The schema version of the database ([`SCHEMA_VERSION`]) is 3 since documents may hold
-//! images: the step changed nothing in the file, and makes a version of the app or of the
-//! tool that does not know images refuse the library ([`StoreError::SchemaTooNew`])
-//! instead of reading an image as an empty paragraph and saving that.
+//! The schema version of the database ([`SCHEMA_VERSION`]) is 4 since library items may be
+//! pages (version 3: documents may hold images). Each step makes a version of the app or
+//! of the tool that does not know what it brought refuse the library
+//! ([`StoreError::SchemaTooNew`]) instead of reading an image as an empty paragraph, or a
+//! page's manifest as text, and saving that. `images.db` is at its own version 2 since it
+//! holds the files of pages; a file of version 1 is brought up by the first connection
+//! that writes to it, and read as it is (no files) by one that reads.
 //!
 //! A tool that only reads opens the library with [`Store::open_read_only`]: nothing is
 //! created, migrated, backed up or locked, so a running app is not disturbed. Snapshots a
@@ -108,14 +123,14 @@ use rusqlite::{Connection, OpenFlags};
 
 pub use crate::backup::{DEFAULT_KEEP_BACKUPS, list_backups};
 pub use crate::clock::Clock;
-pub use crate::documents::{Document, DocumentContent, DocumentMeta};
+pub use crate::documents::{Document, DocumentContent, DocumentKind, DocumentMeta, PageContent};
 pub use crate::error::{ItemKind, Result, StoreError};
 pub use crate::folders::Folder;
 pub use crate::ids::{DocumentId, FolderId, SnapshotId};
 pub use crate::images::{
-    IMAGE_BACKUP_SLICE_BYTES, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId, ImageInfo,
-    ImagesBackedUp, ImagesCollected, NewImage, back_up_all_images, back_up_images,
-    collect_unused_images, images_moved_aside, mark_unused_images,
+    FileId, FileInfo, IMAGE_BACKUP_SLICE_BYTES, IMAGE_RETENTION_MS, ImageFile, ImageFormat,
+    ImageId, ImageInfo, ImagesBackedUp, ImagesCollected, NewImage, back_up_all_images,
+    back_up_images, collect_unused_images, images_moved_aside, mark_unused_images,
 };
 pub use crate::paths::{
     BACKUPS_DIR_NAME, DATA_DIR_ENV, DATABASE_FILE_NAME, IMAGES_FILE_NAME, backups_dir, data_dir,

@@ -1,66 +1,157 @@
-//! Which images stored content names.
+//! Which images and which files of pages stored content names.
 //!
-//! The store does not parse the content of a document. It looks for one token in it: the
+//! The store does not parse the content of a document. It looks for two tokens in it: the
 //! key `"image"` with a value of 32 hex digits, which is how an image block names its
-//! bytes (`{"type":"image","image":"3f2a…"}`, written by `writer-core`). Everything the
-//! collector decides rests on this, so the scan errs to one side only: a hit that is not
-//! an image block (a writer's own text holding the token) keeps an image alive that
-//! could go, and nothing an image block can be written as is missed.
+//! bytes (`{"type":"image","image":"3f2a…"}`, written by `writer-core`), and the key
+//! `"file"` with a value of 32 hex digits, which is how the manifest of a page names the
+//! bytes of each of its files (`{"path":"index.html","file":"3f2a…",…}`, written by
+//! `writer-page`). Everything the collector decides rests on this, so the scan errs to one
+//! side only: a hit that is not what it looks like (a writer's own text holding the token)
+//! keeps bytes alive that could go, and nothing an image block or a manifest can be written
+//! as is missed.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rusqlite::Connection;
 
-use super::ImageId;
+use super::file::Table;
+use super::{FileId, ImageId, parse16};
 use crate::error::Result;
 
 /// The key an image block's id is written under, as it stands in JSON.
 const KEY: &[u8] = b"\"image\"";
 
-/// The tables whose `content` column holds documents: the documents themselves, live and
-/// trashed, and their version snapshots.
+/// The key the manifest of a page writes the id of a file's bytes under.
+const FILE_KEY: &[u8] = b"\"file\"";
+
+/// The tables whose `content` column holds documents: the documents themselves (texts and
+/// pages), live and trashed, and their version snapshots.
 const TABLES: [&str; 2] = ["documents", "snapshots"];
+
+/// Every id stored content names, of images and of files.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Named {
+    /// The images.
+    pub(crate) images: HashSet<ImageId>,
+    /// The files of pages.
+    pub(crate) files: HashSet<FileId>,
+}
+
+impl Named {
+    /// Whether the row of `table` with this id is named.
+    pub(crate) fn names(&self, table: Table, id: [u8; 16]) -> bool {
+        match table {
+            Table::Images => self.images.contains(&ImageId(id)),
+            Table::Files => self.files.contains(&FileId(id)),
+        }
+    }
+
+    /// The same as [`Named::names`] for the id as the column holds it; an id that cannot be
+    /// read is named by nothing that can be found.
+    pub(crate) fn names_hex(&self, table: Table, hex: &str) -> bool {
+        parse16(hex.as_bytes()).is_some_and(|id| self.names(table, id))
+    }
+
+    pub(crate) fn extend(&mut self, other: Named) {
+        self.images.extend(other.images);
+        self.files.extend(other.files);
+    }
+}
 
 /// Every image id that the content stored in a library database names.
 pub(crate) fn referenced(conn: &Connection) -> Result<HashSet<ImageId>> {
     let mut found = HashSet::new();
-    for table in TABLES {
-        // `instr` keeps the rows without the key (nearly all of a library) from being
-        // handed over at all.
-        let mut stmt = conn.prepare(&format!(
-            "SELECT content FROM {table} WHERE instr(content, '\"image\"') > 0"
-        ))?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let content = row.get_ref(0)?.as_bytes().map_err(rusqlite::Error::from)?;
-            collect(content, &mut found);
-        }
-    }
+    scan(conn, "instr(content, '\"image\"') > 0", |content| {
+        collect(content, &mut found)
+    })?;
     Ok(found)
 }
 
-/// Adds every id that `content` names: `"image"`, optional white space, `:`, optional
-/// white space, `"`, 32 hex digits, `"`.
+/// Every file id that the content stored in a library database names.
+pub(crate) fn referenced_files(conn: &Connection) -> Result<HashSet<FileId>> {
+    let mut found = HashSet::new();
+    scan(conn, "instr(content, '\"file\"') > 0", |content| {
+        collect_files(content, &mut found)
+    })?;
+    Ok(found)
+}
+
+/// Every image id and every file id that the content stored in a library database names,
+/// in one pass over the content.
+pub(crate) fn referenced_all(conn: &Connection) -> Result<Named> {
+    let mut found = Named::default();
+    scan(
+        conn,
+        "instr(content, '\"image\"') > 0 OR instr(content, '\"file\"') > 0",
+        |content| {
+            collect(content, &mut found.images);
+            collect_files(content, &mut found.files);
+        },
+    )?;
+    Ok(found)
+}
+
+/// The file ids one manifest names, each once, in order.
+pub(crate) fn files_in(content: &str) -> BTreeSet<FileId> {
+    let mut found = BTreeSet::new();
+    ids_after(content.as_bytes(), FILE_KEY, |id| {
+        found.insert(FileId(id));
+    });
+    found
+}
+
+/// Hands `each` the content of every row of [`TABLES`] that `filter` lets through.
+fn scan(conn: &Connection, filter: &str, mut each: impl FnMut(&[u8])) -> Result<()> {
+    for table in TABLES {
+        // `instr` keeps the rows without the key (nearly all of a library) from being
+        // handed over at all.
+        let mut stmt = conn.prepare(&format!("SELECT content FROM {table} WHERE {filter}"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let content = row.get_ref(0)?.as_bytes().map_err(rusqlite::Error::from)?;
+            each(content);
+        }
+    }
+    Ok(())
+}
+
+/// Adds every image id that `content` names: `"image"`, optional white space, `:`,
+/// optional white space, `"`, 32 hex digits, `"`.
 pub(crate) fn collect(content: &[u8], found: &mut HashSet<ImageId>) {
+    ids_after(content, KEY, |id| {
+        found.insert(ImageId(id));
+    });
+}
+
+/// Adds every file id that `content` names: `"file"`, optional white space, `:`,
+/// optional white space, `"`, 32 hex digits, `"`.
+pub(crate) fn collect_files(content: &[u8], found: &mut HashSet<FileId>) {
+    ids_after(content, FILE_KEY, |id| {
+        found.insert(FileId(id));
+    });
+}
+
+/// Hands `each` every id that stands after `key` in `content`.
+fn ids_after(content: &[u8], key: &[u8], mut each: impl FnMut([u8; 16])) {
     let mut rest = content;
-    while let Some(at) = find(rest, KEY) {
-        rest = &rest[at + KEY.len()..];
+    while let Some(at) = find(rest, key) {
+        rest = &rest[at + key.len()..];
         if let Some(id) = id_after_key(rest) {
-            found.insert(id);
+            each(id);
         }
     }
 }
 
 /// The id in `: "<32 hex digits>"` at the start of `after`, when that is what stands
 /// there.
-fn id_after_key(after: &[u8]) -> Option<ImageId> {
+fn id_after_key(after: &[u8]) -> Option<[u8; 16]> {
     let after = skip_white_space(after).strip_prefix(b":")?;
     let after = skip_white_space(after).strip_prefix(b"\"")?;
     let digits = after.get(..32)?;
     if after.get(32) != Some(&b'"') {
         return None;
     }
-    ImageId::from_hex(digits)
+    parse16(digits)
 }
 
 /// White space as JSON has it between a key, the colon and a value.
@@ -156,5 +247,29 @@ mod tests {
         let content =
             format!(r#"[{{"image":3}},{{"image":"{A}"}},{{"image":"{A}"}},{{"image":"{B}"}}]"#);
         assert_eq!(ids(&content), vec![B.to_owned(), A.to_owned()]);
+    }
+
+    fn files(content: &str) -> Vec<String> {
+        let mut found = HashSet::new();
+        collect_files(content.as_bytes(), &mut found);
+        let mut found: Vec<String> = found.iter().map(FileId::to_hex).collect();
+        found.sort();
+        found
+    }
+
+    /// The manifest of a page names each blob under "file"; the images' key and the files'
+    /// key are told apart, and a path that holds the word is not a key.
+    #[test]
+    fn the_files_of_a_manifest_are_found_and_kept_apart_from_images() {
+        let manifest = format!(
+            r#"{{"page":1,"entry":"index.html","files":[{{"path":"index.html","file":"{A}","type":"text/html","size":3}},{{"path":"file/b.css","file" : "{B}","type":"text/css","size":1}}],"original":[{{"path":"index.html","file":"{A}","type":"text/html","size":3}}],"text":"\"file\":\"{B}\""}}"#
+        );
+        assert_eq!(files(&manifest), vec![B.to_owned(), A.to_owned()]);
+        assert_eq!(ids(&manifest), Vec::<String>::new());
+        let both = format!(r#"[{{"image":"{A}"}},{{"file":"{B}"}},{{"files":"{A}"}}]"#);
+        assert_eq!(ids(&both), vec![A]);
+        assert_eq!(files(&both), vec![B]);
+        let in_order: Vec<String> = files_in(&manifest).iter().map(FileId::to_hex).collect();
+        assert_eq!(in_order, vec![B.to_owned(), A.to_owned()]);
     }
 }

@@ -1,6 +1,6 @@
-//! The bytes of the images: storing and reading them, the second file, which images
-//! stored content names, the collector, a connection of its own to the file, and the copy
-//! of the pictures in the backups directory.
+//! The bytes of the images and of the files of pages: storing and reading them, the
+//! second file, which images and files stored content names, the collector, a connection
+//! of its own to the file, and the copy in the backups directory.
 
 mod common;
 
@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use common::*;
 use writer_store::{
-    Clock, DocumentMeta, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId, ImageInfo,
-    ImagesBackedUp, ImagesCollected, NewImage, OpenOptions, Store, StoreError, back_up_all_images,
-    back_up_images, backups_dir, collect_unused_images, images_backup_path, images_moved_aside,
-    images_path, mark_unused_images,
+    Clock, DocumentMeta, FileId, FileInfo, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId,
+    ImageInfo, ImagesBackedUp, ImagesCollected, NewImage, OpenOptions, PageContent, Store,
+    StoreError, back_up_all_images, back_up_images, backups_dir, collect_unused_images,
+    images_backup_path, images_moved_aside, images_path, mark_unused_images,
 };
 
 // ----- helpers -------------------------------------------------------------------------
@@ -147,6 +147,97 @@ fn sorted(ids: &[ImageId]) -> Vec<String> {
 fn data_version(conn: &rusqlite::Connection) -> i64 {
     conn.query_row("PRAGMA data_version", [], |r| r.get(0))
         .unwrap()
+}
+
+/// Bytes that stand for a file of a page (a font, a sound): the store hashes them. No two
+/// seeds give bytes with a stretch in common, so a page of the file is one file's.
+fn page_file(seed: u8, len: usize) -> Vec<u8> {
+    let mut bytes = b"wOF2".to_vec();
+    let mut state = u64::from(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    bytes.extend((0..len).map(|_| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) as u8
+    }));
+    bytes
+}
+
+/// The manifest of a page that serves these files, as `writer-page` writes it.
+fn manifest_with(ids: &[FileId]) -> String {
+    let files: Vec<String> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            format!(r#"{{"path":"f{index}.woff2","file":"{id}","type":"font/woff2","size":1}}"#)
+        })
+        .collect();
+    format!(
+        r#"{{"page":1,"entry":"index.html","files":[{}],"original":[],"externals":[],"source_url":null,"fingerprint":"","added_at":0,"checked":{{"engine":"WebKit","at":0,"requests":0,"warnings":[]}},"text":"A page"}}"#,
+        files.join(",")
+    )
+}
+
+fn page_content(manifest: &str) -> PageContent<'_> {
+    PageContent {
+        manifest,
+        title: "A page",
+        plain_text: "A page",
+        word_count: 2,
+        char_count: 6,
+        source_url: None,
+    }
+}
+
+fn page_with(store: &mut Store, ids: &[FileId]) -> DocumentMeta {
+    let manifest = manifest_with(ids);
+    store.create_page(None, &page_content(&manifest)).unwrap()
+}
+
+/// The collector's stamp on a file of a page as the file at `images` has it.
+fn file_stamp(images: &Path, id: &FileId) -> Option<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    let conn = rusqlite::Connection::open(images).unwrap();
+    conn.query_row(
+        "SELECT unreferenced_since FROM files WHERE id = ?1",
+        [id.to_hex()],
+        |row| row.get(0),
+    )
+    .optional()
+    .unwrap()
+}
+
+/// The ids of files of pages an images database holds, sorted.
+fn file_ids_in(images: &Path) -> Vec<String> {
+    let conn = rusqlite::Connection::open(images).unwrap();
+    let mut stmt = conn.prepare("SELECT id FROM files ORDER BY id").unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+fn sorted_files(ids: &[FileId]) -> Vec<String> {
+    let mut hex: Vec<String> = ids.iter().map(FileId::to_hex).collect();
+    hex.sort();
+    hex
+}
+
+fn user_version(path: &Path) -> i64 {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn has_table(path: &Path, name: &str) -> bool {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
+        [name],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap()
+        == 1
 }
 
 fn names_in(dir: &Path) -> Vec<String> {
@@ -307,7 +398,7 @@ fn the_second_file_is_made_by_the_first_put_with_its_own_header() {
         .unwrap()
     };
     assert_eq!(pragma("application_id"), 0x5749_4D47.to_string());
-    assert_eq!(pragma("user_version"), "1");
+    assert_eq!(pragma("user_version"), "2");
     assert_eq!(pragma("journal_mode").to_lowercase(), "wal");
     assert_eq!(pragma("auto_vacuum"), "2");
     let (format, width, height, density, byte_len, created_at, since, stored): (
@@ -516,12 +607,12 @@ fn a_file_that_is_not_an_images_database_is_refused_and_left_alone() {
     store.put_image(&png(&picture(1, 10))).unwrap();
     store.close().unwrap();
     let conn = rusqlite::Connection::open(lib.images()).unwrap();
-    conn.pragma_update(None, "user_version", 2).unwrap();
+    conn.pragma_update(None, "user_version", 3).unwrap();
     drop(conn);
     let store = lib.open();
     match store.image_count() {
         Err(StoreError::SchemaTooNew { found, supported }) => {
-            assert_eq!((found, supported), (2, 1))
+            assert_eq!((found, supported), (3, 2))
         }
         other => panic!("expected SchemaTooNew, got {other:?}"),
     }
@@ -640,6 +731,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             deleted: 0,
             bytes_freed: 0,
             copy_failed: None,
+            ..ImagesCollected::default()
         }
     );
     assert_eq!(stamp(&lib.images(), &named), Some(None));
@@ -656,6 +748,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             deleted: 0,
             bytes_freed: 0,
             copy_failed: None,
+            ..ImagesCollected::default()
         }
     );
     assert_eq!(stamp(&lib.images(), &unnamed), Some(Some(START)));
@@ -679,6 +772,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             deleted: 1,
             bytes_freed: unnamed_bytes.len() as u64,
             copy_failed: None,
+            ..ImagesCollected::default()
         }
     );
     assert_eq!(store.image_info(&unnamed).unwrap(), None);
@@ -914,6 +1008,7 @@ fn the_look_alone_deletes_nothing_however_old_a_stamp_is() {
             deleted: 0,
             bytes_freed: 0,
             copy_failed: None,
+            ..ImagesCollected::default()
         }
     );
     lib.clock.advance_ms(365 * DAY);
@@ -927,6 +1022,7 @@ fn the_look_alone_deletes_nothing_however_old_a_stamp_is() {
             deleted: 0,
             bytes_freed: 0,
             copy_failed: None,
+            ..ImagesCollected::default()
         }
     );
     assert_eq!(stamp(&lib.images(), &named), Some(None));
@@ -1152,6 +1248,7 @@ fn the_copy_has_every_picture_after_it_is_brought_up_to_date() {
             copied: 2,
             bytes_copied: (first.len() + second.len()) as u64,
             waiting: 0,
+            ..ImagesBackedUp::default()
         }
     );
     assert_eq!(lib.copy(), lib.dir.path().join("backups").join("images.db"));
@@ -1195,6 +1292,7 @@ fn nothing_is_copied_twice() {
             copied: 0,
             bytes_copied: 0,
             waiting: 0,
+            ..ImagesBackedUp::default()
         }
     );
     assert_eq!(
@@ -1220,6 +1318,7 @@ fn nothing_is_copied_twice() {
             copied: 1,
             bytes_copied: new.len() as u64,
             waiting: 0,
+            ..ImagesBackedUp::default()
         }
     );
     assert_ne!(data_version(&watcher), version);
@@ -1244,6 +1343,7 @@ fn the_copy_is_brought_up_to_date_a_slice_at_a_time() {
             copied: 2,
             bytes_copied: 20_000,
             waiting: 3,
+            ..ImagesBackedUp::default()
         }
     );
     // Oldest first.
@@ -1602,7 +1702,13 @@ fn scribble(path: &Path, offset: u64, len: usize) {
         .unwrap();
 }
 
-/// A library with two pictures in `images.db` and in its copy, closed.
+/// The two files of the page [`two_pictures_and_their_copy`] stores beside its pictures.
+fn the_two_files() -> [Vec<u8>; 2] {
+    [page_file(1, 50_000), page_file(2, 50_000)]
+}
+
+/// A library with two pictures and a page of two files in `images.db` and in its copy,
+/// closed.
 fn two_pictures_and_their_copy(lib: &OnDisk) -> [(ImageInfo, Vec<u8>); 2] {
     let mut store = lib.open();
     let first = picture(1, 60_000);
@@ -1610,6 +1716,11 @@ fn two_pictures_and_their_copy(lib: &OnDisk) -> [(ImageInfo, Vec<u8>); 2] {
     let a = store.put_image(&png(&first)).unwrap();
     let b = store.put_image(&png(&second)).unwrap();
     document_with(&mut store, "Two pictures", &[a.id, b.id]);
+    let files: Vec<FileId> = the_two_files()
+        .iter()
+        .map(|bytes| store.put_file(bytes).unwrap().id)
+        .collect();
+    page_with(&mut store, &files);
     back_up_all_images(&lib.database()).unwrap();
     store.close().unwrap();
     [(a, first), (b, second)]
@@ -1634,6 +1745,9 @@ fn a_damaged_file_is_set_aside_and_its_pictures_come_back(
         assert_eq!(reader.image_bytes(&info.id).unwrap().as_ref(), Some(bytes));
         assert_eq!(reader.image_info(&info.id).unwrap().as_ref(), Some(info));
     }
+    for bytes in the_two_files() {
+        assert_eq!(reader.file_bytes(&FileId::of(&bytes)).unwrap(), Some(bytes));
+    }
     drop(reader);
     let mut store = lib.open();
     store.set_query_only(true).unwrap();
@@ -1647,10 +1761,15 @@ fn a_damaged_file_is_set_aside_and_its_pictures_come_back(
     assert!(images_moved_aside(&lib.database()).is_empty());
     store.set_query_only(false).unwrap();
 
-    // The library itself: every picture as it was, a new one stored.
+    // The library itself: every picture and every file of the page as it was, a new one
+    // stored.
     for (info, bytes) in pictures {
         assert_eq!(store.image_bytes(&info.id).unwrap().as_ref(), Some(bytes));
         assert_eq!(store.image_info(&info.id).unwrap().as_ref(), Some(info));
+    }
+    let files: Vec<FileId> = the_two_files().iter().map(|b| FileId::of(b)).collect();
+    for (id, bytes) in files.iter().zip(the_two_files()) {
+        assert_eq!(store.file_bytes(id).unwrap(), Some(bytes));
     }
     let new = picture(9, 5_000);
     let stored = store.put_image(&png(&new)).unwrap();
@@ -1671,11 +1790,15 @@ fn a_damaged_file_is_set_aside_and_its_pictures_come_back(
     ids.push(stored.id);
     assert_eq!(ids_in(&lib.images()), sorted(&ids));
 
+    assert_eq!(file_ids_in(&lib.images()), sorted_files(&files));
+
     // The collector and the copy go on.
     let run = lib.collect();
     assert_eq!(run.copy_failed, None);
     assert_eq!(run.images, 3);
+    assert_eq!((run.files, run.files_referenced), (2, 2));
     assert_eq!(ids_in(&lib.copy()), sorted(&ids));
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&files));
     store.close().unwrap();
 }
 
@@ -1871,4 +1994,516 @@ fn a_connection_follows_the_file_at_the_path() {
     assert!(store.image_bytes(&b.id).unwrap().is_some());
     assert_eq!(ids_in(&lib.images()), sorted(&[a.id, b.id]));
     assert_eq!(store.image_count().unwrap(), 2);
+}
+
+// ----- the files of pages ---------------------------------------------------------------
+
+#[test]
+fn a_file_of_a_page_is_stored_once_under_the_hash_of_its_bytes() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let bytes = page_file(1, 30_000);
+    let info = store.put_file(&bytes).unwrap();
+    assert_eq!(
+        info,
+        FileInfo {
+            id: FileId::of(&bytes),
+            byte_len: bytes.len() as u64,
+            created_at: START,
+        }
+    );
+    // The same bytes later: the row that is there, with its first time.
+    lib.clock.advance_ms(DAY);
+    assert_eq!(store.put_file(&bytes).unwrap(), info);
+    assert_eq!(store.file_count().unwrap(), 1);
+    assert_eq!(store.file_info(&info.id).unwrap(), Some(info.clone()));
+    assert_eq!(store.file_bytes(&info.id).unwrap(), Some(bytes.clone()));
+    assert_eq!(store.touch_file(&info.id).unwrap(), Some(info.clone()));
+    let never = FileId::of(b"never stored");
+    assert_eq!(store.file_info(&never).unwrap(), None);
+    assert_eq!(store.file_bytes(&never).unwrap(), None);
+    assert_eq!(store.touch_file(&never).unwrap(), None);
+
+    // The files of pages and the pictures are two tables: the same 16 bytes name nothing
+    // in the other.
+    assert_eq!(store.image_count().unwrap(), 0);
+    assert_eq!(store.image_info(&ImageId(info.id.0)).unwrap(), None);
+    let picture_bytes = picture(1, 100);
+    let image = store.put_image(&png(&picture_bytes)).unwrap();
+    assert_eq!(store.file_info(&FileId(image.id.0)).unwrap(), None);
+    assert_eq!(
+        (store.image_count().unwrap(), store.file_count().unwrap()),
+        (1, 1)
+    );
+
+    // What the row is, as a second connection reads it.
+    let conn = rusqlite::Connection::open(lib.images()).unwrap();
+    let (byte_len, created_at, since, stored): (i64, i64, Option<i64>, Vec<u8>) = conn
+        .query_row(
+            "SELECT byte_len, created_at, unreferenced_since, bytes FROM files WHERE id = ?1",
+            [info.id.to_hex()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (byte_len, created_at, since),
+        (bytes.len() as i64, START, None)
+    );
+    assert_eq!(stored, bytes);
+    drop(conn);
+
+    // A connection of its own (the app's listener) stores and reads them too, and the
+    // store sees what it stored; one for reading only refuses to store.
+    let mut file = ImageFile::beside(&lib.database());
+    let other = page_file(2, 10_000);
+    let other_info = file.put_file(&other).unwrap();
+    assert_eq!(
+        store.file_bytes(&other_info.id).unwrap(),
+        Some(other.clone())
+    );
+    assert_eq!(file.file_info(&info.id).unwrap(), Some(info.clone()));
+    assert_eq!(file.file_bytes(&info.id).unwrap(), Some(bytes));
+    let mut reader = ImageFile::read_only(&lib.database());
+    assert_eq!(reader.file_info(&other_info.id).unwrap(), Some(other_info));
+    assert!(matches!(
+        reader.put_file(&page_file(3, 10)),
+        Err(StoreError::Sqlite(_))
+    ));
+    assert_eq!(store.file_count().unwrap(), 2);
+
+    // The file of a library in memory holds them too.
+    let (mut memory, _) = common::store();
+    let stored = memory.put_file(&page_file(4, 100)).unwrap();
+    assert_eq!(
+        memory.file_bytes(&stored.id).unwrap(),
+        Some(page_file(4, 100))
+    );
+    assert_eq!(memory.file_count().unwrap(), 1);
+}
+
+/// `images.db` as 0.7.0 made it: version 1, the table of images and no other.
+fn images_file_of_version_1(lib: &OnDisk, image: &[u8]) -> ImageId {
+    let conn = rusqlite::Connection::open(lib.images()).unwrap();
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    let _: String = conn
+        .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE images (
+             id TEXT NOT NULL UNIQUE, format TEXT NOT NULL, width INTEGER NOT NULL,
+             height INTEGER NOT NULL, density INTEGER NOT NULL, byte_len INTEGER NOT NULL,
+             created_at INTEGER NOT NULL, unreferenced_since INTEGER, bytes BLOB NOT NULL
+         );
+         PRAGMA user_version = 1;
+         PRAGMA application_id = 1464421703;",
+    )
+    .unwrap();
+    let id = ImageId::of(image);
+    conn.execute(
+        "INSERT INTO images VALUES (?1, 'png', 4, 3, 72, ?2, ?3, NULL, ?4)",
+        rusqlite::params![id.to_hex(), image.len() as i64, START, image],
+    )
+    .unwrap();
+    id
+}
+
+/// A version-1 `images.db` is brought to version 2 by the first connection that may
+/// write it, and read as it is, without files and without an error, by one that reads.
+#[test]
+fn an_images_file_of_version_1_is_brought_to_version_2_by_a_writer_and_read_as_it_is() {
+    let lib = OnDisk::new();
+    let store = lib.open();
+    drop(store);
+    let image = picture(1, 1_000);
+    let id = images_file_of_version_1(&lib, &image);
+    let some_file = FileId::of(b"a font");
+
+    // A reader: the pictures are there, the files of pages are not, nothing is changed.
+    let reader = ImageFile::read_only(&lib.database());
+    assert_eq!(reader.bytes(&id).unwrap(), Some(image.clone()));
+    assert_eq!(reader.file_info(&some_file).unwrap(), None);
+    assert_eq!(reader.file_bytes(&some_file).unwrap(), None);
+    let tool = Store::open_read_only(lib.database())
+        .unwrap()
+        .store()
+        .unwrap();
+    assert_eq!(tool.file_count().unwrap(), 0);
+    assert_eq!(tool.file_info(&some_file).unwrap(), None);
+    assert_eq!(tool.image_count().unwrap(), 1);
+    assert_eq!(user_version(&lib.images()), 1);
+    assert!(!has_table(&lib.images(), "files"));
+
+    // A dry run reads it as it is too, and stores nothing.
+    let mut store = lib.open();
+    store.set_query_only(true).unwrap();
+    assert_eq!(store.image_count().unwrap(), 1);
+    assert_eq!(store.file_count().unwrap(), 0);
+    assert!(store.put_file(b"a font").is_err());
+    assert_eq!(user_version(&lib.images()), 1);
+    store.set_query_only(false).unwrap();
+
+    // The first write brings it to version 2, with its pictures as they were.
+    let info = store.put_file(b"a font").unwrap();
+    assert_eq!(user_version(&lib.images()), 2);
+    assert!(has_table(&lib.images(), "files"));
+    assert_eq!(store.image_bytes(&id).unwrap(), Some(image.clone()));
+    assert_eq!(store.file_count().unwrap(), 1);
+    // The readers that opened it at version 1 see the new table and its row.
+    assert_eq!(reader.file_info(&info.id).unwrap(), Some(info.clone()));
+    assert_eq!(tool.file_count().unwrap(), 1);
+    drop((reader, tool, store));
+
+    // Opening it for writing is enough: the collector does, and so does a store that
+    // only reads a picture.
+    for brings_it in ["collector", "store"] {
+        std::fs::remove_file(lib.images()).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(lib.dir.path().join(format!("images.db{suffix}")));
+        }
+        images_file_of_version_1(&lib, &image);
+        match brings_it {
+            "collector" => {
+                let run = lib.look();
+                assert_eq!((run.images, run.files), (1, 0));
+            }
+            _ => {
+                let store = lib.open();
+                assert_eq!(store.image_bytes(&id).unwrap(), Some(image.clone()));
+            }
+        }
+        assert_eq!(user_version(&lib.images()), 2, "{brings_it}");
+        assert!(has_table(&lib.images(), "files"), "{brings_it}");
+    }
+}
+
+#[test]
+fn the_files_that_stored_content_names_are_found() {
+    let (mut store, clock) = store();
+    let live = store.put_file(b"in a live page").unwrap().id;
+    let trashed = store.put_file(b"in a trashed page").unwrap().id;
+    let versioned = store.put_file(b"in a version").unwrap().id;
+    let page = page_with(&mut store, &[live]);
+    let gone = page_with(&mut store, &[trashed]);
+    store.trash_document(gone.id).unwrap();
+    let old = page_with(&mut store, &[versioned, live]);
+    store.create_snapshot(old.id).unwrap();
+    clock.advance_ms(MINUTE);
+    let manifest = manifest_with(&[live]);
+    store.save_page(old.id, &page_content(&manifest)).unwrap();
+    assert_eq!(
+        store.referenced_files().unwrap(),
+        HashSet::from([live, trashed, versioned])
+    );
+    // The images' scan does not take a file for an image.
+    assert_eq!(store.referenced_images().unwrap(), HashSet::new());
+    // Purged, a page names nothing.
+    store.purge_document(gone.id).unwrap();
+    assert_eq!(
+        store.referenced_files().unwrap(),
+        HashSet::from([live, versioned])
+    );
+    assert!(store.document_exists(page.id).unwrap());
+}
+
+/// A file that only a version of a page names stays for as long as the version does.
+#[test]
+fn a_file_named_only_by_a_version_survives() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let old = store.put_file(&page_file(1, 1_000)).unwrap().id;
+    let kept = store.put_file(&page_file(2, 1_000)).unwrap().id;
+    let page = page_with(&mut store, &[old, kept]);
+    let version = store.create_snapshot(page.id).unwrap();
+    let manifest = manifest_with(&[kept]);
+    store.save_page(page.id, &page_content(&manifest)).unwrap();
+
+    for _ in 0..4 {
+        lib.clock.advance_ms(40 * DAY);
+        let run = lib.collect();
+        assert_eq!(
+            (run.files, run.files_referenced, run.files_deleted),
+            (2, 2, 0)
+        );
+        assert_eq!(file_stamp(&lib.images(), &old), Some(None));
+    }
+
+    // The version goes; thirty days later its file does, and the page's stays.
+    store.delete_snapshot(version.id).unwrap();
+    assert_eq!(lib.collect().files_newly_unreferenced, 1);
+    lib.clock.advance_ms(31 * DAY);
+    let run = lib.collect();
+    assert_eq!((run.files_deleted, run.file_bytes_freed), (1, 1_004));
+    assert_eq!(file_ids_in(&lib.images()), sorted_files(&[kept]));
+    assert_eq!(store.file_bytes(&old).unwrap(), None);
+    assert_eq!(store.file_bytes(&kept).unwrap(), Some(page_file(2, 1_000)));
+}
+
+/// Deleting a page frees its files only through the collector: thirty days after, and
+/// only once no kept backup is older than that.
+#[test]
+fn a_file_of_a_deleted_page_goes_after_thirty_days_and_the_oldest_backup() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let bytes = page_file(1, 5_000);
+    let shared_bytes = page_file(2, 5_000);
+    let id = store.put_file(&bytes).unwrap().id;
+    let shared = store.put_file(&shared_bytes).unwrap().id;
+    let page = page_with(&mut store, &[id, shared]);
+    page_with(&mut store, &[shared]);
+    let old_backup = lib.write_backup(&store);
+
+    // In the trash the page still names its files.
+    lib.clock.advance_ms(DAY);
+    store.trash_document(page.id).unwrap();
+    assert_eq!(lib.collect().files_referenced, 2);
+    store.purge_document(page.id).unwrap();
+    assert_eq!(store.file_bytes(&id).unwrap(), Some(bytes.clone()));
+    assert_eq!(
+        lib.collect(),
+        ImagesCollected {
+            files: 2,
+            files_referenced: 1,
+            files_newly_unreferenced: 1,
+            ..ImagesCollected::default()
+        }
+    );
+    let stamped_at = lib.clock.now_ms();
+
+    // Thirty days are over, but the backup from before the stamp is kept.
+    lib.clock.advance_ms(40 * DAY);
+    assert_eq!(lib.collect().files_deleted, 0);
+    assert_eq!(file_stamp(&lib.images(), &id), Some(Some(stamped_at)));
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[id, shared]));
+
+    // Without it the file goes, from `images.db` and from the copy; the file the other
+    // page names stays.
+    std::fs::remove_file(old_backup).unwrap();
+    let run = lib.collect();
+    assert_eq!(
+        (run.files_deleted, run.file_bytes_freed),
+        (1, bytes.len() as u64)
+    );
+    assert_eq!(store.file_bytes(&id).unwrap(), None);
+    assert_eq!(file_ids_in(&lib.images()), sorted_files(&[shared]));
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[shared]));
+    assert_eq!(store.file_bytes(&shared).unwrap(), Some(shared_bytes));
+}
+
+/// A file a kept backup of the library names stays in the copy after the collector took
+/// it out of `images.db`, and leaves the copy with the backup.
+#[test]
+fn the_copy_keeps_a_file_a_kept_backup_names() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let bytes = page_file(1, 4_000);
+    let id = store.put_file(&bytes).unwrap().id;
+    back_up_all_images(&lib.database()).unwrap();
+    // Stamped while nothing names it ...
+    assert_eq!(lib.collect().files_newly_unreferenced, 1);
+    // ... then named by stored content without a touch, and backed up so.
+    lib.clock.advance_ms(10 * DAY);
+    let json = format!(r#"{{"file":"{id}"}}"#);
+    let document = store
+        .create_document(None, &content("Names a file", "x", &json))
+        .unwrap();
+    let backup = lib.write_backup(&store);
+    store.trash_document(document.id).unwrap();
+    store.purge_document(document.id).unwrap();
+    lib.clock.set_ms(START + 31 * DAY);
+    assert_eq!(lib.collect().files_deleted, 1);
+    assert_eq!(file_ids_in(&lib.images()), Vec::<String>::new());
+    // The backup names it: the copy keeps it, marked, and gives it back.
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[id]));
+    assert_eq!(file_stamp(&lib.copy(), &id), Some(Some(START + 31 * DAY)));
+    lib.clock.advance_ms(DAY);
+    lib.collect();
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[id]));
+
+    // The backup goes: so does the row.
+    std::fs::remove_file(backup).unwrap();
+    lib.clock.advance_ms(DAY);
+    lib.collect();
+    assert_eq!(file_ids_in(&lib.copy()), Vec::<String>::new());
+    assert_eq!(store.file_bytes(&id).unwrap(), None);
+}
+
+#[test]
+fn the_copy_has_every_file_of_a_page_and_counts_them_with_the_pictures() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let image = picture(1, 9_992);
+    let first = page_file(1, 9_996);
+    let second = page_file(2, 9_996);
+    store.put_image(&png(&image)).unwrap();
+    let a = store.put_file(&first).unwrap();
+    let b = store.put_file(&second).unwrap();
+    assert!(!lib.copy().exists());
+
+    // A slice of one row at a time: the picture first, then the files, oldest first.
+    let slice = back_up_images(&lib.database(), 1).unwrap();
+    assert_eq!(
+        slice,
+        ImagesBackedUp {
+            images: 1,
+            copied: 1,
+            bytes_copied: 10_000,
+            waiting: 0,
+            files: 2,
+            files_copied: 0,
+            file_bytes_copied: 0,
+            files_waiting: 2,
+        }
+    );
+    let slice = back_up_images(&lib.database(), 1).unwrap();
+    assert_eq!(
+        (slice.copied, slice.files_copied, slice.files_waiting),
+        (0, 1, 1)
+    );
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[a.id]));
+    // The rest, all of it.
+    let done = back_up_all_images(&lib.database()).unwrap();
+    assert_eq!(
+        done,
+        ImagesBackedUp {
+            images: 1,
+            files: 2,
+            files_copied: 1,
+            file_bytes_copied: 10_000,
+            ..ImagesBackedUp::default()
+        }
+    );
+    // Nothing is copied twice.
+    assert_eq!(
+        back_up_all_images(&lib.database()).unwrap(),
+        ImagesBackedUp {
+            images: 1,
+            files: 2,
+            ..ImagesBackedUp::default()
+        }
+    );
+
+    // The copy is an images database with the same rows.
+    let copy = ImageFile::read_only(&lib.copy().with_file_name("library.db"));
+    assert_eq!(copy.file_info(&a.id).unwrap(), Some(a.clone()));
+    assert_eq!(copy.file_bytes(&b.id).unwrap(), Some(second));
+    assert_eq!(file_stamp(&lib.copy(), &a.id), Some(None));
+}
+
+#[test]
+fn a_library_whose_images_file_was_lost_gets_the_files_of_its_pages_back_from_the_copy() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let first = page_file(1, 20_000);
+    let second = page_file(2, 20_000);
+    let a = store.put_file(&first).unwrap();
+    let b = store.put_file(&second).unwrap();
+    back_up_all_images(&lib.database()).unwrap();
+    store.close().unwrap();
+    for name in ["images.db", "images.db-wal", "images.db-shm"] {
+        let _ = std::fs::remove_file(lib.dir.path().join(name));
+    }
+
+    // A reader finds them in the copy and writes nothing.
+    let reader = ImageFile::read_only(&lib.database());
+    assert_eq!(reader.file_bytes(&a.id).unwrap(), Some(first.clone()));
+    assert_eq!(reader.file_info(&b.id).unwrap(), Some(b.clone()));
+    assert!(!lib.images().exists());
+
+    // The library has them again, each as it was: by its bytes, and by the page that is
+    // created naming the other one.
+    let mut store = lib.open();
+    assert_eq!(store.file_bytes(&a.id).unwrap(), Some(first));
+    assert_eq!(store.file_count().unwrap(), 1);
+    page_with(&mut store, &[b.id]);
+    assert_eq!(store.file_count().unwrap(), 2);
+    assert_eq!(store.file_info(&b.id).unwrap(), Some(b));
+    assert_eq!(
+        file_ids_in(&lib.images()),
+        sorted_files(&[a.id, FileId::of(&second)])
+    );
+}
+
+/// What of a damaged file can still be read and the copy does not have is saved into the
+/// new file, of the files of pages too.
+#[test]
+fn a_file_of_a_page_the_copy_does_not_have_is_saved_from_a_damaged_file() {
+    let lib = OnDisk::new();
+    two_pictures_and_their_copy(&lib);
+    let [first, second] = the_two_files();
+    // A third file, stored after the copy was brought up to date.
+    let mut store = lib.open();
+    let third = page_file(3, 100);
+    let late = store.put_file(&third).unwrap();
+    store.close().unwrap();
+    // A page of the second file's bytes points to a page the file does not have.
+    let mut file = std::fs::read(lib.images()).unwrap();
+    let page = (1..file.len() / 4096)
+        .find(|page| {
+            let data = &file[page * 4096 + 4..page * 4096 + 68];
+            second.windows(data.len()).any(|window| window == data)
+        })
+        .expect("a page of the second file's bytes");
+    file[page * 4096..page * 4096 + 4].copy_from_slice(&0xFFFF_FFF0u32.to_be_bytes());
+    std::fs::write(lib.images(), &file).unwrap();
+
+    let store = lib.open();
+    assert_eq!(
+        store.file_bytes(&FileId::of(&second)).unwrap(),
+        Some(second)
+    );
+    assert_eq!(images_moved_aside(&lib.database()).len(), 1);
+    assert_eq!(store.file_info(&late.id).unwrap(), Some(late.clone()));
+    assert_eq!(store.file_bytes(&late.id).unwrap(), Some(third));
+    assert_eq!(store.file_bytes(&FileId::of(&first)).unwrap(), Some(first));
+    assert_eq!(images_moved_aside(&lib.database()).len(), 1);
+}
+
+/// Bytes of a file that went bad inside its row are not believed: the copy's are given
+/// and written over them, and without a copy the same file stored again repairs them.
+#[test]
+fn bytes_of_a_file_that_went_bad_are_taken_from_the_copy() {
+    let lib = OnDisk::new();
+    two_pictures_and_their_copy(&lib);
+    let [first, second] = the_two_files();
+    let (a, b) = (FileId::of(&first), FileId::of(&second));
+    let rot = |id: &FileId| {
+        let conn = rusqlite::Connection::open(lib.images()).unwrap();
+        conn.execute(
+            "UPDATE files SET bytes = ?2 WHERE id = ?1",
+            rusqlite::params![id.to_hex(), page_file(9, 50_000)],
+        )
+        .unwrap();
+    };
+    let stored = |id: &FileId| -> Vec<u8> {
+        let conn = rusqlite::Connection::open(lib.images()).unwrap();
+        conn.query_row(
+            "SELECT bytes FROM files WHERE id = ?1",
+            [id.to_hex()],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    rot(&a);
+    rot(&b);
+
+    let reader = ImageFile::read_only(&lib.database());
+    assert_eq!(reader.file_bytes(&a).unwrap(), Some(first.clone()));
+    drop(reader);
+    assert_eq!(stored(&a), page_file(9, 50_000));
+
+    let mut store = lib.open();
+    assert_eq!(store.file_bytes(&a).unwrap(), Some(first.clone()));
+    assert_eq!(stored(&a), first);
+
+    std::fs::remove_file(lib.copy()).unwrap();
+    assert_eq!(store.file_bytes(&b).unwrap(), None);
+    assert_eq!(store.put_file(&second).unwrap().id, b);
+    assert_eq!(stored(&b), second);
+    assert_eq!(store.file_bytes(&b).unwrap(), Some(second));
+
+    // A row whose bytes went bad is not copied into a new copy either.
+    rot(&b);
+    back_up_all_images(&lib.database()).unwrap();
+    assert_eq!(file_ids_in(&lib.copy()), sorted_files(&[a]));
 }

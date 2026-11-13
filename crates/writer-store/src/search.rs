@@ -14,6 +14,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::Store;
+use crate::documents::DocumentKind;
 use crate::error::Result;
 use crate::ids::{DocumentId, FolderId};
 
@@ -41,6 +42,9 @@ pub struct SearchHit {
     /// Relevance; higher is better (negated FTS5 bm25, title weighted 10x the body).
     /// Results are returned sorted by it.
     pub rank: f64,
+    /// What the item is: a text, or a page (whose text is what it showed).
+    #[serde(default)]
+    pub kind: DocumentKind,
 }
 
 /// A piece of a snippet.
@@ -435,7 +439,8 @@ impl Store {
         }
         let mut hits: Vec<SearchHit> = {
             let mut stmt = self.conn.prepare_cached(
-                "SELECT d.id, d.title, d.folder_id, bm25(documents_fts, 10.0, 1.0) AS score
+                "SELECT d.id, d.title, d.folder_id, bm25(documents_fts, 10.0, 1.0) AS score,
+                        d.kind
                  FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid
                  WHERE documents_fts MATCH ?1 AND d.trashed_at IS NULL
                  ORDER BY score, d.updated_at DESC
@@ -451,6 +456,7 @@ impl Store {
                         folder_id: r.get(2)?,
                         snippet: String::new(),
                         rank: -score,
+                        kind: r.get(4)?,
                     })
                 },
             )?
@@ -580,6 +586,7 @@ mod tests {
             folder_id: None,
             snippet: format!("a {MATCH_START}b{MATCH_END} c"),
             rank: 0.0,
+            kind: DocumentKind::Text,
         };
         let parts = hit.snippet_parts();
         assert_eq!(parts.len(), 3);

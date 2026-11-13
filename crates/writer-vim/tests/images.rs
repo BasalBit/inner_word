@@ -182,6 +182,19 @@ fn writing_around_them() {
         c("|[image 3]", "oX<Esc>", "[image 3]\n|X"),
         c("|[image 3]", "OX<Esc>", "|X\n[image 3]"),
         c("a\n|[image 3]\nb", "OX<Esc>", "a\n|X\n[image 3]\nb"),
+        // In Insert mode on a block without text, Enter starts the line
+        // below it and shift-enter the line above it.
+        c("a\n|[image 3]", "i<CR>X<Esc>", "a\n[image 3]\n|X"),
+        c("|[image 3]", "i<S-CR>X<Esc>", "|X\n[image 3]"),
+        c("a\n|[image 3]\nb", "i<S-CR>X<Esc>", "a\n|X\n[image 3]\nb"),
+        c("|---", "i<S-CR>X<Esc>", "|X\n---"),
+        c("|===", "i<S-CR>X<Esc>", "|X\n==="),
+        c("|[image 3]", "i<S-CR>X<Esc>u", "|[image 3]"),
+        c(
+            "|[image 3]\n[image 4]",
+            "i<S-CR>X<Esc>jj.",
+            "X\n[image 3]\n|X\n[image 4]",
+        ),
         // Changing the line takes the image for text.
         c("a\n|[image 3]\nb", "ccX<Esc>", "a\n|X\nb"),
         c("a\n|[image 3]\nb", "SX<Esc>", "a\n|X\nb"),

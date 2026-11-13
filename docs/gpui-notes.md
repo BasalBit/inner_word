@@ -772,6 +772,110 @@ Source: `$G/src/app.rs`, `$G/src/platform.rs`, `$G/src/platform/app_menu.rs`,
 - Extra fonts: `cx.text_system().add_fonts(vec![Cow::Borrowed(include_bytes!("..").as_slice())])` (compile-checked), then use the family name.
 - Displays: `cx.displays()`, `cx.primary_display()`, `window.display(cx)`, `window.scale_factor()` (2 here).
 
+## Printing
+
+What GPUI has and has not for laying a document out off screen and putting it on paper.
+The code: `crates/writer-editor/src/print.rs` (the print pass), `crates/writer-print` (the
+PDF writer, the PDF reader, the print operation). Everything here was run on this Mac
+unless it says "read".
+
+- **There is no text system without a window.** `WindowTextSystem::new` is `pub(crate)`
+  (`$G/src/text_system.rs:340`); the only way to one is `window.text_system()`, which is
+  an `Arc<WindowTextSystem>` that can be cloned and kept. Any window will do. The print
+  pass keeps the clone in a layout environment of its own and shapes with it outside any
+  frame. What it shapes goes into GPUI's line cache of the current frame
+  (`LineLayoutCache`, two frame maps, swapped in `finish_frame`): a pass over a book in
+  one go holds every shaped line until the window draws twice, a pass in slices with
+  frames in between holds a slice.
+- **A `FontId` goes back to a `Font` only halfway.** `TextSystem::get_font_for_id`
+  (`$G/src/text_system.rs:134-142`, public) looks through the fonts that were asked for
+  by name: it answers for those, and has no answer for a font CoreText put in as a
+  fallback (an emoji, a CJK character in a Charter run), which is entered by PostScript
+  name in a private table (`$G/src/platform/mac/text_system.rs:304-320`). No public call
+  gives the native font of a `FontId`. So the print pass never reads a glyph's `FontId`:
+  it takes the `Font` of every run from `LayoutStyle` (what the layout asked for), and the
+  PDF writer finds the face again and lets CoreText find the fallbacks again when it
+  draws.
+- **Glyph ids are CoreText's and are not reused.** `ShapedGlyph::id` is the `CGGlyph` of
+  the `CTRun` (`text_system.rs:510-537`), but without the font it is of no use, and in
+  tests every id is 1 or 2. What the pass takes from a shaped glyph is its byte offset and
+  its x; the PDF writer makes one `CTLine` of the row's text and draws each of its glyphs
+  where the cluster starts in the layout.
+- **The face of a `gpui::Font`, step by step** (mirrored in `writer-print/src/fonts.rs`):
+  the family by name through font-kit (`SystemSource::select_family_by_name`;
+  `.SystemUIFont` is asked for as `.AppleSystemUIFont`), every face loaded and given the
+  cascade list of `Font::fallbacks` (one descriptor per family, `open_type.rs:30-69`; the
+  system's own fallbacks follow by themselves), a face without an `m` left out,
+  `find_best_match` on weight and style. A family that is not installed goes down
+  `TextSystem::fallback_font_stack` in the *regular* face: bold text in a missing family
+  is Helvetica Regular on screen, and on paper. Never make a font from a PostScript name:
+  CoreText answers `.SFNS-Regular` with Times New Roman.
+  Checked with the editor's demo (`print:<path>`): Charter in four faces, Helvetica Neue,
+  Menlo, the interface font and the emoji and CJK fallbacks came out at the layout's
+  widths in every row (0 rows off of 37; 0 of 35,178 in a generated book).
+- **Where a single shaped line has its baseline.** `ShapedLine::paint(origin,
+  line_height, ..)` centres the line in its box with the layout's own numbers
+  (`$G/src/text_system/line.rs`): the baseline is at `origin.y + (line_height - ascent -
+  descent) / 2 + ascent`. A label that is printed (a list number, a page number) gets its
+  baseline from the same expression over the shaped line's `ascent` and `descent`.
+- **A y far down a long document is coarse.** Content space is `f32` pixels from the top;
+  at page 400 a y is in the hundreds of thousands and single precision has a thirty-second
+  of a point to offer, at page 1,500 an eighth. The screen does not show it. Paper would:
+  what is rounded to half points (a rule, an underline) can land half a point off on one
+  page and not on the next. The pass therefore works every page out on its own sheet
+  (`Placed::on_sheet`: a block's place from the sheet's top edge, from the placement's
+  own page-local numbers), and a test holds 400 identical pages equal to the first to the
+  last bit.
+- **Sheets are started from a foreground task, outside an update.** AppKit calls the
+  window's delegate while a sheet comes up, and those calls re-enter GPUI: started inside
+  an `update` that is "already borrowed". GPUI does the same with its own sheets
+  (`beginSheetModalForWindow:` in `$G/src/platform/mac/window.rs:1197-1206`, the save
+  panel in `platform.rs:768-771`; read). `writer_print::run_sheet` is to be called that
+  way: make the PDF inside the update, then `cx.spawn(..)` and call it from the task. Its
+  callback runs inside AppKit and may only send on a channel. (The sheet itself has not
+  been opened by anything but the design's Swift probes: no test and no script opens a
+  print panel.)
+- **The print operation runs from Rust without a panel.** `writer_print::run_save_job`
+  (PDFKit's `printOperationForPrintInfo:scalingMode:autoRotate:`, the job disposition
+  "save", both panels off, `runOperation`) wrote a two-page PDF with both pages at the
+  paper's size, their text, and the first word where it was within a thousandth of a
+  point (`cargo test -p writer-print --test save_job`). It wants the main thread of the
+  process and an `NSApplication` (`[NSApplication sharedApplication]` is enough; no run
+  loop has to turn), which is why that test is a program of its own (`harness = false`).
+  Leave `NSPrintInfo`'s centering on and the scaling off: only then is the page on the
+  paper at its real size. The selector is `scalingMode:`, not `scaleMode:`.
+- **Small things that bit there.** `[NSString instancesRespondToSelector:
+  @selector(initWithBytes:length:encoding:)]` is NO (a class cluster: the abstract class
+  does not implement what its placeholder does), so a check of selectors must not list
+  it; strings and the file URL go to AppKit as the `CFString` and `CFURL` they are. A PDF
+  context that is closed without a page writes one blank Letter page. A JPEG's own data
+  goes into the PDF unchanged, also with `kCGImageSourceShouldCache` false (tested: a
+  stretch of the file's bytes is found in the PDF, once however often the picture is
+  drawn). `CGColorCreateGenericRGB` (what `core_graphics::color::CGColor::rgb` calls) is
+  not sRGB; `CGColorCreateSRGB` is.
+- **Reading a PDF's text back** (`writer_print::PdfFile`, PDFKit's `PDFPage.string`). The
+  text of such a PDF is what CoreGraphics maps the drawn glyphs back to. A ligature comes
+  back as its own character (U+FB03 for "ffi"), 日 from a CJK fallback font as the Kangxi
+  radical of the same shape (U+2F47): compare after NFKC, or avoid them in a test.
+  Marked content with `ActualText` (`CGPDFContextBeginTag`) does not change what PDFKit
+  reads (tried: it made it worse, an emoji came back on a line of its own). PDFKit's box
+  for a word (`selectionForRange:`, `boundsForPage:`) starts at the origin of the first
+  glyph and is as high as the row (the ascent and the descent of its font; higher in a
+  row with an emoji), whatever the size of the word in it: with one font in the row the
+  baseline is the box's bottom less the font's descent.
+- **The fake text system and a PDF.** In tests every glyph is 0.6 em wide (an emoji, two
+  UTF-16 units, 1.2 em). Real glyphs at those places make PDFKit see spaces inside words
+  ("Fi xed pi t ch"), unless the font is that wide: **Courier New is** (1229 of 2048
+  units). Documents whose pages go through the PDF writer in a test of the editor are set
+  in Courier New, and their text is compared with white space removed. The row widths of
+  the fake are 0.6 em per character too, so `Report::rows_off` is 0 for Courier New rows
+  and counts the others. Two more things are the fake's and not the Mac's: a shaped
+  line's `descent` is negative there (the font's sign; the Mac's line layout has it
+  positive), so a label's baseline, centred with it, is lower than its row's in a test and
+  on it with real fonts; and the theme names the first family of each font stack
+  (`SF Mono`, which this Mac does not have as a family) because the test platform lists
+  no installed fonts, so the PDF writer reports it missing and sets code in Helvetica.
+
 ## Testing
 
 Source: `$G/src/app/test_context.rs`, `$G/src/platform/test/`, `$G/../gpui-macros-0.2.2/src/test.rs`.

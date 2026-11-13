@@ -57,6 +57,9 @@ What you are given:
 the library and its id. It is sent with the first message and again whenever it has \
 changed; the latest one you were sent is the document as it is now. A very long document \
 comes as an outline: read the parts you need with the tools.
+- A line of the form `![description](image:<id>)` is an image in the document: you cannot \
+see it; keep the line unchanged where the image should stay, and never invent such a line \
+or a path to a file.
 - Sometimes a list of other documents and folders of the user's library that they attached \
 as context, inside <attached> tags, with ids and paths.
 - Tools that read the library: list_library and search_library to look around, \
@@ -113,5 +116,25 @@ pub fn side_system_prompt(tools: bool) -> String {
         SIDE_SYSTEM_PROMPT.to_string()
     } else {
         format!("{SIDE_SYSTEM_PROMPT}{SIDE_WITHOUT_TOOLS_NOTE}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The side chat reads the open document as Markdown, where an image is one line; it
+    /// is told what that line is, with and without the tools of the library. The quick
+    /// chat is sent selected text only and never such a line.
+    #[test]
+    fn the_side_chat_is_told_how_an_image_reads() {
+        const SENTENCE: &str = "A line of the form `![description](image:<id>)` is an image in the \
+document: you cannot see it; keep the line unchanged where the image should stay, and never \
+invent such a line or a path to a file.";
+        assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
+        assert!(side_system_prompt(true).contains(SENTENCE));
+        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert_eq!(system_prompt(Mode::Side), SIDE_SYSTEM_PROMPT);
+        assert!(!QUICK_SYSTEM_PROMPT.contains("image:"));
     }
 }

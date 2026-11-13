@@ -429,9 +429,15 @@ open" below).
     lock file names a channel, at once and without trying the lock; otherwise it takes the
     lock and writes. `live::execute` runs the same function on the store the app hands in.
     One request and one answer per connection, each one line of JSON with a version
-    (`{"version":1,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
+    (`{"version":2,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
     result as the direct write gives it, the error as it was (`WireError`), or a
-    `Refusal`.
+    `Refusal`. **The protocol is version 2** (`live::PROTOCOL_VERSION`) since requests
+    bring image files with them ("Images" below). A request reads past a field it does
+    not know, so an app of version 1 (0.6.0) would have taken such a request, kept the
+    image as a link and answered "done"; with the number changed the two versions refuse
+    each other whole, a `flush` included (`Refusal::Protocol`: exit code 5 with the
+    sentence for an app of another version, "nothing was changed" in it; a test sends a
+    request with a picture to a stand-in that answers as 0.6.0 does).
   - **Where the socket is.** `the-writer-<uid>/<pid>-<n>.sock` in the user's temporary
     directory (mode 0700, the socket 0600, the peer's user checked): a socket path holds
     about a hundred bytes and a data directory can be longer. The lock file of the data
@@ -472,6 +478,56 @@ open" below).
   keep the formatting, the link and the comment each has; only the words that differ take
   the formatting of what they replace (`writer-agent/src/rewrite.rs`,
   `formatting_to_take`).
+- **Images.** To an agent an image of a document is one line of Markdown,
+  `![description](image:<id>)` (`read`, `writer get`). The result of `read` lists the
+  images with what the line does not say (width in percent, alignment, pixel size,
+  whether the library has the bytes: `ImageSummary`), and `writer images <document>`
+  prints that list. No tool returns a picture: an agent looks at one by exporting.
+  - **Adding one**: `writer image add <document> <file> [--alt] [--width] [--align] [--at]
+    [--heading] [--heading-occurrence]`, the MCP tool `add_image` (a row of the table,
+    `write_text::add_image`), or a local path in the Markdown of any operation that takes
+    text (`![what it shows](/path.png)`, `file:`, `~/`; a relative path is taken from the
+    folder of `--file`, else from where the command runs, `Library::with_base_dir`; the
+    MCP server is given no folder and reads whole paths only). `add_image` centres the
+    image at its own size on the page, Markdown brings one in at the left; it is never
+    stored wider than the column or taller than a page (`Image::max_width`), and the
+    result says the width that was stored.
+  - **The file is read in the process that was asked and travels with the request**
+    (`writer-agent/src/attach.rs`: `Prepare::prepared`, which the table calls before
+    `Library::write`). `writer_image::prepare_file` makes of it what the library stores,
+    the request carries the bytes (`AttachedImage`, base64 on the channel), and the
+    function that carries the operation out stores what the request brought
+    (`markdown_in::Images`) and **opens no path**: in the app it runs on the main thread,
+    and the app must never read a file an agent named. A file that cannot be used is a
+    warning that names it with the reason, and the image stays a link (for `add_image`
+    it is an error); an address on the web stays a link. The images of one request weigh
+    32 MB together at most (`live::MAX_ATTACHED_BYTES`). A dry run stores nothing and
+    reports the same.
+  - **Every operation keeps the images it does not change, with their size.** Three
+    places would have lost one. `rewrite_blocks` (behind `replace_document` and
+    `replace_section`) kept a block whose whole kind was the same: the key of an image is
+    its picture alone (`rewrite.rs`, `KindKey`), so the block stays with its width and
+    alignment, and a reworded description is set on it in place. `edit` matches in a text
+    in which an image is an empty line: a match that runs across an image is refused with
+    a sentence (`matching::across_an_image`), and an old text given as Markdown that names
+    the image where it stands (between its lines, at its ends, or alone) is found there
+    and nowhere else. A text written back without the line of an image removes the image:
+    the result counts `images_removed` (by picture, so an image that only moved counts
+    for nothing) and a warning says that the version kept before the change has it.
+  - **An image that is named again is answered from the document as it was before the
+    change**, and only then from the library (`markdown_in::Images::know`,
+    `writer_export::KnownImages`): the blocks the operation replaces first, then the rest
+    of the document, the n-th line that names an id being the n-th image with that id. So
+    an image line that moved, one a section got from another section, an `insert` that
+    repeats an image and one picture used at two sizes all keep width, alignment and
+    description. An image of the library that the document does not hold comes at its
+    own size, at the left; an id nobody has stays a link, with a warning.
+  - **Export**: a Markdown file links its pictures, and they are written into a folder
+    beside it, `<name> images/image-<8 hex>.<ext>` (`Exported::assets`; named by content
+    and written over, `--overwrite` is about the text); a DOCX holds them; plain text has
+    their descriptions.
+  - **The skill** has a paragraph "Images" (`writer-agent-setup/src/skill_body.md`; a
+    test holds what it has to say, and its examples are run against the built tool).
 - **Who says what.** `writer-agent` words its errors for both front ends and names fields
   ("occurrence", "permanently"). The command line adds the option to type next
   (`writer-cli/src/main.rs`, `hint`: `--occurrence`, `--all`, `--overwrite`,

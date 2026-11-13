@@ -467,6 +467,115 @@ mod tests {
         assert_eq!(found.matched_as, None);
     }
 
+    /// A document with two pictures: `[Harbour] [A] [One.] [---] [B] [B] [Two.] [A]`.
+    fn pictures() -> (Document, String, String) {
+        use writer_core::{Image, ImageId};
+        let id = |digit: char| ImageId::parse(&digit.to_string().repeat(32)).unwrap();
+        let image = |digit: char| Block::image(Image::new(id(digit), (40, 30), 72));
+        let document = Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Harbour"),
+            image('a'),
+            Block::paragraph("One."),
+            Block::new(BlockKind::Divider),
+            image('b'),
+            image('b'),
+            Block::paragraph("Two."),
+            image('a'),
+        ]);
+        let line = |digit: char| format!("![](image:{})", id(digit));
+        (document, line('a'), line('b'))
+    }
+
+    #[test]
+    fn an_image_is_an_empty_line_and_a_text_that_names_it_is_found_where_it_stands() {
+        let (document, a, b) = pictures();
+        let at = |first: (usize, usize), last: (usize, usize)| {
+            TextRange::new(
+                Position::new(first.0, first.1),
+                Position::new(last.0, last.1),
+            )
+        };
+        let found = |wanted: &str| find(&document, wanted, false).unwrap();
+
+        // As plain text, the lines before and after an image are found across it: the
+        // empty line between them is the image. An edit asks, and refuses.
+        let across = found("Harbour\n\nOne.");
+        assert_eq!(across.matched_as, Some(MatchedAs::Text));
+        assert_eq!(across.ranges, [at((0, 0), (2, 4))]);
+        assert!(across_an_image(
+            &document,
+            &across.ranges[0],
+            across.matched_as
+        ));
+        let beside = found("One.");
+        assert!(!across_an_image(
+            &document,
+            &beside.ranges[0],
+            beside.matched_as
+        ));
+
+        // As Markdown that names the image between its lines: found, and for an edit
+        // to replace.
+        let named = found(&format!("# Harbour\n\n{a}\n\nOne."));
+        assert_eq!(named.matched_as, Some(MatchedAs::Markdown));
+        assert_eq!(named.ranges, [at((0, 0), (2, 4))]);
+        assert!(!across_an_image(
+            &document,
+            &named.ranges[0],
+            named.matched_as
+        ));
+        // Another image, no image, or something else without text in its place: not there.
+        for other in [
+            format!("# Harbour\n\n{b}\n\nOne."),
+            "# Harbour\n\n---\n\nOne.".to_string(),
+            format!("# Harbour\n\n{a}\n\n{a}\n\nOne."),
+        ] {
+            assert_eq!(found(&other).ranges, [], "{other}");
+        }
+        // Markdown that names no image is never found across one.
+        assert_eq!(found("**One.**\n\n---\n\n---\n\n---\n\nTwo.").ranges, []);
+
+        // The image lines a text begins or ends with are the blocks right beside its
+        // own lines, and the match runs from the first to the last of them.
+        assert_eq!(found(&format!("{a}\n\nOne.")).ranges, [at((1, 0), (2, 4))]);
+        assert_eq!(
+            found(&format!("# Harbour\n\n{a}")).ranges,
+            [at((0, 0), (1, 0))]
+        );
+        assert_eq!(
+            found(&format!("One.\n\n---\n\n{b}\n\n{b}")).ranges,
+            [at((2, 0), (5, 0))]
+        );
+        assert_eq!(
+            found(&format!("{b}\n\nTwo.\n\n{a}")).ranges,
+            [at((5, 0), (7, 0))]
+        );
+        for not_beside in [
+            // The image is not the block before, a divider is between, or the text
+            // does not begin or end where its block does.
+            format!("{b}\n\nOne."),
+            format!("One.\n\n{b}"),
+            format!("{a}\n\nne."),
+            format!("# Harb\n\n{a}"),
+            format!("{a}\n\n{a}\n\nOne."),
+        ] {
+            assert_eq!(found(&not_beside).ranges, [], "{not_beside}");
+        }
+
+        // Image lines and nothing else: the image blocks themselves, wherever they
+        // stand in that row.
+        let alone = found(&a);
+        assert_eq!(alone.matched_as, Some(MatchedAs::Markdown));
+        assert_eq!(alone.ranges, [at((1, 0), (1, 0)), at((7, 0), (7, 0))]);
+        assert_eq!(found(&b).ranges, [at((4, 0), (4, 0)), at((5, 0), (5, 0))]);
+        assert_eq!(found(&format!("{b}\n\n{b}")).ranges, [at((4, 0), (5, 0))]);
+        assert_eq!(found(&format!("{b}\n\n{a}")).ranges, []);
+        // What is no image and has no text is not looked for (as before images).
+        assert_eq!(found("---").ranges, []);
+        // Taken literally, the line is the characters it is, which stand nowhere.
+        assert_eq!(find(&document, &a, true).unwrap().ranges, []);
+    }
+
     #[test]
     fn one_match_or_a_choice() {
         let document = sample();

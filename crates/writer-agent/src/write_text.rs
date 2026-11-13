@@ -393,10 +393,13 @@ pub(crate) fn edit(session: &mut Session<'_>, request: &EditRequest) -> Result<C
     // From the end, so that the places before a replacement are where they were.
     for range in ranges.iter().rev() {
         // An image the new text names again is the one the match held, then any other
-        // of the document.
-        let (first, end) = (range.start.block, range.end.block + 1);
-        let blocks = before.blocks();
-        images.know(&blocks[first..end], &blocks[..first], &blocks[end..]);
+        // of the document. (Asked only of a document that has one: a text without images
+        // is not gone through once more for every place of an edit of all of them.)
+        if before.has_images() {
+            let (first, end) = (range.start.block, range.end.block + 1);
+            let blocks = before.blocks();
+            images.know(&blocks[first..end], &blocks[..first], &blocks[end..]);
+        }
         let mut reader = Reader {
             store: &mut *session.store,
             images: &mut images,

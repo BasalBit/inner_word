@@ -20,7 +20,7 @@
 //! |---|---|
 //! | Look around | [`status`](Library::status), [`tree`](Library::tree), [`search`](Library::search), [`recent`](Library::recent), [`info`](Library::info), [`folder_info`](Library::folder_info), [`resolve`](Library::resolve), [`resolve_document`](Library::resolve_document), [`resolve_folder`](Library::resolve_folder) |
 //! | Read | [`read`](Library::read) (Markdown, plain text or the native JSON; a section; with comments), [`find`](Library::find) |
-//! | Write text | [`create_document`](Library::create_document), [`replace_document`](Library::replace_document), [`edit`](Library::edit), [`insert`](Library::insert) (append, at the start, at a heading), [`replace_section`](Library::replace_section) |
+//! | Write text | [`create_document`](Library::create_document), [`replace_document`](Library::replace_document), [`edit`](Library::edit), [`insert`](Library::insert) (append, at the start, at a heading), [`replace_section`](Library::replace_section), [`add_image`](Library::add_image) |
 //! | Documents | [`rename_document`](Library::rename_document), [`move_document`](Library::move_document), [`duplicate_document`](Library::duplicate_document), [`trash_document`](Library::trash_document), [`restore_document`](Library::restore_document), [`delete_document`](Library::delete_document) |
 //! | Folders | [`create_folder`](Library::create_folder), [`rename_folder`](Library::rename_folder), [`move_folder`](Library::move_folder), [`trash_folder`](Library::trash_folder), [`restore_folder`](Library::restore_folder), [`delete_folder`](Library::delete_folder) |
 //! | Trash | [`trash`](Library::trash), [`empty_trash`](Library::empty_trash) |
@@ -70,6 +70,24 @@
 //! exact piece of text in the rich document, so the formatting and the comments around it
 //! stay; [`Library::replace_document`] brings a document to a new text with as few changes
 //! as possible, so comments stay wherever their text does.
+//!
+//! **An image is a line of Markdown, and stays the image it is.** A document can hold
+//! images: blocks that name stored pictures. Read as Markdown, an image is the line
+//! `![description](image:<id>)`, and [`DocumentText::images`] lists what the line does not
+//! say (how wide the image is drawn, where it stands on its line). Every operation keeps
+//! the images it does not change, with their size: a text that is written back keeps an
+//! image where its line stays and moves it where its line moves, [`Library::edit`] refuses
+//! an old text that runs across an image unless the text names it, and a text that leaves
+//! the line out removes the image, which [`ContentChanged::images_removed`] counts (the
+//! version kept before the change has it).
+//!
+//! **A file an agent names is read by whoever was asked.** [`Library::add_image`] adds an
+//! image from a file, and the Markdown of every operation that takes text may name one
+//! (`![what it shows](/Users/ada/harbour.jpg)`). The method of [`Library`] reads the file
+//! in the calling process, makes of it what the library stores (`writer_image::prepare`)
+//! and hands the bytes on with the request ([`AttachedImage`]); the app, when it is the
+//! one that carries the request out, opens no path. A file that cannot be used is a
+//! warning in the result and the image stays a link (for `add_image`: an error).
 //!
 //! # Naming things
 //!

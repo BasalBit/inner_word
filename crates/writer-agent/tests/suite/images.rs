@@ -1478,6 +1478,72 @@ fn the_app_stores_what_a_request_brings_and_opens_no_path() {
     assert_eq!(fx.store().image_count().unwrap(), 1);
 }
 
+/// A document can name a picture the library does not have (its `images.db` was lost, or
+/// the document came from elsewhere). The image stays in the document for every reader
+/// and through every change; only the picture is missing.
+#[test]
+fn an_image_whose_picture_is_missing_stays_in_the_document() {
+    let fx = closed_fixture();
+    let (doc, id) = harbour(&fx);
+    let before = fx.document(doc.id);
+    // The pictures are gone; the documents are what they were.
+    for ending in ["", "-wal", "-shm"] {
+        let mut file = fx.images_path().into_os_string();
+        file.push(ending);
+        std::fs::remove_file(file).ok();
+    }
+    assert_eq!(fx.store().image_count().unwrap(), 0);
+    let read = fx
+        .library
+        .read(&ReadRequest {
+            document: doc.id.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(read.content, markdown_of(&line(DUSK, &id)));
+    assert_eq!(read.images.len(), 1);
+    let image = &read.images[0];
+    assert!(image.missing && image.format.is_none(), "{image:?}");
+    assert_eq!(
+        (image.width_percent, image.align.as_str(), image.pixels),
+        (37, "center", (800, 500))
+    );
+    // Written back, edited beside and named again, it is the image it was.
+    assert!(!replace(&fx, doc.id, &read.content).written.changed);
+    edit(&fx, doc.id, "One.", "One, changed.").unwrap();
+    let moved = replace(
+        &fx,
+        doc.id,
+        &format!(
+            "# Harbour\n\nOne, changed.\n\n{}\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n",
+            line(DUSK, &id)
+        ),
+    );
+    assert_eq!((moved.images_added, moved.images_removed), (0, 0));
+    assert_eq!(moved.warnings, [] as [&str; 0]);
+    let (index, image, alignment) = fx.images(doc.id).remove(0);
+    assert_eq!(index, 2);
+    assert_as_it_was(&image, alignment, &id);
+    assert_eq!(before.blocks()[1].as_image(), Some(&image));
+    // An export says what the picture shows and writes no file for it.
+    let exported = fx
+        .library
+        .export(&ExportRequest {
+            document: Some(doc.id.into()),
+            path: fx.dir.path().join("out/harbour.md"),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(exported.assets, [] as [std::path::PathBuf; 0]);
+    assert!(
+        std::fs::read_to_string(&exported.path)
+            .unwrap()
+            .contains(DUSK)
+    );
+    // Nothing of this made a file of pictures again.
+    assert!(!fx.images_path().exists());
+}
+
 // ----- export -----------------------------------------------------------------------------------
 
 #[test]

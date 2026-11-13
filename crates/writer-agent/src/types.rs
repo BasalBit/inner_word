@@ -1079,6 +1079,14 @@ pub struct DocumentCreated {
 ///
 /// The settings of the document (page, font, language) stay.
 ///
+/// **Images.** An image of the document is a line `![description](image:<id>)` in its
+/// Markdown. Where the new text has that line, the image stays as it is (its width and
+/// its place on the line are not in the text and are kept; other words between the
+/// brackets become its description), also when the line stands somewhere else now. Where
+/// the line is left out, the image is removed: [`ContentChanged::images_removed`] counts
+/// it and a warning says that the version kept before the change has it. A local path in
+/// the place of `image:<id>` brings an image in from a file ([`AttachedImage`]).
+///
 /// **Comments.** A thread stays anchored to its text wherever that text is unchanged.
 /// Where words are replaced by other words, a thread that began at the first of the
 /// replaced words stays on the replacement; a thread on words that are removed without a
@@ -1122,6 +1130,15 @@ pub struct ReplaceDocumentRequest {
 /// front of a heading, list markers, a blank line between paragraphs) finds its place
 /// too; [`ContentChanged::matched_as`] says which it was. [`Library::find`](crate::Library::find)
 /// shows what a text would match without changing anything.
+///
+/// **Images.** In the text that is matched an image is an empty line, so a text that
+/// names the paragraph before an image and the one after it would be found across the
+/// image. Such a match is refused ([`Error::Invalid`](crate::Error::Invalid)), so that no
+/// image goes without a word about it: replace the text before and after the image
+/// separately, or give `old_text` as Markdown with the line of the image in it
+/// (`![description](image:<id>)`: between its lines, at one of its ends, or alone). Then
+/// the image is part of what is replaced, and `new_text` says what becomes of it: named
+/// again it stays as it was, left out it is removed.
 ///
 /// **How many matches.** Exactly one, or the request fails: with
 /// [`Error::NoMatch`](crate::Error::NoMatch) for none, with

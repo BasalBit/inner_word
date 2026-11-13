@@ -556,19 +556,17 @@ fn take_message(run: &Weak<RefCell<CheckRun>>, body: &str, frame_url: &str) {
             load.block(text("url"), text("directive"));
             log.touch();
         }
-        Some("error") => {
-            if load.outcome.script_errors.len() < SCRIPT_ERRORS {
-                let source = text("source");
-                let line = message.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                let place = match (source.is_empty(), line) {
-                    (true, _) => String::new(),
-                    (false, 0) => format!(" ({})", display(&source)),
-                    (false, line) => format!(" ({}:{line})", display(&source)),
-                };
-                load.outcome
-                    .script_errors
-                    .push(format!("{}{place}", text("message")));
-            }
+        Some("error") if load.outcome.script_errors.len() < SCRIPT_ERRORS => {
+            let source = text("source");
+            let line = message.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+            let place = match (source.is_empty(), line) {
+                (true, _) => String::new(),
+                (false, 0) => format!(" ({})", display(&source)),
+                (false, line) => format!(" ({}:{line})", display(&source)),
+            };
+            load.outcome
+                .script_errors
+                .push(format!("{}{place}", text("message")));
         }
         _ => {}
     }
@@ -905,13 +903,15 @@ pub fn check_blocking(input: CheckInput) -> CheckOutcome {
 // ---------------------------------------------------------------------------
 // A page printed offscreen.
 
+/// What a print hands its PDF (or why there is none) to.
+type PrintDone = Box<dyn FnOnce(Result<PrintedPdf, String>)>;
+
 /// Loads the page as `check` loads it (the same configuration, muted, a data store of
 /// its own, an offscreen window), waits until it has settled (at most `settle_max`
 /// after `load`), then prints it with WebKit's print operation as a save job on the
 /// user's default paper. Main thread; `done` as for `check`.
 pub fn print_offscreen(input: PdfInput, done: impl FnOnce(Result<PrintedPdf, String>) + 'static) {
-    type Done = Box<dyn FnOnce(Result<PrintedPdf, String>)>;
-    let done: Done = Box::new(done);
+    let done: PrintDone = Box::new(done);
     if !ns::on_main_thread() {
         done(Err(
             "the page was asked to print off the main thread".to_string()
@@ -981,7 +981,7 @@ pub fn print_offscreen(input: PdfInput, done: impl FnOnce(Result<PrintedPdf, Str
             if let Some(load) = run.borrow_mut().current.as_mut() {
                 load.navigation = retain(navigation);
             }
-            let slot: Rc<RefCell<Option<Done>>> = Rc::new(RefCell::new(Some(done)));
+            let slot: Rc<RefCell<Option<PrintDone>>> = Rc::new(RefCell::new(Some(done)));
             let ticking = run.clone();
             let timer = ns::every(POLL, move || print_tick(&ticking, &slot));
             run.borrow_mut().timer = Some(timer);
@@ -989,7 +989,7 @@ pub fn print_offscreen(input: PdfInput, done: impl FnOnce(Result<PrintedPdf, Str
     });
 }
 
-fn print_tick(run: &Run, slot: &Rc<RefCell<Option<Box<dyn FnOnce(Result<PrintedPdf, String>)>>>>) {
+fn print_tick(run: &Run, slot: &Rc<RefCell<Option<PrintDone>>>) {
     enum Step {
         Wait,
         Print,

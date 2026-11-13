@@ -15,6 +15,10 @@
 //!   ([`BLOCK_RULES`]);
 //! * WebRTC and media devices are off (private switches, which [`available`] asks
 //!   for: neither the policy nor the rule list sees ICE);
+//! * the data stores open no connection ahead of a navigation (WebKit preconnects to
+//!   the host of a link while it asks the policy, also for a link a script clicks:
+//!   `allowsServerPreconnect`, private, also asked for by [`available`]), and DNS
+//!   prefetching is off;
 //! * a navigation goes only to the page's own files; a link to another site opens in
 //!   the reader's browser only when the reader clicked it or pressed a key on it in the
 //!   second before ([`PageEvents::open_externally`]); no window, download, panel,

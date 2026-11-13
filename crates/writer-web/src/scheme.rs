@@ -134,7 +134,7 @@ pub(crate) fn new_handler(state: SchemeState) -> Id {
     }
 }
 
-unsafe fn state_of<'a>(handler: &'a Object) -> Option<&'a SchemeState> {
+unsafe fn state_of(handler: &Object) -> Option<&SchemeState> {
     // SAFETY: the instance variable `new_handler` set; it lives until `dealloc`.
     unsafe {
         let state = *handler.get_ivar::<*mut c_void>(STATE);

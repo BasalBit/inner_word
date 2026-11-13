@@ -19,7 +19,7 @@ use std::{
     ffi::c_void,
     io::{Read, Write},
     net::{TcpListener, UdpSocket},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     rc::Rc,
     sync::{
@@ -240,7 +240,7 @@ fn scratch() -> PathBuf {
     dir
 }
 
-fn input(source: Arc<dyn PageSource>, entry: &str, also: &[&str], rules: &PathBuf) -> CheckInput {
+fn input(source: Arc<dyn PageSource>, entry: &str, also: &[&str], rules: &Path) -> CheckInput {
     CheckInput {
         source,
         entry: entry.to_string(),
@@ -248,7 +248,7 @@ fn input(source: Arc<dyn PageSource>, entry: &str, also: &[&str], rules: &PathBu
         settle_min: Duration::from_millis(1000),
         settle_max: Duration::from_millis(3000),
         limit: Duration::from_secs(60),
-        rules_dir: rules.clone(),
+        rules_dir: rules.to_path_buf(),
     }
 }
 
@@ -416,7 +416,7 @@ impl Host {
         &self,
         files: Vec<(&str, ServedFile)>,
         entry: &str,
-        rules: &PathBuf,
+        rules: &Path,
     ) -> (WebPage, Rc<Events>) {
         let events = Rc::new(Events::default());
         let page = unsafe {
@@ -426,7 +426,7 @@ impl Host {
                     host: "page-12".to_string(),
                     entry: entry.to_string(),
                     source: source(files),
-                    rules_dir: rules.clone(),
+                    rules_dir: rules.to_path_buf(),
                     appearance: Appearance::Light,
                     background: (0.98, 0.97, 0.95),
                 },
@@ -612,7 +612,7 @@ fn main() -> ExitCode {
     finish(report, &dir)
 }
 
-fn finish(report: Report, dir: &PathBuf) -> ExitCode {
+fn finish(report: Report, dir: &Path) -> ExitCode {
     std::fs::remove_dir_all(dir).ok();
     if report.failures.is_empty() {
         println!("webkit: every check held");
@@ -626,7 +626,7 @@ fn finish(report: Report, dir: &PathBuf) -> ExitCode {
     }
 }
 
-fn the_rule_list_is_compiled_once(report: &mut Report, dir: &PathBuf) {
+fn the_rule_list_is_compiled_once(report: &mut Report, dir: &Path) {
     let rules = dir.join("rules-twice");
     for round in 0..2 {
         testing::forget_rule_lists();
@@ -655,7 +655,7 @@ fn the_rule_list_is_compiled_once(report: &mut Report, dir: &PathBuf) {
     );
 }
 
-fn the_probe_blocks_and_names_every_kind(report: &mut Report, server: &Server, rules: &PathBuf) {
+fn the_probe_blocks_and_names_every_kind(report: &mut Report, server: &Server, rules: &Path) {
     let page = format!(
         r#"<!doctype html><html><head><title>Probe</title>
 <link rel="stylesheet" href="{css}">
@@ -691,7 +691,7 @@ fn the_probe_blocks_and_names_every_kind(report: &mut Report, server: &Server, r
         audio = server.url("s.mp3"),
         frame = server.url("c"),
         fetch = server.url("d"),
-        ws = format!("ws://127.0.0.1:{}/e", server.port),
+        ws = server.url("e").replacen("http:", "ws:", 1),
         es = server.url("es"),
         beacon = server.url("beacon"),
         xhr = server.url("xhr"),
@@ -778,7 +778,7 @@ fn the_probe_blocks_and_names_every_kind(report: &mut Report, server: &Server, r
     );
 }
 
-fn webrtc_is_off(report: &mut Report, rules: &PathBuf) {
+fn webrtc_is_off(report: &mut Report, rules: &Path) {
     let udp = Udp::start();
     let page = format!(
         r#"<!doctype html><title>RTC</title><p id="rtc">rtc not asked</p>
@@ -829,7 +829,7 @@ fn webrtc_is_off(report: &mut Report, rules: &PathBuf) {
     );
 }
 
-fn an_svg_frame_is_never_silent(report: &mut Report, server: &Server, rules: &PathBuf) {
+fn an_svg_frame_is_never_silent(report: &mut Report, server: &Server, rules: &Path) {
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><script>fetch('{}').catch(() => {{}});</script><rect width="10" height="10"/></svg>"#,
         server.url("fromsvg")
@@ -866,7 +866,7 @@ fn an_svg_frame_is_never_silent(report: &mut Report, server: &Server, rules: &Pa
     );
 }
 
-fn the_text_is_read_whole(report: &mut Report, rules: &PathBuf) {
+fn the_text_is_read_whole(report: &mut Report, rules: &Path) {
     let page = r#"<!doctype html><html><head><title>Before</title></head><body>
 <h1>Heading One</h1>
 <p>Shown paragraph.</p>
@@ -963,7 +963,7 @@ fn the_text_is_read_whole(report: &mut Report, rules: &PathBuf) {
     );
 }
 
-fn nothing_plays_in_the_check(report: &mut Report, rules: &PathBuf) {
+fn nothing_plays_in_the_check(report: &mut Report, rules: &Path) {
     let page = r#"<!doctype html><title>Audio</title><audio id="a" src="silence.wav" autoplay></audio><p id="state">not asked</p>
 <script>
  const a = document.getElementById('a');
@@ -1010,7 +1010,7 @@ impl PageSource for Slow {
     }
 }
 
-fn settling_and_the_limit(report: &mut Report, _server: &Server, rules: &PathBuf) {
+fn settling_and_the_limit(report: &mut Report, _server: &Server, rules: &Path) {
     // A page that keeps asking for its own files settles at settle_max.
     let busy = r#"<!doctype html><title>Busy</title><p>busy</p>
 <script>setInterval(() => fetch('tick.txt').catch(() => {}), 100);</script>"#;
@@ -1071,7 +1071,7 @@ fn settling_and_the_limit(report: &mut Report, _server: &Server, rules: &PathBuf
     );
 }
 
-fn the_view(report: &mut Report, server: &Server, rules: &PathBuf) {
+fn the_view(report: &mut Report, server: &Server, rules: &Path) {
     let page = format!(
         r#"<!doctype html><html><head><title>View</title>
 <style>body {{ margin: 0; font: 16px sans-serif; }} a {{ display: inline-block; padding: 20px; }}</style></head>
@@ -1466,7 +1466,7 @@ fn the_view(report: &mut Report, server: &Server, rules: &PathBuf) {
                 host: "page-13".to_string(),
                 entry: "index.html".to_string(),
                 source: source(vec![("index.html", html("<p>orphan</p>"))]),
-                rules_dir: rules.clone(),
+                rules_dir: rules.to_path_buf(),
                 appearance: Appearance::System,
                 background: (1., 1., 1.),
             },
@@ -1532,7 +1532,7 @@ fn is_within(view: Id, ancestor: Id) -> bool {
     }
 }
 
-fn pages_switched_during_loads(report: &mut Report, rules: &PathBuf) {
+fn pages_switched_during_loads(report: &mut Report, rules: &Path) {
     // Media make many range requests; a page that goes while they are read must not
     // be answered (answering a stopped task raises an exception).
     let page = r#"<!doctype html><title>Media</title>
@@ -1559,7 +1559,7 @@ fn pages_switched_during_loads(report: &mut Report, rules: &PathBuf) {
                     host: format!("page-{round}"),
                     entry: "index.html".to_string(),
                     source: Arc::new(slow),
-                    rules_dir: rules.clone(),
+                    rules_dir: rules.to_path_buf(),
                     appearance: Appearance::Light,
                     background: (1., 1., 1.),
                 },
@@ -1582,7 +1582,7 @@ fn pages_switched_during_loads(report: &mut Report, rules: &PathBuf) {
     );
 }
 
-fn printed_offscreen(report: &mut Report, rules: &PathBuf) {
+fn printed_offscreen(report: &mut Report, rules: &Path) {
     let page = "<!doctype html><title>Printed</title><h1>A page on paper</h1><p>Its words.</p>";
     let slot: Rc<RefCell<Option<Result<writer_web::PrintedPdf, String>>>> =
         Rc::new(RefCell::new(None));
@@ -1593,7 +1593,7 @@ fn printed_offscreen(report: &mut Report, rules: &PathBuf) {
             entry: "index.html".to_string(),
             settle_max: Duration::from_millis(1000),
             limit: Duration::from_secs(30),
-            rules_dir: rules.clone(),
+            rules_dir: rules.to_path_buf(),
         },
         move |result| *answer.borrow_mut() = Some(result),
     );
@@ -1620,7 +1620,7 @@ fn printed_offscreen(report: &mut Report, rules: &PathBuf) {
         entry: "index.html".to_string(),
         settle_max: Duration::from_millis(500),
         limit: Duration::from_secs(30),
-        rules_dir: rules.clone(),
+        rules_dir: rules.to_path_buf(),
     });
     report.check(
         matches!(&blocking, Ok(pdf) if pdf.pages >= 1),
@@ -1632,7 +1632,7 @@ fn printed_offscreen(report: &mut Report, rules: &PathBuf) {
         entry: "missing.html".to_string(),
         settle_max: Duration::from_millis(300),
         limit: Duration::from_secs(10),
-        rules_dir: rules.clone(),
+        rules_dir: rules.to_path_buf(),
     });
     report.check(
         matches!(&failed, Err(why) if why.contains("missing.html")),

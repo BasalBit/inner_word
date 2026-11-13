@@ -315,13 +315,11 @@ pub fn png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
         out.extend(crc32(&body).to_be_bytes());
     }
     // Every row: the filter "none", then its pixels.
-    let mut rows = Vec::new();
-    for _ in 0..height {
-        rows.push(0);
-        for _ in 0..width {
-            rows.extend(rgb);
-        }
+    let mut row = vec![0u8];
+    for _ in 0..width {
+        row.extend(rgb);
     }
+    let rows = row.repeat(height as usize);
     // A zlib stream of stored blocks, and the checksum of what they hold.
     let mut packed = vec![0x78, 0x01];
     let mut blocks = rows.chunks(65_535).peekable();

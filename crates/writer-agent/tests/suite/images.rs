@@ -191,7 +191,7 @@ fn an_image_is_added_from_a_file_and_read_as_a_line_of_markdown() {
         })
         .unwrap();
     assert_eq!(read.content, format!("{HARBOUR}\n{}\n", line(DUSK, &id)));
-    assert_eq!(read.images, [image.clone()]);
+    assert_eq!(read.images, std::slice::from_ref(&image));
     // As plain text: what it shows, on a line of its own. As JSON: the block.
     let text = fx.read(doc.id, TextFormat::PlainText);
     assert!(text.ends_with(&format!("Five.\n\n{DUSK}\n")), "{text}");
@@ -209,7 +209,7 @@ fn an_image_is_added_from_a_file_and_read_as_a_line_of_markdown() {
             })
             .unwrap()
     };
-    assert_eq!(section("Harbour").images, [image.clone()]);
+    assert_eq!(section("Harbour").images, std::slice::from_ref(&image));
     // The search of the library and the counts know nothing of an image.
     assert_eq!(read.document.words, doc.words);
 
@@ -239,7 +239,7 @@ fn an_image_is_added_from_a_file_and_read_as_a_line_of_markdown() {
     assert_eq!(first.block, 0);
     // Without a width: the picture's own size on the page (200 points of a column of
     // about 451), in the middle of the line. Without a description: none.
-    let page = fx.document(notes.id).settings().page.clone();
+    let page = fx.document(notes.id).settings().page;
     let own = Image::new(
         writer_core::ImageId::parse(&small_id).unwrap(),
         (200, 100),
@@ -317,7 +317,7 @@ fn an_image_is_never_stored_taller_than_a_page_and_the_result_says_the_width() {
             .image
             .unwrap()
     };
-    let page = fx.document(doc.id).settings().page.clone();
+    let page = fx.document(doc.id).settings().page;
     let image = Image::new(
         writer_core::ImageId::parse(&id_of(&tall)).unwrap(),
         (100, 1000),
@@ -720,7 +720,7 @@ fn an_image_that_is_named_again_comes_as_the_document_has_it() {
     assert_eq!(brought.images_added, 1);
     assert_eq!(brought.warnings, [] as [&str; 0]);
     let (_, image, alignment) = fx.images(other.id).remove(0);
-    let page = fx.document(other.id).settings().page.clone();
+    let page = fx.document(other.id).settings().page;
     assert_eq!(image.width, image.original_width(&page));
     assert_eq!(
         image.width,
@@ -1184,7 +1184,7 @@ fn a_file_named_in_markdown_becomes_an_image_and_what_cannot_stays_a_link() {
         Some(std::fs::read(&red).unwrap())
     );
     // An image that Markdown brings in stands at the left, at its own size on the page.
-    let page = fx.document(doc).settings().page.clone();
+    let page = fx.document(doc).settings().page;
     for (_, image, alignment) in fx.images(doc) {
         assert_eq!(alignment, Alignment::Left);
         assert_eq!(image.width, image.original_width(&page));
@@ -1568,11 +1568,11 @@ fn an_export_takes_the_pictures_with_it() {
         .join("Chapter one images")
         .join(format!("image-{}.png", &id[..8]));
     let tried = export("Chapter one.md", true);
-    assert_eq!(tried.assets, [picture.clone()]);
+    assert_eq!(tried.assets, std::slice::from_ref(&picture));
     assert!(!out.exists(), "a dry run wrote something");
     let markdown = export("Chapter one.md", false);
     assert_eq!(markdown.format, ExportFormat::Markdown);
-    assert_eq!(markdown.assets, [picture.clone()]);
+    assert_eq!(markdown.assets, std::slice::from_ref(&picture));
     assert_eq!(std::fs::read(&picture).unwrap(), bytes);
     let written = std::fs::read_to_string(&markdown.path).unwrap();
     assert_eq!(markdown.bytes, written.len() as u64);
@@ -1602,7 +1602,7 @@ fn an_export_takes_the_pictures_with_it() {
     assert_eq!(fx.images(back.document.id)[0].1.id.to_string(), id);
     // Once more over the same files: the text is replaced, the picture is what it was.
     let again = export("Chapter one.md", false);
-    assert_eq!(again.assets, [picture.clone()]);
+    assert_eq!(again.assets, std::slice::from_ref(&picture));
     let names: Vec<String> = std::fs::read_dir(picture.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())

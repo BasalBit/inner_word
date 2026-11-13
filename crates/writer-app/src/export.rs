@@ -6,18 +6,36 @@
 //! native save panel with a suggested name; the result (or the error) is
 //! reported in a toast.
 //!
-//! This module is the only place that talks to `writer-export`.
+//! # Images
+//!
+//! The exporters get the pictures of the library
+//! ([`crate::images::StoreImages`]). A Word document holds its pictures. A
+//! **Markdown file** links them: they are written as files into a folder
+//! beside it, named after the file as it was suggested
+//! (`Chapter 2.md` and `Chapter 2 images/image-3f2a9c1b.png`;
+//! [`PreparedExport::assets`]); when the file is given another name in
+//! the save panel the folder keeps its own, and the links, which are
+//! relative, stay right. **Markdown for the clipboard** names each image
+//! as the library does (`![description](image:<id>)`): there is no place
+//! to put a file. Plain text has the description of each image on a line
+//! of its own.
+//!
+//! This module is the only place that exports with `writer-export`.
 
 use std::path::{Path, PathBuf};
 
 use gpui::{App, AppContext as _, ClipboardItem, Context, SharedString, WeakEntity, Window};
 use writer_core::Document;
-use writer_export::{ExportFormat, ExportOptions, ExportSource, suggested_file_name};
+use writer_export::{
+    ExportAsset, ExportFormat, ExportOptions, ExportSource, MarkdownImages, export_package,
+    images_dir_name, suggested_file_name,
+};
 use writer_library::{DocumentId, DocumentMeta, FolderId, FolderNode};
 use writer_ui::{IconName, Picker, PickerDelegate, PickerEntry, PickerItem, Toast};
 
 use crate::{
     document_io::load_document,
+    images::StoreImages,
     settings::keys,
     workspace::{Workspace, session_title},
 };
@@ -160,8 +178,54 @@ pub struct PreparedExport {
     pub format: ExportFormat,
     /// The file's bytes (UTF-8 text for Markdown and plain text).
     pub bytes: Vec<u8>,
+    /// The files that go beside it: the pictures a Markdown file links,
+    /// each at its path relative to the folder of the file
+    /// (`Chapter 2 images/image-3f2a9c1b.png`). Empty for every other
+    /// export, and for Markdown that goes to the clipboard.
+    pub assets: Vec<ExportAsset>,
     /// How many documents it holds.
     pub documents: usize,
+}
+
+impl PreparedExport {
+    /// The folder the pictures of this export go to, beside the file:
+    /// `None` when it has none.
+    pub fn pictures_folder(&self) -> Option<&str> {
+        let first = self.assets.first()?;
+        first.path.split('/').next()
+    }
+}
+
+/// The sentence a toast adds for an export that wrote `pictures` picture
+/// files into the folder `folder` beside the file, for an export of
+/// `documents` documents.
+pub fn pictures_sentence(pictures: usize, folder: &str, documents: usize) -> String {
+    let whose = if documents == 1 { "Its" } else { "Their" };
+    if pictures == 1 {
+        format!("{whose} 1 picture is in \u{201c}{folder}\u{201d}.")
+    } else {
+        format!("{whose} {pictures} pictures are in \u{201c}{folder}\u{201d}.")
+    }
+}
+
+/// Writes an exported file and, after it, the files that go beside it
+/// (each folder is made when it is not there).
+fn write_export(path: &Path, bytes: &[u8], assets: &[ExportAsset]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)?;
+    let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    for asset in assets {
+        // The path is relative and has `/` between its parts.
+        let target = asset
+            .path
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+            .fold(folder.to_path_buf(), |target, part| target.join(part));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &asset.bytes)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -327,10 +391,23 @@ fn collect_folder(node: &FolderNode, out: &mut Vec<DocumentMeta>) {
     }
 }
 
-fn export_options(created: i64, modified: i64) -> ExportOptions {
+/// The options of an export that is called `file_name` and goes to
+/// `destination`: a Markdown file links its pictures in the folder beside
+/// it, everything else names them as the library does.
+fn export_options(
+    created: i64,
+    modified: i64,
+    file_name: &str,
+    destination: ExportDestination,
+) -> ExportOptions {
     let mut options = ExportOptions::default();
     options.docx.created = created;
     options.docx.modified = modified;
+    if destination == ExportDestination::File {
+        options.markdown.images = MarkdownImages::Files {
+            dir: images_dir_name(file_name),
+        };
+    }
     options
 }
 
@@ -426,16 +503,31 @@ impl Workspace {
         self.prepare_export_of(ExportTarget::Open, scope, format, cx)
     }
 
-    /// Builds the bytes of an export of `target`: the document it names
-    /// (`scope` [`ExportScope::Document`]) or the folder it names or its
-    /// document is in (`scope` [`ExportScope::Folder`]). The open document
-    /// is saved first and exported as it is on screen; every other
-    /// document is read from the library.
+    /// Builds the bytes of an export of `target` as a file: the document
+    /// it names (`scope` [`ExportScope::Document`]) or the folder it names
+    /// or its document is in (`scope` [`ExportScope::Folder`]). The open
+    /// document is saved first and exported as it is on screen; every
+    /// other document is read from the library. The pictures of a
+    /// Markdown file come with it ([`PreparedExport::assets`]).
     pub fn prepare_export_of(
         &mut self,
         target: ExportTarget,
         scope: ExportScope,
         format: ExportFormat,
+        cx: &mut Context<Self>,
+    ) -> Result<PreparedExport, String> {
+        self.prepare_export_for(target, scope, format, ExportDestination::File, cx)
+    }
+
+    /// [`Workspace::prepare_export_of`] for where the export goes: for
+    /// the clipboard Markdown names its images as the library does and
+    /// nothing goes beside it.
+    pub fn prepare_export_for(
+        &mut self,
+        target: ExportTarget,
+        scope: ExportScope,
+        format: ExportFormat,
+        destination: ExportDestination,
         cx: &mut Context<Self>,
     ) -> Result<PreparedExport, String> {
         let open = self.open_document_id();
@@ -446,6 +538,7 @@ impl Workspace {
         };
         self.flush(cx);
         let library = self.library.read(cx);
+        let images = StoreImages::new(library.store());
         let meta = subject
             .map(|id| library.document_meta(id).map_err(|error| error.to_string()))
             .transpose()?;
@@ -465,13 +558,17 @@ impl Workspace {
             (ExportScope::Document, Some(meta)) => {
                 let document = text_of(meta.id)?;
                 let title = session_title(&meta.title);
-                let source = ExportSource::single(title.clone(), &document);
-                let options = export_options(meta.created_at, meta.updated_at);
+                let source = ExportSource::single(title.clone(), &document).with_images(&images);
+                let file_name = suggested_file_name(source.title(), format);
+                let options =
+                    export_options(meta.created_at, meta.updated_at, &file_name, destination);
+                let exported = export_package(&source, format, &options);
                 Ok(PreparedExport {
-                    file_name: suggested_file_name(source.title(), format),
+                    file_name,
                     title,
                     format,
-                    bytes: writer_export::export(&source, format, &options),
+                    bytes: exported.bytes,
+                    assets: exported.assets,
                     documents: 1,
                 })
             }
@@ -506,16 +603,17 @@ impl Workspace {
                     parts
                         .iter()
                         .map(|(title, document)| (title.as_str(), document)),
-                );
+                )
+                .with_images(&images);
+                let file_name = suggested_file_name(source.title(), format);
+                let options = export_options(created, modified, &file_name, destination);
+                let exported = export_package(&source, format, &options);
                 Ok(PreparedExport {
-                    file_name: suggested_file_name(source.title(), format),
+                    file_name,
                     title: name,
                     format,
-                    bytes: writer_export::export(
-                        &source,
-                        format,
-                        &export_options(created, modified),
-                    ),
+                    bytes: exported.bytes,
+                    assets: exported.assets,
                     documents: parts.len(),
                 })
             }
@@ -537,7 +635,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_modal(window, cx);
-        let prepared = match self.prepare_export_of(target, choice.scope, choice.format, cx) {
+        let prepared = match self.prepare_export_for(
+            target,
+            choice.scope,
+            choice.format,
+            choice.destination,
+            cx,
+        ) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.toast_error(format!("Could not export: {error}"), cx);
@@ -594,11 +698,17 @@ impl Workspace {
                         (None, None) => return,
                     };
                     let path = with_extension(chosen, prepared.format);
+                    // The pictures of a Markdown file: how many, and the
+                    // folder beside the file they go to.
+                    let pictures = prepared
+                        .pictures_folder()
+                        .map(|folder| (prepared.assets.len(), folder.to_string()));
                     let bytes = prepared.bytes;
+                    let assets = prepared.assets;
                     let written = cx
                         .background_spawn({
                             let path = path.clone();
-                            async move { std::fs::write(&path, bytes) }
+                            async move { write_export(&path, &bytes, &assets) }
                         })
                         .await;
                     this.update(cx, |this, cx| match written {
@@ -616,11 +726,16 @@ impl Workspace {
                             } else {
                                 format!("{} documents", prepared.documents)
                             };
-                            this.show_toast(
-                                Toast::new(format!("Exported {what} to {}", short_path(&path)))
-                                    .success(),
-                                cx,
-                            );
+                            let mut said = format!("Exported {what} to {}", short_path(&path));
+                            if let Some((count, folder)) = &pictures {
+                                said.push_str(". ");
+                                said.push_str(&pictures_sentence(
+                                    *count,
+                                    folder,
+                                    prepared.documents,
+                                ));
+                            }
+                            this.show_toast(Toast::new(said).success(), cx);
                         }
                         Err(error) => this.toast_error(
                             format!("Could not write {}: {error}", short_path(&path)),

@@ -48,6 +48,15 @@ fn main() {
                     cx,
                 );
             }
+            // Pictures: "Insert > Image…" asks for files in the macOS open
+            // panel, and a paste looks at the system pasteboard for a
+            // picture GPUI's clipboard does not show (a file copied in
+            // Finder, "Copy Image" in a browser). A scripted run opens no
+            // panel and leaves the pasteboard alone: it is the user's.
+            if script.is_none() {
+                writer_app::images::use_open_panel(cx);
+                writer_app::pasteboard::use_system(cx);
+            }
             // kill, a closed terminal and ctrl-c quit like cmd-q: the open
             // document is saved first.
             writer_app::signals::quit_on_termination_signals(cx);
@@ -158,6 +167,9 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
     if welcome::demo_seed_requested() {
         seed_demo(&library, cx);
     }
+    // The bytes of images that nothing names any more: looked at a moment
+    // after the launch and once a day from then on, in the background.
+    writer_app::images::collect_in_background(&library, cx);
     match window::open_main_window(library, cx) {
         Ok(handle) => {
             // Agents change the library through the app while it is open:

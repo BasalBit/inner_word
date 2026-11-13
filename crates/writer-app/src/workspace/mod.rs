@@ -68,6 +68,7 @@
 
 mod assistant;
 mod fonts;
+mod images;
 mod live;
 mod measure;
 mod menus;
@@ -113,6 +114,7 @@ use crate::{
 };
 
 pub use assistant::{library_attachments, library_tool_server};
+pub use images::{SELECT_AN_IMAGE_FIRST, is_image_command};
 pub use live::{
     AgentChanges, ChangeCost, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence,
 };
@@ -248,6 +250,9 @@ pub struct Workspace {
     pub(crate) zoom: zoom::ZoomState,
     /// The print job that is preparing or in the print panel.
     pub(crate) print: print::PrintState,
+    /// Where the pictures of the documents are: the provider the editor
+    /// has, which a print and an export ask too.
+    pub(crate) images: std::rc::Rc<crate::images::LibraryImages>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -312,6 +317,23 @@ impl Workspace {
         });
         let toast_layer = cx.new(|_| ToastLayer::new());
         ToastLayer::set_global(&toast_layer, cx);
+        // The pictures of the documents: the editor asks the library for
+        // them through this, and stores what is inserted, pasted or
+        // dropped through it.
+        let images = crate::images::LibraryImages::new(library.clone(), &toast_layer, cx);
+        editor.update(cx, |editor, cx| {
+            editor.set_image_provider(Some(images.clone()), cx);
+        });
+        // A picture that was stored may be one the editor had found
+        // missing: it asks again.
+        images.on_stored({
+            let editor = editor.downgrade();
+            move |cx| {
+                editor
+                    .update(cx, |editor, cx| editor.images_changed(cx))
+                    .ok();
+            }
+        });
 
         // Everything that extends the editor attaches to the one editor
         // entity here and follows `DocumentReplaced` by itself.
@@ -464,6 +486,7 @@ impl Workspace {
             text_commands: text_commands(),
             zoom,
             print: print::PrintState::default(),
+            images,
             _subscriptions: subscriptions,
         };
         this.extend_the_menus_of_other_crates(cx);
@@ -779,11 +802,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.session.is_none()
-            || self.editor.read(cx).is_read_only()
-            || self.keyboard_in_text(window)
-        {
+        if self.session.is_none() || self.editor.read(cx).is_read_only() {
             cx.propagate();
+            return;
+        }
+        if self.keyboard_in_text(window) {
+            // A command that is only about an image, and no image took
+            // it: the writer is told what it needs.
+            if !self.image_command_came_this_far(action, window, cx) {
+                cx.propagate();
+            }
             return;
         }
         self.dismiss_modal(window, cx);

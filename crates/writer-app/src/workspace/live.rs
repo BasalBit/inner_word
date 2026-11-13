@@ -482,6 +482,11 @@ impl Workspace {
             return executed.answer;
         }
         let changed = Instant::now();
+        // The request may have brought the bytes of an image the editor
+        // had found missing (with a change to this document or to another
+        // one): it asks again.
+        self.editor
+            .update(cx, |editor, cx| editor.images_changed(cx));
         let adopted = self.take_over_open_document(&executed.changes, window, cx);
         self.note_agent_change(request, &executed.changes, &before, adopted, cx);
         self.live.cost = Some(ChangeCost {

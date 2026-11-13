@@ -927,6 +927,9 @@ impl Workspace {
         let loaded = load_document(&stored.content);
         self.editor.update(cx, |editor, cx| {
             editor.set_document(loaded.document, cx);
+            // The version may name images that were found missing while
+            // another text was on screen: they are asked for again.
+            editor.images_changed(cx);
         });
         self.character_count = None;
         self.limit_counter = None;

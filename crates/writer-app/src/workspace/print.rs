@@ -16,20 +16,27 @@
 //! 1. The pass takes a copy of the document. From here on the job is
 //!    **preparing** ([`Printing::Preparing`]); what is typed or changed by
 //!    an agent meanwhile is not in the pages.
-//! 2. A task of the main thread makes the pages in slices
+//! 2. The pictures of the document are read from the library, in the
+//!    background ([`crate::images::LibraryImages::bytes_of_all`]), and
+//!    handed to the pass ([`writer_editor::PrintPass::set_images`]): no
+//!    picture is read on the main thread inside a slice. They stay in
+//!    memory, as the files they are stored as, until the PDF is finished
+//!    (it holds each picture once). A picture the library does not have
+//!    is printed as its box with its description.
+//! 3. A task of the main thread makes the pages in slices
 //!    ([`crate::printing::slice`], 8 ms: laying blocks out and drawing the
 //!    pages that came of it into the PDF, both within the slice); between
 //!    two slices it waits a moment on a timer, which is a turn of the main
 //!    thread: keys are answered and frames are drawn, so a
 //!    book does not freeze the window. A chapter is done in the first
 //!    slice.
-//! 3. A job that is still preparing after [`NOTE_DELAY`] says so in a note
+//! 4. A job that is still preparing after [`NOTE_DELAY`] says so in a note
 //!    at the bottom, "Preparing to print …", whose button is the command
 //!    "Cancel Printing". The command is in the palette and in File too (a
 //!    toast's button has no way in from the keyboard), and "Dismiss
 //!    notifications" cancels as well: otherwise the note would go, the work
 //!    would go on unseen and the print panel would come up unannounced.
-//! 4. The finished job is handed over. With the macOS print panel the job
+//! 5. The finished job is handed over. With the macOS print panel the job
 //!    is then **in the panel** ([`Printing::Panel`]) until the sheet has
 //!    ended; the sheet is started from the task, outside any update, as
 //!    AppKit calls back into GPUI while it comes up.
@@ -49,7 +56,10 @@
 //! [`Workspace::print_job`] makes the same job at once and returns it
 //! instead of handing it over.
 
-use std::time::{Duration, Instant};
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{Context, Stateful, Task, Window, prelude::*};
 use writer_editor::{PrintPass, PrintProgress};
@@ -188,7 +198,10 @@ impl Workspace {
         let Some(target) = printing::target(cx) else {
             return;
         };
-        let pass = self.editor.read(cx).print_pass(window, cx);
+        let mut pass = self.editor.read(cx).print_pass(window, cx);
+        // The pictures are read in the background, before the first page
+        // is made.
+        let pictures = self.images.bytes_of_all(pass.images(), cx);
         let title = self.display_title();
         let slice = printing::slice(cx);
         self.print.stage = Some(Printing::Preparing);
@@ -206,6 +219,10 @@ impl Workspace {
         }));
 
         self.print.task = Some(cx.spawn_in(window, async move |this, cx| {
+            // The job is "preparing" while they come, and Cancel drops
+            // this task with them.
+            let pictures = pictures.await;
+            pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
             let Some(job) = prepare(pass, title, slice, &this, cx).await else {
                 // The workspace is gone.
                 return;
@@ -290,6 +307,13 @@ impl Workspace {
     pub fn print_job(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<PrintJob> {
         self.session.as_ref()?;
         let mut pass = self.editor.read(cx).print_pass(window, cx);
+        // The pictures, read at once.
+        let pictures: std::collections::HashMap<_, _> = pass
+            .images()
+            .into_iter()
+            .filter_map(|image| Some((image, self.images.bytes_now(image, cx)?)))
+            .collect();
+        pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
         let title = self.display_title();
         let paper = pass.paper();
         let mut writer = PdfWriter::new(&printing::job_info(&title));

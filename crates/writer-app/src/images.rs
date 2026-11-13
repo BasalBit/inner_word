@@ -1,0 +1,562 @@
+//! Images, as the app sees them: where their bytes are, how a picture
+//! comes in, and when bytes that nothing names any more go.
+//!
+//! An image in a document is a block that names stored bytes by their
+//! hash (`writer_core::ImageId`); the bytes are in `images.db` beside the
+//! library database (`writer-store`). The editor knows neither: it asks an
+//! [`writer_editor::ImageProvider`], and this module is the one the app
+//! gives the editor of the document ([`LibraryImages`]).
+//!
+//! | What | Where |
+//! |---|---|
+//! | The bytes of an image for the editor, and a picture the user chose, pasted or dropped made into stored bytes | [`LibraryImages`] |
+//! | The files "Insert > Image…" asks for | [`use_open_panel`], [`choose_files_beforehand`] |
+//! | The bytes for the exporters | [`StoreImages`] |
+//! | Bytes nothing names any more | [`collect_in_background`] |
+//!
+//! # Nothing large on the main thread
+//!
+//! For a library on disk the provider has a connection of its own to
+//! `images.db` ([`writer_library::store::ImageFile`]), which only
+//! background tasks use: reading the bytes of a picture, and for a new
+//! picture the whole of it (reading the file, converting it with
+//! [`writer_image::prepare`], the hash, the write of up to 16 MB with a
+//! sync). A library in memory (the tests) has one connection, the
+//! store's, and does the same at once.
+//!
+//! # Bytes first
+//!
+//! A picture is stored, committed, before a block that names it enters a
+//! document: [`ImageProvider::import`] answers with the image only when
+//! the write is back. So no save ever names bytes that are not there.
+//!
+//! # The open panel
+//!
+//! "Insert > Image…" asks for files in the macOS open panel only in a run
+//! that was told to ([`use_open_panel`]: `main`, when the run is not
+//! scripted). A test names the files beforehand
+//! ([`choose_files_beforehand`]); a scripted run inserts with its own step
+//! (`image:<path>`). Without either the panel was "cancelled": no test and
+//! no scripted run ever opens a panel.
+
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+
+use gpui::{App, AppContext as _, Entity, Global, PathPromptOptions, Task, WeakEntity, Window};
+use writer_core::{Image, ImageId};
+use writer_editor::{ImageProvider, NewImageSource};
+use writer_export::{ImageData, ImageFileFormat, ImageSource};
+use writer_library::{
+    ImageFormat, ImageInfo, Library, StoredImageId,
+    store::{self, ImageFile, Store},
+};
+use writer_ui::{Toast, ToastLayer, toast::ToastId};
+
+use crate::settings::keys;
+
+/// How long after a launch the collector runs: the window is up and the
+/// first document is on screen long before.
+pub const COLLECT_DELAY: Duration = Duration::from_secs(20);
+
+/// How often the app looks at which images are named while it stays open,
+/// and how old the last run of the collector has to be before a launch
+/// runs it again.
+pub const LOOK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How many files that could not be used are named one by one; the rest
+/// are counted in one more sentence.
+pub const REFUSALS_NAMED: usize = 3;
+
+/// How long a sentence about a file that could not be used stays.
+const REFUSAL_STAYS: Duration = Duration::from_secs(8);
+
+/// Two imports that are further apart than this are two gestures of the
+/// user's: the count of refused files begins again. (Within one gesture
+/// the editor asks for the next picture as soon as the one before is
+/// stored.)
+const SAME_GESTURE: Duration = Duration::from_secs(1);
+
+/// The id of an image as the store has it.
+pub fn stored_id(image: ImageId) -> StoredImageId {
+    StoredImageId(*image.as_bytes())
+}
+
+/// The id of stored bytes as a document has it.
+pub fn document_id(image: StoredImageId) -> ImageId {
+    ImageId::from_bytes(image.0)
+}
+
+/// The image a document holds for stored bytes: their id, their pixel
+/// size and the density their file declares. The width and the
+/// description are whoever inserts it to set.
+pub fn image_of(info: &ImageInfo) -> Image {
+    let density = info
+        .density
+        .clamp(u32::from(Image::MIN_DENSITY), u32::from(Image::MAX_DENSITY));
+    Image::new(
+        document_id(info.id),
+        (info.width.max(1), info.height.max(1)),
+        u16::try_from(density).unwrap_or(Image::DEFAULT_DENSITY),
+    )
+}
+
+/// What a sentence about a picture that could not be used is about: the
+/// name of the file in quotes, or the picture on the clipboard.
+pub fn subject_of(source: &NewImageSource) -> String {
+    match source {
+        NewImageSource::File(path) => {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            format!("\u{201c}{name}\u{201d}")
+        }
+        NewImageSource::Bytes(_) => "The picture on the clipboard".to_string(),
+    }
+}
+
+/// The sentence for the files that could not be used and are not named
+/// one by one.
+pub fn more_refused(count: usize) -> String {
+    if count == 1 {
+        "1 more file could not be used.".to_string()
+    } else {
+        format!("{count} more files could not be used.")
+    }
+}
+
+// ----- the open panel -----------------------------------------------------------------
+
+/// Whether "Insert > Image…" may open the macOS open panel, and the files
+/// a test named instead.
+#[derive(Default)]
+struct Chooser {
+    panel: bool,
+    beforehand: VecDeque<Vec<PathBuf>>,
+}
+
+impl Global for Chooser {}
+
+/// From now on "Insert > Image…" asks for files in the macOS open panel.
+/// Called by `main` in a launch that is not scripted, and by nothing
+/// else.
+pub fn use_open_panel(cx: &mut App) {
+    cx.default_global::<Chooser>().panel = true;
+}
+
+/// Names the files the next "Insert > Image…" takes, instead of asking for
+/// them in a panel (once; a second call names the files of the one after).
+/// For tests.
+pub fn choose_files_beforehand(paths: Vec<PathBuf>, cx: &mut App) {
+    cx.default_global::<Chooser>().beforehand.push_back(paths);
+}
+
+// ----- the provider -------------------------------------------------------------------
+
+/// The files that could not be used in one gesture: how many, and the
+/// sentence that counts those which are not named.
+#[derive(Default)]
+struct Refusals {
+    count: usize,
+    more: Option<ToastId>,
+    /// When the last import ended.
+    last_end: Option<Instant>,
+}
+
+/// The [`ImageProvider`] over the library: what the editor of the document
+/// is given (see the [module docs](self)).
+pub struct LibraryImages {
+    library: Entity<Library>,
+    /// `images.db` through a connection of its own, which only background
+    /// tasks lock; `None` for a library in memory.
+    file: Option<Arc<Mutex<ImageFile>>>,
+    toasts: WeakEntity<ToastLayer>,
+    refusals: Rc<RefCell<Refusals>>,
+    /// Who hears that a picture was stored ([`LibraryImages::on_stored`]).
+    stored: Rc<RefCell<Option<Stored>>>,
+}
+
+/// What is called when a picture was stored.
+type Stored = Rc<dyn Fn(&mut App)>;
+
+impl LibraryImages {
+    /// The provider over `library`. What it has to say about a file that
+    /// could not be used goes to `toasts`.
+    pub fn new(library: Entity<Library>, toasts: &Entity<ToastLayer>, cx: &App) -> Rc<Self> {
+        let file = library
+            .read(cx)
+            .path()
+            .map(|database| Arc::new(Mutex::new(ImageFile::beside(database))));
+        Rc::new(Self {
+            library,
+            file,
+            toasts: toasts.downgrade(),
+            refusals: Rc::default(),
+            stored: Rc::default(),
+        })
+    }
+
+    /// `heard` is called on the main thread whenever a picture was stored
+    /// through this provider, before the picture is handed to whoever
+    /// asked for it. The workspace tells the editor, which then asks again
+    /// for images it had found missing: the same picture inserted a second
+    /// time brings the bytes of the first back.
+    pub fn on_stored(&self, heard: impl Fn(&mut App) + 'static) {
+        *self.stored.borrow_mut() = Some(Rc::new(heard));
+    }
+
+    /// The stored bytes of `image`, read now, on this thread: for what is
+    /// made at once (a print job of a test or a scripted step). `None`
+    /// when the library has no such image.
+    pub fn bytes_now(&self, image: ImageId, cx: &App) -> Option<Arc<[u8]>> {
+        let name = stored_id(image);
+        let bytes = match &self.file {
+            Some(file) => read(file, &name),
+            None => self
+                .library
+                .read(cx)
+                .store()
+                .image_bytes(&name)
+                .ok()
+                .flatten(),
+        };
+        bytes.map(Arc::from)
+    }
+
+    /// The stored bytes of every image of `images` the library has, read
+    /// in the background one after the other (a print reads the pictures
+    /// of its document before it makes the first page).
+    pub fn bytes_of_all(
+        &self,
+        images: Vec<ImageId>,
+        cx: &mut App,
+    ) -> Task<HashMap<ImageId, Arc<[u8]>>> {
+        match &self.file {
+            Some(file) => {
+                let file = file.clone();
+                cx.background_spawn(async move {
+                    images
+                        .into_iter()
+                        .filter_map(|image| {
+                            let bytes = read(&file, &stored_id(image))?;
+                            Some((image, Arc::from(bytes)))
+                        })
+                        .collect()
+                })
+            }
+            None => Task::ready(
+                images
+                    .into_iter()
+                    .filter_map(|image| Some((image, self.bytes_now(image, cx)?)))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Says that a file could not be used: its sentence, for the first
+    /// [`REFUSALS_NAMED`] of a gesture, and after them one sentence that
+    /// counts the rest.
+    fn refuse(
+        refusals: &Rc<RefCell<Refusals>>,
+        toasts: &WeakEntity<ToastLayer>,
+        sentence: String,
+        cx: &mut App,
+    ) {
+        let Some(toasts) = toasts.upgrade() else {
+            return;
+        };
+        let (count, old) = {
+            let mut refusals = refusals.borrow_mut();
+            refusals.count += 1;
+            (refusals.count, refusals.more.take())
+        };
+        let message = if count <= REFUSALS_NAMED {
+            sentence
+        } else {
+            more_refused(count - REFUSALS_NAMED)
+        };
+        let id = toasts.update(cx, |layer, cx| {
+            if let Some(old) = old {
+                layer.dismiss(old, cx);
+            }
+            layer.push(Toast::new(message).error().duration(REFUSAL_STAYS), cx)
+        });
+        if count > REFUSALS_NAMED {
+            refusals.borrow_mut().more = Some(id);
+        }
+    }
+}
+
+/// Reads the bytes of an image through the provider's own connection.
+fn read(file: &Mutex<ImageFile>, name: &StoredImageId) -> Option<Vec<u8>> {
+    let file = file.lock().unwrap_or_else(PoisonError::into_inner);
+    file.bytes(name).ok().flatten()
+}
+
+/// Makes `source` into what the library stores.
+fn prepare(source: &NewImageSource) -> Result<writer_image::Prepared, writer_image::PrepareError> {
+    match source {
+        NewImageSource::File(path) => writer_image::prepare_file(path),
+        NewImageSource::Bytes(bytes) => writer_image::prepare(bytes),
+    }
+}
+
+/// Why a picture did not come in, as the user is told.
+fn not_stored(subject: &str, error: &store::StoreError) -> String {
+    format!("{subject} could not be stored in the library: {error}")
+}
+
+impl ImageProvider for LibraryImages {
+    fn bytes(&self, image: ImageId, cx: &mut App) -> Task<Option<Arc<[u8]>>> {
+        match &self.file {
+            Some(file) => {
+                let file = file.clone();
+                let name = stored_id(image);
+                cx.background_spawn(async move { read(&file, &name).map(Arc::from) })
+            }
+            None => Task::ready(self.bytes_now(image, cx)),
+        }
+    }
+
+    fn import(&self, source: NewImageSource, cx: &mut App) -> Task<Option<Image>> {
+        // A new gesture, or one more picture of the same one?
+        let now = cx.background_executor().now();
+        {
+            let mut refusals = self.refusals.borrow_mut();
+            let same = refusals
+                .last_end
+                .is_some_and(|end| now.saturating_duration_since(end) <= SAME_GESTURE);
+            if !same {
+                refusals.count = 0;
+                refusals.more = None;
+            }
+        }
+        let subject = subject_of(&source);
+        // Reading, converting, hashing and writing: all of it away from
+        // the main thread, for a library on disk.
+        let stored: Task<Result<ImageInfo, String>> = match &self.file {
+            Some(file) => {
+                let file = file.clone();
+                let subject = subject.clone();
+                cx.background_spawn(async move {
+                    let prepared = prepare(&source).map_err(|error| error.sentence(&subject))?;
+                    let mut file = file.lock().unwrap_or_else(PoisonError::into_inner);
+                    file.put(&prepared.as_new_image())
+                        .map_err(|error| not_stored(&subject, &error))
+                })
+            }
+            None => Task::ready(
+                prepare(&source)
+                    .map_err(|error| error.sentence(&subject))
+                    .and_then(|prepared| {
+                        self.library
+                            .update(cx, |library, _| library.put_image(&prepared.as_new_image()))
+                            .map_err(|error| not_stored(&subject, &error))
+                    }),
+            ),
+        };
+        let refusals = self.refusals.clone();
+        let toasts = self.toasts.clone();
+        let heard = self.stored.clone();
+        cx.spawn(async move |cx| {
+            let stored = stored.await;
+            cx.update(|cx| {
+                refusals.borrow_mut().last_end = Some(cx.background_executor().now());
+                match stored {
+                    // The bytes are committed: now a block may name them.
+                    Ok(info) => {
+                        let heard = heard.borrow().clone();
+                        if let Some(heard) = heard {
+                            heard(cx);
+                        }
+                        Some(image_of(&info))
+                    }
+                    Err(sentence) => {
+                        Self::refuse(&refusals, &toasts, sentence, cx);
+                        None
+                    }
+                }
+            })
+            .ok()
+            .flatten()
+        })
+    }
+
+    fn choose(&self, _: &mut Window, cx: &mut App) -> Task<Option<Vec<PathBuf>>> {
+        let chooser = cx.default_global::<Chooser>();
+        if let Some(paths) = chooser.beforehand.pop_front() {
+            return Task::ready(Some(paths).filter(|paths| !paths.is_empty()));
+        }
+        if !chooser.panel {
+            return Task::ready(None);
+        }
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Insert".into()),
+        });
+        let toasts = self.toasts.clone();
+        cx.spawn(async move |cx| match receiver.await {
+            Ok(Ok(paths)) => paths.filter(|paths| !paths.is_empty()),
+            Ok(Err(error)) => {
+                toasts
+                    .update(cx, |layer, cx| {
+                        layer.push(
+                            Toast::new(format!("Could not open the file panel: {error}"))
+                                .error()
+                                .duration(REFUSAL_STAYS),
+                            cx,
+                        );
+                    })
+                    .ok();
+                None
+            }
+            // The panel went away without an answer.
+            Err(_) => None,
+        })
+    }
+
+    fn pasteboard(&self, cx: &mut App) -> Option<NewImageSource> {
+        crate::pasteboard::image(cx)
+    }
+
+    fn touch(&self, images: &[ImageId], cx: &mut App) {
+        self.library.update(cx, |library, _| {
+            for image in images {
+                // An image the library does not have shows as missing;
+                // there is nothing to say about it here.
+                library.touch_image(&stored_id(*image)).ok();
+            }
+        });
+    }
+}
+
+// ----- the exporters ------------------------------------------------------------------
+
+/// The pictures of the library for the exporters
+/// ([`writer_export::ExportSource::with_images`]). An image the library
+/// does not have is exported as a missing one: its description stands in
+/// for it.
+pub struct StoreImages<'a> {
+    store: &'a Store,
+}
+
+impl<'a> StoreImages<'a> {
+    /// The pictures of `store`.
+    pub fn new(store: &'a Store) -> Self {
+        Self { store }
+    }
+}
+
+impl ImageSource for StoreImages<'_> {
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
+        let name = stored_id(id);
+        let info = self.store.image_info(&name).ok().flatten()?;
+        let bytes = self.store.image_bytes(&name).ok().flatten()?;
+        Some(ImageData {
+            bytes: Cow::Owned(bytes),
+            format: match info.format {
+                ImageFormat::Png => ImageFileFormat::Png,
+                ImageFormat::Jpeg => ImageFileFormat::Jpeg,
+                ImageFormat::Gif => ImageFileFormat::Gif,
+            },
+        })
+    }
+}
+
+// ----- the collector ------------------------------------------------------------------
+
+/// Sees to the bytes that nothing names any more, for a library on disk
+/// and for as long as the app runs. Called once, by `main`.
+///
+/// - [`COLLECT_DELAY`] after the launch, when the last run is a day old
+///   or older (the setting `images.collected_at`, unix milliseconds): the
+///   collector (`writer_store::collect_unused_images`). It is **the only
+///   thing that ever deletes the bytes of an image**, and only of one that
+///   no document (live or in the trash) and no version has named for
+///   thirty days and that no kept backup of the library can name. It runs
+///   at a launch because then nothing but stored content can hold an id:
+///   the undo history, a Vim register and a cut that waits to be pasted
+///   are empty. In a launch that does not run it, the copy of the
+///   pictures among the backups is brought up to date instead
+///   (`writer_store::back_up_all_images`; the collector ends with the
+///   same).
+/// - From then on, every [`LOOK_EVERY`]: the looking half alone
+///   (`writer_store::mark_unused_images`). It deletes nothing. It keeps
+///   the stamp "unnamed since" from growing old on an image that is named
+///   again without the store being asked (an undo brings back an image
+///   that was cut and saved away).
+///
+/// Everything runs on the background executor with connections of its
+/// own; the timers are the app's, so a test drives them with its clock.
+pub fn collect_in_background(library: &Entity<Library>, cx: &mut App) {
+    let (database, clock) = {
+        let library = library.read(cx);
+        let Some(database) = library.path() else {
+            return;
+        };
+        (database.to_path_buf(), library.clock().clone())
+    };
+    let library = library.downgrade();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(COLLECT_DELAY).await;
+        let Ok(last) = library.read_with(cx, |library, _| {
+            library.setting_or(keys::IMAGES_COLLECTED_AT, 0i64)
+        }) else {
+            return;
+        };
+        let now = clock.now_ms();
+        let day = i64::try_from(LOOK_EVERY.as_millis()).unwrap_or(i64::MAX);
+        // A time in the future is a clock that was set back: run.
+        let due = last > now || now - last >= day;
+        let run = cx.background_spawn({
+            let database = database.clone();
+            async move {
+                if due {
+                    store::collect_unused_images(&database, now, store::IMAGE_RETENTION_MS)
+                        .map(|_| ())
+                } else {
+                    store::back_up_all_images(&database).map(|_| ())
+                }
+            }
+        });
+        match run.await {
+            Ok(()) if due => {
+                let stored = library.update(cx, |library, cx| {
+                    library.set_setting(keys::IMAGES_COLLECTED_AT, &now, cx)
+                });
+                if let Ok(Err(error)) = stored {
+                    eprintln!("The Writer: could not note the run of the image collector: {error}");
+                }
+            }
+            Ok(()) => {}
+            Err(error) => eprintln!("The Writer: the image collector did not run: {error}"),
+        }
+        loop {
+            cx.background_executor().timer(LOOK_EVERY).await;
+            // The library is gone with its window.
+            if library.upgrade().is_none() {
+                return;
+            }
+            let now = clock.now_ms();
+            let looked = cx
+                .background_spawn({
+                    let database = database.clone();
+                    async move { store::mark_unused_images(&database, now) }
+                })
+                .await;
+            if let Err(error) = looked {
+                eprintln!("The Writer: could not look at which images are in use: {error}");
+            }
+        }
+    })
+    .detach();
+}

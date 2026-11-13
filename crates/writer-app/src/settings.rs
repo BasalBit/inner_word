@@ -121,6 +121,9 @@ pub mod keys {
     /// defaults; absent while every key is the default. Read when the
     /// library opens, before a key hint is drawn (see `crate::keymap`).
     pub const KEYBOARD_SHORTCUTS: &str = "keyboard.shortcuts";
+    /// `number`: when the collector of image bytes last ran, in unix
+    /// milliseconds (see `crate::images::collect_in_background`).
+    pub const IMAGES_COLLECTED_AT: &str = "images.collected_at";
     /// Prefix of the side chat's conversation about a document:
     /// `assistant.conversation.<id>` holds it as JSON.
     pub const ASSISTANT_CONVERSATION_PREFIX: &str = "assistant.conversation.";

@@ -34,6 +34,7 @@
 //! | [`live`] | agents that write while the app is open: the channel on which the `writer` tool hands the app a change, the thread that listens, the queue to the main thread (what the workspace does with a request is `workspace/live.rs`) |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
 //! | [`printing`] | where a print job goes: the macOS print panel, a recorder in a test, a directory in a scripted run (the command "Print…" itself is `workspace/print.rs`; the pages are the editor's print pass, the PDF and the print operation `writer-print`'s) |
+//! | [`images`], [`pasteboard`] | images: the provider the editor of the document gets (the bytes of a picture, a file, a paste or a drop made into stored bytes, off the main thread), the pictures for the exporters, the collector of bytes nothing names any more; the app's own look at the system pasteboard for pictures GPUI's clipboard does not show |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`view_memory`] | the caret position and the chosen-title flag of a document, checked against the document as it is now |
 //! | [`character_limit`] | the character-limit indicator, counted block by block |
@@ -59,11 +60,13 @@ pub mod controls;
 pub mod document_io;
 pub mod export;
 pub mod font_choice;
+pub mod images;
 pub mod keymap;
 pub mod library_search;
 pub mod live;
 pub mod menus;
 pub mod palette;
+pub mod pasteboard;
 pub mod pinch;
 pub mod press_and_hold;
 pub mod printing;

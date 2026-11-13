@@ -1666,6 +1666,49 @@ fn a_folder_with_a_space_in_its_name_is_read_back_as_it_is_on_disk() {
 }
 
 #[test]
+fn a_folder_with_a_hash_or_a_percent_in_its_name_is_a_link_a_viewer_follows() {
+    // A link is a URL to whoever follows it: `#` ends the path, `?` too,
+    // and `%` is an escape. The folder named after "Draft #2 100%25.md" is
+    // still the folder the link leads to.
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Jpeg, b"jpeg");
+    let base = url::Url::parse("file:///Users/someone/out/Draft.md").unwrap();
+    for file_name in [
+        "Draft #2 100%25.md",
+        "C# notes.md",
+        "Issue #14?.md",
+        "50% done.md",
+        "Trip.md",
+        "#.md",
+    ] {
+        let dir = images_dir_name(file_name);
+        let doc = Document::from_blocks(vec![image_block(HARBOUR, "The harbour")]);
+        let source = ExportSource::single("Trip", &doc).with_images(&pictures);
+        let package = export_package(&source, ExportFormat::Markdown, &files(&dir));
+        let out = String::from_utf8(package.bytes).unwrap();
+        // The file is written where its folder is called as on disk.
+        assert_eq!(
+            package.assets[0].path,
+            format!("{dir}/image-3f2a9c1b.jpg"),
+            "{file_name:?}"
+        );
+        let lines = parse(&out);
+        assert_eq!(lines.len(), 1, "{out:?}");
+        let Kind::Image(destination) = &lines[0].kind else {
+            panic!("no image in {out:?}");
+        };
+        let link = base.join(destination).unwrap();
+        assert_eq!(link.fragment(), None, "{out:?}");
+        assert_eq!(link.query(), None, "{out:?}");
+        let followed = link.to_file_path().unwrap();
+        assert_eq!(
+            followed,
+            std::path::Path::new("/Users/someone/out").join(&package.assets[0].path),
+            "{out:?}"
+        );
+    }
+}
+
+#[test]
 fn two_images_whose_ids_begin_alike_get_two_files() {
     // Three different pictures whose ids share their first eight digits,
     // the last two their first twelve.

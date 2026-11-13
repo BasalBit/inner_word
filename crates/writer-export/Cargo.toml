@@ -21,3 +21,6 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # An independent ZIP reader and XML parser for the DOCX package tests.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
+# A URL parser as a browser or a Markdown viewer reads a link: where the
+# path of a picture file ends and how it is decoded.
+url = "2"

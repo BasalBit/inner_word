@@ -61,7 +61,9 @@ use crate::common::{
     first_comment_ranges, is_blank_text, ordinals, part_needs_title, thread_entries,
 };
 use crate::{ExportAsset, ExportSource, PartTitles};
-use escape::{TextContext, escape_line, escape_line_in, image_alt, image_destination};
+use escape::{
+    TextContext, escape_line, escape_line_in, file_path_in_link, image_alt, image_destination,
+};
 use inline::{Anchor, render_inline};
 
 /// What happens to comment threads in Markdown.
@@ -306,11 +308,12 @@ impl<'a> Pictures<'a> {
                 } else {
                     format!("{dir}/{name}")
                 };
+                let link = file_path_in_link(&path);
                 self.assets.push(ExportAsset {
-                    path: path.clone(),
+                    path,
                     bytes: data.bytes.into_owned(),
                 });
-                path
+                link
             }
         };
         self.destinations.insert(id, destination.clone());

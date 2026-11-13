@@ -319,8 +319,27 @@ pub(crate) fn image_alt(description: &str) -> String {
     }
 }
 
+/// The relative path of a picture file as a link has to say it. To every
+/// program that follows a link its destination is a URL: a `#` begins the
+/// fragment, a `?` the query and a `%` an escape, so `Draft #2 images/a.png`
+/// would name the file `Draft ` there. Those three are percent-encoded
+/// (`Draft %232 images/a.png`); everything else, the spaces too, is kept as
+/// it is on disk, which is what a reader of the file sees.
+pub(crate) fn file_path_in_link(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// The destination of an image: a reference (`image:<id>`) or the path of
-/// a picture file. A path with a space in it is written in angle brackets,
+/// a picture file (as [`file_path_in_link`] writes it). A path with a space in it is written in angle brackets,
 /// which is the one way CommonMark has to keep the space; a parser gives
 /// back the path as it is on disk.
 pub(crate) fn image_destination(destination: &str) -> String {
@@ -578,6 +597,11 @@ mod tests {
         assert_eq!(image_destination("a\nb c/a.png"), "<a%0Ab c/a.png>");
         assert_eq!(image_destination("a\u{a0}b/a.png"), "<a\u{a0}b/a.png>");
         assert_eq!(image_destination(""), "<>");
+        assert_eq!(
+            file_path_in_link("Draft #2 100%25? images/image-3f2a9c1b.png"),
+            "Draft %232 100%2525%3F images/image-3f2a9c1b.png"
+        );
+        assert_eq!(file_path_in_link("my (p)/a.png"), "my (p)/a.png");
     }
 
     #[test]

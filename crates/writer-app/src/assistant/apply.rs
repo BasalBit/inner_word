@@ -131,11 +131,7 @@ pub fn answer_fragment(
     match library {
         Some(library) => {
             let known = KnownImages::of(editor.read(cx).document());
-            let mut images = LibraryAnswerImages {
-                known,
-                library,
-                cx,
-            };
+            let mut images = LibraryAnswerImages { known, library, cx };
             markdown_fragment(markdown, &mut images)
         }
         None => {

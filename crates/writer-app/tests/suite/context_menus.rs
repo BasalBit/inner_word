@@ -1004,7 +1004,16 @@ fn a_right_click_on_an_image_opens_its_menu(cx: &mut TestAppContext) {
     );
     assert_eq!(
         submenu("Size", vcx),
-        ["Larger", "Smaller", "-", "25 %", "50 %", "75 %", "100 %", "Original Size"]
+        [
+            "Larger",
+            "Smaller",
+            "-",
+            "25 %",
+            "50 %",
+            "75 %",
+            "100 %",
+            "Original Size"
+        ]
     );
     assert_eq!(submenu("Align", vcx), ["Left", "Centre", "Right"]);
     assert_eq!(
@@ -1073,7 +1082,11 @@ fn a_right_click_on_an_image_opens_its_menu(cx: &mut TestAppContext) {
         vcx.simulate_keystrokes(key);
         vcx.run_until_parked();
         let labels = open_menu("an image, from the keyboard", vcx);
-        assert_eq!(labels.last().map(String::as_str), Some("Delete Image"), "{key}");
+        assert_eq!(
+            labels.last().map(String::as_str),
+            Some("Delete Image"),
+            "{key}"
+        );
         assert!(dimmed("Add Comment", vcx), "{key}");
         dismiss(vcx);
     }

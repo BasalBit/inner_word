@@ -2993,10 +2993,7 @@ fn an_agent_adds_an_image_to_the_open_document_and_the_writer_can_take_it_out(
 fn an_agents_edit_of_the_text_keeps_the_image_and_its_width(cx: &mut TestAppContext) {
     let (desk, id, image, cx) = desk_with_a_picture(cx);
     let before = pictures(&desk, cx);
-    assert_eq!(
-        before,
-        [(2, image.id, 50, writer_core::Alignment::Right)]
-    );
+    assert_eq!(before, [(2, image.id, 50, writer_core::Alignment::Right)]);
 
     // A word in the paragraph above the picture, and one below it.
     let tool = desk.tool();

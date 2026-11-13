@@ -271,7 +271,10 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
         assert_eq!(inserted.id, super::images::id_of(&picture));
         // At its own size on the page (400 of 451 points), in the middle.
         assert_eq!(inserted.width.percent(), 89);
-        assert_eq!(document(&workspace, vcx).blocks()[at].alignment(), Alignment::Center);
+        assert_eq!(
+            document(&workspace, vcx).blocks()[at].alignment(),
+            Alignment::Center
+        );
         assert!(editor_focused(&workspace, vcx));
         // Smaller and larger, with the keys that size the text.
         vcx.simulate_keystrokes("cmd-shift-, cmd-shift-,");
@@ -282,14 +285,19 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
         vcx.simulate_keystrokes("cmd-shift-r alt-up");
         let (at, _) = selected(vcx);
         assert_eq!(at, last - 1);
-        assert_eq!(document(&workspace, vcx).blocks()[at].alignment(), Alignment::Right);
+        assert_eq!(
+            document(&workspace, vcx).blocks()[at].alignment(),
+            Alignment::Right
+        );
         assert_eq!(document(&workspace, vcx).blocks()[last].text(), "Larger");
         // What it shows, from its menu.
         vcx.simulate_keystrokes("ctrl-enter");
         vcx.run_until_parked();
-        assert!(vcx.update(|window, cx| {
-            writer_ui::ContextMenu::choose("Description…", window, cx)
-        }));
+        assert!(
+            vcx.update(|window, cx| {
+                writer_ui::ContextMenu::choose("Description…", window, cx)
+            })
+        );
         vcx.run_until_parked();
         assert_eq!(tool(&workspace, vcx), Some(ToolKind::ImageDescription));
         vcx.simulate_input("The harbour at night");

@@ -254,10 +254,7 @@ fn the_pdf_has_the_pages_and_the_text_page_view_has(cx: &mut TestAppContext) {
     }
     let (title, creator) = file.title_and_creator();
     assert_eq!(title, "The harbor");
-    assert_eq!(
-        creator,
-        format!("The Writer {}", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(creator, format!("The Writer {}", env!("CARGO_PKG_VERSION")));
 
     let wanted = text_page_view_has(&workspace, cx);
     let found = page_texts(job);
@@ -878,13 +875,10 @@ fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
     assert_eq!(jobs.borrow().len(), 1);
     let job = jobs.borrow()[0].clone();
     assert_eq!(job.pdf.report.rows, 1000);
-    assert_eq!(
-        Some(job.pdf.report.pages),
-        {
-            settle(&workspace, cx);
-            editor_of(&workspace, cx).read_with(cx, |editor, _| editor.page_count())
-        }
-    );
+    assert_eq!(Some(job.pdf.report.pages), {
+        settle(&workspace, cx);
+        editor_of(&workspace, cx).read_with(cx, |editor, _| editor.page_count())
+    });
     assert!(!available(&CancelPrint, cx));
 }
 
@@ -900,7 +894,9 @@ fn print_has_no_key_and_takes_one(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             collect_shortcuts(cx)
                 .into_iter()
-                .filter(|row| row.title.as_ref() == "Print" || row.title.as_ref() == "Cancel Printing")
+                .filter(|row| {
+                    row.title.as_ref() == "Print" || row.title.as_ref() == "Cancel Printing"
+                })
                 .map(|row| {
                     (
                         row.title.to_string(),

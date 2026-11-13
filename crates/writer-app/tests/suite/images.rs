@@ -32,8 +32,7 @@ use writer_app::{
     automation::{ImageStep, Script, Step, describe_state},
     export::{ExportChoice, ExportDestination, ExportScope, pictures_sentence, short_path},
     images::{self, COLLECT_DELAY, LOOK_EVERY, REFUSALS_NAMED, more_refused},
-    menus, pasteboard,
-    printing,
+    menus, pasteboard, printing,
     settings::keys,
     shortcuts::{Place, collect_shortcuts},
     version_history::{IMAGE_WITHOUT_DESCRIPTION, VersionHistory},
@@ -282,7 +281,11 @@ fn insert_image_puts_the_file_in_from_the_menu_bar_the_palette_the_slash_menu_an
     assert_eq!(kinds(&workspace, cx), ["heading", "paragraph", "image"]);
     let (block, image) = selected_image(&workspace, cx).expect("the new image is selected");
     assert_eq!(block, 2);
-    assert_eq!(image.id, id_of(&pictures[0].1), "named by the hash of its bytes");
+    assert_eq!(
+        image.id,
+        id_of(&pictures[0].1),
+        "named by the hash of its bytes"
+    );
     assert_eq!(image.pixels, (320, 200));
     assert_eq!(image.description, "", "no description by itself");
     assert_eq!(
@@ -326,7 +329,14 @@ fn insert_image_puts_the_file_in_from_the_menu_bar_the_palette_the_slash_menu_an
     cx.run_until_parked();
     assert_eq!(
         kinds(&workspace, cx),
-        ["heading", "paragraph", "image", "paragraph", "image", "image"]
+        [
+            "heading",
+            "paragraph",
+            "image",
+            "paragraph",
+            "image",
+            "image"
+        ]
     );
     assert_eq!(
         selected_image(&workspace, cx).map(|(block, image)| (block, image.id)),
@@ -374,7 +384,11 @@ fn a_file_that_is_no_image_says_so_and_three_files_are_one_undo_step(cx: &mut Te
     let library = library(cx);
     let files = tempfile::tempdir().unwrap();
     let pdf = file_in(files.path(), "report.pdf", b"%PDF-1.4\nnot a picture\n");
-    let svg = file_in(files.path(), "drawing.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>");
+    let svg = file_in(
+        files.path(),
+        "drawing.svg",
+        b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+    );
     let text = file_in(files.path(), "notes.txt", b"Just words.");
     let gone = files.path().join("gone.png");
     let three: Vec<(PathBuf, Vec<u8>)> = [RED, GREEN, BLUE]
@@ -445,10 +459,20 @@ fn a_file_that_is_no_image_says_so_and_three_files_are_one_undo_step(cx: &mut Te
         .collect();
     assert_eq!(
         ids,
-        three.iter().map(|(_, bytes)| id_of(bytes)).collect::<Vec<_>>()
+        three
+            .iter()
+            .map(|(_, bytes)| id_of(bytes))
+            .collect::<Vec<_>>()
     );
-    assert_eq!(selected_image(&workspace, cx).map(|(block, _)| block), Some(4));
-    assert_eq!(toasts(&workspace, cx).len(), 1, "the PDF among them said so");
+    assert_eq!(
+        selected_image(&workspace, cx).map(|(block, _)| block),
+        Some(4)
+    );
+    assert_eq!(
+        toasts(&workspace, cx).len(),
+        1,
+        "the PDF among them said so"
+    );
     assert_eq!(undo_depth(&workspace, cx), depth + 1, "one step");
 
     cx.simulate_keystrokes("cmd-z");
@@ -461,9 +485,7 @@ fn a_file_that_is_no_image_says_so_and_three_files_are_one_undo_step(cx: &mut Te
 }
 
 #[gpui::test]
-fn a_cancelled_panel_and_a_document_that_cannot_be_changed_insert_nothing(
-    cx: &mut TestAppContext,
-) {
+fn a_cancelled_panel_and_a_document_that_cannot_be_changed_insert_nothing(cx: &mut TestAppContext) {
     init(cx);
     let library = library(cx);
     let (workspace, cx) = open_workspace(&library, cx);
@@ -536,7 +558,11 @@ impl Disk {
         &self,
         clock: Option<&writer_library::Clock>,
         cx: &'a mut TestAppContext,
-    ) -> (Entity<Library>, Entity<Workspace>, &'a mut VisualTestContext) {
+    ) -> (
+        Entity<Library>,
+        Entity<Workspace>,
+        &'a mut VisualTestContext,
+    ) {
         use writer_library::store::{OpenOptions, Store};
         let options = OpenOptions {
             clock: clock.cloned().unwrap_or_default(),
@@ -667,7 +693,10 @@ fn on_disk_a_picture_is_stored_in_the_background_before_a_block_names_it_and_a_r
 
     // The next launch: the document opens with its image.
     let (_library, workspace, vcx) = disk.launch(None, cx);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
     let found = images_in(&workspace, vcx);
     assert_eq!(found.len(), 1);
     assert_eq!((found[0].0, found[0].1.id), (2, image));
@@ -701,7 +730,10 @@ fn undo_of_an_insertion_then_a_save_then_redo_and_the_image_is_there(cx: &mut Te
     workspace.update(cx, |w, cx| assert!(w.flush(cx)));
     assert!(!stored_content(&library, id, cx).contains("\"image\""));
     // The bytes stay: nothing but the collector ever deletes them.
-    assert_eq!(bytes_in(&library, image, cx).as_deref(), Some(bytes.as_slice()));
+    assert_eq!(
+        bytes_in(&library, image, cx).as_deref(),
+        Some(bytes.as_slice())
+    );
 
     // Redo: the image is back, with its picture.
     cx.simulate_keystrokes("cmd-shift-z");
@@ -773,7 +805,10 @@ fn an_image_cut_in_one_document_is_pasted_whole_into_another(cx: &mut TestAppCon
         }),
         Alignment::Right
     );
-    assert_eq!(selected_image(&workspace, cx).map(|(at, _)| at), Some(*block));
+    assert_eq!(
+        selected_image(&workspace, cx).map(|(at, _)| at),
+        Some(*block)
+    );
     let_pictures_arrive(cx);
     assert_eq!(status(&workspace, image.id, cx), ImageStatus::Ready);
 
@@ -957,10 +992,20 @@ fn what_a_paste_takes_from_the_pasteboard() {
     // Nothing at all.
     assert_eq!(decide(&Contents::default()), None);
 
-    for address in ["http://a.example/x.png", "HTTPS://A.EXAMPLE", "file:///tmp/a.png", "data:,x"] {
+    for address in [
+        "http://a.example/x.png",
+        "HTTPS://A.EXAMPLE",
+        "file:///tmp/a.png",
+        "data:,x",
+    ] {
         assert!(is_an_address(address), "{address}");
     }
-    for other in ["", "harbour.png", "see https://a.example", "https://a.example\nhttps://b.example"] {
+    for other in [
+        "",
+        "harbour.png",
+        "see https://a.example",
+        "https://a.example\nhttps://b.example",
+    ] {
         assert!(!is_an_address(other), "{other:?}");
     }
 }
@@ -971,12 +1016,36 @@ fn what_a_paste_takes_from_the_pasteboard() {
 /// and the key a test gives it.
 const COMMANDS: [(&str, &str, &str); 7] = [
     ("editor::InsertImage", "Insert: Image", "ctrl-alt-i"),
-    ("editor::ImageWidth25", "Layout: Image width 25 %", "ctrl-alt-1"),
-    ("editor::ImageWidth50", "Layout: Image width 50 %", "ctrl-alt-2"),
-    ("editor::ImageWidth75", "Layout: Image width 75 %", "ctrl-alt-3"),
-    ("editor::ImageWidth100", "Layout: Image width 100 %", "ctrl-alt-4"),
-    ("editor::ImageOriginalSize", "Layout: Image original size", "ctrl-alt-0"),
-    ("editor_tools::EditImageDescription", "Format: Image description", "ctrl-alt-d"),
+    (
+        "editor::ImageWidth25",
+        "Layout: Image width 25 %",
+        "ctrl-alt-1",
+    ),
+    (
+        "editor::ImageWidth50",
+        "Layout: Image width 50 %",
+        "ctrl-alt-2",
+    ),
+    (
+        "editor::ImageWidth75",
+        "Layout: Image width 75 %",
+        "ctrl-alt-3",
+    ),
+    (
+        "editor::ImageWidth100",
+        "Layout: Image width 100 %",
+        "ctrl-alt-4",
+    ),
+    (
+        "editor::ImageOriginalSize",
+        "Layout: Image original size",
+        "ctrl-alt-0",
+    ),
+    (
+        "editor_tools::EditImageDescription",
+        "Format: Image description",
+        "ctrl-alt-d",
+    ),
 ];
 
 /// A heading, an image at the whole width, a paragraph.
@@ -1029,7 +1098,10 @@ fn the_image_commands_are_in_the_palette_and_the_list_without_a_key_and_take_one
     });
     assert_eq!(
         labels,
-        COMMANDS.iter().map(|(_, label, _)| *label).collect::<Vec<_>>()
+        COMMANDS
+            .iter()
+            .map(|(_, label, _)| *label)
+            .collect::<Vec<_>>()
     );
 
     // The list of keyboard shortcuts: each is a row "In the text", and
@@ -1068,15 +1140,24 @@ fn the_image_commands_are_in_the_palette_and_the_list_without_a_key_and_take_one
             .map(|row| {
                 (
                     row.title.to_string(),
-                    row.all_keys.iter().map(|key| key.keys.to_string()).collect(),
+                    row.all_keys
+                        .iter()
+                        .map(|key| key.keys.to_string())
+                        .collect(),
                 )
             })
             .collect();
         assert_eq!(
             sizes,
             [
-                ("Larger text or image".to_string(), vec!["cmd-shift-.".to_string()]),
-                ("Smaller text or image".to_string(), vec!["cmd-shift-,".to_string()]),
+                (
+                    "Larger text or image".to_string(),
+                    vec!["cmd-shift-.".to_string()]
+                ),
+                (
+                    "Smaller text or image".to_string(),
+                    vec!["cmd-shift-,".to_string()]
+                ),
             ]
         );
     });
@@ -1139,7 +1220,10 @@ fn the_image_commands_are_in_the_palette_and_the_list_without_a_key_and_take_one
     cx.simulate_input("A red boat");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    assert_eq!(selected_image(&workspace, cx).unwrap().1.description, "A red boat");
+    assert_eq!(
+        selected_image(&workspace, cx).unwrap().1.description,
+        "A red boat"
+    );
     assert!(editor_focused(&workspace, cx));
     name_the_files(&[&path], cx);
     cx.simulate_keystrokes("ctrl-alt-i");
@@ -1209,7 +1293,11 @@ fn an_image_command_without_a_selected_image_changes_nothing_and_says_what_it_ne
             before,
             "{what} changed the document"
         );
-        assert_eq!(undo_depth(&workspace, cx), depth, "{what} left a step of undo");
+        assert_eq!(
+            undo_depth(&workspace, cx),
+            depth,
+            "{what} left a step of undo"
+        );
         assert_eq!(toasts(&workspace, cx), [SELECT_AN_IMAGE_FIRST], "{what}");
         clear_toasts(&workspace, cx);
     };
@@ -1220,7 +1308,14 @@ fn an_image_command_without_a_selected_image_changes_nothing_and_says_what_it_ne
 
     // The menu bar: the items are there (a document is open), and say what
     // they need.
-    for item in ["25 %", "50 %", "75 %", "100 %", "Original Size", "Description…"] {
+    for item in [
+        "25 %",
+        "50 %",
+        "75 %",
+        "100 %",
+        "Original Size",
+        "Description…",
+    ] {
         let action = menu_bar_item("Format", item);
         assert!(is_image_command(action.as_ref()), "{item}");
         assert!(available(action.as_ref(), cx), "{item} is not greyed out");
@@ -1249,7 +1344,9 @@ fn an_image_command_without_a_selected_image_changes_nothing_and_says_what_it_ne
 
     // "Larger" and "Smaller" in Format > Image are the commands of the
     // text's size: without an image they change the text, and say nothing.
-    assert!(!is_image_command(menu_bar_item("Format", "Larger").as_ref()));
+    assert!(!is_image_command(
+        menu_bar_item("Format", "Larger").as_ref()
+    ));
     choose_in_menu_bar("Format", "Larger", cx);
     assert!(toasts(&workspace, cx).is_empty());
     assert!(
@@ -1385,7 +1482,10 @@ fn the_menu_bar_has_insert_image_and_format_image(cx: &mut TestAppContext) {
     assert_eq!(action("Format", "Smaller"), "editor::DecreaseTextSize");
     assert_eq!(action("Format", "25 %"), "editor::ImageWidth25");
     assert_eq!(action("Format", "100 %"), "editor::ImageWidth100");
-    assert_eq!(action("Format", "Original Size"), "editor::ImageOriginalSize");
+    assert_eq!(
+        action("Format", "Original Size"),
+        "editor::ImageOriginalSize"
+    );
     assert_eq!(
         action("Format", "Description…"),
         "editor_tools::EditImageDescription"
@@ -1415,14 +1515,19 @@ fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
     let (_, workspace, cx) = open_with(&document, &library, cx);
     let prepare = |format: ExportFormat, cx: &mut VisualTestContext| {
         workspace
-            .update(cx, |w, cx| w.prepare_export(ExportScope::Document, format, cx))
+            .update(cx, |w, cx| {
+                w.prepare_export(ExportScope::Document, format, cx)
+            })
             .expect("the export is made")
     };
 
     // A Word document holds the picture.
     let docx = prepare(ExportFormat::Docx, cx);
     assert_eq!(docx.file_name, "Harbour.docx");
-    assert!(docx.assets.is_empty(), "nothing goes beside a Word document");
+    assert!(
+        docx.assets.is_empty(),
+        "nothing goes beside a Word document"
+    );
     assert!(
         contains(&docx.bytes, b"word/media/image1.png"),
         "the package has the picture among its parts"
@@ -1479,7 +1584,10 @@ fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
     cx.simulate_new_path_selection(move |_| Some(chosen));
     cx.run_until_parked();
     assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
-    let written = out.path().join("Harbour images").join(format!("image-{digits}.png"));
+    let written = out
+        .path()
+        .join("Harbour images")
+        .join(format!("image-{digits}.png"));
     assert_eq!(std::fs::read(&written).unwrap(), bytes);
     assert_eq!(
         toasts(&workspace, cx),
@@ -1508,7 +1616,10 @@ fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    let copied = cx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
     assert!(
         copied.contains(&format!("![The harbour at dusk](image:{})", image.id)),
         "{copied}"
@@ -1690,9 +1801,7 @@ fn collected_at(library: &Entity<Library>, cx: &mut VisualTestContext) -> Option
 }
 
 #[gpui::test]
-fn the_collector_runs_a_moment_after_a_launch_and_not_again_within_a_day(
-    cx: &mut TestAppContext,
-) {
+fn the_collector_runs_a_moment_after_a_launch_and_not_again_within_a_day(cx: &mut TestAppContext) {
     init(cx);
     let disk = Disk::new();
     let files = tempfile::tempdir().unwrap();
@@ -1727,7 +1836,10 @@ fn the_collector_runs_a_moment_after_a_launch_and_not_again_within_a_day(
         );
         // The picture is named, and it is there; and the run ended by
         // bringing the copy of the pictures among the backups up to date.
-        assert_eq!(disk.stored(id_of(&first)).as_deref(), Some(first.as_slice()));
+        assert_eq!(
+            disk.stored(id_of(&first)).as_deref(),
+            Some(first.as_slice())
+        );
         assert_eq!(
             disk.in_the_copy(id_of(&first)).as_deref(),
             Some(first.as_slice())
@@ -1859,7 +1971,10 @@ fn while_the_app_stays_open_it_looks_once_a_day_and_deletes_nothing(cx: &mut Tes
     vcx.run_until_parked();
     assert!(editor_focused(&workspace, vcx));
     vcx.simulate_keystrokes("cmd-z");
-    assert!(images_in(&workspace, vcx).is_empty(), "the later picture is undone");
+    assert!(
+        images_in(&workspace, vcx).is_empty(),
+        "the later picture is undone"
+    );
     vcx.simulate_keystrokes("cmd-shift-z cmd-shift-z");
     let_pictures_arrive(vcx);
     let found: Vec<ImageId> = images_in(&workspace, vcx)
@@ -1920,7 +2035,9 @@ fn the_version_history_shows_an_image_as_what_it_reads_and_a_restore_brings_it_b
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     let view = workspace
-        .read_with(cx, |w, cx| w.modal_layer().read(cx).active::<VersionHistory>())
+        .read_with(cx, |w, cx| {
+            w.modal_layer().read(cx).active::<VersionHistory>()
+        })
         .expect("the version history is open");
     assert_eq!(IMAGE_WITHOUT_DESCRIPTION, "Image");
     // The newest version is what opening the history kept (the text
@@ -2009,7 +2126,9 @@ fn a_scripted_run_inserts_and_selects_images_and_its_state_says_what_is_there(
     let_pictures_arrive(cx);
     let line = state(cx);
     assert!(
-        line.contains(" images=2 image=[block=3 width=100% natural=1600x1067@144 align=right missing] "),
+        line.contains(
+            " images=2 image=[block=3 width=100% natural=1600x1067@144 align=right missing] "
+        ),
         "{line}"
     );
 }
@@ -2068,21 +2187,32 @@ fn in_vim_mode_an_image_is_one_stop_and_stays_whole(cx: &mut TestAppContext) {
     cx.simulate_input("gg");
     assert_eq!(caret(cx), Position::new(0, 0));
     cx.simulate_input("j");
-    assert_eq!(selected_image(&workspace, cx).map(|(block, _)| block), Some(1));
+    assert_eq!(
+        selected_image(&workspace, cx).map(|(block, _)| block),
+        Some(1)
+    );
     // It shows as every selected image does: the handles are there, and
     // the caret is the picture's own box, not a block of Vim's on it.
     workspace.read_with(cx, |w, cx| {
         let editor = w.editor().read(cx);
-        assert_eq!(editor.config().caret_style, writer_editor::CaretStyle::Block);
+        assert_eq!(
+            editor.config().caret_style,
+            writer_editor::CaretStyle::Block
+        );
         let box_of_the_picture = editor.image_bounds(1).expect("the picture is laid out");
         assert_eq!(editor.caret_bounds(), Some(box_of_the_picture));
-        let handles = editor.image_handle_bounds().expect("the handles of a selected image");
+        let handles = editor
+            .image_handle_bounds()
+            .expect("the handles of a selected image");
         assert_eq!(handles[0].center(), box_of_the_picture.origin);
     });
     cx.simulate_input("j");
     assert_eq!(caret(cx), Position::new(2, 0));
     cx.simulate_input("k");
-    assert_eq!(selected_image(&workspace, cx).map(|(block, _)| block), Some(1));
+    assert_eq!(
+        selected_image(&workspace, cx).map(|(block, _)| block),
+        Some(1)
+    );
     cx.simulate_input("k");
     assert_eq!(caret(cx), Position::new(0, 0));
 
@@ -2178,10 +2308,7 @@ fn the_app_reads_a_real_pasteboard_the_way_it_decides() {
     // The Finder: the file's address (with its space escaped, as an
     // address has it), and the file's name as text.
     let finder = fresh();
-    let address = format!(
-        "file://{}",
-        path.to_string_lossy().replace(' ', "%20")
-    );
+    let address = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
     assert!(finder.add_text(FILE_URL, &address));
     assert!(finder.add_text(PLAIN_TEXT, "copied in Finder.png"));
     match finder.read() {

@@ -642,7 +642,10 @@ fn backspace_below_an_image_selects_it_first_and_a_line_can_be_written_above_one
     vcx.simulate_input("Above.");
     // enter on the image: a line below it.
     vcx.simulate_keystrokes("down");
-    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+    assert_eq!(
+        selected_image(&workspace, vcx).map(|(block, _)| block),
+        Some(1)
+    );
     vcx.simulate_keystrokes("enter");
     assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
     assert_eq!(caret(vcx), Position::new(2, 0));
@@ -653,7 +656,10 @@ fn backspace_below_an_image_selects_it_first_and_a_line_can_be_written_above_one
     // selected, and nothing is gone.
     vcx.simulate_keystrokes("cmd-left backspace");
     assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
-    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+    assert_eq!(
+        selected_image(&workspace, vcx).map(|(block, _)| block),
+        Some(1)
+    );
     assert_eq!(editor_text(&workspace, vcx), "Above.\n\nBelow.");
     // The second press deletes it.
     vcx.simulate_keystrokes("backspace");
@@ -671,7 +677,10 @@ fn backspace_below_an_image_selects_it_first_and_a_line_can_be_written_above_one
     });
     vcx.simulate_keystrokes("delete");
     assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
-    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+    assert_eq!(
+        selected_image(&workspace, vcx).map(|(block, _)| block),
+        Some(1)
+    );
 
     // An empty paragraph above an image: delete in it takes the empty
     // line away and selects the image, in one step.
@@ -682,12 +691,18 @@ fn backspace_below_an_image_selects_it_first_and_a_line_can_be_written_above_one
         );
     });
     vcx.simulate_keystrokes("cmd-backspace");
-    assert_eq!(editor_text(&workspace, vcx), "
+    assert_eq!(
+        editor_text(&workspace, vcx),
+        "
 
-Below.");
+Below."
+    );
     vcx.simulate_keystrokes("delete");
     assert_eq!(kinds(vcx), ["image", "paragraph"]);
-    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(0));
+    assert_eq!(
+        selected_image(&workspace, vcx).map(|(block, _)| block),
+        Some(0)
+    );
 
     // With the pointer: the image is the first block again, and its menu
     // has "Paragraph Above".

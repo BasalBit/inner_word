@@ -27,6 +27,15 @@
 //! pass over the document as page view lays it out, makes the PDF in
 //! slices and hands it to the print panel.
 //!
+//! Images (`images.rs`) mount nothing either: the editor is given the
+//! provider over the library ([`crate::images::LibraryImages`]) where it
+//! is made, and draws, inserts, resizes and moves pictures by itself; its
+//! tools have the image's menu and its description. The workspace says
+//! what a command that needs a selected image needs when there is none,
+//! hands the pictures to a print and an export, and tells the editor to
+//! ask again for missing pictures after an agent's change, a restored
+//! version and a stored picture.
+//!
 //! The slots themselves are public, so another view can be plugged in the
 //! same way:
 //!

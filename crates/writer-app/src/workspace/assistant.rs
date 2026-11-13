@@ -607,8 +607,7 @@ impl Workspace {
             // The Markdown for other apps, the formatted text for a
             // document of this one.
             let text = markdown.trim().to_string();
-            let fragment =
-                apply::answer_fragment(&self.editor, Some(&self.library), markdown, cx);
+            let fragment = apply::answer_fragment(&self.editor, Some(&self.library), markdown, cx);
             let item = if fragment.is_empty() {
                 ClipboardItem::new_string(text)
             } else {

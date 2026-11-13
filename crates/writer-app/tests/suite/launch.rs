@@ -911,7 +911,10 @@ fn an_image_the_tool_added_while_the_app_was_closed_is_shown(cx: &mut TestAppCon
     assert_eq!(added.images_added, 1);
 
     let (library, workspace, vcx) = launch(&disk, cx);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
     let found = images_in(&workspace, vcx);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].1.id, id_of(&bytes));
@@ -923,7 +926,10 @@ fn an_image_the_tool_added_while_the_app_was_closed_is_shown(cx: &mut TestAppCon
     );
     // The text was changed outside: the document opens at its start and
     // says so, as for any change of an agent.
-    assert_eq!(selection(&workspace, vcx), Selection::caret(Position::new(0, 0)));
+    assert_eq!(
+        selection(&workspace, vcx),
+        Selection::caret(Position::new(0, 0))
+    );
     assert!(toasts(&workspace, vcx).contains(&CHANGED_OUTSIDE.to_string()));
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.save_state()),
@@ -997,7 +1003,10 @@ fn a_document_whose_picture_is_missing_opens_with_a_placeholder_and_saves_unchan
     let stored_before = disk.outside(|store| store.document(id).unwrap().content);
 
     let (library, workspace, vcx) = launch(&disk, cx);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(id)
+    );
     // The block is there, with everything the document knows about it.
     let found = images_in(&workspace, vcx);
     assert_eq!(found.len(), 1);

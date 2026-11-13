@@ -1216,7 +1216,11 @@ fn the_description_of_an_image_with_the_pointer_alone(cx: &mut TestAppContext) {
         .expect("the field is open");
     assert!(typed.ends_with("The harbour, from the pier"), "{typed:?}");
     assert_ne!(typed, "The harbour at dusk");
-    assert_eq!(description(vcx), "The harbour at dusk", "not before it is kept");
+    assert_eq!(
+        description(vcx),
+        "The harbour at dusk",
+        "not before it is kept"
+    );
     let in_the_text = workspace.read_with(vcx, |w, cx| {
         let bounds = w
             .editor()
@@ -1228,7 +1232,11 @@ fn the_description_of_an_image_with_the_pointer_alone(cx: &mut TestAppContext) {
     vcx.simulate_click(in_the_text, Modifiers::default());
     vcx.run_until_parked();
     assert_eq!(tool(vcx), None);
-    assert_eq!(description(vcx), typed, "a click outside keeps the description");
+    assert_eq!(
+        description(vcx),
+        typed,
+        "a click outside keeps the description"
+    );
     assert!(editor_focused(&workspace, vcx));
 
     // Cancel: nothing changes.

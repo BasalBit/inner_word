@@ -2654,7 +2654,11 @@ fn the_side_chat_reads_an_image_as_a_line_and_an_answer_that_names_it_brings_it_
             "{destination}"
         );
         vcx.run_until_parked();
-        assert_eq!(images_in(&workspace, vcx).len(), 2, "{destination} became an image");
+        assert_eq!(
+            images_in(&workspace, vcx).len(),
+            2,
+            "{destination} became an image"
+        );
         let linked = editor.read_with(vcx, |editor, _| {
             editor.document().blocks().iter().any(|block| {
                 block

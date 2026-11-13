@@ -1051,17 +1051,18 @@ async fn execute(
             // What is there before: the images of the document, and the
             // notes at the bottom (a file that cannot be used says so in
             // one).
-            let (images, notes) = workspace.update(cx, |workspace, window, cx| -> Result<_> {
-                if workspace.open_document_id().is_none() {
-                    bail!("no document is open");
-                }
-                let images = workspace.editor().read(cx).document().images().count();
-                let notes = workspace.toast_layer().read(cx).ids();
-                workspace.editor().clone().update(cx, |editor, cx| {
-                    editor.insert_image_files(vec![path.clone()], window, cx)
-                });
-                Ok((images, notes))
-            })??;
+            let (images, notes) =
+                workspace.update(cx, |workspace, window, cx| -> Result<_> {
+                    if workspace.open_document_id().is_none() {
+                        bail!("no document is open");
+                    }
+                    let images = workspace.editor().read(cx).document().images().count();
+                    let notes = workspace.toast_layer().read(cx).ids();
+                    workspace.editor().clone().update(cx, |editor, cx| {
+                        editor.insert_image_files(vec![path.clone()], window, cx)
+                    });
+                    Ok((images, notes))
+                })??;
             let started = Instant::now();
             loop {
                 let said = workspace.update(cx, |workspace, _, cx| {

@@ -16,6 +16,11 @@
 //! glyph at its shaped position times the zoom, in its font at its size
 //! times the zoom. Nothing is shaped again for a zoom, so the glyphs of a
 //! row keep their places relative to each other at every size.
+//!
+//! A [`PlannedRow`] is a row in a view (an origin and a zoom) and needs no
+//! window to say where its backgrounds, underlines and strikethroughs
+//! are: the painter below paints them, and the print pass (`crate::print`)
+//! asks the same two functions with a sheet of paper as the view.
 
 use std::rc::Rc;
 
@@ -56,9 +61,13 @@ impl PlannedRow {
             })
     }
 
-    /// Paints what lies behind the row's text: highlight colours and the
-    /// chips of inline code.
-    pub(crate) fn paint_backgrounds(&self, window: &mut Window) {
+    /// The rectangles behind the row's text, in the pixels of the row's
+    /// view: highlight colours and the chips of inline code. Calls
+    /// `f(bounds, colour, corner radius)` for each, left to right.
+    ///
+    /// The screen paints them and the print pass puts them on its page:
+    /// the two cannot disagree about where a highlight is.
+    pub(crate) fn for_each_background(&self, mut f: impl FnMut(Bounds<Pixels>, Hsla, Pixels)) {
         let layout = &self.layout;
         let ink_box = layout.ink_box();
         for (ix, range) in self.marks() {
@@ -77,17 +86,60 @@ impl PlannedRow {
                 MarkShape::Code => (layout.code_box, px(3.5)),
             };
             let zoom = self.zoom;
-            window.paint_quad(
-                fill(
-                    Bounds::new(
-                        point(self.origin.x + x0 * zoom, self.origin.y + top * zoom),
-                        size((x1 - x0) * zoom, height * zoom),
-                    ),
-                    color,
-                )
-                .corner_radii(radius),
+            f(
+                Bounds::new(
+                    point(self.origin.x + x0 * zoom, self.origin.y + top * zoom),
+                    size((x1 - x0) * zoom, height * zoom),
+                ),
+                color,
+                radius,
             );
         }
+    }
+
+    /// The underlines and strikethroughs of the row, in the pixels of the
+    /// row's view. Calls `f(bounds, colour)` for each. Like
+    /// [`Self::for_each_background`], one geometry for screen and paper.
+    pub(crate) fn for_each_line(&self, mut f: impl FnMut(Bounds<Pixels>, Hsla)) {
+        let layout = &self.layout;
+        let zoom = self.zoom;
+        let baseline = self.origin.y + layout.baseline * zoom;
+        let thickness = px((f32::from(layout.font_size) * zoom / 16.).round().max(1.));
+        for (ix, range) in self.marks() {
+            let mark = &layout.decorations.marks[ix];
+            if mark.underline.is_none() && mark.strikethrough.is_none() {
+                continue;
+            }
+            let Some((x0, x1)) = layout.span_in_row(self.row, &range) else {
+                continue;
+            };
+            let mut line_at = |y: Pixels, color: Hsla| {
+                f(
+                    Bounds::new(
+                        point(self.origin.x + x0 * zoom, snap(y)),
+                        size((x1 - x0) * zoom, thickness),
+                    ),
+                    color,
+                );
+            };
+            if let Some(color) = mark.underline {
+                line_at(baseline + (layout.descent * zoom * 0.5).max(px(1.5)), color);
+            }
+            if let Some(color) = mark.strikethrough {
+                line_at(
+                    baseline - layout.x_height * zoom * 0.5 - thickness / 2.,
+                    color,
+                );
+            }
+        }
+    }
+
+    /// Paints what lies behind the row's text: highlight colours and the
+    /// chips of inline code.
+    pub(crate) fn paint_backgrounds(&self, window: &mut Window) {
+        self.for_each_background(|bounds, color, radius| {
+            window.paint_quad(fill(bounds, color).corner_radii(radius));
+        });
     }
 
     /// Paints the row's glyphs, underlines and strikethroughs.
@@ -129,34 +181,6 @@ impl PlannedRow {
                     .ok();
             }
         });
-
-        let thickness = px((f32::from(layout.font_size) * zoom / 16.).round().max(1.));
-        for (ix, range) in self.marks() {
-            let mark = &layout.decorations.marks[ix];
-            if mark.underline.is_none() && mark.strikethrough.is_none() {
-                continue;
-            }
-            let Some((x0, x1)) = layout.span_in_row(self.row, &range) else {
-                continue;
-            };
-            let mut line_at = |y: Pixels, color: Hsla| {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        point(self.origin.x + x0 * zoom, snap(y)),
-                        size((x1 - x0) * zoom, thickness),
-                    ),
-                    color,
-                ));
-            };
-            if let Some(color) = mark.underline {
-                line_at(baseline + (layout.descent * zoom * 0.5).max(px(1.5)), color);
-            }
-            if let Some(color) = mark.strikethrough {
-                line_at(
-                    baseline - layout.x_height * zoom * 0.5 - thickness / 2.,
-                    color,
-                );
-            }
-        }
+        self.for_each_line(|bounds, color| window.paint_quad(fill(bounds, color)));
     }
 }

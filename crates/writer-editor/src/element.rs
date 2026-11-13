@@ -27,7 +27,7 @@ use writer_ui::theme::{self, ActiveTheme};
 
 use crate::{
     config::{CaretStyle, EditorMode},
-    decorations::{self, BlockContext, CheckboxHit},
+    decorations::{self, BlockContext, CheckboxHit, PageNumber, ScreenSink},
     editor::Editor,
     geometry::{caret_rect, drawn_caret},
     layout::{
@@ -344,17 +344,10 @@ impl Editor {
                         .appearance
                         .is_dark()
                         .then_some(colors.border_strong.alpha(0.7));
-                    // The page number: in the lower part of the bottom
-                    // margin, so that the text above it keeps its air, and
-                    // smaller when the margin is small. No number in a
-                    // margin that has no room for one at all.
+                    // The page number, where the bottom margin has room
+                    // for one.
                     let margin = view.len(geometry.margin_bottom);
-                    let label_size = view
-                        .len(theme::UI_TEXT_XS)
-                        .max(px(8.))
-                        .min((margin * 0.5).max(px(6.)));
-                    let label_height = (label_size * 1.4).round();
-                    let numbered = margin >= label_height + px(2.);
+                    let number = PageNumber::in_margin(margin, view.len(theme::UI_TEXT_XS));
                     for page in geometry.page_at(scroll_y, env.pad_top)..pages {
                         let sheet = view.rect(Bounds::new(
                             point(geometry.sheet_x(), geometry.sheet_top(page, env.pad_top)),
@@ -369,24 +362,20 @@ impl Editor {
                             plan.sheet_hitboxes
                                 .push(window.insert_hitbox(visible, HitboxBehavior::Normal));
                         }
-                        if numbered {
+                        if let Some(number) = number {
                             let label = decorations::shape_label(
-                                window,
+                                window.text_system(),
                                 (page + 1).to_string().into(),
                                 env.style.ui_font.clone(),
-                                label_size,
+                                number.font_size,
                                 colors.faint,
                             );
                             plan.markers.push(PlannedMarker {
                                 origin: point(
                                     (sheet.left() + (sheet.size.width - label.width) / 2.).round(),
-                                    // Its middle two fifths of the way
-                                    // up the margin.
-                                    (sheet.bottom() - margin * 0.4 - label_height / 2.)
-                                        .min(sheet.bottom() - label_height - px(1.))
-                                        .round(),
+                                    number.top(sheet, margin),
                                 ),
-                                line_height: label_height,
+                                line_height: number.line_height,
                                 line: label,
                             });
                         }
@@ -422,8 +411,10 @@ impl Editor {
                 let rows = placed.row_at(view_top)..placed.row_at(view_bottom) + 1;
 
                 decorations::plan_block(
-                    &mut plan,
-                    &mut checkboxes,
+                    &mut ScreenSink {
+                        plan: &mut plan,
+                        checkboxes: &mut checkboxes,
+                    },
                     &BlockContext {
                         index,
                         block,
@@ -436,7 +427,6 @@ impl Editor {
                                 .is_some_and(|next| matches!(next.kind(), BlockKind::Quote)),
                         env,
                     },
-                    window,
                 );
 
                 // Comment anchors.
@@ -689,7 +679,7 @@ impl Editor {
             {
                 let env = lay.env();
                 let line = decorations::shape_label(
-                    window,
+                    window.text_system(),
                     self.config.placeholder.clone(),
                     env.style.body_font.clone(),
                     view.len(placed.layout.font_size),

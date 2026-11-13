@@ -463,7 +463,8 @@ impl WireError {
             | Error::OutdatedLibrary { .. }
             | Error::InApp { .. }
             | Error::Io { .. }
-            | Error::Store(_) => None,
+            | Error::Store(_)
+            | Error::Pictures { .. } => None,
         };
         WireError {
             code: error.code().to_string(),

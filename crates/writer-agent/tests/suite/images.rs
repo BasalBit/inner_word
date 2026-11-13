@@ -1652,3 +1652,40 @@ fn an_export_takes_the_pictures_with_it() {
         "one picture, used by two documents, is one file"
     );
 }
+
+/// A picture that cannot be read is not a missing one: with `images.db` damaged an export
+/// fails and writes nothing, where one whose picture the library does not have is written
+/// with the description in its place.
+#[test]
+fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing() {
+    let fx = closed_fixture();
+    let (doc, _) = harbour(&fx);
+    for ending in ["-wal", "-shm"] {
+        let mut file = fx.images_path().into_os_string();
+        file.push(ending);
+        std::fs::remove_file(file).ok();
+    }
+    // The header of the file of pictures overwritten: SQLite reads no database there.
+    let mut damaged = std::fs::read(fx.images_path()).unwrap();
+    damaged[..16].copy_from_slice(b"not a database!!");
+    std::fs::write(fx.images_path(), &damaged).unwrap();
+    let out = fx.dir.path().join("out");
+    for name in ["harbour.md", "harbour.docx"] {
+        let error = fx
+            .library
+            .export(&ExportRequest {
+                document: Some(doc.id.into()),
+                path: out.join(name),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "failed", "{error}");
+        let message = error.to_string();
+        assert!(
+            message.starts_with("the pictures of this export could not be read")
+                && message.contains("nothing was written"),
+            "{message}"
+        );
+    }
+    assert!(!out.exists(), "an export without its pictures was written");
+}

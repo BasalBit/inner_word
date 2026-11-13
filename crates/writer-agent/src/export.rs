@@ -6,6 +6,7 @@
 //! text has the description of each image on a line of its own.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use writer_core::{Document, ImageId};
@@ -42,14 +43,32 @@ fn store_format(format: ExportFormat) -> writer_export::ExportFormat {
 }
 
 /// The pictures of the library, for the exporters. One the library does not have is
-/// exported as a missing one (its description stands in for it).
-struct Pictures<'a>(&'a Store);
+/// exported as a missing one (its description stands in for it). One that could not be
+/// read (`images.db` damaged, busy past its timeout, of a newer version) is not a missing
+/// one: the first such error is kept, and the export fails with it instead of writing a
+/// file without its pictures.
+struct Pictures<'a> {
+    store: &'a Store,
+    failed: RefCell<Option<writer_store::StoreError>>,
+}
+
+impl Pictures<'_> {
+    fn keep<T>(&self, read: writer_store::Result<Option<T>>) -> Option<T> {
+        match read {
+            Ok(found) => found,
+            Err(error) => {
+                self.failed.borrow_mut().get_or_insert(error);
+                None
+            }
+        }
+    }
+}
 
 impl ImageSource for Pictures<'_> {
     fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
         let name = writer_store::ImageId(*id.as_bytes());
-        let info = self.0.image_info(&name).ok().flatten()?;
-        let bytes = self.0.image_bytes(&name).ok().flatten()?;
+        let info = self.keep(self.store.image_info(&name))?;
+        let bytes = self.keep(self.store.image_bytes(&name))?;
         Some(ImageData {
             bytes: Cow::Owned(bytes),
             format: match info.format {
@@ -177,7 +196,10 @@ impl Library {
                     .map(|(meta, document)| (title_of(meta).to_string(), document)),
             )
         };
-        let pictures = Pictures(store);
+        let pictures = Pictures {
+            store,
+            failed: RefCell::new(None),
+        };
         let source = source.with_images(&pictures);
         let mut options = ExportOptions::default();
         options.docx.created = metas.iter().map(|meta| meta.created_at).min().unwrap_or(0);
@@ -191,6 +213,9 @@ impl Library {
             dir: images_dir_name(&file_name),
         };
         let exported = export_package(&source, store_format(format), &options);
+        if let Some(source) = pictures.failed.into_inner() {
+            return Err(Error::Pictures { source });
+        }
         let bytes = exported.bytes;
         let beside = path.parent().unwrap_or(Path::new("")).to_path_buf();
         let assets: Vec<PathBuf> = exported

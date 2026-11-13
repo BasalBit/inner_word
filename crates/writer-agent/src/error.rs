@@ -347,6 +347,17 @@ pub enum Error {
     /// The library reported an error.
     #[error(transparent)]
     Store(writer_store::StoreError),
+    /// The pictures an export needs could not be read from the library (`images.db` is
+    /// damaged, busy past its timeout, or of a newer version). Nothing was written: a file
+    /// without its pictures is not exported as if it were whole.
+    #[error(
+        "the pictures of this export could not be read from the library ({source}), so \
+         nothing was written; try again in a moment"
+    )]
+    Pictures {
+        /// What the library said.
+        source: writer_store::StoreError,
+    },
 }
 
 impl Error {
@@ -367,7 +378,7 @@ impl Error {
             Error::FileExists { .. } => ErrorKind::FileExists,
             Error::OutdatedLibrary { .. } => ErrorKind::AppIsOpen,
             Error::InApp { kind, .. } => *kind,
-            Error::Io { .. } | Error::Store(_) => ErrorKind::Failed,
+            Error::Io { .. } | Error::Store(_) | Error::Pictures { .. } => ErrorKind::Failed,
         }
     }
 

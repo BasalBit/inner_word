@@ -1114,6 +1114,50 @@ fn no_toast_draws_its_message_past_its_edge(cx: &mut TestAppContext) {
 }
 
 /// The number in the debug form of a toast's id (`ToastId(3)`).
+/// `toast_bounds` is where each visible toast was drawn in the last frame,
+/// in window coordinates, oldest first, and empty without toasts.
+#[gpui::test]
+fn toast_bounds_are_where_the_toasts_were_drawn(cx: &mut TestAppContext) {
+    let (root, cx) = root_window(cx);
+    let toasts = root.read_with(cx, |root, _| root.toasts.clone());
+    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+
+    let ids = cx.update(|_, cx| {
+        toasts.update(cx, |layer, cx| {
+            vec![
+                layer.push(Toast::new("Exported to ~/Essay.md").success(), cx),
+                layer.push(
+                    Toast::new("Short one").duration(Duration::from_millis(500)),
+                    cx,
+                ),
+            ]
+        })
+    });
+    cx.run_until_parked();
+    let drawn = |cx: &mut VisualTestContext, id: &writer_ui::toast::ToastId| {
+        let selector = format!("toast-{}", toast_number(&format!("{id:?}")));
+        cx.debug_bounds(Box::leak(selector.into_boxed_str()))
+            .expect("the toast is on screen")
+    };
+    let expected: Vec<_> = ids.iter().map(|id| drawn(cx, id)).collect();
+    let bounds = toasts.read_with(cx, |layer, _| layer.toast_bounds());
+    assert_eq!(bounds, expected);
+    // oldest first, stacked downwards
+    assert!(bounds[0].origin.y < bounds[1].origin.y);
+    assert!(bounds.iter().all(|b| b.size.width > px(0.) && b.size.height > px(0.)));
+
+    // one expires: one left, where it is drawn now
+    cx.executor().advance_clock(Duration::from_millis(600));
+    cx.run_until_parked();
+    let bounds = toasts.read_with(cx, |layer, _| layer.toast_bounds());
+    assert_eq!(bounds, vec![drawn(cx, &ids[0])]);
+
+    // none: empty
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+}
+
 fn toast_number(debug: &str) -> String {
     debug.chars().filter(char::is_ascii_digit).collect()
 }

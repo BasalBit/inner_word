@@ -278,6 +278,40 @@ fn the_toast_layer_draws_the_menu(cx: &mut TestAppContext) {
     assert_eq!(*log.borrow(), ["rename"]);
 }
 
+/// The layer's toast bounds are toasts only: the open context menu, which
+/// the same layer draws, is never among them.
+#[gpui::test]
+fn toast_bounds_leave_the_open_menu_out(cx: &mut TestAppContext) {
+    let (host, cx, _log) = host_window(cx, true, 0);
+    let toasts = host.read_with(cx, |host, _| host.toasts.clone().unwrap());
+    right_click(cx, ROW);
+    let menu_bounds = menu(cx)
+        .expect("a menu is open")
+        .read_with(cx, |menu, _| menu.bounds())
+        .expect("the menu was drawn");
+    // a menu and no toast: nothing
+    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+
+    cx.update(|_, cx| {
+        toasts.update(cx, |layer, cx| {
+            layer.push(writer_ui::Toast::new("First"), cx);
+            layer.push(writer_ui::Toast::new("Second"), cx);
+        })
+    });
+    cx.run_until_parked();
+    assert!(is_open(cx), "the menu is still open");
+    let bounds = toasts.read_with(cx, |layer, _| layer.toast_bounds());
+    assert_eq!(
+        bounds,
+        vec![
+            cx.debug_bounds("toast-0").expect("drawn"),
+            cx.debug_bounds("toast-1").expect("drawn"),
+        ]
+    );
+    assert!(!bounds.contains(&menu_bounds));
+    assert!(bounds.iter().all(|toast| !toast.intersects(&menu_bounds)));
+}
+
 #[gpui::test]
 fn two_layers_draw_one_menu(cx: &mut TestAppContext) {
     let (_host, cx, log) = host_window(cx, true, 2);

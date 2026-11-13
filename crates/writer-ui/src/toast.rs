@@ -470,6 +470,9 @@ pub struct ToastLayer {
     entries: Vec<Entry>,
     next_id: u64,
     insets: Edges<Pixels>,
+    /// Where each toast was drawn in the last frame, in window
+    /// coordinates (written by the stack's prepaint).
+    drawn_bounds: Rc<RefCell<Vec<(ToastId, Bounds<Pixels>)>>>,
 }
 
 impl Default for ToastLayer {
@@ -481,6 +484,7 @@ impl Default for ToastLayer {
                 bottom: DEFAULT_BOTTOM_INSET,
                 ..Edges::default()
             },
+            drawn_bounds: Rc::default(),
         }
     }
 }
@@ -585,6 +589,26 @@ impl ToastLayer {
             .and_then(|entry| entry.drawn.borrow().clone())
     }
 
+    /// Where each visible toast was drawn in the last frame, in window
+    /// coordinates, oldest first; empty without toasts. A toast pushed
+    /// since the last frame is not among them until it is drawn.
+    ///
+    /// Toasts only: the open context menu, which this layer draws too, is
+    /// never among them. (What a native view over the window cuts holes
+    /// for, so that the toasts above it can be seen and clicked.)
+    pub fn toast_bounds(&self) -> Vec<Bounds<Pixels>> {
+        let drawn = self.drawn_bounds.borrow();
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                drawn
+                    .iter()
+                    .find(|(id, _)| *id == entry.id)
+                    .map(|(_, bounds)| *bounds)
+            })
+            .collect()
+    }
+
     /// Makes `layer` the target of [`show_toast`].
     pub fn set_global(layer: &Entity<ToastLayer>, cx: &mut App) {
         cx.set_global(GlobalToastLayer(layer.downgrade()));
@@ -601,13 +625,21 @@ pub fn show_toast(toast: Toast, cx: &mut App) -> Option<ToastId> {
 impl Render for ToastLayer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.entries.is_empty() {
+            self.drawn_bounds.borrow_mut().clear();
             // The layer is mounted over the whole window content by every
             // root view, which makes it the host of the context menu too.
             return div().child(ContextMenuLayer).into_any_element();
         }
         let theme = cx.theme();
         let colors = theme.colors;
+        let ids = self.ids();
+        let drawn_bounds = self.drawn_bounds.clone();
         div()
+            .on_children_prepainted(move |bounds, _, _| {
+                // The children are the toasts, in order, and then the
+                // context menu's layer, which is left out.
+                *drawn_bounds.borrow_mut() = ids.iter().copied().zip(bounds).collect();
+            })
             .absolute()
             .bottom(self.insets.bottom)
             .left(self.insets.left)

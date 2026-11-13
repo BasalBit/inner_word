@@ -74,6 +74,7 @@ icons! {
     Stop => "stop",
     Copy => "copy",
     Sparkle => "sparkle",
+    Globe => "globe",
 }
 
 /// The default icon size.
@@ -139,5 +140,17 @@ mod tests {
         }
         assert_eq!(crate::assets::list("icons/").len(), IconName::ALL.len());
         assert!(crate::assets::load("icons/missing.svg").is_none());
+    }
+
+    #[test]
+    fn the_globe_is_in_the_set() {
+        assert!(IconName::ALL.contains(&IconName::Globe));
+        assert_eq!(IconName::Globe.path(), "icons/globe.svg");
+        assert_eq!(IconName::Globe.name(), "globe");
+        let text = std::str::from_utf8(IconName::Globe.svg_bytes()).unwrap();
+        // drawn like the set: 1.5px round strokes, no fill
+        assert!(text.contains("stroke-width=\"1.5\""));
+        assert!(text.contains("stroke-linecap=\"round\""));
+        assert!(text.contains("fill=\"none\""));
     }
 }

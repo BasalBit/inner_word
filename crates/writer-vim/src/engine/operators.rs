@@ -692,8 +692,12 @@ impl Vim {
     /// `J`: joins `count` lines (at least two) starting at block `first`.
     /// Blocks are joined with one space (none before `)`, after white
     /// space, or when either side is empty); the leading white space of
-    /// the joined block goes. A void block joins like an empty line: it
-    /// disappears. Inside a code block the hard lines are joined instead.
+    /// the joined block goes. A divider or a page break joins like an
+    /// empty line: it disappears. An image does not: joining stops at one
+    /// (with an image as the next block, or on an image, nothing is
+    /// joined), because a picture is not something a line join should be
+    /// able to delete. Inside a code block the hard lines are joined
+    /// instead.
     pub(crate) fn join_lines(
         &mut self,
         cx: &mut Cx,
@@ -739,6 +743,11 @@ impl Vim {
                     break;
                 };
                 let next = &doc.blocks()[next_block];
+                if next_block != b && (next.kind().is_image() || blk.kind().is_image()) {
+                    // An image is never joined away: what was joined so
+                    // far stays, and the rest of the count is dropped.
+                    break;
+                }
                 if next_block != b && next.is_void() {
                     prev_last = None;
                     Step::DropBlock(next_block, brk)

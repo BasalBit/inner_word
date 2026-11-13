@@ -11,6 +11,11 @@
 //!   `### ` headings, `- ` bullet, `1. ` numbered, `[ ] ` / `[x] ` to-do,
 //!   `> ` quote, `~ ` code block. `---` alone is a divider, `===` a page
 //!   break.
+//! - `[image]` alone is an image, and `[image 1]` to `[image 9]` are nine
+//!   more, each with a width, an alignment and a description of its own
+//!   ([`picture`]). A block is only written so while it is exactly that
+//!   picture: one that lost its width, its alignment or its description on
+//!   the way is written `[image 3 changed]`, which no expectation matches.
 //! - `**bold**` and `__italic__` mark formatted text.
 //!
 //! Keys use Vim notation (`<Esc>`, `<C-r>`, `<CR>`, …). Keys the engine does
@@ -23,8 +28,8 @@
 use std::ops::Range;
 
 use writer_core::{
-    Block, BlockKind, Document, EditorOptions, EditorState, Fragment, InlineAttrs, Movement,
-    Position, Selection, TextRange, text,
+    Alignment, Block, BlockKind, Document, EditorOptions, EditorState, Fragment, Image, ImageId,
+    ImageWidth, InlineAttrs, Movement, Position, Selection, TextRange, text,
 };
 use writer_vim::{
     Effect, GoalColumn, HostRequest, Key, KeyCode, Mode, Outcome, RegisterContent, Scroll,
@@ -347,6 +352,46 @@ struct ParsedBuffer {
     anchor: Option<Position>,
 }
 
+/// The image block the notation writes `[image]` (`n` is 0) or
+/// `[image n]`: picture 0 is as plain as an image is, the others differ
+/// from it and from each other in everything an image has, so that a
+/// command that loses any of it shows.
+pub fn picture(n: u8) -> Block {
+    if n == 0 {
+        return Block::image(Image::new(ImageId::from_bytes([0; 16]), (800, 600), 72));
+    }
+    let mut image = Image::new(ImageId::from_bytes([n; 16]), (400 * u32::from(n), 300), 144);
+    image.width = ImageWidth::new(100 * u16::from(n) + 7);
+    image.description = format!("Picture {n}");
+    Block::image(image).with_alignment(if n % 2 == 1 {
+        Alignment::Center
+    } else {
+        Alignment::Right
+    })
+}
+
+/// `[image]` and `[image 1]` to `[image 9]`.
+fn parse_picture(bare: &str) -> Option<Block> {
+    let inner = bare.strip_prefix("[image")?.strip_suffix(']')?;
+    if inner.is_empty() {
+        return Some(picture(0));
+    }
+    let n: u8 = inner.strip_prefix(' ')?.parse().ok()?;
+    (1..=9).contains(&n).then(|| picture(n))
+}
+
+/// How the notation writes an image block (without the caret mark).
+fn render_picture(b: &Block) -> String {
+    let n = b.as_image().map_or(0, |image| image.id.as_bytes()[0]);
+    // Ids are not part of what a block is in the notation.
+    let same = |a: &Block, b: &Block| a.kind() == b.kind() && a.alignment() == b.alignment();
+    match n {
+        0 if same(b, &picture(0)) => "[image]".to_string(),
+        1..=9 if same(b, &picture(n)) => format!("[image {n}]"),
+        _ => format!("[image {n} changed]"),
+    }
+}
+
 fn parse_kind(line: &str) -> (BlockKind, &str) {
     let prefixes: [(&str, BlockKind); 9] = [
         ("### ", BlockKind::heading(3)),
@@ -385,19 +430,19 @@ fn parse_buffer(src: &str) -> ParsedBuffer {
             .chars()
             .filter(|c| *c != CARET && *c != ANCHOR)
             .collect();
-        if bare == "---" || bare == "===" {
-            let kind = if bare == "---" {
-                BlockKind::Divider
-            } else {
-                BlockKind::PageBreak
-            };
+        let void = match bare.as_str() {
+            "---" => Some(Block::new(BlockKind::Divider)),
+            "===" => Some(Block::new(BlockKind::PageBreak)),
+            other => parse_picture(other),
+        };
+        if let Some(void) = void {
             if line.contains(CARET) {
                 caret = Some(Position::new(bi, 0));
             }
             if line.contains(ANCHOR) {
                 anchor = Some(Position::new(bi, 0));
             }
-            blocks.push(Block::new(kind));
+            blocks.push(void);
             continue;
         }
         let (kind, body) = parse_kind(line);
@@ -465,11 +510,11 @@ fn render_block(b: &Block, caret: Option<usize>, anchor: Option<usize>) -> Strin
     match b.kind() {
         BlockKind::Divider | BlockKind::PageBreak | BlockKind::Image(_) => {
             mark(&mut out, 0);
-            out.push_str(match b.kind() {
-                BlockKind::Divider => "---",
-                BlockKind::Image(_) => "[image]",
-                _ => "===",
-            });
+            match b.kind() {
+                BlockKind::Divider => out.push_str("---"),
+                BlockKind::Image(_) => out.push_str(&render_picture(b)),
+                _ => out.push_str("==="),
+            }
             return out;
         }
         BlockKind::Paragraph => {}

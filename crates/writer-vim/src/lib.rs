@@ -275,6 +275,14 @@
 //!   empty line: the caret can rest on it, `dd` / `yy` / `p` treat it as a
 //!   line, `J` removes it, typing on it starts a paragraph after it, and
 //!   commands that need a character (`x`, `r`, `~`) do nothing.
+//! - An image is such a block too, with one difference: `J` never removes
+//!   it. Joining stops at an image (with one as the next block, or on one,
+//!   nothing is joined; a count joins what there is before it). `dd`,
+//!   `yy` and `p` take it whole, with its width, its alignment and its
+//!   description. In Insert mode Backspace at the start of the line below
+//!   an image and Delete at the end of the line above one go onto the
+//!   image first, as in the editor without Vim mode; the second press
+//!   deletes it.
 //!
 //! # Rich text
 //!

@@ -16,6 +16,9 @@ const BUFFERS: &[&str] = &[
     "|---",
     "---\n===\n|---",
     "x\n|\n\n\ny",
+    "|[image]",
+    "one\n[image 2]\n|two three\n[image 5]\n---\n[image 7]\nfour",
+    "[image 1]\n[image 2]\n|[image 3]",
 ];
 
 const KEYS: &[&str] = &[

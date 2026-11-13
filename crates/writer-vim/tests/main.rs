@@ -8,6 +8,7 @@ mod code;
 mod everyday;
 mod ex;
 mod fuzz;
+mod images;
 mod insert;
 mod large;
 mod motions;

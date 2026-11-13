@@ -20,6 +20,14 @@
 //! layout is settled; until then that number rests on estimates), and the
 //! rows on each page are the rows page view has on it.
 //!
+//! A row on paper holds the glyphs page view paints on that row, with the
+//! text they were shaped from (`painted_pieces`). For text that runs one
+//! way that is the row's range. A right-to-left paragraph that wraps is
+//! the exception: page view cuts its rows by logical bytes and paints a
+//! stretch of the visual line, which is other text, and its rows can run
+//! past the edge of the sheet. That wrapping is page view's and not right;
+//! paper has the same rows, not other ones.
+//!
 //! The pass estimates nothing. Where a block goes depends on the measures
 //! of the blocks before it and of at most `KEEP_LOOKAHEAD` after it (a
 //! heading stays with what follows), so it shapes that far ahead and then
@@ -523,43 +531,85 @@ impl PrintPass {
                     }));
                 });
                 let row = &layout.rows[row_ix];
-                let text = block.text().get(row.range.clone()).unwrap_or("");
-                if let (false, Some(line)) = (text.is_empty(), layout.lines.get(row.line)) {
-                    let mut glyphs = Vec::new();
+                let line = layout.lines.get(row.line);
+                // The text of the row is the text of the glyphs page view
+                // paints on it, by their own bytes.
+                let mut glyphs = Vec::new();
+                let mut painted = Vec::new();
+                if let Some(line) = line {
                     layout.for_each_glyph(row_ix, |_, glyph, x, scale| {
-                        let byte = (line.start + glyph.index).saturating_sub(row.range.start);
+                        painted.push(line.start + glyph.index);
                         glyphs.push(GlyphStart {
-                            byte: byte.min(text.len()) as u32,
+                            byte: 0,
                             x: x.into(),
                             scale,
                         });
                     });
+                }
+                let pieces = line.map_or_else(Vec::new, |line| {
+                    let mut clusters: Vec<usize> = line
+                        .layout
+                        .unwrapped_layout
+                        .runs
+                        .iter()
+                        .flat_map(|run| run.glyphs.iter().map(|glyph| line.start + glyph.index))
+                        .collect();
+                    clusters.sort_unstable();
+                    clusters.dedup();
+                    painted_pieces(
+                        row.range.clone(),
+                        &painted,
+                        &clusters,
+                        line.start + line.text.len(),
+                    )
+                });
+                let mut text = String::new();
+                let mut piece_starts = Vec::with_capacity(pieces.len());
+                for piece in &pieces {
+                    piece_starts.push(text.len());
+                    text.push_str(block.text().get(piece.clone()).unwrap_or(""));
+                }
+                // A byte of the block as a byte of the row's text.
+                let in_text = |byte: usize| -> usize {
+                    let ix = pieces
+                        .partition_point(|piece| piece.start <= byte)
+                        .saturating_sub(1);
+                    pieces.get(ix).map_or(0, |piece| {
+                        piece_starts[ix] + byte.clamp(piece.start, piece.end) - piece.start
+                    })
+                };
+                for (glyph, byte) in glyphs.iter_mut().zip(&painted) {
+                    glyph.byte = in_text(*byte).min(text.len()) as u32;
+                }
+                if !text.is_empty() {
                     // The fonts and the colours of the row: a run ends where
-                    // either changes.
+                    // either changes, and where a piece of the row ends.
                     let mut runs: Vec<RowRun> = Vec::new();
-                    let mut at = row.range.start;
-                    while at < row.range.end {
-                        let font_ix = fonts.partition_point(|(end, _)| *end <= at);
-                        let color_ix = colors.partition_point(|(end, _)| *end <= at);
-                        let font_end = fonts.get(font_ix).map_or(row.range.end, |(end, _)| *end);
-                        let (color_end, color) = colors
-                            .get(color_ix)
-                            .map_or((row.range.end, layout.ink), |(end, color)| (*end, *color));
-                        let end = font_end.min(color_end).min(row.range.end).max(at + 1);
-                        let font = fonts
-                            .get(font_ix)
-                            .or(fonts.last())
-                            .map_or(&env.style.body_font, |(_, font)| font);
-                        let font = spec_of(&mut self.specs, font);
-                        runs.push(RowRun {
-                            end: (end - row.range.start).min(text.len()),
-                            font,
-                            color: on_paper(color),
-                        });
-                        at = end;
+                    for piece in &pieces {
+                        let mut at = piece.start;
+                        while at < piece.end {
+                            let font_ix = fonts.partition_point(|(end, _)| *end <= at);
+                            let color_ix = colors.partition_point(|(end, _)| *end <= at);
+                            let font_end = fonts.get(font_ix).map_or(piece.end, |(end, _)| *end);
+                            let (color_end, color) = colors
+                                .get(color_ix)
+                                .map_or((piece.end, layout.ink), |(end, color)| (*end, *color));
+                            let end = font_end.min(color_end).min(piece.end).max(at + 1);
+                            let font = fonts
+                                .get(font_ix)
+                                .or(fonts.last())
+                                .map_or(&env.style.body_font, |(_, font)| font);
+                            let font = spec_of(&mut self.specs, font);
+                            runs.push(RowRun {
+                                end: in_text(end.min(piece.end)).min(text.len()),
+                                font,
+                                color: on_paper(color),
+                            });
+                            at = end;
+                        }
                     }
                     sheet.rows.push(Item::Row(TextRow {
-                        text: text.to_string(),
+                        text,
                         x: planned.origin.x.into(),
                         baseline: (planned.origin.y + layout.baseline).into(),
                         size: layout.font_size.into(),
@@ -587,6 +637,48 @@ impl PrintPass {
             items.extend(sheet.strokes);
         }
     }
+}
+
+/// The stretches of a block's text, in byte order, that a row paints:
+/// `range` is the row's range (block bytes), `painted` the block byte of
+/// every glyph page view paints on it, `clusters` the block byte of every
+/// glyph of its hard line, sorted, and `line_end` where that line ends.
+///
+/// Where every painted glyph is in the row's range (all text that runs one
+/// way, and a phrase of the other direction inside a row) that is the
+/// range. A right-to-left paragraph that wraps is cut into rows by its
+/// logical bytes and painted by the glyphs of a stretch of its visual line,
+/// which are other bytes: then the row is the clusters of those glyphs
+/// (from a glyph's byte to the next glyph's of the line), merged where
+/// they touch. So the text on paper is the text page view paints on that
+/// row, and every glyph has its own byte in it instead of being folded
+/// onto an end.
+pub(crate) fn painted_pieces(
+    range: std::ops::Range<usize>,
+    painted: &[usize],
+    clusters: &[usize],
+    line_end: usize,
+) -> Vec<std::ops::Range<usize>> {
+    if painted
+        .iter()
+        .all(|byte| (range.start..=range.end).contains(byte))
+    {
+        return vec![range];
+    }
+    let mut starts = painted.to_vec();
+    starts.sort_unstable();
+    starts.dedup();
+    let mut pieces: Vec<std::ops::Range<usize>> = Vec::new();
+    for start in starts {
+        let next = clusters.partition_point(|byte| *byte <= start);
+        let end = clusters.get(next).copied().unwrap_or(line_end).max(start);
+        match pieces.last_mut() {
+            Some(last) if last.end >= start => last.end = last.end.max(end),
+            _ => pieces.push(start..end),
+        }
+    }
+    pieces.retain(|piece| !piece.is_empty());
+    pieces
 }
 
 /// What one block puts on one sheet, in painting order.

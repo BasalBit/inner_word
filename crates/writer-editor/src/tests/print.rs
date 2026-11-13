@@ -27,7 +27,7 @@ use crate::{
         style::{MARKER_GAP, QUOTE_GUTTER},
         wrap::INLINE_CODE_SCALE,
     },
-    print::on_paper,
+    print::{on_paper, painted_pieces},
 };
 
 /// A4 portrait: 595.28 x 841.89 points, one-inch margins, a text area of
@@ -1582,4 +1582,43 @@ fn the_pages_of_the_pass_make_a_pdf_with_the_documents_text(cx: &mut TestAppCont
     let report = writer.finish().report;
     assert_eq!(report.rows, pdf.report.rows - others);
     assert_eq!(report.rows_off, 0, "{report:?}");
+}
+
+/// GPUI's test text system shapes everything left to right, so the rows of
+/// a right-to-left paragraph are given here as CoreText makes them: a
+/// Hebrew line of 40 letters of two bytes, 0..80, cut into rows of 40
+/// bytes by logical order, the first row painting the visual left of the
+/// line, which is its logical end.
+#[test]
+fn a_row_on_paper_is_the_text_its_glyphs_were_shaped_from() {
+    let clusters: Vec<usize> = (0..40).map(|letter| letter * 2).collect();
+    // Text that runs one way: the row's own range, whatever glyph stands
+    // at its end.
+    let ltr: Vec<usize> = (0..20).map(|letter| letter * 2).collect();
+    assert_eq!(painted_pieces(0..40, &ltr, &clusters, 80), vec![0..40]);
+    assert_eq!(painted_pieces(0..40, &[0, 40], &clusters, 80), vec![0..40]);
+    // The first row by bytes paints the letters 20..40 (bytes 40..80),
+    // right to left: its text on paper is those bytes, every glyph at a
+    // cluster of its own, not 0..40 with every glyph folded onto an end.
+    let visual_left: Vec<usize> = (20..40).rev().map(|letter| letter * 2).collect();
+    assert_eq!(
+        painted_pieces(0..40, &visual_left, &clusters, 80),
+        vec![40..80]
+    );
+    let visual_right: Vec<usize> = (0..20).rev().map(|letter| letter * 2).collect();
+    assert_eq!(
+        painted_pieces(40..80, &visual_right, &clusters, 80),
+        vec![0..40]
+    );
+    // A cluster of two glyphs (a letter with its point) is one piece.
+    let pointed = [0, 2, 6];
+    assert_eq!(
+        painted_pieces(60..80, &pointed, &[0, 2, 6, 8], 80),
+        vec![0..8]
+    );
+    // Glyphs of two stretches that do not touch: two pieces, in byte order.
+    assert_eq!(
+        painted_pieces(0..10, &[70, 72, 20], &clusters, 80),
+        vec![20..22, 70..74]
+    );
 }

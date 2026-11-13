@@ -33,6 +33,9 @@ fn op_bytes(op: &Op) -> usize {
                     std::mem::size_of::<Block>()
                         + b.text.capacity()
                         + b.runs.capacity() * std::mem::size_of::<crate::runs::Run>()
+                        // An image has no text, but its description is on
+                        // the heap (up to 4 KB of it).
+                        + b.kind.image().map_or(0, |i| i.description.capacity())
                 })
                 .sum::<usize>()
                 + 32
@@ -283,5 +286,36 @@ impl History {
             self.close();
             self.group_started = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::{BlockKind, Image, ImageId};
+
+    #[test]
+    fn the_description_of_an_image_counts_towards_the_budget() {
+        let splice = |description: &str| Op::Splice {
+            index: 0,
+            remove: 1,
+            insert: vec![Block::image(Image {
+                description: description.to_string(),
+                ..Image::new(ImageId::from_bytes([1; 16]), (8, 6), 72)
+            })],
+        };
+        let bare = op_bytes(&splice(""));
+        let described = op_bytes(&splice(&"x".repeat(Image::MAX_DESCRIPTION_CHARS)));
+        assert!(
+            described >= bare + Image::MAX_DESCRIPTION_CHARS,
+            "{described} against {bare}"
+        );
+        // A block without an image counts as it did.
+        let text = Op::Splice {
+            index: 0,
+            remove: 1,
+            insert: vec![Block::new(BlockKind::Divider)],
+        };
+        assert_eq!(op_bytes(&text), bare);
     }
 }

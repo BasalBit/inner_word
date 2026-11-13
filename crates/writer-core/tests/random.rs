@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use writer_core::{
     Alignment, Block, BlockId, BlockKind, CommentId, Document, EditorOptions, EditorState,
-    Fragment, Highlight, InlineAttrs, InlineStyle, Movement, Position, Rgb, SearchOptions,
-    Selection, TextRange,
+    Fragment, Highlight, Image, ImageId, ImageWidth, InlineAttrs, InlineStyle, Movement, Position,
+    Rgb, SearchOptions, Selection, TextRange,
 };
 
 /// xorshift64*: small, deterministic, good enough for test generation.
@@ -136,8 +136,45 @@ const TYPED: &[&str] = &[
     "\t",
 ];
 
+/// An image with values from all over their ranges, and beyond: whoever
+/// takes it has to bring them into range.
+fn random_image(r: &mut Rng) -> Image {
+    let mut image = Image::new(
+        ImageId::from_bytes([r.below(4) as u8; 16]),
+        *r.pick(&[
+            (800, 600),
+            (1170, 2532),
+            (1, 1),
+            (0, 0),
+            (4096, 9),
+            (u32::MAX, 3),
+        ]),
+        *r.pick(&[72, 144, 300, 0, u16::MAX]),
+    );
+    image.width = *r.pick(&[
+        ImageWidth::FULL,
+        ImageWidth::MIN,
+        ImageWidth::new(333),
+        ImageWidth::new(713),
+        ImageWidth::new(999),
+    ]);
+    image.description = r
+        .pick(&["", "A boat", " two\nlines\t", "e\u{301}\u{2028}x", "\u{0}"])
+        .to_string();
+    image
+}
+
+fn random_alignment(r: &mut Rng) -> Alignment {
+    *r.pick(&[
+        Alignment::Left,
+        Alignment::Center,
+        Alignment::Right,
+        Alignment::Justify,
+    ])
+}
+
 fn random_kind(r: &mut Rng) -> BlockKind {
-    match r.below(12) {
+    match r.below(13) {
         0 => BlockKind::heading(1 + r.below(6) as u8),
         1 => BlockKind::BulletItem,
         2 => BlockKind::NumberedItem,
@@ -150,6 +187,7 @@ fn random_kind(r: &mut Rng) -> BlockKind {
         },
         6 => BlockKind::Divider,
         7 => BlockKind::PageBreak,
+        8 => BlockKind::Image(random_image(r)),
         _ => BlockKind::Paragraph,
     }
 }
@@ -280,7 +318,7 @@ impl Runner {
     fn command(&mut self) -> (String, Undoable) {
         let r = &mut self.r;
         let e = &mut self.e;
-        let op = r.below(118);
+        let op = r.below(130);
         let name: String = match op {
             0..=9 => {
                 let a = random_position(r, e.document());
@@ -701,6 +739,91 @@ impl Runner {
                 }
                 return ("whole lines".into(), Undoable::Compound);
             }
+            110..=112 => {
+                // A picture where an insertion goes, or several at a
+                // boundary between blocks (a drop), in or out of range.
+                if r.chance(60) {
+                    let image = random_image(r);
+                    let alignment = random_alignment(r);
+                    assert!(e.insert_image(image, alignment));
+                    assert!(e.selected_image().is_some(), "the new image is selected");
+                } else {
+                    let at = r.below(e.document().block_count() + 3);
+                    let images: Vec<(Image, Alignment)> = (0..r.below(4))
+                        .map(|_| (random_image(r), random_alignment(r)))
+                        .collect();
+                    let n = images.len();
+                    assert_eq!(e.insert_images_at(at, images), n > 0);
+                    if n > 0 {
+                        assert!(e.selected_image().is_some(), "the last one is selected");
+                    }
+                }
+                "insert image".into()
+            }
+            113..=115 => {
+                // Width and description of any block, image or not, in or
+                // out of range: none of them moves the selection.
+                let i = r.below(e.document().block_count() + 2);
+                let sel = e.selection();
+                let was = e.document().block(i).and_then(Block::as_image).cloned();
+                let changed = match r.below(4) {
+                    0 => e.set_image_width(i, random_image(r).width),
+                    1 => e.step_image_width(i, *r.pick(&[1, -1, 3, -20, i32::MAX, 0])),
+                    2 => e.set_image_original_size(i),
+                    _ => e.set_image_description(i, &random_image(r).description),
+                };
+                assert_eq!(e.selection(), sel, "an image command moved the selection");
+                let is = e.document().block(i).and_then(Block::as_image).cloned();
+                assert_eq!(changed, was != is);
+                if changed && let (Some(was), Some(is)) = (&was, &is) {
+                    if was.width != is.width {
+                        // A width that was set is one the page allows.
+                        assert!(is.width <= e.max_image_width(is));
+                    }
+                    assert_eq!(was.id, is.id);
+                    assert_eq!(was.pixels, is.pixels);
+                }
+                "image width or description".into()
+            }
+            116..=118 => {
+                // A block dragged to another place.
+                let n = e.document().block_count();
+                let from = r.below(n + 1);
+                let to = r.below(n + 3);
+                let before: Vec<BlockId> = e.document().blocks().iter().map(|b| b.id()).collect();
+                let held = e.document().block(e.selection().head.block).map(|b| b.id());
+                let moved = e.move_block_to(from, to);
+                let after: Vec<BlockId> = e.document().blocks().iter().map(|b| b.id()).collect();
+                let mut expected = before.clone();
+                if from < n {
+                    let id = expected.remove(from);
+                    let to = to.min(n);
+                    expected.insert(if to > from { to - 1 } else { to }, id);
+                }
+                assert_eq!(after, expected, "move {from} to {to}");
+                assert_eq!(moved, after != before);
+                assert_eq!(
+                    e.document().block(e.selection().head.block).map(|b| b.id()),
+                    held,
+                    "the caret left its block"
+                );
+                "move block".into()
+            }
+            119..=120 => {
+                // A paragraph above or below a void block: only with the
+                // caret on one.
+                let on_void = e.selection().is_collapsed()
+                    && e.document().blocks()[e.selection().head.block].is_void();
+                let above = r.chance(50);
+                let void = e.selection().head.block;
+                assert_eq!(e.insert_paragraph_beside_void(above), on_void);
+                if on_void {
+                    let at = if above { void } else { void + 1 };
+                    assert_eq!(e.selection(), Selection::caret(Position::new(at, 0)));
+                    assert_eq!(e.document().blocks()[at].kind(), &BlockKind::Paragraph);
+                }
+                "paragraph beside void".into()
+            }
             _ => {
                 self.queries();
                 "queries".into()
@@ -725,6 +848,20 @@ impl Runner {
         let _ = d.find_in_block(p.block, "a", SearchOptions::default());
         let s = e.stats();
         assert_eq!(s, e.document().stats());
+        assert_eq!(
+            e.has_something_to_copy(),
+            !e.selection().is_collapsed() || e.selected_image().is_some()
+        );
+        if let Some((i, image)) = e.selected_image() {
+            assert_eq!(e.document().blocks()[i].as_image(), Some(image));
+            assert_eq!(e.copy().blocks().len(), 1);
+        }
+        let d = e.document();
+        assert_eq!(d.has_images(), d.images().count() > 0);
+        for (i, image) in d.images() {
+            assert_eq!(d.blocks()[i].as_image(), Some(image));
+            assert!(e.original_image_width(image) <= e.max_image_width(image));
+        }
         let d = e.document();
         let all = d.numbered_ordinals(0..d.block_count());
         for (i, o) in all.iter().enumerate() {

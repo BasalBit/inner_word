@@ -59,6 +59,20 @@
 //! - A void block (divider, page break, image) has one position, offset 0.
 //!   A range with a void block at either end includes that block: deleting
 //!   or copying it takes the divider along, and block commands touch it.
+//! - With the caret on a void block, typing and Enter start a paragraph
+//!   below it and shift-enter ([`EditorState::insert_soft_break`]) one
+//!   above it ([`EditorState::insert_paragraph_beside_void`]); Backspace
+//!   and forward delete remove the block.
+//! - The caret on an image is "the image is selected"
+//!   ([`EditorState::selected_image`]): copy and cut then take the image
+//!   ([`EditorState::has_something_to_copy`]). Backspace at the start of
+//!   the paragraph below an image, and forward delete at the end of the
+//!   block above one, **select the image first** and delete nothing but an
+//!   empty line the caret was in; the second press removes the image. A
+//!   divider or a page break still goes at the first press.
+//! - The width of an image is never stored wider than the page allows
+//!   ([`EditorState::set_image_width`], [`EditorState::max_image_width`]):
+//!   an image is not cut in two by a page break, so it has to fit on one.
 //! - A range that ends at offset 0 of a later text block does not include
 //!   that block: block commands do not touch it
 //!   ([`EditorState::touched_blocks`]), and when the range also starts at
@@ -124,6 +138,17 @@
 //! - **Formatting UI**: [`EditorState::format_state`], the `toggle_*`,
 //!   `set_*` and block commands; [`EditorState::touched_blocks`] tells which
 //!   blocks a block command acts on.
+//! - **Images**: [`EditorState::insert_image`] (at the caret) and
+//!   [`EditorState::insert_images_at`] (at a boundary between blocks, for
+//!   a drop) with [`EditorState::original_image_width`] as the first
+//!   width; [`EditorState::selected_image`];
+//!   [`EditorState::set_image_width`], [`EditorState::step_image_width`]
+//!   and [`EditorState::set_image_original_size`];
+//!   [`EditorState::set_image_description`];
+//!   [`EditorState::set_alignment`] for its place on the line;
+//!   [`EditorState::move_block_to`] for a drag to another place. The
+//!   bytes are never here: whoever calls has stored them and made the
+//!   [`ImageId`] before the document names it.
 //! - **Comments panel**: [`Document::all_comment_ranges`] once per refresh
 //!   (it walks every block's runs), [`Document::comment`] for the thread,
 //!   [`Document::is_orphaned`], [`Document::next_comment`] /
@@ -134,6 +159,8 @@
 //!   [`Document::settings`], [`Highlight::reference_rgb`].
 //! - **Persistence**: [`Document::to_json`] / [`Document::from_json`];
 //!   [`Document::plain_text`] and [`Document::title`] for the library index.
+//!   A document that holds an image is written as format version 2, any
+//!   other as version 1 (see [`serial`]).
 //!
 //! # Example
 //!

@@ -10,7 +10,7 @@ use super::{EditorState, inherited_attrs};
 
 /// Which way a removed void block hands over the caret.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Dir {
+pub(crate) enum Dir {
     Backward,
     Forward,
 }
@@ -43,7 +43,7 @@ pub(crate) fn continuation_kind(kind: &BlockKind, at_end: bool) -> BlockKind {
     match kind {
         BlockKind::Heading { .. } if at_end => BlockKind::Paragraph,
         BlockKind::TodoItem { .. } => BlockKind::TodoItem { checked: false },
-        BlockKind::Divider | BlockKind::PageBreak => BlockKind::Paragraph,
+        BlockKind::Divider | BlockKind::PageBreak | BlockKind::Image(_) => BlockKind::Paragraph,
         k => k.clone(),
     }
 }
@@ -227,11 +227,17 @@ impl EditorState {
         Position::new(pos.block, pos.offset + text.len())
     }
 
-    /// Inserts a soft line break (`\n` inside the block; shift-enter). On a
-    /// void block this behaves like Enter.
+    /// Inserts a soft line break (`\n` inside the block; shift-enter).
+    ///
+    /// With the caret on a void block (a divider, a page break, an image)
+    /// there is no text to break: it starts an empty paragraph **above**
+    /// the block and puts the caret there
+    /// ([`EditorState::insert_paragraph_beside_void`]). Enter starts the
+    /// one below; between them there is a way to write on either side of
+    /// a void block, also of one that is the first block of the document.
     pub fn insert_soft_break(&mut self) -> bool {
         if self.selection.is_collapsed() && self.doc.blocks[self.selection.head.block].is_void() {
-            return self.insert_paragraph_break();
+            return self.insert_paragraph_beside_void(true);
         }
         self.edit(EditKind::Typing, |ed| {
             ed.set_tx_classes(Some(text::CharClass::Space), Some(text::CharClass::Space));
@@ -468,7 +474,7 @@ impl EditorState {
 
     /// Removes the void block at `index`; the caret goes to the end of the
     /// previous block (`Backward`) or the start of the next (`Forward`).
-    fn remove_void(&mut self, index: usize, dir: Dir) {
+    pub(crate) fn remove_void(&mut self, index: usize, dir: Dir) {
         if self.doc.blocks.len() == 1 {
             self.splice(0, 1, vec![Block::new(BlockKind::Paragraph)]);
             self.caret_to(Position::ZERO);
@@ -501,9 +507,17 @@ impl EditorState {
     /// a block: an indented list item or paragraph outdents; a list item,
     /// heading or quote becomes a paragraph; a code block becomes paragraphs
     /// (one per line); a paragraph merges into the previous block (which
-    /// keeps its id and kind), or removes it if that is a void block or an
-    /// empty block above a paragraph with text (so deleting the empty line
-    /// under a heading's empty sibling never restyles the text).
+    /// keeps its id and kind), or removes it if that is a divider, a page
+    /// break or an empty block above a paragraph with text (so deleting the
+    /// empty line under a heading's empty sibling never restyles the text).
+    ///
+    /// **An image above is selected first, not removed**: at the start of a
+    /// paragraph below an image the caret goes onto the image, and only the
+    /// next Backspace (now on the image) removes it. A picture is not
+    /// deleted by one key press too many at the start of a line. An empty
+    /// paragraph the caret was in goes in the same step (the line was
+    /// deleted); from a paragraph with text only the caret moves, the
+    /// document is as it was and the result is `false`.
     pub fn backspace(&mut self) -> bool {
         if !self.selection.is_collapsed() {
             return self.delete_selection();
@@ -519,7 +533,31 @@ impl EditorState {
                 ed.caret_to(Position::new(pos.block, start));
             });
         }
+        if b.kind == BlockKind::Paragraph
+            && b.indent == 0
+            && pos.block > 0
+            && self.doc.blocks[pos.block - 1].kind.is_image()
+        {
+            return self.select_image_beside(pos.block, pos.block - 1);
+        }
         self.edit(EditKind::Other, |ed| ed.backspace_at_block_start(pos.block))
+    }
+
+    /// The caret, in the text block `from`, goes onto the image at block
+    /// `image` right above or below it instead of deleting it (see
+    /// [`EditorState::backspace`]). An empty `from` is removed in the same
+    /// step, which is then one undo step; otherwise nothing but the
+    /// selection changes. Returns whether the document changed.
+    fn select_image_beside(&mut self, from: usize, image: usize) -> bool {
+        if self.doc.blocks[from].is_empty() {
+            return self.edit(EditKind::Other, |ed| {
+                ed.splice(from, 1, Vec::new());
+                let image = if image > from { image - 1 } else { image };
+                ed.caret_to(Position::new(image, 0));
+            });
+        }
+        self.set_caret(Position::new(image, 0));
+        false
     }
 
     fn backspace_at_block_start(&mut self, i: usize) {
@@ -552,6 +590,7 @@ impl EditorState {
                 if prev.is_void() || (prev.is_empty() && !b.is_empty()) {
                     // A void block, or an empty block above text, is simply
                     // removed: the block with the text keeps its id and kind.
+                    // (An image never gets here: `backspace` selects it.)
                     self.splice(i - 1, 1, Vec::new());
                     self.caret_to(Position::new(i - 1, 0));
                 } else {
@@ -566,9 +605,17 @@ impl EditorState {
     /// Forward delete. With a selection, deletes it. Inside text, deletes the
     /// next grapheme. On a void block, removes the block. At the end of a
     /// block, merges the next block into this one, which keeps its id and
-    /// kind (or removes the next block if it is a void block). In an empty
-    /// block above a block with text, removes the empty block instead, so
-    /// the text below keeps its kind (a heading stays a heading).
+    /// kind (or removes the next block if it is a divider or a page break).
+    /// In an empty block above a block with text, removes the empty block
+    /// instead, so the text below keeps its kind (a heading stays a
+    /// heading).
+    ///
+    /// **An image below is selected first, not removed**, as
+    /// [`EditorState::backspace`] does with an image above: at the end of
+    /// a block above an image the caret goes onto the image, and the next
+    /// press removes it. An empty block the caret was in goes in the same
+    /// step; from a block with text only the caret moves and the result is
+    /// `false`.
     pub fn delete_forward(&mut self) -> bool {
         if !self.selection.is_collapsed() {
             return self.delete_selection();
@@ -591,6 +638,9 @@ impl EditorState {
         }
         if pos.block + 1 >= self.doc.blocks.len() {
             return false;
+        }
+        if self.doc.blocks[pos.block + 1].kind.is_image() {
+            return self.select_image_beside(pos.block, pos.block + 1);
         }
         self.edit(EditKind::Other, |ed| {
             let next = &ed.doc.blocks[pos.block + 1];

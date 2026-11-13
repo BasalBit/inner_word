@@ -6,6 +6,8 @@ use crate::block::{Alignment, BlockKind};
 use crate::fragment::Fragment;
 use crate::search::SearchOptions;
 
+mod images;
+
 const FAMILY: &str = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}";
 const E_ACUTE: &str = "e\u{301}";
 
@@ -290,13 +292,23 @@ fn typing_on_void_blocks() {
     assert_eq!(kinds(&e), vec![BlockKind::Divider, BlockKind::Paragraph]);
     assert_eq!(texts(&e), ["", "a"]);
     assert_eq!(caret(&e), p(1, 1));
-    // Soft break on a void block behaves like Enter.
+    // A soft break on a void block starts a paragraph above it (Enter
+    // starts the one below; `tests/images.rs` has both for every void
+    // kind).
     let mut e = ed(vec![para("x"), Block::new(BlockKind::PageBreak)]);
     e.set_caret(p(1, 5));
     assert_eq!(caret(&e), p(1, 0));
     e.insert_soft_break();
-    assert_eq!(kinds(&e)[2], BlockKind::Paragraph);
-    assert_eq!(caret(&e), p(2, 0));
+    assert_eq!(
+        kinds(&e),
+        vec![
+            BlockKind::Paragraph,
+            BlockKind::Paragraph,
+            BlockKind::PageBreak
+        ]
+    );
+    assert_eq!(texts(&e), ["x", "", ""]);
+    assert_eq!(caret(&e), p(1, 0));
 }
 
 #[test]

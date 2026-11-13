@@ -6,6 +6,7 @@ use crate::history::EditKind;
 use crate::position::Position;
 
 use super::blocks::clean_fragment_blocks;
+use super::text_cmds::Dir;
 use super::{EditorState, inherited_attrs};
 
 /// Joins two neighbouring blocks if possible. A non-void block with text
@@ -34,15 +35,34 @@ fn join(a: Block, b: Block) -> Vec<Block> {
 }
 
 impl EditorState {
-    /// The selection as a [`Fragment`] (without comment anchors).
+    /// Whether [`EditorState::copy`] would give something: the selection is
+    /// a range, or the caret is on an image.
+    pub fn has_something_to_copy(&self) -> bool {
+        !self.selection.is_collapsed() || self.selected_image().is_some()
+    }
+
+    /// The selection as a [`Fragment`] (without comment anchors). With the
+    /// caret on an image ([`EditorState::selected_image`]) that is the
+    /// image: a fragment of its one block, with its width, its alignment
+    /// and its description, which [`EditorState::paste`] puts back as a
+    /// block of its own. A caret anywhere else gives an empty fragment.
     pub fn copy(&self) -> Fragment {
+        if let Some((index, _)) = self.selected_image() {
+            return self.doc.block_fragment(index..index + 1);
+        }
         self.doc.fragment(self.selection.range())
     }
 
-    /// Copies the selection and deletes it (one undo step).
+    /// Copies the selection and deletes it (one undo step). With the caret
+    /// on an image that is the image: its block is removed and the caret
+    /// goes where Backspace on it leaves it (the end of the block before).
     pub fn cut(&mut self) -> Fragment {
         let f = self.copy();
-        self.delete_selection();
+        if let Some((index, _)) = self.selected_image() {
+            self.edit(EditKind::Other, |ed| ed.remove_void(index, Dir::Backward));
+        } else {
+            self.delete_selection();
+        }
         f
     }
 

@@ -661,3 +661,34 @@ fn quick_open_keeps_the_folder_in_view_beside_a_long_title(cx: &mut TestAppConte
         }
     }
 }
+
+/// Every title the palette and the list of shortcuts show is in sentence
+/// case: a capital at the start, and after that only for a name. The crates
+/// that write their titles Like This are brought to it (`lib.rs`,
+/// `commands::in_sentence_case`); the app's own are written so. (Found in
+/// review: "Cancel Printing" stood in title case among "Save now" and
+/// "Rename document"; the menu bar's item keeps title case.)
+#[gpui::test]
+fn every_command_title_is_in_sentence_case(cx: &mut TestAppContext) {
+    use writer_app::commands::{all, sentence_case};
+    init(cx);
+    // The names a title may hold, beside those `sentence_case` keeps.
+    const NAMES: [&str; 3] = ["The Writer", "Paper", "Night"];
+    let titles: Vec<String> = cx.update(|cx| {
+        all(cx)
+            .into_iter()
+            .map(|command| command.title.to_string())
+            .collect()
+    });
+    assert!(titles.len() > 100, "{}", titles.len());
+    let not: Vec<&String> = titles
+        .iter()
+        .filter(|title| {
+            let without_names = NAMES
+                .iter()
+                .fold(title.to_string(), |title, name| title.replace(name, "name"));
+            sentence_case(&without_names) != without_names
+        })
+        .collect();
+    assert!(not.is_empty(), "not in sentence case: {not:?}");
+}

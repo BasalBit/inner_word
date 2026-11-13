@@ -622,8 +622,8 @@ fn print_is_in_the_menu_bar_the_title_menu_the_palette_and_vim(cx: &mut TestAppC
         let cancel = writer_app::commands::all(cx)
             .into_iter()
             .find(|command| command.action_name() == "workspace::CancelPrint")
-            .expect("Cancel Printing is a command");
-        assert_eq!(cancel.label(), "File: Cancel Printing");
+            .expect("Cancel printing is a command");
+        assert_eq!(cancel.label(), "File: Cancel printing");
     });
 
     // Vim's command line.
@@ -758,7 +758,7 @@ fn a_second_print_does_nothing_while_one_is_under_way(cx: &mut TestAppContext) {
 // ----- cancel -------------------------------------------------------------------------------
 
 /// A book takes a while: after 0.4 s a note says so, and "Cancel
-/// Printing" stops it from the palette, from the note's button, from a
+/// printing" stops it from the palette, from the note's button, from a
 /// key the user gave it, and by dismissing the notes.
 #[gpui::test]
 fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
@@ -884,7 +884,7 @@ fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
 
 // ----- keys ---------------------------------------------------------------------------------
 
-/// Print and Cancel Printing are rows "Anywhere" without a key, take one
+/// Print and Cancel printing are rows "Anywhere" without a key, take one
 /// in the list, and are entries of the shortcuts file.
 #[gpui::test]
 fn print_has_no_key_and_takes_one(cx: &mut TestAppContext) {
@@ -895,7 +895,7 @@ fn print_has_no_key_and_takes_one(cx: &mut TestAppContext) {
             collect_shortcuts(cx)
                 .into_iter()
                 .filter(|row| {
-                    row.title.as_ref() == "Print" || row.title.as_ref() == "Cancel Printing"
+                    row.title.as_ref() == "Print" || row.title.as_ref() == "Cancel printing"
                 })
                 .map(|row| {
                     (
@@ -914,7 +914,7 @@ fn print_has_no_key_and_takes_one(cx: &mut TestAppContext) {
         rows(cx),
         [
             ("Print".to_string(), Place::Anywhere, vec![]),
-            ("Cancel Printing".to_string(), Place::Anywhere, vec![]),
+            ("Cancel printing".to_string(), Place::Anywhere, vec![]),
         ]
     );
     // No key of the default keymap prints: cmd-p opens a document.
@@ -979,7 +979,7 @@ fn print_has_no_key_and_takes_one(cx: &mut TestAppContext) {
     assert_eq!(print["default"], serde_json::json!([]));
     assert_eq!(print["keys"], serde_json::json!(["ctrl-alt-p"]));
     let cancel = entry("workspace::CancelPrint");
-    assert_eq!(cancel["title"], "Cancel Printing");
+    assert_eq!(cancel["title"], "Cancel printing");
     assert_eq!(cancel["where"], "Anywhere");
     assert_eq!(cancel["keys"], serde_json::json!([]));
 }

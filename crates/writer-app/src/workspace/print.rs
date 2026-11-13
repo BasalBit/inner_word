@@ -35,7 +35,7 @@
 //!    seconds.
 //! 4. A job that is still preparing after [`NOTE_DELAY`] says so in a note
 //!    at the bottom, "Preparing to print …", whose button is the command
-//!    "Cancel Printing". The command is in the palette and in File too (a
+//!    "Cancel printing". The command is in the palette and in File too (a
 //!    toast's button has no way in from the keyboard), and "Dismiss
 //!    notifications" cancels as well: otherwise the note would go, the work
 //!    would go on unseen and the print panel would come up unannounced.
@@ -50,7 +50,7 @@
 //! # When the commands are there
 //!
 //! "Print" has a handler while a document is open **and** the app was
-//! given a target; "Cancel Printing" only while a job is preparing. The
+//! given a target; "Cancel printing" only while a job is preparing. The
 //! menu bar greys an item out without a handler, and the title's menu has
 //! "Print…" under the same condition.
 //!
@@ -180,7 +180,7 @@ impl Workspace {
 
     // ----- the commands ---------------------------------------------------------------
 
-    /// The handlers of "Print" and "Cancel Printing", on the workspace
+    /// The handlers of "Print" and "Cancel printing", on the workspace
     /// root: the first while a document is open and print jobs have
     /// somewhere to go, the second while pages are being prepared. The
     /// menu bar greys their items out otherwise.
@@ -304,7 +304,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// "Cancel Printing": stops preparing the pages. Nothing is handed to
+    /// "Cancel printing": stops preparing the pages. Nothing is handed to
     /// the target. Does nothing unless a job is preparing (a job in the
     /// print panel is cancelled there).
     pub fn cancel_print(&mut self, cx: &mut Context<Self>) {

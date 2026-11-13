@@ -224,7 +224,7 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "page range",
             "copies",
         ]),
-        CommandDescriptor::new("Cancel Printing", CATEGORY_FILE, CancelPrint)
+        CommandDescriptor::new("Cancel printing", CATEGORY_FILE, CancelPrint)
             .keywords(["stop", "print", "abort"]),
         CommandDescriptor::new("Save now", CATEGORY_FILE, SaveNow)
             .keywords(["write", "store", "autosave"]),

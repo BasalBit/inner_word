@@ -16,12 +16,12 @@
 
 #![allow(unexpected_cfgs)]
 
-use std::{path::PathBuf, process::ExitCode, sync::Arc};
+use std::{cell::Cell, path::PathBuf, process::ExitCode, rc::Rc, sync::Arc};
 
 use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 use writer_print::{
     Anchor, Color, FontSpec, GlyphStart, Item, JobInfo, Label, Page, PdfFile, PdfWriter,
-    PrintRequest, RectItem, RowRun, TextRow, check_selectors, run_save_job,
+    PrintError, PrintRequest, RectItem, RowRun, TextRow, check_selectors, run_save_job, run_sheet,
 };
 
 const A4: (f32, f32) = (595.276, 841.89);
@@ -250,6 +250,49 @@ fn main() -> ExitCode {
             }
         }
     }
+    // What is no PDF is refused before AppKit is asked for anything, and so is
+    // a sheet without a window: `done` is dropped without having run.
+    let nothing = PdfWriter::new(&JobInfo {
+        title: String::new(),
+        creator: String::new(),
+    })
+    .finish();
+    let refused = run_save_job(
+        &PrintRequest {
+            pdf: &nothing,
+            paper: A4,
+            title: "Nothing",
+        },
+        &folder.join("Nothing.pdf"),
+    );
+    check(
+        refused == Err(PrintError::NotAPdf) && !folder.join("Nothing.pdf").exists(),
+        &format!("a PDF without pages is not printed ({refused:?})"),
+        &mut failures,
+    );
+    let ran = Rc::new(Cell::new(false));
+    let done = {
+        let ran = ran.clone();
+        Box::new(move |_| ran.set(true))
+    };
+    // SAFETY: on the main thread; no window is given, and none is touched.
+    let shown = unsafe {
+        run_sheet(
+            &PrintRequest {
+                pdf: &pdf,
+                paper: A4,
+                title: "Save job",
+            },
+            std::ptr::null_mut(),
+            done,
+        )
+    };
+    check(
+        matches!(shown, Err(PrintError::Failed(_))) && !ran.get() && Rc::strong_count(&ran) == 1,
+        &format!("no sheet without a window ({shown:?})"),
+        &mut failures,
+    );
+
     std::fs::remove_dir_all(&folder).ok();
 
     if failures.is_empty() {

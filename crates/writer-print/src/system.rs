@@ -454,3 +454,151 @@ pub fn check_selectors() -> Result<(), Vec<String>> {
         Err(failed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+    };
+
+    use super::*;
+    use crate::{JobInfo, Page, PdfWriter};
+
+    fn a_pdf() -> Pdf {
+        let mut writer = PdfWriter::new(&JobInfo {
+            title: "A page".to_string(),
+            creator: "A test".to_string(),
+        });
+        writer.add_page(&Page {
+            width: 595.276,
+            height: 841.89,
+            items: Vec::new(),
+        });
+        writer.finish()
+    }
+
+    /// Three objects for a sheet's end to release.
+    fn held() -> [*mut Object; 3] {
+        // SAFETY: `new` on NSObject returns an object the caller owns.
+        [(); 3].map(|()| unsafe { msg_send![class!(NSObject), new] })
+    }
+
+    #[test]
+    fn the_delegate_hands_the_result_back() {
+        let delegate = delegate().expect("the delegate of the print sheet");
+        // The one object, however often it is asked for.
+        assert_eq!(delegate, super::delegate().unwrap());
+        // It answers the selector the print operation is given, with the
+        // types AppKit calls it with: nothing back; the operation, a BOOL
+        // and a pointer in.
+        let selector = sel!(printOperationDidRun:success:contextInfo:);
+        // SAFETY: a live object of a registered class.
+        let class = unsafe { &*delegate }.class();
+        let method = class
+            .instance_method(selector)
+            .expect("the delegate has the method");
+        assert_eq!(method.return_type(), <() as objc::Encode>::encode());
+        assert_eq!(method.arguments_count(), 5);
+        assert_eq!(
+            method.argument_type(2),
+            Some(<*mut Object as objc::Encode>::encode())
+        );
+        assert_eq!(
+            method.argument_type(3),
+            Some(<BOOL as objc::Encode>::encode())
+        );
+        assert_eq!(
+            method.argument_type(4),
+            Some(<*mut c_void as objc::Encode>::encode())
+        );
+
+        // Called the way AppKit calls it when a sheet has ended: `done` gets
+        // the result, once, and what was held is let go.
+        for success in [YES, NO] {
+            let (sender, receiver) = mpsc::channel();
+            let context = Box::into_raw(Box::new(SheetEnd {
+                done: Box::new(move |printed| sender.send(printed).expect("the receiver")),
+                held: held(),
+            }));
+            // SAFETY: the delegate's own method with the types it declares;
+            // the context is a `SheetEnd` it takes over.
+            unsafe {
+                let _: () = msg_send![delegate,
+                    printOperationDidRun: std::ptr::null_mut::<Object>()
+                    success: success
+                    contextInfo: context.cast::<c_void>()];
+            }
+            assert_eq!(receiver.try_recv(), Ok(success != NO));
+            assert!(receiver.try_recv().is_err(), "once");
+        }
+
+        // A panic in `done` does not travel into AppKit, and nothing happens
+        // without a context.
+        let context = Box::into_raw(Box::new(SheetEnd {
+            done: Box::new(|_| panic!("a closure that does more than send")),
+            held: held(),
+        }));
+        // SAFETY: as above.
+        unsafe {
+            let _: () = msg_send![delegate,
+                printOperationDidRun: std::ptr::null_mut::<Object>()
+                success: YES
+                contextInfo: context.cast::<c_void>()];
+            let _: () = msg_send![delegate,
+                printOperationDidRun: std::ptr::null_mut::<Object>()
+                success: YES
+                contextInfo: std::ptr::null_mut::<c_void>()];
+        }
+    }
+
+    #[test]
+    fn nothing_is_started_off_the_main_thread() {
+        // A test runs on a thread of the harness: AppKit must not be asked
+        // for a print operation from here, and is not.
+        assert!(!on_main_thread());
+        let pdf = a_pdf();
+        let request = PrintRequest {
+            pdf: &pdf,
+            paper: (595.276, 841.89),
+            title: "A page",
+        };
+        let saved = run_save_job(&request, Path::new("/nonexistent/never-written.pdf"));
+        assert!(matches!(saved, Err(PrintError::Failed(_))), "{saved:?}");
+        assert!(!Path::new("/nonexistent/never-written.pdf").exists());
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let done = {
+            let ran = ran.clone();
+            Box::new(move |_| ran.store(true, Ordering::SeqCst))
+        };
+        // SAFETY: the thread is asked about before the window is touched;
+        // no window is given at all.
+        let shown = unsafe { run_sheet(&request, std::ptr::null_mut(), done) };
+        assert!(matches!(shown, Err(PrintError::Failed(_))), "{shown:?}");
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "`done` is dropped without having run"
+        );
+        assert_eq!(Arc::strong_count(&ran), 1, "and it is dropped");
+    }
+
+    #[test]
+    fn an_error_says_what_went_wrong() {
+        assert_eq!(
+            PrintError::NotAPdf.to_string(),
+            "The pages could not be read as a PDF."
+        );
+        assert_eq!(
+            PrintError::NoOperation.to_string(),
+            "macOS made no print job for the pages."
+        );
+        assert_eq!(PrintError::Failed("Why.".to_string()).to_string(), "Why.");
+        let error: Box<dyn std::error::Error> = Box::new(PrintError::NotAPdf);
+        assert!(error.source().is_none());
+    }
+}

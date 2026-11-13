@@ -334,6 +334,15 @@ struct Marker {
     xml: String,
 }
 
+/// How many bytes of pictures one package holds at most. The archive has
+/// no ZIP64 records: its offsets are 32 bits, so nothing can stand beyond
+/// 4 GB, and a package that tried would be one no reader opens. This
+/// leaves room for the text. A picture that would pass it is written as a
+/// missing one (its description), so that the file is whole. (The library
+/// stores a picture of 16 MB at most: this is more than 200 of the largest
+/// in one export.)
+pub(crate) const MAX_MEDIA_BYTES: u64 = 3_500_000_000;
+
 /// English Metric Units, the unit of a drawing's size, per point.
 const EMU_PER_POINT: f64 = 12_700.0;
 
@@ -399,8 +408,11 @@ struct Builder<'a, 's> {
     rels: Vec<Rel>,
     link_ids: HashMap<String, usize>,
     media: Vec<Media<'s>>,
+    /// How many bytes of pictures the package may still take.
+    media_room: u64,
     /// The relationship of every image met so far, by index into `rels`;
-    /// `None` for one whose bytes the source does not have.
+    /// `None` for one whose bytes the source does not have (or that the
+    /// package has no room for).
     image_rels: HashMap<ImageId, Option<usize>>,
     /// How many drawings have been written: the id of the next is one more.
     drawings: u32,
@@ -429,7 +441,10 @@ impl Builder<'_, '_> {
         let index = match self.image_rels.get(&id) {
             Some(known) => *known,
             None => {
-                let index = self.source.image(id).map(|data| {
+                let room = self.media_room;
+                let fits = |data: &crate::ImageData<'_>| data.bytes.len() as u64 <= room;
+                let index = self.source.image(id).filter(fits).map(|data| {
+                    self.media_room -= data.bytes.len() as u64;
                     self.media.push(Media {
                         name: format!("image{}.{}", self.media.len() + 1, data.format.extension()),
                         format: data.format,
@@ -1038,6 +1053,17 @@ pub(crate) fn build<'s>(
     metrics: &Metrics,
     language: Option<&Lang>,
 ) -> Body<'s> {
+    build_with_room(source, options, metrics, language, MAX_MEDIA_BYTES)
+}
+
+/// [`build`] for a package that takes `media_room` bytes of pictures.
+fn build_with_room<'s>(
+    source: &ExportSource<'s>,
+    options: &DocxOptions,
+    metrics: &Metrics,
+    language: Option<&Lang>,
+    media_room: u64,
+) -> Body<'s> {
     let mut builder = Builder {
         source,
         options,
@@ -1053,6 +1079,7 @@ pub(crate) fn build<'s>(
         rels: Vec::new(),
         link_ids: HashMap::new(),
         media: Vec::new(),
+        media_room,
         image_rels: HashMap::new(),
         drawings: 0,
         numbering: Allocator::new(),
@@ -1176,5 +1203,68 @@ mod tests {
              <w:u w:val=\"single\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFF176\"/><w:rtl/><w:lang w:val=\"en-GB\"/></w:rPr>"
         );
         assert_eq!(RunProps::default().xml(), "");
+    }
+
+    #[test]
+    fn extents() {
+        let image = |pixels: (u32, u32), thousandths: u16| writer_core::Image {
+            width: writer_core::ImageWidth::new(thousandths),
+            ..writer_core::Image::new(ImageId::from_bytes([1; 16]), pixels, 72)
+        };
+        // Half of a column of 400 points, twice as wide as high.
+        assert_eq!(
+            image_extent(&image((1000, 500), 500), 400.0, 600.0),
+            (200 * 12_700, 100 * 12_700)
+        );
+        // Higher than the text area: as high as its whole points.
+        assert_eq!(
+            image_extent(&image((500, 1000), 1000), 400.0, 600.9),
+            (300 * 12_700, 600 * 12_700)
+        );
+        // Never nothing, whatever the page.
+        assert_eq!(image_extent(&image((1, 1), 50), 0.0, 0.0), (635, 635));
+        let (width, height) = image_extent(&image((100_000, 1), 50), 400.0, 600.0);
+        assert_eq!((width, height), (20 * 12_700, 3));
+    }
+
+    /// A package has room for so many bytes of pictures; one more is
+    /// written as a missing picture, and the next small one fits again.
+    #[test]
+    fn a_package_takes_no_more_pictures_than_its_archive_can_hold() {
+        struct Three;
+        impl crate::ImageSource for Three {
+            fn image(&self, id: ImageId) -> Option<crate::ImageData<'_>> {
+                let size = match id.as_bytes()[0] {
+                    1 => 100,
+                    2 => 151,
+                    _ => 150,
+                };
+                Some(crate::ImageData {
+                    bytes: Cow::Owned(vec![7; size]),
+                    format: ImageFileFormat::Png,
+                })
+            }
+        }
+        let block = |n: u8| {
+            let mut image = writer_core::Image::new(ImageId::from_bytes([n; 16]), (10, 10), 72);
+            image.description = format!("picture {n}");
+            Block::image(image)
+        };
+        // The second would pass the room, the third fills it exactly, and
+        // the first again is the part that is there already.
+        let doc = Document::from_blocks(vec![block(1), block(2), block(3), block(1), block(2)]);
+        let source = ExportSource::single("T", &doc).with_images(&Three);
+        let options = DocxOptions::default();
+        let metrics = Metrics::new(&options);
+        let body = build_with_room(&source, &options, &metrics, None, 250);
+        let sizes: Vec<usize> = body.media.iter().map(|m| m.bytes.len()).collect();
+        assert_eq!(sizes, [100, 150]);
+        assert_eq!(body.document.matches("<w:drawing>").count(), 3);
+        assert_eq!(body.document.matches(">picture 2</w:t>").count(), 2);
+        assert_eq!(body.rels.len(), 2);
+        // With the room a package has, all of them are pictures.
+        let body = build(&source, &options, &metrics, None);
+        assert_eq!(body.media.len(), 3);
+        assert_eq!(body.document.matches("<w:drawing>").count(), 5);
     }
 }

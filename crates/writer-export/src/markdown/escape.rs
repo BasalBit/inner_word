@@ -302,14 +302,21 @@ pub(crate) fn image_alt(description: &str) -> String {
         .split(['\n', '\r'])
         .collect::<Vec<_>>()
         .join(" ");
-    escape_text(
+    let escaped = escape_text(
         &line,
         ChunkPosition {
             in_link: true,
             ..ChunkPosition::default()
         },
         TextContext::for_text(&line),
-    )
+    );
+    // `![^1](…)`: to some parsers a bracket that opens with a caret is a
+    // footnote reference before it is anything else.
+    if escaped.starts_with('^') {
+        format!("\\{escaped}")
+    } else {
+        escaped
+    }
 }
 
 /// The destination of an image: a reference (`image:<id>`) or the path of
@@ -538,6 +545,39 @@ mod tests {
             escape_text("a ] b [ c", pos, TextContext::default()),
             "a \\] b \\[ c"
         );
+    }
+
+    #[test]
+    fn image_descriptions_and_destinations() {
+        assert_eq!(image_alt("The harbour at dusk"), "The harbour at dusk");
+        assert_eq!(image_alt(""), "");
+        assert_eq!(image_alt("a ] b [ c"), "a \\] b \\[ c");
+        assert_eq!(image_alt("*a* `b`"), "\\*a\\* \\`b\\`");
+        assert_eq!(image_alt("5 * 3 & snake_case"), "5 * 3 & snake_case");
+        assert_eq!(image_alt("two\nlines"), "two lines");
+        assert_eq!(image_alt("^1"), "\\^1");
+        assert_eq!(image_alt("a^1"), "a^1");
+        assert_eq!(image_alt("ends \\"), "ends \\\\");
+
+        assert_eq!(
+            image_destination("image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718"),
+            "image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718"
+        );
+        assert_eq!(
+            image_destination("p/image-3f2a9c1b.png"),
+            "p/image-3f2a9c1b.png"
+        );
+        assert_eq!(image_destination("p(1)/a.png"), "p\\(1\\)/a.png");
+        assert_eq!(image_destination("my p/a.png"), "<my p/a.png>");
+        assert_eq!(image_destination("my (p)/a.png"), "<my (p)/a.png>");
+        assert_eq!(
+            image_destination("a <b>\\ c/a.png"),
+            "<a \\<b\\>\\\\ c/a.png>"
+        );
+        assert_eq!(image_destination("R&amp;D x/a.png"), "<R\\&amp;D x/a.png>");
+        assert_eq!(image_destination("a\nb c/a.png"), "<a%0Ab c/a.png>");
+        assert_eq!(image_destination("a\u{a0}b/a.png"), "<a\u{a0}b/a.png>");
+        assert_eq!(image_destination(""), "<>");
     }
 
     #[test]

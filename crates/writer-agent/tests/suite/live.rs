@@ -2247,6 +2247,57 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
 }
 
+/// The largest picture the library holds, in one request to the app: a line of more
+/// than twenty megabytes goes over the socket, is read and taken apart on the listener's
+/// thread, and the app stores the bytes it was handed.
+#[test]
+fn a_picture_as_large_as_the_library_holds_goes_through_the_channel() {
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    let app = StandIn::open(&fx);
+    app.names();
+    // 2,330 pixels square, three bytes each, stored as they are: a little under 16 MB.
+    let file = fx.dir.path().join("large.png");
+    std::fs::write(&file, super::stored_png(2330, 2330, [120, 30, 200])).unwrap();
+    let bytes = std::fs::read(&file).unwrap();
+    assert!(
+        bytes.len() > 15 * 1024 * 1024 && bytes.len() <= 16 * 1024 * 1024,
+        "{}",
+        bytes.len()
+    );
+    let started = Instant::now();
+    let added = fx
+        .library
+        .add_image(&AddImageRequest {
+            document: chapter.id.into(),
+            path: file.to_string_lossy().into_owned(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    let took = started.elapsed();
+    assert!(added.written.changed && added.written.app_is_open);
+    let image = added.image.expect("the image that was added");
+    assert_eq!(image.pixels, (2330, 2330));
+    assert_eq!(app.changes(), ["add_image"]);
+    let id = writer_store::ImageId::parse(&image.id).unwrap();
+    assert_eq!(
+        id,
+        writer_store::ImageId::of(&bytes),
+        "a PNG is stored as it came"
+    );
+    assert!(
+        fx.store().image_bytes(&id).unwrap().as_deref() == Some(bytes.as_slice()),
+        "the app stored other bytes than the file has"
+    );
+    // (Unoptimised, on a busy machine: the tool waits ten seconds for the app.)
+    assert!(took < Duration::from_secs(8), "{took:?}");
+    eprintln!(
+        "a picture of {} bytes through the channel: {took:?}",
+        bytes.len()
+    );
+}
+
 #[test]
 fn two_agents_at_once_are_served_one_after_the_other_and_none_is_lost() {
     let fx = closed_fixture();

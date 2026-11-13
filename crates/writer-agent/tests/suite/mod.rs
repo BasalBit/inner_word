@@ -78,6 +78,72 @@ pub fn closed_fixture() -> Fixture {
     }
 }
 
+/// The bytes of a PNG file whose pixel data is stored without compression: `width` ×
+/// `height` pixels in one colour, three bytes a pixel. For a picture file of a size the
+/// test chooses (the pictures of `writer_image::fixtures` are a few hundred bytes
+/// whatever their pixels).
+pub fn stored_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (index, entry) in table.iter_mut().enumerate() {
+            let mut crc = index as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+            *entry = crc;
+        }
+        !bytes.iter().fold(u32::MAX, |crc, byte| {
+            table[((crc ^ u32::from(*byte)) & 0xFF) as usize] ^ (crc >> 8)
+        })
+    }
+    fn chunk(kind: &[u8; 4], data: &[u8], out: &mut Vec<u8>) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        out.extend(&body);
+        out.extend(crc32(&body).to_be_bytes());
+    }
+    // Every row: the filter "none", then its pixels.
+    let mut row = vec![0u8];
+    for _ in 0..width {
+        row.extend(rgb);
+    }
+    let rows = row.repeat(height as usize);
+    // A zlib stream of stored blocks, and the checksum of what they hold.
+    let mut packed = vec![0x78, 0x01];
+    let mut blocks = rows.chunks(65_535).peekable();
+    while let Some(block) = blocks.next() {
+        packed.push(u8::from(blocks.peek().is_none()));
+        packed.extend((block.len() as u16).to_le_bytes());
+        packed.extend((!(block.len() as u16)).to_le_bytes());
+        packed.extend(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for block in rows.chunks(5_552) {
+        for byte in block {
+            a += u32::from(*byte);
+            b += a;
+        }
+        a %= 65_521;
+        b %= 65_521;
+    }
+    packed.extend(((b << 16) | a).to_be_bytes());
+
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &header, &mut out);
+    chunk(b"IDAT", &packed, &mut out);
+    chunk(b"IEND", &[], &mut out);
+    out
+}
+
 /// The options of a real write by "Claude".
 pub fn claude() -> WriteOptions {
     WriteOptions::by("Claude")

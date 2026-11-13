@@ -120,7 +120,7 @@ pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub use page_probe::{PageFit, characters_per_row};
 pub use print::{
     NOTE_DELAY as PRINT_NOTE_DELAY, PANEL_COULD_NOT_OPEN, Printing, SCRIPTED_RUN_HAS_NO_PANEL,
-    SLICE_PAUSE as PRINT_SLICE_PAUSE, preparing_note,
+    SLICE_PAUSE as PRINT_SLICE_PAUSE, layout_share as print_layout_share, preparing_note,
 };
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,

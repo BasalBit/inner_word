@@ -17,9 +17,10 @@
 //!    **preparing** ([`Printing::Preparing`]); what is typed or changed by
 //!    an agent meanwhile is not in the pages.
 //! 2. A task of the main thread makes the pages in slices
-//!    ([`crate::printing::slice`], 8 ms) and draws each finished page into
-//!    the PDF; between two slices it waits a moment on a timer, which is a
-//!    turn of the main thread: keys are answered and frames are drawn, so a
+//!    ([`crate::printing::slice`], 8 ms: laying blocks out and drawing the
+//!    pages that came of it into the PDF, both within the slice); between
+//!    two slices it waits a moment on a timer, which is a turn of the main
+//!    thread: keys are answered and frames are drawn, so a
 //!    book does not freeze the window. A chapter is done in the first
 //!    slice.
 //! 3. A job that is still preparing after [`NOTE_DELAY`] says so in a note
@@ -380,11 +381,19 @@ async fn prepare(
     let mut writer = PdfWriter::new(&printing::job_info(&title));
     let mut pages = Vec::new();
     let mut last_frame = Instant::now();
+    // A slice is the whole turn: laying the blocks out and drawing the
+    // pages that came of it. What share of it the layout gets follows
+    // from what the two have cost so far.
+    let (mut laying, mut drawing) = (Duration::ZERO, Duration::ZERO);
     loop {
-        let done = pass.advance(slice, &mut pages);
+        let started = Instant::now();
+        let done = pass.advance(layout_share(slice, laying, drawing), &mut pages);
+        let laid = started.elapsed();
         for page in pages.drain(..) {
             writer.add_page(&page);
         }
+        laying += laid;
+        drawing += started.elapsed() - laid;
         if done {
             break;
         }
@@ -410,6 +419,19 @@ async fn prepare(
         paper,
         pdf: writer.finish(),
     })
+}
+
+/// How much of a slice the layout gets, when laying out has taken
+/// `laying` so far and drawing the pages `drawing`: the share that leaves
+/// room for drawing what it lays out. Half, before anything was drawn.
+pub fn layout_share(slice: Duration, laying: Duration, drawing: Duration) -> Duration {
+    let (laying, drawing) = (laying.as_secs_f64(), drawing.as_secs_f64());
+    let share = if laying > 0. && drawing > 0. {
+        (laying / (laying + drawing)).clamp(0.2, 0.9)
+    } else {
+        0.5
+    };
+    slice.mul_f64(share)
 }
 
 /// Writes `job` into `directory` under the name its title gives it, and

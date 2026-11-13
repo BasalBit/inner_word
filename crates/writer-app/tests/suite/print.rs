@@ -23,7 +23,7 @@ use writer_app::{
     printing::{self, PrintJob},
     shortcuts::{Place, collect_shortcuts},
     spelling,
-    workspace::{MenuKind, PRINT_NOTE_DELAY, Printing, preparing_note},
+    workspace::{MenuKind, PRINT_NOTE_DELAY, Printing, preparing_note, print_layout_share},
 };
 use writer_core::{
     DocumentSettings, Margins, Orientation, PageSetup, PaperSize, Position, Selection, Typography,
@@ -1094,4 +1094,35 @@ fn in_a_scripted_run_print_writes_a_file_or_says_why_not(cx: &mut TestAppContext
         ["A scripted run does not open the print panel."]
     );
     assert_eq!(stage(&workspace, cx), None);
+}
+
+/// A slice is laying out and drawing together: the layout gets the share
+/// of it that leaves room for drawing what it lays out.
+#[test]
+fn a_slice_leaves_room_for_drawing_the_pages() {
+    let ms = Duration::from_millis;
+    // Nothing is known yet: half.
+    assert_eq!(print_layout_share(ms(8), ms(0), ms(0)), ms(4));
+    // Drawing has cost as much as laying out: half; three times as much:
+    // a quarter.
+    assert_eq!(print_layout_share(ms(8), ms(50), ms(50)), ms(4));
+    assert_eq!(print_layout_share(ms(8), ms(50), ms(150)), ms(2));
+    // Never all of it and never nothing.
+    assert_eq!(print_layout_share(ms(10), ms(1000), ms(1)), ms(9));
+    assert_eq!(print_layout_share(ms(10), ms(1), ms(1000)), ms(2));
+    // A test's slice of zero stays zero: one block a slice.
+    assert_eq!(print_layout_share(ms(0), ms(5), ms(5)), ms(0));
+}
+
+/// The welcome document says where Print is.
+#[test]
+fn the_welcome_document_says_where_print_is() {
+    let text = writer_app::welcome::welcome_document().plain_text();
+    assert!(
+        text.contains(
+            "Print… in the File menu, or Print in the command palette, puts it on paper as \
+             page view shows it; the print panel can save it as a PDF too."
+        ),
+        "{text}"
+    );
 }

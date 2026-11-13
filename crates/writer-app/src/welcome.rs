@@ -85,7 +85,7 @@ pub const WELCOME_TITLE: &str = "Welcome to The Writer";
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
 /// insert menus, Markdown shortcuts, spelling, page view, comments, Vim
-/// mode, the assistant, agents and export.
+/// mode, the assistant, agents, export and print.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
         heading(1, WELCOME_TITLE),
@@ -228,7 +228,9 @@ pub fn welcome_document() -> Document {
         heading(2, "Take your words elsewhere"),
         paragraph(
             "{k:⇧⌘S} exports this document, or its whole folder as one file: Markdown, a Word \
-             document or plain text. It can also copy the text to the clipboard.",
+             document or plain text. It can also copy the text to the clipboard. \
+             {b:Print…} in the File menu, or {b:Print} in the command palette, puts it on \
+             paper as page view shows it; the print panel can save it as a PDF too.",
         ),
         rich(
             BlockKind::Quote,

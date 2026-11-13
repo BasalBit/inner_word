@@ -138,6 +138,20 @@ remember their own zoom, and the same words stand on the same pages at
 every zoom.
 
 
+Printing
+--------
+
+File > Print... (also "Print" in the command palette and in the menu of the
+title above the text) opens the macOS print panel on the document you have
+open. What is printed is what page view shows: the document's paper,
+margins, type and page numbers, at real size, whatever the window is
+showing at the moment (the flowing column, a zoom, the Night theme). The
+panel's PDF menu saves the same pages as a PDF. Print has no key of its own
+(Command-P opens a document here); you can give it one under Keyboard
+Shortcuts. A book takes a moment to prepare: a note says so, and its Cancel
+(or File > Cancel Printing) stops it.
+
+
 Fonts
 -----
 

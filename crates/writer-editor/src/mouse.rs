@@ -253,8 +253,18 @@ impl Editor {
         let anchor = self.state.selection().anchor;
         let extend = event.modifiers.shift;
         let clicks = event.click_count;
+        // Beside a picture, on its row (the margins of a narrow or centred
+        // one): the press selects the image as a press on it does, and as
+        // there nothing scrolls. The caret box of an image is the whole
+        // picture, so bringing it into view would move a half-visible
+        // picture, and whatever is under the pointer, by up to its height.
+        let autoscroll = if self.image_bounds(position.block).is_some() {
+            Autoscroll::None
+        } else {
+            Autoscroll::Fit
+        };
         self.edit_with(
-            Autoscroll::Fit,
+            autoscroll,
             |state| match clicks {
                 2 => state.select_word_at(position),
                 3 => state.select_block(position.block),

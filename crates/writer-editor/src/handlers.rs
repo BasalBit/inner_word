@@ -221,16 +221,7 @@ impl Editor {
     /// text views do.
     fn vertical(&mut self, rows: isize, extend: bool, cx: Cx) {
         let selection = self.state.selection();
-        // A plain up / down on a range collapses to its start / end first.
-        let from = if extend || selection.is_collapsed() {
-            selection.head
-        } else if rows < 0 {
-            selection.start()
-        } else {
-            selection.end()
-        };
-        // The move starts on the row the caret is drawn on.
-        let upstream = from == selection.head && self.caret_is_upstream();
+        let (from, upstream) = self.vertical_origin(rows, extend);
         let Some((step, upstream)) = self.move_caret_by_rows(from, upstream, rows, self.goal_x)
         else {
             // No layout yet: fall back to hard lines.
@@ -262,13 +253,35 @@ impl Editor {
         self.goal_x = Some(step.goal_x);
     }
 
+    /// Where a vertical move by `rows` leaves from, and the caret's
+    /// affinity there: a plain up / down on a range collapses to its start
+    /// / end first, and the move starts on the row the caret is drawn on.
+    fn vertical_origin(&self, rows: isize, extend: bool) -> (Position, bool) {
+        let selection = self.state.selection();
+        let from = if extend || selection.is_collapsed() {
+            selection.head
+        } else if rows < 0 {
+            selection.start()
+        } else {
+            selection.end()
+        };
+        let upstream = from == selection.head && self.caret_is_upstream();
+        (from, upstream)
+    }
+
     /// Moves the caret a viewport page up or down and scrolls by the same
-    /// amount, so the caret keeps its place on screen. One row of the old
-    /// page stays visible for context.
+    /// amount, so the caret keeps its place on screen. One line of the old
+    /// page stays visible for context. A page is measured in height
+    /// (`Editor::rows_in_a_page`), not in lines of body text: a picture on
+    /// the way counts as high as it is, so a page key never carries the
+    /// view past text that was not on screen.
     fn page(&mut self, direction: isize, extend: bool, cx: Cx) {
-        let rows = (self.rows_per_page().unwrap_or(2) as isize - 1).max(1);
-        let caret_y = self.caret_viewport_y();
-        self.vertical(rows * direction, extend, cx);
+        let (from, upstream) = self.vertical_origin(direction, extend);
+        let rows = self
+            .rows_in_a_page(from, upstream, direction)
+            .unwrap_or(direction);
+        let caret_y = self.caret_top_viewport_y();
+        self.vertical(rows, extend, cx);
         if let Some(viewport_y) = caret_y {
             self.request_scroll(PendingScroll::CaretAt { viewport_y });
         }

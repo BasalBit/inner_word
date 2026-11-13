@@ -272,6 +272,55 @@ fn move_rows(
     ))
 }
 
+/// How many rows from the row of `position` (the one a caret with
+/// affinity `upstream` is drawn on) in `direction` have their tops within
+/// `distance` of that row's top, in content space (so the gaps between the
+/// sheets of page view count, as they do when the view scrolls). At least
+/// one, also at the first or last row, where a move of one row reports
+/// that it got nowhere.
+fn rows_within(
+    lay: &mut Lay,
+    document: &Document,
+    position: Position,
+    upstream: bool,
+    direction: isize,
+    distance: Pixels,
+) -> Option<isize> {
+    let position = document.clamp_position(position);
+    let count = lay.count();
+    let mut block_ix = position.block;
+    let mut placed = lay.placed(block_ix)?;
+    let mut row_ix = placed.layout.row_for_caret(position.offset, upstream);
+    let start = placed.row_top(row_ix);
+    let mut rows: isize = 0;
+    loop {
+        if direction > 0 {
+            if row_ix + 1 < placed.layout.rows.len() {
+                row_ix += 1;
+            } else if block_ix + 1 < count {
+                block_ix += 1;
+                placed = lay.placed(block_ix)?;
+                row_ix = 0;
+            } else {
+                break;
+            }
+        } else if row_ix > 0 {
+            row_ix -= 1;
+        } else if block_ix > 0 {
+            block_ix -= 1;
+            placed = lay.placed(block_ix)?;
+            row_ix = placed.layout.rows.len() - 1;
+        } else {
+            break;
+        }
+        if rows > 0 && (placed.row_top(row_ix) - start).abs() > distance {
+            break;
+        }
+        rows += 1;
+    }
+    Some(rows.max(1) * direction.signum())
+}
+
 /// The visual row a caret is drawn on (see [`Editor::caret_row`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CaretRow {
@@ -318,6 +367,30 @@ impl Editor {
             .flatten()
     }
 
+    /// How many visual rows a page up (`direction` -1) or down (1) moves
+    /// the editor's caret from `position` (`upstream` its affinity there):
+    /// the rows whose tops lie within the height of the viewport less one
+    /// line of body text, which stays on screen for context. Counted by
+    /// height, not by a number of body lines, so a picture is as far as it
+    /// is high, and so are headings and the space between paragraphs.
+    /// Always at least one row: a page key never stands still in front of
+    /// a row that is higher than the viewport.
+    pub(crate) fn rows_in_a_page(
+        &self,
+        position: Position,
+        upstream: bool,
+        direction: isize,
+    ) -> Option<isize> {
+        let document = self.state.document();
+        let upstream = self.caret_has_affinity() && upstream;
+        self.with_layout(|lay| {
+            let env = lay.env();
+            let distance = env.view_height() - env.style.base_line_height();
+            rows_within(lay, document, position, upstream, direction, distance)
+        })
+        .flatten()
+    }
+
     /// The oracle over the editor's own state and layout.
     fn rows(&self) -> RowOracle<'_> {
         RowOracle::new(&self.layout, &self.state)
@@ -359,7 +432,10 @@ impl Editor {
     }
 
     /// How many rows of body text fit in the viewport (at least 1): the
-    /// size of a page for page-wise movement and scrolling.
+    /// size of a page for scrolling by pages (Vim `ctrl-f`, `ctrl-d`). The
+    /// editor's own page keys measure a page in height instead, which is
+    /// the same for body text and right where pictures, headings and the
+    /// space between paragraphs are on the way.
     pub fn rows_per_page(&self) -> Option<usize> {
         self.rows().rows_per_page()
     }

@@ -285,7 +285,7 @@ impl Editor {
 
     /// Line height of body text in layout units: the unit of
     /// [`Editor::scroll_by_rows`].
-    fn row_height(&self) -> Option<Pixels> {
+    pub(crate) fn row_height(&self) -> Option<Pixels> {
         self.layout
             .borrow()
             .env()
@@ -328,6 +328,17 @@ impl Editor {
         let viewport = self.viewport_bounds()?;
         let caret = self.caret_line_bounds()?;
         (caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom())
+            .then(|| caret.top() - viewport.top())
+    }
+
+    /// The top of the caret row's distance from the top of the viewport,
+    /// when that top is on screen, also where the row goes on below the
+    /// viewport (a picture that is only partly in view): where a page key
+    /// keeps the caret.
+    pub(crate) fn caret_top_viewport_y(&self) -> Option<Pixels> {
+        let viewport = self.viewport_bounds()?;
+        let caret = self.caret_line_bounds()?;
+        (caret.top() >= viewport.top() && caret.top() < viewport.bottom())
             .then(|| caret.top() - viewport.top())
     }
 

@@ -1714,6 +1714,115 @@ fn an_image_taller_than_the_window_does_not_send_the_view_back_and_forth(cx: &mu
     assert_eq!(offset(cx), filled);
 }
 
+#[gpui::test]
+fn a_page_key_never_moves_the_view_further_than_a_window_over_pictures(cx: &mut TestAppContext) {
+    setup(cx);
+    let images = FakeImages::new();
+    let photo = images.add_png(600, 400);
+    let mut blocks = Vec::new();
+    for ix in 0..90 {
+        blocks.push(paragraph(ix));
+        if ix % 3 == 2 {
+            blocks.push(picture(&photo, 1000, Alignment::Center));
+        }
+    }
+    for page_view in [false, true] {
+        let (editor, cx) = open_with(with_view(blocks.clone(), page_view), &images, cx);
+        editor.update(cx, |editor, cx| {
+            editor.edit(|state| state.set_caret(Position::ZERO), cx);
+        });
+        cx.run_until_parked();
+        let height = editor.read_with(cx, |editor, _| {
+            editor.viewport_bounds().unwrap().size.height
+        });
+        let state = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            editor.read_with(cx, |editor, _| {
+                let viewport = editor.viewport_bounds().unwrap();
+                let caret = editor.caret_bounds().unwrap();
+                assert!(
+                    caret.top() >= viewport.top() && caret.top() < viewport.bottom(),
+                    "the caret is on screen: {caret:?} in {viewport:?}"
+                );
+                (editor.scroll_offset(), editor.selection().head)
+            })
+        };
+        // Down: every press shows what follows the window it left, and
+        // gets on by at least half a window.
+        let mut pages = vec![state(cx)];
+        for _ in 0..6 {
+            cx.simulate_keystrokes("pagedown");
+            let (before, _) = *pages.last().unwrap();
+            let (after, head) = state(cx);
+            let moved = after - before;
+            assert!(
+                moved > height * 0.5 && moved <= height,
+                "page view {page_view}: {before:?} to {after:?} in a window {height:?} high"
+            );
+            pages.push((after, head));
+        }
+        // Up again by the same steps, to the start.
+        for _ in 0..6 {
+            let (before, _) = state(cx);
+            cx.simulate_keystrokes("pageup");
+            let (after, _) = state(cx);
+            let moved = before - after;
+            assert!(
+                moved > px(0.) && moved <= height,
+                "page view {page_view}: {before:?} to {after:?} in a window {height:?} high"
+            );
+        }
+        assert!(state(cx).0 < px(0.5));
+        // A selection made with shift covers one window, not several.
+        cx.simulate_keystrokes("shift-pagedown");
+        let (_, head) = state(cx);
+        assert!(head.block <= pages[1].1.block + 1, "{head:?}");
+    }
+}
+
+#[gpui::test]
+fn a_press_beside_a_half_visible_picture_selects_it_and_scrolls_nothing(cx: &mut TestAppContext) {
+    setup(cx);
+    let images = FakeImages::new();
+    // Narrow and tall: a third of the column, with room beside it.
+    let tall = images.add_png(400, 1000);
+    let mut blocks: Vec<Block> = (0..12).map(paragraph).collect();
+    blocks.push(picture(&tall, 333, Alignment::Center));
+    blocks.extend((12..40).map(paragraph));
+    let (editor, cx) = open_with(flow(blocks), &images, cx);
+    // Only the lower part of the picture is on screen.
+    editor.update(cx, |editor, cx| {
+        let picture = editor.image_bounds(12).unwrap();
+        let viewport = editor.viewport_bounds().unwrap();
+        editor.scroll_by_pixels(
+            picture.top() - viewport.top() + picture.size.height * 0.7,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let (viewport, picture, before) = editor.read_with(cx, |editor, _| {
+        (
+            editor.viewport_bounds().unwrap(),
+            editor.image_bounds(12).unwrap(),
+            editor.scroll_offset(),
+        )
+    });
+    assert!(picture.top() < viewport.top() && picture.bottom() > viewport.top() + px(50.));
+    // Left of it, on its row.
+    let beside = point(
+        picture.left() - px(40.),
+        viewport.top() + (picture.bottom() - viewport.top()) / 2.,
+    );
+    assert!(!picture.contains(&beside));
+    click(cx, beside, 1, Modifiers::none());
+    assert_eq!(selection(&editor, cx), caret(12, 0));
+    cx.run_until_parked();
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        before
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The ways in: chosen files, paste, drop
 // ---------------------------------------------------------------------------

@@ -282,21 +282,32 @@ fn page_keys_keep_the_caret_row_on_screen(cx: &mut TestAppContext) {
     let offset_in_viewport = |editor: &Editor| {
         editor.caret_bounds().unwrap().top() - editor.viewport_bounds().unwrap().top()
     };
-    let (before, page) = editor.read_with(cx, |editor, _| {
-        (offset_in_viewport(editor), editor.rows_per_page().unwrap())
+    let (before, height, line) = editor.read_with(cx, |editor, _| {
+        (
+            offset_in_viewport(editor),
+            editor.viewport_bounds().unwrap().size.height,
+            editor.row_height().unwrap(),
+        )
     });
 
     cx.simulate_keystrokes("pagedown");
-    editor.read_with(cx, |editor, _| {
-        assert_eq!(head(editor), Position::new(6 + page - 1, 3));
+    // A page is the height of the viewport less one line, in whole rows
+    // (here paragraphs with their spacing), and the view follows the
+    // caret.
+    let page = editor.read_with(cx, |editor, _| {
+        let scrolled = editor.scroll_offset();
+        assert!(scrolled <= height - line + px(0.5), "{scrolled:?}");
+        assert!(scrolled > (height - line) * 0.9, "{scrolled:?}");
         assert!((offset_in_viewport(editor) - before).abs() < px(1.));
-        assert!(editor.scroll_offset() > px(0.));
+        let page = head(editor).block - 6;
+        assert_eq!(head(editor), Position::new(6 + page, 3));
+        page
     });
     cx.simulate_keystrokes("pagedown shift-pagedown");
     editor.read_with(cx, |editor, _| {
         let selection = editor.selection();
-        assert_eq!(selection.anchor, Position::new(6 + 2 * (page - 1), 3));
-        assert_eq!(selection.head, Position::new(6 + 3 * (page - 1), 3));
+        assert_eq!(selection.anchor, Position::new(6 + 2 * page, 3));
+        assert_eq!(selection.head, Position::new(6 + 3 * page, 3));
         assert!((offset_in_viewport(editor) - before).abs() < px(1.));
     });
     // A plain page up leaves from the selection's start.

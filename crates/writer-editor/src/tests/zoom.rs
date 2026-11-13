@@ -816,9 +816,9 @@ fn scrolling_and_page_keys_count_in_what_is_on_screen(cx: &mut TestAppContext) {
                 }
             });
 
-            // Page down and page up move the caret by a page of rows (less
-            // the one row that stays for the eye) and keep it where it was
-            // on screen.
+            // Page down and page up move the caret by the height of the
+            // window as it is drawn (less the one line that stays for the
+            // eye), in whole rows, and keep it where it was on screen.
             editor.update(cx, |editor, cx| {
                 editor.edit(|state| state.set_caret(Position::new(6, 0)), cx);
                 editor.scroll_to_caret(Autoscroll::Center, cx);
@@ -828,18 +828,16 @@ fn scrolling_and_page_keys_count_in_what_is_on_screen(cx: &mut TestAppContext) {
                 (
                     editor.caret_bounds().unwrap().top(),
                     editor.visual_row(editor.selection().head).unwrap(),
+                    editor.scroll_offset(),
                 )
             });
             cx.simulate_keystrokes("pagedown");
             cx.run_until_parked();
             editor.read_with(cx, |editor, _| {
-                let head = editor.selection().head;
-                let page = rows as isize - 1;
-                let expected = editor
-                    .move_by_visual_rows(Position::new(6, 0), page, None)
-                    .unwrap();
-                assert_eq!(head, expected.position, "{what}");
-                assert_eq!(expected.rows_moved, page, "{what}");
+                let page = viewport.size.height - px(27.) * zoom;
+                let moved = editor.scroll_offset() - before.2;
+                assert!(moved <= page + px(0.5), "{what}: {moved:?} of {page:?}");
+                assert!(moved > page * 0.6, "{what}: {moved:?} of {page:?}");
                 let after = editor.caret_bounds().unwrap().top();
                 assert!((after - before.0).abs() < px(1.), "{what}: {after:?}");
             });

@@ -22,7 +22,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted) and the library sidebar panel. |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
@@ -96,9 +96,14 @@ the `writer` tool being run from outside meanwhile; fails after `ms`, 10 s unles
 `agents:on` / `agents:off` (the switch "Agents can make changes while The Writer is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
 written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`, `zoom:fit`, `zoom:auto`),
+`print:pdf:<path>` (writes the exact PDF "Print…" would hand to the print panel and says what
+was made: pages, paper, rows, `rows off`, images, fonts, the time) and `print:job:<path>` (the
+same PDF through the real macOS print operation as a save job, without a panel; see
+"Printing"),
 `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
-the zoom of the view (`zoom=[page 177% fit-width life=177%]`),
+the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=[idle]`,
+`print=[preparing 40%]`, `print=[panel]`),
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
 is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
@@ -212,7 +217,10 @@ back, every kind of change, the list, the guard rails, storage, the shortcuts fi
 `tests/suite/zoom.rs` holds the zoom in the assembled app: the keys, the palette, the menu
 bar, the status bar item and its menu with the pointer, `cmd` with the wheel, what is kept
 over a relaunch, what a page opens at, and the tools, the menus, the format bar, the quick
-chat, the comments and Vim's caret at 75 %, 100 % and 150 % in both views.
+chat, the comments and Vim's caret at 75 %, 100 % and 150 % in both views;
+`tests/suite/print.rs` holds printing in the assembled app, every job recorded and none in a
+panel: the pages and their text against page view, what of the window is not on paper,
+where Print is reached from and when it is there, the note and Cancel, the keys.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -710,8 +718,9 @@ Without a key of their own, from the command palette (and the menu bar): "Versio
 text, `enter` restores, after keeping the current text as a version), "Document settings"
 (the settings modal at its "This document" section: page view, paper including a custom
 size, orientation, margins, font, text size, line spacing, paragraph spacing; lengths are
-typed, `20mm`, `0.75in`), "Rename document", "Reveal in library" and "Welcome document"
-(opens it; written again when it is gone). In the settings `up` / `down` move, `left` /
+typed, `20mm`, `0.75in`), "Rename document", "Reveal in library", "Welcome document"
+(opens it; written again when it is gone), and "Print" and "Cancel Printing" (see
+"Printing"; `cmd-p` is Quick open here, so Print has no key until the user gives it one). In the settings `up` / `down` move, `left` /
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
@@ -951,11 +960,13 @@ document"). Three crates: `writer-keymap` knows what a change is,
   one row** (`tests/suite/keybindings.rs`,
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
-  list has 363 rows (362 commands in places and the `/` of the insert menu, which is no
-  binding) and the shortcuts file 388 entries, one for each key context: 13 rows stand for
-  several key contexts, 26 more than there are rows. Without the assistant: 333 rows, and
-  the same 388 entries. (Counted in a scripted run: `keys:cmd-/; state` has `rows=N`, and
-  "Export…" writes the file; the sixteen zoom commands are among them.)
+  list has 372 rows (371 commands in places and the `/` of the insert menu, which is no
+  binding) and the shortcuts file 397 entries, one for each key context: 13 rows stand for
+  several key contexts, 26 more than there are rows. Without the assistant: 342 rows, and
+  the same 397 entries. (Counted in a scripted run: `keys:cmd-/; state` has `rows=N`, and
+  "Export…" writes the file; the sixteen zoom commands are among them, and since 0.6.0 nine
+  more without a key: Print and Cancel Printing, "Anywhere", and the seven commands of an
+  image, "In the text".)
 - **A place name is a promise.** Two rows under one place name ("In the library") are in
   the same place to whoever reads the list: a key of the one given to the other is "taken"
   and never "used in another place", in the question about a key and in the plan of an
@@ -1242,6 +1253,109 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   what "line spacing" means: here a multiple of the text size, rounded to whole points
   (`LayoutStyle::line_points`), in Word a multiple of the font's own line (1.15 to 1.22
   times the size).
+
+## Printing
+
+"Print…" puts the open document on paper as page view shows it, through the macOS print
+panel. Where it lives: `crates/writer-editor/src/print.rs` (the print pass: the pages as
+data), `crates/writer-print` (the PDF writer, the PDF reader for tests, the print
+operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
+`workspace/print.rs` (the command, the slices, the note, Cancel).
+
+- **What is printed**: the document as it is in the editor at that moment, unsaved text
+  included, in page layout: its paper, orientation, margins, font, size, spacing, page
+  breaks, page numbers in the footer. Text in its fonts with bold, italic, underline,
+  strikethrough, highlights, text colours, the chips of inline code, links as coloured
+  underlined text (not clickable), bullets, list numbers, to-do boxes and ticks, the quote
+  bar, the code panel with its language, dividers, page numbers. Real size (a point is
+  1/72 inch), no scaling, Paper's colours.
+- **What is not**: the caret, the selection, spelling marks, find marks, the tints of
+  comments, the desk, the shadows and borders of the sheets, the "Page break" marker, the
+  placeholder of an empty document, the scroll bar. A test prints the same document plain
+  and then in flow view at 200 % in Night with a selection, a comment, an open find bar
+  and a marked misspelling, and holds the two PDFs equal to the pixel
+  (`tests/suite/print.rs`, `what_the_window_shows_is_not_on_paper`).
+- **The layout never comes from the window's view.** `Editor::print_pass` takes a copy of
+  the document and lays it out with a layout of its own, as page view's branch does, at
+  zoom 1 in Paper's colours; the only thing it takes from the window is the text system
+  (GPUI has none without a window). So flow view, a zoom and Night print the same pages,
+  and what is typed after "Print…" was chosen is not in them. The contract the tests hold:
+  the PDF has `Editor::page_count()` pages of `PageSetup::page_size()`, and on each the
+  text page view has on it. **Compare only once the editor's layout is settled**
+  (`!editor.layout_pending()`): before that the editor's own page count is an estimate
+  for blocks that were never on screen, and the pass estimates nothing.
+- **How it is reached**: File > Print…, "Print…" in the menu of the title, "Print" in the
+  palette, `:print` in Vim. **No default key** (`cmd-p` is Quick open, `cmd-shift-p` the
+  palette, `cmd-opt-p` page view); the user gives it one in "Keyboard shortcuts", where it
+  and "Cancel Printing" are rows "Anywhere". Only while a document is open.
+- **The seam** (`printing::PrintTarget`, an app global like the spell service):
+  `SystemPanel` (the print panel as a sheet on the window; `main` installs it in a launch
+  that is not scripted), `Recorder` (tests: `printing::record(cx)` before the workspace
+  opens, every job is kept), `Directory` (a scripted run: "<title>.pdf" into
+  `THE_WRITER_EXPORT_DIR`, or a toast that a scripted run has no panel). **Without a
+  target a workspace has no Print**: no handler, the menu bar's items greyed out, no item
+  in the title's menu. **No test and no scripted run opens the print panel**, and nothing
+  but `printing::show_panel` can: only a person can answer it.
+- **A job** (`Workspace::print`): the pass is made, the job is "preparing", and a task of
+  the main thread makes the pages in slices of 8 ms (`printing::set_slice`; the laying out
+  and the drawing of the finished pages into the PDF together, `layout_share` in
+  `workspace/print.rs`)
+  with a wait of a millisecond on a timer in between, which is a turn of the main thread.
+  The PDF writer is not `Send`: the PDF is made on the main thread. After 0.4 s a note says
+  "Preparing to print …" with the button Cancel. **Cancel is the command "Cancel
+  Printing"** (File, the palette, no key by default; it has a handler only while pages are
+  prepared), because a toast's button has no way in from the keyboard; "Dismiss
+  notifications" cancels too, or the note would go and the panel come up unannounced.
+  While a job is preparing or in the panel a second "Print…" does nothing. A test holds a
+  job in "preparing" with `printing::set_slice(Duration::ZERO)` (a slice is then one
+  block, and the slices are a millisecond of the test clock apart) and in the panel with
+  `printing::hold_the_panel(cx)`, a stand-in the test ends.
+- **The sheet is started outside an update**, from the job's task between two awaits
+  (`printing::show_panel`): AppKit calls the window's delegate while a sheet comes up, and
+  that re-enters GPUI. Its end arrives inside AppKit and only notes the answer and wakes
+  the task (`printing::panel_end`). `show_panel` asks `writer_print::check_selectors`
+  first: a message this macOS does not understand would end the app.
+- **What bites in the print operation** (`writer-print/src/system.rs`; details in
+  `docs/gpui-notes.md`, "Printing"): the selector is
+  `printOperationForPrintInfo:scalingMode:autoRotate:` (`scalingMode:`, not `scaleMode:`);
+  the scaling is "none" and `NSPrintInfo`'s centering must stay on, only then is the page
+  on the paper at its real size; the print info carries the document's paper.
+- **Pictures** are on paper once the pass is given their bytes
+  (`PrintPass::set_images`, before the first slice; `PrintPass::images` says which);
+  until then the box of an image is printed as a hairline with its description.
+- **Scripted runs**: `print:pdf:<path>` makes the job at once (`Workspace::print_job`),
+  writes the PDF and logs `print: 12 pages, 595.28 x 841.89 pt, 5214 rows, 0 rows off, 3
+  images, fonts: .SFNS-Regular, Charter-Bold, Charter-Roman, made in 0.04 s` (and `print:
+  missing fonts: …`). **`0 rows off` is what QA asserts**: a row is "off" when CoreText
+  measures it at another width than the layout did, which is how a face that is not the
+  layout's shows. `print:job:<path>` runs the same PDF through the real print operation
+  as a save job (`writer_print::run_save_job`): everything of "Print…" but the panel.
+  `action:workspace::Print` is the command itself (it writes into the export directory),
+  `action:workspace::CancelPrint` right after it on a book stops it; `state` has
+  `print=[idle]`, `print=[preparing 40%]`, `print=[panel]`.
+
+  ```bash
+  THE_WRITER_DATA_DIR=/some/tmp THE_WRITER_SEED_DEMO=1 \
+  THE_WRITER_AUTOMATION="wait:1200; keys:cmd-p; type:chap 2; keys:enter; wait:400; zoom:200; theme:dark; print:pdf:/some/tmp/a.pdf; print:job:/some/tmp/b.pdf; state; quit" \
+  ./target/debug/the-writer
+  # a book, in the release build:
+  THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; print:pdf:/some/tmp/book.pdf; action:workspace::Print; stall:1500; state; quit"
+  ```
+- **What it costs** (release build, the generated book of 10,000 blocks and 660,000 words,
+  measured when printing was added): 2,856 pages and 67,103 rows, 0 rows off, a PDF of
+  7.8 MB, made in 2.4 s in one go (`print:pdf:`). In slices, as "Print…" makes it, the
+  window stays live: the main thread kept a 4 ms timer waiting 11.8 ms at the median and
+  13.6 ms at most while the pages were made and the spell checker ran its own slices
+  beside them (5.1 ms with the spell checker alone), and a typed key reached the picture
+  in 2 ms. Every 100 ms the window is asked for a frame, so that GPUI's line cache lets
+  go of what the pass shaped (it holds a line until the window has drawn twice).
+- **Never verified by anything but a person**: the print panel itself (that the sheet
+  comes up on the document's paper, its preview, Cancel giving the keyboard back to the
+  text, Save as PDF from its PDF menu, a real printer, quitting with the sheet up).
+  `run_sheet` was never called by a test or a script; what stands in for it:
+  `check_selectors` in a test of the app's own build, the delegate called the way AppKit
+  calls it (`writer-print`), and the same operation run as a save job from a test and
+  from `print:job:`.
 
 ## Mouse
 

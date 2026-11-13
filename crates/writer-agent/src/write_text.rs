@@ -1,32 +1,39 @@
 //! Reading and writing text: the text of a document, creating one, replacing its text,
 //! editing it in place.
 
-use writer_core::{Block, BlockKind, Document, EditorState, Fragment};
-use writer_export::{ExportSource, MarkdownOptions, PlainTextOptions, to_markdown, to_plain_text};
-use writer_store::{DocumentId, DocumentMeta, Folder, FolderId};
+use std::collections::HashMap;
 
+use writer_core::{
+    Alignment, Block, BlockKind, Document, EditorState, Fragment, ImageId, ImageWidth, PageSetup,
+};
+use writer_export::{ExportSource, MarkdownOptions, PlainTextOptions, to_markdown, to_plain_text};
+use writer_store::{DocumentId, DocumentMeta, Folder, FolderId, Store};
+
+use crate::attach;
 use crate::comments::thread_infos;
 use crate::content::{self, Delta, Form, Loaded, Reason};
 use crate::error::{Error, Result};
 use crate::items::{place_among, plan_folders};
 use crate::library::{Library, Session, author_phrase};
 use crate::live::Change;
-use crate::markdown_in;
+use crate::markdown_in::{Images, Reader};
 use crate::matching;
 use crate::resolve::{Index, UNTITLED, join_path};
 use crate::rewrite;
-use crate::sections::find_heading;
+use crate::sections::{Heading, find_heading};
 use crate::types::{
-    ContentChanged, CreateDocumentRequest, DocumentCreated, DocumentSummary, DocumentText,
-    EditRequest, FindRequest, FindResults, FolderSummary, InsertPosition, InsertRequest, MatchedAs,
-    ReadRequest, ReplaceDocumentRequest, ReplaceSectionRequest, Target, TextFormat, Time,
-    WriteOptions,
+    AddImageRequest, ContentChanged, CreateDocumentRequest, DocumentCreated, DocumentSummary,
+    DocumentText, EditRequest, FindRequest, FindResults, FolderSummary, ImageSummary,
+    InsertPosition, InsertRequest, MatchedAs, ReadRequest, ReplaceDocumentRequest,
+    ReplaceSectionRequest, Target, TextFormat, Time, WriteOptions,
 };
 
 /// How many occurrences [`Library::find`] returns unless the request says.
 const DEFAULT_FIND_LIMIT: usize = 20;
 
-/// The text of `document` in `format`, as [`Library::read`] returns it.
+/// The text of `document` in `format`, as [`Library::read`] returns it. In Markdown an
+/// image is a line `![description](image:<id>)` (`MarkdownImages::References`, the
+/// exporter's default): what an agent keeps where the image should stay.
 pub(crate) fn render(document: &Document, title: &str, format: TextFormat) -> String {
     match format {
         TextFormat::Markdown => to_markdown(
@@ -39,6 +46,40 @@ pub(crate) fn render(document: &Document, title: &str, format: TextFormat) -> St
         ),
         TextFormat::Json => document.to_json(),
     }
+}
+
+/// An image block as a result shows it; `None` for a block that is no image. `index` is
+/// the place of the block in its document, whose page is `page`.
+fn image_summary(
+    store: &Store,
+    page: &PageSetup,
+    index: usize,
+    block: &Block,
+) -> Result<Option<ImageSummary>> {
+    let Some(image) = block.as_image() else {
+        return Ok(None);
+    };
+    let stored = store.image_info(&writer_store::ImageId(*image.id.as_bytes()))?;
+    Ok(Some(ImageSummary {
+        id: image.id.to_string(),
+        block: index,
+        format: stored.as_ref().map(|info| info.format.as_str().to_string()),
+        pixels: image.pixels,
+        // What is drawn: a width the page no longer allows is drawn at what it allows.
+        width_percent: image.width.min(image.max_width(page)).percent(),
+        align: block.alignment().name().to_string(),
+        description: image.description.clone(),
+        missing: stored.is_none(),
+    }))
+}
+
+/// How many times each picture stands in `document`.
+fn image_counts(document: &Document) -> HashMap<ImageId, usize> {
+    let mut counts = HashMap::new();
+    for (_, image) in document.images() {
+        *counts.entry(image.id).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// A document open for a change to its text.
@@ -93,12 +134,25 @@ impl Library {
                 })
                 .collect()
         });
+        let mut images = Vec::new();
+        if document.has_images() {
+            let page = &document.settings().page;
+            for index in blocks.clone() {
+                images.extend(image_summary(
+                    &session.store,
+                    page,
+                    index,
+                    &document.blocks()[index],
+                )?);
+            }
+        }
         Ok(DocumentText {
             document: summary,
             format: request.format,
             content,
             section: heading.map(|heading| heading.info(document)),
             comments,
+            images,
         })
     }
 
@@ -145,7 +199,13 @@ pub(crate) fn create_document(
     };
 
     let settings = content::new_document_settings(store);
-    let imported = markdown_in::import(&request.markdown, &settings);
+    let mut images = Images::new(&request.images, session.dry_run)?;
+    let imported = Reader {
+        store: &mut *session.store,
+        images: &mut images,
+    }
+    .read(&request.markdown, &settings)?;
+    let store = &session.store;
     let document = imported.document;
     let derived = content::derived_title(&document);
     let given = request
@@ -272,7 +332,13 @@ pub(crate) fn replace_document(
 ) -> Result<ContentChanged> {
     let open = open_document(session, &request.document)?;
     let before = &open.loaded.document;
-    let imported = markdown_in::import(&request.markdown, before.settings());
+    let mut images = Images::new(&request.images, session.dry_run)?;
+    images.know(before.blocks(), &[], &[]);
+    let imported = Reader {
+        store: &mut *session.store,
+        images: &mut images,
+    }
+    .read(&request.markdown, before.settings())?;
     let mut ed = EditorState::new(before.clone());
     rewrite::rewrite_blocks(&mut ed, 0..before.block_count(), imported.blocks());
     let after = ed.into_document();
@@ -313,10 +379,28 @@ pub(crate) fn edit(session: &mut Session<'_>, request: &EditRequest) -> Result<C
         request.occurrence,
     )?;
     let exact = matches.matched_as == Some(MatchedAs::Markdown);
+    // An image is an empty line in the text that is matched: replacing a match that
+    // runs across one would take it away without a word about it.
+    if ranges
+        .iter()
+        .any(|range| matching::across_an_image(before, range, matches.matched_as))
+    {
+        return Err(Error::invalid(matching::ACROSS_AN_IMAGE));
+    }
+    let mut images = Images::new(&request.images, session.dry_run)?;
     let mut ed = EditorState::new(before.clone());
     let mut warnings: Vec<String> = Vec::new();
     // From the end, so that the places before a replacement are where they were.
     for range in ranges.iter().rev() {
+        // An image the new text names again is the one the match held, then any other
+        // of the document.
+        let (first, end) = (range.start.block, range.end.block + 1);
+        let blocks = before.blocks();
+        images.know(&blocks[first..end], &blocks[..first], &blocks[end..]);
+        let mut reader = Reader {
+            store: &mut *session.store,
+            images: &mut images,
+        };
         for warning in rewrite::replace_text(
             &mut ed,
             *range,
@@ -324,7 +408,8 @@ pub(crate) fn edit(session: &mut Session<'_>, request: &EditRequest) -> Result<C
             request.literal,
             exact,
             before.settings(),
-        ) {
+            &mut reader,
+        )? {
             if !warnings.contains(&warning) {
                 warnings.push(warning);
             }
@@ -341,34 +426,36 @@ pub(crate) fn edit(session: &mut Session<'_>, request: &EditRequest) -> Result<C
             replacements: ranges.len(),
             matched_as: matches.matched_as,
             warnings,
+            ..Outcome::default()
         },
     )
 }
 
-/// Inserts Markdown as new blocks: at the end (append), at the start, or at a heading.
-/// See [`InsertRequest`].
-pub(crate) fn insert(session: &mut Session<'_>, request: &InsertRequest) -> Result<ContentChanged> {
-    if request.position.needs_heading() && request.heading.is_none() {
+/// Checks that a position and a heading go together: the positions that are relative to
+/// a heading name one, the others none.
+fn check_place(position: InsertPosition, heading: bool) -> Result<()> {
+    if position.needs_heading() && !heading {
         return Err(Error::invalid(
             "this position is relative to a heading: name the heading",
         ));
     }
-    if !request.position.needs_heading() && request.heading.is_some() {
+    if !position.needs_heading() && heading {
         return Err(Error::invalid(
             "a heading was named, but the position is not relative to one: choose \
                  before_heading, after_heading or end_of_section",
         ));
     }
-    let open = open_document(session, &request.document)?;
-    let before = &open.loaded.document;
-    let imported = markdown_in::import(&request.markdown, before.settings());
-    let blocks = imported.blocks();
-    let count = before.block_count();
-    let heading = match &request.heading {
-        Some(name) => Some(find_heading(before, name, request.heading_occurrence)?),
-        None => None,
-    };
-    let at = match (request.position, &heading) {
+    Ok(())
+}
+
+/// The index at which new blocks go into `document` for `position`.
+fn insertion_point(
+    document: &Document,
+    position: InsertPosition,
+    heading: Option<&Heading>,
+) -> usize {
+    let count = document.block_count();
+    match (position, heading) {
         (InsertPosition::Start, _) => 0,
         (InsertPosition::BeforeHeading, Some(heading)) => heading.block,
         (InsertPosition::AfterHeading, Some(heading)) => heading.block + 1,
@@ -377,7 +464,7 @@ pub(crate) fn insert(session: &mut Session<'_>, request: &InsertRequest) -> Resu
         _ => {
             let empty = |block: &Block| *block.kind() == BlockKind::Paragraph && block.is_empty();
             count
-                - before
+                - document
                     .blocks()
                     .iter()
                     .rev()
@@ -385,19 +472,50 @@ pub(crate) fn insert(session: &mut Session<'_>, request: &InsertRequest) -> Resu
                     .count()
                     .min(count - 1)
         }
-    };
-    let mut ed = EditorState::new(before.clone());
-    if !blocks.is_empty() {
-        let blank = count == 1
-            && *before.blocks()[0].kind() == BlockKind::Paragraph
-            && before.blocks()[0].is_empty();
-        if blank {
-            // An empty document: the text takes the place of its empty paragraph.
-            rewrite::replace_block_range(&mut ed, 0..1, blocks);
-        } else {
-            ed.insert_blocks_at(at, &Fragment::new(blocks.to_vec()));
-        }
     }
+}
+
+/// Puts `blocks` into the document of `ed` (which is still `before`) at block `at`: as
+/// new blocks, or in the place of the one empty paragraph of a document without text.
+/// Says where the first of them is afterwards.
+fn insert_blocks(ed: &mut EditorState, before: &Document, at: usize, blocks: &[Block]) -> usize {
+    if blocks.is_empty() {
+        return at;
+    }
+    let blank = before.block_count() == 1
+        && *before.blocks()[0].kind() == BlockKind::Paragraph
+        && before.blocks()[0].is_empty();
+    if blank {
+        // An empty document: the text takes the place of its empty paragraph.
+        rewrite::replace_block_range(ed, 0..1, blocks);
+        0
+    } else {
+        ed.insert_blocks_at(at, &Fragment::new(blocks.to_vec()));
+        at
+    }
+}
+
+/// Inserts Markdown as new blocks: at the end (append), at the start, or at a heading.
+/// See [`InsertRequest`].
+pub(crate) fn insert(session: &mut Session<'_>, request: &InsertRequest) -> Result<ContentChanged> {
+    check_place(request.position, request.heading.is_some())?;
+    let open = open_document(session, &request.document)?;
+    let before = &open.loaded.document;
+    let heading = match &request.heading {
+        Some(name) => Some(find_heading(before, name, request.heading_occurrence)?),
+        None => None,
+    };
+    // An image the text names again is the one the document has, as it is there.
+    let mut images = Images::new(&request.images, session.dry_run)?;
+    images.know(&[], before.blocks(), &[]);
+    let imported = Reader {
+        store: &mut *session.store,
+        images: &mut images,
+    }
+    .read(&request.markdown, before.settings())?;
+    let at = insertion_point(before, request.position, heading.as_ref());
+    let mut ed = EditorState::new(before.clone());
+    insert_blocks(&mut ed, before, at, imported.blocks());
     let after = ed.into_document();
     finish_change(
         session,
@@ -412,6 +530,97 @@ pub(crate) fn insert(session: &mut Session<'_>, request: &InsertRequest) -> Resu
     )
 }
 
+/// Adds an image from a file to a document, as a block of its own. See
+/// [`AddImageRequest`]. The file was read by whoever asked
+/// ([`crate::attach::Prepare`]): what is stored here is what the request brought.
+pub(crate) fn add_image(
+    session: &mut Session<'_>,
+    request: &AddImageRequest,
+) -> Result<ContentChanged> {
+    check_place(request.position, request.heading.is_some())?;
+    let alignment = match request.align.as_deref().map(str::trim) {
+        None | Some("") => Alignment::Center,
+        Some(name) => match Alignment::from_name(name) {
+            Some(alignment) if alignment != Alignment::Justify => alignment,
+            _ => {
+                return Err(Error::invalid(
+                    "an image stands at the left, in the middle or at the right of its line: \
+                     align is \"left\", \"center\" or \"right\"",
+                ));
+            }
+        },
+    };
+    if request
+        .width_percent
+        .is_some_and(|percent| !(5..=100).contains(&percent))
+    {
+        return Err(Error::invalid(
+            "the width of an image is a share of the text column: from 5 to 100 percent",
+        ));
+    }
+    let attached = match request.images.as_slice() {
+        [one] => one,
+        [] => {
+            return Err(Error::invalid(
+                "the request brought no image: the file is read by whoever asks, before the \
+                 request is carried out",
+            ));
+        }
+        _ => return Err(Error::invalid("one image is added at a time")),
+    };
+    if let Some(problem) = &attached.problem {
+        return Err(Error::invalid(problem.clone()));
+    }
+    let open = open_document(session, &request.document)?;
+    let before = &open.loaded.document;
+    let heading = match &request.heading {
+        Some(name) => Some(find_heading(before, name, request.heading_occurrence)?),
+        None => None,
+    };
+    let at = insertion_point(before, request.position, heading.as_ref());
+    // The bytes first: a document never names a picture the library does not have yet.
+    let mut images = Images::new(&request.images, session.dry_run)?;
+    let Some(mut image) = images.store(&mut *session.store, attached)? else {
+        return Err(Error::invalid(format!(
+            "{} did not arrive as an image the library can hold",
+            attach::subject(&attached.source)
+        )));
+    };
+    let page = &before.settings().page;
+    image.description = request.description.clone();
+    image.width = match request.width_percent {
+        // Never taller than a page: the width that is stored is the width that is drawn.
+        Some(percent) => ImageWidth::from_percent(percent).min(image.max_width(page)),
+        None => image.original_width(page),
+    };
+    let block = Block::image(image).with_alignment(alignment);
+    let mut ed = EditorState::new(before.clone());
+    let index = insert_blocks(&mut ed, before, at, std::slice::from_ref(&block));
+    let after = ed.into_document();
+    let added = after.blocks().get(index).and_then(Block::as_image);
+    let image = added.map(|image| ImageSummary {
+        id: image.id.to_string(),
+        block: index,
+        format: Some(attached.format.clone()),
+        pixels: image.pixels,
+        width_percent: image.width.percent(),
+        align: after.blocks()[index].alignment().name().to_string(),
+        description: image.description.clone(),
+        missing: false,
+    });
+    finish_change(
+        session,
+        open,
+        after,
+        Reason::Insertion,
+        &request.write,
+        Outcome {
+            image,
+            ..Outcome::default()
+        },
+    )
+}
+
 /// Replaces the section under a heading with Markdown. See [`ReplaceSectionRequest`].
 pub(crate) fn replace_section(
     session: &mut Session<'_>,
@@ -420,12 +629,26 @@ pub(crate) fn replace_section(
     let open = open_document(session, &request.document)?;
     let before = &open.loaded.document;
     let heading = find_heading(before, &request.heading, request.heading_occurrence)?;
-    let imported = markdown_in::import(&request.markdown, before.settings());
     let range = if request.include_heading {
         heading.section()
     } else {
         heading.block + 1..heading.end
     };
+    // An image the new text names is first one of the section, then one of the rest of
+    // the document (a line that came over from another section brings its image as it
+    // is there).
+    let blocks = before.blocks();
+    let mut images = Images::new(&request.images, session.dry_run)?;
+    images.know(
+        &blocks[range.clone()],
+        &blocks[..range.start],
+        &blocks[range.end..],
+    );
+    let imported = Reader {
+        store: &mut *session.store,
+        images: &mut images,
+    }
+    .read(&request.markdown, before.settings())?;
     let mut ed = EditorState::new(before.clone());
     rewrite::rewrite_blocks(&mut ed, range, imported.blocks());
     let after = ed.into_document();
@@ -464,6 +687,27 @@ fn finish_change(
         .into_iter()
         .filter(|thread| delta.detached.iter().any(|id| id.0 == thread.id))
         .collect();
+    // Images by their pictures: one that only changed its place counts for nothing.
+    let (had, has) = (image_counts(before), image_counts(&after));
+    let more_than = |a: &HashMap<ImageId, usize>, b: &HashMap<ImageId, usize>| -> usize {
+        a.iter()
+            .map(|(id, count)| count.saturating_sub(b.get(id).copied().unwrap_or(0)))
+            .sum()
+    };
+    let (images_added, images_removed) = (more_than(&has, &had), more_than(&had, &has));
+    let mut warnings = outcome.warnings;
+    if images_removed > 0 {
+        // A text that was written back without the line of an image reads as "take it
+        // out". Whoever did not mean that is told where the image still is.
+        warnings.push(if images_removed == 1 {
+            "1 image was removed; it is in the version kept before this change".to_string()
+        } else {
+            format!(
+                "{images_removed} images were removed; they are in the version kept before \
+                 this change"
+            )
+        });
+    }
     let kept_title = loaded.custom_title.then(|| loaded.meta.title.clone());
     let (meta, snapshot) = if !changed {
         (loaded.meta.clone(), None)
@@ -504,7 +748,10 @@ fn finish_change(
         characters_before: stats_before.characters as u64,
         characters_after: stats_after.characters as u64,
         headings: delta.headings,
-        warnings: outcome.warnings,
+        images_added,
+        images_removed,
+        image: outcome.image,
+        warnings,
         comments_detached: detached,
         snapshot,
     };
@@ -517,4 +764,6 @@ struct Outcome {
     replacements: usize,
     matched_as: Option<MatchedAs>,
     warnings: Vec<String>,
+    /// For `add_image`: the image that was added.
+    image: Option<ImageSummary>,
 }

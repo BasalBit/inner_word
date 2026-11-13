@@ -30,6 +30,7 @@ pub struct Library {
     pub(crate) patience: Duration,
     pub(crate) app_patience: Duration,
     pub(crate) save_patience: Duration,
+    pub(crate) base_dir: Option<PathBuf>,
 }
 
 impl Library {
@@ -42,6 +43,7 @@ impl Library {
             patience: Duration::from_secs(10),
             app_patience: live::ANSWER_PATIENCE,
             save_patience: live::SAVE_PATIENCE,
+            base_dir: None,
         }
     }
 
@@ -90,6 +92,18 @@ impl Library {
     /// the app does not answer in time the read goes ahead on what is saved.
     pub fn with_save_patience(mut self, patience: Duration) -> Library {
         self.save_patience = patience;
+        self
+    }
+
+    /// The same library with a directory that the relative path of an image file is
+    /// taken from, for every request that names none of its own (`base_dir` of the
+    /// request): a path in the Markdown an operation is given, the file of
+    /// [`Library::add_image`]. A command line tool gives the directory it works in, or
+    /// the directory of the file its text came from. Without one, a relative path is
+    /// not read: an image in Markdown stays a link (a warning says so), and
+    /// `add_image` asks for an absolute path.
+    pub fn with_base_dir(mut self, base_dir: impl Into<PathBuf>) -> Library {
+        self.base_dir = Some(base_dir.into());
         self
     }
 

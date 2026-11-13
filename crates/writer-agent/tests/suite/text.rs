@@ -862,6 +862,7 @@ fn text_is_inserted_at_the_end_the_start_and_at_headings() {
             heading: Some("Log".into()),
             heading_occurrence: Some(2),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert!(
@@ -969,6 +970,7 @@ fn replacing_a_document_keeps_what_reads_the_same() {
                 document: doc.id.into(),
                 markdown: markdown.into(),
                 write: claude(),
+                ..Default::default()
             })
             .unwrap()
     };
@@ -1106,6 +1108,7 @@ fn replacing_a_document_keeps_what_markdown_cannot_say() {
             document: doc.id.into(),
             markdown: changed.clone(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     let after = fx.document(doc.id);
@@ -1212,6 +1215,7 @@ fn writing_back_what_was_read_changes_nothing() {
             document: id.into(),
             markdown: markdown.clone(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     let after = fx.document(id);
@@ -1262,6 +1266,7 @@ fn writing_back_what_was_read_changes_nothing() {
             document: id.into(),
             markdown: markdown.replace("A quote.", "A longer quote."),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(

@@ -793,15 +793,25 @@ mod tests {
         let refused = parse_request(r#"{"version": 99, "op": "teleport"}"#).unwrap_err();
         assert_eq!(
             refused.answer,
-            Answer::refused(Refusal::Protocol { app: 1, tool: 99 })
+            Answer::refused(Refusal::Protocol {
+                app: PROTOCOL_VERSION,
+                tool: 99
+            })
         );
-        for line in [
-            "",
-            "not json",
-            "{}",
-            r#"{"version": 1}"#,
-            r#"{"version": 1, "op": "sing"}"#,
-        ] {
+        // A tool of 0.6.0, which speaks version 1, is refused whole: it would not send
+        // the images a request of today brings, and must not be half understood.
+        let older = parse_request(r#"{"version": 1, "wait_ms": 5, "op": "flush"}"#).unwrap_err();
+        assert_eq!(
+            older.answer,
+            Answer::refused(Refusal::Protocol {
+                app: PROTOCOL_VERSION,
+                tool: 1
+            })
+        );
+        assert_eq!(older.version, PROTOCOL_VERSION);
+        let version = format!(r#"{{"version": {PROTOCOL_VERSION}}}"#);
+        let sing = format!(r#"{{"version": {PROTOCOL_VERSION}, "op": "sing"}}"#);
+        for line in ["", "not json", "{}", version.as_str(), sing.as_str()] {
             let Answer::Failed { error } = parse_request(line).unwrap_err().answer else {
                 panic!("{line}");
             };
@@ -811,7 +821,10 @@ mod tests {
                 "{line}"
             );
         }
-        let request = parse_request(r#"{"version": 1, "wait_ms": 5, "op": "flush"}"#).unwrap();
+        let request = parse_request(&format!(
+            r#"{{"version": {PROTOCOL_VERSION}, "wait_ms": 5, "op": "flush"}}"#
+        ))
+        .unwrap();
         assert!(request.is_flush());
         assert_eq!(request.wait_ms, 5);
     }

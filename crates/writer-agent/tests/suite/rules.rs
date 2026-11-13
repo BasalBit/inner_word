@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use writer_agent::{
-    AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
+    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
     EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest, InsertPosition, InsertRequest,
     Library, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, Refusal,
@@ -56,6 +56,7 @@ pub fn every_write(
                     document: chapter.clone(),
                     markdown: "# Chapter 1\n\nRewritten.".into(),
                     write: o(),
+                    ..Default::default()
                 })
                 .map(|r| r.written.changed),
         ),
@@ -90,6 +91,21 @@ pub fn every_write(
                     document: chapter.clone(),
                     heading: "Notes".into(),
                     markdown: "New notes.".into(),
+                    write: o(),
+                    ..Default::default()
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "add_image",
+            library
+                .add_image(&AddImageRequest {
+                    document: chapter.clone(),
+                    path: fx
+                        .picture("every write.png", (40, 30), [20, 90, 160])
+                        .to_string_lossy()
+                        .into_owned(),
+                    description: "A blue rectangle".into(),
                     write: o(),
                     ..Default::default()
                 })
@@ -718,6 +734,7 @@ fn a_version_is_kept_before_every_change_of_text_and_deleting_needs_a_yes() {
             document: doc.id.into(),
             markdown: "# Plan\n\nAll new.\n".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(
@@ -733,6 +750,7 @@ fn a_version_is_kept_before_every_change_of_text_and_deleting_needs_a_yes() {
             document: doc.id.into(),
             markdown: "# Plan\n\nAll new.\n".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert!(!same.written.changed && same.snapshot.is_none());
@@ -1009,6 +1027,7 @@ fn a_document_written_here_is_stored_exactly_as_the_app_stores_one() {
             document: created.id.into(),
             markdown: "# Ganz anders\n\nNeu.\n".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     check(Some("Meer"));
@@ -1110,6 +1129,7 @@ fn new_documents_take_the_settings_the_app_gives_new_documents() {
             document: created.id.into(),
             markdown: "# Second\n\nother text".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     let after = fx
@@ -1239,6 +1259,7 @@ fn a_book_of_ten_thousand_blocks_is_read_and_edited_in_good_time() {
                 document: id.into(),
                 markdown: changed,
                 write: claude(),
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(
@@ -1454,6 +1475,7 @@ fn content_that_is_not_a_document_is_reported_and_never_written_over() {
                 document: id.into(),
                 markdown: "All new.".into(),
                 write: claude(),
+                ..Default::default()
             })
             .unwrap_err(),
     );

@@ -5,18 +5,28 @@
 //! changed word by word, and only what is left over is removed and inserted. What is not
 //! touched keeps everything it has: its id, the formatting Markdown cannot say (colours,
 //! fonts, alignment, text size) and the comments anchored in it.
+//!
+//! An image is its picture to this module: two image blocks that name the same stored
+//! bytes are the same block, whatever width and alignment each has (Markdown says
+//! neither), so an image that stays where it is in a text that is written back is not
+//! touched. A description that the new text words differently is set on the block in
+//! place. An image that changes place is taken out and put in again, as every block
+//! that moves is; that it comes back as it was is the reader's doing
+//! ([`crate::markdown_in::Images`]), which answers `image:<id>` with the image the
+//! document held.
 
 use std::collections::HashMap;
 use std::ops::Range;
 
 use unicode_segmentation::UnicodeSegmentation;
 use writer_core::{
-    Alignment, Block, BlockKind, DocumentSettings, EditorState, Fragment, InlineAttrs, InlineStyle,
-    Position, Rgb, TextRange,
+    Alignment, Block, BlockKind, DocumentSettings, EditorState, Fragment, ImageId, InlineAttrs,
+    InlineStyle, Position, Rgb, TextRange,
 };
 
 use crate::diff;
-use crate::markdown_in;
+use crate::error::Result;
+use crate::markdown_in::Reader;
 
 /// The largest stretch of changed blocks (old × new) in which edited paragraphs are
 /// looked for by comparing every old block with every new one.
@@ -66,11 +76,19 @@ impl Marks {
     }
 }
 
+/// The kind of a block as Markdown says it. Of an image it says which picture and
+/// nothing else: the width and the pixel size are not in the text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum KindKey {
+    Image(ImageId),
+    Other(BlockKind),
+}
+
 /// What a block reads as in Markdown: two blocks with the same key are the same block to
 /// somebody who reads and writes Markdown.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct BlockKey {
-    kind: BlockKind,
+    kind: KindKey,
     indent: u8,
     text: String,
     runs: Vec<(usize, Marks)>,
@@ -106,7 +124,10 @@ impl BlockKey {
             runs.clear();
         }
         BlockKey {
-            kind: block.kind().clone(),
+            kind: match block.as_image() {
+                Some(image) => KindKey::Image(image.id),
+                None => KindKey::Other(block.kind().clone()),
+            },
             indent: block.indent(),
             text: text[start..end].to_string(),
             runs,
@@ -204,6 +225,13 @@ pub(crate) fn rewrite_blocks(ed: &mut EditorState, range: Range<usize>, new: &[B
     };
     for &(o, n) in &kept {
         stretch(at, (o, n), &mut steps);
+        // The same picture with other words under it: the block stays, with its width
+        // and its place on the line, and takes the new description.
+        if let (Some(was), Some(now)) = (old[o].as_image(), new[n].as_image())
+            && was.description != now.description
+        {
+            steps.push(Step::Edit(o, n));
+        }
         at = (o + 1, n + 1);
     }
     stretch(at, (old.len(), new.len()), &mut steps);
@@ -393,6 +421,14 @@ fn slice(block: &Block, range: Range<usize>) -> Block {
 /// (with their comments and everything else they carry), the others are replaced.
 fn edit_block(ed: &mut EditorState, index: usize, new: &Block) {
     let old = ed.document().blocks()[index].clone();
+    if let (Some(was), Some(now)) = (old.as_image(), new.as_image()) {
+        // An image has no text to change word by word: what a text can say of it
+        // beyond which picture it is, is what it shows.
+        if was.description != now.description {
+            ed.set_image_description(index, &now.description);
+        }
+        return;
+    }
     let old_pieces = pieces(&old);
     let new_pieces = pieces(new);
     let old_keys: Vec<(&str, &Marks)> = old_pieces
@@ -480,7 +516,8 @@ fn edit_block(ed: &mut EditorState, index: usize, new: &Block) {
 /// describes. `exact` says that the formatting of the replacement is all in `new_text`
 /// (the old text was given as Markdown); otherwise words without markup take the
 /// formatting of what they replace. Returns what in `new_text` could not be kept as
-/// written.
+/// written. `reader` reads the Markdown of `new_text` (and stores the images it brings);
+/// its failure is the only one there is.
 pub(crate) fn replace_text(
     ed: &mut EditorState,
     range: TextRange,
@@ -488,7 +525,8 @@ pub(crate) fn replace_text(
     literal: bool,
     exact: bool,
     settings: &DocumentSettings,
-) -> Vec<String> {
+    reader: &mut Reader<'_, '_>,
+) -> Result<Vec<String>> {
     let range = TextRange::new(
         ed.document().clamp_position(range.start),
         ed.document().clamp_position(range.end),
@@ -506,7 +544,27 @@ pub(crate) fn replace_text(
         } else {
             ed.delete_range(range);
         }
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    // A match that is images and nothing else (the old text named them as they read in
+    // Markdown) has no text to put words into: the blocks are brought to what the new
+    // text reads as, the way a section is.
+    if ed.document().blocks()[blocks.clone()]
+        .iter()
+        .all(Block::is_void)
+    {
+        if literal {
+            let lines: Vec<Block> = normalized
+                .trim_matches('\n')
+                .split('\n')
+                .map(Block::paragraph)
+                .collect();
+            rewrite_blocks(ed, blocks, &lines);
+            return Ok(Vec::new());
+        }
+        let imported = reader.read(normalized.trim_matches('\n'), settings)?;
+        rewrite_blocks(ed, blocks, imported.blocks());
+        return Ok(imported.warnings);
     }
     let single = range.start.block == range.end.block;
     // A line break at an end of the new text ends the block there: the text before the
@@ -543,18 +601,18 @@ pub(crate) fn replace_text(
         } else {
             inline(ed, &Block::paragraph(lines), "", "", false);
         }
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if !exact && is_plain_text(&normalized) {
         inline(ed, &Block::paragraph(&normalized), "", "", false);
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let space = |c: char| c == ' ' || c == '\t';
     let trimmed = normalized.trim_matches(|c: char| space(c) || c == '\n');
     let lead = &normalized[..normalized.len() - normalized.trim_start_matches(space).len()];
     let trail = &normalized[normalized.trim_end_matches(space).len()..];
-    let imported = markdown_in::import(trimmed, settings);
+    let imported = reader.read(trimmed, settings)?;
     let warnings = imported.warnings.clone();
     let read = imported.blocks();
     if read.is_empty() {
@@ -568,23 +626,26 @@ pub(crate) fn replace_text(
         } else {
             ed.delete_range(range);
         }
-        return warnings;
+        return Ok(warnings);
     }
     let one_paragraph = read.len() == 1 && *read[0].kind() == BlockKind::Paragraph;
     if one_paragraph {
         inline(ed, &read[0], lead, trail, exact);
-        return warnings;
+        return Ok(warnings);
     }
     if whole_blocks {
         // The match is whole blocks: the new text says what kinds of block they become.
         rewrite_blocks(ed, blocks, read);
-        return warnings;
+        return Ok(warnings);
     }
     if read.len() == 1 && !read[0].is_void() {
         // In the middle of a block a leading "#", "-", ">" or "1." is the characters it
         // is: read the text again behind a word, and take the word away.
+        // (The second reading asks about the images of the text a second time. That
+        // harms nothing: what a file became is remembered, and nothing is read after
+        // this.)
         const GUARD: &str = "x ";
-        let guarded = markdown_in::import(&format!("{GUARD}{trimmed}"), settings);
+        let guarded = reader.read(&format!("{GUARD}{trimmed}"), settings)?;
         let again = guarded.blocks();
         if again.len() == 1
             && *again[0].kind() == BlockKind::Paragraph
@@ -592,12 +653,12 @@ pub(crate) fn replace_text(
         {
             let piece = slice(&again[0], GUARD.len()..again[0].len());
             inline(ed, &piece, lead, trail, exact);
-            return warnings;
+            return Ok(warnings);
         }
     }
     // Several blocks into the middle of one: the block is split around them.
     paste(ed, read);
-    warnings
+    Ok(warnings)
 }
 
 /// Whether `text` is words and nothing a Markdown reader would take for markup.

@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::attach::Prepare;
 use crate::error::{Error, Result};
 use crate::library::{Library, Session};
 use crate::types::*;
@@ -87,6 +88,10 @@ macro_rules! operations {
             $(
                 $(#[$doc])*
                 pub fn $method(&self, request: &$request) -> Result<$done> {
+                    // What the request names of this Mac (an image file) is read here,
+                    // in the process that was asked: the app never opens such a path.
+                    let request = Prepare::prepared(request, self)?;
+                    let request: &$request = &request;
                     self.write(
                         &request.write,
                         || Operation::$variant(request.clone()),
@@ -114,6 +119,10 @@ operations! {
     /// Replaces the section under a heading with Markdown. See [`ReplaceSectionRequest`].
     replace_section / ReplaceSection(ReplaceSectionRequest) -> ContentChanged
         = write_text::replace_section;
+    /// Adds an image from a file on this Mac to a document, as a block of its own. The
+    /// file is read here, by whoever asks, and travels with the request. See
+    /// [`AddImageRequest`].
+    add_image / AddImage(AddImageRequest) -> ContentChanged = write_text::add_image;
 
     /// Renames a document, or gives its title back to its text. See
     /// [`RenameDocumentRequest`].

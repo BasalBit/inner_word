@@ -4,8 +4,16 @@
 //! The text of a document, for this purpose, is the text of its blocks with one line
 //! break between two blocks (a soft line break inside a block is a line break too). A
 //! match may run across blocks.
+//!
+//! An image is a block without text: an empty line in that text. So a text that names
+//! the paragraph before an image and the one after it, with an empty line between them,
+//! is found across the image, and replacing it would take the image away without a word
+//! about it. An edit therefore asks [`across_an_image`] of every match it is about to
+//! replace. A text read as Markdown that names the image where it stands
+//! (`![…](image:<id>)`) is found there too, and only there: then the image is part of
+//! what was asked for.
 
-use writer_core::{Document, Position, TextRange, text};
+use writer_core::{Block, Document, ImageId, Position, TextRange, text};
 
 use crate::error::{Error, Occurrence, Result};
 use crate::markdown_in;
@@ -99,22 +107,31 @@ pub(crate) fn find(document: &Document, wanted: &str, literal: bool) -> Result<M
         });
     }
     if !literal {
-        let read = markdown_in::import(needle, document.settings());
-        let as_text = read
-            .blocks()
+        let read = markdown_in::read_against(needle, document);
+        let blocks = read.blocks();
+        let as_text = blocks
             .iter()
             .map(|block| block.text())
             .collect::<Vec<_>>()
             .join("\n");
         let as_text = as_text.trim_matches('\n');
-        if !as_text.is_empty() && as_text != needle {
-            let ranges = flat.find(document, as_text);
-            if !ranges.is_empty() {
-                return Ok(Matches {
-                    ranges,
-                    matched_as: Some(MatchedAs::Markdown),
-                });
-            }
+        let named = Named::of(blocks);
+        let ranges: Vec<TextRange> = if as_text.is_empty() {
+            // Nothing but image lines: the places where those images stand in a row.
+            rows(document, &named.before)
+        } else if as_text != needle {
+            flat.find(document, as_text)
+                .into_iter()
+                .filter_map(|range| named.at(document, range))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !ranges.is_empty() {
+            return Ok(Matches {
+                ranges,
+                matched_as: Some(MatchedAs::Markdown),
+            });
         }
     }
     Ok(Matches {
@@ -122,6 +139,151 @@ pub(crate) fn find(document: &Document, wanted: &str, literal: bool) -> Result<M
         matched_as: None,
     })
 }
+
+/// The pictures of the image blocks among `blocks`, in order.
+fn images_of(blocks: &[Block]) -> Vec<ImageId> {
+    blocks
+        .iter()
+        .filter_map(|block| block.as_image().map(|image| image.id))
+        .collect()
+}
+
+/// The pictures of the image blocks a match runs across, in order. (A match of text
+/// never begins or ends on one: an image has no text, and the text that is looked for
+/// has no line break at its ends.)
+fn images_in(document: &Document, range: &TextRange) -> Vec<ImageId> {
+    let last = range.end.block.min(document.block_count() - 1);
+    images_of(&document.blocks()[range.start.block.min(last)..=last])
+}
+
+/// A block without text, as a text that was read as Markdown names it: the image with
+/// this picture, or (`None`) anything else without text (a divider, an empty line).
+type Line = Option<ImageId>;
+
+fn line_of(block: &Block) -> Line {
+    block.as_image().map(|image| image.id)
+}
+
+/// Whether the blocks of `document` from `at` on are `lines`, one for one.
+fn stand(document: &Document, at: usize, lines: &[Line]) -> bool {
+    lines.iter().enumerate().all(|(offset, line)| {
+        document
+            .blocks()
+            .get(at + offset)
+            .is_some_and(|block| block.is_empty() && line_of(block) == *line)
+    })
+}
+
+/// The places where `lines` stand as blocks in a row: each from the first of them to
+/// the last.
+fn rows(document: &Document, lines: &[Line]) -> Vec<TextRange> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while !lines.is_empty() && at + lines.len() <= document.block_count() {
+        if stand(document, at, lines) {
+            found.push(TextRange::new(
+                Position::new(at, 0),
+                Position::new(at + lines.len() - 1, 0),
+            ));
+            at += lines.len();
+        } else {
+            at += 1;
+        }
+    }
+    found
+}
+
+/// The images a text that was read as Markdown names, by where they stand in it.
+struct Named {
+    /// The blocks without text before its first line of text, from the first image
+    /// among them on (none when there is no image there: empty lines at the ends of a
+    /// text do not count). For a text without any line of text: from its first image
+    /// to its last.
+    before: Vec<Line>,
+    /// The images between its lines of text.
+    inside: Vec<ImageId>,
+    /// The blocks without text after its last line of text, up to the last image
+    /// among them.
+    after: Vec<Line>,
+}
+
+impl Named {
+    fn of(blocks: &[Block]) -> Named {
+        let first = blocks.iter().position(|block| !block.is_empty());
+        let last = blocks.iter().rposition(|block| !block.is_empty());
+        let (head, core, tail) = match (first, last) {
+            (Some(first), Some(last)) => {
+                (&blocks[..first], &blocks[first..=last], &blocks[last + 1..])
+            }
+            _ => (blocks, &blocks[..0], &blocks[..0]),
+        };
+        // Without a line of text the images are a row of their own: from the first
+        // to the last.
+        let head = match (
+            first,
+            head.iter().rposition(|block| block.kind().is_image()),
+        ) {
+            (None, Some(last_image)) => &head[..=last_image],
+            _ => head,
+        };
+        let before = match head.iter().position(|block| block.kind().is_image()) {
+            Some(image) => head[image..].iter().map(line_of).collect(),
+            None => Vec::new(),
+        };
+        let after = match tail.iter().rposition(|block| block.kind().is_image()) {
+            Some(image) => tail[..=image].iter().map(line_of).collect(),
+            None => Vec::new(),
+        };
+        Named {
+            before,
+            inside: images_of(core),
+            after,
+        }
+    }
+
+    /// The match `range` of the text's own lines as a match of the whole text, the
+    /// image lines at its ends included; `None` when the images are not there as the
+    /// text names them. Exactly the images the text names between its lines stand inside
+    /// the match (so a text that names none is never found across one), and the image
+    /// lines at its ends are the blocks right before and right after it.
+    fn at(&self, document: &Document, mut range: TextRange) -> Option<TextRange> {
+        if images_in(document, &range) != self.inside {
+            return None;
+        }
+        if !self.before.is_empty() {
+            let first = range.start.block.checked_sub(self.before.len())?;
+            if range.start.offset != 0 || !stand(document, first, &self.before) {
+                return None;
+            }
+            range.start = Position::new(first, 0);
+        }
+        if !self.after.is_empty() {
+            let last = range.end.block;
+            let whole = range.end.offset == document.blocks()[last].len();
+            if !whole || !stand(document, last + 1, &self.after) {
+                return None;
+            }
+            range.end = Position::new(last + self.after.len(), 0);
+        }
+        Some(range)
+    }
+}
+
+/// Whether replacing the match `range` would take an image with it that the text of the
+/// match does not name: the match was found as plain text (`matched_as`) and an image
+/// stands inside it. What was found as Markdown names every image in it, and no other
+/// stands there ([`find`]).
+pub(crate) fn across_an_image(
+    document: &Document,
+    range: &TextRange,
+    matched_as: Option<MatchedAs>,
+) -> bool {
+    matched_as != Some(MatchedAs::Markdown) && !images_in(document, range).is_empty()
+}
+
+/// What an edit is told when its old text runs across an image.
+pub(crate) const ACROSS_AN_IMAGE: &str = "the text to replace runs across an image; read the place again and replace the text \
+     before and after the image separately, or name the image as it reads in Markdown";
 
 /// The matches a request means: the only one, the one `occurrence` numbers (from 1), or
 /// with `all` every one. Fails with [`Error::NoMatch`] and [`Error::NotUnique`].

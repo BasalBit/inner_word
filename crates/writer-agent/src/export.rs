@@ -1,10 +1,19 @@
 //! Export of a document, or of a folder as one file, to a path on disk.
+//!
+//! Images go with the text. A DOCX holds its pictures; a Markdown file links them, and
+//! they are written into a folder beside it (`chapter.md` and `chapter images/`), which
+//! is also how an agent gets to look at a picture: the files are there to open. Plain
+//! text has the description of each image on a line of its own.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use writer_core::Document;
-use writer_export::{ExportOptions, ExportSource};
-use writer_store::{DocumentMeta, FolderNode};
+use writer_core::{Document, ImageId};
+use writer_export::{
+    ExportOptions, ExportSource, ImageData, ImageFileFormat, ImageSource, MarkdownImages,
+    export_package, images_dir_name,
+};
+use writer_store::{DocumentMeta, FolderNode, ImageFormat, Store};
 
 use crate::content;
 use crate::error::{Error, Result};
@@ -32,6 +41,40 @@ fn store_format(format: ExportFormat) -> writer_export::ExportFormat {
     }
 }
 
+/// The pictures of the library, for the exporters. One the library does not have is
+/// exported as a missing one (its description stands in for it).
+struct Pictures<'a>(&'a Store);
+
+impl ImageSource for Pictures<'_> {
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
+        let name = writer_store::ImageId(*id.as_bytes());
+        let info = self.0.image_info(&name).ok().flatten()?;
+        let bytes = self.0.image_bytes(&name).ok().flatten()?;
+        Some(ImageData {
+            bytes: Cow::Owned(bytes),
+            format: match info.format {
+                ImageFormat::Png => ImageFileFormat::Png,
+                ImageFormat::Jpeg => ImageFileFormat::Jpeg,
+                ImageFormat::Gif => ImageFileFormat::Gif,
+            },
+        })
+    }
+}
+
+/// Writes `bytes` to `path` so that a reader never sees half of them: beside the file
+/// first, then in its place.
+fn write_whole(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut partial = path.to_path_buf().into_os_string();
+    partial.push(format!(".partial-{}", std::process::id()));
+    let partial = PathBuf::from(partial);
+    std::fs::write(&partial, bytes).map_err(io(&partial))?;
+    if let Err(error) = std::fs::rename(&partial, path) {
+        std::fs::remove_file(&partial).ok();
+        return Err(io(path)(error));
+    }
+    Ok(())
+}
+
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
     move |source| Error::Io {
         path: path.to_path_buf(),
@@ -42,6 +85,10 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
 impl Library {
     /// Writes a document, or a folder as one file, as Markdown, DOCX or plain text. Only
     /// reads the library, so it works while the app is open. See [`ExportRequest`].
+    ///
+    /// The images of a Markdown export are written as files into the folder
+    /// `<name> images` beside the file, and the Markdown links them there
+    /// ([`Exported::assets`] lists them); a DOCX holds its pictures.
     pub fn export(&self, request: &ExportRequest) -> Result<Exported> {
         let targets = (request.document.as_ref(), request.folder.as_ref());
         if matches!(targets, (Some(_), Some(_)) | (None, None)) {
@@ -130,10 +177,27 @@ impl Library {
                     .map(|(meta, document)| (title_of(meta).to_string(), document)),
             )
         };
+        let pictures = Pictures(store);
+        let source = source.with_images(&pictures);
         let mut options = ExportOptions::default();
         options.docx.created = metas.iter().map(|meta| meta.created_at).min().unwrap_or(0);
         options.docx.modified = metas.iter().map(|meta| meta.updated_at).max().unwrap_or(0);
-        let bytes = writer_export::export(&source, store_format(format), &options);
+        // A Markdown file links its pictures in a folder of its own beside it.
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        options.markdown.images = MarkdownImages::Files {
+            dir: images_dir_name(&file_name),
+        };
+        let exported = export_package(&source, store_format(format), &options);
+        let bytes = exported.bytes;
+        let beside = path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let assets: Vec<PathBuf> = exported
+            .assets
+            .iter()
+            .map(|asset| beside.join(&asset.path))
+            .collect();
 
         if !request.dry_run {
             if let Some(parent) = path
@@ -142,20 +206,21 @@ impl Library {
             {
                 std::fs::create_dir_all(parent).map_err(io(parent))?;
             }
-            // Beside the file first, then in its place: a reader never sees half of it.
-            let mut partial = path.clone().into_os_string();
-            partial.push(format!(".partial-{}", std::process::id()));
-            let partial = PathBuf::from(partial);
-            std::fs::write(&partial, &bytes).map_err(io(&partial))?;
-            if let Err(error) = std::fs::rename(&partial, &path) {
-                std::fs::remove_file(&partial).ok();
-                return Err(io(&path)(error));
+            // The pictures first: a file that is there links nothing that is not. They
+            // are named by what they are, so one that is there already is the same one.
+            for (asset, file) in exported.assets.iter().zip(&assets) {
+                if let Some(folder) = file.parent() {
+                    std::fs::create_dir_all(folder).map_err(io(folder))?;
+                }
+                write_whole(file, &asset.bytes)?;
             }
+            write_whole(&path, &bytes)?;
         }
         Ok(Exported {
             path,
             format,
             bytes: bytes.len() as u64,
+            assets,
             title,
             documents: metas
                 .iter()

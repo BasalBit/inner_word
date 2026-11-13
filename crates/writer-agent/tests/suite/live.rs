@@ -10,10 +10,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use writer_agent::live::{
-    self, Answer, CHANGES_SETTING, Change, Closer, Incoming, Listener, Operation, Request,
+    self, Answer, CHANGES_SETTING, Change, Closer, Incoming, Listener, Operation, PROTOCOL_VERSION,
+    Request,
 };
 use writer_agent::{
-    AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
+    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
     EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest, FindRequest,
     FolderInfoRequest, InfoRequest, InsertPosition, InsertRequest, Library, ListCommentsRequest,
@@ -69,11 +70,16 @@ pub fn as_the_app(store: &mut Store, incoming: Incoming) -> Option<Served> {
 pub struct StandIn {
     closer: Closer,
     thread: Option<JoinHandle<()>>,
-    /// Every request that was carried out, in order.
+    /// Every request that was carried out, in order. (Look through [`StandIn::taken`]:
+    /// a request is told here a moment after its answer went out.)
     pub served: mpsc::Receiver<Served>,
     /// The socket it listens on.
     pub socket: PathBuf,
     lock: HeldLock,
+    /// How many requests arrived, and how many of them are done with: answered, and
+    /// told to `served`.
+    arrived: Arc<AtomicUsize>,
+    done: Arc<AtomicUsize>,
 }
 
 /// The lock of a library, where whoever stands in for the app can let go of it.
@@ -98,11 +104,15 @@ impl StandIn {
         let closer = listener.closer();
         let socket = listener.path().to_path_buf();
         let (tell, served) = mpsc::channel();
+        let (arrived, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (counted, finished) = (arrived.clone(), done.clone());
         let thread = std::thread::spawn(move || {
             while let Some(incoming) = listener.accept() {
+                counted.fetch_add(1, Ordering::SeqCst);
                 if let Some(served) = serve(&mut store, incoming) {
                     tell.send(served).ok();
                 }
+                finished.fetch_add(1, Ordering::SeqCst);
             }
         });
         StandIn {
@@ -111,13 +121,29 @@ impl StandIn {
             served,
             socket,
             lock: Arc::new(Mutex::new(Some(lock))),
+            arrived,
+            done,
         }
+    }
+
+    /// Every request that was carried out since the last look. The tool has its answer
+    /// a moment before the stand-in has told what it did: a look right after an answer
+    /// waits that moment (and not for a request the stand-in is keeping on purpose
+    /// for longer than a test waits).
+    pub fn taken(&self) -> Vec<Served> {
+        let started = Instant::now();
+        while self.done.load(Ordering::SeqCst) < self.arrived.load(Ordering::SeqCst)
+            && started.elapsed() < Duration::from_secs(2)
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.served.try_iter().collect()
     }
 
     /// The names of the requests served since the last look.
     pub fn names(&self) -> Vec<&'static str> {
-        self.served
-            .try_iter()
+        self.taken()
+            .iter()
             .map(|served| served.request.name())
             .collect()
     }
@@ -304,7 +330,7 @@ fn a_change_made_while_the_app_is_open_is_carried_out_by_the_app() {
     assert_eq!(edited.replacements, 1);
     let kept = edited.snapshot.expect("the text as it was is kept");
     assert_eq!(kept.label.as_deref(), Some("Before an edit by Claude"));
-    let served: Vec<_> = app.served.try_iter().collect();
+    let served = app.taken();
     assert_eq!(served.len(), 1, "one request, one answer");
     let Served {
         request,
@@ -356,6 +382,9 @@ fn a_change_made_while_the_app_is_open_is_carried_out_by_the_app() {
 /// An app of 0.6.0 answered a real run with `"app_is_open": false, "app_takes_changes":
 /// false` in the result, although it had made the change. A tool of today that is
 /// answered so says what is true all the same: it handed the change to the app.
+/// (Since the channel speaks version 2 an app of 0.6.0 refuses a tool of today whole,
+/// `versions_of_the_channel_that_do_not_fit_tell_each_other`; what is held here is that
+/// the tool does not take who made a change from the answer, whoever answers.)
 #[test]
 fn a_result_from_an_app_of_0_6_0_says_that_the_app_made_the_change() {
     let fx = closed_fixture();
@@ -438,7 +467,7 @@ type Step = (&'static str, Box<dyn Fn(&Library) -> String>);
 
 /// One of every operation that writes (and some of their failures), against the library
 /// `seed` makes, each with the name it has in the table of operations.
-fn steps() -> Vec<Step> {
+fn steps(pictures: &Path) -> Vec<Step> {
     fn step<T: serde::Serialize>(
         name: &'static str,
         run: impl Fn(&Library) -> writer_agent::Result<T> + 'static,
@@ -446,6 +475,14 @@ fn steps() -> Vec<Step> {
         (name, Box::new(move |library| outcome(run(library))))
     }
     let chapter = || Target::path("Book/Chapter 1");
+    // Two picture files, outside both libraries: each library is brought their bytes.
+    let picture = |name: &str, size: (u32, u32), rgb: [u8; 3]| -> String {
+        let path = pictures.join(name);
+        std::fs::write(&path, writer_image::fixtures::png(size.0, size.1, rgb)).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let harbour = picture("harbour.png", (640, 400), [30, 90, 160]);
+    let square = picture("square.png", (48, 48), [200, 40, 40]);
     // The ids of the threads of the chapter, and of the replies of the first.
     fn threads(library: &Library) -> Vec<(u64, Vec<u64>)> {
         library
@@ -580,11 +617,60 @@ fn steps() -> Vec<Step> {
                 ..Default::default()
             })
         }),
+        // Images: a file, as a block of its own; files that the Markdown names; and an
+        // image that is named again.
+        step("add_image", {
+            let harbour = harbour.clone();
+            move |library| {
+                library.add_image(&AddImageRequest {
+                    document: chapter(),
+                    path: harbour.clone(),
+                    description: "The harbour at dusk".into(),
+                    width_percent: Some(40),
+                    position: InsertPosition::AfterHeading,
+                    heading: Some("Notes".into()),
+                    write: claude(),
+                    ..Default::default()
+                })
+            }
+        }),
+        step("add_image", {
+            let square = square.clone();
+            move |library| {
+                // No such heading: nothing is stored, not even the bytes.
+                library.add_image(&AddImageRequest {
+                    document: chapter(),
+                    path: square.clone(),
+                    position: InsertPosition::EndOfSection,
+                    heading: Some("No such heading".into()),
+                    write: claude(),
+                    ..Default::default()
+                })
+            }
+        }),
+        step("insert", {
+            let (harbour, square) = (harbour.clone(), square.clone());
+            move |library| {
+                let again = writer_store::ImageId::of(&std::fs::read(&harbour).unwrap());
+                library.insert(&InsertRequest {
+                    document: chapter(),
+                    markdown: format!(
+                        "![A red square]({square})\n\nThe harbour once more:\n\n\
+                         ![](image:{again})\n\n![Not there](/no/such/picture.png)\n"
+                    ),
+                    write: claude(),
+                    ..Default::default()
+                })
+            }
+        }),
         step("replace_document", move |library| {
+            // A text that names none of the three images: they go, and the result says
+            // where they still are.
             library.replace_document(&ReplaceDocumentRequest {
                 document: chapter(),
                 markdown: "# Chapter 1\n\nRewritten at dusk.\n\n## Notes\n\nKept.\n".into(),
                 write: claude(),
+                ..Default::default()
             })
         }),
         step("replace_document", move |library| {
@@ -593,6 +679,7 @@ fn steps() -> Vec<Step> {
                 document: chapter(),
                 markdown: "# Chapter 1\n\nRewritten at dusk.\n\n## Notes\n\nKept.\n".into(),
                 write: claude(),
+                ..Default::default()
             })
         }),
         step("restore_version", move |library| {
@@ -827,9 +914,11 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
     seed(&through);
     assert_eq!(direct.dump(), through.dump(), "the same start");
     let app = StandIn::open(&through);
+    let pictures = tempfile::tempdir().unwrap();
 
     let mut names = BTreeSet::new();
-    for (number, (name, run)) in steps().into_iter().enumerate() {
+    let mut most_images = 0;
+    for (number, (name, run)) in steps(pictures.path()).into_iter().enumerate() {
         direct.clock.advance_ms(1000);
         through.clock.advance_ms(1000);
         let written = run(&direct.library);
@@ -861,9 +950,27 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
             direct.dump(),
             "step {number} ({name}): the two libraries differ"
         );
+        // The pictures are part of what is compared: how many each library holds, and
+        // the rows of both `images.db` in the dump, bytes included.
+        assert_eq!(
+            through.store().image_count().unwrap(),
+            direct.store().image_count().unwrap(),
+            "step {number} ({name})"
+        );
+        most_images = most_images.max(direct.dump().matches(" bytes ").count());
         names.insert(name);
     }
     assert!(through.library.app_is_open());
+    assert_eq!(
+        direct.store().image_count().unwrap(),
+        2,
+        "two files were brought"
+    );
+    assert!(direct.dump().contains("== images.db images"));
+    assert!(
+        most_images >= 2,
+        "the bytes of the pictures are in the dump"
+    );
 
     // Every operation of the table was among them, and nothing else.
     let table: BTreeSet<&str> = Operation::CHANGES.iter().copied().collect();
@@ -873,7 +980,7 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
         "the steps above and the table of operations (src/operations.rs) name different \
          operations: an operation that writes has to be in both"
     );
-    assert_eq!(table.len(), 24);
+    assert_eq!(table.len(), 25);
 
     // What a search finds is the same too (the index is not in the dump).
     for query in ["dusk", "lighthouse", "Rewritten", "notes", "year"] {
@@ -905,8 +1012,8 @@ fn the_app_is_told_what_changed() {
         .unwrap()
         .id;
     let changes = |app: &StandIn| -> Vec<Change> {
-        app.served
-            .try_iter()
+        app.taken()
+            .into_iter()
             .filter(|served| !served.request.is_flush())
             .flat_map(|served| served.changes)
             .collect()
@@ -948,6 +1055,7 @@ fn the_app_is_told_what_changed() {
             document: chapter.into(),
             markdown: "# Chapter 1\n\nAll new.\n".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(rewritten.comments_detached.len(), 1);
@@ -966,6 +1074,7 @@ fn the_app_is_told_what_changed() {
             document: chapter.into(),
             markdown: "# Chapter 1\n\nAll new.\n".into(),
             write: claude(),
+            ..Default::default()
         })
         .unwrap();
     assert!(!same.written.changed);
@@ -1061,6 +1170,7 @@ fn nothing_writes_to_a_library_but_through_the_table() {
         "default_location",
         "locate",
         "with_clock",
+        "with_base_dir",
         "with_patience",
         "with_app_patience",
         "with_save_patience",
@@ -1431,8 +1541,8 @@ fn with_the_switch_off_the_old_rule_holds() {
     }
     assert_eq!(fx.dump(), before, "a refused change changed the library");
     let refused: Vec<_> = app
-        .served
-        .try_iter()
+        .taken()
+        .into_iter()
         .filter(|served| !served.request.is_flush())
         .collect();
     assert_eq!(refused.len(), Operation::CHANGES.len());
@@ -1964,17 +2074,17 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     // A newer app refuses this tool's request, in a form every version reads.
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":7,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":7,\
-          \"tool\":1},\"more\":[1,2]}\n"
+          \"tool\":2},\"more\":[1,2]}\n"
             .to_vec()
     });
     let error = change(&fx.library).unwrap_err();
     let message = error.to_string();
     assert_eq!(
         refusal(Err::<(), _>(error)),
-        Refusal::Protocol { app: 7, tool: 1 }
+        Refusal::Protocol { app: 7, tool: 2 }
     );
     assert!(
-        message.contains("the app speaks version 7 of their channel, this tool version 1"),
+        message.contains("the app speaks version 7 of their channel, this tool version 2"),
         "{message}"
     );
     assert!(message.contains("nothing was changed"), "{message}");
@@ -2003,17 +2113,39 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         BufReader::new(stream).read_line(&mut answer).unwrap();
         serde_json::from_str(&answer).unwrap_or_else(|_| panic!("{answer:?}"))
     };
-    let answer = ask(r#"{"version":2,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
+    let answer = ask(r#"{"version":3,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
     assert_eq!(
         answer,
         serde_json::json!({
-            "version": 1,
+            "version": 2,
             "answer": "refused",
-            "refusal": {"why": "protocol", "app": 1, "tool": 2},
+            "refusal": {"why": "protocol", "app": 2, "tool": 3},
         })
     );
+    // And a tool from before images (0.6.0 spoke version 1): its requests bring no
+    // image files, and an app that took one would store a link where the agent meant a
+    // picture. It is refused whole, a request it could have read and a `flush` alike.
+    for line in [
+        format!(
+            r#"{{"version":1,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words"}}}}"#,
+            chapter.id
+        ),
+        r#"{"version":1,"wait_ms":1000,"op":"flush"}"#.to_string(),
+    ] {
+        assert_eq!(
+            ask(&line),
+            serde_json::json!({
+                "version": 2,
+                "answer": "refused",
+                "refusal": {"why": "protocol", "app": 2, "tool": 1},
+            }),
+            "{line}"
+        );
+    }
+    assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
+    app.names();
     // What is no request is answered as a failure.
-    for line in ["nonsense", "{}", r#"{"version":1,"op":"sing"}"#] {
+    for line in ["nonsense", "{}", r#"{"version":2,"op":"sing"}"#] {
         let answer = ask(line);
         assert_eq!(answer["answer"], "failed", "{line}");
         assert_eq!(answer["error"]["code"], "invalid", "{line}");
@@ -2021,29 +2153,98 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     assert_eq!(app.names(), [] as [&str; 0], "none of it reached the app");
     // A request as the documentation writes it is served.
     let answer = ask(&format!(
-        r#"{{"version":1,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
+        r#"{{"version":2,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
         chapter.id
     ));
-    assert_eq!(answer["version"], 1);
+    assert_eq!(answer["version"], 2);
     assert_eq!(answer["answer"], "done");
     assert_eq!(answer["result"]["replacements"], 1);
     assert_eq!(answer["result"]["changed"], true);
     assert_eq!(app.changes(), ["edit"]);
-    let answer = ask(r#"{"version":1,"wait_ms":1000,"op":"flush"}"#);
+    let answer = ask(r#"{"version":2,"wait_ms":1000,"op":"flush"}"#);
     assert_eq!(
         answer["result"],
         serde_json::json!({"takes_changes": true, "app_version": env!("CARGO_PKG_VERSION")})
     );
-    let answer = ask(r#"{"version":1,"wait_ms":1000,"op":"hello"}"#);
+    let answer = ask(r#"{"version":2,"wait_ms":1000,"op":"hello"}"#);
     assert_eq!(answer["result"]["takes_changes"], true);
     // A failure travels with its kind and comes out as the error it was.
     let answer = ask(&format!(
-        r#"{{"version":1,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
+        r#"{{"version":2,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
         chapter.id
     ));
     assert_eq!(answer["answer"], "failed");
     assert_eq!(answer["error"]["code"], "no_match");
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nWords.\n");
+}
+
+/// A request that brings a picture, and an app from before pictures (0.6.0, which speaks
+/// version 1 of the channel). That app reads past fields it does not know: had the
+/// version stayed 1 it would have taken the request, stored a link where the agent meant
+/// an image, and answered "done". As it is, it answers what it answers to every line of
+/// another version, and nothing is half applied.
+#[test]
+fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
+    let fx = closed_fixture();
+    let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
+    let file = fx.picture("harbour.png", (64, 40), [30, 90, 160]);
+    let before = fx.dump();
+    // What the listener of 0.6.0 writes for a request of version 2 (its `parse_request`
+    // compares the number first and reads nothing else of the line).
+    let app = RawApp::open(&fx, |_| {
+        b"{\"version\":1,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":1,\
+          \"tool\":2}}\n"
+            .to_vec()
+    });
+    let added = fx.library.add_image(&AddImageRequest {
+        document: chapter.id.into(),
+        path: file.to_string_lossy().into_owned(),
+        description: "The harbour".into(),
+        write: claude(),
+        ..Default::default()
+    });
+    let in_markdown = fx.library.insert(&InsertRequest {
+        document: chapter.id.into(),
+        markdown: format!("![The harbour]({})", file.display()),
+        write: claude(),
+        ..Default::default()
+    });
+    for result in [added, in_markdown] {
+        let error = result.unwrap_err();
+        assert_eq!(error.exit_code(), 5);
+        let message = error.to_string();
+        assert!(
+            message.contains("the app speaks version 1 of their channel, this tool version 2"),
+            "{message}"
+        );
+        assert!(message.contains("nothing was changed"), "{message}");
+        assert!(message.contains("Contents/MacOS/writer"), "{message}");
+        let report = error.report();
+        assert_eq!(report.nothing_changed, Some(true));
+        assert_eq!(
+            refusal(Err::<(), _>(error)),
+            Refusal::Protocol { app: 1, tool: 2 }
+        );
+    }
+    // Both requests said which version they are, and brought the bytes of the file.
+    let lines: Vec<serde_json::Value> = app
+        .requests
+        .try_iter()
+        .map(|line| serde_json::from_str(&line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&file).unwrap());
+    for line in &lines {
+        assert_eq!(line["version"], 2);
+        assert_eq!(line["request"]["images"][0]["data"], bytes.as_str());
+    }
+    assert_eq!(lines[0]["op"], "add_image");
+    assert_eq!(lines[1]["op"], "insert");
+    drop(app);
+    assert_eq!(fx.dump(), before, "refused, not half applied");
+    assert!(!fx.images_path().exists());
+    assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
 }
 
 #[test]
@@ -2115,7 +2316,7 @@ fn two_agents_at_once_are_served_one_after_the_other_and_none_is_lost() {
         assert_eq!(text.matches("Round ").count(), ROUNDS, "{text}");
     }
     // Each change was a request of its own, carried out whole before the next.
-    let served: Vec<Served> = app.served.try_iter().collect();
+    let served: Vec<Served> = app.taken();
     let changes: Vec<&Served> = served
         .iter()
         .filter(|served| !served.request.is_flush())
@@ -2317,7 +2518,12 @@ fn closing_tells_those_who_wait_and_leaves_nothing_behind() {
         .map(|_| {
             let mut stream = UnixStream::connect(&socket).unwrap();
             stream
-                .write_all(b"{\"version\":1,\"wait_ms\":10000,\"op\":\"flush\"}\n")
+                .write_all(
+                    format!(
+                        "{{\"version\":{PROTOCOL_VERSION},\"wait_ms\":10000,\"op\":\"flush\"}}\n"
+                    )
+                    .as_bytes(),
+                )
                 .unwrap();
             stream
         })

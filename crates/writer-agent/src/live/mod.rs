@@ -32,10 +32,10 @@
 //! One request and one answer per connection, each one line of JSON.
 //!
 //! ```text
-//! {"version":1,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
-//! {"version":1,"answer":"done","result":{ ...what Library::edit returns... }}
-//! {"version":1,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
-//! {"version":1,"answer":"refused","refusal":{"why":"switched_off"}}
+//! {"version":2,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
+//! {"version":2,"answer":"done","result":{ ...what Library::edit returns... }}
+//! {"version":2,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
+//! {"version":2,"answer":"refused","refusal":{"why":"switched_off"}}
 //! ```
 //!
 //! A [`Request`] is one [`Operation`]: an operation of [`Library`](crate::Library) that
@@ -48,6 +48,19 @@
 //! `version`, `answer` and `refusal.why` keep their meaning in every later version of the
 //! protocol, so two versions can always tell each other that they do not fit
 //! ([`Refusal::Protocol`]).
+//!
+//! **Version 1** (0.6.0) is everything above. **Version 2** added images: the requests
+//! that take Markdown (`create_document`, `replace_document`, `edit`, `insert`,
+//! `replace_section`) and the new `add_image` carry `images`, the image files the text
+//! names as the bytes the library stores, base64 in the line
+//! ([`AttachedImage`](crate::AttachedImage)). The tool reads the files; the app never
+//! opens a path an agent named, and stores what the request brings. A request reads past
+//! a field it does not know, so an app of version 1 would have taken such a request,
+//! kept every image as a link and answered "done": that is why the number changed, and
+//! an app and a tool of different versions refuse each other whole
+//! ([`Refusal::Protocol`], which the tool words for an app of another version). The
+//! images of one request weigh [`MAX_ATTACHED_BYTES`] together at most; a line may be
+//! 256 MB long.
 //!
 //! `wait_ms` is how long the tool waits for the app to take the request up. An app that
 //! is busy for longer answers [`Refusal::TooLate`] at that moment by itself, and does not
@@ -97,8 +110,16 @@ pub use crate::error::Refusal;
 pub use crate::operations::Operation;
 pub use socket::{Closer, Incoming, Listener};
 
-/// The version of the protocol this build speaks.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The version of the protocol this build speaks: 2 since requests bring image files
+/// with them (the module's notes say what each version added).
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// What the images of one request may weigh together, in bytes as the library stores
+/// them (before they are written as base64): 32 MB, two pictures of the largest size
+/// the library holds. A request with more fails, in the process that was asked and
+/// again where it is carried out, with a sentence that says to add them in several
+/// requests.
+pub const MAX_ATTACHED_BYTES: usize = 32 * 1024 * 1024;
 
 /// How long a tool waits for the app to take a change up, unless the
 /// [`Library`](crate::Library) was told otherwise

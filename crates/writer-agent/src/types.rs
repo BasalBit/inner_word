@@ -950,6 +950,39 @@ pub struct DocumentText {
     /// The comment threads, when they were asked for, in the order of the text
     /// (threads without a place last).
     pub comments: Option<Vec<CommentThreadInfo>>,
+    /// The images of the text that was read (of the section, when a heading was asked
+    /// for), in its order. In Markdown each is a line `![description](image:<id>)`.
+    #[serde(default)]
+    pub images: Vec<ImageSummary>,
+}
+
+/// An image of a document, as a result shows it.
+///
+/// In the Markdown of the document it is a line `![description](image:<id>)`. The line
+/// says which image and what it shows; how wide it is drawn and where it stands on its
+/// line are kept by the document, and stay with the image wherever a text that is
+/// written back names it again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSummary {
+    /// The id of the stored picture: 32 hex digits, the `<id>` of `image:<id>`.
+    pub id: String,
+    /// The index of its block in the document, from 0 (as for a heading and for a
+    /// comment thread).
+    pub block: usize,
+    /// What kind of file the stored picture is: `"png"`, `"jpeg"` or `"gif"`. `None`
+    /// when the library does not have the picture.
+    pub format: Option<String>,
+    /// Width and height of the picture in pixels.
+    pub pixels: (u32, u32),
+    /// How wide it is drawn: a share of the text column, in percent (5 to 100).
+    pub width_percent: u16,
+    /// Where it stands on its line: `"left"`, `"center"` or `"right"`.
+    pub align: String,
+    /// What it shows; may be empty.
+    pub description: String,
+    /// Whether the library does not have the picture the document names. The image
+    /// stays in the document all the same, and the app shows a placeholder for it.
+    pub missing: bool,
 }
 
 /// A request to find a piece of text in a document: where an edit or a comment with this
@@ -998,6 +1031,18 @@ pub struct CreateDocumentRequest {
     pub create_folders: bool,
     /// Where it goes among the documents of the folder. Without it: last.
     pub placement: Option<Placement>,
+    /// The image files the Markdown names, as the bytes the library stores. The operation
+    /// fills this in by itself, in the process that was asked, before it is carried out
+    /// or handed to the app ([`AttachedImage`]); a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative path of an image in the Markdown is relative to: the directory of
+    /// the file the text came from, or the directory the caller works in. Without one
+    /// (and without [`Library::with_base_dir`](crate::Library::with_base_dir)) only
+    /// absolute paths, `~/` and `file:` addresses are read. Never sent to the app: the
+    /// files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
     /// Dry run and author.
     #[serde(flatten)]
     pub write: WriteOptions,
@@ -1048,6 +1093,18 @@ pub struct ReplaceDocumentRequest {
     pub document: Target,
     /// The new text, as Markdown.
     pub markdown: String,
+    /// The image files the Markdown names, as the bytes the library stores. The operation
+    /// fills this in by itself, in the process that was asked, before it is carried out
+    /// or handed to the app ([`AttachedImage`]); a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative path of an image in the Markdown is relative to: the directory of
+    /// the file the text came from, or the directory the caller works in. Without one
+    /// (and without [`Library::with_base_dir`](crate::Library::with_base_dir)) only
+    /// absolute paths, `~/` and `file:` addresses are read. Never sent to the app: the
+    /// files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
     /// Dry run and author.
     #[serde(flatten)]
     pub write: WriteOptions,
@@ -1108,6 +1165,18 @@ pub struct EditRequest {
     /// Take `old_text` and `new_text` as the characters they are: no Markdown is read in
     /// either.
     pub literal: bool,
+    /// The image files the Markdown names, as the bytes the library stores. The operation
+    /// fills this in by itself, in the process that was asked, before it is carried out
+    /// or handed to the app ([`AttachedImage`]); a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative path of an image in the Markdown is relative to: the directory of
+    /// the file the text came from, or the directory the caller works in. Without one
+    /// (and without [`Library::with_base_dir`](crate::Library::with_base_dir)) only
+    /// absolute paths, `~/` and `file:` addresses are read. Never sent to the app: the
+    /// files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
     /// Dry run and author.
     #[serde(flatten)]
     pub write: WriteOptions,
@@ -1167,6 +1236,18 @@ pub struct InsertRequest {
     pub heading: Option<String>,
     /// Which one, when several headings have that text: its number among them, from 1.
     pub heading_occurrence: Option<usize>,
+    /// The image files the Markdown names, as the bytes the library stores. The operation
+    /// fills this in by itself, in the process that was asked, before it is carried out
+    /// or handed to the app ([`AttachedImage`]); a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative path of an image in the Markdown is relative to: the directory of
+    /// the file the text came from, or the directory the caller works in. Without one
+    /// (and without [`Library::with_base_dir`](crate::Library::with_base_dir)) only
+    /// absolute paths, `~/` and `file:` addresses are read. Never sent to the app: the
+    /// files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
     /// Dry run and author.
     #[serde(flatten)]
     pub write: WriteOptions,
@@ -1194,6 +1275,18 @@ pub struct ReplaceSectionRequest {
     pub markdown: String,
     /// Replace the heading line too.
     pub include_heading: bool,
+    /// The image files the Markdown names, as the bytes the library stores. The operation
+    /// fills this in by itself, in the process that was asked, before it is carried out
+    /// or handed to the app ([`AttachedImage`]); a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative path of an image in the Markdown is relative to: the directory of
+    /// the file the text came from, or the directory the caller works in. Without one
+    /// (and without [`Library::with_base_dir`](crate::Library::with_base_dir)) only
+    /// absolute paths, `~/` and `file:` addresses are read. Never sent to the app: the
+    /// files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
     /// Dry run and author.
     #[serde(flatten)]
     pub write: WriteOptions,
@@ -1239,6 +1332,19 @@ pub struct ContentChanged {
     /// The headings whose sections the change touched, in the order of the document (a
     /// change above the first heading is not under any).
     pub headings: Vec<String>,
+    /// How many images the document has more than before. An image that only changed
+    /// its place counts for neither number.
+    #[serde(default)]
+    pub images_added: usize,
+    /// How many images the document has fewer than before: a text that was written
+    /// back named them no longer. They are in the version kept before the change (a
+    /// warning says so).
+    #[serde(default)]
+    pub images_removed: usize,
+    /// For [`Library::add_image`](crate::Library::add_image): the image as it stands
+    /// in the document now, with the width that was stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageSummary>,
     /// What in the given Markdown could not be kept as written, one sentence each.
     pub warnings: Vec<String>,
     /// The comment threads that lost their place through this change: the text they
@@ -1247,6 +1353,116 @@ pub struct ContentChanged {
     /// The version that was kept of the text as it was before the change. `None` in a dry
     /// run and when nothing changed.
     pub snapshot: Option<VersionInfo>,
+}
+
+// ----- images ----------------------------------------------------------------------------
+
+/// An image a request brings with it: read, checked and converted by whoever made the
+/// request, never by the app.
+///
+/// A text an agent writes may name an image file on the Mac
+/// (`![The harbour](/Users/ada/harbour.jpg)`). The operation reads that file in the
+/// process that was asked (the `writer` tool, the MCP server), makes of it what the
+/// library stores (`writer_image::prepare`) and hands the bytes on with the request, so
+/// that the app, when it is the one that carries the request out, never opens a path an
+/// agent named.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AttachedImage {
+    /// The destination as it is written in the Markdown (or the path of
+    /// [`AddImageRequest`]): what the image is found by when the text is read.
+    pub source: String,
+    /// What kind of file the bytes are: `"png"`, `"jpeg"` or `"gif"`. Empty with a
+    /// problem.
+    pub format: String,
+    /// Width and height in pixels, upright.
+    pub pixels: (u32, u32),
+    /// Pixels per inch the file declares, 72 when it says nothing.
+    pub density: u32,
+    /// The bytes as the library stores them; base64 in JSON. Empty with a problem.
+    #[serde(with = "base64_bytes")]
+    pub data: Vec<u8>,
+    /// Why there are no bytes, when the file could not be used: one sentence.
+    pub problem: Option<String>,
+}
+
+impl std::fmt::Debug for AttachedImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Megabytes of picture are of no use in a log.
+        f.debug_struct("AttachedImage")
+            .field("source", &self.source)
+            .field("format", &self.format)
+            .field("pixels", &self.pixels)
+            .field("density", &self.density)
+            .field("data", &format_args!("{} bytes", self.data.len()))
+            .field("problem", &self.problem)
+            .finish()
+    }
+}
+
+/// Bytes as base64 in JSON (the standard alphabet, with padding).
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        let text = std::borrow::Cow::<str>::deserialize(deserializer)?;
+        STANDARD
+            .decode(text.as_bytes())
+            .map_err(|error| serde::de::Error::custom(format!("not base64: {error}")))
+    }
+}
+
+/// A request to add an image to a document from a file on this Mac.
+///
+/// The file is read by the process that was asked, never by the app
+/// ([`AttachedImage`]): a PNG, a JPEG or a GIF is stored as it is, HEIC, TIFF, WebP and
+/// BMP are converted, and anything else is refused with a sentence that says why. The
+/// image becomes a block of its own at the place the request names, as
+/// [`InsertRequest`] places its blocks.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddImageRequest {
+    /// The document.
+    pub document: Target,
+    /// The image file: an absolute path, `~/...`, or a path relative to
+    /// [`base_dir`](AddImageRequest::base_dir).
+    pub path: String,
+    /// What the image shows, in a line: for whoever cannot see it, and for the exports.
+    /// May be empty.
+    pub description: String,
+    /// How wide it is drawn: a share of the text column in percent, 5 to 100. It is
+    /// never drawn taller than a page, so the width that is stored can be smaller (the
+    /// result says which, [`ContentChanged::image`]). Without it: the picture's own
+    /// size on the page.
+    pub width_percent: Option<u16>,
+    /// Where it stands on its line: `"left"`, `"center"` or `"right"`. Without it:
+    /// centred.
+    pub align: Option<String>,
+    /// Where it goes. Without it: at the end.
+    pub position: InsertPosition,
+    /// The heading, for the positions that are relative to one: its text, optionally with
+    /// the `#` signs of its level in front.
+    pub heading: Option<String>,
+    /// Which one, when several headings have that text: its number among them, from 1.
+    pub heading_occurrence: Option<usize>,
+    /// The image itself: exactly one, filled in by
+    /// [`Library::add_image`](crate::Library::add_image) from `path`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AttachedImage>,
+    /// What a relative `path` is relative to. Never sent to the app.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
 }
 
 // ----- names, places, the trash ----------------------------------------------------------
@@ -1754,6 +1970,12 @@ pub struct Exported {
     pub title: String,
     /// The documents that are in it, in order.
     pub documents: Vec<DocumentSummary>,
+    /// The picture files that were written beside it, as absolute paths: a Markdown
+    /// file links its images, and they are in the folder `<name> images` next to it.
+    /// Empty for the other formats (a DOCX holds its pictures) and for a text without
+    /// images.
+    #[serde(default)]
+    pub assets: Vec<PathBuf>,
     /// Whether this was a dry run: nothing was written.
     pub dry_run: bool,
 }

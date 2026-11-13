@@ -134,6 +134,7 @@
 
 #![warn(missing_docs)]
 
+mod attach;
 mod browse;
 mod comments;
 mod content;

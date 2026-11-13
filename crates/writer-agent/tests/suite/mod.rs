@@ -2,6 +2,7 @@
 
 mod browse;
 mod comments;
+mod images;
 mod items;
 pub mod live;
 pub mod rules;
@@ -14,7 +15,7 @@ use writer_agent::{
     Clock, CreateDocumentRequest, DocumentSummary, Library, ReadRequest, Target, TextFormat,
     WriteOptions,
 };
-use writer_core::Document;
+use writer_core::{Alignment, Document, Image};
 use writer_store::{DocumentId, ReadOnlyLibrary, Store};
 
 /// The time every fixture starts at.
@@ -134,16 +135,62 @@ impl Fixture {
         Document::from_json(&stored.content).expect("stored content is a document")
     }
 
+    /// A small picture file in the fixture's directory (outside the library): a PNG of
+    /// `size` pixels in one colour. The same size and colour are the same bytes, and so
+    /// the same image to the library.
+    pub fn picture(&self, name: &str, size: (u32, u32), rgb: [u8; 3]) -> PathBuf {
+        let path = self.dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("the folder of the picture");
+        }
+        std::fs::write(&path, writer_image::fixtures::png(size.0, size.1, rgb))
+            .expect("the picture is written");
+        path
+    }
+
+    /// The images of a stored document, in order: the index of the block, the image and
+    /// where it stands on its line.
+    pub fn images(&self, id: DocumentId) -> Vec<(usize, Image, Alignment)> {
+        let document = self.document(id);
+        document
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                block
+                    .as_image()
+                    .map(|image| (index, image.clone(), block.alignment()))
+            })
+            .collect()
+    }
+
+    /// Where the pictures of the library are stored.
+    pub fn images_path(&self) -> PathBuf {
+        writer_store::images_path(&self.library.database_path())
+    }
+
     /// Everything the library holds, row by row: every table of the database with its
-    /// rows in the order of their keys. Two libraries with the same dump are the same
-    /// library to the app and to the tool.
+    /// rows in the order of their keys, and after them the stored pictures (their rows,
+    /// with a fingerprint of the bytes of each). Two libraries with the same dump are
+    /// the same library to the app and to the tool.
     pub fn dump(&self) -> String {
+        let mut out = dump_of(&self.library.database_path(), "");
+        let images = self.images_path();
+        if images.exists() {
+            out.push_str(&dump_of(&images, "images.db "));
+        }
+        out
+    }
+}
+
+/// The tables of one database file with their rows, each table under `prefix` and its
+/// name.
+fn dump_of(path: &std::path::Path, prefix: &str) -> String {
+    {
         use std::fmt::Write;
-        let conn = rusqlite::Connection::open_with_flags(
-            self.library.database_path(),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .expect("the database opens");
+        let conn =
+            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("the database opens");
         let tables: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table' \
@@ -161,7 +208,7 @@ impl Fixture {
             if table.starts_with("documents_fts") {
                 continue;
             }
-            writeln!(out, "== {table}").unwrap();
+            writeln!(out, "== {prefix}{table}").unwrap();
             let mut statement = match conn.prepare(&format!("SELECT * FROM \"{table}\" ORDER BY 1"))
             {
                 Ok(statement) => statement,
@@ -178,7 +225,12 @@ impl Fixture {
                         rusqlite::types::ValueRef::Text(text) => {
                             format!("{:?}", String::from_utf8_lossy(text))
                         }
-                        rusqlite::types::ValueRef::Blob(bytes) => format!("{} bytes", bytes.len()),
+                        rusqlite::types::ValueRef::Blob(bytes) => {
+                            use std::hash::{Hash, Hasher};
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            bytes.hash(&mut hasher);
+                            format!("{} bytes {:016x}", bytes.len(), hasher.finish())
+                        }
                     })
                     .collect();
                 writeln!(out, "{}", cells.join(" | ")).unwrap();
@@ -186,7 +238,9 @@ impl Fixture {
         }
         out
     }
+}
 
+impl Fixture {
     /// What a dry run, a refused write and a read must leave as it is: the bytes of the
     /// database file and of its write-ahead log (a reader may leave an empty log file
     /// behind, which is no change). Compared through [`Bytes`] so that a difference does

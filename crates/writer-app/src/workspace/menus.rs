@@ -5,7 +5,7 @@
 //!
 //! | Where | How it opens | What it offers |
 //! |---|---|---|
-//! | The title above the text | right-click, or a click on the chevron beside it | rename, export, version history, document settings, reveal in the library, and the assistant's side chat while the assistant is shown |
+//! | The title above the text | right-click, or a click on the chevron beside it | rename, export, print, version history, document settings, reveal in the library, and the assistant's side chat while the assistant is shown |
 //! | The small sparkle at the right of the status bar (only while the assistant is shown) | click | shows or hides the assistant's side chat |
 //! | "Saved" in the status bar | click or right-click | save now, version history |
 //! | The counts in the status bar | click or right-click | which counts are shown, the character limit |
@@ -157,11 +157,18 @@ impl Workspace {
                 let mut items = vec![
                     ContextMenuItem::action("Rename…", RenameDocument),
                     ContextMenuItem::action("Export…", Export),
+                ];
+                // Only where print jobs have somewhere to go: without
+                // that the command has no handler.
+                if self.can_print(cx) {
+                    items.push(ContextMenuItem::action("Print…", Print));
+                }
+                items.extend([
                     ContextMenuItem::action("Version History…", ShowVersionHistory),
                     ContextMenuItem::action("Document Settings…", OpenDocumentSettings),
                     ContextMenuItem::separator(),
                     ContextMenuItem::action("Reveal in Library", RevealInLibrary),
-                ];
+                ]);
                 // The side chat is about this document: it opens from here
                 // too, while the assistant is shown.
                 if self.assistant_shown() {

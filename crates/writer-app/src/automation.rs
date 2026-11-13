@@ -30,12 +30,14 @@
 //! | `agents:on`, `agents:off` | sets the switch "Agents can make changes while The Writer is open", as its button in the Agents panel does |
 //! | `zoom:<what>`         | the zoom of the text: `in`, `out`, `actual` (100 %), `fit` (the width), `page` (a whole page), `life` (the size of the paper), `auto` (what a page opens at, "Automatic"; page view only), a percentage (`zoom:125`), `by:<factor>` (what a pinch at the middle of the text does), `pinch:<magnification>` (hands the monitor AppKit calls a stand-in for a magnify event there) and `sideways:<pixels>` (scrolls a sheet that is wider than its room); prints the zoom afterwards |
 //! | `pagefit:<font>\|<size>\|<line spacing>\|<a4 or letter>\|<file>` | lays the text of the file out as one paragraph in page view at those settings (2.54 cm margins) and prints what the page holds: the rows of the paragraph, the characters in a full row (mean, least, most), the rows on the first page |
+//! | `print:pdf:<path>`    | makes the exact PDF "Print…" would hand to the print panel (the open document laid out as page view lays it out, whatever the window shows), writes it to the path and prints what was made: `print: 12 pages, 595.28 x 841.89 pt, 5214 rows, 0 rows off, 3 images, fonts: .SFNS-Regular, Charter-Bold, Charter-Roman, made in 0.04 s`, and a second line `print: missing fonts: …` when the document asks for a font this Mac does not have. `rows off` counts the rows the PDF sets in another face than the layout measured: 0 when the paper shows what page view shows |
+//! | `print:job:<path>`    | the same PDF through the real macOS print operation as a save job, both panels off: what "Save as PDF" in the print panel would write. Everything of "Print…" but the panel. Prints `print: job saved to <path>` or why it was not |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `dump:<path>`         | writes the whole text in the editor to a file, its blocks one to a line as the document model joins them: what the writer has on screen, to hold against what the library has |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
@@ -63,6 +65,13 @@
 //! `THE_WRITER_EXPORT_DIR=<dir>`: file exports of a scripted run are written
 //! there under the suggested name, without the native save panel (which a
 //! script cannot drive).
+//!
+//! No scripted run opens the print panel. The command itself
+//! (`action:workspace::Print`) writes "<title>.pdf" into
+//! `THE_WRITER_EXPORT_DIR`, or says in a toast that a scripted run has no
+//! panel; `action:workspace::CancelPrint` right after it, on a book, stops
+//! the pages being made (`state` then has `print=[idle]` and nothing was
+//! written).
 //!
 //! While the window is completely covered by other windows macOS stops
 //! GPUI's display link and nothing is drawn. The script therefore draws a
@@ -170,7 +179,18 @@ pub enum Step {
     Zoom(String),
     /// Lay a text out on a page and say what the page holds.
     PageFit(crate::workspace::PageFit),
+    Print(PrintStep),
     Quit,
+}
+
+/// What a `print:` step does with the pages of the open document.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PrintStep {
+    /// Write the PDF "Print…" would hand over to this file.
+    Pdf(PathBuf),
+    /// Run the PDF through the print operation as a save job into this
+    /// file.
+    Job(PathBuf),
 }
 
 /// What a `shortcuts:` step does.
@@ -475,6 +495,20 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             Step::KeyCost(keys)
         }
         "pagefit" => Step::PageFit(crate::workspace::PageFit::parse(arg)?),
+        "print" => {
+            let (what, path) = arg
+                .split_once(':')
+                .map(|(what, path)| (what.trim(), unescape(path.trim())))
+                .unwrap_or((arg, String::new()));
+            if path.is_empty() {
+                bail!("expected pdf:<path> or job:<path>");
+            }
+            match what {
+                "pdf" => Step::Print(PrintStep::Pdf(PathBuf::from(path))),
+                "job" => Step::Print(PrintStep::Job(PathBuf::from(path))),
+                other => bail!("unknown print step {other:?}: expected pdf:<path> or job:<path>"),
+            }
+        }
         "zoom" => {
             if arg.is_empty() {
                 bail!("expected a zoom: in, out, actual, fit, page, life, auto, a percentage");
@@ -932,6 +966,49 @@ async fn execute(
                 .update(cx, |workspace, _, cx| workspace.report_page_fit(&text, cx))??;
             for line in report {
                 eprintln!("[automation] pagefit: {line}");
+            }
+            frame_pause(window, view, cx).await;
+        }
+        Step::Print(step) => {
+            let started = Instant::now();
+            let job = workspace_handle(window, cx)?
+                .update(cx, |workspace, window, cx| workspace.print_job(window, cx))?
+                .ok_or_else(|| anyhow!("no document is open"))?;
+            let made = started.elapsed();
+            match step {
+                PrintStep::Pdf(path) => {
+                    let path = absolute(path);
+                    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("creating {}", parent.display()))?;
+                    }
+                    std::fs::write(&path, job.pdf.bytes())
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    for line in crate::printing::report_lines(&job, made) {
+                        eprintln!("[automation] print: {line}");
+                    }
+                    eprintln!(
+                        "[automation] print: {} bytes written to {}",
+                        job.pdf.len(),
+                        path.display()
+                    );
+                }
+                PrintStep::Job(path) => {
+                    let path = absolute(path);
+                    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("creating {}", parent.display()))?;
+                    }
+                    // The print operation, from this task of the main
+                    // thread and outside any update: AppKit runs it to
+                    // its end before this returns.
+                    match writer_print::run_save_job(&job.request(), &path) {
+                        Ok(()) => {
+                            eprintln!("[automation] print: job saved to {}", path.display())
+                        }
+                        Err(error) => bail!("the print job was not saved: {error}"),
+                    }
+                }
             }
             frame_pause(window, view, cx).await;
         }
@@ -1408,9 +1485,10 @@ pub fn describe_state(
         None => "none".to_string(),
     };
     let zoom = workspace.describe_zoom(cx);
+    let print = workspace.describe_printing();
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
-         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] \
+         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \

@@ -22,6 +22,11 @@
 //! | [`writer_spell::SpellChecker`] (only when the app has a spell service, see [`crate::spelling`]) | wavy underlines in the text, the top of the text context menu | `apply_spelling`: the `spelling.*` settings and the open document's own language |
 //! | `writer_keymap_ui::KeymapView`, the list of keyboard shortcuts (a modal, made when it is opened) | the modal layer | `shortcuts.rs`: the rows and the keymap it shows, what it asks for (a key changed, export, import, reset), the changes stored in the library |
 //!
+//! "Print…" (`print.rs`, only when the app has somewhere for print jobs to
+//! go, see [`crate::printing`]) mounts nothing: it asks the editor for a
+//! pass over the document as page view lays it out, makes the PDF in
+//! slices and hands it to the print panel.
+//!
 //! The slots themselves are public, so another view can be plugged in the
 //! same way:
 //!
@@ -67,6 +72,7 @@ mod live;
 mod measure;
 mod menus;
 mod page_probe;
+mod print;
 mod render;
 mod right_panel;
 mod saver;
@@ -112,6 +118,10 @@ pub use live::{
 };
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub use page_probe::{PageFit, characters_per_row};
+pub use print::{
+    NOTE_DELAY as PRINT_NOTE_DELAY, PANEL_COULD_NOT_OPEN, Printing, SCRIPTED_RUN_HAS_NO_PANEL,
+    SLICE_PAUSE as PRINT_SLICE_PAUSE, preparing_note,
+};
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,
     counted, group_digits, limit_label, panel_layout,
@@ -236,6 +246,8 @@ pub struct Workspace {
     pub(crate) text_commands: Vec<Box<dyn gpui::Action>>,
     /// The zoom of the text: what the library has for it, life size.
     pub(crate) zoom: zoom::ZoomState,
+    /// The print job that is preparing or in the print panel.
+    pub(crate) print: print::PrintState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -451,6 +463,7 @@ impl Workspace {
             off_screen_focus: None,
             text_commands: text_commands(),
             zoom,
+            print: print::PrintState::default(),
             _subscriptions: subscriptions,
         };
         this.extend_the_menus_of_other_crates(cx);
@@ -1736,6 +1749,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.toast_layer.update(cx, |layer, cx| layer.clear(cx));
+        // The note of a print that is preparing went with the others: the
+        // work must not go on unseen (`print.rs`).
+        self.notifications_dismissed(cx);
     }
 
     pub(crate) fn on_close_window(

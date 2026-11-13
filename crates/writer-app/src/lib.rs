@@ -33,6 +33,7 @@
 //! | [`agents`], [`agents_view`] | the `writer` command line tool beside the app, the skill and the MCP server for the agents on this Mac; the Agents panel |
 //! | [`live`] | agents that write while the app is open: the channel on which the `writer` tool hands the app a change, the thread that listens, the queue to the main thread (what the workspace does with a request is `workspace/live.rs`) |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
+//! | [`printing`] | where a print job goes: the macOS print panel, a recorder in a test, a directory in a scripted run (the command "Print…" itself is `workspace/print.rs`; the pages are the editor's print pass, the PDF and the print operation `writer-print`'s) |
 //! | [`document_io`] | stored form of a document, lenient loading |
 //! | [`view_memory`] | the caret position and the chosen-title flag of a document, checked against the document as it is now |
 //! | [`character_limit`] | the character-limit indicator, counted block by block |
@@ -65,6 +66,7 @@ pub mod menus;
 pub mod palette;
 pub mod pinch;
 pub mod press_and_hold;
+pub mod printing;
 pub mod quick_open;
 pub mod screenshot;
 pub mod settings;

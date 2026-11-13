@@ -37,6 +37,17 @@ fn main() {
             // page opens at. Only read.
             writer_app::zoom::use_this_mac(cx);
             writer_app::menus::manage_check_marks(cx);
+            // Where "Print…" sends its pages: the macOS print panel. A
+            // scripted run never opens a panel: it writes the PDF into
+            // its export directory, or says that it has none.
+            if script.is_none() {
+                writer_app::printing::use_system_panel(cx);
+            } else {
+                writer_app::printing::set_target(
+                    writer_app::printing::PrintTarget::Directory(automation::export_directory()),
+                    cx,
+                );
+            }
             // kill, a closed terminal and ctrl-c quit like cmd-q: the open
             // document is saved first.
             writer_app::signals::quit_on_termination_signals(cx);

@@ -67,6 +67,10 @@ actions!(
         SearchLibrary,
         /// Export the current document or its folder.
         Export,
+        /// Print the open document.
+        Print,
+        /// Stop preparing the pages of a print.
+        CancelPrint,
         /// Open the settings.
         OpenSettings,
         /// Show every keyboard shortcut, to look one up or to change it.
@@ -209,6 +213,19 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "plain text",
             "save as",
             "copy",
+        ]),
+        // Neither has a key by default: `cmd-p` opens a document here. The
+        // list of keyboard shortcuts gives them one.
+        CommandDescriptor::new("Print", CATEGORY_FILE, Print).keywords([
+            "printer",
+            "paper",
+            "pdf",
+            "save as pdf",
+            "page range",
+            "copies",
+        ]),
+        CommandDescriptor::new("Cancel Printing", CATEGORY_FILE, CancelPrint).keywords([
+            "stop", "print", "abort",
         ]),
         CommandDescriptor::new("Save now", CATEGORY_FILE, SaveNow)
             .keywords(["write", "store", "autosave"]),

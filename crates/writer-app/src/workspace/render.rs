@@ -966,6 +966,9 @@ impl Render for Workspace {
         }
         // The zoom of the text, while there is a text.
         root = self.zoom_actions(root, cx);
+        // "Print" while there is a document and somewhere for the job to
+        // go, "Cancel Printing" while pages are being prepared.
+        root = self.print_actions(root, cx);
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))

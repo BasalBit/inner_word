@@ -189,6 +189,11 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::action("Save Now", SaveNow),
                 MenuItem::action("Rename…", RenameDocument),
                 MenuItem::action("Export…", Export),
+                // Greyed out without a document, and "Cancel Printing"
+                // except while the pages of a print are being prepared:
+                // each has a handler only then (`workspace/print.rs`).
+                MenuItem::action("Print…", Print),
+                MenuItem::action("Cancel Printing", CancelPrint),
                 MenuItem::separator(),
                 MenuItem::action("Version History…", ShowVersionHistory),
                 MenuItem::action("Document Settings…", OpenDocumentSettings),

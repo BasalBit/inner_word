@@ -35,12 +35,37 @@ const DEFAULT_FIND_LIMIT: usize = 20;
 /// The text of `document` in `format`, as [`Library::read`] returns it. In Markdown an
 /// image is a line `![description](image:<id>)` (`MarkdownImages::References`, the
 /// exporter's default): what an agent keeps where the image should stay.
+///
+/// The plain text is the text an edit and a comment match against, so an image is in it
+/// what it is there: no text (the blocks around it are a paragraph apart, as two
+/// paragraphs are). Its description is left out, unlike in a plain-text export, where it
+/// stands for the picture: words an agent reads there and quotes back would be found
+/// nowhere. The description is in the list of images and in the Markdown.
 pub(crate) fn render(document: &Document, title: &str, format: TextFormat) -> String {
     match format {
         TextFormat::Markdown => to_markdown(
             &ExportSource::single(title, document),
             &MarkdownOptions::default(),
         ),
+        TextFormat::PlainText if document.has_images() => {
+            let blocks = document
+                .blocks()
+                .iter()
+                .map(|block| match block.as_image() {
+                    Some(image) if !image.description.is_empty() => {
+                        let mut undescribed = image.clone();
+                        undescribed.description.clear();
+                        Block::image(undescribed).with_alignment(block.alignment())
+                    }
+                    _ => block.clone(),
+                })
+                .collect();
+            let matched = Document::from_blocks(blocks).with_settings(document.settings().clone());
+            to_plain_text(
+                &ExportSource::single(title, &matched),
+                &PlainTextOptions::default(),
+            )
+        }
         TextFormat::PlainText => to_plain_text(
             &ExportSource::single(title, document),
             &PlainTextOptions::default(),
@@ -181,6 +206,7 @@ impl Library {
             occurrences: matching::occurrences(
                 &loaded.document,
                 &matches.ranges,
+                matches.matched_as,
                 request.limit.unwrap_or(DEFAULT_FIND_LIMIT),
             ),
             matched_as: matches.matched_as,

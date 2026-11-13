@@ -463,6 +463,12 @@ pub fn found(results: &FindResults) -> String {
             out.push_str(&format!("[{heading}] "));
         }
         out.push_str(&one_line(&occurrence.context));
+        if occurrence.across_image {
+            out.push_str(
+                "  (runs across an image: an edit refuses it; name the image as it reads in \
+                 Markdown, or change the text before and after it separately)",
+            );
+        }
         out.push('\n');
     }
     if results.count > results.occurrences.len() {

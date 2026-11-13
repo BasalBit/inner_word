@@ -71,6 +71,12 @@ pub struct Occurrence {
     pub heading: Option<String>,
     /// The line it is on, shortened around the match.
     pub context: String,
+    /// Whether it runs across an image without naming it (the text before the image and
+    /// the text after it, with the empty line of the image between them). A comment can
+    /// be anchored there; an edit refuses to replace it, because the image would go with
+    /// the text. Naming the image as it reads in Markdown makes it part of the match.
+    #[serde(default)]
+    pub across_image: bool,
 }
 
 /// The kinds of failure, without their details: what an exit code or a `code` field tells

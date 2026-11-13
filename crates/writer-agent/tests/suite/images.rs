@@ -193,9 +193,10 @@ fn an_image_is_added_from_a_file_and_read_as_a_line_of_markdown() {
         .unwrap();
     assert_eq!(read.content, format!("{HARBOUR}\n{}\n", line(DUSK, &id)));
     assert_eq!(read.images, std::slice::from_ref(&image));
-    // As plain text: what it shows, on a line of its own. As JSON: the block.
+    // As plain text, the text an edit matches: the image has no text there, its
+    // description neither (the list of images has it). As JSON: the block.
     let text = fx.read(doc.id, TextFormat::PlainText);
-    assert!(text.ends_with(&format!("Five.\n\n{DUSK}\n")), "{text}");
+    assert!(text.ends_with("Five.\n") && !text.contains(DUSK), "{text}");
     let json = fx.read(doc.id, TextFormat::Json);
     assert!(json.contains(&format!("\"image\":\"{id}\"")), "{json}");
     assert!(json.contains("\"width\":370"), "{json}");
@@ -1654,22 +1655,18 @@ fn an_export_takes_the_pictures_with_it() {
     );
 }
 
-/// A picture that cannot be read is not a missing one: with `images.db` damaged an export
-/// fails and writes nothing, where one whose picture the library does not have is written
-/// with the description in its place.
+/// A picture that cannot be read is not a missing one: with `images.db` of a newer
+/// version (which this version does not read) an export fails and writes nothing, where
+/// one whose picture the library does not have is written with the description in its
+/// place.
 #[test]
 fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing() {
     let fx = closed_fixture();
     let (doc, _) = harbour(&fx);
-    for ending in ["-wal", "-shm"] {
-        let mut file = fx.images_path().into_os_string();
-        file.push(ending);
-        std::fs::remove_file(file).ok();
+    {
+        let images = rusqlite::Connection::open(fx.images_path()).unwrap();
+        images.pragma_update(None, "user_version", 99).unwrap();
     }
-    // The header of the file of pictures overwritten: SQLite reads no database there.
-    let mut damaged = std::fs::read(fx.images_path()).unwrap();
-    damaged[..16].copy_from_slice(b"not a database!!");
-    std::fs::write(fx.images_path(), &damaged).unwrap();
     let out = fx.dir.path().join("out");
     for name in ["harbour.md", "harbour.docx"] {
         let error = fx
@@ -1731,4 +1728,92 @@ fn the_line_of_an_image_with_markup_in_its_description_is_the_image_written_back
     let images = fx.images(doc.id);
     assert_eq!(images.len(), 1);
     assert_eq!(images[0].1.description, description);
+}
+
+/// What find says is what edit does: a text that runs across an image without naming it
+/// is found (a comment can be anchored there) and marked, because an edit refuses it; the
+/// same text with the image's line in it is found unmarked and replaced.
+#[test]
+fn find_marks_a_text_across_an_image_that_edit_refuses() {
+    let fx = fixture();
+    let (doc, id) = harbour(&fx);
+    let find = |text: &str| {
+        fx.library
+            .find(&FindRequest {
+                document: doc.id.into(),
+                text: text.into(),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let across = find("Harbour\n\nOne.");
+    assert_eq!(across.count, 1);
+    assert!(across.occurrences[0].across_image, "{across:?}");
+    let refused = edit(&fx, doc.id, "Harbour\n\nOne.", "Harbour B").unwrap_err();
+    assert!(
+        refused.to_string().contains("runs across an image"),
+        "{refused}"
+    );
+
+    let beside = find("One.");
+    assert!(!beside.occurrences[0].across_image, "{beside:?}");
+    let named = format!("# Harbour\n\n{}\n\nOne.", line(DUSK, &id));
+    let found = find(&named);
+    assert_eq!(found.count, 1);
+    assert!(!found.occurrences[0].across_image, "{found:?}");
+    edit(
+        &fx,
+        doc.id,
+        &named,
+        &format!("# Harbour\n\n{}\n\nOne, again.", line(DUSK, &id)),
+    )
+    .unwrap();
+    assert_eq!(fx.images(doc.id).len(), 1);
+}
+
+/// The plain text an agent reads is the text it can quote: every line of it is found,
+/// in a document whose images have descriptions.
+#[test]
+fn every_line_of_the_plain_text_of_a_document_with_images_is_found() {
+    let fx = fixture();
+    let (doc, _) = harbour(&fx);
+    let second = fx.picture("tiny.png", (40, 30), [200, 200, 20]);
+    fx.library
+        .add_image(&AddImageRequest {
+            document: doc.id.into(),
+            path: path_of(&second),
+            description: "Tiny one".into(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    let text = fx.read(doc.id, TextFormat::PlainText);
+    assert!(!text.contains(DUSK) && !text.contains("Tiny one"), "{text}");
+    for wanted in text.lines().filter(|line| !line.trim().is_empty()) {
+        let found = fx
+            .library
+            .find(&FindRequest {
+                document: doc.id.into(),
+                text: wanted.into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(found.count >= 1, "{wanted:?} is not found in\n{text}");
+    }
+    // The descriptions are in the list of images, and the word counts know nothing of
+    // them.
+    let read = fx
+        .library
+        .read(&ReadRequest {
+            document: doc.id.into(),
+            format: TextFormat::PlainText,
+            ..Default::default()
+        })
+        .unwrap();
+    let described: Vec<&str> = read
+        .images
+        .iter()
+        .map(|image| image.description.as_str())
+        .collect();
+    assert_eq!(described, [DUSK, "Tiny one"]);
 }

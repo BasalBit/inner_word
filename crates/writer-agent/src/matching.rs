@@ -317,14 +317,22 @@ pub(crate) fn choose(
     Err(Error::NotUnique {
         text: wanted.to_string(),
         count,
-        occurrences: occurrences(document, &matches.ranges, SHOWN_OCCURRENCES),
+        occurrences: occurrences(
+            document,
+            &matches.ranges,
+            matches.matched_as,
+            SHOWN_OCCURRENCES,
+        ),
     })
 }
 
-/// The first `limit` matches as data: number, block, heading and the line around each.
+/// The first `limit` matches as data: number, block, heading and the line around each,
+/// and whether an edit would refuse it for running across an image ([`across_an_image`];
+/// `matched_as` is how the text was found).
 pub(crate) fn occurrences(
     document: &Document,
     ranges: &[TextRange],
+    matched_as: Option<MatchedAs>,
     limit: usize,
 ) -> Vec<Occurrence> {
     ranges
@@ -336,6 +344,7 @@ pub(crate) fn occurrences(
             block: range.start.block,
             heading: heading_above(document, range.start.block),
             context: context(document, range),
+            across_image: across_an_image(document, range, matched_as),
         })
         .collect()
 }
@@ -635,7 +644,7 @@ mod tests {
             " b".repeat(100)
         ))]);
         let found = find(&document, "needle", false).unwrap();
-        let shown = occurrences(&document, &found.ranges, 5);
+        let shown = occurrences(&document, &found.ranges, found.matched_as, 5);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].context.chars().count(), 40 + 6 + 40 + 2);
         assert!(shown[0].context.starts_with('\u{2026}'));

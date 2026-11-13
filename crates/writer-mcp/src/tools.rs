@@ -621,9 +621,10 @@ restore_document and restore_folder bring them back.",
             "Read a document",
             "The text of a document: as Markdown (default), as plain text without markup, or as the JSON the app \
 stores. Give a heading to read only that section. The plain text is what edit_document and add_comment match \
-against, character for character. An image is a line ![description](image:<id>) in the Markdown: keep that \
+against; an image has no text there (not even its description), so the paragraphs around it read as two \
+paragraphs do. An image is a line ![description](image:<id>) in the Markdown: keep that \
 line in a text you write back and the image stays, with its size; the result lists the images with what the \
-line does not say (width, alignment). You cannot see a picture here: export writes the pictures as files.",
+line does not say (width, alignment, the description). You cannot see a picture here: export writes the pictures as files.",
             reads(
                 vec![
                     ("document", string(DOCUMENT)),

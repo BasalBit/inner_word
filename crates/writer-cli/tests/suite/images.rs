@@ -89,6 +89,7 @@ fn an_image_is_added_with_every_option_and_listed() {
         json!({
             "id": id, "block": 3, "format": "png", "pixels": [800, 500], "width_percent": 37,
             "align": "right", "description": "The harbour at dusk", "missing": false,
+            "markdown": line("The harbour at dusk", &id),
         })
     );
     assert_eq!(
@@ -542,6 +543,7 @@ fn the_server_adds_an_image_from_a_whole_path_and_reads_images_as_lines() {
         json!({
             "id": id, "block": 2, "format": "png", "pixels": [64, 40], "width_percent": 40,
             "align": "left", "description": "The harbour", "missing": false,
+            "markdown": line("The harbour", &id),
         }),
         "the width that was asked for is the width (its own size would be 14 %)"
     );
@@ -676,5 +678,52 @@ fn what_image_add_says_about_a_heading_names_its_own_options() {
     assert!(
         get.ends_with("\nHere: --occurrence <n> takes the heading with that number.\n"),
         "{get}"
+    );
+}
+
+/// "writer find" says of a text that runs across an image what "writer edit" will do with
+/// it, and the plain text "writer get" prints is the text that is found.
+#[test]
+fn find_and_the_plain_text_say_what_edit_matches_around_an_image() {
+    let sandbox = Sandbox::new();
+    assert_eq!(
+        sandbox.create("Doc", None, "## Two\n\nBeta para.\n"),
+        "doc:1"
+    );
+    sandbox.picture("tiny.png", (40, 30), [10, 120, 40]);
+    sandbox.ok(&[
+        "image",
+        "add",
+        "doc:1",
+        "tiny.png",
+        "--alt",
+        "Tiny one",
+        "--at",
+        "after-heading",
+        "--heading",
+        "Two",
+    ]);
+    let found = sandbox.ok(&["find", "doc:1", "Two\n\nBeta"]);
+    assert!(
+        found.starts_with("The text occurs once") && found.contains("runs across an image"),
+        "{found}"
+    );
+    sandbox.fail(
+        &[
+            "edit",
+            "doc:1",
+            "--old",
+            "Two\n\nBeta para.",
+            "--new",
+            "Two B",
+        ],
+        2,
+    );
+    let text = sandbox.ok(&["get", "doc:1", "--format", "text"]);
+    assert_eq!(text, "Two\n\nBeta para.\n");
+    assert!(
+        sandbox
+            .ok(&["find", "doc:1", "Beta para."])
+            .starts_with("The text occurs once")
     );
 }

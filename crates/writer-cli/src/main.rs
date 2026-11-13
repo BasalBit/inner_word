@@ -167,7 +167,8 @@ fn hint(kind: ErrorKind) -> Option<&'static str> {
         ErrorKind::LibraryNotFound => Some("Here that option is --library <dir>."),
         ErrorKind::NoMatch => Some(
             "\"writer find <document> <text>\" shows where a text stands; \"writer get \
-             <document> --format text\" prints the text as it is matched.",
+             <document> --format text\" prints the text as it is matched (an image has no \
+             text there; in Markdown it is its line).",
         ),
         ErrorKind::NotUnique => Some(
             "Here: --occurrence <n> takes the one with that number; \"writer edit\" also has \

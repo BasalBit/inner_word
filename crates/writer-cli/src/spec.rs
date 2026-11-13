@@ -306,7 +306,9 @@ library itself.",
 plain text, or as the JSON the app stores, which has everything (block ids, colours, fonts, \
 comment anchors). Nothing but the text is printed, so the output can be piped or saved. With \
 --section only the part under one heading is printed. An image is printed as a line \
-![description](image:<id>); \"writer images\" lists the images of a document with their sizes.",
+![description](image:<id>) in Markdown; in the plain text, which is the text an edit matches, it \
+has no text, not even its description. \"writer images\" lists the images of a document with \
+their sizes and descriptions.",
         positionals: &[arg("document", DOCUMENT)],
         options: &[
             FORMAT_READ,

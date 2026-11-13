@@ -124,6 +124,38 @@ fn what_the_library_is_handed() {
     assert_eq!((new.width, new.height, new.density), (40, 30, 144));
 }
 
+/// The seam to the store: what `prepare` gives is what the library takes, and the id it
+/// is stored under is the hash of the prepared bytes.
+#[test]
+fn what_is_prepared_goes_into_a_library_as_it_is() {
+    use writer_store::{ImageId, Store};
+
+    let mut store = Store::open_in_memory().unwrap();
+    let prepared = prepare(&fixtures::png_at(40, 30, RED, 144)).unwrap();
+    let info = store.put_image(&prepared.as_new_image()).unwrap();
+    assert_eq!(info.id, ImageId::of(&prepared.bytes));
+    assert_eq!(info.format, prepared.format);
+    assert_eq!((info.width, info.height), prepared.pixels);
+    assert_eq!(info.density, prepared.density);
+    assert_eq!(info.byte_len, prepared.bytes.len() as u64);
+    assert_eq!(
+        store.image_bytes(&info.id).unwrap(),
+        Some(prepared.bytes.clone())
+    );
+
+    // The same file prepared again is the same image, and one that was converted is
+    // another, stored under the hash of what it was converted to.
+    let again = prepare(&fixtures::png_at(40, 30, RED, 144)).unwrap();
+    assert_eq!(store.put_image(&again.as_new_image()).unwrap(), info);
+    let tiff = file(40, 30, None, uti::TIFF, &Written::default()).unwrap();
+    let converted = prepare(&tiff).unwrap();
+    let other = store.put_image(&converted.as_new_image()).unwrap();
+    assert_eq!(other.id, ImageId::of(&converted.bytes));
+    assert_ne!(other.id, ImageId::of(&tiff));
+    assert_eq!(other.format, ImageFormat::Jpeg);
+    assert_eq!(store.image_count().unwrap(), 2);
+}
+
 #[test]
 fn a_jpeg_that_lies_on_its_side_is_stored_upright() {
     let with = Written {

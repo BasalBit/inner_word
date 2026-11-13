@@ -8,7 +8,8 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | Crate | Kind | Responsibility |
 |---|---|---|
 | `crates/writer-core` | pure Rust | Document model, headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
-| `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string. |
+| `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. `library.db` is at schema 3 since documents may hold images: a version that does not know them refuses the library. |
+| `crates/writer-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
 | `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
@@ -38,9 +39,9 @@ editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant
 the list of its read-only tools and for the folders installers put a program in; no GPUI),
 `{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
-`library → {store, ui}`, `export → core`, `cli → {agent, mcp, agent-setup}`,
-`mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`. Never the
-reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
+`library → {store, ui}`, `image → store`, `export → core`, `cli → {agent, mcp, agent-setup}`,
+`mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`,
+`{app, agent} → image`. Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
 (the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
 live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
 the tool out on the library's own store; `crates/writer-app/src/live.rs` and
@@ -543,7 +544,7 @@ open" below).
 
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
-  `writer-store`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
+  `writer-store`, `writer-image`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
   `writer-agent-setup`, `writer-assistant`, `writer-keymap`) build and test with
   `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.

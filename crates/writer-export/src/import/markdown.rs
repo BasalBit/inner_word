@@ -115,6 +115,11 @@
 //! exports to itself. The tests hold both over generated documents and
 //! generated Markdown.
 //!
+//! An image comes back as the image it was (its stored bytes, its width,
+//! its alignment) when the import is given the images of the document
+//! ([`KnownImages`](super::KnownImages)): the Markdown says which image
+//! and what it shows, and nothing of how it is shown.
+//!
 //! The parser is [pulldown-cmark](https://docs.rs/pulldown-cmark), the
 //! one the exporter's output is checked against. Bare addresses in text
 //! (`https://example.com` without angle brackets) are text, as in

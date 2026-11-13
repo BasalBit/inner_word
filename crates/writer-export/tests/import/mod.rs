@@ -1326,6 +1326,13 @@ fn what_the_text_says_about_alignment_wins_and_a_text_that_says_nothing_keeps_it
         )),
         ["right", "left", "center"]
     );
+    // The image the document had centred, with a div that says right.
+    assert_eq!(
+        alignments(&format!(
+            "{reference}\n\n<div align=\"right\">\n\n{reference}\n\n</div>\n"
+        )),
+        ["left", "right"]
+    );
     // An image cannot be justified: a div that says so says nothing.
     assert_eq!(
         alignments(&format!(

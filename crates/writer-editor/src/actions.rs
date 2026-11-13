@@ -110,6 +110,9 @@ actions!(
         InsertPageBreak,
         /// Insert a divider.
         InsertDivider,
+        /// Ask for image files and insert them (in a document editor that
+        /// has an image provider).
+        InsertImage,
         // --- Inline formatting ---
         /// Toggle bold.
         ToggleBold,
@@ -165,9 +168,11 @@ actions!(
         AlignRight,
         /// Justify the selected blocks.
         AlignJustify,
-        /// Make the text of the selected blocks one step larger.
+        /// Make the text of the selected blocks one step larger; with the
+        /// caret on an image, the image.
         IncreaseTextSize,
-        /// Make the text of the selected blocks one step smaller.
+        /// Make the text of the selected blocks one step smaller; with the
+        /// caret on an image, the image.
         DecreaseTextSize,
         /// Give the selected blocks their default text size again.
         ResetTextSize,
@@ -179,6 +184,17 @@ actions!(
         MoveBlockUp,
         /// Move the selected blocks down.
         MoveBlockDown,
+        // --- The selected image ---
+        /// Make the selected image a quarter of the text column wide.
+        ImageWidth25,
+        /// Make the selected image half the text column wide.
+        ImageWidth50,
+        /// Make the selected image three quarters of the text column wide.
+        ImageWidth75,
+        /// Make the selected image as wide as the text column.
+        ImageWidth100,
+        /// Give the selected image its own size on the page.
+        ImageOriginalSize,
         // --- History and clipboard ---
         /// Undo the last change.
         Undo,

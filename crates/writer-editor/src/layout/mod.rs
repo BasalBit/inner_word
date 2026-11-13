@@ -69,7 +69,7 @@ pub(crate) mod wrap;
 use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{Bounds, Pixels, Point, SharedString, TextRun, WindowTextSystem, point, px, size};
-use writer_core::{Block, BlockId, BlockKind, BlockSplice, Document, Stats};
+use writer_core::{Block, BlockId, BlockKind, BlockSplice, Document, ImageWidth, Stats};
 
 use block::Reflow;
 pub(crate) use block::{BlockLayout, Measure};
@@ -270,6 +270,31 @@ pub(crate) struct DocumentLayout {
     /// Very long blocks whose rows an edit left with a seam (see
     /// `block`): the background layout finishes their reflow.
     seamed: Vec<BlockId>,
+    /// An image that is laid out at another width than its block has: the
+    /// width a resize with the pointer shows before it is stored (see
+    /// [`DocumentLayout::set_image_preview`]).
+    image_preview: Option<(BlockId, ImageWidth)>,
+}
+
+/// `block` as the layout sees it: with the width of `preview` when it is
+/// the image that is being resized.
+fn previewed<'a>(
+    preview: Option<(BlockId, ImageWidth)>,
+    block: &'a Block,
+) -> std::borrow::Cow<'a, Block> {
+    use std::borrow::Cow;
+    let Some((id, width)) = preview else {
+        return Cow::Borrowed(block);
+    };
+    match block.as_image() {
+        Some(image) if block.id() == id && image.width != width => {
+            let mut image = image.clone();
+            image.width = width;
+            // Only the kind and the alignment of the stand-in are read.
+            Cow::Owned(Block::image(image).with_alignment(block.alignment()))
+        }
+        _ => Cow::Borrowed(block),
+    }
 }
 
 /// What a block is to list numbering: bit 7 for a numbered item, the low
@@ -328,6 +353,7 @@ impl DocumentLayout {
             calibrated: false,
             marker_em: None,
             seamed: Vec::new(),
+            image_preview: None,
         };
         layout.reset(document, revision);
         layout
@@ -339,6 +365,7 @@ impl DocumentLayout {
         self.slots.clear();
         self.layouts.clear();
         self.seamed.clear();
+        self.image_preview = None;
         self.scroll = ScrollPosition::Top;
         self.scroll_x = None;
         self.stats_shown = Stats::default();
@@ -387,7 +414,7 @@ impl DocumentLayout {
                 let measure = match (&old, &self.env) {
                     (Some(old), _) => old.measure,
                     (None, Some(env)) => Measure::estimate(
-                        block,
+                        &previewed(self.image_preview, block),
                         &env.style,
                         env.column_width,
                         self.advance,
@@ -720,8 +747,13 @@ impl DocumentLayout {
                 digit_em,
                 period_em,
             };
-            slot.measure =
-                Measure::estimate(block, &env.style, env.column_width, self.advance, marker);
+            slot.measure = Measure::estimate(
+                &previewed(self.image_preview, block),
+                &env.style,
+                env.column_width,
+                self.advance,
+                marker,
+            );
             slot.measured = false;
         }
         self.unmeasured = self.slots.len();
@@ -750,8 +782,13 @@ impl DocumentLayout {
                 digit_em,
                 period_em,
             };
-            let measure =
-                Measure::estimate(block, &env.style, env.column_width, self.advance, marker);
+            let measure = Measure::estimate(
+                &previewed(self.image_preview, block),
+                &env.style,
+                env.column_width,
+                self.advance,
+                marker,
+            );
             if measure != slot.measure {
                 slot.measure = measure;
                 first.get_or_insert(index);
@@ -843,7 +880,7 @@ impl DocumentLayout {
         // takes over from it what did not change.
         let previous = self.layouts.get(&id).map(|cached| cached.layout.clone());
         let layout = Rc::new(BlockLayout::shape(
-            block,
+            &previewed(self.image_preview, block),
             &env.style,
             env.column_width,
             &env.text_system,
@@ -911,7 +948,7 @@ impl DocumentLayout {
             return;
         };
         let (measure, _) = block::measure_block(
-            block,
+            &previewed(self.image_preview, block),
             &env.style,
             env.column_width,
             &env.text_system,
@@ -922,6 +959,44 @@ impl DocumentLayout {
 
     pub(crate) fn is_measured(&self, index: usize) -> bool {
         self.slots.get(index).is_some_and(|slot| slot.measured)
+    }
+
+    /// Lays the image block `preview.0` out at the width `preview.1`
+    /// instead of at the width the block has, until this is called with
+    /// `None`: what a resize with the pointer shows while it lasts. The
+    /// document is not touched, so nothing is edited, saved or added to
+    /// the undo history; the text under the picture moves all the same,
+    /// because the block's measure is replaced and what comes after it is
+    /// placed again (what a change to the block would do).
+    pub(crate) fn set_image_preview(
+        &mut self,
+        preview: Option<(BlockId, ImageWidth)>,
+        document: &Document,
+    ) {
+        if self.image_preview == preview {
+            return;
+        }
+        let before = self.image_preview.map(|(id, _)| id);
+        self.image_preview = preview;
+        let after = preview.map(|(id, _)| id);
+        for id in [before, after.filter(|id| Some(*id) != before)]
+            .into_iter()
+            .flatten()
+        {
+            self.layouts.remove(&id);
+            let Some(index) = self.slots.iter().position(|slot| slot.id == id) else {
+                continue;
+            };
+            // An image's measure needs no shaping: it is known at once.
+            self.measure_only(index, document);
+        }
+    }
+
+    /// The width the image block `id` is laid out at while it is being
+    /// resized (see [`Self::set_image_preview`]).
+    #[cfg(test)]
+    pub(crate) fn image_preview(&self) -> Option<(BlockId, ImageWidth)> {
+        self.image_preview
     }
 
     /// Whether there is work for [`Self::refine`]: estimates, missing
@@ -1330,7 +1405,7 @@ impl DocumentLayout {
         let marker = self.marker(self.slots[index].digits);
         let env = self.env.as_ref().expect("laid out");
         BlockLayout::shape(
-            block,
+            &previewed(self.image_preview, block),
             &env.style,
             env.column_width,
             &env.text_system,
@@ -1471,6 +1546,21 @@ impl Placed {
             found = pair[0] + within.min(pair[1] - pair[0] - 1);
         }
         found
+    }
+
+    /// The picture of an image block: x from the column's left edge, y in
+    /// content space. `None` for every other block.
+    pub(crate) fn image_rect(&self) -> Option<Bounds<Pixels>> {
+        self.layout
+            .image_bounds()
+            .map(|bounds| self.lift(0, bounds))
+    }
+
+    /// The bottom of the block's box in content space: under its last row
+    /// and its inner padding, on the sheet that row is on.
+    pub(crate) fn bottom(&self) -> Pixels {
+        let last = self.layout.rows.len() - 1;
+        self.row_top(last) + self.layout.line_height + px(self.layout.measure.pad_bottom)
     }
 
     /// The line box of the position at `offset`: zero width, one row high.

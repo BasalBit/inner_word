@@ -12,9 +12,9 @@ use std::{
 };
 
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyContext, Keystroke,
-    ModifiersChangedEvent, Pixels, Point, Render, SharedString, Subscription, Task, Window, div,
-    prelude::*,
+    App, Bounds, Context, DragMoveEvent, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    IntoElement, KeyContext, Keystroke, ModifiersChangedEvent, Pixels, Point, Render, SharedString,
+    Subscription, Task, Window, div, prelude::*,
 };
 use writer_core::{
     BlockId, CommentId, Document, EditorOptions, EditorState, Position, Selection, Stats, TextRange,
@@ -29,6 +29,7 @@ use crate::{
     events::EditorEvent,
     handlers,
     highlights::{HighlightStyle, Highlights},
+    images::Pictures,
     input::MarkedText,
     intercept::{self, InterceptPriority, Interceptors, KeyDisposition},
     layout::{DocumentLayout, ScrollPosition},
@@ -147,6 +148,23 @@ pub struct Editor {
     pub(crate) zoom_fine: Option<(f32, f32)>,
     /// The to-do checkboxes of the last frame.
     pub(crate) checkbox_hits: Vec<CheckboxHit>,
+    /// The decoded pictures of the document's images and who supplies
+    /// their bytes (see `crate::images`).
+    pub(crate) images: Pictures,
+    /// Counts the documents this editor was given
+    /// ([`Editor::set_document`]): a picture that was on its way into one
+    /// document does not arrive in the next.
+    pub(crate) document_serial: u64,
+    /// The handles the last frame drew on the selected image, in window
+    /// coordinates, with the block they belong to: where a press starts a
+    /// resize.
+    pub(crate) image_handles: Option<(BlockId, [Bounds<Pixels>; 4])>,
+    /// Files are dragged over the editor: the boundary between blocks
+    /// they would be dropped at (the index of the block after it).
+    pub(crate) file_drop: Option<usize>,
+    /// `escape` cancels the drag of an image while one lasts: the
+    /// editor's own key interceptor for it.
+    pub(crate) drag_escape: Option<Subscription>,
     /// The pointer is over a link with `cmd` held.
     pub(crate) link_hover: bool,
     /// The link the pointer rests on, and its tooltip (see `link_tip`).
@@ -192,6 +210,15 @@ pub struct Editor {
     /// The sheets of the last frame, in window coordinates.
     #[cfg(test)]
     pub(crate) painted_sheets: Vec<gpui::Bounds<Pixels>>,
+    /// What the last frame painted for each image block on screen.
+    #[cfg(test)]
+    pub(crate) painted_images: Vec<crate::element::PaintedImage>,
+    /// The drop line of the last frame, in window coordinates.
+    #[cfg(test)]
+    pub(crate) painted_drop_line: Option<gpui::Bounds<Pixels>>,
+    /// What the chip beside a handle said in the last frame.
+    #[cfg(test)]
+    pub(crate) painted_chip: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -259,6 +286,7 @@ impl Editor {
                 this.blink_task = None;
                 this.blink_on = true;
                 this.end_composition();
+                this.cancel_image_drag(cx);
                 this.drag = None;
                 this.drag_scroll = None;
                 this.drag_scrolling = false;
@@ -324,6 +352,13 @@ impl Editor {
             // Colours and fonts are part of the shaped runs; the next frame
             // compares styles and drops the layout cache if they differ.
             cx.observe_global::<GlobalTheme>(|_, cx| cx.notify()),
+            // The textures of the decoded pictures are the window's: they
+            // go when the editor goes.
+            cx.on_release_in(window, |this, window, _| {
+                for picture in this.images.drain() {
+                    window.drop_image(picture).ok();
+                }
+            }),
         ];
 
         let mut editor = Self {
@@ -358,6 +393,11 @@ impl Editor {
             zoom_shown: 100.,
             zoom_fine: None,
             checkbox_hits: Vec::new(),
+            images: Pictures::new(),
+            document_serial: 0,
+            image_handles: None,
+            file_drop: None,
+            drag_escape: None,
             link_hover: false,
             link_tip: None,
             focused: false,
@@ -386,6 +426,12 @@ impl Editor {
             painted_rows: Vec::new(),
             #[cfg(test)]
             painted_sheets: Vec::new(),
+            #[cfg(test)]
+            painted_images: Vec::new(),
+            #[cfg(test)]
+            painted_drop_line: None,
+            #[cfg(test)]
+            painted_chip: None,
             _subscriptions: subscriptions,
         };
         // A long document: its words are counted in the background.
@@ -526,9 +572,16 @@ impl Editor {
         self.caret_override = None;
         self.caret_upstream = false;
         self.drag = None;
+        self.drag_escape = None;
         self.drag_scroll = None;
         self.drag_scrolling = false;
         self.checkbox_hits.clear();
+        self.image_handles = None;
+        self.file_drop = None;
+        // Pictures on their way into the old document do not arrive in
+        // this one. (The decoded pictures stay: an image is named by its
+        // bytes, whatever document it is in.)
+        self.document_serial += 1;
         self.highlights.clear_all();
         self.spelling.reset(self.state.document());
         self.active_comment = None;
@@ -1201,7 +1254,26 @@ impl Render for Editor {
             .track_focus(&self.focus_handle)
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .w_full()
-            .when(!compact, |surface| surface.h_full());
+            .when(!compact, |surface| {
+                // Files dragged in from Finder: a line shows where they
+                // would go, a drop puts them there (see `images::insert`).
+                // GPUI hands a drag from outside to an element only as
+                // these two; the element itself takes the line away when
+                // the drag leaves the window.
+                surface
+                    .h_full()
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        |editor, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                            editor.file_drag_moved(event.event.position, cx);
+                        },
+                    ))
+                    .on_drop::<ExternalPaths>(cx.listener(
+                        |editor, paths: &ExternalPaths, window, cx| {
+                            let at = window.mouse_position();
+                            editor.drop_files(paths.paths(), at, window, cx);
+                        },
+                    ))
+            });
         let surface = handlers::register(surface, cx).child(EditorElement::new(cx.entity()));
         div()
             .relative()

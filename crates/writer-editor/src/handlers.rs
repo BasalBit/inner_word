@@ -14,12 +14,20 @@
 //! The clipboard carries plain text for other apps and the copied fragment
 //! (as JSON in GPUI's clipboard metadata) for pasting back with formatting.
 //! GPUI 0.2.2 cannot write HTML or RTF, so formatting survives only inside
-//! The Writer.
+//! The Writer. An image by itself is copied as the picture. Copy, cut and
+//! paste are in `crate::images` (`images::insert`), with the other ways a
+//! picture comes into a document.
+//!
+//! Some commands mean something else with the caret on an image (it is
+//! selected): "larger" and "smaller" step its width instead of a text
+//! size. The commands that are only about an image (the width presets,
+//! the original size) do nothing anywhere else and let the action travel
+//! on, so that whoever is further out can say what they are for.
 
-use gpui::{ClipboardItem, Context, Div, Window, prelude::*};
+use gpui::{Context, Div, Window, prelude::*};
 use writer_core::{
-    Alignment, BlockKind, Choice, Fragment, Highlight, InlineStyle, Movement, Position, Selection,
-    TextRange, text,
+    Alignment, BlockKind, Choice, Highlight, ImageWidth, InlineStyle, Movement, Position,
+    Selection, TextRange, text,
 };
 
 use crate::{
@@ -92,6 +100,7 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         InsertSoftBreak => insert_soft_break,
         InsertPageBreak => insert_page_break,
         InsertDivider => insert_divider,
+        InsertImage => insert_image,
         ToggleBold => toggle_bold,
         ToggleItalic => toggle_italic,
         ToggleUnderline => toggle_underline,
@@ -123,6 +132,11 @@ pub(crate) fn register(surface: Div, cx: &mut Context<Editor>) -> Div {
         Outdent => outdent,
         MoveBlockUp => move_block_up,
         MoveBlockDown => move_block_down,
+        ImageWidth25 => image_width_25,
+        ImageWidth50 => image_width_50,
+        ImageWidth75 => image_width_75,
+        ImageWidth100 => image_width_100,
+        ImageOriginalSize => image_original_size,
         Undo => undo,
         Redo => redo,
         Copy => copy,
@@ -454,6 +468,37 @@ impl Editor {
             self.user_edit(|state| state.insert_divider(), cx);
         }
     }
+
+    /// "Image": asks the provider for files and inserts them where the
+    /// selection is by then. Only a document editor that can be changed
+    /// and has a provider does it; from any other the action travels on.
+    fn insert_image(&mut self, window: &mut Window, cx: Cx) {
+        let Some(provider) = self
+            .images
+            .provider
+            .clone()
+            .filter(|_| self.takes_pictures())
+        else {
+            cx.propagate();
+            return;
+        };
+        let serial = self.document_serial;
+        let chosen = provider.choose(window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(paths) = chosen.await else {
+                return;
+            };
+            this.update_in(cx, |editor, window, cx| {
+                // The panel was open for a while: another document may be
+                // in the editor now.
+                if editor.document_serial == serial {
+                    editor.insert_image_files(paths, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 // --- Formatting ---------------------------------------------------------------
@@ -585,15 +630,55 @@ impl Editor {
             self.user_edit(|state| state.set_alignment(Alignment::Justify), cx);
         }
     }
-    fn increase_text_size(&mut self, _: &mut Window, cx: Cx) {
-        if self.rich_text(cx) {
-            self.user_edit(|state| state.step_text_size(1), cx);
+    /// "Larger" and "smaller": one step of the text size of the selected
+    /// blocks, or of the width of the image the caret is on.
+    fn step_size(&mut self, steps: i32, cx: Cx) {
+        if !self.rich_text(cx) {
+            return;
         }
+        match self.state.selected_image() {
+            Some((index, _)) => self.user_edit(|state| state.step_image_width(index, steps), cx),
+            None => self.user_edit(|state| state.step_text_size(steps), cx),
+        };
+    }
+    fn increase_text_size(&mut self, _: &mut Window, cx: Cx) {
+        self.step_size(1, cx)
     }
     fn decrease_text_size(&mut self, _: &mut Window, cx: Cx) {
-        if self.rich_text(cx) {
-            self.user_edit(|state| state.step_text_size(-1), cx);
-        }
+        self.step_size(-1, cx)
+    }
+
+    /// A command that is only about the selected image: `width` for it,
+    /// or its original size. Without a selected image nothing changes and
+    /// the action travels on.
+    fn set_image_width(&mut self, width: Option<ImageWidth>, cx: Cx) {
+        let selected = self.state.selected_image().map(|(index, _)| index);
+        let Some(index) = selected.filter(|_| !self.config.mode.is_compact()) else {
+            cx.propagate();
+            return;
+        };
+        self.user_edit(
+            |state| match width {
+                Some(width) => state.set_image_width(index, width),
+                None => state.set_image_original_size(index),
+            },
+            cx,
+        );
+    }
+    fn image_width_25(&mut self, _: &mut Window, cx: Cx) {
+        self.set_image_width(Some(ImageWidth::from_percent(25)), cx)
+    }
+    fn image_width_50(&mut self, _: &mut Window, cx: Cx) {
+        self.set_image_width(Some(ImageWidth::from_percent(50)), cx)
+    }
+    fn image_width_75(&mut self, _: &mut Window, cx: Cx) {
+        self.set_image_width(Some(ImageWidth::from_percent(75)), cx)
+    }
+    fn image_width_100(&mut self, _: &mut Window, cx: Cx) {
+        self.set_image_width(Some(ImageWidth::FULL), cx)
+    }
+    fn image_original_size(&mut self, _: &mut Window, cx: Cx) {
+        self.set_image_width(None, cx)
     }
     fn reset_text_size(&mut self, _: &mut Window, cx: Cx) {
         if self.rich_text(cx) {
@@ -768,52 +853,6 @@ impl Editor {
     }
     fn redo(&mut self, _: &mut Window, cx: Cx) {
         self.user_edit(|state| state.redo(), cx);
-    }
-
-    /// Writes a fragment to the clipboard: plain text for other apps, the
-    /// fragment's JSON as metadata for pasting back with formatting.
-    fn write_clipboard(fragment: &Fragment, cx: Cx) {
-        cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
-            fragment.to_plain_text(),
-            fragment.to_json(),
-        ));
-    }
-
-    fn copy(&mut self, _: &mut Window, cx: Cx) {
-        if self.state.selection().is_collapsed() {
-            return;
-        }
-        let fragment = self.state.copy();
-        Self::write_clipboard(&fragment, cx);
-    }
-
-    fn cut(&mut self, _: &mut Window, cx: Cx) {
-        if self.state.selection().is_collapsed() || self.config.read_only {
-            return;
-        }
-        if let Some(fragment) = self.user_edit(|state| state.cut(), cx) {
-            Self::write_clipboard(&fragment, cx);
-        }
-    }
-
-    fn paste(&mut self, _: &mut Window, cx: Cx) {
-        let Some(item) = cx.read_from_clipboard() else {
-            return;
-        };
-        // Compact editors hold plain text only.
-        let fragment = item
-            .metadata()
-            .filter(|_| !self.config.mode.is_compact())
-            .and_then(|json| Fragment::from_json(json).ok());
-        match (fragment, item.text()) {
-            (Some(fragment), _) => {
-                self.user_edit(|state| state.paste(&fragment), cx);
-            }
-            (None, Some(text)) => {
-                self.user_edit(|state| state.paste_plain_text(&text), cx);
-            }
-            (None, None) => {}
-        }
     }
 
     fn paste_as_plain_text(&mut self, _: &mut Window, cx: Cx) {

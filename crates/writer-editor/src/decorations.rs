@@ -274,6 +274,38 @@ pub(crate) fn shape_label(
     text_system.shape_line(text, font_size, &[run], None)
 }
 
+/// [`shape_label`] for a line that has to fit in `room`: a text that is
+/// too long is cut and ends in an ellipsis. `None` when not even a few
+/// characters fit.
+pub(crate) fn shape_label_within(
+    text_system: &WindowTextSystem,
+    text: &str,
+    font: Font,
+    font_size: Pixels,
+    color: Hsla,
+    room: Pixels,
+) -> Option<ShapedLine> {
+    let shape =
+        |text: String| shape_label(text_system, text.into(), font.clone(), font_size, color);
+    let whole = shape(text.to_string());
+    if whole.width <= room {
+        return Some(whole);
+    }
+    // As many characters as the room holds at the line's average advance,
+    // then fewer until it fits.
+    let count = text.chars().count();
+    let mut keep = ((count as f32) * (room / whole.width)).floor() as usize;
+    while keep >= 3 {
+        let cut: String = text.chars().take(keep).collect();
+        let line = shape(format!("{}\u{2026}", cut.trim_end()));
+        if line.width <= room {
+            return Some(line);
+        }
+        keep -= 1;
+    }
+    None
+}
+
 /// Works out the decorations of one block and hands them to `sink`.
 pub(crate) fn plan_block(sink: &mut impl DecorationSink, cx: &BlockContext) {
     let BlockContext {

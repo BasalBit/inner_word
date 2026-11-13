@@ -15,8 +15,8 @@
 
 use std::ops::Range;
 
-use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, Rgba, TextRun, px};
-use writer_core::{Block, BlockKind, InlineAttrs, Typography};
+use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, Rgba, Size, TextRun, px, size};
+use writer_core::{Block, BlockKind, Image, InlineAttrs, Typography};
 use writer_ui::theme::{self, HighlightColor, Theme, ThemeColors};
 
 use crate::config::FORMATTED_HEADING_SCALE;
@@ -35,6 +35,9 @@ pub(crate) const CODE_PADDING: f32 = 14.;
 const CODE_PADDING_V: f32 = 10.;
 /// Line height ratio of compact editors.
 const COMPACT_LINE_HEIGHT: f32 = 1.45;
+/// The narrowest a picture is drawn, in points (less in a column that is
+/// narrower than this).
+pub(crate) const MIN_IMAGE_WIDTH: f32 = 24.;
 
 /// Everything shaping depends on besides the block itself and the width.
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +55,13 @@ pub(crate) struct LayoutStyle {
     /// A formatted compact editor (`CompactOptions::formatted`): headings
     /// at `FORMATTED_HEADING_SCALE` instead of the document's own scale.
     pub(crate) small_headings: bool,
+    /// The text area of a page of the document's page setup
+    /// (`PageSetup::content_size`), in both views of a document editor
+    /// and in the print pass: no picture is drawn taller than a page's
+    /// text area, or in flow view than the same proportion of its column
+    /// ([`LayoutStyle::image_size`]). `None` in a compact editor, which
+    /// has no page.
+    pub(crate) page_content: Option<Size<Pixels>>,
 }
 
 /// Sizes and spacing of one block, in layout units (points).
@@ -180,7 +190,15 @@ impl LayoutStyle {
             typography: typography.clone(),
             paged,
             small_headings: false,
+            page_content: None,
         }
+    }
+
+    /// The style of a document that has pages: `content` is the text area
+    /// of one (`PageSetup::content_size`, in points).
+    pub(crate) fn with_page_content(mut self, content: (f32, f32)) -> Self {
+        self.page_content = Some(size(px(content.0.max(1.)), px(content.1.max(1.))));
+        self
     }
 
     /// The style of a formatted compact editor: the document's typography
@@ -202,6 +220,10 @@ impl LayoutStyle {
             && self.typography == other.typography
             && self.paged == other.paged
             && self.small_headings == other.small_headings
+            // A picture's height is capped by the page's text area: other
+            // paper or other margins measure a tall picture differently,
+            // in flow view too.
+            && self.page_content == other.page_content
     }
 
     /// Document points as a layout length (one layout unit is one point).
@@ -248,10 +270,58 @@ impl LayoutStyle {
         (font_points * ratio).round().max(1.)
     }
 
-    /// The metrics of `block`. `marker` widens the gutter of a numbered
-    /// item to the widest number of its list ([`Marker::NONE`]: the
-    /// standard gutter).
-    pub(crate) fn metrics(&self, block: &Block, marker: Marker) -> BlockMetrics {
+    /// How large `image` is drawn in a text column `column_width` wide, in
+    /// layout units. One rule for flow view, page view and paper, so a
+    /// picture has the same proportion to its column in all of them:
+    ///
+    /// 1. its width is its share of the column ([`Image::width`]), at
+    ///    least [`MIN_IMAGE_WIDTH`] and never more than the column;
+    /// 2. its height follows from the aspect ratio of its pixels;
+    /// 3. it is never taller than a page's text area: in a column as wide
+    ///    as the page's, exactly the whole points of that area's height
+    ///    (no rounding through a division: the text area of US Letter is
+    ///    648 points to the digit), in any other column the same
+    ///    proportion of the column, in whole points. A picture that would
+    ///    be taller is drawn as tall as that, and narrower by its aspect.
+    ///
+    /// The cap is a whole number of points and the row of a picture is
+    /// its height rounded up ([`LayoutStyle::metrics`]), so the row of a
+    /// capped picture is never higher than the text area: it always fits
+    /// on an empty sheet. Core keeps stored widths within the page
+    /// (`Image::max_width`); the cap is what holds after the paper or the
+    /// margins were changed, and in a column the window made narrower.
+    pub(crate) fn image_size(&self, image: &Image, column_width: Pixels) -> Size<Pixels> {
+        let column = f32::from(column_width).max(1.);
+        let aspect = image.aspect().max(f32::MIN_POSITIVE);
+        let mut width =
+            (image.width.fraction() * column).clamp(MIN_IMAGE_WIDTH.min(column), column);
+        let mut height = width * aspect;
+        if let Some(page) = self.page_content {
+            let (page_width, page_height) = (f32::from(page.width), f32::from(page.height));
+            let cap = if column_width == page.width {
+                page_height.floor()
+            } else {
+                (column * page_height / page_width).floor()
+            }
+            .max(1.);
+            if height > cap {
+                height = cap;
+                width = (height / aspect).min(column);
+            }
+        }
+        size(px(width), px(height))
+    }
+
+    /// The metrics of `block` in a column `column_width` wide. `marker`
+    /// widens the gutter of a numbered item to the widest number of its
+    /// list ([`Marker::NONE`]: the standard gutter). Only a picture's
+    /// metrics depend on the column: its row is as high as the picture.
+    pub(crate) fn metrics(
+        &self,
+        block: &Block,
+        marker: Marker,
+        column_width: Pixels,
+    ) -> BlockMetrics {
         let kind = block.kind();
         let heading = kind.heading_level().filter(|_| !self.compact);
         let font_points = if self.compact {
@@ -324,6 +394,16 @@ impl LayoutStyle {
                 line_points = (base_line * 0.6).round().max(1.);
             }
             BlockKind::PageBreak => line_points = base_line,
+            BlockKind::Image(image) => {
+                // One row, as high as the picture: whole points, like
+                // every row. Rounded up, which never takes a capped
+                // picture past the page (the cap is whole, see
+                // `image_size`). No gutter and no padding: a picture
+                // stands in the column by its alignment alone.
+                let height = f32::from(self.image_size(image, column_width).height);
+                line_points = height.ceil().max(1.);
+                text_left = 0.;
+            }
             _ => {}
         }
         BlockMetrics {

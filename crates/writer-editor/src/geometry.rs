@@ -305,7 +305,8 @@ pub(crate) fn visible_blocks(lay: &mut Lay) -> std::ops::Range<usize> {
 }
 
 /// The caret rectangle at `offset` for a caret style: column-local x,
-/// content-space y, one row high, in layout units. `upstream` puts a bar
+/// content-space y, one row high, in layout units (on an image block: the
+/// whole picture). `upstream` puts a bar
 /// caret at a soft wrap on the row that ends there. `zoom` is the zoom of
 /// the view the rectangle will be drawn in: the bar and the underline
 /// keep their thickness on screen ([`CARET_WIDTH`] window pixels) at
@@ -318,6 +319,11 @@ pub(crate) fn caret_rect(
     upstream: bool,
     zoom: f32,
 ) -> Bounds<Pixels> {
+    // A picture has no character to stand before or to cover: the caret
+    // on it is the picture itself, whatever the style.
+    if let Some(picture) = placed.image_rect() {
+        return picture;
+    }
     let line_box = placed.caret_box(offset, upstream && style == CaretStyle::Bar);
     let thickness = CARET_WIDTH / zoom.max(0.01);
     if style == CaretStyle::Bar {

@@ -58,18 +58,43 @@ pub fn commands() -> Vec<CommandDescriptor> {
         c("Align Centre", CATEGORY_LAYOUT, AlignCenter).keywords(["center", "middle"]),
         c("Align Right", CATEGORY_LAYOUT, AlignRight),
         c("Justify", CATEGORY_LAYOUT, AlignJustify).keywords(["align"]),
-        c("Larger Text", CATEGORY_LAYOUT, IncreaseTextSize)
-            .keywords(["size", "bigger", "increase"]),
-        c("Smaller Text", CATEGORY_LAYOUT, DecreaseTextSize).keywords(["size", "decrease"]),
+        // One key means "larger" for whatever is selected: the text of the
+        // blocks, or the image the caret is on. The titles say both,
+        // because the list of keyboard shortcuts finds a command by its
+        // title.
+        c("Larger Text or Image", CATEGORY_LAYOUT, IncreaseTextSize)
+            .keywords(["size", "bigger", "increase", "picture", "photo", "resize"]),
+        c("Smaller Text or Image", CATEGORY_LAYOUT, DecreaseTextSize)
+            .keywords(["size", "decrease", "picture", "photo", "resize"]),
         c("Reset Text Size", CATEGORY_LAYOUT, ResetTextSize).keywords(["default"]),
         c("Indent", CATEGORY_LAYOUT, Indent).keywords(["nest", "right"]),
         c("Outdent", CATEGORY_LAYOUT, Outdent).keywords(["unindent", "left"]),
         c("Move Block Up", CATEGORY_LAYOUT, MoveBlockUp).keywords(["paragraph", "reorder"]),
         c("Move Block Down", CATEGORY_LAYOUT, MoveBlockDown).keywords(["paragraph", "reorder"]),
+        // The selected image.
+        c("Image Width 25 %", CATEGORY_LAYOUT, ImageWidth25)
+            .keywords(["picture", "size", "quarter", "small"]),
+        c("Image Width 50 %", CATEGORY_LAYOUT, ImageWidth50).keywords(["picture", "size", "half"]),
+        c("Image Width 75 %", CATEGORY_LAYOUT, ImageWidth75).keywords(["picture", "size"]),
+        c("Image Width 100 %", CATEGORY_LAYOUT, ImageWidth100).keywords([
+            "picture",
+            "size",
+            "full width",
+            "column",
+        ]),
+        c("Image Original Size", CATEGORY_LAYOUT, ImageOriginalSize)
+            .keywords(["picture", "actual", "natural", "reset"]),
         // Insert.
         c("Line Break", CATEGORY_INSERT, InsertSoftBreak).keywords(["soft break", "newline"]),
         c("Page Break", CATEGORY_INSERT, InsertPageBreak).keywords(["new page"]),
         c("Divider", CATEGORY_INSERT, InsertDivider).keywords(["rule", "separator", "line"]),
+        c("Image", CATEGORY_INSERT, InsertImage).keywords([
+            "picture",
+            "photo",
+            "figure",
+            "screenshot",
+            "insert",
+        ]),
         // Edit.
         c("Undo", CATEGORY_EDIT, Undo),
         c("Redo", CATEGORY_EDIT, Redo),

@@ -64,10 +64,10 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Font, Hsla, Pixels, ShapedGlyph, ShapedRun, SharedString, TextRun, WindowTextSystem,
-    WrappedLineLayout, point, px, size,
+    Bounds, Font, Hsla, Pixels, ShapedGlyph, ShapedRun, SharedString, Size, TextRun,
+    WindowTextSystem, WrappedLineLayout, point, px, size,
 };
-use writer_core::{Alignment, Block, BlockKind, text};
+use writer_core::{Alignment, Block, BlockKind, ImageId, text};
 
 use super::{
     style::{BlockMetrics, Decorations, Group, LayoutStyle, Marker},
@@ -214,7 +214,7 @@ impl Measure {
         advance: f32,
         marker: Marker,
     ) -> Self {
-        let metrics = style.metrics(block, marker);
+        let metrics = style.metrics(block, marker, column_width);
         let rows = if block.is_void() {
             1
         } else {
@@ -342,6 +342,19 @@ pub(crate) struct Row {
     pub(crate) code: Vec<CodeFragment>,
 }
 
+/// Where the picture of an image block is, in the block's box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ImageBox {
+    /// The stored bytes the picture is made of.
+    pub(crate) image: ImageId,
+    /// Its left edge from the column's left edge: the block's alignment is
+    /// in it.
+    pub(crate) x: Pixels,
+    /// As it is drawn: within the column and within a page's text area
+    /// (`LayoutStyle::image_size`).
+    pub(crate) size: Size<Pixels>,
+}
+
 /// The layout of one block at one width.
 #[derive(Debug)]
 pub(crate) struct BlockLayout {
@@ -356,8 +369,12 @@ pub(crate) struct BlockLayout {
     /// Width of the text box (the wrap width).
     pub(crate) text_width: Pixels,
     pub(crate) align: Alignment,
-    /// Divider or page break: no text, one caret position.
+    /// Divider, page break or image: no text, one caret position.
     pub(crate) void: bool,
+    /// The picture of an image block. Its row is as high as the picture
+    /// (rounded up to whole points), and the picture stands at the top of
+    /// it.
+    pub(crate) image: Option<ImageBox>,
     pub(crate) measure: Measure,
     pub(crate) decorations: Decorations,
     /// The baseline, from the top of a row. One baseline for the whole
@@ -749,7 +766,7 @@ pub(crate) fn measure_block(
     text_system: &WindowTextSystem,
     marker: Marker,
 ) -> (Measure, Pixels) {
-    let metrics = style.metrics(block, marker);
+    let metrics = style.metrics(block, marker, column_width);
     if block.is_void() {
         return (Measure::new(&metrics, block.kind(), 1), px(0.));
     }
@@ -804,7 +821,7 @@ impl BlockLayout {
         previous: Option<&BlockLayout>,
         reflow: Reflow,
     ) -> Self {
-        let metrics = style.metrics(block, marker);
+        let metrics = style.metrics(block, marker, column_width);
         let text_width = text_width(&metrics, column_width);
         let font_id = text_system.resolve_font(&style.block_font(block));
         let ascent = text_system.ascent(font_id, metrics.font_size);
@@ -821,6 +838,19 @@ impl BlockLayout {
             text_width,
             align: block.alignment(),
             void: block.is_void(),
+            image: block.as_image().map(|image| {
+                let size = style.image_size(image, column_width);
+                let room = (column_width - size.width).max(px(0.));
+                ImageBox {
+                    image: image.id,
+                    x: match block.alignment() {
+                        Alignment::Center => room / 2.,
+                        Alignment::Right => room,
+                        Alignment::Left | Alignment::Justify => px(0.),
+                    },
+                    size,
+                }
+            }),
             measure: Measure::default(),
             decorations: Decorations::default(),
             baseline,
@@ -1475,6 +1505,15 @@ impl BlockLayout {
     /// white space the row wraps at hangs past the text box; the caret
     /// stays inside it.
     pub(crate) fn caret_bounds_on(&self, offset: usize, upstream: bool) -> (usize, Bounds<Pixels>) {
+        if let Some(picture) = self.image_bounds() {
+            // The one position of a picture is its left edge, and as high
+            // as the picture: what follows a caret (scrolling, a popup)
+            // then follows the picture.
+            return (
+                0,
+                Bounds::new(picture.origin, size(px(0.), picture.size.height)),
+            );
+        }
         let row_ix = self.row_for_caret(offset, upstream);
         let row = &self.rows[row_ix];
         let mut x = self.x_in_row(row_ix, offset);
@@ -1522,15 +1561,28 @@ impl BlockLayout {
         Some((x0, x1))
     }
 
+    /// The picture of an image block: x from the column's left edge, y from
+    /// the top of the block's box.
+    pub(crate) fn image_bounds(&self) -> Option<Bounds<Pixels>> {
+        let picture = self.image?;
+        Some(Bounds::new(
+            point(self.text_left + picture.x, self.rows[0].y),
+            picture.size,
+        ))
+    }
+
     /// One rectangle per row for the bytes in `range`: `(row, rectangle)`,
     /// block-local, one row high. Only rows inside `window` are looked at
     /// (pass `0..usize::MAX` for all). A void block is one rectangle across
-    /// its row.
+    /// its row; an image is its picture.
     pub(crate) fn rects_for_range(
         &self,
         range: Range<usize>,
         window: Range<usize>,
     ) -> Vec<(usize, Bounds<Pixels>)> {
+        if let Some(picture) = self.image_bounds() {
+            return vec![(0, picture)];
+        }
         if self.void {
             let row = &self.rows[0];
             return vec![(

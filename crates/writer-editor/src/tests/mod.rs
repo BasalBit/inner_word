@@ -9,6 +9,10 @@
 //! - `editing`: every editing action from the keyboard, clipboard, undo.
 //! - `movement`: caret movement over wrapped rows, hit testing round trips.
 //! - `ime`: platform text input with marked text, UTF-16 ranges.
+//! - `images`: image blocks: the box and its cap by the page, the picture
+//!   and its placeholder, selecting, resizing and moving with the pointer
+//!   and the keys, chosen files, paste and drop, the cache of decoded
+//!   pictures, the picture on paper.
 //! - `mouse`: clicks, drags, checkboxes, links, wheel, scroll bar.
 //! - `pages`: pagination invariants and page view.
 //! - `print`: the print pass: the pages page view has, as data for paper,
@@ -24,6 +28,7 @@
 //!   the place, sideways scrolling.
 
 mod editing;
+mod images;
 mod ime;
 mod layout;
 mod mouse;

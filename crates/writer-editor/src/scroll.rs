@@ -465,12 +465,22 @@ impl Editor {
             let target = match mode {
                 Autoscroll::None => None,
                 Autoscroll::Fit => {
-                    if top - margin < scroll_y {
-                        // The first row of the document shows what is above
-                        // it too (padding, the top of the sheet).
-                        let first_row = position.block == 0
-                            && placed.layout.row_for_caret(position.offset, upstream) == 0;
-                        Some(if first_row { px(0.) } else { top - margin })
+                    // The first row of the document shows what is above
+                    // it too (padding, the top of the sheet).
+                    let first_row = position.block == 0
+                        && placed.layout.row_for_caret(position.offset, upstream) == 0;
+                    let by_top = if first_row { px(0.) } else { top - margin };
+                    if bottom - top > viewport_height - margin - below {
+                        // A row higher than the viewport has room for (a
+                        // picture; never text): its top and its bottom
+                        // cannot both be brought into view, and the two
+                        // rules below would send the view back and forth.
+                        // It is fitted by its top, and left alone where
+                        // it fills the viewport already.
+                        let fills = top <= scroll_y && bottom >= scroll_y + viewport_height;
+                        (!fills).then_some(by_top)
+                    } else if top - margin < scroll_y {
+                        Some(by_top)
                     } else if bottom + below > scroll_y + viewport_height {
                         Some(bottom + below - viewport_height)
                     } else {

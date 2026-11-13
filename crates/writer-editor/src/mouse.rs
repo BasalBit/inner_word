@@ -5,6 +5,10 @@
 //!   by blocks after a triple click, and scrolls when the pointer leaves
 //!   the viewport;
 //! - clicking a to-do checkbox toggles it without moving the caret;
+//! - a click on a picture selects its image (the caret goes onto its
+//!   block); dragging the picture moves the block to another place, and
+//!   dragging a corner handle of the selected image makes it larger or
+//!   smaller (see "Images" below);
 //! - `cmd`-click opens a link;
 //! - a right-click (the secondary button, or `ctrl`-click) adjusts the
 //!   selection as a macOS text view does and asks for the context menu
@@ -17,21 +21,100 @@
 //! frame) and forwards the events here. The mouse is never required: every
 //! one of these has a keyboard equivalent. Nor is the keyboard: what has no
 //! pointer gesture of its own is in the context menu.
+//!
+//! # Images
+//!
+//! **Resize.** A press on a handle of the selected image starts it. The
+//! width follows the pointer sideways: pulling a handle away from the
+//! picture makes it wider, by as much as the pointer moves, and by twice
+//! as much for a centred image, which grows on both sides (so the handle
+//! stays under the pointer wherever the picture has an edge that can
+//! move). The height follows from the aspect ratio. The width is a share
+//! of the text column and stays within what a width can be (a twentieth
+//! of the column, 24 points, the whole column, and the width at which the
+//! picture would be taller than a page); near a quarter, a half, three
+//! quarters, the whole column and the picture's original size it snaps to
+//! them. While the button is held nothing of the document changes: the
+//! layout shows the width as a preview
+//! (`DocumentLayout::set_image_preview`), so the text under the picture
+//! moves, and no edit, no autosave and no undo step is made. The release
+//! stores the width as one undo step.
+//!
+//! **Move.** A press on a picture selects it and arms a move, which starts
+//! once the pointer is 4 pixels away. The picture is dimmed where it is
+//! and a line shows the boundary between two blocks nearest to the
+//! pointer; the view scrolls at its edges. The release puts the block
+//! there as one undo step; at the two boundaries around the picture
+//! itself there is no line and nothing changes.
+//!
+//! **`escape`** cancels either. It is no key binding: for the length of
+//! the drag the editor registers one of its own key interceptors
+//! (`crate::intercept`), ahead of everyone else's, so the key cannot be
+//! given another meaning and does nothing else meanwhile.
+//!
+//! The image is held by the id of its block. A change from elsewhere that
+//! is taken over in the middle of a drag (`Editor::adopt_document`) either
+//! still has the block, and the drag goes on, or not, and it ends.
 
 use std::{ops::Range, time::Duration};
 
 use gpui::{Context, MouseDownEvent, MouseMoveEvent, Pixels, Point, Window, point, px};
-use writer_core::{Position, Selection, TextRange, text};
+use writer_core::{Alignment, BlockId, Image, ImageWidth, Position, Selection, TextRange, text};
 
 use crate::{
     editor::Editor,
-    element::SCROLLBAR_ZONE,
+    element::{HANDLE_SLACK, SCROLLBAR_ZONE},
     events::{ContextMenuRequest, EditorEvent},
+    intercept::{InterceptPriority, KeyDisposition},
+    layout::style::MIN_IMAGE_WIDTH,
     scroll::{Autoscroll, PendingScroll},
 };
 
 /// How often a drag outside the viewport scrolls.
 const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(30);
+/// How far the pointer has to go from where it pressed a picture before
+/// the picture is being moved, in window pixels.
+const MOVE_THRESHOLD: Pixels = px(4.);
+/// A width that is being dragged snaps to a preset when it is this close
+/// to it, in window pixels.
+const SNAP_DISTANCE: f32 = 6.;
+/// The widths a resize with the pointer snaps to, in thousandths of the
+/// column (and the image's original size).
+const SNAP_WIDTHS: [u16; 4] = [250, 500, 750, 1000];
+/// The editor's own interceptor for `escape` during the drag of an image
+/// comes before every other one (an open menu, Vim).
+const DRAG_PRIORITY: InterceptPriority = InterceptPriority(i32::MAX);
+
+/// The pointer holds a corner handle of an image.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ImageResize {
+    pub(crate) block: BlockId,
+    /// The handle: 0 to 3 for top left, top right, bottom left, bottom
+    /// right.
+    pub(crate) corner: usize,
+    /// Window x of the press.
+    pressed_x: Pixels,
+    /// How wide the picture was drawn then, in layout units.
+    start_width: Pixels,
+    /// A centred image grows on both sides.
+    centred: bool,
+    /// The pointer has moved since the press.
+    moved: bool,
+    /// The width that is shown now.
+    pub(crate) width: ImageWidth,
+}
+
+/// The pointer pressed a picture and may be dragging it elsewhere.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ImageMove {
+    pub(crate) block: BlockId,
+    pressed_at: Point<Pixels>,
+    /// The pointer went far enough for this to be a move.
+    pub(crate) started: bool,
+    /// The boundary the block would go to: the index of the block after
+    /// it. `None` at the two boundaries around the block itself.
+    pub(crate) drop: Option<usize>,
+}
 
 /// What a drag extends the selection by.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +125,11 @@ pub(crate) enum Drag {
     Words(TextRange),
     /// By blocks, keeping the blocks that were triple-clicked.
     Blocks(Range<usize>),
+    /// Not a selection: a handle of an image is being dragged.
+    ResizeImage(ImageResize),
+    /// Not a selection: a picture was pressed, and is dragged once the
+    /// pointer has moved far enough.
+    MoveImage(ImageMove),
 }
 
 impl Editor {
@@ -98,6 +186,55 @@ impl Editor {
                 );
                 self.state.break_undo_group();
             }
+            return;
+        }
+
+        // A handle of the selected image: the pointer resizes it.
+        if let Some((block, handles)) = self.image_handles
+            && let Some(corner) = handles
+                .iter()
+                .position(|handle| handle.dilate(HANDLE_SLACK).contains(&event.position))
+            && self.start_image_resize(block, corner, event.position, cx)
+        {
+            return;
+        }
+
+        // A picture: its image is selected (the caret goes onto its
+        // block; shift extends the selection to it as to any place), and
+        // dragging it on moves the block. However often it is clicked.
+        if let Some(index) = self.picture_at(event.position) {
+            self.end_composition();
+            let position = Position::new(index, 0);
+            let anchor = self.state.selection().anchor;
+            let extend = event.modifiers.shift;
+            // The picture is under the pointer: nothing scrolls.
+            self.edit_with(
+                Autoscroll::None,
+                |state| {
+                    if extend {
+                        state.set_selection(Selection::new(anchor, position))
+                    } else {
+                        state.set_caret(position)
+                    }
+                },
+                cx,
+            );
+            self.state.break_undo_group();
+            self.caret_upstream = false;
+            let movable = !extend && !self.config.read_only && !self.config.mode.is_compact();
+            self.drag = Some(
+                match self.state.document().block(index).filter(|_| movable) {
+                    Some(block) => Drag::MoveImage(ImageMove {
+                        block: block.id(),
+                        pressed_at: event.position,
+                        started: false,
+                        drop: None,
+                    }),
+                    None => Drag::Characters,
+                },
+            );
+            self.last_mouse = event.position;
+            cx.notify();
             return;
         }
 
@@ -306,7 +443,11 @@ impl Editor {
         }
         self.last_mouse = event.position;
         self.extend_drag(cx);
-        self.update_drag_scroll(cx);
+        // A handle is not followed out of the viewport: the width only
+        // goes sideways.
+        if !matches!(self.drag, Some(Drag::ResizeImage(_)) | None) {
+            self.update_drag_scroll(cx);
+        }
     }
 
     /// The mouse moved without a button held.
@@ -340,9 +481,20 @@ impl Editor {
     /// The left button was released (anywhere).
     pub(crate) fn mouse_up(&mut self, cx: &mut Context<Self>) {
         if self.mouse_busy() {
-            self.drag = None;
+            // Where a picture that is being moved goes is where the
+            // pointer is now, in the document as it is now.
+            if matches!(self.drag, Some(Drag::MoveImage(_))) {
+                self.move_image_to_pointer(cx);
+            }
+            let drag = self.drag.take();
+            self.drag_escape = None;
             self.drag_scroll = None;
             self.drag_scrolling = false;
+            match drag {
+                Some(Drag::ResizeImage(resize)) => self.finish_image_resize(resize, cx),
+                Some(Drag::MoveImage(moving)) => self.finish_image_move(moving, cx),
+                _ => {}
+            }
             if self.scrollbar.drag.take().is_some() {
                 self.flash_scrollbar(cx);
             }
@@ -397,8 +549,14 @@ impl Editor {
         self.scroll_to_y(geometry.max_scroll * ratio, cx);
     }
 
-    /// Extends the drag selection to the last pointer position.
+    /// Extends the drag selection to the last pointer position (or, when
+    /// it is an image that is dragged, lets the image follow it).
     fn extend_drag(&mut self, cx: &mut Context<Self>) {
+        match self.drag {
+            Some(Drag::ResizeImage(_)) => return self.resize_image_to_pointer(cx),
+            Some(Drag::MoveImage(_)) => return self.move_image_to_pointer(cx),
+            _ => {}
+        }
         let (Some(drag), Some(viewport)) = (self.drag.clone(), self.viewport_bounds()) else {
             return;
         };
@@ -443,6 +601,8 @@ impl Editor {
                     )
                 }
             }
+            // Handled above: they select nothing.
+            Drag::ResizeImage(_) | Drag::MoveImage(_) => return,
         };
         if selection != self.state.selection() {
             self.edit_with(Autoscroll::None, |state| state.set_selection(selection), cx);
@@ -500,6 +660,249 @@ impl Editor {
         };
         let speed = (f32::from(distance.abs()) * 0.4).clamp(4., 80.);
         Some(px(speed.round() * f32::from(distance).signum()))
+    }
+}
+
+// --- Images: resize and move ---------------------------------------------------
+
+impl Editor {
+    /// The index of the block with this id, as the document is now.
+    pub(crate) fn block_index(&self, id: BlockId) -> Option<usize> {
+        self.state
+            .document()
+            .blocks()
+            .iter()
+            .position(|block| block.id() == id)
+    }
+
+    /// The image block whose picture is under a window point.
+    pub(crate) fn picture_at(&self, at: Point<Pixels>) -> Option<usize> {
+        let (position, _) = self.caret_at_point(at)?;
+        self.image_bounds(position.block)
+            .is_some_and(|picture| picture.contains(&at))
+            .then_some(position.block)
+    }
+
+    /// `escape` ends the drag of an image for as long as one lasts (see
+    /// the module documentation).
+    fn watch_escape(&mut self, cx: &mut Context<Self>) {
+        let editor = cx.weak_entity();
+        self.drag_escape = Some(
+            self.interceptors
+                .register(DRAG_PRIORITY, move |key, _, cx| {
+                    if key.key != "escape" || key.modifiers.modified() {
+                        return KeyDisposition::Pass;
+                    }
+                    editor
+                        .update(cx, |editor, cx| editor.cancel_image_drag(cx))
+                        .ok();
+                    KeyDisposition::Consumed
+                }),
+        );
+    }
+
+    /// Ends the drag of an image without changing anything: the picture
+    /// is as wide as it was and where it was.
+    pub(crate) fn cancel_image_drag(&mut self, cx: &mut Context<Self>) {
+        if !matches!(
+            self.drag,
+            Some(Drag::ResizeImage(_)) | Some(Drag::MoveImage(_))
+        ) {
+            return;
+        }
+        self.drag = None;
+        self.drag_escape = None;
+        self.drag_scroll = None;
+        self.drag_scrolling = false;
+        self.layout
+            .borrow_mut()
+            .set_image_preview(None, self.state.document());
+        cx.notify();
+    }
+
+    /// A press on handle `corner` of the image block `block`. Says whether
+    /// a resize began.
+    fn start_image_resize(
+        &mut self,
+        block: BlockId,
+        corner: usize,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.config.read_only || self.config.mode.is_compact() {
+            return false;
+        }
+        let Some(index) = self.block_index(block) else {
+            return false;
+        };
+        let (Some(picture), Some(block_ref)) =
+            (self.image_bounds(index), self.state.document().block(index))
+        else {
+            return false;
+        };
+        let Some(image) = block_ref.as_image() else {
+            return false;
+        };
+        let resize = ImageResize {
+            block,
+            corner,
+            pressed_x: at.x,
+            start_width: picture.size.width / self.view_zoom(),
+            centred: block_ref.alignment() == Alignment::Center,
+            moved: false,
+            width: image.width,
+        };
+        self.end_composition();
+        self.state.break_undo_group();
+        self.drag = Some(Drag::ResizeImage(resize));
+        self.last_mouse = at;
+        self.watch_escape(cx);
+        cx.notify();
+        true
+    }
+
+    /// The width an image gets for `wanted` layout units under the
+    /// pointer: a share of the column within what a width can be, snapped
+    /// to the presets and to the original size where one is near.
+    fn dragged_image_width(&self, image: &Image, wanted: Pixels) -> ImageWidth {
+        let (column, zoom) = self.layout.borrow().env().map_or((1., 1.), |env| {
+            (f32::from(env.column_width).max(1.), env.zoom)
+        });
+        let wanted = f32::from(wanted);
+        let widest = self.state.max_image_width(image);
+        let narrowest = ImageWidth::MIN
+            .max(ImageWidth::from_fraction(MIN_IMAGE_WIDTH / column))
+            .min(widest);
+        let snapped = SNAP_WIDTHS
+            .into_iter()
+            .map(ImageWidth::new)
+            .chain([self.state.original_image_width(image)])
+            .filter(|preset| (narrowest..=widest).contains(preset))
+            .map(|preset| (preset, (preset.fraction() * column - wanted).abs() * zoom))
+            .filter(|(_, distance)| *distance <= SNAP_DISTANCE)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        match snapped {
+            Some((preset, _)) => preset,
+            None => ImageWidth::from_fraction(wanted / column).clamp(narrowest, widest),
+        }
+    }
+
+    /// The handle that is held follows the pointer: the layout shows the
+    /// image at the new width, and the document stays as it is.
+    fn resize_image_to_pointer(&mut self, cx: &mut Context<Self>) {
+        let Some(Drag::ResizeImage(mut resize)) = self.drag.clone() else {
+            return;
+        };
+        let image = self
+            .block_index(resize.block)
+            .and_then(|index| self.state.document().block(index))
+            .and_then(|block| block.as_image());
+        let Some(image) = image else {
+            // The block is gone (a change from elsewhere).
+            return self.cancel_image_drag(cx);
+        };
+        let sideways = (self.last_mouse.x - resize.pressed_x) / self.view_zoom();
+        // Away from the picture is wider: to the right for the handles on
+        // the right, to the left for those on the left.
+        let outward = if resize.corner % 2 == 1 {
+            sideways
+        } else {
+            -sideways
+        };
+        let grown = if resize.centred {
+            outward * 2.
+        } else {
+            outward
+        };
+        let width = self.dragged_image_width(image, resize.start_width + grown);
+        if resize.moved && width == resize.width {
+            return;
+        }
+        resize.moved = true;
+        resize.width = width;
+        let block = resize.block;
+        self.drag = Some(Drag::ResizeImage(resize));
+        self.layout
+            .borrow_mut()
+            .set_image_preview(Some((block, width)), self.state.document());
+        cx.notify();
+    }
+
+    /// The handle was let go: the width that was shown is stored, as one
+    /// undo step.
+    fn finish_image_resize(&mut self, resize: ImageResize, cx: &mut Context<Self>) {
+        if resize.moved
+            && !self.config.read_only
+            && let Some(index) = self.block_index(resize.block)
+        {
+            // Nothing scrolls: the picture is where the pointer is.
+            self.edit_with(
+                Autoscroll::None,
+                |state| state.set_image_width(index, resize.width),
+                cx,
+            );
+            self.state.break_undo_group();
+        }
+        self.layout
+            .borrow_mut()
+            .set_image_preview(None, self.state.document());
+        cx.notify();
+    }
+
+    /// The picture that was pressed follows the pointer: once it is far
+    /// enough from the press, the boundary between blocks nearest to it
+    /// is where the block would go.
+    fn move_image_to_pointer(&mut self, cx: &mut Context<Self>) {
+        let Some(Drag::MoveImage(mut moving)) = self.drag.clone() else {
+            return;
+        };
+        let Some(from) = self.block_index(moving.block) else {
+            return self.cancel_image_drag(cx);
+        };
+        if !moving.started {
+            let (dx, dy) = (
+                f32::from(self.last_mouse.x - moving.pressed_at.x),
+                f32::from(self.last_mouse.y - moving.pressed_at.y),
+            );
+            if dx.hypot(dy) < f32::from(MOVE_THRESHOLD) {
+                return;
+            }
+            moving.started = true;
+            self.state.break_undo_group();
+            self.watch_escape(cx);
+        }
+        // Outside the viewport the place follows the edge; the autoscroll
+        // brings more of the text under it.
+        let pointer = match self.viewport_bounds() {
+            Some(viewport) => point(
+                self.last_mouse.x,
+                self.last_mouse
+                    .y
+                    .clamp(viewport.top(), viewport.bottom() - px(1.)),
+            ),
+            None => self.last_mouse,
+        };
+        // Before or after the block itself is where it is already.
+        moving.drop = self
+            .boundary_at(pointer)
+            .filter(|to| *to != from && *to != from + 1);
+        if self.drag.as_ref() != Some(&Drag::MoveImage(moving.clone())) {
+            self.drag = Some(Drag::MoveImage(moving));
+            cx.notify();
+        }
+    }
+
+    /// The picture was let go: its block goes to the boundary that was
+    /// shown, as one undo step, and stays selected.
+    fn finish_image_move(&mut self, moving: ImageMove, cx: &mut Context<Self>) {
+        if moving.started
+            && let Some(to) = moving.drop
+            && let Some(from) = self.block_index(moving.block)
+        {
+            self.user_edit(|state| state.move_block_to(from, to), cx);
+            self.state.break_undo_group();
+        }
+        cx.notify();
     }
 }
 

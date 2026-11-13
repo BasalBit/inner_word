@@ -7,22 +7,24 @@
 //!   builds a [`FramePlan`]: everything to paint, as owned data.
 //! - `paint`: registers the platform input handler and the mouse listeners,
 //!   then paints the plan back to front: desk or canvas, sheets, block
-//!   decorations, comment tints and highlight layers, run backgrounds,
-//!   selection, glyphs, markers, caret, scroll bar.
+//!   decorations, comment tints and highlight layers, pictures, run
+//!   backgrounds, selection, glyphs, markers, caret (or the outline and
+//!   the handles of a selected image), scroll bar, and over everything
+//!   the chip that says how wide an image is being made.
 //!
 //! Per block kind details are in `decorations`; rows of text are painted by
 //! `paint`.
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use gpui::{
     App, AvailableSpace, Bounds, BoxShadow, ContentMask, Context, Corners, CursorStyle,
-    DispatchPhase, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Path, Pixels, Point, ScrollWheelEvent, ShapedLine,
-    Style, UnderlineStyle, Window, fill, point, px, relative, size,
+    DispatchPhase, Element, ElementId, ElementInputHandler, Entity, FileDropEvent, GlobalElementId,
+    Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Path, Pixels, Point, RenderImage,
+    ScrollWheelEvent, ShapedLine, Style, UnderlineStyle, Window, fill, point, px, relative, size,
 };
-use writer_core::BlockKind;
+use writer_core::{BlockKind, ImageWidth};
 use writer_ui::theme::{self, ActiveTheme};
 
 use crate::{
@@ -30,10 +32,12 @@ use crate::{
     decorations::{self, BlockContext, CheckboxHit, PageNumber, ScreenSink},
     editor::Editor,
     geometry::{caret_rect, drawn_caret},
+    images::{HANDLE_SIZE, ImageStatus, OUTLINE_WIDTH, handles_of},
     layout::{
         Lay, LayoutEnv, LayoutStyle, PageGeometry,
         pages::{DESK_PADDING, DESK_SIDE_PADDING},
     },
+    mouse::Drag,
     paint::{PlannedRow, snap},
     scroll::{PendingScroll, ScrollbarGeometry},
     spelling::{self, PlannedWave},
@@ -68,6 +72,40 @@ pub(crate) struct PlannedMarker {
     pub(crate) line_height: Pixels,
 }
 
+/// The picture of an image block in a frame.
+pub(crate) struct PlannedImage {
+    /// Where it is drawn, in window coordinates (on whole device pixels).
+    pub(crate) bounds: Bounds<Pixels>,
+    /// The decoded picture; `None` while there is none (the block's
+    /// placeholder is among the decorations then).
+    pub(crate) picture: Option<Arc<RenderImage>>,
+    /// Painted over it while it is dragged to another place: the colour
+    /// of the surface it lies on, half transparent, which is what dims a
+    /// picture (GPUI paints an image at the opacity of its element, and
+    /// only GPUI's own elements can set one).
+    pub(crate) veil: Option<Hsla>,
+}
+
+/// What a frame painted for an image block.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PaintedImage {
+    pub(crate) block: usize,
+    /// Where the picture or its placeholder is, in window coordinates.
+    pub(crate) bounds: Bounds<Pixels>,
+    /// The level of the picture that was painted (see `images::cache`);
+    /// `None` for a placeholder.
+    pub(crate) level: Option<u8>,
+    /// What the placeholder says.
+    pub(crate) label: Option<String>,
+    /// The colour of the outline of a selected image.
+    pub(crate) outline: Option<Hsla>,
+    /// Its handles.
+    pub(crate) handles: Vec<Bounds<Pixels>>,
+    /// The colour that dims it while it is dragged.
+    pub(crate) veil: Option<Hsla>,
+}
+
 /// Everything one frame paints, back to front.
 pub(crate) struct FramePlan {
     pub(crate) hitbox: Hitbox,
@@ -82,6 +120,9 @@ pub(crate) struct FramePlan {
     pub(crate) sheet_border: Option<Hsla>,
     /// Block decorations, comment tints, highlight layers.
     pub(crate) back: Vec<PaintQuad>,
+    /// The pictures of image blocks: over the decorations, under the
+    /// selection, so a selection tints a picture as it tints text.
+    pub(crate) images: Vec<PlannedImage>,
     pub(crate) rows: Vec<PlannedRow>,
     /// Selection rectangles: over the run backgrounds, under the glyphs.
     pub(crate) selection: Vec<PaintQuad>,
@@ -93,6 +134,17 @@ pub(crate) struct FramePlan {
     pub(crate) paths: Vec<(Path<Pixels>, Hsla)>,
     /// The caret and anything else over the text.
     pub(crate) front: Vec<PaintQuad>,
+    /// Over everything: the chip beside the handle of an image that is
+    /// being resized, which says its width.
+    pub(crate) chip: Option<(PaintQuad, PlannedMarker)>,
+    /// The pictures (the arrow cursor shows over them).
+    pub(crate) image_hitboxes: Vec<Hitbox>,
+    /// The handles of the selected image, each with the cursor of its
+    /// diagonal.
+    pub(crate) handle_hitboxes: Vec<(Hitbox, CursorStyle)>,
+    /// The cursor of the whole editor while the pointer drags an image
+    /// or one of its handles.
+    pub(crate) drag_cursor: Option<CursorStyle>,
     /// Page view: the sheets (the text cursor shows over them, the arrow
     /// over the desk).
     pub(crate) sheet_hitboxes: Vec<Hitbox>,
@@ -116,6 +168,7 @@ impl FramePlan {
             sheet_shadows: Vec::new(),
             sheet_border: None,
             back: Vec::new(),
+            images: Vec::new(),
             rows: Vec::new(),
             selection: Vec::new(),
             markers: Vec::new(),
@@ -123,6 +176,10 @@ impl FramePlan {
             spelling_color: gpui::transparent_black(),
             paths: Vec::new(),
             front: Vec::new(),
+            chip: None,
+            image_hitboxes: Vec::new(),
+            handle_hitboxes: Vec::new(),
+            drag_cursor: None,
             sheet_hitboxes: Vec::new(),
             pointer_hitboxes: Vec::new(),
             scrollbar_hitbox: None,
@@ -202,7 +259,8 @@ impl Editor {
                 };
             LayoutEnv {
                 text_system: window.text_system().clone(),
-                style: LayoutStyle::new(theme, &settings.typography, false, true),
+                style: LayoutStyle::new(theme, &settings.typography, false, true)
+                    .with_page_content(settings.page.content_size()),
                 viewport,
                 zoom,
                 column_left: sheet_left + geometry.margin_left * zoom,
@@ -251,7 +309,10 @@ impl Editor {
                 .round();
             LayoutEnv {
                 text_system: window.text_system().clone(),
-                style: LayoutStyle::new(theme, &settings.typography, false, false),
+                // Flow view shows no pages, and a picture is still as large
+                // in proportion to its column as it is on a page.
+                style: LayoutStyle::new(theme, &settings.typography, false, false)
+                    .with_page_content(settings.page.content_size()),
                 viewport,
                 zoom,
                 column_left: viewport.left() + inset,
@@ -299,10 +360,40 @@ impl Editor {
         let mut caret_painted = false;
         #[cfg(test)]
         let mut tints: Vec<Bounds<Pixels>> = Vec::new();
+        #[cfg(test)]
+        let mut painted_images: Vec<PaintedImage> = Vec::new();
+        #[cfg(test)]
+        let mut painted_drop_line = None;
+        // The textures of pictures that left the cache go with them.
+        for picture in self.images.take_evicted() {
+            window.drop_image(picture).ok();
+        }
+        self.images.begin_frame();
+        let mut image_handles = None;
+        let scale_factor = window.scale_factor();
         let document = self.state.document();
         let selection = self.state.selection();
         let caret_position = self.caret_position();
         let caret_upstream = self.caret_is_upstream();
+        // The image the caret is on, and what the pointer is doing to an
+        // image.
+        let selected_image = self.state.selected_image().map(|(index, _)| index);
+        let (moving, resizing, drop_at) = match &self.drag {
+            Some(Drag::MoveImage(moving)) if moving.started => {
+                plan.drag_cursor = Some(CursorStyle::ClosedHand);
+                (Some(moving.block), None, moving.drop)
+            }
+            Some(Drag::ResizeImage(resize)) => {
+                plan.drag_cursor = Some(handle_cursor(resize.corner));
+                (
+                    None,
+                    Some((resize.block, resize.corner, resize.width)),
+                    None,
+                )
+            }
+            _ => (None, None, None),
+        };
+        let drop_at = self.file_drop.or(drop_at);
 
         {
             let mut guard = self.layout.borrow_mut();
@@ -559,7 +650,10 @@ impl Editor {
                                     || document
                                         .block(index + 1)
                                         .is_some_and(|next| next.is_void())));
+                        // (A picture is tinted as a picture: its box, and
+                        // nothing under it.)
                         if continues
+                            && block_layout.image.is_none()
                             && let Some((row, last)) = rects.last_mut()
                             && *row + 1 == block_layout.rows.len()
                         {
@@ -641,10 +735,13 @@ impl Editor {
                 // text, so a selection tint never covers it.
                 let head = caret_position;
                 let style = self.config.caret_style;
+                // An image has no caret: the caret on it is the outline
+                // around it, planned with the picture below.
                 if focused
                     && active
                     && self.blink_on
                     && head.block == index
+                    && block_layout.image.is_none()
                     && (selection.is_collapsed()
                         || style != CaretStyle::Bar
                         || self.caret_override.is_some())
@@ -668,6 +765,156 @@ impl Editor {
                             .corner_radii(px(1.)),
                     );
                 }
+
+                // The picture of an image block, or its placeholder.
+                if let (Some(picture), Some(image)) = (placed.image_rect(), block.as_image()) {
+                    // On whole device pixels, where the sprite is put
+                    // anyway: the outline then fits the picture.
+                    let rect = view.rect(picture);
+                    let bounds = Bounds::from_corners(
+                        point(snap(rect.left()), snap(rect.top())),
+                        point(snap(rect.right()), snap(rect.bottom())),
+                    );
+                    let device_width = f32::from(bounds.size.width) * scale_factor;
+                    let (found, status) = self.images.picture(image, device_width);
+                    #[cfg(test)]
+                    let mut painted = PaintedImage {
+                        block: index,
+                        bounds,
+                        level: found.as_ref().map(|(_, level)| *level),
+                        label: None,
+                        outline: None,
+                        handles: Vec::new(),
+                        veil: None,
+                    };
+                    if found.is_none() {
+                        // The box at the picture's size: nothing moves
+                        // when the picture arrives.
+                        plan.back.push(
+                            fill(bounds, colors.hover)
+                                .border_widths(px(1.))
+                                .border_color(colors.hairline),
+                        );
+                        let text = match status {
+                            ImageStatus::Missing => "Missing image",
+                            ImageStatus::Broken => "This image cannot be shown",
+                            _ if image.description.is_empty() => "Image",
+                            _ => image.description.as_str(),
+                        };
+                        let font_size = view.len(theme::UI_TEXT_SM);
+                        let line_height = (font_size * 1.4).round();
+                        let room = bounds.size.width - view.len(px(16.));
+                        if bounds.size.height >= line_height
+                            && let Some(line) = decorations::shape_label_within(
+                                window.text_system(),
+                                text,
+                                lay.env().style.ui_font.clone(),
+                                font_size,
+                                colors.faint,
+                                room,
+                            )
+                        {
+                            #[cfg(test)]
+                            {
+                                painted.label = Some(line.text.to_string());
+                            }
+                            let middle = bounds.center();
+                            plan.markers.push(PlannedMarker {
+                                origin: point(
+                                    (middle.x - line.width / 2.).round(),
+                                    (middle.y - line_height / 2.).round(),
+                                ),
+                                line_height,
+                                line,
+                            });
+                        }
+                    }
+                    let veil = (moving == Some(block.id())).then(|| surface.alpha(0.5));
+                    plan.images.push(PlannedImage {
+                        bounds,
+                        picture: found.map(|(picture, _)| picture),
+                        veil,
+                    });
+                    let shown = bounds.intersect(&viewport);
+                    if shown.size.width > px(0.) && shown.size.height > px(0.) {
+                        plan.image_hitboxes
+                            .push(window.insert_hitbox(shown, HitboxBehavior::Normal));
+                    }
+                    // Selected: an outline just outside the picture, and
+                    // a handle at each corner while it can be resized. In
+                    // window pixels at every zoom, like the caret.
+                    if selected_image == Some(index) {
+                        let live = focused && active;
+                        let color = if live {
+                            colors.accent
+                        } else {
+                            colors.border_strong
+                        };
+                        plan.front.push(
+                            fill(bounds.dilate(OUTLINE_WIDTH), gpui::transparent_black())
+                                .border_widths(OUTLINE_WIDTH)
+                                .border_color(color),
+                        );
+                        #[cfg(test)]
+                        {
+                            painted.outline = Some(color);
+                        }
+                        if live && !self.config.read_only && !compact {
+                            let handles = handles_of(bounds);
+                            for (corner, handle) in handles.iter().enumerate() {
+                                plan.front.push(
+                                    fill(*handle, surface)
+                                        .border_widths(px(1.))
+                                        .border_color(colors.accent),
+                                );
+                                plan.handle_hitboxes.push((
+                                    window.insert_hitbox(
+                                        handle.dilate(HANDLE_SLACK),
+                                        HitboxBehavior::Normal,
+                                    ),
+                                    handle_cursor(corner),
+                                ));
+                            }
+                            image_handles = Some((block.id(), handles));
+                            #[cfg(test)]
+                            {
+                                painted.handles = handles.to_vec();
+                            }
+                        }
+                    }
+                    // The width an image is being made, beside the handle
+                    // that is held.
+                    if let Some((_, corner, width)) =
+                        resizing.filter(|(resized, ..)| *resized == block.id())
+                    {
+                        plan.chip = Some(plan_chip(
+                            window,
+                            lay.env(),
+                            width,
+                            handles_of(bounds)[corner].center(),
+                            corner < 2,
+                            viewport,
+                        ));
+                    }
+                    #[cfg(test)]
+                    {
+                        painted.veil = veil;
+                        painted_images.push(painted);
+                    }
+                }
+            }
+
+            // Where a picture that is dragged, or files that are dragged
+            // in, would go: a line between two blocks.
+            if let Some(boundary) = drop_at
+                && let Some(line) = crate::images::drop_line(&mut lay, boundary)
+            {
+                #[cfg(test)]
+                {
+                    painted_drop_line = Some(line);
+                }
+                plan.front
+                    .push(fill(line, colors.accent).corner_radii(px(1.)));
             }
 
             // Placeholder over an empty document.
@@ -768,12 +1015,86 @@ impl Editor {
                 .map(|row| (row.origin, row.layout.font_size * row.zoom))
                 .collect();
             self.painted_sheets = plan.sheets.clone();
+            self.painted_images = painted_images;
+            self.painted_drop_line = painted_drop_line;
+            self.painted_chip = plan
+                .chip
+                .as_ref()
+                .map(|(_, label)| label.line.text.to_string());
         }
         self.checkbox_hits = checkboxes;
+        self.image_handles = image_handles;
         self.scrollbar.geometry = scrollbar;
         self.caret_painted = caret_painted;
         plan
     }
+}
+
+/// How far around a handle of the selected image a press still takes it,
+/// in window pixels.
+pub(crate) const HANDLE_SLACK: Pixels = px(3.);
+
+/// The cursor over a corner handle (0 to 3: top left, top right, bottom
+/// left, bottom right): the arrow of its diagonal.
+fn handle_cursor(corner: usize) -> CursorStyle {
+    if corner == 0 || corner == 3 {
+        CursorStyle::ResizeUpLeftDownRight
+    } else {
+        CursorStyle::ResizeUpRightDownLeft
+    }
+}
+
+/// The chip that says how wide an image is being made ("62 %"): beside
+/// the handle that is held (`at`, its centre), outside the picture (over
+/// a top handle, under a bottom one), and inside the viewport. In the
+/// interface's size at every zoom.
+fn plan_chip(
+    window: &Window,
+    env: &LayoutEnv,
+    width: ImageWidth,
+    at: Point<Pixels>,
+    above: bool,
+    viewport: Bounds<Pixels>,
+) -> (PaintQuad, PlannedMarker) {
+    let colors = env.style.colors;
+    let line = decorations::shape_label(
+        window.text_system(),
+        format!("{} %", width.percent()).into(),
+        env.style.ui_font.clone(),
+        theme::UI_TEXT_SM,
+        colors.ink,
+    );
+    let chip = size(line.width + theme::SPACE_2 * 2., px(22.));
+    let away = HANDLE_SIZE + theme::SPACE_1;
+    let top = if above {
+        at.y - away - chip.height
+    } else {
+        at.y + away
+    };
+    let margin = theme::SPACE_1;
+    let left = (at.x - chip.width / 2.)
+        .min(viewport.right() - margin - chip.width)
+        .max(viewport.left() + margin);
+    let top = top
+        .min(viewport.bottom() - margin - chip.height)
+        .max(viewport.top() + margin);
+    let bounds = Bounds::new(point(left.round(), top.round()), chip);
+    let border = if colors.appearance.is_dark() {
+        colors.border_strong
+    } else {
+        colors.hairline
+    };
+    (
+        fill(bounds, colors.elevated)
+            .corner_radii(theme::RADIUS_SM)
+            .border_widths(px(1.))
+            .border_color(border),
+        PlannedMarker {
+            origin: point(bounds.left() + theme::SPACE_2, bounds.top()),
+            line_height: chip.height,
+            line,
+        },
+    )
 }
 
 /// The soft shadow under a sheet of paper, as large as the sheet is
@@ -914,11 +1235,24 @@ impl Element for EditorElement {
         } else {
             window.set_cursor_style(text_cursor, &plan.hitbox);
         }
+        // A picture is an object, not text: the arrow, and over the
+        // handles of the selected one the arrows of their diagonals.
+        for hitbox in &plan.image_hitboxes {
+            window.set_cursor_style(CursorStyle::Arrow, hitbox);
+        }
+        for (hitbox, cursor) in &plan.handle_hitboxes {
+            window.set_cursor_style(*cursor, hitbox);
+        }
         for hitbox in &plan.pointer_hitboxes {
             window.set_cursor_style(CursorStyle::PointingHand, hitbox);
         }
         if let Some(hitbox) = &plan.scrollbar_hitbox {
             window.set_cursor_style(CursorStyle::Arrow, hitbox);
+        }
+        // While the pointer drags an image or a handle, the cursor says
+        // so wherever it is over the editor.
+        if let Some(cursor) = plan.drag_cursor {
+            window.set_cursor_style(cursor, &plan.hitbox);
         }
         self.register_mouse(&plan.hitbox, plan.row_height, window);
 
@@ -940,6 +1274,18 @@ impl Element for EditorElement {
             }
             for quad in plan.back.drain(..) {
                 window.paint_quad(quad);
+            }
+            for image in plan.images.drain(..) {
+                if let Some(picture) = image.picture {
+                    // A picture the atlas cannot take (it never gets one
+                    // that large) is left out, not an error of the frame.
+                    window
+                        .paint_image(image.bounds, Corners::default(), picture, 0, false)
+                        .ok();
+                }
+                if let Some(veil) = image.veil {
+                    window.paint_quad(fill(image.bounds, veil));
+                }
             }
             for row in &plan.rows {
                 row.paint_backgrounds(window);
@@ -978,6 +1324,13 @@ impl Element for EditorElement {
             }
             for quad in plan.front.drain(..) {
                 window.paint_quad(quad);
+            }
+            if let Some((quad, label)) = plan.chip.take() {
+                window.paint_quad(quad);
+                label
+                    .line
+                    .paint(label.origin, label.line_height, window, cx)
+                    .ok();
             }
         });
         self.editor.read(cx).perf.set(
@@ -1044,6 +1397,18 @@ impl EditorElement {
             }
         });
 
+        // Files that were dragged over the window left it again: the line
+        // that showed where they would go goes too.
+        let editor = self.editor.clone();
+        window.on_mouse_event(move |event: &FileDropEvent, phase, _, cx| {
+            if phase == DispatchPhase::Bubble
+                && matches!(event, FileDropEvent::Exited)
+                && editor.read(cx).file_drop.is_some()
+            {
+                editor.update(cx, |editor, cx| editor.set_file_drop(None, cx));
+            }
+        });
+
         let editor = self.editor.clone();
         let scroll_hitbox = hitbox.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
@@ -1079,5 +1444,7 @@ impl Editor {
     fn after_frame(&mut self, prepaint: std::time::Duration, cx: &mut Context<Self>) {
         self.perf.set(self.perf.get().with_prepaint(prepaint));
         self.start_background_work(cx);
+        // The pictures the frame wanted and did not have.
+        self.load_wanted_images(cx);
     }
 }

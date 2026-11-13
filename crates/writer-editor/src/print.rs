@@ -33,7 +33,8 @@
 //! # What a page holds
 //!
 //! In painting order, block by block: the block's decorations (bullet,
-//! to-do box, quote bar, code panel, rule), then for every row its
+//! to-do box, quote bar, code panel, rule), the picture of an image block
+//! (see "Pictures" below), then for every row its
 //! backgrounds (highlights, the chips of inline code), the row itself
 //! ([`writer_print::TextRow`]: its text, the font and colour of every
 //! run, and where each shaped glyph starts), its underlines and
@@ -62,6 +63,19 @@
 //! Colours are Paper's. A colour with alpha (a highlight) is blended onto
 //! white when its item is made: a printed page has no transparency.
 //!
+//! # Pictures
+//!
+//! An image block puts its picture on the page at its box: the box the
+//! layout gave it, which is page view's (the same share of the column,
+//! never taller than the text area, moved to the next sheet as a whole
+//! when it does not fit). The item carries the stored bytes as they are
+//! (PNG, JPEG or GIF; the PDF writer decodes them) and the image's id as
+//! its key, so a picture that is in a document twice is in the PDF once.
+//! The bytes come from whoever made the pass ([`PrintPass::set_images`]):
+//! the pass reads no library. Without them, and for an image nobody has
+//! bytes for, the box is drawn as a hairline with the image's description
+//! in its middle, so the page still says that a picture belongs there.
+//!
 //! # Fonts
 //!
 //! A row names its fonts as the layout asked for them (`gpui::Font` as a
@@ -73,14 +87,16 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{App, Bounds, Font, FontStyle, Hsla, Pixels, Rgba, Window, point, px, size};
-use writer_core::{BlockKind, Document};
+use writer_core::{BlockKind, Document, ImageId};
 use writer_print::{
-    Anchor, Color, FontSpec, GlyphStart, Item, Label, Page, RectItem, RowRun, StrokeItem, TextRow,
+    Anchor, Color, FontSpec, GlyphStart, ImageItem, Item, Label, Page, RectItem, RowRun,
+    StrokeItem, TextRow,
 };
 use writer_ui::theme::{self, ActiveTheme, Theme};
 
@@ -142,7 +158,13 @@ pub struct PrintPass {
     specs: HashMap<Font, Arc<FontSpec>>,
     /// The numbers of the numbered items among the blocks from `.0` on.
     ordinals: (usize, Vec<Option<usize>>),
+    /// Where the bytes of a picture come from ([`PrintPass::set_images`]).
+    images: Option<ImageBytes>,
 }
+
+/// Answers with the stored bytes of an image, or with `None` when there
+/// are none.
+type ImageBytes = Rc<dyn Fn(ImageId) -> Option<Arc<[u8]>>>;
 
 /// Where and how the number of a page is set.
 struct NumberPlace {
@@ -167,7 +189,8 @@ impl Editor {
         // Paper's colours and this Mac's fonts: what page view shows in the
         // light theme.
         let paper = Theme::paper(cx.theme().fonts.clone());
-        let style = LayoutStyle::new(&paper, &settings.typography, false, true);
+        let style = LayoutStyle::new(&paper, &settings.typography, false, true)
+            .with_page_content(settings.page.content_size());
         let pad_top = px(DESK_PADDING);
         let env = LayoutEnv {
             text_system: window.text_system().clone(),
@@ -225,6 +248,7 @@ impl Editor {
             number,
             specs: HashMap::new(),
             ordinals: (0, Vec::new()),
+            images: None,
         }
     }
 }
@@ -233,6 +257,28 @@ impl PrintPass {
     /// The size of the document's paper in points, orientation applied.
     pub fn paper(&self) -> (f32, f32) {
         self.document.settings().page.page_size()
+    }
+
+    /// Where the pass gets the bytes of a picture (PNG, JPEG or GIF, as
+    /// they are stored). It is asked once for every image block, when the
+    /// block is put on its page, on the thread the pass runs on: whoever
+    /// prints reads the bytes beforehand and answers from memory. Without
+    /// it, and for an id it answers `None` for, the picture's box is
+    /// drawn with its description. Set it before the first
+    /// [`PrintPass::advance`].
+    pub fn set_images(&mut self, images: Rc<dyn Fn(ImageId) -> Option<Arc<[u8]>>>) {
+        self.images = Some(images);
+    }
+
+    /// The images of the document the pass holds, each once, in the order
+    /// they come: what [`PrintPass::set_images`] will be asked for.
+    pub fn images(&self) -> Vec<ImageId> {
+        let mut seen = std::collections::HashSet::new();
+        self.document
+            .images()
+            .map(|(_, image)| image.id)
+            .filter(|id| seen.insert(*id))
+            .collect()
     }
 
     /// How far the pass has come.
@@ -400,6 +446,64 @@ impl PrintPass {
                     env,
                 },
             );
+
+            // The picture of an image block (a void block: one segment).
+            if let (Some(picture), Some(image)) = (on_sheet.image_rect(), block.as_image()) {
+                let bounds = view.rect(picture);
+                let bytes = self.images.as_ref().and_then(|images| images(image.id));
+                match bytes {
+                    Some(bytes) => sheet.rows.push(Item::Image(ImageItem {
+                        key: *image.id.as_bytes(),
+                        bytes,
+                        x: bounds.left().into(),
+                        y: bounds.top().into(),
+                        width: bounds.size.width.into(),
+                        height: bounds.size.height.into(),
+                    })),
+                    None => {
+                        // No bytes: the box, and what the picture shows in
+                        // words.
+                        let faint = on_paper(env.style.colors.faint);
+                        sheet.rows.push(Item::Rect(RectItem {
+                            x: bounds.left().into(),
+                            y: bounds.top().into(),
+                            width: bounds.size.width.into(),
+                            height: bounds.size.height.into(),
+                            radius: 0.,
+                            fill: None,
+                            border: Some((0.5, on_paper(env.style.colors.border_strong))),
+                        }));
+                        let font_size = theme::UI_TEXT_SM;
+                        let line_height = (font_size * 1.4).round();
+                        let room = bounds.size.width - px(16.);
+                        if !image.description.is_empty()
+                            && bounds.size.height >= line_height
+                            && let Some(line) = decorations::shape_label_within(
+                                &env.text_system,
+                                &image.description,
+                                env.style.ui_font.clone(),
+                                font_size,
+                                env.style.colors.faint,
+                                room,
+                            )
+                        {
+                            let middle = bounds.center();
+                            let top = middle.y - line_height / 2.;
+                            let baseline =
+                                top + (line_height - line.ascent - line.descent) / 2. + line.ascent;
+                            sheet.labels.push(Item::Label(Label {
+                                text: line.text.to_string(),
+                                font: spec_of(&mut self.specs, &env.style.ui_font),
+                                size: font_size.into(),
+                                color: faint,
+                                x: middle.x.into(),
+                                baseline: baseline.into(),
+                                anchor: Anchor::Middle,
+                            }));
+                        }
+                    }
+                }
+            }
 
             // Rows.
             for row_ix in rows[0]..rows[1] {

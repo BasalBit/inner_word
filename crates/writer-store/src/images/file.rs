@@ -265,14 +265,14 @@ pub(crate) fn write_row(conn: &Connection, info: &ImageInfo, bytes: &[u8]) -> Re
 /// Which file a path names at a moment: a file that is moved aside, deleted or replaced
 /// under a connection is no longer the one at the path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FileId {
+pub(crate) struct FileIdentity {
     device: u64,
     inode: u64,
 }
 
 /// The file at `path` now; `None` when there is none.
-pub(crate) fn file_id(path: &Path) -> Option<FileId> {
-    std::fs::metadata(path).ok().map(|m| FileId {
+pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
+    std::fs::metadata(path).ok().map(|m| FileIdentity {
         device: m.dev(),
         inode: m.ino(),
     })
@@ -341,11 +341,11 @@ pub(crate) const DAMAGED_MARK: &str = ".damaged-";
 pub(crate) fn replace_damaged(
     path: &Path,
     other: &Path,
-    suspect: Option<FileId>,
+    suspect: Option<FileIdentity>,
 ) -> Result<Option<PathBuf>> {
     let (aside, conn) = {
         let _making = making();
-        if suspect.is_none() || file_id(path) != suspect {
+        if suspect.is_none() || file_identity(path) != suspect {
             return Ok(None);
         }
         let aside = move_aside(path)?;
@@ -489,7 +489,7 @@ pub struct ImageFile {
 struct Kept {
     conn: Connection,
     /// `None` in memory.
-    file: Option<FileId>,
+    file: Option<FileIdentity>,
 }
 
 enum Place {
@@ -753,7 +753,7 @@ impl ImageFile {
             return Ok(false);
         }
         // The error came from opening the file: it is the one at the path now.
-        let suspect = suspect.or_else(|| file_id(path));
+        let suspect = suspect.or_else(|| file_identity(path));
         replace_damaged(path, copy, suspect)?;
         Ok(true)
     }
@@ -764,7 +764,8 @@ impl ImageFile {
     /// path (one that replaced a damaged one) is the one that is read.
     fn reader(&self) -> Result<Option<Ref<'_, Connection>>> {
         if let Place::Disk { path, .. } = &self.place {
-            let gone = matches!(&*self.conn.borrow(), Some(kept) if file_id(path) != kept.file);
+            let gone =
+                matches!(&*self.conn.borrow(), Some(kept) if file_identity(path) != kept.file);
             if gone {
                 self.conn.borrow_mut().take();
             }
@@ -810,7 +811,7 @@ impl ImageFile {
             conn.pragma_update(None, "query_only", true)?;
         }
         let file = match &self.place {
-            Place::Disk { path, .. } => file_id(path),
+            Place::Disk { path, .. } => file_identity(path),
             Place::Memory => None,
         };
         *self.conn.borrow_mut() = Some(Kept { conn, file });

@@ -143,7 +143,7 @@ impl Run {
                 file::replace_damaged(
                     &images,
                     &images_backup_path(database),
-                    file::file_id(&images),
+                    file::file_identity(&images),
                 )?;
                 Run::look(database, now_ms)
             }

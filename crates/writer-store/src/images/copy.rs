@@ -80,7 +80,7 @@ pub fn back_up_images(database: &Path, max_bytes: u64) -> Result<ImagesBackedUp>
             let mut replaced = false;
             for (path, other) in [(&images, &copy), (&copy, &images)] {
                 if file::is_damaged(path) {
-                    file::replace_damaged(path, other, file::file_id(path))?;
+                    file::replace_damaged(path, other, file::file_identity(path))?;
                     replaced = true;
                 }
             }

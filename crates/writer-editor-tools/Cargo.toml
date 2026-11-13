@@ -1,6 +1,6 @@
 [package]
 name = "writer-editor-tools"
-description = "Contextual editor overlays for The Writer: format menu, insert menu, link popover, font picker, find and replace, the text context menu, the floating format bar."
+description = "Contextual editor overlays for The Writer: format menu, insert menu, link popover, font picker, find and replace, the text context menu, the floating format bar, the menu and the description of an image."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

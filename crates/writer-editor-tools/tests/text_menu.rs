@@ -265,8 +265,11 @@ fn a_right_click_where_nothing_is_selected(cx: &mut TestAppContext) {
     );
     assert_eq!(
         submenu_labels(&tools, "Insert", cx),
-        ["Divider", "Page Break", "Today's Date", "Link"]
+        ["Divider", "Page Break", "Image…", "Today's Date", "Link"]
     );
+    // An editor nobody gave a place for pictures takes none.
+    assert!(item(&tools, "Insert > Image…", cx).is_disabled());
+    assert!(!item(&tools, "Insert > Divider", cx).is_disabled());
 
     // Turn Into, with the mouse: a click opens the submenu, a click on
     // its row turns the block.

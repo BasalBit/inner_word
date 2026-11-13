@@ -38,6 +38,10 @@ actions!(
         OpenFontPicker,
         /// Insert today's date at the caret.
         InsertDate,
+        /// Write what the selected image shows: opens a small field under
+        /// the picture. Only with the caret on an image; otherwise the
+        /// action travels on.
+        EditImageDescription,
         /// Open the find bar.
         Find,
         /// Open the find bar with the replace field; from inside the bar,

@@ -13,6 +13,7 @@ use crate::{
     font_picker::FontMenu,
     format_bar::FormatBar,
     format_menu::FormatMenu,
+    image_description::ImageDescriptionTool,
     insert_menu::InsertMenu,
     link::LinkTool,
     menu::{Mark, Menu, MenuEntry, MenuEvent},
@@ -34,6 +35,8 @@ pub enum ToolKind {
     Find,
     /// The context menu of the text (right-click, `ctrl-enter`).
     ContextMenu,
+    /// The description of the selected image: a field under the picture.
+    ImageDescription,
 }
 
 /// Emitted by [`EditorTools`] when a tool opens or closes.
@@ -74,6 +77,7 @@ pub(crate) enum PopupTool {
     Insert(InsertMenu),
     Link(LinkTool),
     Font(FontMenu),
+    ImageDescription(ImageDescriptionTool),
 }
 
 impl PopupTool {
@@ -83,6 +87,7 @@ impl PopupTool {
             PopupTool::Insert(_) => ToolKind::Insert,
             PopupTool::Link(_) => ToolKind::Link,
             PopupTool::Font(_) => ToolKind::Font,
+            PopupTool::ImageDescription(_) => ToolKind::ImageDescription,
         }
     }
 
@@ -93,6 +98,7 @@ impl PopupTool {
             PopupTool::Insert(tool) => tool.menu.entity_id(),
             PopupTool::Link(tool) => tool.popover.entity_id(),
             PopupTool::Font(tool) => tool.menu.entity_id(),
+            PopupTool::ImageDescription(tool) => tool.popover.entity_id(),
         }
     }
 
@@ -101,7 +107,7 @@ impl PopupTool {
             PopupTool::Format(tool) => Some(&tool.menu),
             PopupTool::Insert(tool) => Some(&tool.menu),
             PopupTool::Font(tool) => Some(&tool.menu),
-            PopupTool::Link(_) => None,
+            PopupTool::Link(_) | PopupTool::ImageDescription(_) => None,
         }
     }
 }
@@ -371,6 +377,11 @@ impl EditorTools {
         let Some(tool) = self.popup.take() else {
             return;
         };
+        // What was typed into the description of an image is kept,
+        // however its popover closes, unless the user said otherwise.
+        if let PopupTool::ImageDescription(tool) = &tool {
+            self.settle_image_description(tool, cx);
+        }
         let view_id = tool.view_id();
         self.editor.update(cx, |editor, cx| {
             // Another crate may have replaced the popup meanwhile.
@@ -392,6 +403,9 @@ impl EditorTools {
     fn popup_has_focus(&self, window: &Window, cx: &App) -> bool {
         match &self.popup {
             Some(PopupTool::Link(tool)) => tool.popover.read(cx).field.read(cx).is_focused(window),
+            Some(PopupTool::ImageDescription(tool)) => {
+                tool.popover.read(cx).field.read(cx).is_focused(window)
+            }
             Some(PopupTool::Insert(_)) | None => false,
             Some(tool) => tool
                 .menu()
@@ -499,6 +513,7 @@ impl EditorTools {
                     if self.find_results_visible() {
                         self.find_document_edited(change, cx);
                     }
+                    self.sync_image_description(window, cx);
                 }
             }
             EditorEvent::SelectionChanged => {
@@ -509,6 +524,7 @@ impl EditorTools {
                 if self.find_results_visible() {
                     self.sync_find_current(cx);
                 }
+                self.sync_image_description(window, cx);
             }
             EditorEvent::Blurred => {
                 // The format bar is for the text that has the keyboard.
@@ -529,6 +545,9 @@ impl EditorTools {
                 // The editor dropped its popup and its highlight layers. If
                 // the popup had the keyboard, the editor gets it back.
                 let had_focus = self.popup_has_focus(window, cx);
+                // A description that was being typed belonged to an image
+                // of the old document.
+                self.abandon_image_description();
                 self.close_popup(had_focus, window, cx);
                 self.slash_typed = false;
                 if self.find_bar.is_some() {
@@ -551,6 +570,9 @@ impl EditorTools {
     /// open the key goes on.
     fn on_close_tool(&mut self, _: &CloseTool, window: &mut Window, cx: &mut Context<Self>) {
         if self.popup.is_some() {
+            // The key that closes a tool is the key beside "Cancel" in
+            // the description of an image: it changes nothing.
+            self.abandon_image_description();
             self.close_popup(true, window, cx);
         } else if self.format_bar_pending_or_visible() {
             self.dismiss_format_bar(cx);
@@ -608,6 +630,13 @@ impl Render for EditorTools {
                 this.toggle_font_picker(window, cx)
             }))
             .on_action(cx.listener(|this, _: &InsertDate, _, cx| this.insert_date(cx)))
+            .on_action(cx.listener(|this, _: &EditImageDescription, window, cx| {
+                // Only for a selected image; otherwise the action travels
+                // on (the app says what the command needs).
+                if !this.toggle_image_description(window, cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(false, window, cx)))
             .on_action(cx.listener(|this, _: &FindAndReplace, window, cx| {
                 this.toggle_find_replace(window, cx)

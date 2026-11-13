@@ -348,7 +348,7 @@ fn every_action_has_a_key_or_a_palette_entry(cx: &mut TestAppContext) {
             .filter(|name| name.starts_with("editor_tools::"))
             .collect()
     });
-    assert_eq!(all.len(), 18, "{all:?}");
+    assert_eq!(all.len(), 19, "{all:?}");
     for name in all {
         assert!(
             bound.contains(name) || listed.contains(name),

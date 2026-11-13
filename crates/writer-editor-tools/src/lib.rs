@@ -1,6 +1,7 @@
 //! The contextual tools of the editor: the format menu, the insert menu,
 //! the link popover, the font picker, find and replace, the context menu
-//! of the text, and the format bar that floats over a mouse selection.
+//! of the text, the format bar that floats over a mouse selection, and
+//! what there is to do with an image (its menu, its description).
 //!
 //! Everything here works from the keyboard alone and with the mouse alone,
 //! and plugs into `writer_editor::Editor` through its public seams (the
@@ -38,9 +39,10 @@
 //! | Insert menu | `/` at the start of a block or after whitespace | Focus stays in the document; the text after the slash filters. `enter` or `tab` applies (slash and query are removed in the same undo step), `escape` closes and keeps the text. Also [`actions::OpenInsertMenu`] for the palette. |
 //! | Link popover | `cmd-k` | `enter` applies (inserts the URL as linked text at a collapsed caret outside a link), `cmd-enter` opens the URL in the browser, `cmd-shift-k` removes the link, `escape` cancels. |
 //! | Font picker | `cmd-t` | Document default, recent, all families. `enter` applies to the selection or to the text typed next, `cmd-enter` sets the document's body font. |
+//! | Image description | no key by default ([`actions::EditImageDescription`]) | For the selected image (the caret is on its block): a field under the picture for one line that says what it shows. The field's submit keeps it ("Done"; an empty field removes the description), "Remove" takes it away, the key that closes a tool cancels. Any other way of closing keeps what was typed. |
 //! | Find and replace | `cmd-f`, `cmd-alt-f` | `enter` / `shift-enter` and `cmd-g` / `cmd-shift-g` step through the matches, `cmd-alt-c` case, `cmd-alt-w` whole word, `tab` between the fields, `enter` in the replace field replaces the current match, `cmd-enter` replaces all, `cmd-alt-f` in the bar shows or hides the replace row, `escape` (in the bar or in the document) closes and leaves the current match selected. |
 //!
-//! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. What the host puts first (spelling suggestions) leads the menu, see [`EditorTools::set_text_menu_leading_extension`]. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
+//! | Context menu of the text | right-click, `ctrl`-click, `ctrl-enter` | What fits the place: the link under the pointer (open, edit, remove, copy its address); cut, copy, paste; the formatting of the selection (highlight and text colour as submenus); the block (turn into, align, text size, mark a to-do done); insert; find, select all; then the host's items. On a selected image it is the image's menu: cut, copy, paste; Size, Align, Description…; insert; find, select all; the host's items; Delete Image. What the host puts first (spelling suggestions) leads the menu, see [`EditorTools::set_text_menu_leading_extension`]. Every row runs what its key runs and shows that key. See [`EditorTools::open_text_menu`]. |
 //!
 //! | Format bar | a selection made with the mouse | Comes up by itself a moment after a drag, a double or triple click or a `shift`-click, over the selection: bold, italic, underline, strikethrough, inline code (showing the state of the selection), highlight, text colour, link, "turn into", the host's buttons, and "more" (the format menu). Never takes the keyboard; a button keeps the selection and the bar. Goes on `escape`, a keyboard selection, typing, a press elsewhere. See [`EditorTools::set_format_bar_enabled`] and the `format_bar` module docs. |
 //!
@@ -57,6 +59,44 @@
 //! picker or insert menu is used, and `escape` then closes one thing at a
 //! time (the popup first). Opening the find bar closes an open popup tool,
 //! because the bar takes the keyboard.
+//!
+//! # Images
+//!
+//! An image is a block of its own and is selected when the caret is on it
+//! (`writer_editor`'s crate docs, "Images"). The editor does the picture:
+//! drawing, resizing and moving it with the pointer, the ways in. This
+//! crate adds what is reached through a menu:
+//!
+//! - **The image's context menu** (`text_menu`): a right-click on a
+//!   picture selects it, and the menu that opens is about it. "Size" has
+//!   one step larger and smaller (the keys that make text larger and
+//!   smaller mean that on an image), the presets 25, 50, 75 and 100 % of
+//!   the text column and "Original Size", with a check on the one the
+//!   image has; a size at which this picture would be taller than a page
+//!   is dimmed. "Align" has left, centre and right. "Delete Image" ends
+//!   the menu, after the host's items.
+//! - **Insert** in every text menu has "Image…" (dimmed where the editor
+//!   has nobody to store a picture: no `writer_editor::ImageProvider`),
+//!   and on an image, a divider or a page break it begins with "Paragraph
+//!   Above" and "Paragraph Below": the editor's line break and new line,
+//!   which mean exactly that with the caret on such a block.
+//! - **Paste** in the text menu asks the editor
+//!   (`writer_editor::Editor::can_paste`), which also knows of a picture
+//!   GPUI's clipboard does not show.
+//! - **"Image" in the insert menu** (after "Page break", only where the
+//!   editor takes pictures): the slash and what was typed after it go,
+//!   then the editor's own `InsertImage` asks for files.
+//! - **The format menu on a selected image** offers the image's rows
+//!   instead of the formatting of text: the sizes the page allows, the
+//!   three alignments, "Description…", "Delete image".
+//! - **The description** ([`EditorTools::open_image_description`], module
+//!   `image_description`): a popup tool like the link popover,
+//!   [`ToolKind::ImageDescription`]. It has no key context and no binding
+//!   of its own (the field's submit and cancel, and buttons).
+//!
+//! The format bar never comes up for a selected image (it is for a
+//! selection that is not collapsed), and over a selection of text and
+//! pictures its buttons leave the pictures alone.
 //!
 //! With the find bar closed, `cmd-g` / `cmd-shift-g` search for the last
 //! query without opening it. For [`FIND_FLASH_DURATION`] after each step
@@ -110,7 +150,8 @@
 //!   with [`EditorTools::press_format_bar_button`]. `escape` in the text
 //!   closes a showing bar before the find bar.
 //! - **Key contexts.** The bindings live in `"EditorTools"` (the whole
-//!   view), `"FindBar"` and `"LinkPopover"`. Inside the find bar
+//!   view), `"FindBar"` and `"LinkPopover"` (the description of an image
+//!   has none). Inside the find bar
 //!   `cmd-alt-c` toggles case sensitivity; a context-free binding for the
 //!   same key (the app's "show comments") must be registered before
 //!   [`init`] so that the find bar's binding wins there. `escape` is bound
@@ -144,9 +185,11 @@
 //!   [`EditorTools::active_tool`], [`EditorTools::menu_rows`],
 //!   [`EditorTools::find_status`], [`EditorTools::find_flash_visible`],
 //!   [`EditorTools::find_button_tooltip`],
-//!   [`EditorTools::link_button_enabled`], [`EditorTools::text_menu`] and
-//!   [`EditorTools::text_menu_request`], and [`ToolsEvent`] on open and
-//!   close.
+//!   [`EditorTools::link_button_enabled`],
+//!   [`EditorTools::image_description_field_text`],
+//!   [`EditorTools::image_description_buttons`], [`EditorTools::text_menu`]
+//!   and [`EditorTools::text_menu_request`], and [`ToolsEvent`] on open
+//!   and close.
 //! - **Highlight layers.** Find uses the editor layers [`FIND_LAYER`] and
 //!   [`FIND_CURRENT_LAYER`]; other crates should pick other names.
 //!
@@ -156,7 +199,7 @@
 //! |---|---|
 //! | `tools` | [`EditorTools`]: state, action handlers, editor events, popup plumbing, render |
 //! | `menu` | the popup list shared by the format menu, the insert menu and the font picker |
-//! | `format_menu`, `insert_menu`, `link`, `font_picker`, `find` | one tool each, as `impl EditorTools` blocks |
+//! | `format_menu`, `insert_menu`, `link`, `font_picker`, `find`, `image_description` | one tool each, as `impl EditorTools` blocks |
 //! | `text_menu` | the context menu of the text: its items for a request, the host's extension, what each row runs |
 //! | `format_bar` | the floating format bar: telling a mouse selection from a keyboard one, placing and drawing the bar, its buttons and their menus, the host's buttons |
 //! | [`actions`] | actions and key bindings |
@@ -169,6 +212,7 @@ mod find;
 mod font_picker;
 mod format_bar;
 mod format_menu;
+mod image_description;
 mod insert_menu;
 mod link;
 mod menu;

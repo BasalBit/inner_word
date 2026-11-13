@@ -18,13 +18,26 @@
 //!    Formatting;
 //! 4. the block: Turn Into, Align and Text Size as submenus, and on a
 //!    to-do item Mark as Done / Mark as Not Done;
-//! 5. Insert as a submenu (divider, page break, date, link);
+//! 5. Insert as a submenu (divider, page break, image, date, link; on an
+//!    image, a divider or a page break it begins with Paragraph Above and
+//!    Paragraph Below, the only way to a line above one that is the first
+//!    thing in a document);
 //! 6. Find in Document, Select All;
 //! 7. what the host adds ([`EditorTools::set_text_menu_extension`]).
 //!
 //! Before all of them, behind a separator, come the items the host puts
 //! first ([`EditorTools::set_text_menu_leading_extension`]): the place of
 //! spelling suggestions in every Mac app.
+//!
+//! **On a selected image** (the caret is on its block, which is where a
+//! right-click on a picture puts it) the menu is the image's: groups 3 and
+//! 4 make way for Size (Larger, Smaller, the presets 25 to 100 % and
+//! Original Size, with a check mark on the one the image has), Align
+//! (Left, Centre, Right) and Description…, and after everything else, the
+//! host's items included, comes Delete Image. A preset the page does not
+//! allow for this picture (it would be taller than a page) is dimmed. A
+//! range selection that covers an image is text with a picture in it and
+//! gets the menu of a selection.
 //!
 //! The menu itself is `writer_ui::ContextMenu`, the app's one menu widget:
 //! it never takes the keyboard, so the editor keeps it, an action row
@@ -41,13 +54,14 @@ use gpui::{
     Action, App, ClipboardItem, Context, DismissEvent, Entity, Hsla, SharedString, Subscription,
     WeakEntity, Window,
 };
-use writer_core::{BlockKind, Choice, TextRange};
+use writer_core::{Alignment, BlockKind, Choice, EditorState, Image, ImageWidth, TextRange};
 use writer_editor::{ContextMenuRequest, actions as editor};
 use writer_ui::{ContextMenu, ContextMenuItem, KeyHint, MenuAnchor};
 
 use crate::{
-    actions::{Find, InsertDate, OpenLink, RemoveLink},
+    actions::{EditImageDescription, Find, InsertDate, OpenLink, RemoveLink},
     format_menu::{Effect, FormatItem, Section, format_items},
+    insert_menu::takes_pictures,
     menu::Mark,
     tools::{EditorTools, ToolKind, ToolsEvent},
 };
@@ -80,6 +94,8 @@ enum What {
     Action(Rc<dyn Action>),
     Run(Run),
     Submenu(Vec<Row>),
+    /// A line between two groups of a submenu.
+    Separator,
 }
 
 /// A row while the menu is put together.
@@ -91,6 +107,8 @@ struct Row {
     /// The colour a row stands for (a highlight, a text colour).
     swatch: Option<Hsla>,
     enabled: bool,
+    /// The style of a row that deletes.
+    danger: bool,
     what: What,
 }
 
@@ -102,8 +120,13 @@ impl Row {
             checked: None,
             swatch: None,
             enabled: true,
+            danger: false,
             what,
         }
+    }
+
+    fn separator() -> Self {
+        Self::new("", What::Separator).enabled(false)
     }
 
     fn run(label: &'static str, run: Run) -> Self {
@@ -153,6 +176,11 @@ impl Row {
         self
     }
 
+    fn danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
     fn into_item(self, tools: &WeakEntity<EditorTools>) -> ContextMenuItem {
         let item = match self.what {
             What::Action(action) => ContextMenuItem::action_boxed(self.label, action.boxed_clone()),
@@ -170,8 +198,10 @@ impl Row {
                 self.label,
                 rows.into_iter().map(|row| row.into_item(tools)).collect(),
             ),
+            What::Separator => return ContextMenuItem::separator(),
         };
         let item = item.key_hint(self.key_hint).disabled(!self.enabled);
+        let item = if self.danger { item.danger() } else { item };
         let item = match self.swatch {
             Some(color) => item.swatch(color),
             None => item,
@@ -263,7 +293,8 @@ impl EditorTools {
     /// Opens the text context menu for `request` (the editor's
     /// `EditorEvent::ContextMenuRequested` does this): this crate's items
     /// from [`EditorTools::text_menu_items`], then the host's (and before
-    /// them what the host puts first). A
+    /// them what the host puts first; after them the row that ends the
+    /// menu of an image, "Delete Image"). A
     /// right-click opens it at the pointer; `ctrl-enter` drops it down
     /// from the caret with the first item marked. An open popup tool
     /// closes; the find bar stays.
@@ -279,7 +310,7 @@ impl EditorTools {
         self.close_popup(false, window, cx);
         // The menu is what the pointer asked for now.
         self.dismiss_format_bar(cx);
-        let mut items = self.text_menu_items(&request, cx);
+        let (mut items, last) = self.text_menu_parts(&request, cx);
         let extension = self.text_menu_extension.clone();
         let leading = self.text_menu_leading_extension.clone();
         let caret = self.editor.read(cx).caret_bounds();
@@ -303,6 +334,11 @@ impl EditorTools {
                     items.push(ContextMenuItem::separator());
                     items.extend(extra);
                 }
+            }
+            // What ends the menu comes after the host's items too.
+            if !last.is_empty() {
+                items.push(ContextMenuItem::separator());
+                items.extend(last);
             }
             let menu = ContextMenu::open(anchor, items, window, cx);
             if request.from_keyboard {
@@ -350,40 +386,79 @@ impl EditorTools {
     /// This crate's items of the text context menu for `request`, in
     /// order, groups separated by separators (without the host's items):
     /// the link under the pointer; cut, copy and paste; the formatting of
-    /// the selection; the block; insert; find and select all. Items that
-    /// cannot apply right now are disabled.
-    pub fn text_menu_items(&self, request: &ContextMenuRequest, cx: &App) -> Vec<ContextMenuItem> {
+    /// the selection; the block; insert; find and select all. On a
+    /// selected image: cut, copy and paste; size, alignment and
+    /// description; insert; find and select all; delete. Items that cannot
+    /// apply right now are disabled.
+    ///
+    /// `cx` is the app as it can be changed: whether Paste would put
+    /// something in is asked of the editor ([`Editor::can_paste`]), which
+    /// asks its image provider for a picture GPUI's clipboard does not
+    /// show.
+    ///
+    /// [`Editor::can_paste`]: writer_editor::Editor::can_paste
+    pub fn text_menu_items(
+        &self,
+        request: &ContextMenuRequest,
+        cx: &mut App,
+    ) -> Vec<ContextMenuItem> {
+        let (mut items, last) = self.text_menu_parts(request, cx);
+        if !last.is_empty() {
+            items.push(ContextMenuItem::separator());
+            items.extend(last);
+        }
+        items
+    }
+
+    /// The items of [`EditorTools::text_menu_items`] in two parts: the
+    /// menu, and what ends it. The host's items go between the two.
+    fn text_menu_parts(
+        &self,
+        request: &ContextMenuRequest,
+        cx: &mut App,
+    ) -> (Vec<ContextMenuItem>, Vec<ContextMenuItem>) {
+        // GPUI's clipboard shows nothing for a picture it cannot read (a
+        // HEIC, a file copied in Finder) although Paste takes it.
+        let can_paste = self.editor.update(cx, |editor, cx| editor.can_paste(cx));
+        let (sections, last) = self.text_menu_sections(request, can_paste, cx);
         let mut items = Vec::new();
-        for section in self.text_menu_sections(request, cx) {
+        for section in sections {
             if !items.is_empty() {
                 items.push(ContextMenuItem::separator());
             }
             items.extend(section.into_iter().map(|row| row.into_item(&self.this)));
         }
-        items
+        let last = last
+            .into_iter()
+            .map(|row| row.into_item(&self.this))
+            .collect();
+        (items, last)
     }
 
-    fn text_menu_sections(&self, request: &ContextMenuRequest, cx: &App) -> Vec<Vec<Row>> {
+    /// The groups of the menu, and the rows that end it.
+    fn text_menu_sections(
+        &self,
+        request: &ContextMenuRequest,
+        can_paste: bool,
+        cx: &App,
+    ) -> (Vec<Vec<Row>>, Vec<Row>) {
         let editor = self.editor.read(cx);
         let state = editor.state();
         let document = editor.document();
         let editable = !editor.is_read_only();
         let has_selection = !editor.selection().is_collapsed();
-        let format = state.format_state();
-        let items = format_items(state, cx);
         let block_kind = document
             .block(request.block)
             .map(|block| block.kind().clone());
         let on_void = block_kind.as_ref().is_some_and(BlockKind::is_void);
-        // A code block's text carries no inline formatting.
-        let all_code = matches!(&format.kind, Choice::Same(kind) if kind.is_code());
-        let section = |section: Section| items.iter().filter(move |item| item.section == section);
-        let format_rows = |wanted: Section, state: bool, enabled: bool| -> Vec<Row> {
-            section(wanted)
-                .map(|item| Row::format(item, state).enabled(enabled))
-                .collect()
-        };
+        // The image the menu is for: the selected one, when the request is
+        // about its block.
+        let image = state
+            .selected_image()
+            .filter(|(index, _)| *index == request.block)
+            .map(|(index, image)| (index, image.clone()));
         let mut sections: Vec<Vec<Row>> = Vec::new();
+        let mut last = Vec::new();
 
         // 1. The link under the pointer.
         if let Some(url) = &request.link {
@@ -409,81 +484,131 @@ impl EditorTools {
             sections.push(rows);
         }
 
-        // 2. The clipboard.
-        let can_paste = editable && cx.read_from_clipboard().is_some();
+        // 2. The clipboard. A selected image is something to copy: the
+        // picture itself.
+        let can_copy = state.has_something_to_copy();
+        let can_paste_text = editable && cx.read_from_clipboard().is_some();
         sections.push(vec![
-            Row::action("Cut", editor::Cut, cx).enabled(editable && has_selection),
-            Row::action("Copy", editor::Copy, cx).enabled(has_selection),
-            Row::action("Paste", editor::Paste, cx).enabled(can_paste),
-            Row::action("Paste as Plain Text", editor::PasteAsPlainText, cx).enabled(can_paste),
+            Row::action("Cut", editor::Cut, cx).enabled(editable && can_copy),
+            Row::action("Copy", editor::Copy, cx).enabled(can_copy),
+            Row::action("Paste", editor::Paste, cx).enabled(editable && can_paste),
+            Row::action("Paste as Plain Text", editor::PasteAsPlainText, cx)
+                .enabled(can_paste_text),
         ]);
 
-        // 3. The selected text.
-        if has_selection {
-            let inline = editable && !all_code;
-            let mut rows = Vec::new();
-            let mut tail = Vec::new();
-            for item in section(Section::Text) {
-                match &item.effect {
-                    // "Edit Link" above is this row for a link.
-                    Effect::Link if request.link.is_some() => {}
-                    Effect::Link | Effect::Font => {
-                        tail.push(Row::format(item, false).enabled(inline))
-                    }
-                    _ if item.short == "Clear Formatting" => {
-                        tail.push(Row::format(item, false).enabled(inline))
-                    }
-                    _ => rows.push(Row::format(item, true).enabled(inline)),
-                }
+        match &image {
+            // 3 and 4 for an image: its size, its place, what it shows.
+            Some((_, image)) => {
+                let alignment = document
+                    .block(request.block)
+                    .map_or(Alignment::Left, |block| block.alignment());
+                sections.push(vec![
+                    Row::submenu("Size", image_size_rows(state, image, editable, cx)),
+                    Row::submenu("Align", image_align_rows(alignment, editable, cx)),
+                    Row::action("Description…", EditImageDescription, cx).enabled(editable),
+                ]);
+                last.push(
+                    Row::action("Delete Image", editor::Backspace, cx)
+                        .enabled(editable)
+                        .danger(),
+                );
             }
-            let mut highlights = format_rows(Section::Highlight, true, inline);
-            highlights.push(
-                Row::run("None", Run::Format(Effect::NoHighlight))
-                    .checked(matches!(&format.highlight, Choice::Same(None)))
-                    .enabled(inline),
-            );
-            rows.push(Row::submenu("Highlight", highlights));
-            rows.push(Row::submenu(
-                "Text Colour",
-                format_rows(Section::Color, true, inline),
-            ));
-            rows.extend(tail);
-            sections.push(rows);
-        }
+            None => {
+                let format = state.format_state();
+                let items = format_items(state, cx);
+                // A code block's text carries no inline formatting.
+                let all_code = matches!(&format.kind, Choice::Same(kind) if kind.is_code());
+                let section =
+                    |section: Section| items.iter().filter(move |item| item.section == section);
+                let format_rows = |wanted: Section, state: bool, enabled: bool| -> Vec<Row> {
+                    section(wanted)
+                        .map(|item| Row::format(item, state).enabled(enabled))
+                        .collect()
+                };
 
-        // 4. The block.
-        let block = editable && !on_void;
-        let mut rows = vec![
-            Row::submenu("Turn Into", format_rows(Section::TurnInto, true, block)),
-            Row::submenu("Align", format_rows(Section::Align, true, block)),
-            Row::submenu("Text Size", format_rows(Section::Size, false, block)),
-        ];
-        if let Some(BlockKind::TodoItem { checked }) = block_kind {
-            rows.push(
-                Row::action(
-                    if checked {
-                        "Mark as Not Done"
-                    } else {
-                        "Mark as Done"
-                    },
-                    editor::ToggleTodoChecked,
-                    cx,
-                )
-                .enabled(editable),
-            );
+                // 3. The selected text.
+                if has_selection {
+                    let inline = editable && !all_code;
+                    let mut rows = Vec::new();
+                    let mut tail = Vec::new();
+                    for item in section(Section::Text) {
+                        match &item.effect {
+                            // "Edit Link" above is this row for a link.
+                            Effect::Link if request.link.is_some() => {}
+                            Effect::Link | Effect::Font => {
+                                tail.push(Row::format(item, false).enabled(inline))
+                            }
+                            _ if item.short == "Clear Formatting" => {
+                                tail.push(Row::format(item, false).enabled(inline))
+                            }
+                            _ => rows.push(Row::format(item, true).enabled(inline)),
+                        }
+                    }
+                    let mut highlights = format_rows(Section::Highlight, true, inline);
+                    highlights.push(
+                        Row::run("None", Run::Format(Effect::NoHighlight))
+                            .checked(matches!(&format.highlight, Choice::Same(None)))
+                            .enabled(inline),
+                    );
+                    rows.push(Row::submenu("Highlight", highlights));
+                    rows.push(Row::submenu(
+                        "Text Colour",
+                        format_rows(Section::Color, true, inline),
+                    ));
+                    rows.extend(tail);
+                    sections.push(rows);
+                }
+
+                // 4. The block.
+                let block = editable && !on_void;
+                let mut rows = vec![
+                    Row::submenu("Turn Into", format_rows(Section::TurnInto, true, block)),
+                    Row::submenu("Align", format_rows(Section::Align, true, block)),
+                    Row::submenu("Text Size", format_rows(Section::Size, false, block)),
+                ];
+                if let Some(BlockKind::TodoItem { checked }) = block_kind {
+                    rows.push(
+                        Row::action(
+                            if checked {
+                                "Mark as Not Done"
+                            } else {
+                                "Mark as Done"
+                            },
+                            editor::ToggleTodoChecked,
+                            cx,
+                        )
+                        .enabled(editable),
+                    );
+                }
+                sections.push(rows);
+            }
         }
-        sections.push(rows);
 
         // 5. Insert.
-        sections.push(vec![Row::submenu(
-            "Insert",
-            vec![
-                Row::action("Divider", editor::InsertDivider, cx).enabled(editable),
-                Row::action("Page Break", editor::InsertPageBreak, cx).enabled(editable),
-                Row::action("Today's Date", InsertDate, cx).enabled(editable),
-                Row::action("Link", OpenLink, cx).enabled(editable),
-            ],
-        )]);
+        let mut insert = Vec::new();
+        // With the caret on a block that holds no text, a new line and a
+        // line break mean a paragraph below and a paragraph above it.
+        let caret_on_void = !has_selection
+            && document
+                .block(editor.selection().head.block)
+                .is_some_and(|block| block.is_void());
+        if on_void && caret_on_void {
+            insert.extend([
+                Row::action("Paragraph Above", editor::InsertSoftBreak, cx).enabled(editable),
+                Row::action("Paragraph Below", editor::Newline, cx).enabled(editable),
+                Row::separator(),
+            ]);
+        }
+        // A picture comes in where the editor has somebody to store it.
+        let pictures = takes_pictures(editor);
+        insert.extend([
+            Row::action("Divider", editor::InsertDivider, cx).enabled(editable),
+            Row::action("Page Break", editor::InsertPageBreak, cx).enabled(editable),
+            Row::action("Image…", editor::InsertImage, cx).enabled(pictures),
+            Row::action("Today's Date", InsertDate, cx).enabled(editable),
+            Row::action("Link", OpenLink, cx).enabled(editable),
+        ]);
+        sections.push(vec![Row::submenu("Insert", insert)]);
 
         // 6. The document.
         sections.push(vec![
@@ -491,7 +616,7 @@ impl EditorTools {
             Row::action("Select All", editor::SelectAll, cx),
         ]);
 
-        sections
+        (sections, last)
     }
 
     /// Does what a chosen row stands for. The menu is closed and the
@@ -527,4 +652,53 @@ impl EditorTools {
             Run::CopyText(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
         }
     }
+}
+
+/// The rows of "Size" in the menu of an image: one step larger and
+/// smaller (the keys that make text larger and smaller), the presets, the
+/// picture's own size. The preset the image has is checked, and so is
+/// "Original Size" while the image has that width. A row that would
+/// change nothing because the page does not allow it is dimmed: a preset
+/// wider than the widest this picture is drawn (it would be taller than a
+/// page), "Larger" at that width, "Smaller" at the smallest step.
+fn image_size_rows(state: &EditorState, image: &Image, editable: bool, cx: &App) -> Vec<Row> {
+    let widest = state.max_image_width(image);
+    // What a step starts from: the width as it is drawn.
+    let drawn = image.width.min(widest);
+    let steps_to = |steps: i32| drawn.stepped(steps).min(widest) != image.width;
+    let preset = |label: &'static str, percent: u16, action: Rc<dyn Action>| {
+        let width = ImageWidth::from_percent(percent);
+        Row::new(label, What::Action(action.clone()))
+            .key(KeyHint::for_action(action.as_ref(), cx))
+            .checked(image.width == width)
+            .enabled(editable && width <= widest)
+    };
+    vec![
+        Row::action("Larger", editor::IncreaseTextSize, cx).enabled(editable && steps_to(1)),
+        Row::action("Smaller", editor::DecreaseTextSize, cx).enabled(editable && steps_to(-1)),
+        Row::separator(),
+        preset("25 %", 25, Rc::new(editor::ImageWidth25)),
+        preset("50 %", 50, Rc::new(editor::ImageWidth50)),
+        preset("75 %", 75, Rc::new(editor::ImageWidth75)),
+        preset("100 %", 100, Rc::new(editor::ImageWidth100)),
+        Row::action("Original Size", editor::ImageOriginalSize, cx)
+            .checked(image.width == state.original_image_width(image))
+            .enabled(editable),
+    ]
+}
+
+/// The rows of "Align" in the menu of an image. An image stands left, in
+/// the middle or right; "Justify" means nothing for it.
+fn image_align_rows(alignment: Alignment, editable: bool, cx: &App) -> Vec<Row> {
+    vec![
+        Row::action("Left", editor::AlignLeft, cx)
+            .checked(alignment == Alignment::Left)
+            .enabled(editable),
+        Row::action("Centre", editor::AlignCenter, cx)
+            .checked(alignment == Alignment::Center)
+            .enabled(editable),
+        Row::action("Right", editor::AlignRight, cx)
+            .checked(alignment == Alignment::Right)
+            .enabled(editable),
+    ]
 }

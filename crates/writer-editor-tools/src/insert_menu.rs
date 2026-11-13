@@ -12,7 +12,7 @@ use gpui::{
     Action, App, AppContext, Context, Entity, Keystroke, SharedString, Subscription, Window, px,
 };
 use writer_core::{BlockId, BlockKind, Position, TextRange};
-use writer_editor::{InterceptPriority, KeyDisposition, PopupAnchor, actions as editor};
+use writer_editor::{Editor, InterceptPriority, KeyDisposition, PopupAnchor, actions as editor};
 use writer_ui::{KeyHint, keymap, picker};
 
 use crate::{
@@ -30,6 +30,8 @@ enum Effect {
     Kind(BlockKind),
     Divider,
     PageBreak,
+    /// Ask for picture files and insert them (the editor's "Image").
+    Image,
     Link,
     Date,
 }
@@ -124,7 +126,9 @@ impl InsertMenuKey {
     }
 }
 
-fn insert_items(cx: &App) -> Vec<InsertItem> {
+/// The rows of the insert menu. `pictures`: the editor takes pictures (see
+/// [`takes_pictures`]); "Image" is offered only there.
+fn insert_items(pictures: bool, cx: &App) -> Vec<InsertItem> {
     let kind = |label: &'static str, keywords, kind: BlockKind, hint: Option<KeyHint>| InsertItem {
         label: label.into(),
         keywords,
@@ -135,10 +139,10 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
     let hint = |action: &dyn gpui::Action| KeyHint::for_action(action, cx);
     // The blocks a writer reaches for first are in view when the menu
     // opens (ten rows): the three headings a text usually has, the lists,
-    // quote, code, and the two separators. Link and date follow, then the
-    // kinds that are rarely asked for by menu (a paragraph is what `enter`
-    // gives; headings 4 to 6).
-    vec![
+    // quote, code, and the two separators. The image, link and date
+    // follow, then the kinds that are rarely asked for by menu (a paragraph
+    // is what `enter` gives; headings 4 to 6).
+    let mut items = vec![
         kind(
             "Heading 1",
             "h1 title",
@@ -239,7 +243,31 @@ fn insert_items(cx: &App) -> Vec<InsertItem> {
             BlockKind::heading(6),
             hint(&editor::SetHeading6),
         ),
-    ]
+    ];
+    if pictures {
+        let after_page_break = items
+            .iter()
+            .position(|item| matches!(item.effect, Effect::PageBreak))
+            .map_or(items.len(), |index| index + 1);
+        items.insert(
+            after_page_break,
+            InsertItem {
+                label: "Image".into(),
+                keywords: "picture photo figure screenshot",
+                detail: None,
+                key_hint: hint(&editor::InsertImage),
+                effect: Effect::Image,
+            },
+        );
+    }
+    items
+}
+
+/// Whether pictures can come into `editor`: a document editor that can be
+/// changed and has somebody to store them (an image provider). Only such
+/// an editor does anything with `editor::InsertImage`.
+pub(crate) fn takes_pictures(editor: &Editor) -> bool {
+    !editor.is_read_only() && !editor.config().mode.is_compact() && editor.has_image_provider()
 }
 
 impl EditorTools {
@@ -346,7 +374,7 @@ impl EditorTools {
             });
         let tool = InsertMenu {
             menu: menu.clone(),
-            items: insert_items(cx),
+            items: insert_items(takes_pictures(self.editor.read(cx)), cx),
             start,
             block,
             trigger_len,
@@ -397,7 +425,7 @@ impl EditorTools {
         let Some(PopupTool::Insert(tool)) = &mut self.popup else {
             return;
         };
-        tool.items = insert_items(cx);
+        tool.items = insert_items(takes_pictures(self.editor.read(cx)), cx);
         self.sync_insert_menu(window, cx);
     }
 
@@ -489,15 +517,23 @@ impl EditorTools {
                             Effect::Date => {
                                 state.insert_text(&today);
                             }
-                            Effect::Link => {}
+                            // What these two do comes after the edit:
+                            // the slash and the query are gone by then.
+                            Effect::Link | Effect::Image => {}
                         }
                     })
                 },
                 cx,
             );
         });
-        if matches!(effect, Effect::Link) {
-            self.open_link(window, cx);
+        match effect {
+            Effect::Link => self.open_link(window, cx),
+            // The editor's own command, where the keyboard is (in the
+            // text: the insert menu never took it). It asks for files and
+            // puts the pictures where the caret is by then: in the
+            // paragraph the slash emptied, or after the caret's block.
+            Effect::Image => window.dispatch_action(Box::new(editor::InsertImage), cx),
+            _ => {}
         }
     }
 

@@ -5,6 +5,12 @@
 //! Rows that have an editor action run that action (and show its real key
 //! binding); highlight colours and text colours, which have no action, go
 //! through `Editor::edit`.
+//!
+//! On a selected image (the caret is on its block) none of that applies,
+//! and the menu is the image's: its size (one step larger or smaller, the
+//! presets the page allows for this picture, its original size, with a
+//! check on the one it has), where it stands (left, centre, right), its
+//! description, and deleting it.
 
 use std::rc::Rc;
 
@@ -12,7 +18,10 @@ use gpui::{
     Action, App, AppContext, Context, Entity, Focusable, Hsla, Rgba, SharedString, Subscription,
     Window, px,
 };
-use writer_core::{Alignment, BlockKind, Choice, EditorState, FormatState, Highlight, Rgb, Toggle};
+use writer_core::{
+    Alignment, BlockKind, Choice, EditorState, FormatState, Highlight, Image, ImageWidth, Rgb,
+    Toggle,
+};
 use writer_editor::{PopupAnchor, actions as editor};
 use writer_ui::{
     KeyHint,
@@ -20,7 +29,7 @@ use writer_ui::{
 };
 
 use crate::{
-    actions::{OpenFontPicker, OpenLink},
+    actions::{EditImageDescription, OpenFontPicker, OpenLink},
     menu::{Mark, Menu, MenuEntry, MenuItem, MenuOptions, rank},
     tools::{EditorTools, PopupTool},
 };
@@ -56,6 +65,10 @@ pub(crate) enum Section {
     TurnInto,
     Align,
     Size,
+    /// The width of the selected image.
+    ImageSize,
+    /// What else there is to do with the selected image.
+    Image,
 }
 
 impl Section {
@@ -67,6 +80,8 @@ impl Section {
             Section::TurnInto => "Turn into",
             Section::Align => "Align",
             Section::Size => "Text size",
+            Section::ImageSize => "Size",
+            Section::Image => "Image",
         }
     }
 }
@@ -87,6 +102,8 @@ const BLOCK_FIRST: [Section; 6] = [
     Section::Highlight,
     Section::Color,
 ];
+/// The menu of a selected image.
+const IMAGE: [Section; 3] = [Section::ImageSize, Section::Align, Section::Image];
 
 #[derive(Clone)]
 pub(crate) enum Effect {
@@ -99,6 +116,8 @@ pub(crate) enum Effect {
     Color(Option<Rgb>),
     Link,
     Font,
+    /// Open the description of the selected image.
+    ImageDescription,
 }
 
 pub(crate) struct FormatItem {
@@ -121,7 +140,7 @@ pub(crate) struct FormatItem {
 pub(crate) struct FormatMenu {
     pub(crate) menu: Entity<Menu>,
     items: Vec<FormatItem>,
-    order: [Section; 6],
+    order: &'static [Section],
     _subscription: Subscription,
 }
 
@@ -142,7 +161,7 @@ impl FormatMenu {
         };
         if query.trim().is_empty() {
             let mut entries = Vec::with_capacity(self.items.len() + self.order.len());
-            for section in self.order {
+            for &section in self.order {
                 entries.push(MenuEntry::Header(section.title().into()));
                 entries.extend(
                     self.items
@@ -179,7 +198,7 @@ impl EditorTools {
         self.make_room(window, cx);
         let editor = self.editor.read(cx);
         let collapsed = editor.selection().is_collapsed();
-        let items = format_items(editor.state(), cx);
+        let (items, order) = format_menu_content(editor.state(), cx);
         let menu = cx.new(|cx| {
             Menu::new(
                 MenuOptions {
@@ -197,7 +216,7 @@ impl EditorTools {
         let tool = FormatMenu {
             menu: menu.clone(),
             items,
-            order: if collapsed { BLOCK_FIRST } else { INLINE_FIRST },
+            order,
             _subscription: cx.subscribe_in(&menu, window, Self::on_menu_event),
         };
         let entries = tool.entries("");
@@ -227,7 +246,7 @@ impl EditorTools {
         let Some(PopupTool::Format(tool)) = &mut self.popup else {
             return;
         };
-        tool.items = format_items(self.editor.read(cx).state(), cx);
+        (tool.items, tool.order) = format_menu_content(self.editor.read(cx).state(), cx);
         let query = tool.menu.read(cx).query(cx);
         let selected = tool.menu.read(cx).selected_id();
         let entries = tool.entries(&query);
@@ -292,8 +311,164 @@ impl EditorTools {
             }),
             Effect::Link => self.open_link(window, cx),
             Effect::Font => self.open_font_picker(window, cx),
+            Effect::ImageDescription => {
+                self.open_image_description(window, cx);
+            }
         }
     }
+}
+
+/// What the format menu offers for the selection as it is, and the order
+/// of its sections: the rows of the selected image, or the formatting of
+/// text (inline formatting first with a selection, the block first with a
+/// collapsed caret).
+fn format_menu_content(state: &EditorState, cx: &App) -> (Vec<FormatItem>, &'static [Section]) {
+    if let Some((index, image)) = state.selected_image() {
+        let alignment = state
+            .document()
+            .block(index)
+            .map_or(Alignment::Left, |block| block.alignment());
+        return (image_items(state, image, alignment, cx), &IMAGE);
+    }
+    let order: &'static [Section] = if state.selection().is_collapsed() {
+        &BLOCK_FIRST
+    } else {
+        &INLINE_FIRST
+    };
+    (format_items(state, cx), order)
+}
+
+/// The rows of the format menu for the selected image. Written as the
+/// rows of this menu are (a capital at the start only); the image's
+/// context menu has the same commands under its own names.
+///
+/// A preset the page does not allow for this picture (at that width it
+/// would be taller than a page) is left out: a row of this menu cannot be
+/// dimmed, and one that changes nothing is not offered.
+fn image_items(
+    state: &EditorState,
+    image: &Image,
+    alignment: Alignment,
+    cx: &App,
+) -> Vec<FormatItem> {
+    let mut items = Vec::new();
+    let mut row = |section, label: &'static str, keywords, mark, effect: Effect| {
+        let key_hint = match &effect {
+            Effect::Editor(action) => KeyHint::for_action(action.as_ref(), cx),
+            Effect::ImageDescription => KeyHint::for_action(&EditImageDescription, cx),
+            _ => None,
+        };
+        items.push(FormatItem {
+            section,
+            label: label.into(),
+            short: label,
+            keywords,
+            detail: None,
+            mark,
+            swatch: None,
+            key_hint,
+            effect,
+        });
+    };
+    let check = |on: bool| if on { Mark::Check } else { Mark::None };
+    let action = |action: Rc<dyn Action>| Effect::Editor(action);
+
+    let size = Section::ImageSize;
+    row(
+        size,
+        "Larger",
+        "bigger increase wider grow size image picture",
+        Mark::None,
+        action(Rc::new(editor::IncreaseTextSize)),
+    );
+    row(
+        size,
+        "Smaller",
+        "decrease narrower shrink size image picture",
+        Mark::None,
+        action(Rc::new(editor::DecreaseTextSize)),
+    );
+    let widest = state.max_image_width(image);
+    let presets: [(&'static str, u16, &'static str, Rc<dyn Action>); 4] = [
+        (
+            "25 %",
+            25,
+            "quarter width size",
+            Rc::new(editor::ImageWidth25),
+        ),
+        ("50 %", 50, "half width size", Rc::new(editor::ImageWidth50)),
+        (
+            "75 %",
+            75,
+            "three quarters width size",
+            Rc::new(editor::ImageWidth75),
+        ),
+        (
+            "100 %",
+            100,
+            "full column width size",
+            Rc::new(editor::ImageWidth100),
+        ),
+    ];
+    for (label, percent, keywords, preset) in presets {
+        let width = ImageWidth::from_percent(percent);
+        if width <= widest {
+            row(
+                size,
+                label,
+                keywords,
+                check(image.width == width),
+                action(preset),
+            );
+        }
+    }
+    row(
+        size,
+        "Original size",
+        "actual natural reset own size",
+        check(image.width == state.original_image_width(image)),
+        action(Rc::new(editor::ImageOriginalSize)),
+    );
+
+    let align = Section::Align;
+    row(
+        align,
+        "Align left",
+        "",
+        check(alignment == Alignment::Left),
+        action(Rc::new(editor::AlignLeft)),
+    );
+    row(
+        align,
+        "Align centre",
+        "center middle",
+        check(alignment == Alignment::Center),
+        action(Rc::new(editor::AlignCenter)),
+    );
+    row(
+        align,
+        "Align right",
+        "",
+        check(alignment == Alignment::Right),
+        action(Rc::new(editor::AlignRight)),
+    );
+
+    let rest = Section::Image;
+    row(
+        rest,
+        "Description…",
+        "alt text caption describe accessibility",
+        check(!image.description.is_empty()),
+        Effect::ImageDescription,
+    );
+    row(
+        rest,
+        "Delete image",
+        "remove picture",
+        Mark::None,
+        action(Rc::new(editor::Backspace)),
+    );
+    items
 }
 
 fn toggle_mark(toggle: Toggle) -> Mark {

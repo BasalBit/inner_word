@@ -32,6 +32,8 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["url", "follow", "visit"]),
         CommandDescriptor::new("Choose Font", CATEGORY_FORMAT, OpenFontPicker)
             .keywords(["typeface", "family"]),
+        CommandDescriptor::new("Image Description", CATEGORY_FORMAT, EditImageDescription)
+            .keywords(["alt text", "caption", "picture", "accessibility"]),
         CommandDescriptor::new("Insert Menu", CATEGORY_INSERT, OpenInsertMenu)
             .keywords(["slash", "block", "add"]),
         CommandDescriptor::new("Today's Date", CATEGORY_INSERT, InsertDate)

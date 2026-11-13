@@ -6,7 +6,9 @@
 //! - **Folders** ([`Folder`]), nested to any depth, manually ordered among siblings.
 //! - **Documents** ([`DocumentMeta`], [`Document`]). Content is an opaque JSON string supplied
 //!   by the caller together with derived fields (title, plain text, word and character
-//!   counts) in a [`DocumentContent`]. This crate never parses content. A separate opaque
+//!   counts) in a [`DocumentContent`]. This crate never parses content, and reads one
+//!   thing in it: the token an image block names its bytes with, `"image":"<32 hex
+//!   digits>"` ([`Store::referenced_images`]). A separate opaque
 //!   view-state JSON (caret, scroll, toggles) is stored without touching `updated_at`.
 //! - **The library tree** ([`LibraryTree`]) for the sidebar, in one call.
 //! - **Trash** ([`TrashEntry`]): deletes are soft; a folder takes its subtree with it.
@@ -16,6 +18,30 @@
 //! - **Full-text search** ([`SearchHit`]) over title and plain text with FTS5, kept in sync
 //!   by triggers, tolerant of any user input, with prefix matching on the last word.
 //! - **Daily backups** written on open into a `backups` directory next to the database.
+//! - **Images** ([`ImageId`], [`ImageInfo`], [`NewImage`]): the bytes of the pictures that
+//!   documents hold, stored once each under the hash of their bytes, in a **second file**
+//!   beside the database (`images.db`, see [`images_path`]; it is there only once the
+//!   library holds an image, and [`ImageFile`] is that file by itself, for a thread of
+//!   its own). The bytes are stored before a document names them
+//!   ([`Store::put_image`]), and nothing deletes them but the collector
+//!   ([`collect_unused_images`], [`mark_unused_images`]): an image goes only after no
+//!   document, live or trashed, and no version has named it for 30 days, and no kept
+//!   backup can name it.
+//!
+//! What a backup holds: a daily backup (and [`Store::backup_to`]) is a copy of the library
+//! database, so it holds **the documents only**: folders, documents, versions, settings.
+//! The pictures are not copied every day and kept seven times. They have **one copy**,
+//! `images.db` in the backups directory ([`images_backup_path`]), which
+//! [`back_up_images`] brings up to date in the background (only pictures the copy does not
+//! have yet are copied) and from which a picture that `images.db` has lost is read and
+//! written back ([`Store::image_bytes`]). A picture leaves the copy only when the
+//! collector deleted it and no kept backup names it, so a backup that is brought back
+//! finds its pictures in `images.db` or in the copy.
+//!
+//! The schema version of the database ([`SCHEMA_VERSION`]) is 3 since documents may hold
+//! images: the step changed nothing in the file, and makes a version of the app or of the
+//! tool that does not know images refuse the library ([`StoreError::SchemaTooNew`])
+//! instead of reading an image as an empty paragraph and saving that.
 //!
 //! A tool that only reads opens the library with [`Store::open_read_only`]: nothing is
 //! created, migrated, backed up or locked, so a running app is not disturbed. Snapshots a
@@ -60,6 +86,7 @@ mod documents;
 mod error;
 mod folders;
 mod ids;
+mod images;
 pub mod instance_lock;
 mod paths;
 mod schema;
@@ -79,8 +106,14 @@ pub use crate::documents::{Document, DocumentContent, DocumentMeta};
 pub use crate::error::{ItemKind, Result, StoreError};
 pub use crate::folders::Folder;
 pub use crate::ids::{DocumentId, FolderId, SnapshotId};
+pub use crate::images::{
+    IMAGE_BACKUP_SLICE_BYTES, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId, ImageInfo,
+    ImagesBackedUp, ImagesCollected, NewImage, back_up_all_images, back_up_images,
+    collect_unused_images, mark_unused_images,
+};
 pub use crate::paths::{
-    BACKUPS_DIR_NAME, DATA_DIR_ENV, DATABASE_FILE_NAME, backups_dir, data_dir, database_path,
+    BACKUPS_DIR_NAME, DATA_DIR_ENV, DATABASE_FILE_NAME, IMAGES_FILE_NAME, backups_dir, data_dir,
+    database_path, images_backup_path, images_path,
 };
 pub use crate::schema::SCHEMA_VERSION;
 pub use crate::search::{MATCH_END, MATCH_START, SearchHit, SnippetPart};
@@ -94,6 +127,8 @@ pub struct OpenOptions {
     /// Time source for every timestamp. Default: the system clock.
     pub clock: Clock,
     /// Write a backup on open when the newest one is at least a day old. Default: true.
+    /// The backup is a copy of the library database: it holds the documents and not the
+    /// bytes of the images (see the [crate docs](crate), "What a backup holds").
     pub daily_backup: bool,
     /// How many backups to keep; older ones are deleted after a new one is written.
     /// Default: [`DEFAULT_KEEP_BACKUPS`].
@@ -118,6 +153,10 @@ pub struct Store {
     snapshot_policy: SnapshotPolicy,
     backup_outcome: Option<std::result::Result<PathBuf, String>>,
     read_only: bool,
+    /// `images.db`, opened at the first use that finds something to open: a library
+    /// without images never gets the file, and a store that only saves documents never
+    /// opens it.
+    images: ImageFile,
 }
 
 /// What [`Store::open_read_only`] found at the path.
@@ -197,6 +236,7 @@ impl Store {
         Ok(Self {
             conn,
             clock: options.clock,
+            images: ImageFile::beside(&path),
             path: Some(path),
             snapshot_policy: SnapshotPolicy::default(),
             backup_outcome,
@@ -233,6 +273,7 @@ impl Store {
         Ok(ReadOnlyLibrary::Open(Box::new(Self {
             conn,
             clock: Clock::system(),
+            images: ImageFile::read_only(&path),
             path: Some(path),
             snapshot_policy: SnapshotPolicy::default(),
             backup_outcome: None,
@@ -258,6 +299,7 @@ impl Store {
         Ok(Self {
             conn,
             clock,
+            images: ImageFile::in_memory(),
             path: None,
             snapshot_policy: SnapshotPolicy::default(),
             backup_outcome: None,
@@ -297,6 +339,10 @@ impl Store {
 
     /// Writes a consistent copy of the whole database to `dest` (replacing it). The copy is
     /// written to a temporary file next to `dest` and renamed into place.
+    ///
+    /// The copy holds the documents only: folders, documents, versions, settings. The
+    /// bytes of the images are in a second file ([`images_path`]) and are not in it; they
+    /// have one copy of their own ([`back_up_images`]).
     pub fn backup_to(&self, dest: impl AsRef<Path>) -> Result<()> {
         backup::write_backup(&self.conn, dest.as_ref())
     }
@@ -315,20 +361,27 @@ impl Store {
     /// take them again (`false`). Whoever carries out the dry run of a change on a
     /// connection that can write switches this on for its duration, so that a mistake
     /// in the dry run fails instead of writing.
+    ///
+    /// It holds for the images too: while it is on no image is stored, the stamp of none
+    /// is cleared, and `images.db` is not created.
     pub fn set_query_only(&self, on: bool) -> Result<()> {
         self.conn.pragma_update(None, "query_only", on)?;
-        Ok(())
+        self.images.set_query_only(on)
     }
 
     /// Checkpoints the WAL into the main file and closes the connection, reporting errors
     /// that a plain drop would swallow. Dropping without calling this is safe too. A
     /// read-only store is closed without a checkpoint.
+    ///
+    /// The same is done for `images.db` when this store opened it.
     pub fn close(self) -> Result<()> {
         if self.path.is_some() && !self.read_only {
             self.conn
                 .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         }
-        self.conn.close().map_err(|(_, e)| StoreError::Sqlite(e))
+        let images = self.images.close(true);
+        self.conn.close().map_err(|(_, e)| StoreError::Sqlite(e))?;
+        images
     }
 
     pub(crate) fn now(&self) -> i64 {

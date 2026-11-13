@@ -2,6 +2,11 @@
 //!
 //! Backups are named `library-<unix ms>.db` and written with `VACUUM INTO`, which produces a
 //! consistent, compact copy (including anything still in the WAL) without blocking readers.
+//!
+//! A backup is the library database and nothing else: the documents, without the bytes of
+//! the images, which live in a second file and have one copy of their own in the same
+//! directory (`images.db`, see `images/copy.rs`). That file does not follow the naming of
+//! the daily backups, so it is neither listed nor deleted with them.
 
 use std::path::{Path, PathBuf};
 

@@ -19,7 +19,7 @@ pub(crate) const APPLICATION_ID: i32 = 0x5752_4954;
 /// The newest schema version this build creates and understands.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 const V1: &str = r#"
 CREATE TABLE folders (
@@ -113,6 +113,16 @@ CREATE INDEX documents_meta ON documents(
 );
 "#;
 
+/// Version 3: documents may hold images (block type "image"; the bytes are in images.db).
+///
+/// The step changes nothing in this file. It exists so that a version of the app or of
+/// the `writer` tool that does not know images refuses the library
+/// ([`StoreError::SchemaTooNew`]) instead of reading an image as an empty paragraph and
+/// saving that.
+const V3: &str = r#"
+SELECT 1;
+"#;
+
 /// Applies the per-connection pragmas that do not modify the file: busy timeout, foreign
 /// keys, in-memory temp storage.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -143,6 +153,11 @@ pub(crate) struct Header {
 
 /// Validates that the file is ours (or empty) and not from a newer app version.
 pub(crate) fn inspect(conn: &Connection) -> Result<Header> {
+    inspect_as(conn, SCHEMA_VERSION)
+}
+
+/// [`inspect`] as a build does it whose newest schema version is `supported`.
+fn inspect_as(conn: &Connection, supported: i64) -> Result<Header> {
     let application_id: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if application_id != 0 && application_id != APPLICATION_ID {
@@ -158,10 +173,10 @@ pub(crate) fn inspect(conn: &Connection) -> Result<Header> {
             return Err(StoreError::NotALibrary);
         }
     }
-    if user_version > SCHEMA_VERSION {
+    if user_version > supported {
         return Err(StoreError::SchemaTooNew {
             found: user_version,
-            supported: SCHEMA_VERSION,
+            supported,
         });
     }
     if user_version < 0 {
@@ -233,7 +248,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 2);
+        assert_eq!(SCHEMA_VERSION, 3);
         let (title, words): (String, i64) = conn
             .query_row("SELECT title, word_count FROM documents", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -251,6 +266,68 @@ mod tests {
         assert_eq!(hits, 1);
         // Running it again changes nothing.
         migrate(&mut conn).unwrap();
+    }
+
+    /// A database as version 2 of the app (0.6.0) left it, with one document.
+    fn version_2() -> Connection {
+        let conn = version_1();
+        conn.execute_batch(V2).unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn
+    }
+
+    /// Step 3 changes nothing a version-2 library holds: it only moves the version on.
+    #[test]
+    fn version_2_upgrades_to_3_and_its_documents_are_unchanged() {
+        fn everything(conn: &Connection) -> Vec<String> {
+            let mut rows = Vec::new();
+            for sql in [
+                "SELECT id, folder_id, title, content, plain_text, word_count, char_count,
+                        position, created_at, updated_at, view_state, trashed_at
+                 FROM documents ORDER BY id",
+                "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name",
+            ] {
+                let mut stmt = conn.prepare(sql).unwrap();
+                let columns = stmt.column_count();
+                let mut found = stmt.query([]).unwrap();
+                while let Some(row) = found.next().unwrap() {
+                    let cells: Vec<String> = (0..columns)
+                        .map(|i| format!("{:?}", row.get::<_, rusqlite::types::Value>(i).unwrap()))
+                        .collect();
+                    rows.push(cells.join("|"));
+                }
+            }
+            rows
+        }
+        let mut conn = version_2();
+        let before = everything(&conn);
+        assert!(before.iter().any(|row| row.contains("Kept")));
+        migrate(&mut conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        assert_eq!(everything(&conn), before);
+    }
+
+    /// What step 3 is for: a build whose newest schema is 2 (0.6.0, the app and the
+    /// `writer` tool) refuses a library that may hold images, and one that knows 3 opens
+    /// it.
+    #[test]
+    fn a_build_that_knows_schema_2_refuses_a_library_of_schema_3() {
+        let mut conn = version_2();
+        assert!(inspect_as(&conn, 2).is_ok());
+        migrate(&mut conn).unwrap();
+        match inspect_as(&conn, 2) {
+            Err(StoreError::SchemaTooNew { found, supported }) => {
+                assert_eq!((found, supported), (3, 2));
+            }
+            other => panic!(
+                "expected SchemaTooNew, got {:?}",
+                other.map(|h| h.user_version)
+            ),
+        }
+        assert_eq!(inspect(&conn).unwrap().user_version, 3);
     }
 
     /// The listings must be answered from the index alone: a plan that visits the table

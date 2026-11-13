@@ -14,6 +14,11 @@ pub const DATABASE_FILE_NAME: &str = "library.db";
 /// Name of the directory, next to the database, that holds the daily backups.
 pub const BACKUPS_DIR_NAME: &str = "backups";
 
+/// File name of the database that holds the bytes of the images, inside the data
+/// directory beside the library database. The copy of the pictures in the backups
+/// directory has the same name ([`images_backup_path`]).
+pub const IMAGES_FILE_NAME: &str = "images.db";
+
 /// The data directory: `$THE_WRITER_DATA_DIR` when set and non-empty, otherwise
 /// `~/Library/Application Support/The Writer`. The directory is not created.
 pub fn data_dir() -> Result<PathBuf> {
@@ -33,6 +38,23 @@ pub fn backups_dir(database_path: &Path) -> PathBuf {
         .map(Path::to_path_buf)
         .unwrap_or_default()
         .join(BACKUPS_DIR_NAME)
+}
+
+/// Where the bytes of the images of the library at `database_path` are stored:
+/// `images.db` in the same directory. The file is there only once the library holds an
+/// image.
+pub fn images_path(database_path: &Path) -> PathBuf {
+    database_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join(IMAGES_FILE_NAME)
+}
+
+/// Where the one copy of the pictures is kept for a database at `database_path`:
+/// `images.db` in its backups directory ([`backups_dir`]).
+pub fn images_backup_path(database_path: &Path) -> PathBuf {
+    backups_dir(database_path).join(IMAGES_FILE_NAME)
 }
 
 pub(crate) fn resolve_data_dir(env: Option<OsString>, home: Option<OsString>) -> Result<PathBuf> {
@@ -73,6 +95,22 @@ mod tests {
             resolve_data_dir(None, None),
             Err(StoreError::NoDataDirectory)
         ));
+    }
+
+    #[test]
+    fn the_images_are_beside_the_database_and_their_copy_among_the_backups() {
+        assert_eq!(
+            images_path(Path::new("/a/b/library.db")),
+            PathBuf::from("/a/b/images.db")
+        );
+        assert_eq!(
+            images_backup_path(Path::new("/a/b/library.db")),
+            PathBuf::from("/a/b/backups/images.db")
+        );
+        assert_eq!(
+            images_path(Path::new("library.db")),
+            PathBuf::from("images.db")
+        );
     }
 
     #[test]

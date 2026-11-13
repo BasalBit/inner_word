@@ -6897,6 +6897,7 @@ dependencies = [
  "libc",
  "objc",
  "raw-window-handle",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

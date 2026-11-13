@@ -18,7 +18,10 @@
 //! relative, stay right. **Markdown for the clipboard** names each image
 //! as the library does (`![description](image:<id>)`): there is no place
 //! to put a file. Plain text has the description of each image on a line
-//! of its own.
+//! of its own. An export whose pictures cannot be read from the library
+//! (`images.db` of a newer version, busy past its timeout) fails and
+//! writes nothing ([`pictures_not_read`]); a picture the library does not
+//! have is exported as its description.
 //!
 //! This module is the only place that exports with `writer-export`.
 
@@ -384,6 +387,22 @@ impl PickerDelegate for ExportDelegate {
 /// The name shown for the top level of the library.
 pub const LIBRARY_ROOT_NAME: &str = "Library";
 
+/// The words of an export whose pictures could not be read from the
+/// library: nothing is written then, as `writer export` does
+/// (`writer_agent::Error::Pictures`), so no file goes out without the
+/// pictures the library has. After "Could not export: ".
+pub fn pictures_not_read(error: &str) -> String {
+    format!("its pictures could not be read from the library ({error}), so nothing was written")
+}
+
+/// Fails when a picture of the export met an error of the store.
+fn pictures_were_read(images: &StoreImages<'_>) -> Result<(), String> {
+    match images.failure() {
+        Some(error) => Err(pictures_not_read(&error)),
+        None => Ok(()),
+    }
+}
+
 fn collect_folder(node: &FolderNode, out: &mut Vec<DocumentMeta>) {
     out.extend(node.documents.iter().cloned());
     for child in &node.folders {
@@ -563,6 +582,7 @@ impl Workspace {
                 let options =
                     export_options(meta.created_at, meta.updated_at, &file_name, destination);
                 let exported = export_package(&source, format, &options);
+                pictures_were_read(&images)?;
                 Ok(PreparedExport {
                     file_name,
                     title,
@@ -608,6 +628,7 @@ impl Workspace {
                 let file_name = suggested_file_name(source.title(), format);
                 let options = export_options(created, modified, &file_name, destination);
                 let exported = export_package(&source, format, &options);
+                pictures_were_read(&images)?;
                 Ok(PreparedExport {
                     file_name,
                     title: name,

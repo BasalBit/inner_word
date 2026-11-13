@@ -445,22 +445,49 @@ impl ImageProvider for LibraryImages {
 /// ([`writer_export::ExportSource::with_images`]). An image the library
 /// does not have is exported as a missing one: its description stands in
 /// for it.
+///
+/// An image that could not be read (`images.db` of a newer version, busy
+/// past its timeout, not to be opened) is not a missing one: the first
+/// such error is kept ([`StoreImages::failure`]), and the export fails
+/// with it instead of writing a file without its pictures. (A damaged file
+/// is no such error: the store reads the copy then.)
 pub struct StoreImages<'a> {
     store: &'a Store,
+    failed: RefCell<Option<store::StoreError>>,
 }
 
 impl<'a> StoreImages<'a> {
     /// The pictures of `store`.
     pub fn new(store: &'a Store) -> Self {
-        Self { store }
+        Self {
+            store,
+            failed: RefCell::new(None),
+        }
+    }
+
+    /// The first error of the store a picture met, if one did: the
+    /// export that asked for it has pictures missing that the library
+    /// has.
+    pub fn failure(&self) -> Option<String> {
+        self.failed.borrow().as_ref().map(ToString::to_string)
+    }
+
+    fn keep<T>(&self, read: store::Result<Option<T>>) -> Option<T> {
+        match read {
+            Ok(found) => found,
+            Err(error) => {
+                self.failed.borrow_mut().get_or_insert(error);
+                None
+            }
+        }
     }
 }
 
 impl ImageSource for StoreImages<'_> {
     fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
         let name = stored_id(id);
-        let info = self.store.image_info(&name).ok().flatten()?;
-        let bytes = self.store.image_bytes(&name).ok().flatten()?;
+        let info = self.keep(self.store.image_info(&name))?;
+        let bytes = self.keep(self.store.image_bytes(&name))?;
         Some(ImageData {
             bytes: Cow::Owned(bytes),
             format: match info.format {

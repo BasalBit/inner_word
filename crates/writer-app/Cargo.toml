@@ -70,6 +70,8 @@ block = "0.1"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# A test makes images.db a file of a newer version (the store's own build of it).
+rusqlite = { version = "0.42", features = ["bundled"] }
 tempfile.workspace = true
 writer-editor.workspace = true
 

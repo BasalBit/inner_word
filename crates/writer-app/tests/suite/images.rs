@@ -1724,6 +1724,80 @@ fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
     assert!(!contains(&docx.bytes, b"word/media/image2.png"));
 }
 
+/// An export whose pictures cannot be read from the library (here
+/// `images.db` of a newer version) is not an export of missing pictures:
+/// it fails, says why, and writes nothing, as `writer export` does. What
+/// reads no picture (plain text, Markdown for the clipboard) still works.
+/// (Found in review: the source took every error of the store for a
+/// picture the library does not have, and the success toast came.)
+#[gpui::test]
+fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing(cx: &mut TestAppContext) {
+    init(cx);
+    let disk = Disk::new();
+    let id = {
+        let (library, workspace, vcx) = disk.launch(None, cx);
+        let image = stored_png(&library, 400, 300, BLUE, vcx);
+        let document = Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Harbour"),
+            picture(&image, 50, Alignment::Center, "The harbour at dusk"),
+        ]);
+        let id = add_document(&library, None, &document, vcx);
+        quit(&workspace, vcx);
+        id
+    };
+    {
+        let images = rusqlite::Connection::open(disk.images_file()).unwrap();
+        images.pragma_update(None, "user_version", 99).unwrap();
+    }
+
+    let (_library, workspace, vcx) = disk.launch(None, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(id, true, window, cx));
+    });
+    vcx.run_until_parked();
+    clear_toasts(&workspace, vcx);
+    let prepare = |format: ExportFormat, cx: &mut VisualTestContext| {
+        workspace.update(cx, |w, cx| {
+            w.prepare_export(ExportScope::Document, format, cx)
+        })
+    };
+    for format in [ExportFormat::Docx, ExportFormat::Markdown] {
+        let error = prepare(format, vcx).err().expect("the export fails");
+        assert!(
+            error.starts_with("its pictures could not be read from the library (")
+                && error.ends_with("), so nothing was written"),
+            "{format:?}: {error}"
+        );
+    }
+    let plain = prepare(ExportFormat::PlainText, vcx).expect("plain text reads no picture");
+    assert!(
+        String::from_utf8(plain.bytes)
+            .unwrap()
+            .contains("The harbour at dusk")
+    );
+
+    // As the writer does it: the toast says so and no save panel opens.
+    workspace.update_in(vcx, |w, window, cx| {
+        w.export(
+            ExportChoice::new(
+                ExportScope::Document,
+                ExportFormat::Docx,
+                ExportDestination::File,
+            ),
+            window,
+            cx,
+        )
+    });
+    vcx.run_until_parked();
+    assert!(!vcx.did_prompt_for_new_path(), "nothing is written");
+    let said = toasts(&workspace, vcx);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with("Could not export: its pictures could not be read from the library"),
+        "{said:?}"
+    );
+}
+
 // ----- print ------------------------------------------------------------------------------------
 
 /// Lets the editor's background layout measure every block.

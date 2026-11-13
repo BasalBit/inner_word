@@ -439,6 +439,7 @@ fn an_agent_replaces_the_whole_text(cx: &mut TestAppContext) {
             document: id.into(),
             markdown: "# Other notes\n\nOne paragraph, and nothing of what was there.".into(),
             write: claude(),
+            ..Default::default()
         })
     })
     .unwrap();
@@ -768,6 +769,7 @@ fn a_document_changed_while_another_was_open_says_so_when_it_is_opened(cx: &mut 
             document: other.into(),
             markdown: "# Other\n\nRewritten from top to bottom by the agent.".into(),
             write: claude(),
+            ..Default::default()
         })
     })
     .unwrap();
@@ -1923,6 +1925,10 @@ fn the_note_says_who_did_what() {
     assert_eq!(
         sentence("An agent", "insert", &named("")),
         format!("An agent changed {}", q("Untitled"))
+    );
+    assert_eq!(
+        sentence("Claude", "add_image", &named("Chapter 2")),
+        format!("Claude added an image to {}", q("Chapter 2"))
     );
     assert_eq!(
         sentence(

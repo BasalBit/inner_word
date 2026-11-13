@@ -209,6 +209,7 @@ pub fn sentence(who: &str, operation: &str, names: &Names) -> String {
         "create_document" | "duplicate_document" => format!("created {document}"),
         "replace_document" => format!("rewrote {document}"),
         "edit" | "insert" | "replace_section" => format!("changed {document}"),
+        "add_image" => format!("added an image to {document}"),
         "rename_document" => match (&names.document_before, &names.document) {
             (Some(before), Some(now)) if before != now => {
                 format!("renamed {} to {}", quoted(before), quoted(now))

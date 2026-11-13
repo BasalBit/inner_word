@@ -24,12 +24,15 @@
 //!    (it holds each picture once). A picture the library does not have
 //!    is printed as its box with its description.
 //! 3. A task of the main thread makes the pages in slices
-//!    ([`crate::printing::slice`], 8 ms: laying blocks out and drawing the
-//!    pages that came of it into the PDF, both within the slice); between
-//!    two slices it waits a moment on a timer, which is a turn of the main
-//!    thread: keys are answered and frames are drawn, so a
-//!    book does not freeze the window. A chapter is done in the first
-//!    slice.
+//!    ([`crate::printing::slice`], 8 ms: laying blocks out and drawing
+//!    pages into the PDF, both within the slice); between two slices it
+//!    waits a moment on a timer, which is a turn of the main thread: keys
+//!    are answered and frames are drawn, so a book does not freeze the
+//!    window. A chapter is done in the first slice. Pages that are laid
+//!    out and not drawn yet wait for the next slice (a slice draws at
+//!    least one): a page of photographs is laid out in no time and takes
+//!    long to draw, and fifty of them in one turn froze the window for two
+//!    seconds.
 //! 4. A job that is still preparing after [`NOTE_DELAY`] says so in a note
 //!    at the bottom, "Preparing to print …", whose button is the command
 //!    "Cancel Printing". The command is in the palette and in File too (a
@@ -57,6 +60,7 @@
 //! instead of handing it over.
 
 use std::{
+    collections::VecDeque,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -85,6 +89,10 @@ pub const SLICE_PAUSE: Duration = Duration::from_millis(1);
 /// so this is only longer than any job.
 const NOTE_STAYS: Duration = Duration::from_secs(60 * 60);
 
+/// How many pages may wait to be drawn before more blocks are laid out: a
+/// book is not held as pages and as a PDF at once.
+const PAGES_AHEAD: usize = 4;
+
 /// How often the window is asked for a frame while pages are prepared.
 /// The lines the pass shapes lie in GPUI's line cache until the window has
 /// drawn twice: with a frame now and then a book holds a moment's lines
@@ -112,6 +120,8 @@ pub(crate) struct PrintState {
     stage: Option<Printing>,
     /// How far the pages are.
     progress: Option<PrintProgress>,
+    /// The pages that are laid out and not drawn into the PDF yet.
+    waiting: usize,
     /// The task that makes the pages and hands the job over. Dropping it
     /// drops the pass and the half-written PDF.
     task: Option<Task<()>>,
@@ -147,16 +157,21 @@ impl Workspace {
 
     /// One word about printing for the `state` step of a scripted run:
     /// `idle`, `preparing 40%` (the share of the blocks that are on their
-    /// pages) or `panel`.
+    /// pages, less what of those pages is not drawn yet) or `panel`.
     pub fn describe_printing(&self) -> String {
         match self.print.stage {
             None => "idle".to_string(),
             Some(Printing::Panel) => "panel".to_string(),
             Some(Printing::Preparing) => {
                 let percent = self.print.progress.map_or(0, |progress| {
-                    (progress.blocks_done * 100)
+                    let laid = (progress.blocks_done * 100)
                         .checked_div(progress.blocks)
-                        .unwrap_or(100)
+                        .unwrap_or(100);
+                    // Of the pages handed out so far, those that are in
+                    // the PDF.
+                    let made = progress.pages_done;
+                    let drawn = made.saturating_sub(self.print.waiting);
+                    (laid * drawn).checked_div(made).unwrap_or(laid)
                 });
                 format!("preparing {percent}%")
             }
@@ -206,6 +221,7 @@ impl Workspace {
         let slice = printing::slice(cx);
         self.print.stage = Some(Printing::Preparing);
         self.print.progress = Some(pass.progress());
+        self.print.waiting = 0;
         self.print.note = None;
 
         // The note, when the job is still preparing after a moment.
@@ -378,6 +394,7 @@ impl Workspace {
         self.take_print_note(cx);
         self.print.stage = None;
         self.print.progress = None;
+        self.print.waiting = 0;
         cx.notify();
     }
 
@@ -402,30 +419,44 @@ async fn prepare(
     let paper = pass.paper();
     let mut writer = PdfWriter::new(&printing::job_info(&title));
     let mut pages = Vec::new();
+    // The pages that are laid out and wait to be drawn.
+    let mut waiting: VecDeque<writer_print::Page> = VecDeque::new();
+    let mut laid_out = false;
     let mut last_frame = Instant::now();
-    // A slice is the whole turn: laying the blocks out and drawing the
-    // pages that came of it. What share of it the layout gets follows
-    // from what the two have cost so far.
+    // A slice is the whole turn: laying blocks out and drawing pages.
+    // What share of it the layout gets follows from what the two have
+    // cost so far.
     let (mut laying, mut drawing) = (Duration::ZERO, Duration::ZERO);
     loop {
         let started = Instant::now();
-        let done = pass.advance(layout_share(slice, laying, drawing), &mut pages);
+        // No more is laid out while pages wait: they are drawn first.
+        if !laid_out && waiting.len() < PAGES_AHEAD {
+            laid_out = pass.advance(layout_share(slice, laying, drawing), &mut pages);
+            waiting.extend(pages.drain(..));
+        }
         let laid = started.elapsed();
-        for page in pages.drain(..) {
+        // At least one page a slice, and more while the slice lasts: a
+        // page of photographs takes far longer to draw than to lay out.
+        while let Some(page) = waiting.pop_front() {
             writer.add_page(&page);
+            if started.elapsed() >= slice {
+                break;
+            }
         }
         laying += laid;
         drawing += started.elapsed() - laid;
-        if done {
+        if laid_out && waiting.is_empty() {
             break;
         }
         let progress = pass.progress();
+        let left = waiting.len();
         let frame = last_frame.elapsed() >= FRAME_EVERY;
         if frame {
             last_frame = Instant::now();
         }
         this.update(cx, |this, cx| {
             this.print.progress = Some(progress);
+            this.print.waiting = left;
             if frame {
                 cx.notify();
             }

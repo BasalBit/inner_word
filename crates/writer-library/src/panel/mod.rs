@@ -16,6 +16,7 @@ mod undo;
 
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -362,6 +363,14 @@ pub enum LibraryPanelEvent {
     },
     /// The user pressed escape in the panel: return focus to the editor.
     Dismissed,
+    /// Files dropped on the panel: on a folder row (`folder`), else the folder selected, else the root.
+    /// The variant and the app's empty arm are WP4's (wave 1); WP6 emits it.
+    DropPaths {
+        /// The paths that were dropped, as the system handed them over.
+        paths: Vec<PathBuf>,
+        /// The folder they were dropped into; `None` is the root.
+        folder: Option<FolderId>,
+    },
 }
 
 /// The muted detail at the right of a document row.

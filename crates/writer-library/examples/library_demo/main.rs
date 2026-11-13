@@ -324,6 +324,10 @@ impl Demo {
                         window.focus(&this.editor_focus);
                         this.log.push("Dismissed".into());
                     }
+                    LibraryPanelEvent::DropPaths { paths, folder } => {
+                        this.log
+                            .push(format!("DropPaths {} into {folder:?}", paths.len()).into());
+                    }
                 }
                 cx.notify();
             },

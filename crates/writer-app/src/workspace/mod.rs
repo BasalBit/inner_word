@@ -1495,6 +1495,8 @@ impl Workspace {
                 self.open_document(*id, *focus_editor, window, cx);
             }
             LibraryPanelEvent::Dismissed => self.focus_editor(window, cx),
+            // Pages dropped on the sidebar: taken in by the import of pages (WP9).
+            LibraryPanelEvent::DropPaths { .. } => {}
         }
     }
 

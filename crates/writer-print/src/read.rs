@@ -217,6 +217,13 @@ impl PdfFile {
     /// The text of page `page` as PDFKit reads it (what Preview selects and
     /// copies): rows from top to bottom, one per line. Empty for a page without
     /// text and for a page the file does not have.
+    ///
+    /// The text of a PDF this crate wrote is what CoreGraphics maps the drawn
+    /// glyphs back to. That is the text that was set, with two kinds of
+    /// exceptions a comparison has to know: a ligature comes back as its own
+    /// character ("ﬃ", U+FB03), and a glyph a font has for several characters
+    /// as one of them (日 from a CJK fallback font as the Kangxi radical
+    /// U+2F47). Unicode's compatibility folding (NFKC) undoes both.
     pub fn page_text(&self, page: usize) -> String {
         autoreleasepool(|| {
             let page = self.kit_page(page);

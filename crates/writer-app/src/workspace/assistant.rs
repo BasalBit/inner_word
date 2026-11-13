@@ -602,7 +602,8 @@ impl Workspace {
             // The Markdown for other apps, the formatted text for a
             // document of this one.
             let text = markdown.trim().to_string();
-            let fragment = apply::markdown_fragment(markdown);
+            let fragment =
+                apply::answer_fragment(&self.editor, Some(&self.library), markdown, cx);
             let item = if fragment.is_empty() {
                 ClipboardItem::new_string(text)
             } else {
@@ -616,8 +617,11 @@ impl Workspace {
             return;
         }
         let editor = self.editor.clone();
+        let library = self.library.clone();
         let done = match kind {
-            ApplyKind::InsertAtCaret => apply::insert_at_caret(&editor, markdown, cx),
+            ApplyKind::InsertAtCaret => {
+                apply::insert_at_caret_from(&editor, &library, markdown, cx)
+            }
             ApplyKind::ReplaceSelection => {
                 if !apply::has_selection(&editor, cx) {
                     self.show_toast(
@@ -626,7 +630,7 @@ impl Workspace {
                     );
                     return;
                 }
-                apply::replace_selection(&editor, markdown, cx)
+                apply::replace_selection_from(&editor, &library, markdown, cx)
             }
             ApplyKind::Copy => false,
         };

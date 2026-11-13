@@ -15,14 +15,39 @@
 //! The quick chat captures its selection and applies its answers itself
 //! (`writer_assistant_quick::capture`, `writer_assistant_quick::apply`):
 //! it has to remember where the selected text was when it opened.
+//!
+//! # Images
+//!
+//! The assistant reads an image as a line `![description](image:<id>)`
+//! and never sees the picture. An answer that has such a line gets the
+//! image back when it is applied:
+//!
+//! - an image the open document holds comes back as the document has it,
+//!   with its width, its alignment and its description
+//!   ([`writer_export::KnownImages`]): an answer that moves the line moves
+//!   the image;
+//! - another image of the library (the assistant read it in another
+//!   document) is put in at its original size ([`LibraryAnswerImages`]),
+//!   and counts as used from then on;
+//! - **anything else stays a link: a path or an address in an answer is
+//!   never read.** The engine has no file tools, so a local path in an
+//!   answer is invented or was planted in a text the model read; reading
+//!   it would let the text of a document pull a file of the user's into
+//!   the document at the press of a button.
 
 use gpui::{App, Entity};
-use writer_core::{Block, BlockKind, EditorState, Fragment, InlineAttrs, Position, TextRange};
+use writer_core::{
+    Block, BlockKind, Document, EditorState, Fragment, InlineAttrs, Position, TextRange,
+};
 use writer_editor::Editor;
 use writer_export::{
-    ExportSource, MarkdownFrontMatter, MarkdownImportOptions, MarkdownOptions, from_markdown,
+    ExportSource, ImageResolution, ImageResolver, KnownImages, MarkdownFrontMatter,
+    MarkdownImportOptions, MarkdownOptions, from_markdown_with_images, image_reference,
     to_markdown,
 };
+use writer_library::Library;
+
+use crate::images::{image_of, stored_id};
 
 /// The Markdown the assistant is given for a document: comments are left
 /// out (they are the writer's notes to themselves, not text), everything
@@ -37,16 +62,87 @@ pub fn document_markdown(editor: &Editor) -> String {
     to_markdown(&ExportSource::single("", document), &markdown_options())
 }
 
-/// An answer's Markdown as the blocks it stands for. Empty for an answer
+/// Which image an answer names, with a library to ask: an image of the
+/// open document as the document has it, another image of the library by
+/// its id, and nothing else (see the [module docs](self)).
+pub struct LibraryAnswerImages<'a> {
+    known: KnownImages,
+    library: &'a Entity<Library>,
+    cx: &'a mut App,
+}
+
+impl<'a> LibraryAnswerImages<'a> {
+    /// For an answer that goes into `document`, a document of `library`.
+    pub fn new(document: &Document, library: &'a Entity<Library>, cx: &'a mut App) -> Self {
+        Self {
+            known: KnownImages::of(document),
+            library,
+            cx,
+        }
+    }
+}
+
+impl ImageResolver for LibraryAnswerImages<'_> {
+    fn resolve(&mut self, source: &str) -> ImageResolution {
+        if let Some(known) = self.known.known(source) {
+            return known;
+        }
+        // Not `image:<id>`: a path or an address. Never read.
+        let Some(id) = image_reference(source) else {
+            return ImageResolution::Remote;
+        };
+        // Naming an image is using it: the collector's stamp on it goes.
+        let stored = self
+            .library
+            .update(self.cx, |library, _| library.touch_image(&stored_id(id)));
+        match stored {
+            Ok(Some(info)) => ImageResolution::Stored {
+                image: image_of(&info),
+                width: None,
+                alignment: None,
+            },
+            _ => ImageResolution::NotFound,
+        }
+    }
+}
+
+/// An answer's Markdown as the blocks it stands for, with `images` saying
+/// which stored image each image of the answer is. Empty for an answer
 /// with nothing in it.
-pub fn markdown_fragment(markdown: &str) -> Fragment {
+pub fn markdown_fragment(markdown: &str, images: &mut dyn ImageResolver) -> Fragment {
     let options = MarkdownImportOptions {
         // An answer that opens with a rule is a rule, never data about
         // the text.
         front_matter: MarkdownFrontMatter::Markdown,
         ..MarkdownImportOptions::default()
     };
-    from_markdown(markdown, &options).fragment()
+    from_markdown_with_images(markdown, &options, images).fragment()
+}
+
+/// [`markdown_fragment`] for an answer that goes into the document of
+/// `editor`. With a `library`, an image of another document that the
+/// answer names by its id is an image too.
+pub fn answer_fragment(
+    editor: &Entity<Editor>,
+    library: Option<&Entity<Library>>,
+    markdown: &str,
+    cx: &mut App,
+) -> Fragment {
+    match library {
+        Some(library) => {
+            let known = KnownImages::of(editor.read(cx).document());
+            let mut images = LibraryAnswerImages {
+                known,
+                library,
+                cx,
+            };
+            markdown_fragment(markdown, &mut images)
+        }
+        None => {
+            let mut images = KnownImages::of(editor.read(cx).document());
+            markdown_fragment(markdown, &mut images)
+        }
+    }
 }
 
 /// Whether the text in `editor` can be changed right now.
@@ -70,9 +166,37 @@ pub fn has_selection(editor: &Entity<Editor>, cx: &App) -> bool {
 /// code) goes in as whole blocks at the caret: an empty block there is
 /// replaced by them, a block with the caret inside it is split around
 /// them, and nothing of the answer is merged into the neighbouring text.
+///
+/// An image of the document that the answer names (`image:<id>`) is that
+/// image again; every other image is a link. See
+/// [`insert_at_caret_from`] for an answer that may name the images of
+/// other documents.
 pub fn insert_at_caret(editor: &Entity<Editor>, markdown: &str, cx: &mut App) -> bool {
-    let fragment = markdown_fragment(markdown);
-    if fragment.is_empty() || !can_edit(editor, cx) {
+    insert(editor, None, markdown, cx)
+}
+
+/// [`insert_at_caret`], with the images of `library` for an answer that
+/// names one of another document by its id.
+pub fn insert_at_caret_from(
+    editor: &Entity<Editor>,
+    library: &Entity<Library>,
+    markdown: &str,
+    cx: &mut App,
+) -> bool {
+    insert(editor, Some(library), markdown, cx)
+}
+
+fn insert(
+    editor: &Entity<Editor>,
+    library: Option<&Entity<Library>>,
+    markdown: &str,
+    cx: &mut App,
+) -> bool {
+    if !can_edit(editor, cx) {
+        return false;
+    }
+    let fragment = answer_fragment(editor, library, markdown, cx);
+    if fragment.is_empty() {
         return false;
     }
     editor.update(cx, |editor, cx| {
@@ -93,7 +217,21 @@ pub fn replace_selection(editor: &Entity<Editor>, markdown: &str, cx: &mut App) 
     if !has_selection(editor, cx) {
         return false;
     }
-    insert_at_caret(editor, markdown, cx)
+    insert(editor, None, markdown, cx)
+}
+
+/// [`replace_selection`], with the images of `library` for an answer that
+/// names one of another document by its id.
+pub fn replace_selection_from(
+    editor: &Entity<Editor>,
+    library: &Entity<Library>,
+    markdown: &str,
+    cx: &mut App,
+) -> bool {
+    if !has_selection(editor, cx) {
+        return false;
+    }
+    insert(editor, Some(library), markdown, cx)
 }
 
 /// Puts `fragment` where the selection of `state` is. See

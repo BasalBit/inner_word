@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use gpui::{AppContext as _, Entity, TestAppContext};
 use writer_library::{
-    Clock, DocumentContent, DocumentId, FolderId, Library, LibraryEvent, StoreError, TrashEntry,
+    Clock, DocumentContent, DocumentId, FolderId, ImageFormat, Library, LibraryEvent, NewImage,
+    StoreError, StoredImageId, TrashEntry,
 };
 
 mod panel;
@@ -1238,4 +1239,106 @@ fn changes_made_in_the_store_from_outside_reach_the_tree_and_the_subscribers(
             LibraryEvent::TrashChanged,
         ]
     );
+}
+
+/// The bytes of an image are stored through the library and nobody is told: no event,
+/// no notification. The reads go through the store.
+#[gpui::test]
+fn storing_an_image_emits_nothing_and_the_bytes_are_read_through_the_store(
+    cx: &mut TestAppContext,
+) {
+    fn picture(bytes: &[u8]) -> NewImage<'_> {
+        NewImage {
+            bytes,
+            format: ImageFormat::Png,
+            width: 640,
+            height: 480,
+            density: 144,
+        }
+    }
+    let (library, events) = library(cx);
+    let notified = Rc::new(RefCell::new(0));
+    cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(&library, move |_, _| *notified.borrow_mut() += 1)
+            .detach();
+    });
+    let bytes = b"\x89PNG the bytes of a picture".to_vec();
+
+    let info = library.update(cx, |l, _| l.put_image(&picture(&bytes)).unwrap());
+    assert_eq!(info.id, StoredImageId::of(&bytes));
+    assert_eq!(
+        (info.format, info.width, info.height, info.density),
+        (ImageFormat::Png, 640, 480, 144)
+    );
+    assert_eq!(info.byte_len, bytes.len() as u64);
+    assert!(take(&events, cx).is_empty());
+    assert_eq!(*notified.borrow(), 0);
+
+    // Read through the store, as every reader does.
+    library.read_with(cx, |l, _| {
+        assert_eq!(
+            l.store().image_bytes(&info.id).unwrap(),
+            Some(bytes.clone())
+        );
+        assert_eq!(l.store().image_info(&info.id).unwrap(), Some(info.clone()));
+        assert_eq!(l.store().image_count().unwrap(), 1);
+    });
+
+    // The same bytes again are the same image; a touch finds it; neither says anything.
+    let again = library.update(cx, |l, _| l.put_image(&picture(&bytes)).unwrap());
+    assert_eq!(again, info);
+    let touched = library.update(cx, |l, _| l.touch_image(&info.id).unwrap());
+    assert_eq!(touched, Some(info.clone()));
+    let unknown = StoredImageId::of(b"no such picture");
+    assert_eq!(
+        library.update(cx, |l, _| l.touch_image(&unknown).unwrap()),
+        None
+    );
+    assert!(take(&events, cx).is_empty());
+    assert_eq!(*notified.borrow(), 0);
+    assert_eq!(
+        library.read_with(cx, |l, _| l.store().image_count().unwrap()),
+        1
+    );
+}
+
+/// A library on disk keeps the bytes in a second file beside the database, made when the
+/// first image is stored, and has them again when it is opened the next time.
+#[gpui::test]
+fn the_images_of_a_library_on_disk_are_beside_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let images = dir.path().join("images.db");
+    let bytes = b"GIF89a the bytes of another picture".to_vec();
+    let id = {
+        let (library, events) = library_from(Library::open(&path).unwrap(), cx);
+        library.update(cx, |l, cx| {
+            l.create_document(None, &content("Words", "no picture yet"), cx)
+                .unwrap()
+        });
+        assert!(
+            !images.exists(),
+            "a library without images has no second file"
+        );
+        take(&events, cx);
+        let info = library.update(cx, |l, _| {
+            l.put_image(&NewImage {
+                bytes: &bytes,
+                format: ImageFormat::Gif,
+                width: 10,
+                height: 10,
+                density: 72,
+            })
+            .unwrap()
+        });
+        assert!(images.exists());
+        assert!(take(&events, cx).is_empty());
+        info.id
+    };
+    cx.run_until_parked();
+    let (library, _) = library_from(Library::open(&path).unwrap(), cx);
+    library.read_with(cx, |l, _| {
+        assert_eq!(l.store().image_bytes(&id).unwrap(), Some(bytes.clone()));
+    });
 }

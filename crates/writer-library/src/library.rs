@@ -10,8 +10,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use writer_store::{
     Clock, Document, DocumentContent, DocumentId, DocumentMeta, EmptiedTrash, Folder, FolderId,
-    FolderNode, LibraryTree, Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, Store,
-    TrashEntry,
+    FolderNode, ImageId, ImageInfo, LibraryTree, NewImage, Result, SearchHit, Snapshot, SnapshotId,
+    SnapshotMeta, Store, TrashEntry,
 };
 
 /// A change made through a [`Library`].
@@ -593,6 +593,31 @@ impl Library {
     /// A document's stored view-state JSON, if any.
     pub fn view_state(&self, id: DocumentId) -> Result<Option<String>> {
         self.store.view_state(id)
+    }
+
+    // ----- images ---------------------------------------------------------------------
+
+    /// Stores the bytes of an image once, under the hash of the bytes, and answers what
+    /// the library knows about them ([`Store::put_image`]). Committed before it returns.
+    ///
+    /// No event and no notification: nothing anybody shows changes when bytes are
+    /// stored. **Store the bytes before a block that names them enters a document**, so
+    /// that a save never names bytes that are not there.
+    ///
+    /// The reads (what is known about an image, its bytes) go through
+    /// [`store`](Self::store). This runs on the main thread like every method here; for
+    /// a library on disk, whoever has many bytes to hash and write does it in the
+    /// background through a [`writer_store::ImageFile`] of its own.
+    pub fn put_image(&mut self, image: &NewImage<'_>) -> Result<ImageInfo> {
+        self.store.put_image(image)
+    }
+
+    /// For the id of an image that should be there (it came with a pasted fragment, or
+    /// in Markdown): the image counts as used from now ([`Store::touch_image`]). `None`
+    /// when the library does not have it. No event, as for
+    /// [`put_image`](Self::put_image).
+    pub fn touch_image(&mut self, id: &ImageId) -> Result<Option<ImageInfo>> {
+        self.store.touch_image(id)
     }
 
     // ----- trash ----------------------------------------------------------------------

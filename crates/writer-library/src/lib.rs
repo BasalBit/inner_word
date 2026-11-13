@@ -20,6 +20,10 @@
 //! Errors are returned as [`StoreError`] (`Result<T>`), never panics. A failed call changes
 //! nothing and emits nothing.
 //!
+//! The bytes of the images that documents hold are stored through the library too
+//! ([`Library::put_image`], [`Library::touch_image`]; the reads go through
+//! [`Library::store`]). Storing bytes emits no event: nothing anybody shows changes.
+//!
 //! ```ignore
 //! use writer_library::{Library, LibraryEvent, DocumentContent};
 //!
@@ -100,13 +104,17 @@ pub mod internals {
 
 /// The whole storage crate, for anything not re-exported above.
 pub use writer_store as store;
+/// The name of stored image bytes, as the store has it (the hash of the bytes). Under
+/// another name here, because the document model has an `ImageId` of its own for the
+/// same 16 bytes inside a document, and the app sees both.
+pub use writer_store::ImageId as StoredImageId;
 /// The storage types that appear in this crate's API, re-exported so that consumers do not
 /// need a direct dependency on `writer-store`.
 pub use writer_store::{
     Clock, DATA_DIR_ENV, Document, DocumentContent, DocumentId, DocumentMeta, EmptiedTrash, Folder,
-    FolderId, FolderNode, ItemKind, LibraryTree, MATCH_END, MATCH_START, Result, SearchHit,
-    Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart, StoreError, TrashEntry,
-    data_dir, database_path,
+    FolderId, FolderNode, ImageFormat, ImageInfo, ItemKind, LibraryTree, MATCH_END, MATCH_START,
+    NewImage, Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart,
+    StoreError, TrashEntry, data_dir, database_path,
 };
 
 /// Installs the key bindings of the library panel. Call once at startup, after the app's

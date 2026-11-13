@@ -593,6 +593,32 @@ fn more_than_a_hundred_megabytes_is_refused_before_anything_is_read() {
     std::fs::write(&text, "not a picture, whatever the name says").unwrap();
     assert_eq!(prepare_file(&text).unwrap_err(), PrepareError::NotAnImage);
 
+    // A path that names no plain file is not read: a folder, a device whose length is 0
+    // and whose bytes never end, a named pipe that nobody writes to (opening it would
+    // wait for a writer for ever).
+    assert_eq!(prepare_file(&dir).unwrap_err(), PrepareError::NotAnImage);
+    assert_eq!(
+        prepare_file(Path::new("/dev/zero")).unwrap_err(),
+        PrepareError::NotAnImage
+    );
+    let pipe = dir.join("pipe.png");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (sender, answer) = std::sync::mpsc::channel();
+    let reading = pipe.clone();
+    std::thread::spawn(move || sender.send(prepare_file(&reading)).unwrap());
+    let refused = answer
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a named pipe was opened or read");
+    assert_eq!(refused.unwrap_err(), PrepareError::NotAnImage);
+    // Through a link the file it names counts.
+    let link = dir.join("link.png");
+    std::os::unix::fs::symlink(&good, &link).unwrap();
+    assert_eq!(prepare_file(&link).unwrap().bytes, bytes);
+
     let missing = prepare_file(&dir.join("nowhere.png")).unwrap_err();
     assert!(matches!(missing, PrepareError::Failed(_)), "{missing:?}");
     assert_eq!(

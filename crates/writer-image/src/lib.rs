@@ -181,14 +181,38 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, PrepareError> {
 }
 
 /// Reads the file (refusing one over [`MAX_INPUT_BYTES`] before reading it), then
-/// [`prepare`]. A file that cannot be read at all is [`PrepareError::Failed`].
+/// [`prepare`]. A file that cannot be read at all is [`PrepareError::Failed`]; a path
+/// that names no plain file (a folder, a device such as `/dev/zero`, a named pipe) is
+/// [`PrepareError::NotAnImage`], and is not opened.
+///
+/// Whatever the file system says about the length, no more than one byte over the
+/// limit is ever read: the length of a device or a pipe is 0, and reading one to its
+/// end does not end.
 pub fn prepare_file(path: &Path) -> Result<Prepared, PrepareError> {
+    use std::io::Read;
+
     let failed = |error: std::io::Error| PrepareError::Failed(error.to_string());
-    let size = std::fs::metadata(path).map_err(failed)?.len();
-    if size > MAX_INPUT_BYTES {
+    // Asked before the file is opened: opening a named pipe waits for a writer.
+    let metadata = std::fs::metadata(path).map_err(failed)?;
+    if !metadata.is_file() {
+        return Err(PrepareError::NotAnImage);
+    }
+    if metadata.len() > MAX_INPUT_BYTES {
         return Err(PrepareError::TooLarge { animated: false });
     }
-    prepare(&std::fs::read(path).map_err(failed)?)
+    let file = std::fs::File::open(path).map_err(failed)?;
+    // The file that was opened, in case another one took the name in between.
+    if !file.metadata().map_err(failed)?.is_file() {
+        return Err(PrepareError::NotAnImage);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(MAX_INPUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if bytes.len() as u64 > MAX_INPUT_BYTES {
+        return Err(PrepareError::TooLarge { animated: false });
+    }
+    prepare(&bytes)
 }
 
 /// `"SVG"` or `"PDF"` when the bytes are one of the two kinds of file that are told

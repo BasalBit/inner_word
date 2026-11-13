@@ -314,7 +314,7 @@ fn the_paper_and_the_breaks_are_the_documents(cx: &mut TestAppContext) {
             Block::paragraph(LONG.repeat(130).trim_end()),
             Block::paragraph("After the long one."),
         ],
-        landscape.clone(),
+        landscape,
     );
     let (jobs, workspace, cx) = open_recording(&document, cx);
     settle(&workspace, cx);
@@ -358,8 +358,7 @@ fn the_paper_and_the_breaks_are_the_documents(cx: &mut TestAppContext) {
         margins: Margins::default(),
     };
     workspace.update(cx, |w, cx| {
-        let page = custom.clone();
-        w.change_document_settings(|settings| settings.page = page, |_| String::new(), cx);
+        w.change_document_settings(|settings| settings.page = custom, |_| String::new(), cx);
     });
     cx.run_until_parked();
     settle(&workspace, cx);
@@ -694,7 +693,7 @@ fn without_a_target_there_is_no_print(cx: &mut TestAppContext) {
     let labels = menu_labels(cx).unwrap();
     assert!(!labels.contains(&"Print…".to_string()), "{labels:?}");
     // The exact job can still be made (a test, a script step).
-    cx.update(|window, cx| ContextMenu::dismiss(window, cx));
+    cx.update(ContextMenu::dismiss);
     let job = workspace
         .update_in(cx, |w, window, cx| w.print_job(window, cx))
         .expect("a document is open");
@@ -800,7 +799,7 @@ fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(60));
         cx.run_until_parked();
         assert_eq!(note_button(cx), Some(Some("Cancel".to_string())));
-        assert_eq!(workspace.read_with(cx, |w, _| w.print_note()).is_some(), true);
+        assert!(workspace.read_with(cx, |w, _| w.print_note()).is_some());
         let line = state_line(&workspace, cx);
         assert!(line.contains(" print=[preparing 4"), "{line}");
         assert!(jobs.borrow().is_empty());

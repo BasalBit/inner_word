@@ -144,11 +144,9 @@ impl Workspace {
             Some(Printing::Panel) => "panel".to_string(),
             Some(Printing::Preparing) => {
                 let percent = self.print.progress.map_or(0, |progress| {
-                    if progress.blocks == 0 {
-                        100
-                    } else {
-                        progress.blocks_done * 100 / progress.blocks
-                    }
+                    (progress.blocks_done * 100)
+                        .checked_div(progress.blocks)
+                        .unwrap_or(100)
                 });
                 format!("preparing {percent}%")
             }

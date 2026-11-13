@@ -24,6 +24,14 @@ or by its path in the library (\"The Salt Road/Part one/Chapter 1\"; the last pa
 is enough when no other item has that name; a path that starts with / starts at the top).
 A name that fits several items is an error that lists them with their ids.";
 
+/// What the help of every command that takes Markdown says about images.
+const IMAGES_IN_MARKDOWN: &str = "\
+An image is a line of its own: ![description](image:<id>) names an image the library has
+(\"writer get\" prints them so), ![description](picture.png) brings one in from a file. A
+relative path is taken from the folder of --file, else from where the command runs; an
+address on the web stays a link.
+";
+
 /// `writer --help`: every command on one line.
 pub fn overview() -> String {
     let mut out = String::new();
@@ -130,6 +138,7 @@ pub fn exit_codes() -> String {
 /// the short way (`comments <document>`).
 fn left_column(spec: &Spec) -> String {
     let name = match spec.name {
+        "image list" => "images",
         "comment list" => "comments",
         "history list" => "history",
         "agents list" => "agents",
@@ -215,6 +224,9 @@ pub fn command(spec: &Spec) -> String {
             "\nThe text is Markdown. Without --content and --file it is read from standard input\n\
 when that is a pipe or a file.\n",
         ),
+    }
+    if spec.content != Content::None {
+        out.push_str(IMAGES_IN_MARKDOWN);
     }
     if spec.writes {
         out.push_str(
@@ -352,8 +364,9 @@ mod tests {
                 "the overview does not mention {word}"
             );
         }
+        // (70 before the two commands about images.)
         assert!(
-            overview.lines().count() <= 70,
+            overview.lines().count() <= 72,
             "the overview has {} lines",
             overview.lines().count()
         );

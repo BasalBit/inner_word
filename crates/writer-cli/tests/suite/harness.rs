@@ -205,6 +205,26 @@ impl Sandbox {
         run.stderr
     }
 
+    /// Writes a small picture file (a PNG of `size` pixels in one colour) into the
+    /// directory the binary is started in, under `name`, and says where it is.
+    pub fn picture(&self, name: &str, size: (u32, u32), rgb: [u8; 3]) -> PathBuf {
+        self.picture_at(&self.work().join(name), size, rgb)
+    }
+
+    /// The same at any path inside the sandbox.
+    pub fn picture_at(&self, path: &Path, size: (u32, u32), rgb: [u8; 3]) -> PathBuf {
+        assert!(
+            inside(path.parent().expect("a file in a folder"), &self.root())
+                || path.starts_with(self.root.path()),
+            "a picture outside the sandbox: {}",
+            path.display()
+        );
+        std::fs::create_dir_all(path.parent().expect("a file in a folder"))
+            .expect("the folder of the picture");
+        std::fs::write(path, png(size.0, size.1, rgb)).expect("the picture is written");
+        path.to_path_buf()
+    }
+
     /// Creates a document and gives its id as the commands take it (`doc:12`).
     #[track_caller]
     pub fn create(&self, title: &str, folder: Option<&str>, markdown: &str) -> String {
@@ -266,6 +286,68 @@ impl Sandbox {
             next_id: 1,
         }
     }
+}
+
+/// The bytes of a PNG file: `width` × `height` pixels in one colour, 8 bits a channel,
+/// its pixel data stored without compression. Written out here so that the tests of the
+/// binary need nothing but the binary to have a real picture file (the tool reads it
+/// with ImageIO, as it reads a user's).
+pub fn png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    fn chunk(kind: &[u8; 4], data: &[u8], out: &mut Vec<u8>) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        out.extend(&body);
+        out.extend(crc32(&body).to_be_bytes());
+    }
+    // Every row: the filter "none", then its pixels.
+    let mut rows = Vec::new();
+    for _ in 0..height {
+        rows.push(0);
+        for _ in 0..width {
+            rows.extend(rgb);
+        }
+    }
+    // A zlib stream of stored blocks, and the checksum of what they hold.
+    let mut packed = vec![0x78, 0x01];
+    let mut blocks = rows.chunks(65_535).peekable();
+    while let Some(block) = blocks.next() {
+        packed.push(u8::from(blocks.peek().is_none()));
+        packed.extend((block.len() as u16).to_le_bytes());
+        packed.extend((!(block.len() as u16)).to_le_bytes());
+        packed.extend(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &rows {
+        a = (a + u32::from(*byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    packed.extend(((b << 16) | a).to_be_bytes());
+
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    // 8 bits a channel, colour type 2 (RGB), and the three methods there is one of each.
+    header.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &header, &mut out);
+    chunk(b"IDAT", &packed, &mut out);
+    chunk(b"IEND", &[], &mut out);
+    out
 }
 
 /// What stands in for the running app: it holds the lock of the library, listens on the

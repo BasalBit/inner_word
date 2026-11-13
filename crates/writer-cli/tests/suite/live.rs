@@ -86,6 +86,7 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
     );
     app.served();
 
+    sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
     // One command line (or more) for every command that changes the library, with the
     // operation the app is asked for. `{version}` is the oldest version of doc:1.
     let lines: Vec<(&str, Vec<&str>, &str)> = vec![
@@ -126,6 +127,20 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
             "edit",
             vec!["edit", "doc:1", "--old", "at dawn", "--new", "at dusk"],
             "edit",
+        ),
+        (
+            // The file is read by the tool, in the directory it runs in; the app is
+            // handed its bytes.
+            "image add",
+            vec![
+                "image",
+                "add",
+                "doc:1",
+                "harbour.png",
+                "--alt",
+                "The harbour",
+            ],
+            "add_image",
         ),
         (
             "append",
@@ -360,11 +375,19 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
     );
     app.served();
 
+    let picture = sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
     let calls: Vec<(&str, Value, &str)> = vec![
         (
             "add_comment",
             json!({ "document": 1, "quote": "could not swim", "body": "Hm." }),
             "add_comment",
+        ),
+        (
+            // The server reads the file (it is given its whole path); the app is handed
+            // the bytes.
+            "add_image",
+            json!({ "document": 1, "path": picture.to_str().unwrap(), "description": "The harbour" }),
+            "add_image",
         ),
         (
             "reply_to_comment",

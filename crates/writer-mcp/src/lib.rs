@@ -49,6 +49,9 @@ documents (books, chapters, posts, notes) in folders. These tools work on that l
 not the app is running. Documents and folders are named by id or by their path in the library \
 (\"The Salt Road/Part one/Chapter 1\"; the last part alone is enough when nothing else has that name, and a \
 name that fits several items fails with the list of them); every result carries ids, and an id is exact. Text goes in and comes out as Markdown. \
+An image in a text is a line ![description](image:<id>): keep the line where the image should stay (it keeps \
+its size), leave it out and the image is removed; add_image, or a line ![description](/absolute/path.png) in \
+the Markdown you write, brings an image in from a file. \
 Start with list_library or search_library. To change part of a text use edit_document (an exact piece of \
 text), replace_section or append_to_document rather than replace_document; to review a text without changing \
 it, use add_comment. Before every change the text as it was is kept as a version (list_versions, \

@@ -44,7 +44,7 @@ fn the_handshake_the_tool_list_and_a_clean_exit() {
 
     let listed = client.request("tools/list", json!({}));
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 35);
+    assert_eq!(tools.len(), 36);
     let mut names: Vec<&str> = Vec::new();
     for tool in tools {
         let name = tool["name"].as_str().unwrap();
@@ -255,7 +255,7 @@ fn the_revision_without_a_handshake() {
 
     let listed = client.request("tools/list", json!({ "_meta": modern_meta() }));
     assert_eq!(listed["result"]["resultType"], "complete");
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 35);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 36);
     assert!(listed["result"]["ttlMs"].as_u64().is_some());
     assert_eq!(listed["result"]["cacheScope"], "public");
 

@@ -305,7 +305,8 @@ library itself.",
         about: "Prints the text of a document: as Markdown (headings, lists, emphasis, links, code), as \
 plain text, or as the JSON the app stores, which has everything (block ids, colours, fonts, \
 comment anchors). Nothing but the text is printed, so the output can be piped or saved. With \
---section only the part under one heading is printed.",
+--section only the part under one heading is printed. An image is printed as a line \
+![description](image:<id>); \"writer images\" lists the images of a document with their sizes.",
         positionals: &[arg("document", DOCUMENT)],
         options: &[
             FORMAT_READ,
@@ -377,8 +378,9 @@ exist unless --create-folders is given.",
         summary: "Replace the whole text of a document",
         about: "Replaces the text of the document with the given Markdown. Paragraphs that read the same \
 are left as they are, with their formatting and comments; still, to change part of a text, \
-\"writer edit\", \"writer replace-section\" and \"writer append\" are the better commands. The \
-text before the change is kept as a version.",
+\"writer edit\", \"writer replace-section\" and \"writer append\" are the better commands. An \
+image stays, with its size, where its line ![description](image:<id>) stays in the text, and is \
+removed where the line is left out. The text before the change is kept as a version.",
         positionals: &[arg("document", DOCUMENT)],
         content: Content::Required,
         examples: &[
@@ -395,7 +397,9 @@ given (words, punctuation, capitals) and exactly once, unless --all or --occurre
 otherwise: quote enough of the words around it. It is matched against the text without markup \
 (as \"writer get --format text\" prints it); a piece copied from the Markdown is found too. \
 --new is Markdown: plain words take the formatting of what they replace, an empty --new \
-deletes. Formatting and comments outside the replaced text stay as they are.",
+deletes. Formatting and comments outside the replaced text stay as they are. An --old that runs \
+across an image is refused, so that no image goes unnoticed: replace the text before and after \
+it separately, or give --old as Markdown with the line of the image in it.",
         positionals: &[arg("document", DOCUMENT)],
         options: &[
             value(
@@ -499,6 +503,76 @@ unless --with-heading is given. A heading is named by its text.",
         ..writing("replace-section", Group::Documents)
     },
     Spec {
+        synopsis: "<document>",
+        summary: "The images of a document: id, size, width, description",
+        about: "Prints the images of a document in the order of its text: for each the line it is in \
+Markdown (![description](image:<id>)), the size of its picture, how wide it is drawn (a share \
+of the text column) and where it stands on its line. Also written \"writer images \
+<document>\". To look at the pictures themselves, export the document as Markdown: they are \
+written into a folder beside the file.",
+        positionals: &[arg("document", DOCUMENT)],
+        examples: &[
+            "writer images doc:12",
+            "writer image list \"The Salt Road/Part one/Chapter 1\" --json",
+        ],
+        ..reading("image list", Group::Documents)
+    },
+    Spec {
+        synopsis: "<document> <file>",
+        summary: "Add an image from a file (--alt, --width, --align, --at)",
+        about: "Adds an image file to a document, as a block of its own: at the end, or where --at \
+says. PNG, JPEG, GIF, HEIC, TIFF, WebP and BMP work; the file is read by this tool and stored \
+in the library. Without --width the image has its own size on the page; it is never drawn \
+wider than the text or taller than a page, and the result says the width it was given. It is \
+centered unless --align says otherwise. In the Markdown of the document the image then reads \
+as a line ![description](image:<id>): a text that is written back keeps the image where that \
+line stays. The text before the change is kept as a version.",
+        positionals: &[
+            arg("document", DOCUMENT),
+            arg(
+                "file",
+                "The image file (a relative path is taken from where the command runs)",
+            ),
+        ],
+        options: &[
+            value(
+                "alt",
+                "text",
+                "What the image shows: for whoever cannot see it, and for the exports",
+            ),
+            value(
+                "width",
+                "percent",
+                "How wide it is drawn: a share of the text column, 5 to 100",
+            ),
+            value(
+                "align",
+                "left|center|right",
+                "Where it stands on its line (default: center)",
+            ),
+            value(
+                "at",
+                "place",
+                "end (default), start, before-heading, after-heading or end-of-section",
+            ),
+            value(
+                "heading",
+                "heading",
+                "The heading the place refers to, by its text (for the three places at a heading)",
+            ),
+            value(
+                "heading-occurrence",
+                "n",
+                "Which heading, when several have that text: its number among them, from 1",
+            ),
+        ],
+        examples: &[
+            "writer image add doc:12 ~/Pictures/harbour.jpg --alt \"The harbour at dusk\"",
+            "writer image add \"Notes/Trip\" map.png --width 50 --at after-heading --heading \"Day 2\" --author Claude",
+        ],
+        ..writing("image add", Group::Documents)
+    },
+    Spec {
         aliases: &["copy", "cp"],
         synopsis: "<document>",
         summary: "Copy a document, beside the original",
@@ -528,7 +602,10 @@ the id of the copy.",
         about: "Writes a document to a file, or every document of a folder to one file in the order of \
 the library (\"/\" is the whole library). The format is taken from the ending of the path (.md, \
 .docx, .txt) unless --format names it. A file that exists is not replaced unless --overwrite is \
-given. Exporting only reads the library, so it works while the app is open.",
+given. Exporting only reads the library, so it works while the app is open. The images of a \
+Markdown export are written as files into a folder beside it (\"chapter images\" for \
+chapter.md) and linked from the text, which is also the way to look at a picture; a DOCX holds \
+its pictures.",
         positionals: &[arg("item", ITEM)],
         options: &[
             value("to", "path", "The file to write"),
@@ -846,7 +923,9 @@ agent. With --library the server works on that library.",
 
 /// The first words that open a group, with the group's own name (the first word of its
 /// commands).
-const GROUPS: [(&str, &str); 6] = [
+const GROUPS: [(&str, &str); 8] = [
+    ("image", "image"),
+    ("images", "image"),
     ("comment", "comment"),
     ("comments", "comment"),
     ("history", "history"),

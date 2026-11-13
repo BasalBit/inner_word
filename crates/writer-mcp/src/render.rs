@@ -9,9 +9,9 @@ use writer_agent::live::{CHANGES_SWITCH, Refusal};
 use writer_agent::{
     CommentChanged, CommentList, CommentThreadInfo, ContentChanged, DocumentChanged,
     DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, ExportFormat,
-    Exported, FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, LibraryStatus,
-    MatchedAs, SearchResults, Time, TrashEmptied, TrashItem, TrashList, Tree, TreeFolder,
-    VersionInfo, VersionList, VersionRestored, VersionText, Written,
+    Exported, FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, ImageSummary,
+    LibraryStatus, MatchedAs, SearchResults, Time, TrashEmptied, TrashItem, TrashList, Tree,
+    TreeFolder, VersionInfo, VersionList, VersionRestored, VersionText, Written,
 };
 
 /// A number with thin grouping: `12,345`.
@@ -525,6 +525,16 @@ pub fn content_changed(did: &str, changed: &ContentChanged) -> String {
     if !blocks.is_empty() {
         facts.push(format!("blocks: {}", blocks.join(", ")));
     }
+    let mut images: Vec<String> = Vec::new();
+    if changed.images_added > 0 {
+        images.push(format!("{} added", changed.images_added));
+    }
+    if changed.images_removed > 0 {
+        images.push(format!("{} removed", changed.images_removed));
+    }
+    if !images.is_empty() {
+        facts.push(format!("images: {}", images.join(", ")));
+    }
     facts.push(format!(
         "{} -> {} words",
         count(changed.words_before),
@@ -538,6 +548,9 @@ pub fn content_changed(did: &str, changed: &ContentChanged) -> String {
             .map(|heading| format!("\"{heading}\""))
             .collect();
         out.push_str(&format!("Under: {}\n", headings.join(", ")));
+    }
+    if let Some(image) = &changed.image {
+        out.push_str(&format!("The image: {}\n", image_line(image)));
     }
     if let Some(snapshot) = &changed.snapshot {
         out.push_str(&format!(
@@ -924,6 +937,73 @@ pub fn exported(exported: &Exported) -> String {
         exported.path.display(),
         count(exported.bytes)
     ));
+    // The pictures a Markdown file links: where they are, so that they can be opened.
+    if let Some(folder) = exported.assets.first().and_then(|file| file.parent()) {
+        out.push_str(&format!(
+            "Its {} in {}:\n",
+            if exported.assets.len() == 1 {
+                "picture is".to_string()
+            } else {
+                format!("{} pictures are", count(exported.assets.len() as u64))
+            },
+            folder.display()
+        ));
+        for file in &exported.assets {
+            let name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            out.push_str(&format!("  {name}\n"));
+        }
+    }
+    out
+}
+
+/// One image in a sentence: how it reads in Markdown, how large the picture is, and
+/// what Markdown does not say of it (how wide it is drawn, where it stands).
+fn image_line(image: &ImageSummary) -> String {
+    let place = match image.align.as_str() {
+        "center" => "centered",
+        "right" => "at the right",
+        _ => "at the left",
+    };
+    let mut line = format!(
+        "![{}](image:{}), {} x {} pixels",
+        one_line(&image.description),
+        image.id,
+        image.pixels.0,
+        image.pixels.1
+    );
+    if let Some(format) = &image.format {
+        line.push_str(&format!(" ({})", format.to_ascii_uppercase()));
+    }
+    line.push_str(&format!(
+        ", {} % of the text column wide, {place}",
+        image.width_percent
+    ));
+    if image.missing {
+        line.push_str("; the library does not have the picture itself");
+    }
+    line
+}
+
+/// The images of a document, one line each.
+pub fn images(text: &DocumentText) -> String {
+    let name = document_name(&text.document);
+    if text.images.is_empty() {
+        return format!("No images in {name}.\n");
+    }
+    let mut out = format!(
+        "{} in {name}, in the order of the text:\n",
+        plural(text.images.len() as u64, "image", "images")
+    );
+    for image in &text.images {
+        out.push_str(&format!("  block {}  {}\n", image.block, image_line(image)));
+    }
+    out.push_str(
+        "In the Markdown of the document each is the line shown here: keep it where the image \
+         should stay.\n",
+    );
     out
 }
 
@@ -1055,6 +1135,38 @@ mod tests {
         );
         assert!(note.contains("has only just started"), "{note}");
         assert!(!status.contains("switched off") && !note.contains("switched off"));
+    }
+
+    #[test]
+    fn an_image_is_said_as_it_reads_and_with_what_markdown_does_not_say() {
+        let image = ImageSummary {
+            id: "3f2a9c1b5d6e7f80a1b2c3d4e5f60718".into(),
+            block: 4,
+            format: Some("jpeg".into()),
+            pixels: (1600, 1067),
+            width_percent: 50,
+            align: "center".into(),
+            description: "The harbour\nat dusk".into(),
+            missing: false,
+        };
+        assert_eq!(
+            image_line(&image),
+            "![The harbour at dusk](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718), 1600 x 1067 pixels \
+             (JPEG), 50 % of the text column wide, centered"
+        );
+        let missing = ImageSummary {
+            format: None,
+            align: "right".into(),
+            description: String::new(),
+            missing: true,
+            ..image.clone()
+        };
+        assert_eq!(
+            image_line(&missing),
+            "![](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718), 1600 x 1067 pixels, 50 % of the text \
+             column wide, at the right; the library does not have the picture itself"
+        );
+        assert!(image_line(&image).is_ascii());
     }
 
     #[test]

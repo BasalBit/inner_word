@@ -6,6 +6,7 @@
 //! text, or with `--json` its data.
 
 use std::io::{IsTerminal, Read};
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use writer_mcp::{ErrorKind, Failure, Item, Reply, Toolbox};
@@ -117,6 +118,50 @@ fn content(spec: &Spec, parsed: &Parsed) -> Result<Option<String>, Failure> {
     }
 }
 
+/// The directory a relative path of an image file is taken from: the directory of the
+/// file the text came from (`--file`, or `--new-file` of an edit), else the directory the
+/// tool was started in. `None` when that directory cannot be told.
+pub fn base_dir(parsed: &Parsed) -> Option<PathBuf> {
+    let started_in = std::env::current_dir().ok();
+    let named = ["file", "new-file"]
+        .into_iter()
+        .find_map(|option| parsed.value(option))
+        .filter(|path| *path != "-");
+    match named {
+        Some(file) => {
+            let folder = Path::new(file).parent().unwrap_or(Path::new(""));
+            if folder.is_absolute() {
+                Some(folder.to_path_buf())
+            } else {
+                Some(started_in?.join(folder))
+            }
+        }
+        None => started_in,
+    }
+}
+
+/// One of the words an option takes, or the failure that names them.
+fn one_of<'a>(
+    spec: &Spec,
+    option: &str,
+    value: &'a str,
+    words: &[&'a str],
+) -> Result<&'a str, Failure> {
+    let given = value.trim().to_ascii_lowercase();
+    words
+        .iter()
+        .copied()
+        .find(|word| *word == given)
+        .ok_or_else(|| {
+            Failure::invalid(format!(
+                "--{option} is one of {}, and \"{value}\" is none of them\nusage: {}\nSee \"writer {} --help\".",
+                words.join(", "),
+                crate::spec::usage(spec),
+                spec.name
+            ))
+        })
+}
+
 /// An option that may come from the command line or from a file (`--old` / `--old-file`).
 fn text_option(parsed: &Parsed, name: &str, file: &str) -> Result<Option<String>, Failure> {
     match (parsed.value(name), parsed.value(file)) {
@@ -145,6 +190,25 @@ fn placement(arguments: &mut Arguments, parsed: &Parsed) {
         .set_flag("first", parsed.flag("first"))
         .set_some("before", parsed.value("before"))
         .set_some("after", parsed.value("after"));
+}
+
+/// What the command line adds when the file of `writer image add` is not there: where a
+/// path that does not start at the top was looked for.
+fn missing_file(failure: Failure, file: &str) -> Failure {
+    let relative = !file.starts_with('/') && !file.starts_with('~');
+    if failure.kind != ErrorKind::Invalid
+        || !failure.message.starts_with("there is no file ")
+        || !relative
+    {
+        return failure;
+    }
+    let started_in = std::env::current_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_else(|_| "the directory the command runs in".to_string());
+    Failure::invalid(format!(
+        "{}\nA path that does not begin with / or ~/ is taken from where the command runs: {started_in}",
+        failure.message
+    ))
 }
 
 /// Runs a command about the library.
@@ -322,6 +386,57 @@ pub fn run(
                 )?;
             arguments.set("markdown", content(spec, parsed)?.unwrap_or_default());
             call("replace_section", arguments)
+        }
+        "image list" => {
+            arguments.set("document", arg(0));
+            call("list_images", arguments)
+        }
+        "image add" => {
+            arguments
+                .set("document", arg(0))
+                .set("path", arg(1))
+                .set_some("description", parsed.value("alt"))
+                .set_some("heading", parsed.value("heading"))
+                .set_number(
+                    "heading_occurrence",
+                    "--heading-occurrence",
+                    parsed.value("heading-occurrence"),
+                )?;
+            if let Some(align) = parsed.value("align") {
+                arguments.set(
+                    "align",
+                    one_of(spec, "align", align, &["left", "center", "right"])?,
+                );
+            }
+            if let Some(place) = parsed.value("at") {
+                let places = [
+                    "end",
+                    "start",
+                    "before-heading",
+                    "after-heading",
+                    "end-of-section",
+                ];
+                arguments.set(
+                    "position",
+                    one_of(spec, "at", place, &places)?.replace('-', "_"),
+                );
+            }
+            if let Some(width) = parsed.value("width") {
+                // "50" and "50%" are both a way to write it.
+                let percent = width.trim().trim_end_matches('%').trim();
+                match percent.parse::<u64>() {
+                    Ok(percent @ 5..=100) => {
+                        arguments.set("width_percent", percent);
+                    }
+                    _ => {
+                        return Err(Failure::invalid(format!(
+                            "--width is a share of the text column in percent, from 5 to 100, and \"{width}\" is not\nusage: {}\nSee \"writer image add --help\".",
+                            crate::spec::usage(spec)
+                        )));
+                    }
+                }
+            }
+            call("add_image", arguments).map_err(|failure| missing_file(failure, arg(1)))
         }
         "duplicate" => {
             arguments

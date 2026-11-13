@@ -81,8 +81,16 @@ fn main() -> ExitCode {
             let outcome = if spec.name.starts_with("agents ") {
                 agents::run(spec, &parsed, &globals)
             } else {
-                library(&globals)
-                    .and_then(|library| run::run(&Toolbox::new(library), spec, &parsed, &globals))
+                library(&globals).and_then(|library| {
+                    // An image file named by a relative path is looked for from the
+                    // folder of the file the text came from, else from here. (The MCP
+                    // server is given no such folder: it takes whole paths.)
+                    let library = match run::base_dir(&parsed) {
+                        Some(folder) => library.with_base_dir(folder),
+                        None => library,
+                    };
+                    run::run(&Toolbox::new(library), spec, &parsed, &globals)
+                })
             };
             match outcome {
                 Ok(reply) => print(&render(&reply, globals.json)),

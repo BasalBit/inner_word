@@ -7,6 +7,7 @@ mod suite {
     mod agents;
     mod documents;
     mod guard;
+    mod images;
     mod items;
     mod live;
     mod mcp;

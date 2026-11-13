@@ -13,14 +13,15 @@
 //!
 //! Three operations are not listed as tools and exist only for the command line, which
 //! asks for them with an explicit flag: `delete_document`, `delete_folder` and
-//! `empty_trash` erase for good. The operations ending in `_item` take a name that may be
-//! a document or a folder and are the command line's too.
+//! `empty_trash` erase for good. `list_images` is the command line's too (`writer
+//! images`): it only reads, and a model has the same list in the result of
+//! `read_document`, so the tools that read stay the ones they were.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use writer_agent::{
-    AddCommentRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
+    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
     EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport, ExportRequest, FindRequest,
     FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind, Library, ListCommentsRequest,
@@ -147,8 +148,9 @@ const DOCUMENT: &str = "The document: its id (12 or \"doc:12\") or its path in t
 const FOLDER: &str = "The folder: its id (3 or \"folder:3\") or its path in the library (\"The Salt Road/Part one\").";
 const FOLDER_OR_TOP: &str =
     "The folder: its id (3 or \"folder:3\") or its path in the library; \"/\" is the top level.";
-const MARKDOWN: &str =
-    "The text, as Markdown (headings, lists, quotes, code, *emphasis*, [links](url)).";
+const MARKDOWN: &str = "The text, as Markdown (headings, lists, quotes, code, *emphasis*, [links](url)). An image is a \
+line of its own: ![description](image:<id>) for one the library has, ![description](/absolute/path.png) to \
+bring one in from a file.";
 const HEADING: &str = "The heading, by its text (\"The harbour\"); # signs in front (\"## The harbour\") also say its level.";
 const HEADING_OCCURRENCE: &str =
     "Which one, when several headings have that text: its number among them, from 1.";
@@ -305,6 +307,21 @@ fn replace_section(library: &Library, arguments: Map<String, Value>) -> Result<R
         &changed,
         render::content_changed("Replaced a section of", &changed),
     )
+}
+
+fn add_image(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.add_image(&request::<AddImageRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::content_changed("Added an image to", &changed),
+    )
+}
+
+/// The images of a document: what `read_document` lists beside the text, by itself.
+fn list_images(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let text = library.read(&request::<ReadRequest>(arguments)?)?;
+    let data = json!({ "document": text.document, "images": text.images });
+    reply(&data, render::images(&text))
 }
 
 fn rename_document(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
@@ -489,6 +506,16 @@ fn operations() -> Vec<Operation> {
         schema,
         run,
     };
+    let hidden_read = |name, title, description, schema, run| Operation {
+        name,
+        title,
+        description,
+        effect: Effect::Read,
+        idempotent: true,
+        listed: false,
+        schema,
+        run,
+    };
     let place = |mut properties: Vec<(&'static str, Value)>| {
         properties.push(("first", boolean(FIRST)));
         properties.push(("before", string(BEFORE)));
@@ -594,7 +621,9 @@ restore_document and restore_folder bring them back.",
             "Read a document",
             "The text of a document: as Markdown (default), as plain text without markup, or as the JSON the app \
 stores. Give a heading to read only that section. The plain text is what edit_document and add_comment match \
-against, character for character.",
+against, character for character. An image is a line ![description](image:<id>) in the Markdown: keep that \
+line in a text you write back and the image stays, with its size; the result lists the images with what the \
+line does not say (width, alignment). You cannot see a picture here: export writes the pictures as files.",
             reads(
                 vec![
                     ("document", string(DOCUMENT)),
@@ -646,7 +675,9 @@ occurrence.",
             "Create a document",
             "Creates a new document from Markdown and returns its id and path. Without a title the title \
 follows the text (the first heading, else the first line). The folder must exist unless create_folders is \
-true. What the app has no form for (a table, an image) is kept as plain text and named in the warnings.",
+true. What the app has no form for (a table, a footnote) is kept as plain text and named in the warnings. \
+An image file named by its absolute path, ![description](/absolute/path.png), is read and becomes an image \
+of the document; an address on the web stays a link.",
             false,
             writes(
                 place(vec![
@@ -678,7 +709,9 @@ true. What the app has no form for (a table, an image) is kept as plain text and
             "Replace the whole text",
             "Replaces the whole text of a document with new Markdown. Paragraphs that read the same are left as \
 they are, with their formatting and comments, but for a change to part of a text edit_document, \
-replace_section and append_to_document are the better tools. The text as it was is kept as a version first.",
+replace_section and append_to_document are the better tools. An image stays where its line \
+![description](image:<id>) stays, and goes when the line is left out. The text as it was is kept as a \
+version first.",
             true,
             writes(
                 vec![
@@ -697,7 +730,9 @@ must be in the document exactly as given (words, punctuation, quotation marks, c
 unless all is true or occurrence picks one: include enough of the words around it. It is matched against the \
 text without markup; a piece copied from the Markdown form is found too. new_text is Markdown: plain words \
 take the formatting of what they replace, an empty text deletes. Formatting and comments outside the replaced \
-text stay. The text as it was is kept as a version first.",
+text stay. An old_text that runs across an image is refused: replace the text before and after it \
+separately, or give old_text as Markdown with the line of the image in it. The text as it was is kept as a \
+version first.",
             false,
             writes(
                 vec![
@@ -801,6 +836,70 @@ include_heading is true. The text as it was is kept as a version first.",
                 &["document", "heading", "markdown"],
             ),
             replace_section,
+        ),
+        add(
+            "add_image",
+            "Add an image",
+            "Adds an image from a file on this Mac to a document, as a block of its own: at the end, at the \
+start, or at a heading. The file is read here and stored in the library; PNG, JPEG, GIF, HEIC, TIFF, WebP \
+and BMP work, anything else fails with the reason. Without width_percent the image has its own size on the \
+page, and it is never wider than the text or taller than a page; without align it is centered. In the \
+Markdown of the document it then reads as a line ![description](image:<id>). The text as it was is kept as \
+a version first.",
+            false,
+            writes(
+                vec![
+                    ("document", string(DOCUMENT)),
+                    (
+                        "path",
+                        string(
+                            "The image file: its absolute path on this Mac (\"/Users/ada/Pictures/harbour.jpg\").",
+                        ),
+                    ),
+                    (
+                        "description",
+                        string(
+                            "What the image shows, in a line: for whoever cannot see it, and for the exports.",
+                        ),
+                    ),
+                    (
+                        "width_percent",
+                        integer(
+                            "How wide it is drawn: a share of the text column in percent, 5 to 100. Default: its own size.",
+                            5,
+                        ),
+                    ),
+                    (
+                        "align",
+                        one_of(
+                            "Where it stands on its line. Default: \"center\".",
+                            &["left", "center", "right"],
+                        ),
+                    ),
+                    (
+                        "position",
+                        one_of(
+                            "Where: \"end\" of the document (default), \"start\", \"before_heading\", \"after_heading\" (right under the heading line) or \"end_of_section\".",
+                            &[
+                                "end",
+                                "start",
+                                "before_heading",
+                                "after_heading",
+                                "end_of_section",
+                            ],
+                        ),
+                    ),
+                    (
+                        "heading",
+                        string(
+                            "The heading the position refers to; required for the three positions at a heading. By its text; # signs in front also say its level.",
+                        ),
+                    ),
+                    ("heading_occurrence", integer(HEADING_OCCURRENCE, 1)),
+                ],
+                &["document", "path"],
+            ),
+            add_image,
         ),
         // ----- documents -------------------------------------------------------------
         change(
@@ -1140,7 +1239,9 @@ so a restore can itself be taken back.",
             "Export to a file",
             "Writes a document, or a folder as one file with its documents in the order of the library, to a \
 file on disk: Markdown, DOCX or plain text. Give exactly one of document and folder. Only reads the library, \
-so it works while the app is open. A file that exists is not replaced unless overwrite is true.",
+so it works while the app is open. A file that exists is not replaced unless overwrite is true. The images \
+of a Markdown export are written as files into a folder beside it (\"<name> images\") and linked from the \
+text: that is how to look at a picture of a document. A DOCX holds its pictures.",
             true,
             args::object(
                 vec![
@@ -1175,6 +1276,14 @@ so it works while the app is open. A file that exists is not replaced unless ove
             export,
         ),
         // ----- for the command line only ---------------------------------------------
+        hidden_read(
+            "list_images",
+            "List the images",
+            "The images of a document, in the order of the text: for each the line it is in Markdown, the \
+size of the picture, how wide it is drawn and where it stands.",
+            reads(vec![("document", string(DOCUMENT))], &["document"]),
+            list_images,
+        ),
         hidden(
             "delete_document",
             "Erase a document",
@@ -1496,7 +1605,7 @@ mod tests {
                 assert!(!properties.contains_key("dry_run"), "{}", operation.name);
             }
         }
-        assert_eq!(toolbox.tools().len(), 35);
+        assert_eq!(toolbox.tools().len(), 36);
         // Nothing that erases for good is offered as a tool.
         for tool in toolbox.tools() {
             assert!(
@@ -1512,9 +1621,31 @@ mod tests {
                     .contains_key("permanently")
             );
         }
-        for hidden in ["delete_document", "delete_folder", "empty_trash"] {
+        for hidden in [
+            "delete_document",
+            "delete_folder",
+            "empty_trash",
+            "list_images",
+        ] {
             assert!(toolbox.operation_names().contains(&hidden));
+            assert!(toolbox.tools().iter().all(|tool| tool.name != hidden));
         }
+        // The tools that only read are the twelve they were: what the app's assistant
+        // is given was checked for those, and an image is read through them (a line of
+        // Markdown, and the list in the result of read_document).
+        let reading: Vec<&str> = toolbox
+            .tools()
+            .iter()
+            .filter(|tool| tool.effect == Effect::Read)
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(reading.len(), 12, "{reading:?}");
+        let add_image = toolbox
+            .tools()
+            .iter()
+            .find(|tool| tool.name == "add_image")
+            .expect("add_image is a tool");
+        assert_eq!(add_image.effect, Effect::Add);
     }
 
     #[test]

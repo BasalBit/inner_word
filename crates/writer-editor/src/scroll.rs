@@ -470,13 +470,17 @@ impl Editor {
                     let first_row = position.block == 0
                         && placed.layout.row_for_caret(position.offset, upstream) == 0;
                     let by_top = if first_row { px(0.) } else { top - margin };
-                    if bottom - top > viewport_height - margin - below {
-                        // A row higher than the viewport has room for (a
-                        // picture; never text): its top and its bottom
-                        // cannot both be brought into view, and the two
-                        // rules below would send the view back and forth.
-                        // It is fitted by its top, and left alone where
-                        // it fills the viewport already.
+                    if placed.layout.image.is_some()
+                        && bottom - top > viewport_height - margin - below
+                    {
+                        // A picture higher than the viewport has room for:
+                        // its top and its bottom cannot both be brought
+                        // into view, and the two rules below would send
+                        // the view back and forth. It is fitted by its
+                        // top, and left alone where it fills the viewport
+                        // already. (Rows of text are left to the two
+                        // rules: none is higher than a viewport that
+                        // scrolls.)
                         let fills = top <= scroll_y && bottom >= scroll_y + viewport_height;
                         (!fills).then_some(by_top)
                     } else if top - margin < scroll_y {

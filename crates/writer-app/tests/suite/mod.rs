@@ -13,6 +13,7 @@ mod keymap;
 mod launch;
 mod live;
 mod mouse;
+mod print;
 mod saving;
 mod session;
 mod settings;

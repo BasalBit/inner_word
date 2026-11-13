@@ -172,6 +172,8 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
                 "Save Now",
                 "Rename…",
                 "Export…",
+                "Print…",
+                "Cancel Printing",
                 "Version History…",
                 "Document Settings…",
                 "Close Window",

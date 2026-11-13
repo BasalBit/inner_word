@@ -19,3 +19,11 @@ core-text = "21"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed" }
 # AppKit's print operation and PDFKit, through the Objective-C binding the app uses.
 objc.workspace = true
+
+# The print operation run as a save job. AppKit wants the main thread of the
+# process for it, which a test of the default harness never has: this target is
+# a program of its own (`cargo test -p writer-print` runs it with the others).
+[[test]]
+name = "save_job"
+path = "tests/save_job.rs"
+harness = false

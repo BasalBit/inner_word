@@ -152,6 +152,63 @@ Shortcuts. A book takes a moment to prepare: a note says so, and its Cancel
 (or File > Cancel Printing) stops it.
 
 
+Pictures
+--------
+
+Insert > Image... puts a picture into the text (you can choose several at
+once). So does "Image" in the insert menu you get by typing "/", a paste (a
+screenshot, a picture copied in Preview, an image file copied in the Finder,
+"Copy Image" in a browser), and an image file dragged in from the Finder. PNG,
+JPEG and GIF are kept as they are; HEIC, TIFF, WebP and BMP are converted on
+the way in; a very large picture is made smaller. An SVG or a PDF is not a
+picture here, and The Writer says so. Pictures dragged straight out of a
+browser or out of Photos do not arrive: save or export the file first, or
+copy and paste.
+
+A picture stands on a line of its own. Click it to select it: drag a corner
+to resize it (it snaps to a quarter, a half, three quarters and the whole
+width of the text, and to its own size), drag the picture itself to move it
+between paragraphs, press Backspace to delete it. From the keyboard, the
+arrows stop on a picture, the keys that make text larger and smaller
+(Shift-Command-. and Shift-Command-, by default) resize it, the alignment
+keys put it left, in the middle or right, and Option-Up and Option-Down move
+it. Return on a selected picture starts a line below it and Shift-Return a
+line above it. A right-click on the picture, and Format > Image in the menu
+bar, have the sizes and "Description...".
+
+The width of a picture is a share of the width of the text, so "50 %" is
+half as wide as the text in the flowing column, on a page, in print and in a
+Word document alike. The flowing column is wider than a page, so a picture
+looks larger there than on paper.
+
+"Description..." is a line that says what the picture shows. It is what a
+screen reader reads out in an exported Word document, the alternative text
+in exported Markdown, and what agents and the assistant are told about the
+picture (they never see the picture itself). The Writer cannot read it out
+with VoiceOver inside the app.
+
+Exports carry your pictures: a Word document holds them, and a Markdown file
+gets a folder beside it ("Chapter 2 images" next to "Chapter 2.md") with the
+picture files, which the Markdown links. Markdown copied to the clipboard
+names each picture by its id in the library instead. Print puts them on
+paper.
+
+What a picture file says about itself stays in it when the file is stored as
+it came: the camera and the date, an author and a copyright note, a place
+name somebody typed in. All of that travels with the picture into a Word
+document and into the picture folder of a Markdown export. The one thing
+The Writer always takes out is the GPS position. (A picture that had to be
+converted or made smaller carries nothing of the kind.)
+
+Pictures are stored once, in a file "images.db" beside your library, and a
+second copy of them is kept in the "backups" folder there, so they take
+their size on disk twice. Deleting a picture, or the document it is in, does
+not free the space at once: The Writer removes a picture's data only when
+nothing has used it for thirty days, not a document, not the trash, not a
+kept version. If a picture's data is ever missing, its place in the text
+stays and says "Missing image"; nothing is dropped from the document.
+
+
 Fonts
 -----
 
@@ -255,6 +312,11 @@ File > Version History lists it with its reason ("Before an edit by Claude")
 and brings it back. What an agent deletes goes to the trash. Comments an
 agent leaves show up in the comments of the document under the agent's name.
 
+An agent reads a picture as one line with its description, and never sees
+the picture itself unless it exports the document. When it edits a text the
+pictures in it stay where they are, as wide as they were. It can add a
+picture from a file on your Mac ("writer image add").
+
 If you would rather have agents wait until the app is closed, switch "Agents
 can make changes while The Writer is open" off in The Writer > Agents... .
 While the app is open they can then only read, and to change something they
@@ -279,4 +341,5 @@ The Writer keeps your library in
     ~/Library/Application Support/The Writer
 
 Removing the app does not remove your documents. Back up that folder to keep
-a copy of them.
+a copy of them: "library.db" is your documents, "images.db" the pictures in
+them.

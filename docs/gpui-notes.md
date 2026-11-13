@@ -1077,6 +1077,16 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   before `run_until_parked()` nothing a spawned task does has happened; tested, the
   picture that is stored before its block appears). A real `std::thread` is not on that
   executor: the test waits for it in a loop (see above).
+- **Quit on the `TestAppContext` the test was given, never through a `VisualTestContext`.**
+  `TestAppContext::quit` (`$G/src/app/test_context.rs:168-171`) first runs the clean-ups of
+  the test, and one of them drops the `VisualTestContext` that `add_window_view` leaked
+  for the test (`into_mut`); then it calls `shutdown` through `self`. Called as `vcx.quit()`
+  (by deref), `self` is that freed context: the process dies of `SIGSEGV`, with no Rust
+  message (tested the hard way, `crates/writer-app/tests/suite/images.rs`). End the
+  borrow of the `&mut VisualTestContext` and call `cx.quit()`: the hooks of quitting
+  (`on_app_quit`) run, with the windows still there, and the windows are gone afterwards.
+  `vcx.simulate_close()` calls the window's `on_window_should_close` handler and leaves
+  the window open; remove it with `window.remove_window()`.
 - **What a view emitted inside `window.update(cx, ..)` from an async task has been delivered
   when `update` returns** (read from `$G/src/app.rs`: `update_window_id` runs inside
   `App::update`, and `finish_update` flushes the effects when the outermost update ends,

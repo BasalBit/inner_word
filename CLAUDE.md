@@ -7,28 +7,28 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 
 | Crate | Kind | Responsibility |
 |---|---|---|
-| `crates/writer-core` | pure Rust | Document model, headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
+| `crates/writer-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
 | `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. `library.db` is at schema 3 since documents may hold images: a version that does not know them refuses the library. |
 | `crates/writer-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
 | `crates/writer-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows CoreText measured at another width than the layout, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
-| `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). |
+| `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s), and the seams the crates below plug into. |
-| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text, the floating format bar over a mouse selection. |
+| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s), images (`src/images.rs`: the picture of an image block decoded in the background at the size it is drawn, the outline and handles of the selected one, resize and move with the pointer, insert, paste, copy and drop; the bytes come through the `ImageProvider` an editor is given, `FakeImages` in tests), and the seams the crates below plug into. |
+| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text and of an image, the popover for an image's description, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted) and the library sidebar panel. |
+| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody) and the library sidebar panel. |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
-| `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text. |
-| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, comments, history, export, trash) over `writer-store`, `writer-core` and `writer-export`, with the app-is-open rule and the safety net (a version before every change) inside it. |
-| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream. |
-| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts, and `writer mcp`, the MCP server. Ships inside the app bundle at `Contents/MacOS/writer`. |
+| `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
+| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `writer-store`, `writer-core`, `writer-export` and `writer-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. |
+| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (36 tools, 12 of them read-only; `add_image` is among those that change the library, and no tool returns a picture). |
+| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts (`writer image add`, `writer images` among its commands), and `writer mcp`, the MCP server. Ships inside the app bundle at `Contents/MacOS/writer`. |
 | `crates/writer-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`writer agents ...`) and by the app (the Agents panel). |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
@@ -99,11 +99,17 @@ written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`
 `print:pdf:<path>` (writes the exact PDF "Print…" would hand to the print panel and says what
 was made: pages, paper, rows, `rows off`, images, fonts, the time) and `print:job:<path>` (the
 same PDF through the real macOS print operation as a save job, without a panel; see
-"Printing"),
+"Printing"), `image:<path>` (inserts the image file at the caret as Insert > Image… does once
+the file is chosen, waits until it is stored and in the text and says `image: inserted <id>
+1600x1067 at block 3`, or the sentence for a file that cannot be used) and `image:select:<n>`
+(puts the caret on the n-th image, from 1; see "Images"),
 `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=[idle]`,
-`print=[preparing 40%]`, `print=[panel]`),
+`print=[preparing 40%]`, `print=[panel]`), images (`images=3`, and with the caret on one
+`image=[block=2 width=50% natural=1600x1067@144 align=center ready alt="..."]`: the block
+from 0, the width as a share of the text column, pixels and pixels per inch, and `ready`,
+`loading`, `missing` or `broken` for its picture),
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
 is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
@@ -125,7 +131,8 @@ lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a palette command
 `keys:cmd-shift-p; type:version history; keys:enter`; the settings of the open document
 `keys:cmd-shift-p; type:document settings; keys:enter`; a context menu `keys:ctrl-enter`
 (in the text, the library, the comment list or a text field), then `choose:Add Comment`;
-the format bar `keys:shift-right shift-right; bar; bar:bold`.
+the format bar `keys:shift-right shift-right; bar; bar:bold`; a picture `image:/some/tmp/a.png;
+keys:cmd-shift-,` (smaller), `keys:ctrl-enter; choose:Description…; type:The harbour; keys:enter`.
 There are no mouse steps (GPUI cannot be handed pointer events from outside); mouse
 behaviour is tested headlessly with the test context's `simulate_*` calls.
 
@@ -177,7 +184,18 @@ document with its search index 80, counting its words 28, the version kept befor
 reading it 10), bringing the window up to date 14 ms. The tool takes 20 to 30 ms on top
 to start and to ask. It grows with the document: a chapter of 5,000 words 4 to 6 ms, a
 novel of 100,000 words in one document about 40 ms. In the debug build the append to the
-book is 2.5 s):
+book is 2.5 s. **A picture an agent adds** (`writer image add`) is stored on the main thread
+too, as part of the change: its bytes come with the request, are hashed and written with a
+sync. Measured when images were added, five pictures of each size that the library stores
+as they come, with a short document open: 1 MB 4 ms (3.4 to 6.9), 4 MB 15 ms (10.9 to
+17.5), 16 MB, the most a picture can weigh, 62 ms (59.8 to 63.6), each "change"; the save
+before it and the window after it under half a millisecond; the tool 30, 49 and 124 ms from
+start to answer. With the book of 10,000 blocks open the same three are 136, 150 and
+190 ms of "change" (the append of a block to the book is most of it) and 14 ms for the
+window: the 16 MB picture holds the main thread for 206 ms, 60 more than the smallest.
+The way to take the write off the main thread, should that ever be too long, is for the
+channel's listener to store what a request brings through an `ImageFile` of its own before
+the request is queued; it is not built):
 
 ```bash
 THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
@@ -185,6 +203,8 @@ THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:
 #   writer --library <dir> recent                # the id of the book
 #   time writer --library <dir> append doc:<id> --content "One more paragraph." --author Claude
 # state: live=[... cost=[save 6.2 ms, change 153.3 ms, window 14.4 ms]]   (release)
+#   time writer --library <dir> image add doc:<id> /some/tmp/16mb.png --author Claude
+# state: live=[... cost=[save 2.6 ms, change 189.3 ms, window 13.2 ms]]   (release, the book open)
 ```
 
 What spell checking costs in a book (measured for 0.2.0: the text on screen is checked
@@ -220,7 +240,15 @@ over a relaunch, what a page opens at, and the tools, the menus, the format bar,
 chat, the comments and Vim's caret at 75 %, 100 % and 150 % in both views;
 `tests/suite/print.rs` holds printing in the assembled app, every job recorded and none in a
 panel: the pages and their text against page view, what of the window is not on paper,
-where Print is reached from and when it is there, the note and Cancel, the keys.
+where Print is reached from and when it is there, the note and Cancel, the keys;
+`tests/suite/images.rs` holds images in the assembled app, with the app's own provider over
+a library in memory or on disk and picture files made when the test runs: every way in, the
+bytes stored before a block names them, undo and relaunch, cut and paste between documents,
+the pasteboard (the decision, and the read against a pasteboard of the test's own), the
+commands and their keys, the exports, a print, the collector's timers, the preview of a
+version, Vim mode on an image (the image's menu is in `context_menus.rs`, its description
+with the pointer in `mouse.rs`, agents in `live.rs` and `launch.rs`, the assistant in
+`assistant.rs`).
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -230,6 +258,15 @@ the app was given a spell service: `main` installs the system one
 workspace, and without one there is no checker at all. A scripted run of the real binary
 does use the system checker: do not choose "Learn Spelling" there except on an invented
 word that is unlearned again in the same run.
+
+**Tests never open the open panel and never read or write the system pasteboard.**
+"Insert > Image…" asks for files in the macOS open panel only in a run that was told to
+(`writer_app::images::use_open_panel`, called by `main` when the run is not scripted); a
+test names the files (`images::choose_files_beforehand`), a scripted run uses `image:<path>`,
+and without either the panel was "cancelled". A paste looks at the system pasteboard for a
+picture only where `main` said so (`pasteboard::use_system`); a test says what is "on" it
+(`pasteboard::stand_in`), and a scripted run has none. Do not script Copy or Cut on an image
+either: it puts the picture on the user's clipboard.
 
 **Tests never call the real Claude Code** (every message spends the user's own allowance,
 and its answers are not the same twice). A workspace has an assistant only when the app
@@ -283,6 +320,20 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   anything else goes in as whole blocks and is never merged into the text around it).
   An answer that went into the text leaves the keyboard in the text, so `cmd-z` right
   after it takes the answer out again (`Workspace::apply_answer`).
+- **Images.** The assistant never sees a picture. In the document the side chat is sent, an
+  image is one line, `![description](image:<id>)` (the Markdown export's `References`), and
+  its system prompt says what the line is and that it is to be kept unchanged and never
+  invented (`writer_assistant::prompts`). The quick chat is sent the selected text, in which
+  an image is an empty line. An answer that is applied is read with the images of the open
+  document (`writer_export::KnownImages`): a line that names one of them is that image
+  again, with its width, alignment and description, so an answer that moves the line moves
+  the image. The side chat also takes the id of an image of another document (the assistant
+  read it there with its tools): it comes in at its own size and counts as used from then
+  on (`assistant/apply.rs`, `LibraryAnswerImages`). **Any other image in an answer stays a
+  link: a path or an address in an answer is never read.** The engine has no file tools, so
+  a local path in an answer is invented or was planted in a text the model read; reading it
+  would let the text of a document pull a file of the user's into the document at the press
+  of a button. (Agents, which have the file system anyway, do read local paths: "Agents".)
 - **The slot at the right is shared with the comments, one at a time**
   (`workspace/right_panel.rs`). A panel is there when it has something to show (comments:
   the document has a thread or one is being written; side chat: the user has it open).
@@ -676,6 +727,11 @@ open" below).
    The library keeps version snapshots; "Version history" in the palette brings one back.
    The title above the text is the title of the text as it is now (it follows every edit,
    undo included, `Workspace::mark_dirty`); the library's row follows with the save.
+   **The bytes of an image are stored, committed, before a block that names them enters a
+   document**, on every way in (a chosen file, a paste, a drop, an agent's request), so no
+   save ever names bytes that are not there; and nothing deletes them but the collector
+   ("Images"). A document that names an image the library does not have keeps the block: it
+   shows a placeholder and is saved as it was.
 
 ## Document model in one paragraph
 
@@ -719,8 +775,12 @@ text, `enter` restores, after keeping the current text as a version), "Document 
 (the settings modal at its "This document" section: page view, paper including a custom
 size, orientation, margins, font, text size, line spacing, paragraph spacing; lengths are
 typed, `20mm`, `0.75in`), "Rename document", "Reveal in library", "Welcome document"
-(opens it; written again when it is gone), and "Print" and "Cancel Printing" (see
-"Printing"; `cmd-p` is Quick open here, so Print has no key until the user gives it one). In the settings `up` / `down` move, `left` /
+(opens it; written again when it is gone), "Print" and "Cancel Printing" (see
+"Printing"; `cmd-p` is Quick open here, so Print has no key until the user gives it one),
+and the seven commands of an image (see "Images"): "Image" (Insert > Image…, the open panel),
+"Image width 25 %", "50 %", "75 %" and "100 %", "Image original size" and "Image
+description". The four widths, the original size and the description need a selected image
+and say so in a toast without one. In the settings `up` / `down` move, `left` /
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
@@ -810,7 +870,7 @@ Editor:
 | `shift-enter` / `cmd-enter` | Soft line break / page break |
 | `cmd-shift-enter` | Toggle todo checked |
 | `cmd-shift-l` `cmd-shift-e` `cmd-shift-r` `cmd-shift-j` | Align left, centre, right, justify |
-| `cmd-shift-.` / `cmd-shift-,` | Larger / smaller text |
+| `cmd-shift-.` / `cmd-shift-,` | Larger / smaller text; on a selected image, a larger / smaller image ("Larger text or image", "Smaller text or image" in the palette and the list) |
 | `cmd-t` | Font picker |
 | `cmd-.` | Contextual format menu |
 | `/` at the start of a block or after a space | Insert menu |
@@ -1018,6 +1078,8 @@ document"). Three crates: `writer-keymap` knows what a change is,
     menu is open a chord with `cmd` closes it and then runs; any other shortcut is swallowed;
   - what the pointer does with a key held: `cmd`-click opens a link, `shift`-click extends
     the selection, `ctrl`-click is a right-click;
+  - `escape` while the pointer resizes or moves an image: it ends the drag and nothing
+    changed (the editor intercepts the key for the length of the drag and no longer);
   - `escape` in the list of keyboard shortcuts itself when its `Close` has no key (so the
     list can always be left), and the two keys of the message window that stands in when
     the library cannot be opened (the changes live in the library);
@@ -1296,10 +1358,12 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   target a workspace has no Print**: no handler, the menu bar's items greyed out, no item
   in the title's menu. **No test and no scripted run opens the print panel**, and nothing
   but `printing::show_panel` can: only a person can answer it.
-- **A job** (`Workspace::print`): the pass is made, the job is "preparing", and a task of
+- **A job** (`Workspace::print`): the pass is made, the job is "preparing", the pictures of
+  the document are read in the background, and a task of
   the main thread makes the pages in slices of 8 ms (`printing::set_slice`; the laying out
-  and the drawing of the finished pages into the PDF together, `layout_share` in
-  `workspace/print.rs`)
+  and the drawing of pages into the PDF together, `layout_share` in
+  `workspace/print.rs`; pages that are laid out wait in a queue, a slice draws at least one
+  and more while it lasts, and no more blocks are laid out while four pages wait)
   with a wait of a millisecond on a timer in between, which is a turn of the main thread.
   The PDF writer is not `Send`: the PDF is made on the main thread. After 0.4 s a note says
   "Preparing to print …" with the button Cancel. **Cancel is the command "Cancel
@@ -1320,9 +1384,17 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   `printOperationForPrintInfo:scalingMode:autoRotate:` (`scalingMode:`, not `scaleMode:`);
   the scaling is "none" and `NSPrintInfo`'s centering must stay on, only then is the page
   on the paper at its real size; the print info carries the document's paper.
-- **Pictures** are on paper once the pass is given their bytes
-  (`PrintPass::set_images`, before the first slice; `PrintPass::images` says which);
-  until then the box of an image is printed as a hairline with its description.
+- **Pictures** are on paper: before the first slice the job's task reads the stored bytes
+  of every image of the document in the background
+  (`images::LibraryImages::bytes_of_all`; the job is "preparing" meanwhile and Cancel
+  works) and hands them to the pass (`PrintPass::set_images`; `PrintPass::images` says
+  which). No picture is read on the main thread inside a slice. `Workspace::print_job`
+  reads them at once. The PDF holds each picture once, as the file it is stored as (a JPEG
+  stays a JPEG), however often the document uses it. An image the library does not have is
+  printed as the hairline of its box with its description. **A page of photographs is laid
+  out in no time and takes long to draw**: a slice that drew every page it had laid out
+  held the main thread for two seconds on a document of fifty photographs, which is why
+  drawn pages are counted against the slice too.
 - **Scripted runs**: `print:pdf:<path>` makes the job at once (`Workspace::print_job`),
   writes the PDF and logs `print: 12 pages, 595.28 x 841.89 pt, 5214 rows, 0 rows off, 3
   images, fonts: .SFNS-Regular, Charter-Bold, Charter-Roman, made in 0.04 s` (and `print:
@@ -1349,6 +1421,13 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   beside them (5.1 ms with the spell checker alone), and a typed key reached the picture
   in 2 ms. Every 100 ms the window is asked for a frame, so that GPUI's line cache lets
   go of what the pass shaped (it holds a line until the window has drawn twice).
+  A document of fifty photographs (twelve megapixels and 5.6 MB each as JPEG, 279 MB
+  together; measured when images were added): 26 pages, a PDF of 293 MB, made in 1.7 s in
+  one go and in 2 s in slices, in which `state` was answered every third of a second
+  (a page of two such photographs is about 65 ms of drawing and cannot be divided). The
+  peak memory footprint was 1.0 GB against 0.36 GB with the document only open: the bytes
+  of every picture and the PDF are in memory once each until the job is handed over.
+  Hundreds of large photographs in one document are beyond what this was made for.
 - **Never verified by anything but a person**: the print panel itself (that the sheet
   comes up on the document's paper, its preview, Cancel giving the keyboard back to the
   text, Save as PDF from its PDF menu, a real printer, quitting with the sheet up).
@@ -1357,13 +1436,190 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   calls it (`writer-print`), and the same operation run as a save job from a test and
   from `print:job:`.
 
+## Images
+
+A document can hold pictures. Where it lives: `writer-core` (the block),
+`writer-store/src/images` (the bytes, the collector, the copy among the backups),
+`writer-image` (a file made into what is stored), `crates/writer-editor/src/images.rs`
+and `mouse.rs` (drawing, the pointer, the ways in), `writer-editor-tools/src/image.rs`
+(the menu, the description), `crates/writer-app/src/images.rs` (the provider over the
+library, the exporters' pictures, the collector's timers), `pasteboard.rs`,
+`workspace/images.rs`; for agents "Agents", for the assistant "The assistant", on paper
+"Printing".
+
+- **The block, and what "selected" is.** An image is a block of its own, a void block like
+  a divider ("Document model"): no text wraps around it. **The caret on an image's block is
+  "the image is selected"**; there is no second kind of selection anywhere. The editor
+  draws an outline and four handles in place of a caret (whatever the caret style: Vim's
+  block caret is the outline too), `Editor::selected_image` and `caret_bounds` (the
+  picture's box) answer for it, and everything that acts "on the selection" acts on the
+  image: copy and cut take the picture, the alignment keys and "larger" / "smaller" work on
+  it, `backspace` deletes it, typing and `enter` start a paragraph below it, `shift-enter`
+  one above. The four widths, "Original size" and "Description" exist only for a selected
+  image: the editor and the tools take them only then and let them travel on otherwise, and
+  at the workspace root the writer is told what they need
+  (`Workspace::image_command_came_this_far`, `workspace::SELECT_AN_IMAGE_FIRST`), because
+  the menu bar cannot grey an item out by what is selected.
+- **Width is a share of the text column, the same share in every view** (`ImageWidth`,
+  thousandths): "50 %" is half the width of the text in flow view, on a page, in print and
+  in a DOCX. Flow view's column is wider than a page's (700 points against 451 on A4), so
+  the same picture is drawn larger there. "Original size" is the picture's own size **on
+  the page** (pixels at the density its file declares; a Retina screenshot at half its
+  pixels), never wider than the column and never taller than a page's text area
+  (`Image::original_width`, `Image::max_width`: one definition for the app, the importer
+  and agents). A new picture is centred at its original size; one that Markdown brings in
+  stands at the left.
+- **Where the bytes are.** A document names stored bytes by the first 16 bytes of their
+  SHA-256 (`ImageId`, 32 hex digits) and holds what layout needs without them (pixel size,
+  density, width): about 130 bytes of JSON per image. The bytes are stored once in
+  `images.db` beside `library.db` (the row of `writer-store` above says why a second file
+  and what a backup holds). The store never parses a document; it scans stored content for
+  one token, `"image":"<32 hex>"` (`Store::referenced_images`): **do not rename that JSON
+  key**. `library.db` is at schema 3, so a version that does not know images refuses the
+  library instead of reading an image as an empty paragraph and saving that.
+- **Bytes first** (product rule 4). On every way in the bytes are committed before a block
+  names them: the provider's `import` answers with the image only when the write is back,
+  an agent's request stores what it brought before it changes the document.
+- **Nothing ever deletes the bytes of an image but the collector**
+  (`writer_store::collect_unused_images`): not an undo, not a purge, not emptying the
+  trash, not the pruning of versions, not the `writer` tool. It runs in the app only
+  (`images::collect_in_background`, started by `main`), in the background, in two halves:
+  - **Once per launch at most it deletes**: 20 s after the launch (`images::COLLECT_DELAY`),
+    when the last run is a day old (`images.collected_at` in the library's settings). It
+    stamps every image that no stored content names (documents live and in the trash,
+    versions) and deletes one whose stamp is older than 30 days **and** older than the
+    oldest kept backup of the library. At a launch nothing but stored content can hold an
+    id: the undo history, a Vim register and a cut that waits to be pasted are empty. A
+    launch that does not run it brings the copy of the pictures among the backups up to
+    date instead.
+  - **Once a day while the app stays open it only looks** (`mark_unused_images`,
+    `images::LOOK_EVERY`): it clears the stamp of every image that is named and stamps
+    what is not. It deletes nothing. Without it a stamp could grow old on an image that is
+    named again without the store being asked: an undo brings back an image that was cut
+    and saved away, and nothing tells the store.
+  - Who else can hold an id and why each is safe is the table at the top of
+    `writer-store/src/images/collect.rs` (the clipboard and an old answer of the assistant
+    come in through `touch_image`, which clears the stamp; a backup is safe by the second
+    condition). The timers are the app's (`cx.background_executor().timer`): a test drives
+    them with its clock.
+  - Deleting documents therefore frees picture space only after 30 days, and only at a
+    launch.
+- **A missing picture.** A document can name an image the library does not have. The block
+  stays everywhere: the editor shows a placeholder of the picture's size that says "Missing
+  image" (the size is in the block, so nothing moves when the picture is there), a save
+  writes the block as it was, exports write the description, a print its box, agents read
+  the line. A picture that is only in `backups/images.db` is found there and written back
+  (`ImageFile`): a library whose `images.db` was lost shows its pictures again.
+- **The provider seam** (`writer_editor::ImageProvider`, set per editor;
+  `Editor::has_image_provider`). The editor does not know the library. Its provider hands
+  out the stored bytes of an image (`bytes`), stores what the user chose, pasted or
+  dropped (`import`), asks for files (`choose`), looks at the pasteboard (`pasteboard`) and
+  is told when ids came in from outside, with a pasted fragment (`touch`). Without one
+  every image is a placeholder and nothing can be inserted: compact editors (a comment
+  being written) and the editors of the assistant's answers have none.
+  `writer_editor::FakeImages` is the provider for the tests of every crate that shows an
+  editor (pictures in memory, `hold` / `release` for one that is on its way, the "panel"
+  and the "pasteboard" answered beforehand). The app's is `images::LibraryImages`, and
+  the app's own tests use it, not the fake.
+- **Nothing large on the main thread** (`images::LibraryImages`). For a library on disk the
+  provider has a connection of its own to `images.db` (`writer_store::ImageFile`, behind a
+  mutex that only background tasks lock): the bytes of a picture are read there, and a new
+  picture is read from its file, converted (`writer_image::prepare`), hashed and written
+  there (up to 16 MB with a sync), and only then does the block appear. A library in
+  memory (tests) has one connection and does the same at once. A print reads its pictures
+  the same way before its first slice. **What still runs on the main thread**: an agent's
+  picture (it is part of the request; the cost is in "Build and test") and an export, which
+  reads every picture of what it exports through the library's store, as it reads the
+  documents. The editor asks again for images it found missing after anything that can
+  have brought their bytes: an agent's change, a restored version, a picture stored
+  through the provider (`Editor::images_changed`; `LibraryImages::on_stored`).
+- **A file that cannot be used** says so in a toast, in the words of
+  `writer_image::PrepareError::sentence` about the file's name, or about "The picture on
+  the clipboard": three files of one gesture by name, the rest counted ("2 more files
+  could not be used."). A gesture is told from the next by the app's clock
+  (`cx.background_executor().now()`, so a test decides).
+- **Formats and limits** are `writer_image::prepare`'s: a PNG, a JPEG or a GIF that is
+  upright, at most 4096 pixels on its long edge and 16 MB and carries no GPS position is
+  stored as it came, byte for byte, so the same file twice is stored once. HEIC, TIFF,
+  BMP, WebP and AVIF are converted (JPEG, or PNG when transparent), a larger picture is
+  made smaller, a file over 100 MB, an SVG and a PDF are refused. A stored picture keeps
+  what its file says about itself except the GPS position (camera, date, author, a place
+  name somebody typed), and that travels into a DOCX and a Markdown picture folder; the
+  read-me says so. An animated GIF is kept whole and shows its first frame, on screen and
+  on paper.
+- **Decoded pictures** (the editor's `images/cache.rs`): a picture is decoded in the
+  background at a *level*, its natural size halved as often as it can be while it stays at
+  least as wide as the device pixels it is drawn on, because GPUI's atlas samples without
+  mip maps and a twelve megapixel photograph is 48 MB of pixels. Levels are keyed by
+  `ImageId`, so two blocks with one picture share them; they are bounded at 128 MB of
+  pixels per editor, and a level that leaves the cache is handed to `Window::drop_image`,
+  or its texture would stay in the atlas for the life of the window
+  (`docs/gpui-notes.md`, "Images").
+- **A resize with the pointer is a preview, not an edit**: while a handle is dragged the
+  layout shows the new width (`DocumentLayout::set_image_preview`) and the text below
+  follows, the document is not touched, and the release is one transaction. `escape`
+  during the drag ends it with nothing changed.
+- **Copy, paste, drop.** A clipboard item is text or one picture, never both. Copy or cut
+  with the caret on an image puts **the picture** on the clipboard (it pastes into other
+  apps) and remembers the block; pasted back here it comes with its size, alignment and
+  description. A selection of text and pictures is copied as its text with the blocks
+  beside it, as before. A paste takes, in this order: what was copied here, a picture
+  GPUI's clipboard shows (a screenshot, Copy in Preview), a picture only the pasteboard
+  shows, text. The third is the app's own read of `NSPasteboard` (`pasteboard.rs`): GPUI
+  hands over the text of a pasteboard whenever there is text, which leaves out an image
+  file copied in the Finder (its name is the text), "Copy Image" in a browser (its address
+  is the text) and a HEIC. What counts as a picture is a pure function
+  (`pasteboard::decide`): a file address whose file has an image's extension, else picture
+  data when there is no plain text beside it or the text is one line that is an address;
+  cells copied in a spreadsheet carry a picture of themselves beside their text and stay
+  text. "Paste" in the text's menu asks `Editor::can_paste`, which asks the pasteboard
+  too. A drop is `Editor::drop_files`, at the boundary between blocks nearest to the
+  pointer.
+- **What GPUI cannot do**: a picture dragged out of a browser or out of Photos does not
+  arrive (the window registers for file drops only; a file from the Finder works), the
+  open panel has no file type filter (any file can be chosen, and one that is no picture
+  is refused with its sentence), a custom element cannot paint a picture half transparent
+  (a quad of the surface's colour over it dims a dragged picture), and there is no
+  accessibility interface: the description of an image is not read out by VoiceOver in the
+  app. It serves where it can: the alternative text of a picture in a DOCX, the alt text
+  in Markdown, what agents and the assistant are told, the preview of a version.
+- **Exports** (`export.rs`, `images::StoreImages`): a DOCX embeds the pictures at their
+  size on the page; a Markdown **file** links them and they are written into a folder
+  beside it, `<name> images/image-<8 hex>.<ext>` (the folder is named after the file as it
+  was suggested and keeps that name when the file is renamed in the save panel: the links
+  are relative; the toast says where the pictures are); Markdown for the clipboard, for
+  agents and for the assistant names each image `![description](image:<id>)`; plain text
+  has the description on a line of its own. Counts, the character limit, find, spelling
+  and the library search see an image as an empty block.
+- **The version history** shows an image as its description, or "Image", in the muted
+  colour: its preview is text made of the blocks, not an editor, and has no picture.
+- **Scripted runs**: `image:<path>` inserts a file (the open panel is never opened),
+  `image:select:<n>` selects, `state` says `images=N` and what the selected image is; the
+  rest is keys (`keys:cmd-shift-.`, `keys:alt-up`, `keys:backspace`,
+  `keys:ctrl-enter; choose:Description…`), an export into `THE_WRITER_EXPORT_DIR` and
+  `print:pdf:`. There are no pointer steps in the app (the editor's demo has them:
+  `cargo run -p writer-editor --example demo`).
+- **Not in this version**: captions, cropping, text that wraps around a picture, a change
+  of an image's size by an agent, removing a description through an agent's Markdown (an
+  empty alt text keeps the old one). A selection of text and pictures pasted into another
+  library arrives with "Missing image" where the pictures were (one picture copied by
+  itself travels as a picture and arrives whole).
+- **Checked by hand only, or by nothing**: a file dragged in from the Finder (the two drop
+  listeners of the editor were compiled and never run by a test: nothing can drag from the
+  Finder but a hand), what real apps put on the general pasteboard (the read itself is run
+  against a pasteboard of the test's own, `pasteboard::private::Pasteboard`, and the
+  decision is tested), resize and move with a real pointer in the app (the editor's tests
+  call what the listeners call), the open panel, a HEIC from Photos, and everything on an
+  Intel Mac.
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
 - **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: The Writer (with
   the keyboard shortcuts: the list, import, export, reset all), File, Edit (with
-  Spelling), Format (with Turn Into and Align), Insert, View (with Theme), Help. While the
+  Spelling), Format (with Turn Into, Align and Image), Insert (with Image…), View (with
+  Theme), Help. While the
   assistant is shown it has its items too (Edit > Ask the Assistant…; View > Show or Hide
   Assistant, Go to Assistant, New Chat, Clear Chat), and none of them otherwise. Every item
   is an existing action; it is enabled when the action has a handler on the way from the
@@ -1380,6 +1636,20 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   library rows). The text menu has a second hook for
   what goes first (`EditorTools::set_text_menu_leading_extension`): the spell checker's
   suggestions on a marked word.
+- **An image** is everything with the pointer (the editor's `mouse.rs`, the tools'
+  `image.rs`). A click on the picture selects it: an outline and four corner handles. A
+  drag of a handle resizes it (a chip says the percentage, it snaps to 25, 50, 75 and
+  100 % and to its original size, the text below follows; one undo step on release); a
+  drag of the picture moves it between blocks, with a line where it would go; an image
+  file dragged in from the Finder shows the same line and lands there. A right-click on
+  the picture selects it and opens its menu: Cut, Copy, Paste, Paste as Plain Text; Size
+  (Larger, Smaller, the four widths, Original Size), Align (Left, Centre, Right),
+  Description…; Insert, which on an image begins with Paragraph Above and Paragraph Below;
+  Find in Document, Select All; the app's Add Comment, dimmed, because no thread can be
+  anchored to an image; Delete Image. "Description…" opens a small popover under the
+  picture with one field and the buttons Done, Remove (only when there is a description)
+  and Cancel; a click anywhere else keeps what was typed. The menu bar has the same under
+  Format > Image, and Insert > Image… opens the macOS open panel (several files at once).
 - **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),

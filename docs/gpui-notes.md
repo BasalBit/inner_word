@@ -958,6 +958,21 @@ editor's demo in a real window (`cargo run -p writer-editor --example demo`).
   outside gpui (its field is `pub(crate)`), so a headless test calls what the two div
   listeners call; **the listeners themselves were compiled and not run** (nothing can
   drag from Finder but a hand).
+- **A picture GPUI's clipboard does not show is read from `NSPasteboard` directly**
+  (`crates/writer-app/src/pasteboard.rs`; `objc` 0.2, no struct crosses the boundary, so
+  it is the same on Intel). `[NSPasteboard generalPasteboard]`, `types` (an `NSArray` of
+  `NSString`: `count`, `objectAtIndex:`, `UTF8String`), `stringForType:` for
+  `public.utf8-plain-text` and `public.file-url`, `dataForType:` (`bytes`, `length`) for
+  `public.png`, `public.jpeg`, `com.compuserve.gif`, `public.heic`, `public.heif`,
+  `public.tiff`. The file address is made a path with `[NSURL URLWithString:]`,
+  `filePathURL` (the Finder may write a file reference, `file:///.file/id=…`) and `path`,
+  which also undoes the percent escapes. Tested against a real pasteboard that is not the
+  user's: `[NSPasteboard pasteboardWithUniqueName]` gives a private one
+  (`clearContents`, `addTypes:owner:`, `setString:forType:`, `setData:forType:`, and
+  `releaseGlobally` when done), and what was written there reads back as written. A test
+  thread has no autorelease pool: wrap such calls in `objc::rc::autoreleasepool`. What real
+  apps put on the general pasteboard was read from their behaviour as documented and is a
+  hand check.
 - **The open panel has no file type filter.** `PathPromptOptions` is `files`,
   `directories`, `multiple`, `prompt` and nothing else (`$G/src/platform.rs:1330-1339`):
   any file can be chosen, and whoever asked has to say what is wrong with one that is not
@@ -1033,6 +1048,29 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   `join()` first, which would wait for an answer nobody is there to give. Timers of the app
   (`cx.background_executor().timer(..)`, `.now()`) are on the test clock and need
   `advance_clock` in that loop; the other thread's own waits are real time.
+- **`advance_clock` runs every timer that falls due on the way, one after the other**
+  (`$G/src/platform/test/dispatcher.rs:71-87`: it moves the clock to the next due timer,
+  runs until parked, and again, until the time asked for is reached). A timer that arms
+  itself again is therefore run once for each of its periods: with the keyboard in an
+  editor the caret blinks every half second, so a day of the test clock is 172,800 turns
+  with a frame each, and a test that advances forty days never ends (tested the hard way,
+  `crates/writer-app/tests/suite/images.rs`: the collector's daily look). Before a long
+  advance put the keyboard where nothing blinks (the library: `cmd-0`), and come back
+  afterwards. Short advances (the 20 s of a delay) cost a few dozen turns and are fine.
+- **A test must never reach `cx.prompt_for_paths`**: it is `unimplemented!()` on the test
+  platform. Code that opens the open panel takes the files from somewhere else in a test
+  (the app: `images::choose_files_beforehand`, `workspace::choose_import_file_beforehand`)
+  and asks the panel only in a run that was told it may (`images::use_open_panel`, called
+  by `main`), which also keeps a scripted run of the real binary from opening a panel
+  nobody can answer. `cx.prompt_for_new_path` is implemented: `did_prompt_for_new_path()`,
+  `simulate_new_path_selection(|dir| Some(path))`.
+- **`cx.background_spawn` in a test runs inside `run_until_parked()`**, on the test's own
+  thread and in a deterministic order. Work that the app does "in the background" (reading
+  a file, a write to SQLite) is therefore done when `run_until_parked()` returns, and not
+  before: a test can look at the state in between (after `entity.update_in(cx, ..)` and
+  before `run_until_parked()` nothing a spawned task does has happened; tested, the
+  picture that is stored before its block appears). A real `std::thread` is not on that
+  executor: the test waits for it in a loop (see above).
 - **What a view emitted inside `window.update(cx, ..)` from an async task has been delivered
   when `update` returns** (read from `$G/src/app.rs`: `update_window_id` runs inside
   `App::update`, and `finish_update` flushes the effects when the outermost update ends,

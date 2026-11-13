@@ -51,6 +51,12 @@ writer-keymap.workspace = true
 # The "Keyboard shortcuts" view: the list, changing a key, the import
 # preview.
 writer-keymap-ui.workspace = true
+# Printing (no GPUI): the PDF of the pages the editor lays out, and the
+# macOS print operation.
+writer-print.workspace = true
+# Image files (no GPUI): a file, a paste or a drop made into what the
+# library stores.
+writer-image.workspace = true
 # localtime_r for the times in the version history.
 libc.workspace = true
 # Window capture for visual QA: the NSWindow number behind a GPUI window.

@@ -6863,6 +6863,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 name = "writer-agent"
 version = "0.6.0"
 dependencies = [
+ "base64",
  "libc",
  "rusqlite",
  "serde",
@@ -6872,6 +6873,7 @@ dependencies = [
  "unicode-segmentation",
  "writer-core",
  "writer-export",
+ "writer-image",
  "writer-store",
 ]
 
@@ -6909,9 +6911,11 @@ dependencies = [
  "writer-editor",
  "writer-editor-tools",
  "writer-export",
+ "writer-image",
  "writer-keymap",
  "writer-keymap-ui",
  "writer-library",
+ "writer-print",
  "writer-spell",
  "writer-ui",
  "writer-vim-mode",
@@ -6998,11 +7002,14 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "image",
  "objc",
  "raw-window-handle",
  "serde",
  "serde_json",
+ "smallvec",
  "writer-core",
+ "writer-print",
  "writer-ui",
 ]
 
@@ -7028,6 +7035,15 @@ dependencies = [
  "unicode-segmentation",
  "writer-core",
  "zip",
+]
+
+[[package]]
+name = "writer-image"
+version = "0.6.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "writer-store",
 ]
 
 [[package]]
@@ -7076,6 +7092,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-print"
+version = "0.6.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "core-text",
+ "objc",
+ "zed-font-kit",
+]
+
+[[package]]
 name = "writer-spell"
 version = "0.6.0"
 dependencies = [
@@ -7097,6 +7124,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
 ]

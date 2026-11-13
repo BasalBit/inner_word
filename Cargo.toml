@@ -34,6 +34,12 @@ writer-assistant-ui = { path = "crates/writer-assistant-ui" }
 writer-assistant-quick = { path = "crates/writer-assistant-quick" }
 writer-keymap = { path = "crates/writer-keymap" }
 writer-keymap-ui = { path = "crates/writer-keymap-ui" }
+# Printing: what a printed page is as data, the PDF made of it, the macOS print
+# operation (no GPUI, and still built in `target/`: see its manifest).
+writer-print = { path = "crates/writer-print" }
+# Image files: bytes as they come to bytes as the library stores them (no GPUI;
+# the app and the command layer for agents make the same thing of the same file).
+writer-image = { path = "crates/writer-image" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.
@@ -51,6 +57,10 @@ libc = "0.2"
 # Objective-C calls (user name, user defaults, forcing a frame).
 raw-window-handle = "0.6"
 objc = "0.2"
+# CoreFoundation and CoreGraphics (the PDF of a print job, ImageIO for image
+# files): the versions gpui locks, so nothing is compiled twice in `target/`.
+core-foundation = "0.10"
+core-graphics = "0.24"
 # Throwaway libraries on disk in tests.
 tempfile = "3"
 

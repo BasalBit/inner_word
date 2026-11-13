@@ -10,6 +10,13 @@ gpui.workspace = true
 serde.workspace = true
 writer-core.workspace = true
 writer-ui.workspace = true
+# What a printed page is as data (no GPUI): the print pass of the layout fills
+# its pages.
+writer-print.workspace = true
+# Decoding the pictures of a document for the screen, and the small vector
+# GPUI's image frames are held in. Both are built for gpui already.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+smallvec = "1"
 
 [dev-dependencies]
 # Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.

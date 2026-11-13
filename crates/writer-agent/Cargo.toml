@@ -16,6 +16,11 @@ thiserror.workspace = true
 libc.workspace = true
 # Word boundaries, to change a paragraph word by word.
 unicode-segmentation.workspace = true
+# An image file an agent names, made into what the library stores (the same
+# code the app runs on a file the writer chooses).
+writer-image.workspace = true
+# The bytes of an image as an agent is handed them.
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile.workspace = true

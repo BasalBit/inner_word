@@ -1492,6 +1492,80 @@ fn the_menu_bar_has_insert_image_and_format_image(cx: &mut TestAppContext) {
     );
 }
 
+// ----- a description being written when the window goes -----------------------------------------
+
+/// The description of the image in the stored document `id`.
+fn stored_description(
+    library: &Entity<Library>,
+    id: DocumentId,
+    cx: &mut TestAppContext,
+) -> String {
+    let content = library.read_with(cx, |library, _| library.document(id).unwrap().content);
+    Document::from_json(&content)
+        .unwrap()
+        .images()
+        .map(|(_, image)| image.description.clone())
+        .next()
+        .expect("the stored document has its image")
+}
+
+/// The popover of a description keeps what was typed however it closes
+/// (`writer_editor_tools::image_description`), and closing the window or
+/// quitting is one more way: no key and no click comes first that would
+/// close it, so the workspace puts the field into the text before the
+/// last save. (Found in review: cmd-q, cmd-w and SIGTERM with the popover
+/// open saved the image without its description.)
+#[gpui::test]
+fn a_description_being_written_is_kept_when_the_window_closes_or_the_app_quits(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 240, GREEN, cx);
+    let document = around(&image);
+    // cmd-w, the window's close button, and quitting (cmd-q, the menu bar,
+    // a signal: all of them are `cx.quit()`). Quitting ends the app, so it
+    // is the last.
+    for (way, words) in [
+        ("cmd-w", "The harbour at dusk"),
+        ("the close button", "The pier in the rain"),
+        ("quitting", "Boats on the slipway"),
+    ] {
+        let id = {
+            let (id, workspace, vcx) = open_with(&document, &library, cx);
+            caret_on(&workspace, 1, vcx);
+            vcx.update(|window, cx| {
+                window.dispatch_action(Box::new(tools::EditImageDescription), cx)
+            });
+            vcx.run_until_parked();
+            assert_eq!(
+                workspace.read_with(vcx, |w, cx| w.tools().read(cx).active_tool()),
+                Some(ToolKind::ImageDescription),
+                "{way}"
+            );
+            vcx.simulate_input(words);
+            assert_eq!(images_in(&workspace, vcx)[0].1.description, "", "{way}");
+            match way {
+                "cmd-w" => vcx.simulate_keystrokes("cmd-w"),
+                "the close button" => {
+                    assert!(vcx.simulate_close(), "the window may close");
+                    vcx.update(|window, _| window.remove_window());
+                }
+                // Below, on the app's own context: quitting drops the
+                // window's test context.
+                _ => {}
+            }
+            vcx.run_until_parked();
+            id
+        };
+        if way == "quitting" {
+            cx.quit();
+            cx.run_until_parked();
+        }
+        assert_eq!(stored_description(&library, id, cx), words, "{way}");
+    }
+}
+
 // ----- exports ----------------------------------------------------------------------------------
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

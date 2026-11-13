@@ -386,6 +386,7 @@ impl Workspace {
             cx.new(|cx| writer_spell::SpellChecker::new(editor.clone(), service, cx))
         });
 
+        let window_handle = window.window_handle();
         let mut subscriptions = vec![
             cx.subscribe_in(&editor, window, Self::on_editor_event),
             cx.subscribe_in(&library, window, Self::on_library_event),
@@ -413,8 +414,9 @@ impl Workspace {
                 this.schedule_bounds_save(cx);
             }),
             // Quit: flush synchronously in the closure body; GPUI gives the
-            // returned future only 100ms.
-            cx.on_app_quit(|this, cx| {
+            // returned future only 100ms. The window is still there.
+            cx.on_app_quit(move |this, cx| {
+                this.keep_what_the_tools_hold_at_quit(window_handle, cx);
                 this.flush(cx);
                 this.store_assistant_conversation(cx);
                 this.save_window_bounds(cx);
@@ -442,8 +444,9 @@ impl Workspace {
         });
         // Closing the window (red button, cmd-w through the system) flushes too.
         let weak = cx.weak_entity();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {
+                this.keep_what_the_tools_hold(window, cx);
                 this.flush(cx);
                 this.store_assistant_conversation(cx);
                 this.store_zoom_now(cx);
@@ -1797,6 +1800,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.keep_what_the_tools_hold(window, cx);
         self.flush(cx);
         self.store_assistant_conversation(cx);
         self.window_bounds = Some(window.window_bounds());

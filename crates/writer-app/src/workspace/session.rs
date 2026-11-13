@@ -34,9 +34,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{AppContext as _, Context, Task, Window};
+use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, Task, Window};
 use writer_core::{Block, BlockKind, Document, Position, SearchOptions, TextRange};
-use writer_editor::{Autoscroll, ViewState};
+use writer_editor::{Autoscroll, Editor, ViewState};
+use writer_editor_tools::{EditorTools, ToolKind};
 use writer_library::{DocumentId, DocumentMeta, Library, LibraryItem};
 use writer_ui::Toast;
 
@@ -749,6 +750,42 @@ impl Workspace {
         self.save_now(cx)
     }
 
+    /// The window is about to close or the app to quit: what a tool around
+    /// the text holds and has not put into the text yet goes into it now,
+    /// so that the flush that follows saves it. That is the description of
+    /// an image being written (`writer_editor_tools::image_description`:
+    /// every way of closing its popover keeps the field). Every other way
+    /// of leaving the popover moves the keyboard or the pointer first, and
+    /// that closes it; closing the window and quitting do neither.
+    ///
+    /// The editor tells of the change as an event, which reaches this
+    /// workspace only after the turn of the main thread that closes the
+    /// window (and never, when the app quits). So the change is noted here,
+    /// by the revision of the text.
+    pub(crate) fn keep_what_the_tools_hold(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if put_what_the_tools_hold(&self.tools, &self.editor, window, cx) {
+            self.mark_dirty(cx);
+        }
+    }
+
+    /// [`Self::keep_what_the_tools_hold`] from a hook of quitting, which is
+    /// given no window: the window is still there while those hooks run.
+    pub(crate) fn keep_what_the_tools_hold_at_quit(
+        &mut self,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let (tools, editor) = (self.tools.clone(), self.editor.clone());
+        let changed = window
+            .update(cx, |_, window, cx| {
+                put_what_the_tools_hold(&tools, &editor, window, cx)
+            })
+            .unwrap_or(false);
+        if changed {
+            self.mark_dirty(cx);
+        }
+    }
+
     /// What the last save of this window cost.
     pub fn last_save_cost(&self) -> Option<SaveCost> {
         self.last_save
@@ -1136,4 +1173,20 @@ pub fn first_occurrence(document: &Document, query: &str) -> Option<TextRange> {
         .filter(|word| !word.is_empty())
         .filter_map(|word| document.find_all(word, options).into_iter().next())
         .min_by_key(|range| range.start)
+}
+
+/// Closes the description of an image, if it is open, which puts what its
+/// field holds into the text. Whether the text changed.
+fn put_what_the_tools_hold(
+    tools: &Entity<EditorTools>,
+    editor: &Entity<Editor>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if !tools.read(cx).is_open(ToolKind::ImageDescription) {
+        return false;
+    }
+    let before = editor.read(cx).state().revision();
+    tools.update(cx, |tools, cx| tools.close(window, cx));
+    editor.read(cx).state().revision() != before
 }

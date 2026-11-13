@@ -381,8 +381,12 @@ mod tests {
         assert!(allowed.contains(&"mcp__the-writer__search_library"));
         assert!(denied.contains(&"mcp__the-writer__edit_document"));
         assert!(denied.contains(&"mcp__the-writer__trash_document"));
-        // Every tool of the server is on exactly one of the two lists.
-        assert_eq!(allowed.len() + denied.len(), 35);
+        // A tool that brings a file of the Mac into a document is one that writes.
+        assert!(denied.contains(&"mcp__the-writer__add_image"));
+        // Every tool of the server is on exactly one of the two lists: the twelve that
+        // only read, and the others.
+        assert_eq!(allowed.len(), 12);
+        assert_eq!(allowed.len() + denied.len(), 36);
         assert!(allowed.iter().all(|tool| !denied.contains(tool)));
         // The built-in tools stay off with the server there.
         assert_eq!(value_after(&args, "--tools"), Some(""));

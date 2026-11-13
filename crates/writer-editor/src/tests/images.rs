@@ -1343,6 +1343,63 @@ fn dragging_a_picture_moves_its_block(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_picture_dragged_to_the_edge_scrolls_the_view_under_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let images = FakeImages::new();
+    let photo = images.add_png(800, 600);
+    let mut blocks = vec![paragraph(0), picture(&photo, 200, Alignment::Left)];
+    blocks.extend((1..120).map(paragraph));
+    let (editor, cx) = open_with(flow(blocks), &images, cx);
+    let id = editor.read_with(cx, |editor, _| editor.document().blocks()[1].id());
+    let viewport = editor.read_with(cx, |editor, _| editor.viewport_bounds().unwrap());
+    let grab = picture_bounds(&editor, 1, cx).center();
+    press(cx, grab);
+    // Under the bottom edge of the window, and resting there: the view
+    // scrolls, and the place the block would go to moves on with it.
+    let below = point(grab.x, viewport.bottom() + px(60.));
+    drag_to(cx, below);
+    let first = editor.read_with(cx, |editor, _| match &editor.drag {
+        Some(crate::mouse::Drag::MoveImage(moving)) => moving.drop,
+        other => panic!("not a move: {other:?}"),
+    });
+    for _ in 0..12 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(35));
+    }
+    let (scrolled, later) = editor.read_with(cx, |editor, _| {
+        let drop = match &editor.drag {
+            Some(crate::mouse::Drag::MoveImage(moving)) => moving.drop,
+            other => panic!("not a move: {other:?}"),
+        };
+        (editor.scroll_offset(), drop)
+    });
+    assert!(scrolled > px(100.), "{scrolled:?}");
+    assert!(later > first, "the place went from {first:?} to {later:?}");
+    // Back inside the scrolling stops; a release puts the block where the
+    // line is now, far below where it was.
+    let inside = point(grab.x, viewport.center().y);
+    drag_to(cx, inside);
+    let resting = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    for _ in 0..5 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(35));
+    }
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.scroll_offset()),
+        resting
+    );
+    release(cx, inside);
+    editor.read_with(cx, |editor, _| {
+        let now = editor.selected_image().expect("still selected").0;
+        assert!(now > 8, "the image is block {now}");
+        assert_eq!(editor.document().blocks()[now].id(), id);
+        // And it is where the pointer let it go: on screen.
+        let picture = editor.image_bounds(now).unwrap();
+        assert!(viewport.intersects(&picture), "{picture:?}");
+    });
+}
+
+#[gpui::test]
 fn a_picture_dropped_where_it_is_or_given_up_stays(cx: &mut TestAppContext) {
     setup(cx);
     let images = FakeImages::new();
@@ -1933,7 +1990,14 @@ fn pictures_are_pasted_copied_and_cut(cx: &mut TestAppContext) {
     let can_paste =
         |cx: &mut VisualTestContext| editor.update(cx, |editor, cx| editor.can_paste(cx));
 
-    // Nothing on the clipboard, nothing on the pasteboard.
+    // Nothing on the clipboard, nothing on the pasteboard: nothing to
+    // paste. A picture only the provider sees is something to paste,
+    // although GPUI's clipboard is empty.
+    assert!(!can_paste(cx));
+    assert_eq!(cx.read_from_clipboard(), None);
+    images.set_pasteboard(Some(NewImageSource::Bytes(FakeImages::png(8, 8))));
+    assert!(can_paste(cx));
+    images.set_pasteboard(None);
     assert!(!can_paste(cx));
     cx.simulate_keystrokes("cmd-v");
     assert_eq!(kinds(&editor, cx), ["paragraph", "image", "paragraph"]);

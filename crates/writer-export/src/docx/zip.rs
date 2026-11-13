@@ -1,5 +1,5 @@
-//! A minimal ZIP writer: deflated entries, no extensions, deterministic
-//! output. Enough for an Office Open XML package.
+//! A minimal ZIP writer: deflated or stored entries, no extensions,
+//! deterministic output. Enough for an Office Open XML package.
 
 use miniz_oxide::deflate::compress_to_vec;
 
@@ -83,11 +83,21 @@ impl ZipWriter {
     pub fn add(&mut self, name: &str, data: &[u8]) {
         let deflated = compress_to_vec(data, 6);
         // Store tiny or incompressible data as it is.
-        let (method, body): (u16, &[u8]) = if deflated.len() < data.len() {
-            (8, &deflated)
+        if deflated.len() < data.len() {
+            self.entry(name, data, 8, &deflated);
         } else {
-            (0, data)
-        };
+            self.entry(name, data, 0, data);
+        }
+    }
+
+    /// Adds a file as it is, without trying to compress it: for data that
+    /// is compressed already (a picture).
+    pub fn add_stored(&mut self, name: &str, data: &[u8]) {
+        self.entry(name, data, 0, data);
+    }
+
+    /// Writes one entry: the file `data`, held in the archive as `body`.
+    fn entry(&mut self, name: &str, data: &[u8], method: u16, body: &[u8]) {
         let entry = Entry {
             name: name.to_string(),
             crc: crc32(data),
@@ -174,5 +184,22 @@ mod tests {
         z2.add("a.txt", b"hello hello hello hello hello hello");
         z2.add("dir/b.txt", b"x");
         assert_eq!(bytes, z2.finish());
+    }
+
+    #[test]
+    fn stored_entries_are_held_as_they_are() {
+        let data = [b"picture".as_slice(), &[0u8; 4000]].concat();
+        let mut z = ZipWriter::new(1_794_391_505_000);
+        z.add("deflated.bin", &data);
+        z.add_stored("stored.bin", &data);
+        assert_eq!((z.entries[0].method, z.entries[1].method), (8, 0));
+        assert!(z.entries[0].compressed < 100);
+        assert_eq!(z.entries[1].compressed as usize, data.len());
+        assert_eq!(z.entries[1].size as usize, data.len());
+        assert_eq!(z.entries[0].crc, z.entries[1].crc);
+        // The bytes stand in the archive right after the entry's name.
+        let at = z.entries[1].offset as usize + 30 + "stored.bin".len();
+        let bytes = z.finish();
+        assert_eq!(&bytes[at..at + data.len()], data.as_slice());
     }
 }

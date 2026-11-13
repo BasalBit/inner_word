@@ -13,15 +13,28 @@
 //! numbered items say their own number ("item 2"), which passes every
 //! limit the DOCX numbering has (a definition per list, shared
 //! definitions, numbers as text).
+//!
+//! With a second argument, a folder of pictures (`.png`, `.jpg`, `.gif`),
+//! it also writes a document that shows each of them at several widths
+//! and alignments: `images.docx`, `images.md` with its folder
+//! `images images`, `images-references.md` and `images.txt`.
+//!
+//! ```text
+//! CARGO_TARGET_DIR=target-pure cargo run -p writer-export --example export_sample -- /some/dir /some/pictures
+//! ```
+
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use writer_core::{
-    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
-    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
-    SpellingLanguage, Typography,
+    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, Image,
+    ImageId, ImageWidth, InlineAttrs, InlineStyle, Margins, Orientation, PageSetup, PaperSize,
+    Position, Rgb, Selection, SpellingLanguage, Typography,
 };
 use writer_export::{
-    DocxOptions, ExportFormat, ExportSource, MarkdownComments, MarkdownOptions, PlainTextOptions,
-    export, suggested_file_name, to_docx, to_markdown, to_plain_text,
+    DocxOptions, ExportFormat, ExportOptions, ExportSource, ImageData, ImageFileFormat,
+    ImageSource, MarkdownComments, MarkdownImages, MarkdownOptions, PlainTextOptions, export,
+    export_package, images_dir_name, suggested_file_name, to_docx, to_markdown, to_plain_text,
 };
 
 fn plain() -> InlineAttrs {
@@ -252,6 +265,213 @@ fn long_book(sections: usize) -> Document {
     Document::from_blocks(blocks)
 }
 
+/// The pictures of a folder, standing in for the library's image store.
+#[derive(Default)]
+struct Pictures(BTreeMap<ImageId, (Vec<u8>, ImageFileFormat)>);
+
+impl ImageSource for Pictures {
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
+        self.0.get(&id).map(|(bytes, format)| ImageData {
+            bytes: Cow::Borrowed(bytes),
+            format: *format,
+        })
+    }
+}
+
+/// An id for the bytes of a picture. The library names a picture by the
+/// SHA-256 of its bytes; a sample needs no more than a name that differs
+/// from picture to picture.
+fn sample_id(bytes: &[u8]) -> ImageId {
+    let mut id = [0u8; 16];
+    for (half, seed) in id
+        .chunks_mut(8)
+        .zip([0xcbf2_9ce4_8422_2325u64, 0x8422_2325_cbf2_9ce4])
+    {
+        let mut hash = seed;
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        half.copy_from_slice(&hash.to_be_bytes());
+    }
+    ImageId::from_bytes(id)
+}
+
+/// The pixel size a PNG, GIF or JPEG file says it has. The app reads it
+/// with the system's image reader when a picture comes in; this is enough
+/// for a sample.
+fn pixel_size(bytes: &[u8], format: ImageFileFormat) -> Option<(u32, u32)> {
+    let be16 = |at: usize| {
+        Some(u32::from(u16::from_be_bytes([
+            *bytes.get(at)?,
+            *bytes.get(at + 1)?,
+        ])))
+    };
+    match format {
+        ImageFileFormat::Png => {
+            let be32 =
+                |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+            Some((be32(16)?, be32(20)?))
+        }
+        ImageFileFormat::Gif => {
+            let le16 = |at: usize| {
+                Some(u32::from(u16::from_le_bytes([
+                    *bytes.get(at)?,
+                    *bytes.get(at + 1)?,
+                ])))
+            };
+            Some((le16(6)?, le16(8)?))
+        }
+        ImageFileFormat::Jpeg => {
+            // Segments until a start of frame, which holds the size.
+            let mut at = 2;
+            loop {
+                if *bytes.get(at)? != 0xff {
+                    return None;
+                }
+                let marker = *bytes.get(at + 1)?;
+                let frame = matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc);
+                if frame {
+                    return Some((be16(at + 7)?, be16(at + 5)?));
+                }
+                at += 2 + be16(at + 2)? as usize;
+            }
+        }
+    }
+}
+
+/// Writes the image samples from the pictures in `pictures_dir`.
+fn image_samples(
+    dir: &std::path::Path,
+    pictures_dir: &std::path::Path,
+    docx: &DocxOptions,
+) -> std::io::Result<()> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(pictures_dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .collect();
+    files.sort();
+    let mut pictures = Pictures::default();
+    let mut blocks = vec![
+        Block::with_text(BlockKind::heading(1), "Images"),
+        Block::paragraph(
+            "Each picture at its original size, then at half and at a quarter of the text column, left, \
+             centred and right, then once more as wide as the column.",
+        ),
+    ];
+    let page = PageSetup::default();
+    for file in &files {
+        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let Some(format) = ImageFileFormat::from_extension(extension) else {
+            continue;
+        };
+        let bytes = std::fs::read(file)?;
+        let Some(pixels) = pixel_size(&bytes, format) else {
+            println!("skipped {}: its size could not be read", file.display());
+            continue;
+        };
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("picture");
+        let id = sample_id(&bytes);
+        pictures.0.insert(id, (bytes, format));
+        // A screenshot of a Retina display: two pixels to the point.
+        let original = Image::new(id, pixels, 144);
+        let at = |width: ImageWidth, alignment: Alignment, description: String| {
+            Block::image(Image {
+                width: width.min(original.max_width(&page)),
+                description,
+                ..original.clone()
+            })
+            .with_alignment(alignment)
+        };
+        blocks.push(Block::with_text(BlockKind::heading(2), name));
+        blocks.push(Block::paragraph(&format!(
+            "{} × {} pixels, {}.",
+            pixels.0,
+            pixels.1,
+            format.mime_type()
+        )));
+        blocks.push(at(
+            original.original_width(&page),
+            Alignment::Center,
+            format!("{name} at its original size"),
+        ));
+        blocks.push(Block::paragraph("Half the column, left:"));
+        blocks.push(at(
+            ImageWidth::from_percent(50),
+            Alignment::Left,
+            format!("{name}, half the column"),
+        ));
+        blocks.push(Block::paragraph(
+            "A quarter, centred, and a quarter, right:",
+        ));
+        blocks.push(at(
+            ImageWidth::from_percent(25),
+            Alignment::Center,
+            format!("{name}, a quarter, centred"),
+        ));
+        blocks.push(at(
+            ImageWidth::from_percent(25),
+            Alignment::Right,
+            format!("{name}, a quarter, right"),
+        ));
+        blocks.push(Block::paragraph(
+            "The whole column, or as much of it as fits on a page:",
+        ));
+        blocks.push(at(ImageWidth::FULL, Alignment::Left, String::new()));
+        blocks.push(Block::paragraph("Text goes on after the picture."));
+    }
+    // An image the library does not have.
+    blocks.push(Block::with_text(BlockKind::heading(2), "A missing picture"));
+    blocks.push(Block::image(Image {
+        description: "A picture the library no longer has".into(),
+        ..Image::new(ImageId::from_bytes([7; 16]), (800, 600), 72)
+    }));
+    blocks.push(Block::paragraph("The description stands in its place."));
+    let doc = Document::from_blocks(blocks);
+    let source = ExportSource::single("Images", &doc).with_images(&pictures);
+
+    std::fs::write(dir.join("images.docx"), to_docx(&source, docx))?;
+    std::fs::write(
+        dir.join("images.txt"),
+        to_plain_text(&source, &PlainTextOptions::default()),
+    )?;
+    let references = MarkdownOptions {
+        alignment: true,
+        ..MarkdownOptions::default()
+    };
+    std::fs::write(
+        dir.join("images-references.md"),
+        to_markdown(&source, &references),
+    )?;
+    // Markdown as a file: the pictures go into a folder beside it.
+    let file_name = "images.md";
+    let options = ExportOptions {
+        markdown: MarkdownOptions {
+            images: MarkdownImages::Files {
+                dir: images_dir_name(file_name),
+            },
+            ..MarkdownOptions::default()
+        },
+        ..ExportOptions::default()
+    };
+    let package = export_package(&source, ExportFormat::Markdown, &options);
+    std::fs::write(dir.join(file_name), &package.bytes)?;
+    for asset in &package.assets {
+        let path = dir.join(&asset.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, &asset.bytes)?;
+    }
+    println!(
+        "wrote the image samples: {} pictures, {} files beside images.md",
+        pictures.0.len(),
+        package.assets.len()
+    );
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let dir = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let dir = std::path::Path::new(&dir);
@@ -433,6 +653,10 @@ fn main() -> std::io::Result<()> {
         dir.join("book.md"),
         export(&book, ExportFormat::Markdown, &Default::default()),
     )?;
+
+    if let Some(pictures_dir) = std::env::args().nth(2) {
+        image_samples(dir, std::path::Path::new(&pictures_dir), &docx)?;
+    }
 
     println!("wrote samples to {}", dir.display());
     println!(

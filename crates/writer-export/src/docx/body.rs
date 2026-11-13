@@ -1,9 +1,13 @@
 //! `word/document.xml`: paragraphs, runs, hyperlinks, comment anchors and
 //! section properties.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
-use writer_core::{Alignment, Block, BlockKind, Document, InlineAttrs, Orientation, Typography};
+use writer_core::{
+    Alignment, Block, BlockKind, Document, Image, ImageId, InlineAttrs, Margins, Orientation,
+    Typography,
+};
 
 use super::lang::Lang;
 use super::numbering::{Allocator, Instance, Slot};
@@ -12,17 +16,41 @@ use super::styles::{
     RULE_COLOR, code_spacing, heading_spacing,
 };
 use super::xml::{DECLARATION, attr, text, uri};
-use super::{Comment, DocxOptions, FIRST_LINK_REL, FOOTER_REL, Metrics, R_NS, W_NS, page_twips};
+use super::{Comment, DocxOptions, FIRST_REL, FOOTER_REL, Metrics, R_NS, W_NS, WP_NS, page_twips};
 use crate::common::{first_comment_ranges, ordinals, part_needs_title, thread_entries};
-use crate::{ExportPart, ExportSource};
+use crate::{ExportPart, ExportSource, ImageFileFormat};
+
+/// A relationship of the document body that the text asks for: a
+/// hyperlink's target or a picture. Both kinds take their ids from one
+/// counter: the id of `rels[i]` is `rId{FIRST_REL + i}`.
+pub(crate) enum Rel {
+    /// A hyperlink to this address.
+    Link(String),
+    /// The picture `media[part]`.
+    Image {
+        /// Index into [`Body::media`].
+        part: usize,
+    },
+}
+
+/// One picture of the package: a part under `word/media`.
+pub(crate) struct Media<'a> {
+    /// The file name inside `word/media`: `image1.png`.
+    pub name: String,
+    pub format: ImageFileFormat,
+    /// The file, as it is stored.
+    pub bytes: Cow<'a, [u8]>,
+}
 
 /// Everything the package needs from the body.
-pub(crate) struct Body {
+pub(crate) struct Body<'a> {
     /// `word/document.xml`.
     pub document: String,
-    /// Hyperlink targets; the relationship id of `links[i]` is
-    /// `rId{FIRST_LINK_REL + i}`.
-    pub links: Vec<String>,
+    /// The hyperlinks and pictures the text refers to; the relationship id
+    /// of `rels[i]` is `rId{FIRST_REL + i}`.
+    pub rels: Vec<Rel>,
+    /// The pictures, one for each image however often it is used.
+    pub media: Vec<Media<'a>>,
     /// The numbering instances of the numbered lists; `numbered[i]` has
     /// the id `FIRST_DECIMAL_NUM_ID + i`.
     pub numbered: Vec<Instance>,
@@ -306,7 +334,53 @@ struct Marker {
     xml: String,
 }
 
-struct Builder<'a> {
+/// English Metric Units, the unit of a drawing's size, per point.
+const EMU_PER_POINT: f64 = 12_700.0;
+
+const DRAWING_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const PICTURE_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+
+/// The size an image is drawn at on a page whose text area is `column`
+/// points wide and `text_height` points high, in EMU: its share of the
+/// column wide, as high as its pixels say, and both smaller where it would
+/// be higher than the text area (a width stored before the paper or the
+/// margins changed). This is the size the page view draws it at.
+fn image_extent(image: &Image, column: f32, text_height: f32) -> (i64, i64) {
+    let aspect = f64::from(image.pixels.1.max(1)) / f64::from(image.pixels.0.max(1));
+    let mut width = f64::from(image.width.thousandths()) / 1000.0 * f64::from(column.max(1.0));
+    let mut height = width * aspect;
+    let cap = f64::from(text_height.floor().max(1.0));
+    if height > cap {
+        height = cap;
+        width = height / aspect;
+    }
+    let emu = |points: f64| ((points * EMU_PER_POINT).round() as i64).max(1);
+    (emu(width), emu(height))
+}
+
+/// A run that holds a picture, in line with the text: the drawing Word
+/// itself writes for "In Line with Text". `id` is unique among the
+/// drawings of the document.
+fn drawing_run(rel: &str, id: u32, file: &str, description: &str, (cx, cy): (i64, i64)) -> String {
+    let descr = attr(description);
+    let file = attr(file);
+    format!(
+        "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
+         <wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{id}\" name=\"Picture {id}\" descr=\"{descr}\"/>\
+         <wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a=\"{DRAWING_NS}\" noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>\
+         <a:graphic xmlns:a=\"{DRAWING_NS}\"><a:graphicData uri=\"{PICTURE_NS}\">\
+         <pic:pic xmlns:pic=\"{PICTURE_NS}\">\
+         <pic:nvPicPr><pic:cNvPr id=\"{id}\" name=\"{file}\" descr=\"{descr}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+         <pic:blipFill><a:blip r:embed=\"{rel}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>\
+         </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
+    )
+}
+
+struct Builder<'a, 's> {
+    /// Where the bytes of the images are.
+    source: &'a ExportSource<'s>,
     options: &'a DocxOptions,
     metrics: &'a Metrics,
     /// The typography the styles are written from: the first document's.
@@ -322,24 +396,121 @@ struct Builder<'a> {
     /// The proofing language of the document being written, when the
     /// styles do not carry it: its runs then say so themselves.
     local_language: Option<Lang>,
-    links: Vec<String>,
+    rels: Vec<Rel>,
     link_ids: HashMap<String, usize>,
+    media: Vec<Media<'s>>,
+    /// The relationship of every image met so far, by index into `rels`;
+    /// `None` for one whose bytes the source does not have.
+    image_rels: HashMap<ImageId, Option<usize>>,
+    /// How many drawings have been written: the id of the next is one more.
+    drawings: u32,
     numbering: Allocator,
     comments: Vec<Comment>,
 }
 
-impl Builder<'_> {
+impl Builder<'_, '_> {
     fn link_rel(&mut self, url: &str) -> String {
         let target = uri(url);
         let index = match self.link_ids.get(&target) {
             Some(i) => *i,
             None => {
-                self.links.push(target.clone());
-                self.link_ids.insert(target, self.links.len() - 1);
-                self.links.len() - 1
+                self.rels.push(Rel::Link(target.clone()));
+                self.link_ids.insert(target, self.rels.len() - 1);
+                self.rels.len() - 1
             }
         };
-        format!("rId{}", FIRST_LINK_REL + index)
+        format!("rId{}", FIRST_REL + index)
+    }
+
+    /// The relationship id and the file name of the picture of `id`, which
+    /// becomes a part of the package the first time it is asked for.
+    /// `None` when the source does not have its bytes.
+    fn image_rel(&mut self, id: ImageId) -> Option<(String, String)> {
+        let index = match self.image_rels.get(&id) {
+            Some(known) => *known,
+            None => {
+                let index = self.source.image(id).map(|data| {
+                    self.media.push(Media {
+                        name: format!("image{}.{}", self.media.len() + 1, data.format.extension()),
+                        format: data.format,
+                        bytes: data.bytes,
+                    });
+                    self.rels.push(Rel::Image {
+                        part: self.media.len() - 1,
+                    });
+                    self.rels.len() - 1
+                });
+                self.image_rels.insert(id, index);
+                index
+            }
+        }?;
+        let Rel::Image { part } = &self.rels[index] else {
+            return None;
+        };
+        Some((
+            format!("rId{}", FIRST_REL + index),
+            self.media[*part].name.clone(),
+        ))
+    }
+
+    /// The paragraph of an image: the picture in line, at the size it has
+    /// on the page, or its description where the picture is missing.
+    fn image_para(
+        &mut self,
+        image: &Image,
+        alignment: Alignment,
+        markers: &[Marker],
+        (column, text_height): (f32, f32),
+    ) -> Para {
+        // The paragraph is a body paragraph in everything but its content.
+        let stand_in = Block::paragraph("");
+        let size = self.size(&stand_in);
+        let mut para = Para {
+            align: match alignment {
+                Alignment::Center => Some("center"),
+                Alignment::Right => Some("right"),
+                Alignment::Left | Alignment::Justify => None,
+            },
+            ..self.para(stand_in.kind(), size)
+        };
+        // A comment range that begins on the image begins before it.
+        for m in markers.iter().filter(|m| !m.end) {
+            para.content.push_str(&m.xml);
+        }
+        match self.image_rel(image.id) {
+            Some((rel, file)) => {
+                self.drawings += 1;
+                // A line is as high as the picture in it. Under a line
+                // height that is a multiple (the style's), a reader would
+                // add that multiple of the picture's height above it.
+                para.line_auto = Some(240);
+                para.content.push_str(&drawing_run(
+                    &rel,
+                    self.drawings,
+                    &file,
+                    &image.description,
+                    image_extent(image, column, text_height),
+                ));
+            }
+            None => {
+                // The picture is not there: what it shows is said in its
+                // place, in the colour of things that are not the text.
+                let props = RunProps {
+                    color: Some(MUTED_COLOR.to_string()),
+                    ..self.run_props(&InlineAttrs::default(), size, &stand_in)
+                };
+                para.bidi = starts_rtl(&image.description);
+                if para.bidi && alignment == Alignment::Right {
+                    para.align = Some("left");
+                }
+                para.content
+                    .push_str(&text_runs(&image.description, &props));
+            }
+        }
+        for m in markers.iter().filter(|m| m.end) {
+            para.content.push_str(&m.xml);
+        }
+        para
     }
 
     /// Registers the comments of `doc` and returns the range markers per
@@ -616,6 +787,13 @@ impl Builder<'_> {
         let body = BlockKind::Paragraph;
         let markers = self.comment_markers(doc);
         let none: Vec<Marker> = Vec::new();
+        let text_area = {
+            let (width, height, margins) = page_geometry(doc);
+            (
+                width - margins.left - margins.right,
+                height - margins.top - margins.bottom,
+            )
+        };
         let mut paras: Vec<Para> = Vec::new();
         if part_needs_title(source, part, self.options.part_titles) {
             let title = Block::with_text(heading.clone(), "");
@@ -644,9 +822,15 @@ impl Builder<'_> {
                 pending_break = true;
                 continue;
             }
+            let block_markers = markers.get(&index).unwrap_or(&none);
+            if let BlockKind::Image(image) = block.kind() {
+                let mut para = self.image_para(image, block.alignment(), block_markers, text_area);
+                para.page_break = std::mem::take(&mut pending_break);
+                paras.push(para);
+                continue;
+            }
             let level = block.indent().min(8);
             let size = self.size(block);
-            let block_markers = markers.get(&index).unwrap_or(&none);
             let bidi = starts_rtl(block.text());
             let mut para = Para {
                 bidi,
@@ -741,7 +925,7 @@ impl Builder<'_> {
                     para.style = Some("ListParagraph");
                     para.indent = Some((item_left, gutter));
                 }
-                // (An image is an empty paragraph here.)
+                // (Both were written above.)
                 BlockKind::PageBreak | BlockKind::Image(_) => {}
             }
             if block.kind().is_list_item() && !next_in_list {
@@ -794,8 +978,9 @@ const MAX_PAGE: f32 = 1584.0;
 /// The smallest bottom margin that still shows a page number, in points.
 const MIN_FOOTER_MARGIN: f32 = 23.0;
 
-/// Section properties: page size, orientation, margins and the footer.
-fn section_xml(doc: &Document, page_numbers: bool) -> String {
+/// The page of `doc` as the section is written: `(width, height, margins)`
+/// in points.
+fn page_geometry(doc: &Document) -> (f32, f32, Margins) {
     let page = doc.settings().page.sanitized();
     let (w, h) = page.page_size();
     // Word's largest page is 22 inches each way; a larger one is cut to
@@ -812,6 +997,13 @@ fn section_xml(doc: &Document, page_numbers: bool) -> String {
     };
     fit(&mut m.left, &mut m.right, w);
     fit(&mut m.top, &mut m.bottom, h);
+    (w, h, m)
+}
+
+/// Section properties: page size, orientation, margins and the footer.
+fn section_xml(doc: &Document, page_numbers: bool) -> String {
+    let (w, h, m) = page_geometry(doc);
+    let page = doc.settings().page.sanitized();
     let orient = match page.orientation {
         Orientation::Landscape => " w:orient=\"landscape\"",
         Orientation::Portrait => "",
@@ -840,13 +1032,14 @@ fn section_xml(doc: &Document, page_numbers: bool) -> String {
 }
 
 /// Builds the document body of `source`.
-pub(crate) fn build(
-    source: &ExportSource<'_>,
+pub(crate) fn build<'s>(
+    source: &ExportSource<'s>,
     options: &DocxOptions,
     metrics: &Metrics,
     language: Option<&Lang>,
-) -> Body {
+) -> Body<'s> {
     let mut builder = Builder {
+        source,
         options,
         metrics,
         typography: source
@@ -857,14 +1050,17 @@ pub(crate) fn build(
         local: None,
         language: language.cloned(),
         local_language: None,
-        links: Vec::new(),
+        rels: Vec::new(),
         link_ids: HashMap::new(),
+        media: Vec::new(),
+        image_rels: HashMap::new(),
+        drawings: 0,
         numbering: Allocator::new(),
         comments: Vec::new(),
     };
     let mut xml = String::from(DECLARATION);
     xml.push_str(&format!(
-        "<w:document xmlns:w=\"{W_NS}\" xmlns:r=\"{R_NS}\"><w:body>"
+        "<w:document xmlns:w=\"{W_NS}\" xmlns:r=\"{R_NS}\" xmlns:wp=\"{WP_NS}\"><w:body>"
     ));
     let parts = source.parts();
     let mut last_section = None;
@@ -909,7 +1105,8 @@ pub(crate) fn build(
     xml.push_str("</w:body></w:document>");
     Body {
         document: xml,
-        links: builder.links,
+        rels: builder.rels,
+        media: builder.media,
         numbered: builder.numbering.into_instances(),
         comments: builder.comments,
     }

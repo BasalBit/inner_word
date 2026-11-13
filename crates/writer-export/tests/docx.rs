@@ -2,55 +2,82 @@
 //! reader, every part is parsed with an XML parser, and the required parts,
 //! relationships and document structure are checked.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
 use roxmltree::Node;
 use writer_core::{
-    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, InlineAttrs,
-    InlineStyle, Margins, Orientation, PageSetup, PaperSize, Position, Rgb, Selection,
-    SpellingLanguage, Typography,
+    Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, Image,
+    ImageId, ImageWidth, InlineAttrs, InlineStyle, Margins, Orientation, PageSetup, PaperSize,
+    Position, Rgb, Selection, SpellingLanguage, Typography,
 };
 use writer_export::docx::parts;
-use writer_export::{DocxOptions, ExportSource, PartTitles, to_docx};
+use writer_export::{
+    DocxOptions, ExportSource, ImageData, ImageFileFormat, ImageSource, PartTitles, to_docx,
+};
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+const CONTENT_TYPES: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
 const W14: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 
 // ----- reading the package ----------------------------------------------------------------
 
-/// The parts of a package: name to XML text. Also checks the archive
-/// itself: CRCs (the reader verifies them), no duplicate names.
-fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
+/// The parts of a package: the XML parts, name to text, and the pictures
+/// under `word/media`, name to bytes. Also checks the archive itself: CRCs
+/// (the reader verifies them), no duplicate names, the pictures held as
+/// they are and written after every XML part.
+fn unzip(bytes: &[u8]) -> Package {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("a valid ZIP archive");
     let mut parts = BTreeMap::new();
+    let mut media = BTreeMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("a readable entry");
+        let name = file.name().to_string();
+        if name.starts_with(parts::MEDIA_DIR) {
+            assert_eq!(
+                file.compression(),
+                zip::CompressionMethod::Stored,
+                "{name} is compressed again"
+            );
+            assert_eq!(file.compressed_size(), file.size(), "{name}");
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)
+                .expect("content with a valid CRC");
+            assert!(
+                media.insert(name.clone(), content).is_none(),
+                "duplicate part {name}"
+            );
+            continue;
+        }
+        assert!(media.is_empty(), "{name} is written after a picture");
         let mut content = String::new();
         file.read_to_string(&mut content)
             .expect("UTF-8 content with a valid CRC");
         assert!(
-            parts.insert(file.name().to_string(), content).is_none(),
-            "duplicate part {}",
-            file.name()
+            parts.insert(name.clone(), content).is_none(),
+            "duplicate part {name}"
         );
     }
-    parts
+    Package { parts, media }
 }
 
 struct Package {
     parts: BTreeMap<String, String>,
+    /// The pictures: `word/media/image1.png` to its bytes.
+    media: BTreeMap<String, Vec<u8>>,
 }
 
 impl Package {
     fn new(source: &ExportSource<'_>, options: &DocxOptions) -> Package {
         let bytes = to_docx(source, options);
-        let package = Package {
-            parts: unzip(&bytes),
-        };
+        let package = unzip(&bytes);
         package.check();
         package
     }
@@ -66,7 +93,23 @@ impl Package {
     }
 
     fn has(&self, name: &str) -> bool {
-        self.parts.contains_key(name)
+        self.parts.contains_key(name) || self.media.contains_key(name)
+    }
+
+    /// The `Default` entries of the content types: extension to type.
+    fn default_types(&self) -> BTreeMap<String, String> {
+        let types = roxmltree::Document::parse(self.part(parts::CONTENT_TYPES)).unwrap();
+        types
+            .root_element()
+            .children()
+            .filter(|n| n.has_tag_name((CONTENT_TYPES, "Default")))
+            .map(|n| {
+                (
+                    n.attribute("Extension").unwrap().to_string(),
+                    n.attribute("ContentType").unwrap().to_string(),
+                )
+            })
+            .collect()
     }
 
     /// `Id -> (Type, Target, external)` of a relationships part.
@@ -144,6 +187,32 @@ impl Package {
         for name in &overrides {
             assert!(self.has(name), "content type for missing part {name}");
         }
+        // A picture has its content type by its extension, and no extension
+        // is named that no picture has.
+        let defaults = self.default_types();
+        let mut used: BTreeSet<&str> = BTreeSet::from(["rels", "xml"]);
+        for name in self.media.keys() {
+            let extension = name.rsplit('.').next().unwrap();
+            let expected = match extension {
+                "png" => "image/png",
+                "jpg" => "image/jpeg",
+                "gif" => "image/gif",
+                other => panic!("a picture with the extension {other}"),
+            };
+            assert_eq!(
+                defaults.get(extension).map(String::as_str),
+                Some(expected),
+                "the content type of {name}"
+            );
+            assert!(!overrides.contains(name), "{name} has two content types");
+            used.insert(extension);
+        }
+        for extension in defaults.keys() {
+            assert!(
+                used.contains(extension.as_str()),
+                "a content type for .{extension}, which no part has"
+            );
+        }
         // Relationship targets exist.
         for (_, (_, target, external)) in self.rels(parts::ROOT_RELS) {
             assert!(
@@ -196,9 +265,32 @@ impl Package {
         let mut starts = Vec::new();
         let mut ends = Vec::new();
         let mut refs = Vec::new();
+        let mut drawing_ids: BTreeSet<&str> = BTreeSet::new();
+        let mut embedded: BTreeSet<String> = BTreeSet::new();
         for n in document.descendants() {
             if let Some(id) = n.attribute((R, "id")) {
                 assert!(rels.contains_key(id), "dangling relationship {id}");
+            }
+            // A picture is embedded through a relationship to a part of
+            // the package, and every drawing has an id of its own.
+            if let Some(id) = n.attribute((R, "embed")) {
+                let (kind, target, external) = rels
+                    .get(id)
+                    .unwrap_or_else(|| panic!("dangling relationship {id}"));
+                assert!(kind.ends_with("/image") && !external, "{id} is no picture");
+                assert!(self.media.contains_key(&format!("word/{target}")));
+                embedded.insert(format!("word/{target}"));
+            }
+            if n.has_tag_name((WP, "docPr")) {
+                let id = n.attribute("id").unwrap();
+                assert!(id.parse::<u32>().unwrap() > 0);
+                assert!(drawing_ids.insert(id), "two drawings with the id {id}");
+            }
+            if n.has_tag_name((W, "drawing")) {
+                assert!(
+                    n.parent().unwrap().has_tag_name((W, "r")),
+                    "a drawing outside a run"
+                );
             }
             if n.has_tag_name((W, "pStyle")) || n.has_tag_name((W, "rStyle")) {
                 let id = n.attribute((W, "val")).unwrap();
@@ -216,6 +308,16 @@ impl Package {
             } else if n.has_tag_name((W, "commentReference")) {
                 refs.push(id());
             }
+        }
+        // No picture is in the package that the text does not show.
+        let held: BTreeSet<String> = self.media.keys().cloned().collect();
+        assert_eq!(embedded, held, "pictures embedded and pictures held");
+        for (kind, target, _) in rels.values() {
+            assert_eq!(
+                kind.ends_with("/image"),
+                target.starts_with("media/"),
+                "{target}"
+            );
         }
         // Styles refer to styles that exist.
         for n in styles
@@ -477,6 +579,65 @@ struct Run {
     shade: Option<String>,
     style: Option<String>,
     link: Option<String>,
+    /// The picture the run holds.
+    picture: Option<Picture>,
+}
+
+/// A picture in line with the text, as the tests see it.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Picture {
+    /// The id of the relationship it is embedded through.
+    rel: String,
+    /// The part it shows, as the relationship names it: `media/image1.png`.
+    target: String,
+    /// Width and height in EMU (`wp:extent`).
+    extent: (i64, i64),
+    /// The alternative text (`descr` of `wp:docPr`).
+    description: String,
+    /// The id of the drawing.
+    id: u32,
+}
+
+impl Picture {
+    fn read(drawing: Node, rels: &BTreeMap<String, (String, String, bool)>) -> Picture {
+        let find = |ns: &'static str, name: &'static str| {
+            drawing
+                .descendants()
+                .find(|n| n.has_tag_name((ns, name)))
+                .unwrap_or_else(|| panic!("a drawing without {name}"))
+        };
+        let inline = find(WP, "inline");
+        assert!(
+            drawing.children().filter(Node::is_element).eq([inline]),
+            "a drawing holds one inline picture"
+        );
+        let size = |n: Node| -> (i64, i64) {
+            (
+                n.attribute("cx").unwrap().parse().unwrap(),
+                n.attribute("cy").unwrap().parse().unwrap(),
+            )
+        };
+        let extent = size(find(WP, "extent"));
+        // The picture itself is as large as the room it is given.
+        assert_eq!(size(find(A, "ext")), extent);
+        assert!(extent.0 > 0 && extent.1 > 0);
+        let properties = find(WP, "docPr");
+        let description = properties.attribute("descr").unwrap().to_string();
+        assert_eq!(find(PIC, "cNvPr").attribute("descr"), Some(&*description));
+        assert_eq!(
+            find(A, "graphicFrameLocks").attribute("noChangeAspect"),
+            Some("1")
+        );
+        assert_eq!(find(A, "graphicData").attribute("uri"), Some(PIC));
+        let rel = find(A, "blip").attribute((R, "embed")).unwrap().to_string();
+        Picture {
+            target: rels[&rel].1.clone(),
+            rel,
+            extent,
+            description,
+            id: properties.attribute("id").unwrap().parse().unwrap(),
+        }
+    }
 }
 
 /// A paragraph as the tests see it.
@@ -497,6 +658,8 @@ struct P {
     after: Option<i32>,
     /// `w:spacing w:line` when the rule is "exact".
     line_exact: Option<i32>,
+    /// `w:spacing w:line` when the rule is "auto".
+    line_auto: Option<i32>,
     /// Tab stops: `(alignment, position)`.
     tabs: Vec<(String, i32)>,
     runs: Vec<Run>,
@@ -527,6 +690,9 @@ impl P {
                 out.after = spacing.attribute((W, "after")).map(|v| v.parse().unwrap());
                 if spacing.attribute((W, "lineRule")) == Some("exact") {
                     out.line_exact = spacing.attribute((W, "line")).map(|v| v.parse().unwrap());
+                }
+                if spacing.attribute((W, "lineRule")) == Some("auto") {
+                    out.line_auto = spacing.attribute((W, "line")).map(|v| v.parse().unwrap());
                 }
             }
             if let Some(tabs) = child(ppr, "tabs") {
@@ -585,6 +751,10 @@ impl P {
                     }
                     "br" => run.text.push('\n'),
                     "tab" => run.text.push('\t'),
+                    "drawing" => {
+                        assert!(run.picture.is_none(), "two pictures in one run");
+                        run.picture = Some(Picture::read(c, rels));
+                    }
                     "commentReference" => {}
                     other => panic!("unexpected <w:{other}> in a run"),
                 }
@@ -643,10 +813,9 @@ fn package_parts_and_order() {
         &bytes[30..30 + parts::CONTENT_TYPES.len()],
         parts::CONTENT_TYPES.as_bytes()
     );
-    let package = Package {
-        parts: unzip(&bytes),
-    };
+    let package = unzip(&bytes);
     package.check();
+    assert!(package.media.is_empty());
     let names: Vec<&str> = package.parts.keys().map(String::as_str).collect();
     assert_eq!(
         names,
@@ -1518,6 +1687,7 @@ fn every_attribute_at_once() {
             shade: Some("D9C5F0".into()),
             style: Some("Hyperlink".into()),
             link: Some("https://example.com/all".into()),
+            picture: None,
         }]
     );
 }
@@ -2775,6 +2945,600 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                 eprintln!("seed {seed} failed");
                 std::panic::resume_unwind(e);
             }
+        }
+    }
+}
+
+// ----- images -----------------------------------------------------------------------------
+
+const HARBOUR: &str = "3f2a9c1b5d6e7f80a1b2c3d4e5f60718";
+
+/// An image id made for a test: `first` in hex, then zeros up to 32
+/// digits.
+fn image_id(first: &str) -> ImageId {
+    ImageId::parse(&format!("{first:0<32}")).expect("hex digits")
+}
+
+/// An image of `pixels` at 144 to the inch, `percent` of the column wide.
+fn image(first: &str, pixels: (u32, u32), percent: u16, description: &str) -> Image {
+    Image {
+        width: ImageWidth::from_percent(percent),
+        description: description.to_string(),
+        ..Image::new(image_id(first), pixels, 144)
+    }
+}
+
+/// The stored images of a test: what a library would hold.
+#[derive(Default)]
+struct Pictures(BTreeMap<ImageId, (Vec<u8>, ImageFileFormat)>);
+
+impl Pictures {
+    fn with(mut self, first: &str, format: ImageFileFormat, bytes: &[u8]) -> Pictures {
+        self.0.insert(image_id(first), (bytes.to_vec(), format));
+        self
+    }
+}
+
+impl ImageSource for Pictures {
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
+        self.0.get(&id).map(|(bytes, format)| ImageData {
+            bytes: Cow::Borrowed(bytes),
+            format: *format,
+        })
+    }
+}
+
+/// Bytes that stand for a picture file and that DEFLATE would make much
+/// smaller: a package that compressed them again would show.
+fn picture_bytes(signature: &[u8]) -> Vec<u8> {
+    let mut bytes = signature.to_vec();
+    bytes.extend(std::iter::repeat_n(0u8, 6000));
+    bytes.extend_from_slice(b"the end of the picture");
+    bytes
+}
+
+fn package_with(doc: &Document, pictures: &Pictures) -> Package {
+    Package::new(
+        &ExportSource::single("Test", doc).with_images(pictures),
+        &DocxOptions::default(),
+    )
+}
+
+/// The size in EMU of something `width` points wide with the proportions
+/// of `pixels`.
+fn emu(width: f64, pixels: (u32, u32)) -> (i64, i64) {
+    let height = width * f64::from(pixels.1) / f64::from(pixels.0);
+    (
+        (width * 12_700.0).round() as i64,
+        (height * 12_700.0).round() as i64,
+    )
+}
+
+#[test]
+fn an_image_is_a_picture_of_the_package_in_a_paragraph_of_its_own() {
+    let png = picture_bytes(b"\x89PNG\r\n\x1a\n");
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, &png);
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("Before."),
+        Block::image(image(HARBOUR, (1600, 1067), 50, "The harbour at dusk"))
+            .with_alignment(Alignment::Center),
+        Block::paragraph("After."),
+    ]);
+    let package = package_with(&doc, &pictures);
+
+    // The part holds the stored file, byte for byte, and is not compressed
+    // again (`unzip` checks that for every picture).
+    assert_eq!(
+        package.media.keys().collect::<Vec<_>>(),
+        ["word/media/image1.png"]
+    );
+    assert_eq!(package.media["word/media/image1.png"], png);
+    // The whole package is larger than the picture, which it would not be
+    // had the 6000 zeros been deflated.
+    let bytes = to_docx(
+        &ExportSource::single("Test", &doc).with_images(&pictures),
+        &DocxOptions::default(),
+    );
+    assert!(bytes.len() > png.len());
+
+    // Its content type goes by its extension, its relationship is an
+    // image relationship inside the package.
+    assert_eq!(
+        package.default_types().get("png").map(String::as_str),
+        Some("image/png")
+    );
+    let rels = package.rels(parts::DOCUMENT_RELS);
+    assert_eq!(
+        rels["rId7"],
+        (
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".to_string(),
+            "media/image1.png".to_string(),
+            false
+        )
+    );
+
+    let ps = package.paragraphs();
+    assert_eq!(ps.len(), 3);
+    assert_eq!(ps[0].text(), "Before.");
+    assert_eq!(ps[2].text(), "After.");
+    let p = &ps[1];
+    assert_eq!(p.style, "");
+    assert_eq!(p.align.as_deref(), Some("center"));
+    assert_eq!(
+        (p.left, p.bidi, p.rule, p.page_break),
+        (None, false, false, false)
+    );
+    // A line as high as the picture: single spacing, where the style's
+    // multiple would put that multiple of the picture's height above it.
+    assert_eq!(p.line_auto, Some(240));
+    // The space after it is the style's: a paragraph's.
+    assert_eq!((p.before, p.after), (None, None));
+    assert_eq!(p.runs.len(), 1);
+    assert_eq!(p.text(), "");
+    let picture = p.runs[0].picture.as_ref().expect("a picture");
+    assert_eq!(picture.rel, "rId7");
+    assert_eq!(picture.target, "media/image1.png");
+    assert_eq!(picture.description, "The harbour at dusk");
+    assert_eq!(picture.id, 1);
+    // Half of the text column of an A4 page with one-inch margins
+    // (451.276 points), and as high as 1600 × 1067 pixels say.
+    let column = f64::from(PageSetup::default().content_size().0);
+    assert!((column - 451.276).abs() < 0.001);
+    assert_eq!(picture.extent, emu(column / 2.0, (1600, 1067)));
+    assert!(
+        (picture.extent.0 - 2_865_603).abs() <= 2,
+        "{:?}",
+        picture.extent
+    );
+    assert!(
+        (picture.extent.1 - 1_910_999).abs() <= 2,
+        "{:?}",
+        picture.extent
+    );
+    // The namespace of the drawing is declared on the document.
+    assert!(
+        package
+            .part(parts::DOCUMENT)
+            .contains(&format!("xmlns:wp=\"{WP}\""))
+    );
+
+    // A document without an image has no picture, no content type for one
+    // and the parts it always had.
+    let plain = Package::of(&Document::from_blocks(vec![Block::paragraph("Text")]));
+    assert!(plain.media.is_empty());
+    assert_eq!(
+        plain.default_types().keys().collect::<Vec<_>>(),
+        ["rels", "xml"]
+    );
+    assert!(!plain.part(parts::DOCUMENT).contains("<w:drawing>"));
+}
+
+#[test]
+fn the_width_of_an_image_is_its_share_of_the_column_of_its_page() {
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, b"png");
+    let extent_on = |page: PageSetup, percent: u16, pixels: (u32, u32)| {
+        let doc = Document::from_blocks(vec![Block::image(image(HARBOUR, pixels, percent, ""))])
+            .with_settings(DocumentSettings {
+                page,
+                ..DocumentSettings::default()
+            });
+        let ps = package_with(&doc, &pictures).paragraphs();
+        ps[0].runs[0].picture.clone().expect("a picture").extent
+    };
+    let a4 = PageSetup::default();
+    let column = f64::from(a4.content_size().0);
+    for percent in [5, 10, 25, 33, 50, 62, 75, 100] {
+        assert_eq!(
+            extent_on(a4, percent, (1600, 1067)),
+            emu(column * f64::from(percent) / 100.0, (1600, 1067)),
+            "{percent} %"
+        );
+    }
+    // Left and right aligned, the whole column: 451.276 points.
+    assert_eq!(extent_on(a4, 100, (2000, 1000)).0, 5_731_205);
+    // US Letter with margins of one inch has a column of 468 points.
+    let letter = PageSetup {
+        paper: PaperSize::UsLetter,
+        ..PageSetup::default()
+    };
+    assert_eq!(
+        extent_on(letter, 50, (1000, 500)),
+        (234 * 12_700, 117 * 12_700)
+    );
+    // Landscape: 792 - 144 = 648.
+    let landscape = PageSetup {
+        orientation: Orientation::Landscape,
+        ..letter
+    };
+    assert_eq!(
+        extent_on(landscape, 25, (1000, 500)),
+        (162 * 12_700, 81 * 12_700)
+    );
+    // Narrow margins widen the column, and the picture with it.
+    let narrow = PageSetup {
+        margins: Margins::uniform(36.0),
+        ..letter
+    };
+    assert_eq!(
+        extent_on(narrow, 50, (1000, 500)),
+        (270 * 12_700, 135 * 12_700)
+    );
+
+    // The scale of the text is not the scale of the page: a picture stays
+    // its share of the column.
+    let doc = Document::from_blocks(vec![Block::image(image(HARBOUR, (1000, 500), 50, ""))]);
+    let scaled = Package::new(
+        &ExportSource::single("T", &doc).with_images(&pictures),
+        &DocxOptions {
+            text_scale: 12.0 / 17.0,
+            ..DocxOptions::default()
+        },
+    );
+    assert_eq!(
+        scaled.paragraphs()[0].runs[0]
+            .picture
+            .clone()
+            .unwrap()
+            .extent,
+        emu(column / 2.0, (1000, 500))
+    );
+}
+
+#[test]
+fn an_image_is_never_higher_than_the_text_area_of_its_page() {
+    // A phone screenshot stored as wide as the column (a width from before
+    // the paper was changed: the editor never stores one that does not fit).
+    let phone = (1170, 2532);
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, b"png");
+    let extent_on = |page: PageSetup, percent: u16| {
+        let doc = Document::from_blocks(vec![Block::image(image(HARBOUR, phone, percent, ""))])
+            .with_settings(DocumentSettings {
+                page,
+                ..DocumentSettings::default()
+            });
+        let ps = package_with(&doc, &pictures).paragraphs();
+        ps[0].runs[0].picture.clone().expect("a picture").extent
+    };
+    // A4: the text area is 697.89 points high; the picture is 697, the
+    // whole points the page view gives it, and as narrow as that makes it.
+    let a4 = PageSetup::default();
+    let (width, height) = extent_on(a4, 100);
+    assert_eq!(height, 697 * 12_700);
+    assert_eq!(
+        width,
+        (697.0 * 1170.0 / 2532.0 * 12_700.0_f64).round() as i64
+    );
+    assert!(f64::from(a4.content_size().1) * 12_700.0 >= height as f64);
+    // US Letter: 648 points, to the digit.
+    let letter = PageSetup {
+        paper: PaperSize::UsLetter,
+        ..PageSetup::default()
+    };
+    let (width, height) = extent_on(letter, 100);
+    assert_eq!(height, 648 * 12_700);
+    assert_eq!(
+        width,
+        (648.0 * 1170.0 / 2532.0 * 12_700.0_f64).round() as i64
+    );
+    // The widest it can be stored at on A4 (`Image::max_width`) needs no
+    // cut: its height is under the text area by less than a thousandth of
+    // the column.
+    let stored = Image::new(image_id(HARBOUR), phone, 144).max_width(&a4);
+    assert_eq!(stored.thousandths(), 713);
+    let (width, height) = extent_on(a4, 71);
+    assert_eq!(
+        (width, height),
+        emu(f64::from(a4.content_size().0) * 0.71, phone)
+    );
+    assert!(height < 697 * 12_700);
+    // A picture that is wide and low is not touched by any of this.
+    let doc = Document::from_blocks(vec![Block::image(image(HARBOUR, (4000, 10), 100, ""))]);
+    let ps = package_with(&doc, &pictures).paragraphs();
+    let (width, height) = ps[0].runs[0].picture.clone().unwrap().extent;
+    assert_eq!(width, 5_731_205);
+    assert_eq!(
+        height,
+        (451.276_f64 * 10.0 / 4000.0 * 12_700.0).round() as i64
+    );
+}
+
+#[test]
+fn links_and_images_take_their_relationships_from_one_counter() {
+    let jpeg = picture_bytes(b"\xff\xd8\xff\xe0");
+    let gif = picture_bytes(b"GIF89a");
+    let png = picture_bytes(b"\x89PNG\r\n\x1a\n");
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Jpeg, &jpeg)
+        .with("00ff", ImageFileFormat::Gif, &gif)
+        .with("abcd", ImageFileFormat::Png, &png);
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("See ").with_span("the site", link("https://example.com/a")),
+        Block::image(image(HARBOUR, (800, 600), 100, "First")),
+        Block::paragraph("And ").with_span("another", link("https://example.com/b")),
+        Block::image(image("00ff", (10, 10), 10, "Second")).with_alignment(Alignment::Right),
+        // The first picture again, at another width: the same part.
+        Block::image(image(HARBOUR, (800, 600), 25, "First again")),
+        Block::paragraph("Back to ").with_span("the site", link("https://example.com/a")),
+        Block::image(image("abcd", (10, 10), 10, "Third")),
+    ]);
+    let package = package_with(&doc, &pictures);
+    let rels = package.rels(parts::DOCUMENT_RELS);
+    let asked: Vec<(&str, &str, bool)> = ["rId7", "rId8", "rId9", "rId10", "rId11"]
+        .iter()
+        .map(|id| {
+            let (kind, target, external) = &rels[*id];
+            (kind.rsplit('/').next().unwrap(), target.as_str(), *external)
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("hyperlink", "https://example.com/a", true),
+            ("image", "media/image1.jpg", false),
+            ("hyperlink", "https://example.com/b", true),
+            ("image", "media/image2.gif", false),
+            ("image", "media/image3.png", false),
+        ]
+    );
+    // Nothing else was added: the fixed parts have the ids below 7.
+    assert_eq!(rels.len(), 4 + 5);
+    assert!(!rels.contains_key("rId12"));
+
+    // One part for each picture, however often it is used.
+    assert_eq!(
+        package.media.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "word/media/image1.jpg",
+            "word/media/image2.gif",
+            "word/media/image3.png"
+        ]
+    );
+    assert_eq!(package.media["word/media/image1.jpg"], jpeg);
+    assert_eq!(package.media["word/media/image2.gif"], gif);
+    assert_eq!(package.media["word/media/image3.png"], png);
+    let types = package.default_types();
+    assert_eq!(types["jpg"], "image/jpeg");
+    assert_eq!(types["gif"], "image/gif");
+    assert_eq!(types["png"], "image/png");
+
+    let ps = package.paragraphs();
+    assert_eq!(ps[0].runs[1].link.as_deref(), Some("https://example.com/a"));
+    assert_eq!(ps[5].runs[1].link.as_deref(), Some("https://example.com/a"));
+    let drawn: Vec<Picture> = ps
+        .iter()
+        .filter_map(|p| p.runs.first().and_then(|r| r.picture.clone()))
+        .collect();
+    let seen: Vec<(u32, &str, &str, &str)> = drawn
+        .iter()
+        .map(|p| {
+            (
+                p.id,
+                p.rel.as_str(),
+                p.target.as_str(),
+                p.description.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (1, "rId8", "media/image1.jpg", "First"),
+            (2, "rId10", "media/image2.gif", "Second"),
+            (3, "rId8", "media/image1.jpg", "First again"),
+            (4, "rId11", "media/image3.png", "Third"),
+        ]
+    );
+    // The two uses of one picture have their own sizes.
+    assert_eq!(drawn[0].extent.0, 5_731_205);
+    assert_eq!(
+        drawn[2].extent,
+        emu(451.276_000_976_562_5 * 0.25, (800, 600))
+    );
+    assert_eq!(ps[3].align.as_deref(), Some("right"));
+    assert_eq!(ps[1].align, None);
+
+    // The same bytes every time.
+    let source = ExportSource::single("Test", &doc).with_images(&pictures);
+    assert_eq!(
+        to_docx(&source, &DocxOptions::default()),
+        to_docx(&source, &DocxOptions::default())
+    );
+}
+
+#[test]
+fn the_description_of_an_image_is_its_alternative_text() {
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, b"png");
+    for description in [
+        "",
+        "A \"quoted\" <tag> & an entity &amp;",
+        "tab\tinside",
+        "日本語の説明, שלום, émile, 👩‍👩‍👧",
+        "]]> --> <!--",
+    ] {
+        let doc = Document::from_blocks(vec![Block::image(image(
+            HARBOUR,
+            (10, 10),
+            50,
+            description,
+        ))]);
+        let kept = doc.blocks()[0].as_image().unwrap().description.clone();
+        let ps = package_with(&doc, &pictures).paragraphs();
+        // A tab cannot stand in an attribute as it is; it is a space there.
+        assert_eq!(
+            ps[0].runs[0].picture.clone().unwrap().description,
+            kept.replace('\t', " "),
+            "{description:?}"
+        );
+    }
+}
+
+#[test]
+fn an_image_whose_bytes_are_missing_is_its_description() {
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("Before."),
+        Block::image(image(HARBOUR, (800, 600), 50, "The harbour at dusk"))
+            .with_alignment(Alignment::Center),
+        // Not described either: an empty paragraph keeps its place.
+        Block::image(image("00ff", (800, 600), 50, "")),
+        Block::image(image("abcd", (800, 600), 50, "A file of no bytes")),
+        Block::paragraph("After."),
+    ]);
+    // A library that has none of them (one as a file of nothing), and a
+    // source that was given no library at all.
+    let empty = Pictures::default().with("abcd", ImageFileFormat::Png, b"");
+    let with_empty_library = package_with(&doc, &empty);
+    let without_library = Package::of(&doc);
+    for package in [&with_empty_library, &without_library] {
+        assert!(package.media.is_empty());
+        assert_eq!(
+            package.default_types().keys().collect::<Vec<_>>(),
+            ["rels", "xml"]
+        );
+        assert!(
+            package
+                .rels(parts::DOCUMENT_RELS)
+                .values()
+                .all(|(kind, _, _)| !kind.ends_with("/image"))
+        );
+        assert!(!package.part(parts::DOCUMENT).contains("<w:drawing>"));
+        let ps = package.paragraphs();
+        assert_eq!(ps.len(), 5);
+        assert_eq!(ps[1].text(), "The harbour at dusk");
+        assert_eq!(ps[1].align.as_deref(), Some("center"));
+        // In the colour of what is not the text itself.
+        assert_eq!(ps[1].runs.len(), 1);
+        assert_eq!(ps[1].runs[0].color.as_deref(), Some("6B645B"));
+        assert_eq!(ps[1].line_auto, None);
+        assert_eq!((ps[2].text().as_str(), ps[2].runs.len()), ("", 0));
+        assert_eq!(ps[3].text(), "A file of no bytes");
+        assert_eq!(ps[4].text(), "After.");
+    }
+    assert_eq!(
+        with_empty_library.part(parts::DOCUMENT),
+        without_library.part(parts::DOCUMENT)
+    );
+    // One image there and one missing: the one that is there is image1.
+    let some = Pictures::default().with("00ff", ImageFileFormat::Gif, b"GIF89a");
+    let package = package_with(&doc, &some);
+    assert_eq!(
+        package.media.keys().collect::<Vec<_>>(),
+        ["word/media/image1.gif"]
+    );
+    let ps = package.paragraphs();
+    assert_eq!(ps[1].text(), "The harbour at dusk");
+    assert_eq!(ps[2].runs[0].picture.as_ref().unwrap().id, 1);
+}
+
+#[test]
+fn images_in_a_collection_and_after_a_page_break() {
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Png, b"harbour")
+        .with("00ff", ImageFileFormat::Jpeg, b"other");
+    let one = Document::from_blocks(vec![
+        Block::paragraph("One."),
+        Block::new(BlockKind::PageBreak),
+        Block::image(image(HARBOUR, (1000, 500), 50, "In one")),
+    ]);
+    // The second document has its own paper and its own typography.
+    let two = Document::from_blocks(vec![
+        Block::image(image(HARBOUR, (1000, 500), 50, "In two")),
+        Block::image(image("00ff", (1000, 500), 100, "Only in two")),
+        Block::image(image("abcd", (1000, 500), 100, "Missing in two")),
+    ])
+    .with_settings(DocumentSettings {
+        page: PageSetup {
+            paper: PaperSize::UsLetter,
+            orientation: Orientation::Landscape,
+            ..PageSetup::default()
+        },
+        typography: Typography {
+            base_size: 12.0,
+            paragraph_spacing: 6.0,
+            ..Typography::default()
+        },
+        ..DocumentSettings::default()
+    });
+    let source =
+        ExportSource::collection("Book", [("One", &one), ("Two", &two)]).with_images(&pictures);
+    let options = DocxOptions {
+        part_titles: PartTitles::Never,
+        ..DocxOptions::default()
+    };
+    let package = Package::new(&source, &options);
+    assert_eq!(
+        package.media.keys().collect::<Vec<_>>(),
+        ["word/media/image1.png", "word/media/image2.jpg"]
+    );
+    let ps = package.paragraphs();
+    assert_eq!(ps.len(), 5);
+    // The image after the page break starts the new page itself, and ends
+    // the section of the first document.
+    assert!(ps[1].page_break && ps[1].section);
+    let first = ps[1].runs[0].picture.clone().unwrap();
+    assert_eq!(first.extent, emu(451.276_000_976_562_5 / 2.0, (1000, 500)));
+    // In the second document the same share is a share of its own column
+    // (648 points), and the paragraph carries that document's spacing.
+    let second = ps[2].runs[0].picture.clone().unwrap();
+    assert_eq!(second.extent, (324 * 12_700, 162 * 12_700));
+    assert_eq!((second.rel.as_str(), first.rel.as_str()), ("rId7", "rId7"));
+    assert_eq!(ps[2].after, Some(120));
+    assert_eq!(ps[2].line_auto, Some(240));
+    let third = ps[3].runs[0].picture.clone().unwrap();
+    assert_eq!(third.extent, (648 * 12_700, 324 * 12_700));
+    assert_eq!(third.target, "media/image2.jpg");
+    assert_eq!([first.id, second.id, third.id], [1, 2, 3]);
+    // The missing one is text in that document's size.
+    assert_eq!(ps[4].text(), "Missing in two");
+    assert_eq!(ps[4].runs[0].size, Some(24));
+    assert_eq!(ps[4].runs[0].color.as_deref(), Some("6B645B"));
+}
+
+#[test]
+fn documents_of_every_kind_of_block_with_images_are_valid_packages() {
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Png, &picture_bytes(b"\x89PNG"))
+        .with("00ff", ImageFileFormat::Jpeg, &picture_bytes(b"\xff\xd8"));
+    for seed in 1..=300u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut blocks = Vec::new();
+        for _ in 0..1 + rng.below(12) {
+            if rng.chance(35) {
+                let id = [HARBOUR, "00ff", "abcd"][rng.below(3)];
+                let pixels = (1 + rng.below(4000) as u32, 1 + rng.below(4000) as u32);
+                let percent = 5 + rng.below(96) as u16;
+                let description = ADV_PIECES[rng.below(ADV_PIECES.len())];
+                let alignment =
+                    [Alignment::Left, Alignment::Center, Alignment::Right][rng.below(3)];
+                blocks.push(
+                    Block::image(image(id, pixels, percent, description)).with_alignment(alignment),
+                );
+            } else {
+                blocks.extend(adv_document(&mut rng).blocks().iter().take(2).cloned());
+            }
+        }
+        let images = blocks.iter().filter(|b| b.kind().is_image()).count();
+        let there = blocks
+            .iter()
+            .filter_map(Block::as_image)
+            .filter(|i| i.id != image_id("abcd"))
+            .count();
+        let doc = Document::from_blocks(blocks);
+        // `Package::new` checks everything that must hold for a package.
+        let package = package_with(&doc, &pictures);
+        let ps = package.paragraphs();
+        let pictures: Vec<&Picture> = ps
+            .iter()
+            .flat_map(|p| p.runs.iter().filter_map(|r| r.picture.as_ref()))
+            .collect();
+        assert_eq!(pictures.len(), there, "seed {seed}: {images} images");
+        let (column, height) = PageSetup::default().content_size();
+        for picture in pictures {
+            assert!(
+                picture.extent.0 as f64 <= f64::from(column) * 12_700.0 + 1.0
+                    && picture.extent.1 as f64 <= f64::from(height) * 12_700.0,
+                "seed {seed}: {:?} is larger than the text area",
+                picture.extent
+            );
         }
     }
 }

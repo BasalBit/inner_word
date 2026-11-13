@@ -23,6 +23,16 @@
 //!   their whitespace and line breaks. Alignment and indent levels are
 //!   kept. Indents and spacing follow the editor's page view: 24 pt per
 //!   indent level, list items closer together than paragraphs.
+//! - **Images.** Each image is a paragraph that holds the picture in line
+//!   with the text, at the size it has on the page: its share of the text
+//!   column wide, as high as its pixels say, and never higher than the
+//!   page's text area. Its alignment is the paragraph's. The description
+//!   is the alternative text a screen reader reads. A picture is one part
+//!   of the package however often the document uses it, stored as the
+//!   file it is (PNG, JPEG or GIF), not compressed again. An image whose
+//!   bytes the source does not have
+//!   ([`ExportSource::with_images`](crate::ExportSource::with_images)) is
+//!   a paragraph with its description in a muted colour.
 //! - **Runs.** Bold, italic, underline, strikethrough, highlight (as run
 //!   shading in the highlight's reference colour), text colour, font
 //!   family and the block's text size; inline code in the monospace font
@@ -95,6 +105,8 @@ pub use lang::language_tag;
 
 pub(crate) const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 pub(crate) const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+pub(crate) const WP_NS: &str =
+    "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
@@ -127,6 +139,10 @@ pub mod parts {
     pub const COMMENTS: &str = "word/comments.xml";
     /// Comment threading and resolved state (only when comments are exported).
     pub const COMMENTS_EXTENDED: &str = "word/commentsExtended.xml";
+    /// The folder of the pictures, with its slash: one part
+    /// `word/media/image<N>.<png|jpg|gif>` for each image whose bytes the
+    /// source has, written last and in the order the text first uses them.
+    pub const MEDIA_DIR: &str = "word/media/";
 }
 
 /// Options for [`to_docx`].
@@ -364,15 +380,15 @@ pub(crate) fn page_twips(points: f32) -> i32 {
     (points * 20.0).round() as i32
 }
 
-/// Relationship ids of the fixed parts. Hyperlinks follow from
-/// [`FIRST_LINK_REL`].
+/// Relationship ids of the fixed parts. Hyperlinks and pictures follow
+/// from [`FIRST_REL`], in the order the text first uses them.
 const STYLES_REL: &str = "rId1";
 const NUMBERING_REL: &str = "rId2";
 const SETTINGS_REL: &str = "rId3";
 pub(crate) const FOOTER_REL: &str = "rId4";
 const COMMENTS_REL: &str = "rId5";
 const COMMENTS_EXTENDED_REL: &str = "rId6";
-pub(crate) const FIRST_LINK_REL: usize = 7;
+pub(crate) const FIRST_REL: usize = 7;
 
 /// Exports `source` as a DOCX package and returns the file's bytes.
 ///
@@ -393,7 +409,7 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(options.modified);
     zip.add(
         parts::CONTENT_TYPES,
-        content_types(options.page_numbers, has_comments).as_bytes(),
+        content_types(options.page_numbers, has_comments, &body.media).as_bytes(),
     );
     zip.add(parts::ROOT_RELS, root_rels().as_bytes());
     zip.add(
@@ -404,7 +420,7 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
     zip.add(parts::DOCUMENT, body.document.as_bytes());
     zip.add(
         parts::DOCUMENT_RELS,
-        document_rels(options.page_numbers, has_comments, &body.links).as_bytes(),
+        document_rels(options.page_numbers, has_comments, &body.rels, &body.media).as_bytes(),
     );
     zip.add(
         parts::STYLES,
@@ -425,16 +441,34 @@ pub fn to_docx(source: &ExportSource<'_>, options: &DocxOptions) -> Vec<u8> {
             comments_extended_xml(&body.comments).as_bytes(),
         );
     }
+    for picture in &body.media {
+        // A picture is compressed already: deflating it again costs time
+        // and saves nothing.
+        zip.add_stored(
+            &format!("{}{}", parts::MEDIA_DIR, picture.name),
+            &picture.bytes,
+        );
+    }
     zip.finish()
 }
 
-fn content_types(footer: bool, comments: bool) -> String {
+fn content_types(footer: bool, comments: bool, media: &[body::Media<'_>]) -> String {
     let mut s = String::from(DECLARATION);
     s.push_str(
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
          <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
          <Default Extension=\"xml\" ContentType=\"application/xml\"/>",
     );
+    // One default for each kind of picture the package holds.
+    for format in crate::ImageFileFormat::ALL {
+        if media.iter().any(|picture| picture.format == format) {
+            s.push_str(&format!(
+                "<Default Extension=\"{}\" ContentType=\"{}\"/>",
+                format.extension(),
+                format.mime_type()
+            ));
+        }
+    }
     let mut part = |name: &str, content_type: &str| {
         s.push_str(&format!(
             "<Override PartName=\"/{name}\" ContentType=\"{content_type}\"/>"
@@ -479,7 +513,12 @@ fn root_rels() -> String {
     )
 }
 
-fn document_rels(footer: bool, comments: bool, links: &[String]) -> String {
+fn document_rels(
+    footer: bool,
+    comments: bool,
+    rels: &[body::Rel],
+    media: &[body::Media<'_>],
+) -> String {
     let mut s = format!(
         "{DECLARATION}{RELATIONSHIPS_OPEN}\
          <Relationship Id=\"{STYLES_REL}\" Type=\"{REL_BASE}/styles\" Target=\"styles.xml\"/>\
@@ -497,12 +536,18 @@ fn document_rels(footer: bool, comments: bool, links: &[String]) -> String {
              <Relationship Id=\"{COMMENTS_EXTENDED_REL}\" Type=\"http://schemas.microsoft.com/office/2011/relationships/commentsExtended\" Target=\"commentsExtended.xml\"/>"
         ));
     }
-    for (i, target) in links.iter().enumerate() {
-        s.push_str(&format!(
-            "<Relationship Id=\"rId{}\" Type=\"{REL_BASE}/hyperlink\" Target=\"{}\" TargetMode=\"External\"/>",
-            FIRST_LINK_REL + i,
-            attr(target),
-        ));
+    for (i, rel) in rels.iter().enumerate() {
+        let id = FIRST_REL + i;
+        match rel {
+            body::Rel::Link(target) => s.push_str(&format!(
+                "<Relationship Id=\"rId{id}\" Type=\"{REL_BASE}/hyperlink\" Target=\"{}\" TargetMode=\"External\"/>",
+                attr(target),
+            )),
+            body::Rel::Image { part } => s.push_str(&format!(
+                "<Relationship Id=\"rId{id}\" Type=\"{REL_BASE}/image\" Target=\"media/{}\"/>",
+                attr(&media[*part].name),
+            )),
+        }
     }
     s.push_str("</Relationships>");
     s

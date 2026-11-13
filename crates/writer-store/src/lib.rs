@@ -38,6 +38,12 @@
 //! collector deleted it and no kept backup names it, so a backup that is brought back
 //! finds its pictures in `images.db` or in the copy.
 //!
+//! A damaged file of the two (its header or a page is not what SQLite wrote) is moved
+//! aside (`images.db.damaged-<unix ms>`, [`images_moved_aside`] lists them) and made
+//! again, with what can still be read of it and the other file does not have; the rest
+//! comes from the other file. Bytes whose hash is not their id are not believed in
+//! either file, and are written over with the right ones where those are found.
+//!
 //! The schema version of the database ([`SCHEMA_VERSION`]) is 3 since documents may hold
 //! images: the step changed nothing in the file, and makes a version of the app or of the
 //! tool that does not know images refuse the library ([`StoreError::SchemaTooNew`])
@@ -109,7 +115,7 @@ pub use crate::ids::{DocumentId, FolderId, SnapshotId};
 pub use crate::images::{
     IMAGE_BACKUP_SLICE_BYTES, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId, ImageInfo,
     ImagesBackedUp, ImagesCollected, NewImage, back_up_all_images, back_up_images,
-    collect_unused_images, mark_unused_images,
+    collect_unused_images, images_moved_aside, mark_unused_images,
 };
 pub use crate::paths::{
     BACKUPS_DIR_NAME, DATA_DIR_ENV, DATABASE_FILE_NAME, IMAGES_FILE_NAME, backups_dir, data_dir,

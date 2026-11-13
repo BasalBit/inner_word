@@ -12,8 +12,8 @@ use common::*;
 use writer_store::{
     Clock, DocumentMeta, IMAGE_RETENTION_MS, ImageFile, ImageFormat, ImageId, ImageInfo,
     ImagesBackedUp, ImagesCollected, NewImage, OpenOptions, Store, StoreError, back_up_all_images,
-    back_up_images, backups_dir, collect_unused_images, images_backup_path, images_path,
-    mark_unused_images,
+    back_up_images, backups_dir, collect_unused_images, images_backup_path, images_moved_aside,
+    images_path, mark_unused_images,
 };
 
 // ----- helpers -------------------------------------------------------------------------
@@ -639,6 +639,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             newly_unreferenced: 1,
             deleted: 0,
             bytes_freed: 0,
+            copy_failed: None,
         }
     );
     assert_eq!(stamp(&lib.images(), &named), Some(None));
@@ -654,6 +655,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             newly_unreferenced: 0,
             deleted: 0,
             bytes_freed: 0,
+            copy_failed: None,
         }
     );
     assert_eq!(stamp(&lib.images(), &unnamed), Some(Some(START)));
@@ -676,6 +678,7 @@ fn an_image_nothing_names_goes_after_thirty_days_and_not_before() {
             newly_unreferenced: 0,
             deleted: 1,
             bytes_freed: unnamed_bytes.len() as u64,
+            copy_failed: None,
         }
     );
     assert_eq!(store.image_info(&unnamed).unwrap(), None);
@@ -910,6 +913,7 @@ fn the_look_alone_deletes_nothing_however_old_a_stamp_is() {
             newly_unreferenced: 2,
             deleted: 0,
             bytes_freed: 0,
+            copy_failed: None,
         }
     );
     lib.clock.advance_ms(365 * DAY);
@@ -922,6 +926,7 @@ fn the_look_alone_deletes_nothing_however_old_a_stamp_is() {
             newly_unreferenced: 0,
             deleted: 0,
             bytes_freed: 0,
+            copy_failed: None,
         }
     );
     assert_eq!(stamp(&lib.images(), &named), Some(None));
@@ -1584,4 +1589,286 @@ fn a_lost_images_file_takes_nothing_out_of_the_copy() {
     assert_eq!(ids_in(&lib.copy()), sorted(&[named, unnamed]));
     // The one nothing names is still to be had, for whoever asks for it.
     assert!(store.image_bytes(&unnamed).unwrap().is_some());
+}
+
+// ----- a damaged file -------------------------------------------------------------------
+
+/// Overwrites `len` bytes of the file at `path` from `offset` with a pattern.
+fn scribble(path: &Path, offset: u64, len: usize) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    file.write_all(&[0xDE, 0xAD, 0xBE, 0xEF].repeat(len / 4))
+        .unwrap();
+}
+
+/// A library with two pictures in `images.db` and in its copy, closed.
+fn two_pictures_and_their_copy(lib: &OnDisk) -> [(ImageInfo, Vec<u8>); 2] {
+    let mut store = lib.open();
+    let first = picture(1, 60_000);
+    let second = picture(2, 60_000);
+    let a = store.put_image(&png(&first)).unwrap();
+    let b = store.put_image(&png(&second)).unwrap();
+    document_with(&mut store, "Two pictures", &[a.id, b.id]);
+    back_up_all_images(&lib.database()).unwrap();
+    store.close().unwrap();
+    [(a, first), (b, second)]
+}
+
+/// What a library whose `images.db` is damaged does, whatever the damage: the pictures
+/// come from the copy, a new picture is stored, the damaged file is set aside and named,
+/// a reader and a dry run change nothing.
+fn a_damaged_file_is_set_aside_and_its_pictures_come_back(
+    lib: &OnDisk,
+    pictures: &[(ImageInfo, Vec<u8>)],
+) {
+    let damaged = std::fs::read(lib.images()).unwrap();
+
+    // A reader (the tool reading) and a dry run find the pictures in the copy and leave
+    // the damaged file where it is.
+    let reader = Store::open_read_only(lib.database())
+        .unwrap()
+        .store()
+        .unwrap();
+    for (info, bytes) in pictures {
+        assert_eq!(reader.image_bytes(&info.id).unwrap().as_ref(), Some(bytes));
+        assert_eq!(reader.image_info(&info.id).unwrap().as_ref(), Some(info));
+    }
+    drop(reader);
+    let mut store = lib.open();
+    store.set_query_only(true).unwrap();
+    let (first, first_bytes) = &pictures[0];
+    assert_eq!(
+        store.image_bytes(&first.id).unwrap().as_ref(),
+        Some(first_bytes)
+    );
+    assert_eq!(store.touch_image(&first.id).unwrap().as_ref(), Some(first));
+    assert_eq!(std::fs::read(lib.images()).unwrap(), damaged);
+    assert!(images_moved_aside(&lib.database()).is_empty());
+    store.set_query_only(false).unwrap();
+
+    // The library itself: every picture as it was, a new one stored.
+    for (info, bytes) in pictures {
+        assert_eq!(store.image_bytes(&info.id).unwrap().as_ref(), Some(bytes));
+        assert_eq!(store.image_info(&info.id).unwrap().as_ref(), Some(info));
+    }
+    let new = picture(9, 5_000);
+    let stored = store.put_image(&png(&new)).unwrap();
+    assert_eq!(store.image_bytes(&stored.id).unwrap(), Some(new));
+
+    // The damaged file is beside the new one, as it was, and is named.
+    let aside = images_moved_aside(&lib.database());
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert!(
+        aside[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("images.db.damaged-")
+    );
+    assert_eq!(std::fs::read(&aside[0]).unwrap(), damaged);
+    let mut ids: Vec<ImageId> = pictures.iter().map(|(info, _)| info.id).collect();
+    ids.push(stored.id);
+    assert_eq!(ids_in(&lib.images()), sorted(&ids));
+
+    // The collector and the copy go on.
+    let run = lib.collect();
+    assert_eq!(run.copy_failed, None);
+    assert_eq!(run.images, 3);
+    assert_eq!(ids_in(&lib.copy()), sorted(&ids));
+    store.close().unwrap();
+}
+
+#[test]
+fn an_images_file_whose_header_is_gone_gives_its_pictures_back_from_the_copy() {
+    let lib = OnDisk::new();
+    let pictures = two_pictures_and_their_copy(&lib);
+    scribble(&lib.images(), 0, 100);
+    a_damaged_file_is_set_aside_and_its_pictures_come_back(&lib, &pictures);
+}
+
+#[test]
+fn an_images_file_cut_in_half_gives_its_pictures_back_from_the_copy() {
+    let lib = OnDisk::new();
+    let pictures = two_pictures_and_their_copy(&lib);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(lib.images())
+        .unwrap();
+    let len = file.metadata().unwrap().len();
+    file.set_len(len / 2).unwrap();
+    drop(file);
+    a_damaged_file_is_set_aside_and_its_pictures_come_back(&lib, &pictures);
+}
+
+/// The collector finds the damage before anything else does (a launch that shows no
+/// picture): it sets the file aside, and the pictures come back from the copy.
+#[test]
+fn the_collector_sets_a_damaged_images_file_aside() {
+    let lib = OnDisk::new();
+    let pictures = two_pictures_and_their_copy(&lib);
+    scribble(&lib.images(), 0, 100);
+    let run = lib.collect();
+    assert_eq!((run.images, run.deleted, run.copy_failed), (0, 0, None));
+    assert_eq!(images_moved_aside(&lib.database()).len(), 1);
+    // Nothing went out of the copy.
+    assert_eq!(
+        ids_in(&lib.copy()),
+        sorted(&[pictures[0].0.id, pictures[1].0.id])
+    );
+    let store = lib.open();
+    for (info, bytes) in &pictures {
+        assert_eq!(store.image_bytes(&info.id).unwrap().as_ref(), Some(bytes));
+    }
+    assert_eq!(store.image_count().unwrap(), 2);
+}
+
+/// What of a damaged file can still be read and the copy does not have is not lost:
+/// it is in the new file.
+#[test]
+fn what_the_copy_does_not_have_is_saved_from_a_damaged_file() {
+    let lib = OnDisk::new();
+    let [(a, a_bytes), (b, b_bytes)] = two_pictures_and_their_copy(&lib);
+    // A third picture, stored after the copy was brought up to date.
+    let mut store = lib.open();
+    let c_bytes = picture(3, 100);
+    let c = store.put_image(&png(&c_bytes)).unwrap();
+    store.close().unwrap();
+    // A page of the second picture's bytes points to a page the file does not have:
+    // its bytes cannot be read, the rows can.
+    let mut file = std::fs::read(lib.images()).unwrap();
+    let page = (1..file.len() / 4096)
+        .find(|page| {
+            let data = &file[page * 4096 + 4..page * 4096 + 68];
+            b_bytes.windows(data.len()).any(|window| window == data)
+        })
+        .expect("a page of the second picture's bytes");
+    file[page * 4096..page * 4096 + 4].copy_from_slice(&0xFFFF_FFF0u32.to_be_bytes());
+    std::fs::write(lib.images(), &file).unwrap();
+    let store = lib.open();
+    assert_eq!(store.image_bytes(&a.id).unwrap(), Some(a_bytes));
+    assert_eq!(store.image_bytes(&b.id).unwrap(), Some(b_bytes));
+    assert_eq!(images_moved_aside(&lib.database()).len(), 1);
+    assert_eq!(store.image_info(&c.id).unwrap(), Some(c.clone()));
+    assert_eq!(store.image_bytes(&c.id).unwrap(), Some(c_bytes));
+}
+
+/// Bytes that went bad inside a row (SQLite's own checks find nothing) are not
+/// believed: the copy's are given and written over them, and without a copy the same
+/// picture stored again repairs them.
+#[test]
+fn bytes_that_went_bad_are_not_believed_and_are_repaired() {
+    let lib = OnDisk::new();
+    let [(a, a_bytes), (b, b_bytes)] = two_pictures_and_their_copy(&lib);
+    let rot = |id: &ImageId| {
+        let conn = rusqlite::Connection::open(lib.images()).unwrap();
+        conn.execute(
+            "UPDATE images SET bytes = ?2 WHERE id = ?1",
+            rusqlite::params![id.to_hex(), picture(7, 60_000)],
+        )
+        .unwrap();
+    };
+    let stored = |id: &ImageId| -> Vec<u8> {
+        let conn = rusqlite::Connection::open(lib.images()).unwrap();
+        conn.query_row(
+            "SELECT bytes FROM images WHERE id = ?1",
+            [id.to_hex()],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    rot(&a.id);
+    rot(&b.id);
+
+    // A reader is given the copy's bytes and writes nothing.
+    let reader = ImageFile::read_only(&lib.database());
+    assert_eq!(reader.bytes(&a.id).unwrap(), Some(a_bytes.clone()));
+    drop(reader);
+    assert_eq!(stored(&a.id), picture(7, 60_000));
+
+    // The library repairs the row from the copy.
+    let mut store = lib.open();
+    assert_eq!(store.image_bytes(&a.id).unwrap(), Some(a_bytes.clone()));
+    assert_eq!(stored(&a.id), a_bytes);
+    assert!(images_moved_aside(&lib.database()).is_empty());
+
+    // Without a copy the bad bytes are a picture the library does not have, until the
+    // same picture is stored again.
+    std::fs::remove_file(lib.copy()).unwrap();
+    assert_eq!(store.image_bytes(&b.id).unwrap(), None);
+    assert_eq!(store.put_image(&png(&b_bytes)).unwrap(), b);
+    assert_eq!(stored(&b.id), b_bytes);
+    assert_eq!(store.image_bytes(&b.id).unwrap(), Some(b_bytes.clone()));
+
+    // A row whose bytes went bad is not copied into a new copy either.
+    rot(&b.id);
+    back_up_all_images(&lib.database()).unwrap();
+    assert_eq!(ids_in(&lib.copy()), sorted(&[a.id]));
+}
+
+/// A damaged copy does not stop the copy for good: the next run sets it aside and makes
+/// a new one that holds every picture. One that cannot be written at all is said.
+#[test]
+fn a_damaged_copy_is_made_again_and_a_copy_that_cannot_be_written_is_said() {
+    let lib = OnDisk::new();
+    let [(a, _), (b, _)] = two_pictures_and_their_copy(&lib);
+    scribble(&lib.copy(), 0, 100);
+    let mut store = lib.open();
+    let c = store.put_image(&png(&picture(3, 1_000))).unwrap();
+    store.close().unwrap();
+
+    let run = lib.collect();
+    assert_eq!(run.copy_failed, None);
+    assert_eq!(ids_in(&lib.copy()), sorted(&[a.id, b.id, c.id]));
+    let aside = images_moved_aside(&lib.database());
+    assert_eq!(aside.len(), 1);
+    assert_eq!(aside[0].parent().unwrap(), backups_dir(&lib.database()));
+
+    // The same through the look of a day, and through the copy by itself.
+    scribble(&lib.copy(), 0, 100);
+    assert_eq!(lib.look().copy_failed, None);
+    assert_eq!(ids_in(&lib.copy()), sorted(&[a.id, b.id, c.id]));
+    scribble(&lib.copy(), 0, 100);
+    let done = back_up_all_images(&lib.database()).unwrap();
+    assert_eq!(done.copied, 3);
+    assert_eq!(images_moved_aside(&lib.database()).len(), 3);
+
+    // Something that is no file at all where the copy goes.
+    for name in ["images.db", "images.db-wal", "images.db-shm"] {
+        let _ = std::fs::remove_file(backups_dir(&lib.database()).join(name));
+    }
+    std::fs::create_dir(lib.copy()).unwrap();
+    let run = lib.collect();
+    assert!(run.copy_failed.is_some(), "{run:?}");
+    assert_eq!(run.images, 3);
+    assert!(lib.look().copy_failed.is_some());
+}
+
+/// A connection that has the file open notices when the file at the path is another
+/// one (set aside by another connection, or deleted), and opens that: nothing it stores
+/// goes into a file that is no longer the library's.
+#[test]
+fn a_connection_follows_the_file_at_the_path() {
+    let lib = OnDisk::new();
+    let mut store = lib.open();
+    let a = store.put_image(&png(&picture(1, 1_000))).unwrap();
+    back_up_all_images(&lib.database()).unwrap();
+    let mut file = ImageFile::beside(&lib.database());
+    assert_eq!(file.count().unwrap(), 1);
+
+    std::fs::rename(lib.images(), lib.dir.path().join("elsewhere.db")).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::rename(
+            lib.dir.path().join(format!("images.db{suffix}")),
+            lib.dir.path().join(format!("elsewhere.db{suffix}")),
+        );
+    }
+    assert_eq!(file.count().unwrap(), 0);
+    let b = file.put(&png(&picture(2, 1_000))).unwrap();
+    assert_eq!(ids_in(&lib.images()), sorted(&[b.id]));
+    // The first picture comes back from the copy, through either connection.
+    assert!(file.info(&a.id).unwrap().is_some());
+    assert!(store.image_bytes(&b.id).unwrap().is_some());
+    assert_eq!(ids_in(&lib.images()), sorted(&[a.id, b.id]));
+    assert_eq!(store.image_count().unwrap(), 2);
 }

@@ -33,7 +33,7 @@ use super::file::{self, Mode};
 use super::{ImageId, copy, scan};
 use crate::backup::list_backups;
 use crate::error::Result;
-use crate::paths::{backups_dir, images_path};
+use crate::paths::{backups_dir, images_backup_path, images_path};
 use crate::schema;
 
 /// How long an image that nothing names is kept before the collector may delete it: 30
@@ -53,6 +53,11 @@ pub struct ImagesCollected {
     pub deleted: u64,
     /// The bytes of the deleted images.
     pub bytes_freed: u64,
+    /// Why the copy of the pictures in the backups directory could not be brought up to
+    /// date at the end of the run, when it could not ([`crate::back_up_all_images`]):
+    /// the collection itself is done, and the copy is behind until a later run brings it
+    /// up to date. A damaged copy is no such reason: it is made again.
+    pub copy_failed: Option<String>,
 }
 
 /// The collector: looks at what is named, stamps, and deletes what has been unnamed for
@@ -75,16 +80,21 @@ pub fn collect_unused_images(
     now_ms: i64,
     retention_ms: i64,
 ) -> Result<ImagesCollected> {
-    let Some(mut run) = Run::look(database, now_ms)? else {
-        return Ok(ImagesCollected::default());
+    let Some(mut run) = Run::look_mending(database, now_ms)? else {
+        return Ok(with_the_copy(database, ImagesCollected::default()));
     };
     let unused = run.unused(now_ms, retention_ms)?;
     run.delete(&unused, now_ms)?;
-    let collected = run.collected;
-    // The copy is a second line of safety, and the collection is done: what goes wrong
-    // with the copy is found by whoever asks for it directly (`back_up_images`).
-    let _ = copy::back_up_all_images(database);
-    Ok(collected)
+    Ok(with_the_copy(database, run.collected))
+}
+
+/// Brings the copy of the pictures up to date after a run, and says in `collected` when
+/// that failed: the copy is a second line of safety, and the collection is done.
+fn with_the_copy(database: &Path, mut collected: ImagesCollected) -> ImagesCollected {
+    if let Err(error) = copy::back_up_all_images(database) {
+        collected.copy_failed = Some(error.to_string());
+    }
+    collected
 }
 
 /// The looking half of the collector alone: clears the stamp of every image that is
@@ -94,12 +104,10 @@ pub fn collect_unused_images(
 /// Like [`collect_unused_images`] it ends by bringing the copy of the pictures in the
 /// backups directory up to date.
 pub fn mark_unused_images(database: &Path, now_ms: i64) -> Result<ImagesCollected> {
-    let Some(run) = Run::look(database, now_ms)? else {
-        return Ok(ImagesCollected::default());
+    let Some(run) = Run::look_mending(database, now_ms)? else {
+        return Ok(with_the_copy(database, ImagesCollected::default()));
     };
-    let collected = run.collected;
-    let _ = copy::back_up_all_images(database);
-    Ok(collected)
+    Ok(with_the_copy(database, run.collected))
 }
 
 /// An image the collector is about to delete: its id, the stamp it was read with, and how
@@ -122,6 +130,27 @@ struct Run {
 }
 
 impl Run {
+    /// [`look`](Self::look); when `images.db` turns out damaged, it is moved aside and a
+    /// new one is made ([`file::replace_damaged`]: its pictures come back from the copy),
+    /// and the new one is looked at. A damaged library database is an error, as it was.
+    fn look_mending(database: &Path, now_ms: i64) -> Result<Option<Run>> {
+        match Run::look(database, now_ms) {
+            Err(error) if file::is_damage(&error) => {
+                let images = images_path(database);
+                if !file::is_damaged(&images) {
+                    return Err(error);
+                }
+                file::replace_damaged(
+                    &images,
+                    &images_backup_path(database),
+                    file::file_id(&images),
+                )?;
+                Run::look(database, now_ms)
+            }
+            other => other,
+        }
+    }
+
     /// Steps 1 to 3: `None` when there is no `images.db` or no image in it; otherwise
     /// what stored content names is read, and in one transaction the stamp of every
     /// image that is named is cleared and every unnamed image without a stamp gets one.
@@ -342,6 +371,30 @@ mod tests {
         assert!(store.image_info(&put_again).unwrap().is_some());
         assert!(store.image_info(&left_alone).unwrap().is_none());
         assert_eq!(store.image_count().unwrap(), 2);
+    }
+
+    /// A touch reads the row and then clears its stamp, in two statements; when the
+    /// collector's delete comes in between (it has the stamp the touch read), the touch
+    /// does not say that the image is there.
+    #[test]
+    fn a_delete_between_the_read_and_the_update_of_a_touch_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        let mut store = Store::open(&path).unwrap();
+        let id = store.put_image(&new_image(&picture(1))).unwrap().id;
+        mark_unused_images(&path, START).unwrap();
+        let later = START + 31 * DAY;
+        let mut run = Run::look(&path, later).unwrap().unwrap();
+        let unused = run.unused(later, IMAGE_RETENTION_MS).unwrap();
+        assert_eq!(unused.len(), 1);
+
+        let touched = store
+            .images
+            .touch_image_between(&id, &mut || run.delete(&unused, later).unwrap())
+            .unwrap();
+        assert_eq!(run.collected.deleted, 1);
+        assert_eq!(touched, None);
+        assert!(store.image_info(&id).unwrap().is_none());
     }
 
     /// The same when the stamp was cleared and set again in between (another run of the

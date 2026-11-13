@@ -28,15 +28,49 @@ mod scan;
 
 use std::collections::HashSet;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::Store;
 use crate::error::Result;
+use crate::paths::{images_backup_path, images_path};
 
 pub use collect::{IMAGE_RETENTION_MS, ImagesCollected, collect_unused_images, mark_unused_images};
 pub use copy::{IMAGE_BACKUP_SLICE_BYTES, ImagesBackedUp, back_up_all_images, back_up_images};
 pub use file::ImageFile;
+
+/// The images databases of the library at `database` that were found damaged and moved
+/// aside (`images.db.damaged-<unix ms>` beside the library, the same in the backups
+/// directory for the copy of the pictures), oldest first. Their pictures came back from
+/// the other file; what neither had is only there, so they are kept for the writer (or
+/// whoever helps them) to look at, and the app says that they are there.
+pub fn images_moved_aside(database: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for dir in [images_path(database), images_backup_path(database)]
+        .iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+    {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let prefix = format!("{}{}", crate::paths::IMAGES_FILE_NAME, file::DAMAGED_MARK);
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            if rest.ends_with("-wal") || rest.ends_with("-shm") {
+                continue;
+            }
+            let stamp = rest.split('-').next().and_then(|ms| ms.parse::<i64>().ok());
+            found.push((stamp.unwrap_or(0), entry.path()));
+        }
+    }
+    found.sort();
+    found.into_iter().map(|(_, path)| path).collect()
+}
 
 /// The name of stored image bytes: the first 16 bytes of their SHA-256. Written as 32
 /// lowercase hex digits wherever it is text (the column, a document's JSON, Markdown).

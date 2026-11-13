@@ -9,8 +9,12 @@
 //!   have yet, found by their ids, a slice at a time. A picture is written once and never
 //!   changes, so nothing is ever copied twice. It is meant for a background thread,
 //!   after a launch: never before the window opens, never on the main thread.
-//! - **Reading from it**: when `images.db` does not have an image that is asked for, the
-//!   copy is asked ([`read_from_copy`]), and what it has is written back.
+//! - **Reading from it**: when `images.db` does not have an image that is asked for (or
+//!   is damaged, or has bytes that are not the ones the id names), the copy is asked
+//!   ([`read_from_copy`]), and what it has is written back.
+//! - **A damaged copy** is moved aside and made again by the next [`back_up_images`];
+//!   a copy that cannot be brought up to date is said by the collector
+//!   ([`crate::ImagesCollected::copy_failed`]).
 //! - **Taking a picture out of it** is the collector's and nobody else's: a row leaves
 //!   the copy only when the collector deleted it from `images.db` and no kept backup of
 //!   the library database names it. The collector marks the rows it is about to delete
@@ -59,7 +63,37 @@ pub struct ImagesBackedUp {
 /// Opens connections of its own (`images.db` read-only, the copy for writing), so it runs
 /// on any thread while a [`crate::Store`] of the same process is open: run it in the
 /// background. Does nothing, and creates nothing, for a library without images.
+///
+/// **A damaged file** is no reason for the copy to stop. When the copy turns out damaged
+/// (its header or a page is not what SQLite wrote), it is moved aside
+/// (`backups/images.db.damaged-<unix ms>`) and a new one is made, with what can still be
+/// read of the old one and `images.db` does not have, and then everything of `images.db`.
+/// A damaged `images.db` is moved aside the same way, its pictures coming back from the
+/// copy ([`crate::ImageFile`]): so call it only where the library is written (the app, the
+/// holder of the data directory's lock). Bytes in `images.db` that are not the ones their
+/// id names are not copied.
 pub fn back_up_images(database: &Path, max_bytes: u64) -> Result<ImagesBackedUp> {
+    match back_up_slice(database, max_bytes) {
+        Err(error) if file::is_damage(&error) => {
+            let images = images_path(database);
+            let copy = images_backup_path(database);
+            let mut replaced = false;
+            for (path, other) in [(&images, &copy), (&copy, &images)] {
+                if file::is_damaged(path) {
+                    file::replace_damaged(path, other, file::file_id(path))?;
+                    replaced = true;
+                }
+            }
+            if !replaced {
+                return Err(error);
+            }
+            back_up_slice(database, max_bytes)
+        }
+        other => other,
+    }
+}
+
+fn back_up_slice(database: &Path, max_bytes: u64) -> Result<ImagesBackedUp> {
     let mut done = ImagesBackedUp::default();
     let Some(images) = file::open(&images_path(database), Mode::Read)? else {
         return Ok(done);
@@ -118,14 +152,27 @@ pub fn back_up_images(database: &Path, max_bytes: u64) -> Result<ImagesBackedUp>
                 break;
             }
             looked_at += 1;
+            // A row of `images.db` that cannot be read, or whose bytes are not the ones
+            // its id names, is not copied: the copy keeps nothing that is not whole, and
+            // `images.db` repairs it from there when it is read.
             let mut rows = read.query([id])?;
             // Deleted since the list was read: nothing to copy.
-            let Some(row) = rows.next()? else {
-                continue;
+            let row = match rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => continue,
+                Err(error) if file::is_sqlite_damage(&error) => continue,
+                Err(error) => return Err(error.into()),
             };
             // The row as it is, column for column.
             let column = |index: usize| row.get_ref(index).map(ToSqlOutput::Borrowed);
-            let bytes = row.get_ref(7)?.as_blob().map_err(rusqlite::Error::from)?;
+            let bytes = match row.get_ref(7).and_then(|value| Ok(value.as_blob()?)) {
+                Ok(bytes) => bytes,
+                Err(error) if file::is_sqlite_damage(&error) => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if ImageId::parse(id).is_none_or(|id| ImageId::of(bytes) != id) {
+                continue;
+            }
             write.execute(params![
                 column(0)?,
                 column(1)?,

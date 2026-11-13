@@ -31,7 +31,7 @@ use writer_app::{
     SaveState,
     automation::{ImageStep, Script, Step, describe_state},
     export::{ExportChoice, ExportDestination, ExportScope, pictures_sentence, short_path},
-    images::{self, COLLECT_DELAY, LOOK_EVERY, REFUSALS_NAMED, more_refused},
+    images::{self, COLLECT_DELAY, LOOK_EVERY, REFUSALS_NAMED, copy_not_updated, more_refused},
     menus, pasteboard, printing,
     settings::keys,
     shortcuts::{Place, collect_shortcuts},
@@ -2131,6 +2131,165 @@ fn while_the_app_stays_open_it_looks_once_a_day_and_deletes_nothing(cx: &mut Tes
         .collect();
     assert!(found.contains(&id_of(&later)), "{found:?}");
     assert_eq!(status(&workspace, id_of(&later), vcx), ImageStatus::Ready);
+}
+
+/// The notes on screen, oldest first, each with the label of its button.
+fn notes(
+    workspace: &Entity<Workspace>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, Option<String>)> {
+    workspace.read_with(cx, |w, cx| {
+        w.toast_layer()
+            .read(cx)
+            .toasts()
+            .map(|toast| {
+                (
+                    toast.message.to_string(),
+                    toast.action_label().map(ToString::to_string),
+                )
+            })
+            .collect()
+    })
+}
+
+/// A copy of the pictures among the backups that cannot be brought up to
+/// date is said once a launch, not only on stderr: it is what would bring
+/// back a picture that `images.db` loses. (Handed over by the store's
+/// review: `ImagesCollected::copy_failed` was thrown away.)
+#[gpui::test]
+fn a_copy_of_the_pictures_that_is_behind_is_said_once_a_launch(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+    init(cx);
+    let disk = Disk::new();
+    let clock = Clock::manual(1_800_000_000_000);
+    let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+    vcx.update(|_, cx| images::collect_in_background(&library, cx));
+    let image = stored_png(&library, 200, 120, RED, vcx);
+    add_document(&library, None, &around(&image), vcx);
+    // The backups directory cannot be written to: the copy cannot be made.
+    let backups = writer_library::store::images_backup_path(&disk.database())
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o500)).unwrap();
+    clear_toasts(&workspace, vcx);
+
+    clock.advance_ms(20_000);
+    vcx.executor().advance_clock(COLLECT_DELAY);
+    vcx.run_until_parked();
+    let said = notes(&workspace, vcx);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].0.starts_with(
+                "The backup copy of the pictures could not be brought up to date, and is tried again later ("
+            ),
+            "{said:?}"
+        );
+        assert!(collected_at(&library, vcx).is_some(), "the collection ran");
+        assert_eq!(disk.in_the_copy(image.id), None);
+
+        // A day later it is still behind: stderr says so, the note not
+        // again. (The keyboard is in the library: no caret blinks all day.)
+        vcx.simulate_keystrokes("cmd-0");
+        clear_toasts(&workspace, vcx);
+        clock.advance_ms(DAY_MS);
+        vcx.executor().advance_clock(images::LOOK_EVERY);
+        vcx.run_until_parked();
+        assert_eq!(notes(&workspace, vcx), [], "once a launch");
+    }));
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+    // Once it can be written, the next look brings it up to date.
+    clock.advance_ms(DAY_MS);
+    vcx.executor().advance_clock(images::LOOK_EVERY);
+    vcx.run_until_parked();
+    assert!(disk.in_the_copy(image.id).is_some());
+    assert_eq!(
+        copy_not_updated("x"),
+        "The backup copy of the pictures could not be brought up to date, and is tried again later (x)."
+    );
+}
+
+/// A damaged `images.db` that the store set aside (and made again from the
+/// copy) is told of once, by its path, with a way to it in the Finder: a
+/// picture only it had is in it and nowhere else. (Handed over by the
+/// store's review: `writer_store::images_moved_aside`.)
+#[gpui::test]
+fn a_damaged_pictures_file_that_was_set_aside_is_told_of_once(cx: &mut TestAppContext) {
+    init(cx);
+    let disk = Disk::new();
+    let clock = Clock::manual(1_800_000_000_000);
+    let image = {
+        let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+        vcx.update(|_, cx| images::collect_in_background(&library, cx));
+        let image = stored_png(&library, 200, 120, GREEN, vcx);
+        add_document(&library, None, &around(&image), vcx);
+        clock.advance_ms(20_000);
+        vcx.executor().advance_clock(COLLECT_DELAY);
+        vcx.run_until_parked();
+        assert!(disk.in_the_copy(image.id).is_some(), "the copy is made");
+        assert_eq!(notes(&workspace, vcx), [], "nothing to say");
+        quit(&workspace, vcx);
+        image
+    };
+    // images.db goes bad while the app is closed.
+    for end in ["", "-wal", "-shm"] {
+        let path = PathBuf::from(format!("{}{end}", disk.images_file().display()));
+        std::fs::remove_file(&path).ok();
+    }
+    std::fs::write(
+        disk.images_file(),
+        b"not a database, only some text that is long enough",
+    )
+    .unwrap();
+
+    clock.advance_ms(2 * DAY_MS);
+    let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+    vcx.update(|_, cx| images::collect_in_background(&library, cx));
+    clear_toasts(&workspace, vcx);
+    vcx.executor().advance_clock(COLLECT_DELAY);
+    vcx.run_until_parked();
+    // The collector found it damaged, set it aside and made it again from
+    // the copy.
+    let aside = writer_library::store::images_moved_aside(&disk.database());
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_eq!(disk.stored(image.id).is_some(), true, "back from the copy");
+    assert_eq!(
+        notes(&workspace, vcx),
+        [(
+            images::moved_aside_note(&aside[0]),
+            Some("Show in Finder".to_string())
+        )]
+    );
+    assert!(
+        images::moved_aside_note(&aside[0])
+            .starts_with("A damaged pictures file was set aside as ")
+    );
+    let told: Vec<String> = library.read_with(vcx, |library, _| {
+        library.setting_or(keys::IMAGES_MOVED_ASIDE_TOLD, Vec::new())
+    });
+    assert_eq!(told, [aside[0].display().to_string()]);
+
+    // Once: not at the next look, nor at the next launch. (The keyboard
+    // is in the library meanwhile: a caret that blinks in the text is a
+    // timer every half second of the test's clock.)
+    vcx.simulate_keystrokes("cmd-0");
+    clear_toasts(&workspace, vcx);
+    clock.advance_ms(DAY_MS);
+    vcx.executor().advance_clock(images::LOOK_EVERY);
+    vcx.run_until_parked();
+    assert_eq!(notes(&workspace, vcx), []);
+    quit(&workspace, vcx);
+    let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+    vcx.update(|_, cx| images::collect_in_background(&library, cx));
+    clear_toasts(&workspace, vcx);
+    vcx.executor().advance_clock(COLLECT_DELAY);
+    vcx.run_until_parked();
+    assert_eq!(notes(&workspace, vcx), []);
 }
 
 /// A library in memory has no file to collect in.

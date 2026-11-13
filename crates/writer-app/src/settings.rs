@@ -124,6 +124,11 @@ pub mod keys {
     /// `number`: when the collector of image bytes last ran, in unix
     /// milliseconds (see `crate::images::collect_in_background`).
     pub const IMAGES_COLLECTED_AT: &str = "images.collected_at";
+    /// List of paths: the damaged files of pictures the store set aside
+    /// (`writer_store::images_moved_aside`) that the writer was told of,
+    /// so that each is told of once (see
+    /// `crate::images::collect_in_background`).
+    pub const IMAGES_MOVED_ASIDE_TOLD: &str = "images.moved_aside_told";
     /// Prefix of the side chat's conversation about a document:
     /// `assistant.conversation.<id>` holds it as JSON.
     pub const ASSISTANT_CONVERSATION_PREFIX: &str = "assistant.conversation.";

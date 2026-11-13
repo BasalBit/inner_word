@@ -12,7 +12,7 @@
 //! | The bytes of an image for the editor, and a picture the user chose, pasted or dropped made into stored bytes | [`LibraryImages`] |
 //! | The files "Insert > Image…" asks for | [`use_open_panel`], [`choose_files_beforehand`] |
 //! | The bytes for the exporters | [`StoreImages`] |
-//! | Bytes nothing names any more | [`collect_in_background`] |
+//! | Bytes nothing names any more; a copy that is behind, a damaged file set aside | [`collect_in_background`] |
 //!
 //! # Nothing large on the main thread
 //!
@@ -43,7 +43,7 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -522,6 +522,14 @@ impl ImageSource for StoreImages<'_> {
 ///   again without the store being asked (an undo brings back an image
 ///   that was cut and saved away).
 ///
+/// What the writer is told, after each run: a copy of the pictures that
+/// could not be brought up to date ([`copy_not_updated`], once a launch),
+/// and each damaged file of pictures the store set aside
+/// ([`moved_aside_note`], once for each file: the setting
+/// `images.moved_aside_told`), with "Show in Finder". A file the store set
+/// aside in between, when a read found `images.db` damaged, is told of at
+/// the next run.
+///
 /// Everything runs on the background executor with connections of its
 /// own; the timers are the app's, so a test drives them with its clock.
 pub fn collect_in_background(library: &Entity<Library>, cx: &mut App) {
@@ -544,18 +552,27 @@ pub fn collect_in_background(library: &Entity<Library>, cx: &mut App) {
         let day = i64::try_from(LOOK_EVERY.as_millis()).unwrap_or(i64::MAX);
         // A time in the future is a clock that was set back: run.
         let due = last > now || now - last >= day;
+        // What the run did, and why the copy of the pictures among the
+        // backups could not be brought up to date, if it could not.
         let run = cx.background_spawn({
             let database = database.clone();
             async move {
                 if due {
-                    store::collect_unused_images(&database, now, store::IMAGE_RETENTION_MS)
-                        .map(|_| ())
+                    match store::collect_unused_images(&database, now, store::IMAGE_RETENTION_MS) {
+                        Ok(collected) => (Ok(()), collected.copy_failed),
+                        Err(error) => (Err(error), None),
+                    }
                 } else {
-                    store::back_up_all_images(&database).map(|_| ())
+                    match store::back_up_all_images(&database) {
+                        Ok(_) => (Ok(()), None),
+                        Err(error) => (Ok(()), Some(error.to_string())),
+                    }
                 }
             }
         });
-        match run.await {
+        let mut said = Said::default();
+        let (ran, copy_failed) = run.await;
+        match ran {
             Ok(()) if due => {
                 let stored = library.update(cx, |library, cx| {
                     library.set_setting(keys::IMAGES_COLLECTED_AT, &now, cx)
@@ -567,6 +584,8 @@ pub fn collect_in_background(library: &Entity<Library>, cx: &mut App) {
             Ok(()) => {}
             Err(error) => eprintln!("The Writer: the image collector did not run: {error}"),
         }
+        said.copy_failed(copy_failed, cx);
+        tell_of_files_moved_aside(&database, &library, cx);
         loop {
             cx.background_executor().timer(LOOK_EVERY).await;
             // The library is gone with its window.
@@ -580,10 +599,119 @@ pub fn collect_in_background(library: &Entity<Library>, cx: &mut App) {
                     async move { store::mark_unused_images(&database, now) }
                 })
                 .await;
-            if let Err(error) = looked {
-                eprintln!("The Writer: could not look at which images are in use: {error}");
+            match looked {
+                Ok(collected) => said.copy_failed(collected.copy_failed, cx),
+                Err(error) => {
+                    eprintln!("The Writer: could not look at which images are in use: {error}")
+                }
             }
+            tell_of_files_moved_aside(&database, &library, cx);
         }
     })
     .detach();
+}
+
+/// What the writer is told when the copy of the pictures among the
+/// backups could not be brought up to date. The pictures themselves are
+/// in `images.db`; the copy is what brings back one that file loses.
+pub fn copy_not_updated(error: &str) -> String {
+    format!(
+        "The backup copy of the pictures could not be brought up to date, and is tried again later ({error})."
+    )
+}
+
+/// What the writer is told of a damaged file of pictures that was set
+/// aside at `path` (`writer_store::images_moved_aside`): its pictures came
+/// back from the other file, and one that only it had is still in it.
+pub fn moved_aside_note(path: &Path) -> String {
+    format!(
+        "A damaged pictures file was set aside as {}. A picture only it had is still in it.",
+        crate::export::short_path(path)
+    )
+}
+
+/// What the collector of this launch has said.
+#[derive(Default)]
+struct Said {
+    copy_failed: bool,
+}
+
+impl Said {
+    /// A copy that could not be brought up to date: always on stderr, and
+    /// once a launch in a note (it is tried again at every run, once a day).
+    fn copy_failed(&mut self, error: Option<String>, cx: &mut gpui::AsyncApp) {
+        let Some(error) = error else {
+            return;
+        };
+        eprintln!("The Writer: the copy of the pictures among the backups is behind: {error}");
+        if std::mem::replace(&mut self.copy_failed, true) {
+            return;
+        }
+        cx.update(|cx| {
+            writer_ui::toast::show_toast(
+                Toast::new(copy_not_updated(&error))
+                    .error()
+                    .duration(SAID_FOR),
+                cx,
+            )
+        })
+        .ok();
+    }
+}
+
+/// How long a note of the collector stays.
+const SAID_FOR: Duration = Duration::from_secs(12);
+
+/// Tells the writer, once for each, of the damaged files of pictures the
+/// store set aside (when it found `images.db` or its copy damaged, it made
+/// the file again from the other one). Looked at after each run of the
+/// collector: at a launch, and once a day while the app stays open.
+fn tell_of_files_moved_aside(
+    database: &Path,
+    library: &WeakEntity<Library>,
+    cx: &mut gpui::AsyncApp,
+) {
+    let found = store::images_moved_aside(database);
+    let Ok(told) = library.read_with(cx, |library, _| {
+        library.setting_or(keys::IMAGES_MOVED_ASIDE_TOLD, Vec::<String>::new())
+    }) else {
+        return;
+    };
+    let named: Vec<String> = found
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let new: Vec<&PathBuf> = found
+        .iter()
+        .zip(&named)
+        .filter(|(_, name)| !told.contains(name))
+        .map(|(path, _)| path)
+        .collect();
+    if new.is_empty() && told.len() == named.len() {
+        return;
+    }
+    for path in new {
+        eprintln!(
+            "The Writer: a damaged pictures file was set aside: {}",
+            path.display()
+        );
+        let shown = path.clone();
+        cx.update(|cx| {
+            writer_ui::toast::show_toast(
+                Toast::new(moved_aside_note(path))
+                    .error()
+                    .duration(SAID_FOR)
+                    .on_action("Show in Finder", move |_, cx| cx.reveal_path(&shown)),
+                cx,
+            )
+        })
+        .ok();
+    }
+    // Only the files that are still there: one that was deleted drops out.
+    let stored = library.update(cx, |library, cx| {
+        library.set_setting(keys::IMAGES_MOVED_ASIDE_TOLD, &named, cx)
+    });
+    if let Ok(Err(error)) = stored {
+        eprintln!("The Writer: could not note the damaged pictures files told of: {error}");
+    }
 }

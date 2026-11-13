@@ -10,10 +10,11 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-core` | pure Rust | Document model, headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
 | `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. `library.db` is at schema 3 since documents may hold images: a version that does not know them refuses the library. |
 | `crates/writer-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
+| `crates/writer-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows CoreText measured at another width than the layout, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
 | `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, and the seams the crates below plug into. |
+| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s), and the seams the crates below plug into. |
 | `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
@@ -37,11 +38,12 @@ assistant-quick, assistant-ui, assistant, keymap-ui, keymap}`, `keymap-ui → {k
 (`keymap` depends on nothing of ours and not on GPUI), `assistant-quick → {assistant-ui, assistant,
 editor, export}`, `assistant-ui → {assistant, editor, export, ui}`, `assistant → {mcp, agent-setup}` (for
 the list of its read-only tools and for the folders installers put a program in; no GPUI),
-`{editor-tools, vim-mode, comments, spell} → editor → {ui, core}`, `vim-mode → vim → core`
+`{editor-tools, vim-mode, comments, spell} → editor → {ui, core, print}`, `vim-mode → vim → core`
 (the Vim crates do not depend on `spell`: the app connects the two, `VimMode::set_spelling`),
 `library → {store, ui}`, `image → store`, `export → core`, `cli → {agent, mcp, agent-setup}`,
 `mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`,
-`{app, agent} → image`. Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
+`{app, agent} → image`, `app → print` (`print` depends on nothing of ours: the editor's print pass
+fills its pages, the app has a PDF made of them and hands it to the system). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
 (the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
 live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
 the tool out on the library's own store; `crates/writer-app/src/live.rs` and
@@ -546,7 +548,13 @@ open" below).
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
   `writer-store`, `writer-image`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
   `writer-agent-setup`, `writer-assistant`, `writer-keymap`) build and test with
-  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. Do not create other
+  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. `writer-print` has no
+  GPUI in it and builds and tests in `target/` all the same (`cargo test -p writer-print`):
+  CoreText, CoreGraphics and font-kit are compiled there for gpui already, the crate is only
+  ever linked into GPUI crates, and a second copy of that stack in `target-pure` would cost
+  disk. Its test binaries are small (no GPUI is linked); `tests/save_job.rs` is a program of
+  its own (`harness = false`), because AppKit runs a print operation on the main thread of
+  the process. Do not create other
   target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
   150 MB. Keep at most one integration-test binary per GPUI crate (`tests/main.rs` with

@@ -964,7 +964,8 @@ impl QuickChat {
         let capture = open.capture.clone();
         let range = match action {
             QuickAction::Copy => {
-                cx.write_to_clipboard(answer_clipboard(&text));
+                let item = answer_clipboard(&text, self.editor.read(cx).document());
+                cx.write_to_clipboard(item);
                 show_toast(Toast::new("Copied the answer"), cx);
                 cx.emit(QuickChatEvent::Copied);
                 return true;
@@ -1005,7 +1006,9 @@ impl QuickChat {
             return;
         };
         let item = match message.role {
-            Role::Assistant => answer_clipboard(&message.text),
+            Role::Assistant => {
+                answer_clipboard(&message.text, self.editor.read(cx).document())
+            }
             Role::User => ClipboardItem::new_string(message.text.clone()),
         };
         cx.write_to_clipboard(item);
@@ -1546,9 +1549,9 @@ fn selection_delivered(transcript: &Transcript) -> bool {
 
 /// An answer for the clipboard: its Markdown as the text other apps get,
 /// and the formatted text for pasting into a document of this app.
-fn answer_clipboard(markdown: &str) -> ClipboardItem {
+fn answer_clipboard(markdown: &str, document: &writer_core::Document) -> ClipboardItem {
     let text = markdown.trim().to_string();
-    let fragment = apply::answer_fragment(markdown);
+    let fragment = apply::answer_fragment(markdown, document);
     if fragment.is_empty() {
         ClipboardItem::new_string(text)
     } else {

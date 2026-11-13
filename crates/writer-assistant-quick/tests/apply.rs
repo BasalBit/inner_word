@@ -349,7 +349,7 @@ fn an_empty_answer_changes_nothing(cx: &mut TestAppContext) {
     let (editor, cx) = open_editor(paragraphs(&["The quick brown fox"]), cx);
     let capture = capture(&editor, TextRange::in_block(0, 4, 9), cx);
     let depth = undo_depth(&editor, cx);
-    assert!(answer_fragment("  \n\n").is_empty());
+    assert!(answer_fragment("  \n\n", &Document::new()).is_empty());
 
     assert_eq!(replace(&editor, &capture, "  \n\n", cx), None);
     assert_eq!(below(&editor, &capture, "", cx), None);
@@ -554,4 +554,94 @@ fn an_answer_that_opens_with_a_rule_keeps_it(cx: &mut TestAppContext) {
     );
     assert!(all.contains("Dear Anna,"));
     assert!(all.starts_with("First.\n") && all.ends_with("\nLast."));
+}
+
+// ----- images ------------------------------------------------------------------------------
+
+/// A document with an image between two paragraphs: half the column wide,
+/// at the right, with a description.
+fn with_an_image() -> (Document, writer_core::Image) {
+    use writer_core::{Alignment, Image, ImageId, ImageWidth};
+    let mut image = Image::new(ImageId::from_bytes([7; 16]), (1600, 1067), 144);
+    image.width = ImageWidth::from_percent(50);
+    image.description = "The harbour at dusk".to_string();
+    let document = Document::from_blocks(vec![
+        Block::paragraph("Before the picture."),
+        Block::image(image.clone()).with_alignment(Alignment::Right),
+        Block::paragraph("After the picture."),
+    ]);
+    (document, image)
+}
+
+#[gpui::test]
+fn an_answer_that_names_an_image_of_the_document_brings_it_back_as_it_was(
+    cx: &mut TestAppContext,
+) {
+    setup(cx);
+    let (document, image) = with_an_image();
+    let (editor, cx) = open_editor(document, cx);
+    // Everything is selected, the image among it.
+    let end = Position::new(2, "After the picture.".len());
+    let capture = capture(&editor, TextRange::new(Position::new(0, 0), end), cx);
+
+    // The answer puts the image first and rewrites the two paragraphs.
+    let answer = format!(
+        "![The harbour at dusk](image:{})\n\nThe boats came in.\n\nThen it was dark.",
+        image.id
+    );
+    assert!(replace(&editor, &capture, &answer, cx).is_some());
+
+    editor.read_with(cx, |editor, _| {
+        let document = editor.document();
+        let block = document.block(0).expect("the first block");
+        assert_eq!(
+            block.as_image(),
+            Some(&image),
+            "the image is the document's own again: its id, its width, its description"
+        );
+        assert_eq!(block.alignment(), writer_core::Alignment::Right);
+        assert_eq!(document.block(1).map(|block| block.text()), Some("The boats came in."));
+        assert_eq!(document.block(2).map(|block| block.text()), Some("Then it was dark."));
+        assert_eq!(document.block_count(), 3);
+    });
+}
+
+#[gpui::test]
+fn an_answer_never_makes_an_image_of_a_file_or_of_an_id_the_document_does_not_have(
+    cx: &mut TestAppContext,
+) {
+    setup(cx);
+    let (document, _) = with_an_image();
+    let (editor, cx) = open_editor(document, cx);
+    let capture = capture(&editor, TextRange::in_block(0, 0, 6), cx);
+
+    // A path, an address, and the id of an image this document does not
+    // hold: none of them becomes an image block.
+    for destination in [
+        "/etc/hosts",
+        "file:///etc/hosts",
+        "https://example.com/a.png",
+        "image:00112233445566778899aabbccddeeff",
+    ] {
+        let fragment = editor.read_with(cx, |editor, _| {
+            answer_fragment(&format!("![x]({destination})"), editor.document())
+        });
+        assert!(
+            fragment.blocks().iter().all(|block| block.as_image().is_none()),
+            "{destination} became an image"
+        );
+        assert!(!fragment.is_empty(), "{destination} left nothing");
+    }
+
+    // Inserted below, the path is a link in the text and nothing else.
+    assert!(below(&editor, &capture, "![x](/etc/hosts)", cx).is_some());
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().images().count(), 1, "only the image that was there");
+        let inserted = editor.document().block(1).expect("the inserted block");
+        assert!(inserted.as_image().is_none());
+        let linked = inserted
+            .text_spans()
+            .any(|(_, _, attrs)| attrs.link.as_deref() == Some("/etc/hosts"));
+        assert!(linked, "the path stays a link: {:?}", inserted.text());
+    });
 }

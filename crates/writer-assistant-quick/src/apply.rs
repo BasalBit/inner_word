@@ -26,25 +26,39 @@
 //!
 //! **Insert below** puts the answer as whole blocks after the block the
 //! selection (or the caret) ended in, without touching that block.
+//!
+//! **Images.** A line `![description](image:<id>)` in an answer is an
+//! image the document holds already: it comes back as that image, with
+//! its width and its alignment ([`writer_export::KnownImages`]). Any
+//! other image in an answer (a path, an address) stays a link: **no file
+//! is ever read because an answer names it**. The engine has no file
+//! tools, so a path in an answer is invented or was planted in text the
+//! model read.
 
 use gpui::Context;
 use writer_core::{
     Block, BlockKind, Document, EditorState, Fragment, InlineAttrs, Position, TextRange,
 };
 use writer_editor::Editor;
-use writer_export::{MarkdownFrontMatter, MarkdownImportOptions, from_markdown};
+use writer_export::{
+    KnownImages, MarkdownFrontMatter, MarkdownImportOptions, from_markdown_with_images,
+};
 
 use crate::capture::Capture;
 
-/// The blocks an answer becomes.
-pub fn answer_fragment(markdown: &str) -> Fragment {
+/// The blocks an answer becomes, for `document`: an image of the
+/// document that the answer names (`image:<id>`) is that image again, as
+/// the document has it; every other image is a link (see the
+/// [module docs](self)).
+pub fn answer_fragment(markdown: &str, document: &Document) -> Fragment {
     let options = MarkdownImportOptions {
         // An answer that opens with a rule is a rule, never data about
         // the text that would be left out.
         front_matter: MarkdownFrontMatter::Markdown,
         ..MarkdownImportOptions::default()
     };
-    from_markdown(markdown, &options).fragment()
+    let mut images = KnownImages::of(document);
+    from_markdown_with_images(markdown, &options, &mut images).fragment()
 }
 
 /// Whether "Replace Selection" can run: text was selected when the chat
@@ -82,7 +96,7 @@ pub fn replace_selection(
     }
     let document = editor.document();
     let range = capture.intact_range(document)?;
-    let fragment = answer_fragment(markdown);
+    let fragment = answer_fragment(markdown, document);
     if fragment.is_empty() {
         return None;
     }
@@ -176,7 +190,7 @@ pub fn insert_below(
     if editor.is_read_only() {
         return None;
     }
-    let fragment = answer_fragment(markdown);
+    let fragment = answer_fragment(markdown, editor.document());
     if fragment.is_empty() {
         return None;
     }

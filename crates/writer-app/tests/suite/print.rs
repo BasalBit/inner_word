@@ -32,7 +32,7 @@ use writer_editor::{Autoscroll, Editor, Zoom};
 use writer_keymap::{KeySequence, Target};
 use writer_print::PdfFile;
 use writer_spell::FakeSpellService;
-use writer_ui::{ContextMenu, ThemeMode};
+use writer_ui::{ContextMenu, ThemeMode, Toast};
 
 use super::*;
 
@@ -880,6 +880,86 @@ fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
         editor_of(&workspace, cx).read_with(cx, |editor, _| editor.page_count())
     });
     assert!(!available(&CancelPrint, cx));
+}
+
+/// The note of a job goes only with the job, whichever way notes go: a
+/// click on it (which takes any note away) stops the job as "Dismiss
+/// notifications" does, and four newer notes do not push it out of sight.
+/// (Found in review: both took the note away while the pages went on being
+/// made unseen, and the print panel came up unannounced.)
+#[gpui::test]
+fn the_note_of_a_long_job_goes_only_with_the_job(cx: &mut TestAppContext) {
+    let document = in_courier(lines(1000), PageSetup::default());
+    let (jobs, workspace, cx) = open_recording(&document, cx);
+    cx.update(|_, cx| printing::set_slice(Duration::ZERO, cx));
+    let note = preparing_note("A long list");
+    let layer = workspace.read_with(cx, |w, _| w.toast_layer().clone());
+    let begin = |cx: &mut VisualTestContext| {
+        cx.dispatch_action(Print);
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(PRINT_NOTE_DELAY + Duration::from_millis(10));
+        cx.run_until_parked();
+        assert_eq!(toasts(&workspace, cx), [note.clone()]);
+        assert_eq!(stage(&workspace, cx), Some(Printing::Preparing));
+    };
+
+    // Four newer notes (four saves with cmd-s say "Saved" four times): the
+    // layer shows four and drops the oldest, and the note of the job comes
+    // back as the newest.
+    begin(cx);
+    for n in 1..=4 {
+        layer.update(cx, |layer, cx| {
+            layer.push(Toast::new(format!("Note {n}")), cx);
+        });
+        cx.run_until_parked();
+    }
+    let shown = toasts(&workspace, cx);
+    assert_eq!(shown.len(), writer_ui::toast::MAX_VISIBLE);
+    assert_eq!(shown.last(), Some(&note), "{shown:?}");
+    assert_eq!(stage(&workspace, cx), Some(Printing::Preparing));
+    let id = workspace
+        .read_with(cx, |w, _| w.print_note())
+        .expect("the note is up");
+    assert!(layer.read_with(cx, |layer, _| layer.ids().contains(&id)));
+    // The job ends as it would have: handed over, and its note goes.
+    let_it_prepare(&workspace, cx);
+    assert_eq!(jobs.borrow().len(), 1);
+    assert!(!toasts(&workspace, cx).contains(&note));
+    assert_eq!(workspace.read_with(cx, |w, _| w.print_note()), None);
+    layer.update(cx, |layer, cx| layer.clear(cx));
+    cx.run_until_parked();
+
+    // A click on the note itself, not on its button: the note goes, and
+    // the job with it.
+    begin(cx);
+    let id = workspace
+        .read_with(cx, |w, _| w.print_note())
+        .expect("the note is up");
+    // The layer draws a toast as `toast-<n>`; the id says its n.
+    let n: String = format!("{id:?}")
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let bounds = cx
+        .debug_bounds(Box::leak(format!("toast-{n}").into_boxed_str()))
+        .expect("the note is drawn");
+    cx.simulate_click(
+        gpui::point(bounds.left() + gpui::px(6.), bounds.center().y),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(
+        !toasts(&workspace, cx).contains(&note),
+        "the click took it away"
+    );
+    assert_eq!(stage(&workspace, cx), None, "the job stopped with it");
+    assert!(state_line(&workspace, cx).contains(" print=[idle] "));
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert_eq!(jobs.borrow().len(), 1, "nothing more was handed over");
 }
 
 // ----- keys ---------------------------------------------------------------------------------

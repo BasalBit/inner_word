@@ -39,6 +39,9 @@
 //!    toast's button has no way in from the keyboard), and "Dismiss
 //!    notifications" cancels as well: otherwise the note would go, the work
 //!    would go on unseen and the print panel would come up unannounced.
+//!    For the same reason a click on the note (which takes any note away)
+//!    cancels, and a note pushed out by four newer ones is shown again
+//!    (`Workspace::print_note_went`).
 //! 5. The finished job is handed over. With the macOS print panel the job
 //!    is then **in the panel** ([`Printing::Panel`]) until the sheet has
 //!    ended; the sheet is started from the task, outside any update, as
@@ -65,10 +68,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Context, Stateful, Task, Window, prelude::*};
+use gpui::{Context, Entity, Stateful, Task, Window, prelude::*};
 use writer_editor::{PrintPass, PrintProgress};
 use writer_print::PdfWriter;
-use writer_ui::{Toast, toast::ToastId};
+use writer_ui::{
+    Toast, ToastLayer,
+    toast::{MAX_VISIBLE, ToastId},
+};
 
 use super::Workspace;
 use crate::{
@@ -129,6 +135,8 @@ pub(crate) struct PrintState {
     note_task: Option<Task<()>>,
     /// The note "Preparing to print …", while it is up.
     note: Option<ToastId>,
+    /// The title the note names: the document's when the job began.
+    title: String,
 }
 
 /// The words of the note for a document called `title`.
@@ -223,6 +231,7 @@ impl Workspace {
         self.print.progress = Some(pass.progress());
         self.print.waiting = 0;
         self.print.note = None;
+        self.print.title = title.clone();
 
         // The note, when the job is still preparing after a moment.
         self.print.note_task = Some(cx.spawn({
@@ -404,6 +413,39 @@ impl Workspace {
         // The layer is empty already.
         self.print.note = None;
         self.cancel_print(cx);
+    }
+
+    /// The notes changed. The note of the job may have gone by a way the
+    /// workspace is not told of, and it must not go while the pages are
+    /// still being made: the work would go on unseen and the print panel
+    /// come up unannounced (the module docs, 4).
+    ///
+    /// - Pushed out by newer notes (the layer shows
+    ///   [`writer_ui::toast::MAX_VISIBLE`] and drops the oldest): nobody
+    ///   asked for it to go, so it is shown again, as the newest.
+    /// - Taken away by the writer, with a click on it (every note goes so)
+    ///   or its own button: the job stops, as with "Dismiss notifications".
+    ///
+    /// The two are told apart by what is left: a note that was pushed out
+    /// leaves the layer full, one that was clicked away leaves room.
+    pub(crate) fn print_note_went(&mut self, layer: Entity<ToastLayer>, cx: &mut Context<Self>) {
+        let Some(note) = self.print.note else {
+            return;
+        };
+        let ids = layer.read(cx).ids();
+        if ids.contains(&note) {
+            return;
+        }
+        self.print.note = None;
+        if self.print.stage != Some(Printing::Preparing) {
+            return;
+        }
+        if ids.len() >= MAX_VISIBLE {
+            let title = self.print.title.clone();
+            self.show_print_note(&title, cx);
+        } else {
+            self.cancel_print(cx);
+        }
     }
 }
 

@@ -394,6 +394,9 @@ impl Workspace {
             cx.subscribe_in(&comments, window, Self::on_comments_event),
             cx.subscribe_in(&vim, window, Self::on_vim_event),
             cx.observe_global::<FontLibrary>(Self::store_recent_fonts),
+            // The note of a print that is preparing can go by ways the
+            // workspace is not told of (`print.rs`, `print_note_went`).
+            cx.observe(&toast_layer, Self::print_note_went),
             // A modal that closes gives focus back to where it was. When
             // that place is gone (a popup that closed meanwhile), focus
             // would be nowhere and no key would reach anything.

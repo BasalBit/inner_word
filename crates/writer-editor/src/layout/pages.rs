@@ -147,6 +147,11 @@ pub(crate) struct Placement {
     pub(crate) end: f32,
     /// Sheet of the first row (0 in flow view).
     pub(crate) page: u32,
+    /// Page view: how far below the top of its sheet's text area the box
+    /// starts. `top` is this plus where that text area is in content
+    /// space; kept by itself it stays exact however long the document is.
+    /// 0 in flow view.
+    pub(crate) page_y: f32,
     /// Sheet of the last row.
     pub(crate) end_page: u32,
     pub(crate) shifts: Option<Rc<[RowShift]>>,
@@ -203,6 +208,7 @@ pub(crate) fn place_flow(previous: Option<Previous>, measure: &Measure, pad_top:
         top,
         end: top + measure.height(),
         page: 0,
+        page_y: 0.,
         end_page: 0,
         shifts: None,
     }
@@ -264,6 +270,7 @@ pub(crate) fn place_paged(
             top,
             end: y + whole,
             page,
+            page_y: y,
             end_page: page,
             shifts: None,
         };
@@ -312,6 +319,7 @@ pub(crate) fn place_paged(
         top,
         end: rows_on_last as f32 * line_height + measure.pad_bottom,
         page,
+        page_y: y,
         end_page: sheet,
         shifts: Some(shifts.into()),
     }

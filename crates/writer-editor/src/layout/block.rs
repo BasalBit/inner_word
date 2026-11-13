@@ -410,7 +410,7 @@ struct Source {
 }
 
 /// The fonts of a block as `(end offset, font)` runs covering its text.
-fn font_runs(block: &Block, style: &LayoutStyle) -> Vec<(usize, Font)> {
+pub(crate) fn font_runs(block: &Block, style: &LayoutStyle) -> Vec<(usize, Font)> {
     let mut end = 0;
     style
         .shape_runs(block)

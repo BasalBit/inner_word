@@ -11,6 +11,8 @@
 //! - `ime`: platform text input with marked text, UTF-16 ranges.
 //! - `mouse`: clicks, drags, checkboxes, links, wheel, scroll bar.
 //! - `pages`: pagination invariants and page view.
+//! - `print`: the print pass: the pages page view has, as data for paper,
+//!   and a PDF made of them.
 //! - `rebinding`: the keymap cleared and bound again with other keys.
 //! - `layout`: the lazy layout on a book-length document, with timings.
 //! - `vim_seams`: layout answers inside a mutation, the typed-text report,
@@ -27,6 +29,7 @@ mod layout;
 mod mouse;
 mod movement;
 mod pages;
+mod print;
 mod rebinding;
 mod seams;
 mod slice;

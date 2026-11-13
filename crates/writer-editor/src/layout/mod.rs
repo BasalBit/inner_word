@@ -285,6 +285,7 @@ fn empty_placement() -> Placement {
         top: 0.,
         end: 0.,
         page: 0,
+        page_y: 0.,
         end_page: 0,
         shifts: None,
     }
@@ -1350,6 +1351,11 @@ pub(crate) struct Placed {
     pub(crate) layout: Rc<BlockLayout>,
     /// Content-space y of the top of the block's box.
     pub(crate) top: Pixels,
+    /// The sheet (0-based) the block's first row is on; 0 in flow view.
+    page: u32,
+    /// Page view: how far below the top of that sheet's text area the box
+    /// starts.
+    page_y: Pixels,
     shifts: Option<Rc<[RowShift]>>,
 }
 
@@ -1371,8 +1377,52 @@ impl Placed {
         self.top + self.layout.rows[row].y + self.shift(row)
     }
 
+    /// The sheet (0-based) row `row` is on: the sheet of the block's first
+    /// row, and one further for every time the block goes on on the next
+    /// sheet before that row. From the placement itself, so it does not
+    /// depend on how exactly a y far down a long document can be told
+    /// from the edge of a sheet. 0 in flow view.
+    pub(crate) fn row_page(&self, row: usize) -> usize {
+        let row = row.min(self.layout.rows.len() - 1);
+        let moved = self.shifts.as_deref().map_or(0, |shifts| {
+            shifts.partition_point(|shift| shift.first_row as usize <= row)
+        });
+        self.page as usize + moved
+    }
+
+    /// The block as it lies on one of its sheets, in that sheet's own
+    /// coordinates: y from the sheet's top edge instead of from the top of
+    /// the scrollable content. `segment` says which of the block's sheets
+    /// (0: the one its first row is on), `text_top` how far below the
+    /// sheet's top edge its text area begins (the top margin).
+    ///
+    /// The rows of that sheet are where they are in content space, less
+    /// the sheet's place in it; the block's rows on other sheets come out
+    /// above or below the sheet. Nothing here is worked out from a y far
+    /// down a long document, so the result is exact on page 1,500 as on
+    /// page 1. Page view only.
+    pub(crate) fn on_sheet(&self, segment: usize, text_top: Pixels) -> Placed {
+        let starts = self.segment_starts();
+        let segment = segment.min(starts.len().saturating_sub(2));
+        let top = if segment == 0 {
+            text_top + self.page_y
+        } else {
+            // The first row of a later sheet stands at the top of the text
+            // area.
+            let first = starts[segment];
+            text_top - self.layout.rows[first].y - self.shift(first)
+        };
+        Placed {
+            layout: self.layout.clone(),
+            top,
+            page: self.page,
+            page_y: self.page_y,
+            shifts: self.shifts.clone(),
+        }
+    }
+
     /// First row of each segment, with the row count as the last entry.
-    fn segment_starts(&self) -> Vec<usize> {
+    pub(crate) fn segment_starts(&self) -> Vec<usize> {
         let rows = self.layout.rows.len();
         let mut starts = vec![0];
         if let Some(shifts) = &self.shifts {
@@ -1515,6 +1565,8 @@ impl Lay<'_> {
         Some(Placed {
             layout,
             top: px(place.top),
+            page: place.page,
+            page_y: px(place.page_y),
             shifts: place.shifts.clone(),
         })
     }

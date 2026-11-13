@@ -2,7 +2,8 @@
 //! writer-app). Same script syntax, subset of steps:
 //! `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`, `typeslow:<text>`,
 //! `bench:<count> <keystrokes>`, `theme:<light|dark|system>`,
-//! `screenshot:<path>`, `log:<text>`, `quit`, and for runs that post real
+//! `screenshot:<path>`, `print:<path>` (the document as a PDF, as the
+//! print pass lays it out), `log:<text>`, `quit`, and for runs that post real
 //! mouse events to the process: `frame` (draw one; a background window
 //! draws none by itself), `state` (selection, selected text, scroll,
 //! link tooltip, to-dos, last event) and `where:<block>:<offset>` (the
@@ -34,6 +35,7 @@ enum Step {
     Bench(usize, Vec<Keystroke>),
     Theme(ThemeMode),
     Screenshot(PathBuf),
+    Print(PathBuf),
     Log(String),
     Frame,
     State,
@@ -75,6 +77,7 @@ fn parse(source: &str) -> Result<Vec<Step>> {
                 Step::Theme(ThemeMode::parse(arg).ok_or_else(|| anyhow!("unknown theme {arg:?}"))?)
             }
             "screenshot" => Step::Screenshot(PathBuf::from(arg.trim())),
+            "print" => Step::Print(PathBuf::from(arg.trim())),
             "log" => Step::Log(arg.to_string()),
             "frame" => Step::Frame,
             "state" => Step::State,
@@ -243,6 +246,14 @@ pub fn run_from_env(window: AnyWindowHandle, cx: &mut App) {
                         cx.background_executor()
                             .spawn(async move { capture(number, &path) })
                             .await?;
+                    }
+                    Step::Print(path) => {
+                        let line = window.update(cx, |root, window, cx| {
+                            root.downcast::<crate::Demo>()
+                                .map(|demo| demo.read(cx).print_to(&path, window, cx))
+                                .unwrap_or_default()
+                        })?;
+                        eprintln!("[automation] print {}: {line}", path.display());
                     }
                     Step::Log(text) => eprintln!("[automation] {text}"),
                     Step::Frame => {

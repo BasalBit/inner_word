@@ -67,7 +67,10 @@
 //! Steps: `wait:<ms>`, `keys:<keystrokes>`, `type:<text>`,
 //! `typeslow:<text>` (one key per frame, prints what dispatching a key
 //! costs), `theme:<light|dark|system>`, `screenshot:<path>`, `log:<text>`,
-//! `quit`.
+//! `quit`, and `print:<path>`: the document as the print pass lays it out,
+//! whatever the window shows, written as a PDF with a picture of each page
+//! beside it, and one line about it (pages, rows, how many rows the PDF
+//! writer set at another width than the layout measured, the fonts).
 
 mod automation;
 mod textfile;
@@ -982,6 +985,59 @@ impl Demo {
 
     fn focus_composer(&mut self, _: &FocusComposer, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.read(cx).focus(window);
+    }
+
+    /// What a scripted run's `print:<path>` does: the document as the print
+    /// pass lays it out (whatever the window shows), written as a PDF to
+    /// `path`, with a picture of every page beside it (`<name>-1.png`, ...).
+    /// Returns what was made, as one line.
+    fn print_to(&self, path: &std::path::Path, window: &Window, cx: &App) -> String {
+        let started = Instant::now();
+        let mut pass = self.editor.read(cx).print_pass(window, cx);
+        let paper = pass.paper();
+        let pages = pass.run_to_end();
+        let laid_out = started.elapsed();
+        let mut writer = writer_print::PdfWriter::new(&writer_print::JobInfo {
+            title: "The Writer editor demo".to_string(),
+            creator: "The Writer (the editor's demo)".to_string(),
+        });
+        for page in &pages {
+            writer.add_page(page);
+        }
+        let pdf = writer.finish();
+        let made = started.elapsed();
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).ok();
+        }
+        if let Err(error) = std::fs::write(path, pdf.bytes()) {
+            return format!("could not write {}: {error}", path.display());
+        }
+        // A picture of every page (of the first twenty of a book), for
+        // whoever has no Preview at hand.
+        if let Some(file) = writer_print::PdfFile::open(pdf.bytes()) {
+            for page in 0..file.page_count().min(20) {
+                if let Some(png) = file.page_png(page, 2.) {
+                    let name = format!(
+                        "{}-{}.png",
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .unwrap_or("page"),
+                        page + 1
+                    );
+                    std::fs::write(path.with_file_name(name), png).ok();
+                }
+            }
+        }
+        let mut line = format!(
+            "{}, laid out in {laid_out:.1?}, made in {made:.1?}, {} bytes, page view has {:?} pages",
+            pdf.report.line(paper),
+            pdf.len(),
+            self.editor.read(cx).page_count(),
+        );
+        if let Some(missing) = pdf.report.missing_line() {
+            line.push_str(&format!("; {missing}"));
+        }
+        line
     }
 
     /// One line about the editor for scripted runs (`state`).

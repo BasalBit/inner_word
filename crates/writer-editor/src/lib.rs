@@ -48,6 +48,7 @@
 //! | Mark misspelled words (a spell checker) | [`Editor::set_spelling_marks`] per block and block revision with a [`SpellingMarksOutcome`], [`Editor::spelling_checked`], [`Editor::first_unchecked_spelling_block`], [`Editor::spelling_marks`], [`Editor::spelling_mark_at`], [`Editor::next_spelling_mark`], [`Editor::previous_spelling_mark`], [`Editor::spelling_mark_count`], [`Editor::invalidate_spelling_marks`], [`Editor::clear_spelling_marks`], [`Editor::set_spelling_marks_visible`], [`ContextMenuRequest::spelling_mark`] |
 //! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`], [`EditorEvent::StatsChanged`], [`EditorEvent::LayoutSettled`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
+//! | Print | [`Editor::print_pass`]: a [`PrintPass`] that lays the document out as page view does and hands out its pages as data ([`writer_print::Page`]) in slices ([`PrintPass::advance`], [`PrintPass::progress`], [`PrintPass::paper`]) |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
 //! | A view of rich text in a panel (an answer of the assistant) | [`CompactOptions::formatted`] with [`EditorConfig::read_only`]: sized like a small input, set with the typography of its document, headings at [`FORMATTED_HEADING_SCALE`] |
@@ -88,6 +89,21 @@
 //! a page break starts a new sheet, headings stay with the text after
 //! them. All geometry, the visual-row oracle and scrolling work the same in
 //! both views.
+//!
+//! ## Printing
+//!
+//! [`Editor::print_pass`] copies the document and lays the copy out for
+//! paper with a layout of its own: the document's paper, margins and
+//! typography, Paper's colours, one point to the point. What the editor
+//! shows (flow view, a zoom, Night, the selection) has no part in it. The
+//! pass hands out exactly the pages page view has ([`Editor::page_count`]
+//! once the layout is settled), each as a [`writer_print::Page`]: rows of
+//! text with the place of every glyph, the shapes of the block
+//! decorations, the page number. Nothing that is there for whoever edits
+//! is on a page (caret, selection, spelling and find marks, comment tints,
+//! the page break marker, the placeholder). The module `print` says how
+//! the pages stay page view's by construction. Making a PDF of the pages
+//! and handing it to the system is `writer-print`'s and the app's.
 //!
 //! ## Zoom
 //!
@@ -131,8 +147,9 @@
 //! | `editor` | the entity: state, config, mutation seam, interception and key context API, highlights and comments API, `Render` |
 //! | `layout` | `DocumentLayout` (a slot per block with its measure, lazy placement, shaped layouts for what is on screen, background refinement, scroll anchor, word counts), `layout::block` (shaping, rows, hit testing), `layout::wrap` (where rows break, the size of inline code), `layout::style` (fonts, colours, metrics), `layout::pages` (placement in flow view and on sheets) |
 //! | `element` | `EditorElement`: measure, prepaint (frame plan), paint, listeners |
-//! | `paint` | painting one visual row: glyphs, backgrounds, underlines |
-//! | `decorations` | per block kind painting: markers, quote bar, code panel, rules |
+//! | `paint` | one visual row in a view: where its backgrounds, underlines and strikethroughs are (for the screen and for paper), and painting it |
+//! | `decorations` | what a block kind shows besides its text (markers, quote bar, code panel, rules) as neutral shapes for a sink: the frame's, or the print pass's |
+//! | `print` | the print pass: the document laid out as page view lays it out, as pages of data for a PDF writer |
 //! | `input` | platform input handler (typing, IME) |
 //! | `actions`, `handlers` | actions and key bindings; what each action does |
 //! | `commands` | command descriptors for the palette |
@@ -193,6 +210,7 @@ mod mouse;
 mod movement;
 mod paint;
 mod popup;
+pub mod print;
 mod scroll;
 pub mod spelling;
 mod stats;
@@ -214,6 +232,7 @@ pub use highlights::HighlightStyle;
 pub use intercept::{InterceptPriority, KeyDisposition};
 pub use movement::{RowMove, RowOracle, VisualRow};
 pub use popup::{PopupAnchor, PopupPlacement};
+pub use print::{PrintPass, PrintProgress};
 pub use scroll::Autoscroll;
 pub use spelling::SpellingMarksOutcome;
 pub use view_state::ViewState;

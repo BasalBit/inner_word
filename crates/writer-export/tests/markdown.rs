@@ -2,14 +2,19 @@
 //! trip through an independent CommonMark parser (pulldown-cmark) that must
 //! give back the structure and the text of the document.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use writer_core::{
-    Alignment, Block, BlockKind, Document, EditorState, Highlight, InlineAttrs, InlineStyle,
-    Position, Rgb, Selection,
+    Alignment, Block, BlockKind, Document, EditorState, Highlight, Image, ImageId, ImageWidth,
+    InlineAttrs, InlineStyle, Position, Rgb, Selection,
 };
 use writer_export::{
-    ExportSource, MarkdownComments, MarkdownHighlight, MarkdownOptions, MarkdownPageBreak,
-    PartTitles, to_markdown,
+    ExportAsset, ExportFormat, ExportOptions, ExportSource, ImageData, ImageFileFormat,
+    ImageSource, MarkdownComments, MarkdownHighlight, MarkdownImages, MarkdownOptions,
+    MarkdownPageBreak, PartTitles, export, export_package, images_dir_name, to_markdown,
+    to_plain_text,
 };
 
 // ----- builders ---------------------------------------------------------------------------
@@ -58,6 +63,45 @@ fn one(spans: &[(&str, InlineAttrs)]) -> String {
     out.strip_suffix('\n').unwrap_or(&out).to_string()
 }
 
+/// An image id made for a test: `first` in hex, then zeros up to 32
+/// digits (`"3f2a"` is `3f2a0000…`).
+fn image_id(first: &str) -> ImageId {
+    ImageId::parse(&format!("{first:0<32}")).expect("hex digits")
+}
+
+/// An image of 1600 × 1200 pixels at 144 to the inch (800 × 600 points)
+/// with a description, as wide as the column.
+fn image(first: &str, description: &str) -> Image {
+    Image {
+        description: description.to_string(),
+        ..Image::new(image_id(first), (1600, 1200), 144)
+    }
+}
+
+fn image_block(first: &str, description: &str) -> Block {
+    Block::image(image(first, description))
+}
+
+/// The stored images of a test: what a library would hold.
+#[derive(Default)]
+struct Pictures(BTreeMap<ImageId, (Vec<u8>, ImageFileFormat)>);
+
+impl Pictures {
+    fn with(mut self, first: &str, format: ImageFileFormat, bytes: &[u8]) -> Pictures {
+        self.0.insert(image_id(first), (bytes.to_vec(), format));
+        self
+    }
+}
+
+impl ImageSource for Pictures {
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>> {
+        self.0.get(&id).map(|(bytes, format)| ImageData {
+            bytes: Cow::Borrowed(bytes),
+            format: *format,
+        })
+    }
+}
+
 // ----- the parser side: Markdown to a flat, comparable form -------------------------------
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -82,6 +126,9 @@ enum Kind {
     Code(String),
     Rule,
     Html(String),
+    /// An image alone in its paragraph, with its destination. Its text is
+    /// the alternative text.
+    Image(String),
 }
 
 /// One block of the document in reading order: its kind, how many list
@@ -155,6 +202,7 @@ fn parse(markdown: &str) -> Vec<Line> {
     let mut links: Vec<String> = Vec::new();
 
     let mut in_footnote = false;
+    let mut in_image = false;
     for event in Parser::new_ext(markdown, parser_options()) {
         // Footnote definitions hold comments, not document text.
         match event {
@@ -277,6 +325,20 @@ fn parse(markdown: &str) -> Vec<Line> {
             Event::End(TagEnd::Link) => {
                 links.pop();
             }
+            // The exporter writes an image as a paragraph that holds
+            // nothing else.
+            Event::Start(Tag::Image {
+                dest_url, title, ..
+            }) => {
+                let i = cur.unwrap_or_else(|| panic!("an image outside a block in:\n{markdown}"));
+                assert!(
+                    lines[i].kind == Kind::Para && lines[i].text.is_empty() && title.is_empty(),
+                    "an image that is not alone in its paragraph in:\n{markdown}"
+                );
+                lines[i].kind = Kind::Image(dest_url.to_string());
+                in_image = true;
+            }
+            Event::End(TagEnd::Image) => in_image = false,
             Event::InlineHtml(tag) => match &*tag {
                 "<u>" => underline += 1,
                 "</u>" => underline -= 1,
@@ -295,6 +357,10 @@ fn parse(markdown: &str) -> Vec<Line> {
             },
             Event::Text(s) => {
                 let i = cur.unwrap_or_else(|| panic!("text {s:?} outside a block in:\n{markdown}"));
+                assert!(
+                    in_image || !matches!(lines[i].kind, Kind::Image(_)),
+                    "text {s:?} beside an image in:\n{markdown}"
+                );
                 let st = style(html_code > 0);
                 lines[i].text.extend(s.chars().map(|c| (c, st.clone())));
             }
@@ -439,8 +505,9 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
                 }
                 MarkdownPageBreak::Omit => continue,
             },
-            // The generators of these tests make no image.
-            BlockKind::Image(_) => continue,
+            // A reference to the stored image: no test that compares with
+            // this writes picture files.
+            BlockKind::Image(image) => Kind::Image(format!("image:{}", image.id)),
         };
         let text = match block.kind() {
             BlockKind::CodeBlock { .. } => {
@@ -449,6 +516,15 @@ fn expected(doc: &Document, options: &MarkdownOptions) -> Vec<Line> {
                     t.push('\n');
                 }
                 t.chars().map(|c| (c, Style::default())).collect()
+            }
+            BlockKind::Image(image) => {
+                let mut text: Vec<(char, Style)> = image
+                    .description
+                    .chars()
+                    .map(|c| (c, Style::default()))
+                    .collect();
+                normalize(&mut text);
+                text
             }
             k => block_text(block, options, k.heading_level().is_some()),
         };
@@ -1264,6 +1340,566 @@ fn options_for_things_markdown_cannot_say() {
         "<div align=\"center\">\n\n<span style=\"color:#123456;font-family:'Iowan Old Style'\"><mark><u>text</u></mark></span>\n\n</div>\n\n\
          <div align=\"right\">\n\n# Right\n\n</div>\n\nleft\n"
     );
+}
+
+// ----- images -----------------------------------------------------------------------------
+
+const HARBOUR: &str = "3f2a9c1b5d6e7f80a1b2c3d4e5f60718";
+
+#[test]
+fn an_image_is_a_line_that_names_the_stored_image() {
+    let out = round_trip(vec![
+        Block::paragraph("Before."),
+        image_block(HARBOUR, "The harbour at dusk"),
+        Block::paragraph("After."),
+    ]);
+    assert_eq!(
+        out,
+        "Before.\n\n![The harbour at dusk](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n\nAfter.\n"
+    );
+    // Without a description, and as the only block.
+    assert_eq!(
+        round_trip(vec![image_block(HARBOUR, "")]),
+        "![](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n"
+    );
+    // The width is not written, whatever it is; a source that has the
+    // bytes changes nothing while references are asked for.
+    let narrow = Block::image(Image {
+        width: ImageWidth::from_percent(25),
+        ..image(HARBOUR, "Small")
+    });
+    let doc = Document::from_blocks(vec![narrow]);
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, b"png bytes");
+    let source = ExportSource::from(&doc).with_images(&pictures);
+    assert_eq!(
+        to_markdown(&source, &MarkdownOptions::default()),
+        "![Small](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n"
+    );
+    assert_eq!(
+        to_markdown(&source, &MarkdownOptions::strict()),
+        "![Small](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n"
+    );
+    let package = export_package(&source, ExportFormat::Markdown, &ExportOptions::default());
+    assert_eq!(
+        package.bytes,
+        b"![Small](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n"
+    );
+    assert_eq!(package.assets, []);
+}
+
+#[test]
+fn the_description_of_an_image_is_read_back_as_it_is() {
+    for description in [
+        "a ] b [ c",
+        "[link](https://example.com) and ![nested](x.png)",
+        "*stars* and **more**, _under_ and __scores__, ~~struck~~",
+        "`code` and ``more``",
+        "a <b>tag</b> and <https://example.com>",
+        "AT&T &amp; &#42; 5 * 3 = 15",
+        "ends with a backslash \\",
+        "C:\\Users\\me and \\[escaped\\]",
+        "[^1] and [ref][label] and ]( and )",
+        "# not a heading",
+        "- not a list",
+        "1. not a list",
+        "> not a quote",
+        "| not | a | table |",
+        "    four spaces inside are kept",
+        "tab\tinside",
+        "\"quoted\" and 'single'",
+        "日本語の説明, שלום, émile, 👩‍👩‍👧",
+        "!",
+        "!!",
+        "\\",
+        "]",
+        "[",
+        "<",
+        ">",
+        "*",
+        "_",
+    ] {
+        let doc = Document::from_blocks(vec![image_block(HARBOUR, description)]);
+        // What the document holds is the description as it was cleaned.
+        let kept = doc.blocks()[0].as_image().unwrap().description.clone();
+        let out = round_trip_with(&doc, &MarkdownOptions::default());
+        assert!(
+            out.ends_with("](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n") && out.starts_with("!["),
+            "{description:?} gave {out:?}"
+        );
+        assert_eq!(out.lines().count(), 1, "{description:?} gave {out:?}");
+        let lines = parse(&out);
+        let alt: String = lines[0].text.iter().map(|(c, _)| *c).collect();
+        assert_eq!(alt, kept, "{out:?}");
+    }
+}
+
+#[test]
+fn an_image_keeps_the_lists_around_it_apart() {
+    // An image has no indent: it ends the list above it, and the list
+    // below is a new one.
+    let out = round_trip(vec![
+        Block::with_text(BlockKind::BulletItem, "one"),
+        Block::with_text(BlockKind::BulletItem, "two").with_indent(1),
+        image_block(HARBOUR, "Between"),
+        Block::with_text(BlockKind::BulletItem, "three"),
+    ]);
+    assert_eq!(
+        out,
+        "- one\n  - two\n\n![Between](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n\n- three\n"
+    );
+    let out = round_trip(vec![
+        Block::with_text(BlockKind::NumberedItem, "one"),
+        image_block(HARBOUR, ""),
+        Block::with_text(BlockKind::NumberedItem, "again one"),
+    ]);
+    assert_eq!(
+        out,
+        "1. one\n\n![](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n\n1. again one\n"
+    );
+    // Under an item without text, where a paragraph would be read as the
+    // item's own text.
+    let out = round_trip(vec![
+        Block::new(BlockKind::BulletItem),
+        image_block(HARBOUR, "Alone"),
+        Block::new(BlockKind::TodoItem { checked: false }),
+        image_block(HARBOUR, "Alone"),
+    ]);
+    assert_eq!(
+        out,
+        "-\n\n![Alone](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n\n- [ ]\n\n![Alone](image:3f2a9c1b5d6e7f80a1b2c3d4e5f60718)\n"
+    );
+    // Beside every other kind of block.
+    round_trip(vec![
+        Block::with_text(BlockKind::heading(2), "Title"),
+        image_block(HARBOUR, "a"),
+        Block::with_text(BlockKind::Quote, "quote"),
+        image_block(HARBOUR, "b"),
+        Block::with_text(BlockKind::code(), "code"),
+        image_block(HARBOUR, "c"),
+        Block::new(BlockKind::Divider),
+        image_block(HARBOUR, "d"),
+        Block::new(BlockKind::PageBreak),
+        image_block(HARBOUR, "e"),
+        image_block("00ff", "f"),
+    ]);
+}
+
+#[test]
+fn the_alignment_of_an_image_is_kept_when_alignment_is() {
+    let doc = Document::from_blocks(vec![
+        image_block(HARBOUR, "Left"),
+        image_block(HARBOUR, "Centre").with_alignment(Alignment::Center),
+        image_block(HARBOUR, "Right").with_alignment(Alignment::Right),
+    ]);
+    let source = ExportSource::from(&doc);
+    let reference = |alt: &str| format!("![{alt}](image:{HARBOUR})");
+    // Dropped by default, like the alignment of a paragraph.
+    assert_eq!(
+        to_markdown(&source, &MarkdownOptions::default()),
+        format!(
+            "{}\n\n{}\n\n{}\n",
+            reference("Left"),
+            reference("Centre"),
+            reference("Right")
+        )
+    );
+    let o = MarkdownOptions {
+        alignment: true,
+        ..Default::default()
+    };
+    let out = to_markdown(&source, &o);
+    assert_eq!(
+        out,
+        format!(
+            "{}\n\n<div align=\"center\">\n\n{}\n\n</div>\n\n<div align=\"right\">\n\n{}\n\n</div>\n",
+            reference("Left"),
+            reference("Centre"),
+            reference("Right")
+        )
+    );
+    // The wrappers are HTML blocks; what is between them is still an image.
+    let lines: Vec<Line> = parse(&out)
+        .into_iter()
+        .filter(|l| !matches!(l.kind, Kind::Html(_)))
+        .collect();
+    assert_eq!(lines, expected(&doc, &o));
+}
+
+fn files(dir: &str) -> ExportOptions {
+    ExportOptions {
+        markdown: MarkdownOptions {
+            images: MarkdownImages::Files {
+                dir: dir.to_string(),
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_file_export_links_picture_files_and_returns_them() {
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("Before."),
+        image_block(HARBOUR, "The harbour"),
+        image_block("00ff", "A drawing"),
+        // The same picture a second time: one file.
+        image_block(HARBOUR, "The harbour again"),
+        image_block("abcd", "Moving"),
+    ]);
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Jpeg, b"\xff\xd8 the harbour")
+        .with("00ff", ImageFileFormat::Png, b"\x89PNG a drawing")
+        .with("abcd", ImageFileFormat::Gif, b"GIF89a moving");
+    let source = ExportSource::single("Trip", &doc).with_images(&pictures);
+    let package = export_package(&source, ExportFormat::Markdown, &files("pictures"));
+    assert_eq!(
+        String::from_utf8(package.bytes.clone()).unwrap(),
+        "Before.\n\n![The harbour](pictures/image-3f2a9c1b.jpg)\n\n![A drawing](pictures/image-00ff0000.png)\n\n\
+         ![The harbour again](pictures/image-3f2a9c1b.jpg)\n\n![Moving](pictures/image-abcd0000.gif)\n"
+    );
+    assert_eq!(
+        package.assets,
+        [
+            ExportAsset {
+                path: "pictures/image-3f2a9c1b.jpg".into(),
+                bytes: b"\xff\xd8 the harbour".to_vec()
+            },
+            ExportAsset {
+                path: "pictures/image-00ff0000.png".into(),
+                bytes: b"\x89PNG a drawing".to_vec()
+            },
+            ExportAsset {
+                path: "pictures/image-abcd0000.gif".into(),
+                bytes: b"GIF89a moving".to_vec()
+            },
+        ]
+    );
+    // `export` and `to_markdown` write the same text and return no files.
+    assert_eq!(
+        export(&source, ExportFormat::Markdown, &files("pictures")),
+        package.bytes
+    );
+    assert_eq!(
+        to_markdown(&source, &files("pictures").markdown).into_bytes(),
+        package.bytes
+    );
+    // The same export twice gives the same files.
+    assert_eq!(
+        export_package(&source, ExportFormat::Markdown, &files("pictures")),
+        package
+    );
+    // Only Markdown has files beside it.
+    for format in [ExportFormat::PlainText, ExportFormat::Docx] {
+        let other = export_package(&source, format, &files("pictures"));
+        assert_eq!(other.assets, []);
+        assert_eq!(other.bytes, export(&source, format, &files("pictures")));
+    }
+    // A folder written with a slash at its end, or the other slash, is the
+    // same folder; none at all is the folder of the file.
+    let slashed = export_package(&source, ExportFormat::Markdown, &files(" a\\b/ "));
+    assert_eq!(slashed.assets[0].path, "a/b/image-3f2a9c1b.jpg");
+    assert!(
+        String::from_utf8(slashed.bytes)
+            .unwrap()
+            .contains("](a/b/image-3f2a9c1b.jpg)")
+    );
+    let beside = export_package(&source, ExportFormat::Markdown, &files(""));
+    assert_eq!(beside.assets[0].path, "image-3f2a9c1b.jpg");
+    assert!(
+        String::from_utf8(beside.bytes)
+            .unwrap()
+            .starts_with("Before.\n\n![The harbour](image-3f2a9c1b.jpg)\n")
+    );
+}
+
+#[test]
+fn a_folder_with_a_space_in_its_name_is_read_back_as_it_is_on_disk() {
+    assert_eq!(images_dir_name("Chapter 2.md"), "Chapter 2 images");
+    assert_eq!(images_dir_name("Chapter 2"), "Chapter 2 images");
+    assert_eq!(images_dir_name("v1.2 notes.md"), "v1.2 notes images");
+    assert_eq!(images_dir_name("out/Trip.markdown"), "Trip images");
+    assert_eq!(images_dir_name(".md"), ".md images");
+    assert_eq!(images_dir_name(""), "Untitled images");
+
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Jpeg, b"jpeg");
+    for (dir, written) in [
+        ("Chapter 2 images", "<Chapter 2 images/image-3f2a9c1b.jpg>"),
+        (
+            "Émile (draft) images",
+            "<Émile (draft) images/image-3f2a9c1b.jpg>",
+        ),
+        (
+            "a <b> & c images",
+            "<a \\<b\\> & c images/image-3f2a9c1b.jpg>",
+        ),
+        ("R&amp;D images", "<R\\&amp;D images/image-3f2a9c1b.jpg>"),
+        (
+            "back\\slash images",
+            "<back/slash images/image-3f2a9c1b.jpg>",
+        ),
+        // Without a space the destination needs no brackets, and what
+        // would end it early is escaped.
+        ("Trip-images", "Trip-images/image-3f2a9c1b.jpg"),
+        ("Trip(1)", "Trip\\(1\\)/image-3f2a9c1b.jpg"),
+        ("東京", "東京/image-3f2a9c1b.jpg"),
+    ] {
+        let doc = Document::from_blocks(vec![image_block(HARBOUR, "a ] b")]);
+        let source = ExportSource::single("Trip", &doc).with_images(&pictures);
+        let package = export_package(&source, ExportFormat::Markdown, &files(dir));
+        let out = String::from_utf8(package.bytes).unwrap();
+        assert_eq!(out, format!("![a \\] b]({written})\n"), "{dir:?}");
+        // A parser finds the path of the file that was returned.
+        let lines = parse(&out);
+        assert_eq!(lines.len(), 1, "{out:?}");
+        assert_eq!(
+            lines[0].kind,
+            Kind::Image(package.assets[0].path.clone()),
+            "{out:?}"
+        );
+        let alt: String = lines[0].text.iter().map(|(c, _)| *c).collect();
+        assert_eq!(alt, "a ] b");
+    }
+}
+
+#[test]
+fn two_images_whose_ids_begin_alike_get_two_files() {
+    // Three different pictures whose ids share their first eight digits,
+    // the last two their first twelve.
+    let first = "3f2a9c1b00000000000000000000000a";
+    let second = "3f2a9c1b11110000000000000000000b";
+    let third = "3f2a9c1b11112222000000000000000c";
+    let doc = Document::from_blocks(vec![
+        image_block(first, "one"),
+        image_block(second, "two"),
+        image_block(first, "one again"),
+        image_block(third, "three"),
+        image_block(second, "two again"),
+    ]);
+    let pictures = Pictures::default()
+        .with(first, ImageFileFormat::Png, b"first")
+        .with(second, ImageFileFormat::Png, b"second")
+        .with(third, ImageFileFormat::Jpeg, b"third");
+    let source = ExportSource::single("T", &doc).with_images(&pictures);
+    let package = export_package(&source, ExportFormat::Markdown, &files("p"));
+    assert_eq!(
+        String::from_utf8(package.bytes).unwrap(),
+        "![one](p/image-3f2a9c1b.png)\n\n![two](p/image-3f2a9c1b1111.png)\n\n![one again](p/image-3f2a9c1b.png)\n\n\
+         ![three](p/image-3f2a9c1b11112222.jpg)\n\n![two again](p/image-3f2a9c1b1111.png)\n"
+    );
+    let assets: Vec<(&str, &[u8])> = package
+        .assets
+        .iter()
+        .map(|a| (a.path.as_str(), a.bytes.as_slice()))
+        .collect();
+    assert_eq!(
+        assets,
+        [
+            ("p/image-3f2a9c1b.png", &b"first"[..]),
+            ("p/image-3f2a9c1b1111.png", &b"second"[..]),
+            ("p/image-3f2a9c1b11112222.jpg", &b"third"[..]),
+        ]
+    );
+    // Eight pictures whose ids differ only in their last digits: each takes
+    // four digits more than the one before, up to the whole id.
+    let ids: Vec<String> = (0..8)
+        .map(|n| format!("3f2a9c1b5d6e7f80a1b2c3d4e5f6{n:04x}"))
+        .collect();
+    let doc = Document::from_blocks(ids.iter().map(|id| image_block(id, "")).collect());
+    let mut pictures = Pictures::default();
+    for id in &ids {
+        pictures = pictures.with(id, ImageFileFormat::Png, id.as_bytes());
+    }
+    let source = ExportSource::single("T", &doc).with_images(&pictures);
+    let package = export_package(&source, ExportFormat::Markdown, &files("p"));
+    let paths: Vec<&str> = package.assets.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "p/image-3f2a9c1b.png",
+            "p/image-3f2a9c1b5d6e.png",
+            "p/image-3f2a9c1b5d6e7f80.png",
+            "p/image-3f2a9c1b5d6e7f80a1b2.png",
+            "p/image-3f2a9c1b5d6e7f80a1b2c3d4.png",
+            "p/image-3f2a9c1b5d6e7f80a1b2c3d4e5f6.png",
+            "p/image-3f2a9c1b5d6e7f80a1b2c3d4e5f60006.png",
+            "p/image-3f2a9c1b5d6e7f80a1b2c3d4e5f60007.png",
+        ]
+    );
+    // Every file holds its own picture, and every link names its own file.
+    let text = String::from_utf8(package.bytes).unwrap();
+    for ((id, asset), line) in ids.iter().zip(&package.assets).zip(text.split("\n\n")) {
+        assert_eq!(asset.bytes, id.as_bytes());
+        assert_eq!(line.trim_end(), format!("![]({})", asset.path));
+    }
+}
+
+#[test]
+fn an_image_whose_bytes_are_missing_is_a_reference_in_a_file_export_too() {
+    let doc = Document::from_blocks(vec![
+        image_block(HARBOUR, "Here"),
+        image_block("00ff", "Gone"),
+        image_block("abcd", "Empty file"),
+    ]);
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Png, b"png")
+        .with("abcd", ImageFileFormat::Png, b"");
+    let source = ExportSource::single("T", &doc).with_images(&pictures);
+    let package = export_package(&source, ExportFormat::Markdown, &files("p"));
+    assert_eq!(
+        String::from_utf8(package.bytes).unwrap(),
+        "![Here](p/image-3f2a9c1b.png)\n\n![Gone](image:00ff0000000000000000000000000000)\n\n\
+         ![Empty file](image:abcd0000000000000000000000000000)\n"
+    );
+    assert_eq!(package.assets.len(), 1);
+    // A source that was given no images at all has none.
+    let bare = ExportSource::single("T", &doc);
+    assert!(!bare.has_images() && source.has_images());
+    let package = export_package(&bare, ExportFormat::Markdown, &files("p"));
+    assert_eq!(package.assets, []);
+    assert_eq!(
+        String::from_utf8(package.bytes).unwrap(),
+        to_markdown(&bare, &MarkdownOptions::default())
+    );
+}
+
+#[test]
+fn the_documents_of_a_collection_share_their_picture_files() {
+    let one = Document::from_blocks(vec![image_block(HARBOUR, "In one")]);
+    let two = Document::from_blocks(vec![
+        image_block(HARBOUR, "In two"),
+        image_block("00ff", "Only in two"),
+    ]);
+    let pictures = Pictures::default()
+        .with(HARBOUR, ImageFileFormat::Png, b"harbour")
+        .with("00ff", ImageFileFormat::Png, b"other");
+    let source =
+        ExportSource::collection("Book", [("One", &one), ("Two", &two)]).with_images(&pictures);
+    let options = ExportOptions {
+        markdown: MarkdownOptions {
+            part_titles: PartTitles::Never,
+            ..files("Book images").markdown
+        },
+        ..Default::default()
+    };
+    let package = export_package(&source, ExportFormat::Markdown, &options);
+    assert_eq!(
+        String::from_utf8(package.bytes).unwrap(),
+        "![In one](<Book images/image-3f2a9c1b.png>)\n\n---\n\n![In two](<Book images/image-3f2a9c1b.png>)\n\n\
+         ![Only in two](<Book images/image-00ff0000.png>)\n"
+    );
+    let paths: Vec<&str> = package.assets.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "Book images/image-3f2a9c1b.png",
+            "Book images/image-00ff0000.png"
+        ]
+    );
+}
+
+#[test]
+fn image_file_formats() {
+    assert_eq!(ImageFileFormat::Png.extension(), "png");
+    assert_eq!(ImageFileFormat::Jpeg.extension(), "jpg");
+    assert_eq!(ImageFileFormat::Gif.extension(), "gif");
+    assert_eq!(ImageFileFormat::Png.mime_type(), "image/png");
+    assert_eq!(ImageFileFormat::Jpeg.mime_type(), "image/jpeg");
+    assert_eq!(ImageFileFormat::Gif.mime_type(), "image/gif");
+    for format in ImageFileFormat::ALL {
+        assert_eq!(
+            ImageFileFormat::from_extension(format.extension()),
+            Some(format)
+        );
+    }
+    assert_eq!(
+        ImageFileFormat::from_extension(".JPEG"),
+        Some(ImageFileFormat::Jpeg)
+    );
+    assert_eq!(
+        ImageFileFormat::from_extension(" Png "),
+        Some(ImageFileFormat::Png)
+    );
+    for other in ["", "webp", "heic", "svg", "pdf", "tiff", "pn g"] {
+        assert_eq!(ImageFileFormat::from_extension(other), None, "{other:?}");
+    }
+    // Megabytes of picture do not go into a log.
+    let data = ImageData {
+        bytes: Cow::Owned(vec![7; 5000]),
+        format: ImageFileFormat::Gif,
+    };
+    assert_eq!(
+        format!("{data:?}"),
+        "ImageData { bytes: 5000 bytes, format: Gif }"
+    );
+}
+
+#[test]
+fn plain_text_has_the_description_of_an_image_on_a_line_of_its_own() {
+    let doc = Document::from_blocks(vec![
+        Block::paragraph("Before."),
+        image_block(HARBOUR, "The harbour at dusk"),
+        Block::paragraph("Between."),
+        // Nobody described this one: nothing is written for it, and the
+        // paragraphs around it are one blank line apart.
+        image_block("00ff", ""),
+        Block::paragraph("After."),
+        image_block("abcd", "*Not* [markup] here"),
+    ]);
+    let source = ExportSource::from(&doc);
+    assert_eq!(
+        to_plain_text(&source, &Default::default()),
+        "Before.\n\nThe harbour at dusk\n\nBetween.\n\nAfter.\n\n*Not* [markup] here\n"
+    );
+    // With the bytes at hand it is the same: plain text holds no picture.
+    let pictures = Pictures::default().with(HARBOUR, ImageFileFormat::Png, b"png");
+    assert_eq!(
+        to_plain_text(&source.clone().with_images(&pictures), &Default::default()),
+        to_plain_text(&source, &Default::default())
+    );
+    // The letters of a description are not restyled for a post.
+    let social = to_plain_text(&source, &writer_export::PlainTextOptions::social());
+    assert!(social.contains("\n\nThe harbour at dusk\n\n"), "{social:?}");
+    // Only images, none described: nothing at all.
+    let doc = Document::from_blocks(vec![image_block(HARBOUR, ""), image_block("00ff", "")]);
+    assert_eq!(
+        to_plain_text(&ExportSource::from(&doc), &Default::default()),
+        ""
+    );
+}
+
+/// Random documents with images among their blocks, their descriptions
+/// made of everything Markdown could read as markup.
+#[test]
+fn random_documents_with_images_round_trip() {
+    for seed in 1..=seeds(3000) {
+        let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
+        let n = 1 + rng.below(8);
+        let blocks: Vec<Block> = (0..n)
+            .map(|_| {
+                if !rng.chance(40) {
+                    return adv_block(&mut rng);
+                }
+                let pieces = rng.below(5);
+                let description = if rng.chance(50) {
+                    adv_text(&mut rng, pieces)
+                } else {
+                    random_text(&mut rng, pieces)
+                };
+                let id = ["3f2a", "00ff", "abcd"][rng.below(3)];
+                let alignment =
+                    [Alignment::Left, Alignment::Center, Alignment::Right][rng.below(3)];
+                image_block(id, &description).with_alignment(alignment)
+            })
+            .collect();
+        let doc = Document::from_blocks(blocks);
+        let options = adv_options(&mut rng);
+        let result = std::panic::catch_unwind(|| round_trip_with(&doc, &options));
+        if let Err(e) = result {
+            eprintln!("seed {seed} failed");
+            std::panic::resume_unwind(e);
+        }
+    }
 }
 
 // ----- comments ---------------------------------------------------------------------------
@@ -2344,6 +2980,7 @@ fn dump_case(seed: u64, doc: &Document, options: &MarkdownOptions, markdown: &st
             Kind::Code(lang) => format!("code:{lang}"),
             Kind::Rule => "rule".to_string(),
             Kind::Html(_) => "html".to_string(),
+            Kind::Image(destination) => format!("image:{destination}"),
         };
         let text: String = line.text.iter().map(|(c, _)| *c).collect();
         let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();

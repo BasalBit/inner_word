@@ -11,6 +11,13 @@
 //! alignment are dropped by default, a page break is an HTML comment, and
 //! comments are left out unless asked for.
 //!
+//! An image is a line of its own, `![description](image:<id>)`: a
+//! reference to the stored picture, which is what an agent reads and
+//! writes back. For a file somebody else will open,
+//! [`MarkdownImages::Files`] links picture files instead and
+//! [`export_package`](crate::export_package) returns them. The width of an
+//! image is not written: Markdown has no syntax for it.
+//!
 //! The output is tidy: one blank line between blocks, none between the
 //! items of a list, exactly one newline at the end. Literal text is escaped
 //! only where it would otherwise be read as markup (`[1]`, `5 * 3`,
@@ -46,15 +53,15 @@ mod emphasis;
 mod escape;
 mod inline;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use writer_core::{Alignment, Block, BlockKind, CommentThread, Document};
+use writer_core::{Alignment, Block, BlockKind, CommentThread, Document, Image, ImageId};
 
 use crate::common::{
     first_comment_ranges, is_blank_text, ordinals, part_needs_title, thread_entries,
 };
-use crate::{ExportSource, PartTitles};
-use escape::{TextContext, escape_line, escape_line_in};
+use crate::{ExportAsset, ExportSource, PartTitles};
+use escape::{TextContext, escape_line, escape_line_in, image_alt, image_destination};
 use inline::{Anchor, render_inline};
 
 /// What happens to comment threads in Markdown.
@@ -101,6 +108,33 @@ pub enum MarkdownPageBreak {
     Omit,
 }
 
+/// How an image is written in Markdown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum MarkdownImages {
+    /// `![description](image:<id>)`: a reference to the stored image. The
+    /// default: what agents, the assistant and the clipboard get, and what
+    /// the importer reads back as the same image.
+    #[default]
+    References,
+    /// `![description](<dir>/image-<first 8 hex of the id>.<ext>)`: a link
+    /// to a picture file in the folder `dir` beside the Markdown file. The
+    /// files are returned by [`export_package`](crate::export_package) as
+    /// its assets, one per picture however often it is used
+    /// ([`to_markdown`] writes the same text and returns no files).
+    ///
+    /// Two different images of one export whose ids begin with the same
+    /// eight digits get 12, 16, ... 32 digits (the later one in the text),
+    /// so no file is written over. An image whose bytes the source does
+    /// not have is written as a reference, as with
+    /// [`References`](MarkdownImages::References).
+    Files {
+        /// The folder, relative to the Markdown file, with `/` between its
+        /// parts; [`images_dir_name`](crate::images_dir_name) names it
+        /// after the file. Empty: beside the file.
+        dir: String,
+    },
+}
+
 /// Options for [`to_markdown`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkdownOptions {
@@ -116,8 +150,9 @@ pub struct MarkdownOptions {
     /// default: fonts are dropped.
     pub fonts: bool,
     /// Keep the alignment of centred, right-aligned and justified top-level
-    /// paragraphs and headings by wrapping them in `<div align="…">`. Off
-    /// by default: alignment is dropped.
+    /// paragraphs and headings, and of centred and right-aligned images,
+    /// by wrapping them in `<div align="…">`. Off by default: alignment is
+    /// dropped.
     pub alignment: bool,
     /// How a page break is written.
     pub page_break: MarkdownPageBreak,
@@ -129,6 +164,8 @@ pub struct MarkdownOptions {
     /// Separate the documents of a collection with a thematic break
     /// (default). When off, only a blank line separates them.
     pub part_rule: bool,
+    /// How an image is written.
+    pub images: MarkdownImages,
 }
 
 impl Default for MarkdownOptions {
@@ -143,6 +180,7 @@ impl Default for MarkdownOptions {
             comments: MarkdownComments::default(),
             part_titles: PartTitles::default(),
             part_rule: true,
+            images: MarkdownImages::default(),
         }
     }
 }
@@ -163,11 +201,24 @@ impl MarkdownOptions {
 
 /// Exports `source` as Markdown. The result ends with exactly one newline,
 /// or is empty when there is nothing to write.
+///
+/// With [`MarkdownImages::Files`] the text links picture files that this
+/// function does not return: use [`export_package`](crate::export_package)
+/// to get them with the text.
 pub fn to_markdown(source: &ExportSource<'_>, options: &MarkdownOptions) -> String {
+    to_markdown_with_assets(source, options).0
+}
+
+/// The Markdown of `source` and the picture files it links.
+pub(crate) fn to_markdown_with_assets(
+    source: &ExportSource<'_>,
+    options: &MarkdownOptions,
+) -> (String, Vec<ExportAsset>) {
     let mut footnotes: Vec<String> = Vec::new();
+    let mut pictures = Pictures::new(source, &options.images);
     let mut parts: Vec<String> = Vec::new();
     for part in source.parts() {
-        let mut writer = Writer::new(part.document, options, &mut footnotes);
+        let mut writer = Writer::new(part.document, options, &mut footnotes, &mut pictures);
         if part_needs_title(source, part, options.part_titles) {
             writer.push_other(format!("# {}", escape_line(&part.title, true)));
         }
@@ -192,7 +243,79 @@ pub fn to_markdown(source: &ExportSource<'_>, options: &MarkdownOptions) -> Stri
     if !out.is_empty() {
         out.push('\n');
     }
-    out
+    (out, pictures.assets)
+}
+
+/// The pictures of one export: what each image is written as, and the
+/// files that go beside the Markdown.
+struct Pictures<'a> {
+    source: &'a ExportSource<'a>,
+    /// The folder of the picture files; `None` writes references.
+    dir: Option<String>,
+    /// What the link of each image met so far points at.
+    destinations: HashMap<ImageId, String>,
+    /// The digits of the file names given out.
+    taken: HashSet<String>,
+    assets: Vec<ExportAsset>,
+}
+
+impl<'a> Pictures<'a> {
+    fn new(source: &'a ExportSource<'a>, images: &MarkdownImages) -> Pictures<'a> {
+        let dir = match images {
+            MarkdownImages::References => None,
+            MarkdownImages::Files { dir } => {
+                Some(dir.trim().trim_end_matches(['/', '\\']).replace('\\', "/"))
+            }
+        };
+        Pictures {
+            source,
+            dir,
+            destinations: HashMap::new(),
+            taken: HashSet::new(),
+            assets: Vec::new(),
+        }
+    }
+
+    /// What the link of `image` points at: its file, written as an asset
+    /// the first time it is asked for, or the reference to the stored
+    /// image where there is no file to write.
+    fn destination(&mut self, image: &Image) -> String {
+        let id = image.id;
+        if let Some(known) = self.destinations.get(&id) {
+            return known.clone();
+        }
+        let file = self
+            .dir
+            .as_ref()
+            .and_then(|dir| Some((dir, self.source.image(id)?)));
+        let destination = match file {
+            None => format!("image:{id}"),
+            Some((dir, data)) => {
+                // A name is the first digits of the id: as many as it
+                // takes to differ from every name given out before.
+                let hex = id.to_string();
+                let mut digits = 8;
+                while digits < hex.len() && self.taken.contains(&hex[..digits]) {
+                    digits += 4;
+                }
+                let digits = digits.min(hex.len());
+                self.taken.insert(hex[..digits].to_string());
+                let name = format!("image-{}.{}", &hex[..digits], data.format.extension());
+                let path = if dir.is_empty() {
+                    name
+                } else {
+                    format!("{dir}/{name}")
+                };
+                self.assets.push(ExportAsset {
+                    path: path.clone(),
+                    bytes: data.bytes.into_owned(),
+                });
+                path
+            }
+        };
+        self.destinations.insert(id, destination.clone());
+        destination
+    }
 }
 
 /// The two kinds of Markdown list. Bullets and to-dos share one.
@@ -235,10 +358,11 @@ struct Chunk {
     glue: bool,
 }
 
-struct Writer<'a> {
+struct Writer<'a, 'p> {
     doc: &'a Document,
     options: &'a MarkdownOptions,
     footnotes: &'a mut Vec<String>,
+    pictures: &'a mut Pictures<'p>,
     chunks: Vec<Chunk>,
     stack: Vec<Level>,
     /// The most recent list at each depth, while nothing has broken it.
@@ -254,16 +378,18 @@ struct Writer<'a> {
     block_anchors: BTreeMap<usize, Vec<String>>,
 }
 
-impl<'a> Writer<'a> {
+impl<'a, 'p> Writer<'a, 'p> {
     fn new(
         doc: &'a Document,
         options: &'a MarkdownOptions,
         footnotes: &'a mut Vec<String>,
-    ) -> Writer<'a> {
+        pictures: &'a mut Pictures<'p>,
+    ) -> Writer<'a, 'p> {
         let mut writer = Writer {
             doc,
             options,
             footnotes,
+            pictures,
             chunks: Vec::new(),
             stack: Vec::new(),
             last_list: Vec::new(),
@@ -513,6 +639,27 @@ impl<'a> Writer<'a> {
             },
             BlockKind::CodeBlock { language } => {
                 code_block(block.text(), language.as_deref(), &prefix)
+            }
+            BlockKind::Image(image) => {
+                // One line. The width is not written: Markdown has no
+                // syntax for it.
+                let destination = self.pictures.destination(image);
+                let line = format!(
+                    "{prefix}![{}]({})",
+                    image_alt(&image.description),
+                    image_destination(&destination)
+                );
+                let align = match block.alignment() {
+                    Alignment::Center => Some("center"),
+                    Alignment::Right => Some("right"),
+                    Alignment::Left | Alignment::Justify => None,
+                };
+                match align {
+                    Some(a) if self.options.alignment && depth == 0 => {
+                        format!("<div align=\"{a}\">\n\n{line}\n\n</div>")
+                    }
+                    _ => line,
+                }
             }
             BlockKind::Quote => {
                 let quote_prefix = format!("{prefix}> ");

@@ -8,7 +8,8 @@
 //! numbers, to-dos a ballot box, quotes a `>` prefix, and links are written
 //! as `text (url)`. Formatting that plain text cannot carry is dropped;
 //! optionally bold and italic become the Unicode mathematical alphabets
-//! that LinkedIn and X posts commonly use.
+//! that LinkedIn and X posts commonly use. An image is its description on
+//! a line of its own, and nothing when it has none.
 //!
 //! ```
 //! use writer_core::{Block, BlockKind, Document, InlineAttrs, InlineStyle};
@@ -182,6 +183,9 @@ fn document_chunks(doc: &Document, options: &PlainTextOptions, chunks: &mut Vec<
         let text = match block.kind() {
             BlockKind::Divider => options.divider.trim().to_string(),
             BlockKind::PageBreak => String::new(),
+            // What the picture shows, on a line of its own; nothing for a
+            // picture nobody described.
+            BlockKind::Image(image) => image.description.trim().to_string(),
             BlockKind::CodeBlock { .. } => {
                 let code = block.text().trim_end_matches(['\n', ' ', '\t']);
                 code.split('\n')

@@ -294,6 +294,56 @@ pub(crate) fn link_destination(url: &str) -> String {
     out
 }
 
+/// The description of an image as the text between `![` and `](`: one
+/// line, with everything a parser would read as markup escaped, so that
+/// the alternative text it reads is the description.
+pub(crate) fn image_alt(description: &str) -> String {
+    let line = description
+        .split(['\n', '\r'])
+        .collect::<Vec<_>>()
+        .join(" ");
+    escape_text(
+        &line,
+        ChunkPosition {
+            in_link: true,
+            ..ChunkPosition::default()
+        },
+        TextContext::for_text(&line),
+    )
+}
+
+/// The destination of an image: a reference (`image:<id>`) or the path of
+/// a picture file. A path with a space in it is written in angle brackets,
+/// which is the one way CommonMark has to keep the space; a parser gives
+/// back the path as it is on disk.
+pub(crate) fn image_destination(destination: &str) -> String {
+    if !destination.is_empty() && !destination.contains(char::is_whitespace) {
+        return link_destination(destination);
+    }
+    let chars: Vec<char> = destination.chars().collect();
+    let mut out = String::with_capacity(destination.len() + 4);
+    out.push('<');
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '\\' | '<' | '>' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '&' if entity_at(&chars, i) => out.push_str("\\&"),
+            // No line can end inside the brackets.
+            c if c.is_control() => {
+                let mut buf = [0u8; 4];
+                for b in c.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("%{b:02X}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('>');
+    out
+}
+
 /// Whether `url` can be written as an autolink `<url>`: an absolute URI
 /// with a scheme and no characters the autolink syntax forbids.
 pub(crate) fn is_autolinkable(url: &str) -> bool {

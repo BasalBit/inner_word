@@ -26,6 +26,23 @@
 //! [`export`] dispatches on an [`ExportFormat`] and always returns bytes;
 //! [`suggested_file_name`] turns a title into a safe file name.
 //!
+//! # Images
+//!
+//! A document names its images by id and does not hold their bytes. An
+//! exporter that needs them (DOCX, and Markdown that writes picture files)
+//! asks the [`ImageSource`] the source was given with
+//! [`ExportSource::with_images`]; an image the source does not have, and
+//! every image of a source without one, is exported as what can be said
+//! without the picture: its description, or a reference to it.
+//!
+//! - DOCX embeds each picture once, at the size it has on the page.
+//! - Markdown writes `![description](image:<id>)` by default, the form
+//!   agents read and write back ([`MarkdownImages::References`]). With
+//!   [`MarkdownImages::Files`] it links picture files in a folder beside
+//!   the Markdown file ([`images_dir_name`]); [`export_package`] returns
+//!   those files as [`ExportAsset`]s.
+//! - Plain text writes the description on a line of its own.
+//!
 //! # Importing
 //!
 //! - [`from_markdown`]: Markdown to a document, the inverse of
@@ -71,7 +88,10 @@ pub mod markdown;
 pub mod plain;
 pub mod social;
 
-use writer_core::Document;
+use std::borrow::Cow;
+use std::fmt;
+
+use writer_core::{Document, ImageId};
 
 pub use docx::{DocxOptions, to_docx};
 pub use import::{
@@ -80,7 +100,8 @@ pub use import::{
     from_markdown, from_plain_text, summarize_warnings,
 };
 pub use markdown::{
-    MarkdownComments, MarkdownHighlight, MarkdownOptions, MarkdownPageBreak, to_markdown,
+    MarkdownComments, MarkdownHighlight, MarkdownImages, MarkdownOptions, MarkdownPageBreak,
+    to_markdown,
 };
 pub use plain::{PlainTextLinks, PlainTextOptions, to_plain_text};
 pub use social::{SocialCount, SocialNetwork, social_length};
@@ -158,6 +179,88 @@ impl ExportFormat {
     }
 }
 
+/// The file format of a stored image: the three every reader of an
+/// exported file understands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ImageFileFormat {
+    /// PNG.
+    Png,
+    /// JPEG.
+    Jpeg,
+    /// GIF, animated or not.
+    Gif,
+}
+
+impl ImageFileFormat {
+    /// Every format.
+    pub const ALL: [ImageFileFormat; 3] = [
+        ImageFileFormat::Png,
+        ImageFileFormat::Jpeg,
+        ImageFileFormat::Gif,
+    ];
+
+    /// The file extension without the dot: `"png"`, `"jpg"` or `"gif"`.
+    pub fn extension(self) -> &'static str {
+        match self {
+            ImageFileFormat::Png => "png",
+            ImageFileFormat::Jpeg => "jpg",
+            ImageFileFormat::Gif => "gif",
+        }
+    }
+
+    /// The MIME type: `"image/png"`, `"image/jpeg"` or `"image/gif"`.
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            ImageFileFormat::Png => "image/png",
+            ImageFileFormat::Jpeg => "image/jpeg",
+            ImageFileFormat::Gif => "image/gif",
+        }
+    }
+
+    /// The format with the given extension (case-insensitive, with or
+    /// without the dot; `"jpeg"` is accepted too).
+    pub fn from_extension(extension: &str) -> Option<ImageFileFormat> {
+        let e = extension
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        match e.as_str() {
+            "png" => Some(ImageFileFormat::Png),
+            "jpg" | "jpeg" => Some(ImageFileFormat::Jpeg),
+            "gif" => Some(ImageFileFormat::Gif),
+            _ => None,
+        }
+    }
+}
+
+/// The stored bytes of one image, as an exporter needs them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImageData<'a> {
+    /// The file as it is stored. Written into an export as it is: this
+    /// crate never decodes or converts a picture.
+    pub bytes: Cow<'a, [u8]>,
+    /// What kind of file the bytes are.
+    pub format: ImageFileFormat,
+}
+
+impl fmt::Debug for ImageData<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Megabytes of picture are of no use in a log.
+        f.debug_struct("ImageData")
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .field("format", &self.format)
+            .finish()
+    }
+}
+
+/// Where exporters get the bytes of the images a document names. The app
+/// and the command line tool implement it over the library.
+pub trait ImageSource {
+    /// The stored image with this id, or `None` when there is none: the
+    /// image is then exported as a missing one.
+    fn image(&self, id: ImageId) -> Option<ImageData<'_>>;
+}
+
 /// One titled document inside an [`ExportSource`].
 #[derive(Clone, Debug)]
 pub struct ExportPart<'a> {
@@ -168,12 +271,25 @@ pub struct ExportPart<'a> {
 }
 
 /// What to export: one document, or an ordered list of titled documents
-/// written to a single file.
-#[derive(Clone, Debug)]
+/// written to a single file, and optionally where the bytes of their
+/// images are ([`ExportSource::with_images`]).
+#[derive(Clone)]
 pub struct ExportSource<'a> {
     title: String,
     parts: Vec<ExportPart<'a>>,
     collection: bool,
+    images: Option<&'a dyn ImageSource>,
+}
+
+impl fmt::Debug for ExportSource<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExportSource")
+            .field("title", &self.title)
+            .field("parts", &self.parts)
+            .field("collection", &self.collection)
+            .field("images", &self.images.is_some())
+            .finish()
+    }
 }
 
 impl<'a> ExportSource<'a> {
@@ -188,6 +304,7 @@ impl<'a> ExportSource<'a> {
             }],
             title,
             collection: false,
+            images: None,
         }
     }
 
@@ -208,7 +325,26 @@ impl<'a> ExportSource<'a> {
                 })
                 .collect(),
             collection: true,
+            images: None,
         }
+    }
+
+    /// The same source with a place to get the bytes of its images from.
+    /// Without one, every image is exported as if its bytes were missing.
+    pub fn with_images(mut self, images: &'a dyn ImageSource) -> ExportSource<'a> {
+        self.images = Some(images);
+        self
+    }
+
+    /// Whether this source was given a place to get image bytes from.
+    pub fn has_images(&self) -> bool {
+        self.images.is_some()
+    }
+
+    /// The stored bytes of an image, when the source has them. A file of
+    /// no bytes is no picture and counts as missing.
+    pub(crate) fn image(&self, id: ImageId) -> Option<ImageData<'a>> {
+        self.images?.image(id).filter(|data| !data.bytes.is_empty())
     }
 
     /// The title of the whole export.
@@ -279,6 +415,69 @@ pub fn export(source: &ExportSource<'_>, format: ExportFormat, options: &ExportO
         ExportFormat::PlainText => to_plain_text(source, &options.plain_text).into_bytes(),
         ExportFormat::Docx => to_docx(source, &options.docx),
     }
+}
+
+/// A file that belongs beside an exported one: a picture a Markdown file
+/// links.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportAsset {
+    /// Where the file goes, relative to the folder of the exported file,
+    /// with `/` between its parts: `"Chapter 2 images/image-3f2a9c1b.jpg"`.
+    pub path: String,
+    /// The file's bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// An exported file with the files that go beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exported {
+    /// The exported file, as [`export`] returns it.
+    pub bytes: Vec<u8>,
+    /// The files that go beside it, in the order the text names them. Only
+    /// Markdown with [`MarkdownImages::Files`] has any.
+    pub assets: Vec<ExportAsset>,
+}
+
+/// [`export`], with the files that go beside the result: the pictures a
+/// Markdown file links when [`MarkdownOptions::images`] is
+/// [`MarkdownImages::Files`]. Every other export is one file and has no
+/// assets.
+///
+/// The caller writes each asset at its path beside the exported file; a
+/// picture is named after its content, so writing over a file of the same
+/// name changes nothing.
+pub fn export_package(
+    source: &ExportSource<'_>,
+    format: ExportFormat,
+    options: &ExportOptions,
+) -> Exported {
+    match format {
+        ExportFormat::Markdown => {
+            let (text, assets) = markdown::to_markdown_with_assets(source, &options.markdown);
+            Exported {
+                bytes: text.into_bytes(),
+                assets,
+            }
+        }
+        ExportFormat::PlainText | ExportFormat::Docx => Exported {
+            bytes: export(source, format, options),
+            assets: Vec::new(),
+        },
+    }
+}
+
+/// The folder the pictures of a Markdown file go to, beside the file:
+/// `"Chapter 2 images"` for `"Chapter 2.md"`. Pass it as the `dir` of
+/// [`MarkdownImages::Files`].
+pub fn images_dir_name(file_name: &str) -> String {
+    let name = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let stem = match name.rfind('.') {
+        Some(dot) if dot > 0 => &name[..dot],
+        _ => name,
+    };
+    let stem = stem.trim();
+    let stem = if stem.is_empty() { UNTITLED } else { stem };
+    format!("{stem} images")
 }
 
 /// Exports `source` as text. `None` for [`ExportFormat::Docx`], which is

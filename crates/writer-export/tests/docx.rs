@@ -2686,7 +2686,9 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
                 PartTitles::Always,
             ][rng.below(3)],
         };
-        let result = std::panic::catch_unwind(|| {
+        // (A source can name a place for image bytes, which the compiler
+        // cannot know to be unchanged by a panic. This one has none.)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let package = Package::new(&source, &options);
             let ps = package.paragraphs();
             let mut ps = ps.iter().peekable();
@@ -2760,7 +2762,7 @@ fn adversarial_packages_are_valid_and_keep_their_text() {
             }
             assert!(ps.next().is_none(), "extra paragraphs");
             expected_text
-        });
+        }));
         match result {
             Ok(text) => {
                 if let Some(dir) = &dump {

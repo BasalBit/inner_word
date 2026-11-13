@@ -539,6 +539,20 @@ pub struct Pdf {
 }
 
 impl Pdf {
+    /// A PDF that was made elsewhere (WebKit's print operation, for a page),
+    /// so that it goes to the same print target as one this crate wrote. The
+    /// report has `pages`; its other counts are 0 and its lists empty. The
+    /// bytes are taken as they are: nothing checks that they are a PDF.
+    pub fn from_bytes(bytes: Vec<u8>, pages: usize) -> Pdf {
+        Pdf {
+            data: CFData::from_buffer(&bytes),
+            report: Report {
+                pages,
+                ..Report::default()
+            },
+        }
+    }
+
     /// The bytes of the PDF file.
     pub fn bytes(&self) -> &[u8] {
         self.data.bytes()

@@ -840,6 +840,36 @@ fn a_finished_pdf_is_a_pdf_and_a_clone_shares_it() {
     assert!(format!("{pdf:?}").starts_with("Pdf { len: "));
 }
 
+/// A PDF made elsewhere (WebKit's, for a page) gives its bytes back as they
+/// came, with the page count it was given and nothing else in the report.
+#[test]
+fn a_pdf_from_bytes_gives_them_back() {
+    let (made, _) = write(&[
+        page(A4, vec![Item::Row(fixed_row("One.", courier(), 12., 72., 100.))]),
+        page(A4, vec![Item::Row(fixed_row("Two.", courier(), 12., 72., 100.))]),
+    ]);
+    let bytes = made.bytes().to_vec();
+    let pdf = Pdf::from_bytes(bytes.clone(), 2);
+    assert_eq!(pdf.bytes(), &bytes[..]);
+    assert_eq!(pdf.len(), bytes.len());
+    assert!(!pdf.is_empty());
+    assert_eq!(
+        pdf.report,
+        Report {
+            pages: 2,
+            ..Report::default()
+        }
+    );
+    assert_eq!(PdfFile::open(pdf.bytes()).unwrap().page_count(), 2);
+    // a clone shares them
+    assert_eq!(pdf.clone().bytes().as_ptr(), pdf.bytes().as_ptr());
+    // taken as they are
+    let odd = Pdf::from_bytes(b"not a PDF".to_vec(), 1);
+    assert_eq!(odd.bytes(), b"not a PDF");
+    assert_eq!(odd.report.pages, 1);
+    assert!(Pdf::from_bytes(Vec::new(), 0).is_empty());
+}
+
 #[test]
 fn a_page_with_broken_rows_is_still_written() {
     // What the layout never hands over, and what must not bring a print job

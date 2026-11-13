@@ -285,6 +285,26 @@ fn base_menus() -> Vec<Menu> {
                         MenuItem::action("Justify", editor::AlignJustify),
                     ],
                 }),
+                // What there is to do with the selected image. "Larger"
+                // and "Smaller" are the commands of the two lines below
+                // (one key means larger for whatever is selected); the
+                // widths and the description say what they need when no
+                // image is selected.
+                MenuItem::submenu(Menu {
+                    name: "Image".into(),
+                    items: vec![
+                        MenuItem::action("Larger", editor::IncreaseTextSize),
+                        MenuItem::action("Smaller", editor::DecreaseTextSize),
+                        MenuItem::separator(),
+                        MenuItem::action("25 %", editor::ImageWidth25),
+                        MenuItem::action("50 %", editor::ImageWidth50),
+                        MenuItem::action("75 %", editor::ImageWidth75),
+                        MenuItem::action("100 %", editor::ImageWidth100),
+                        MenuItem::action("Original Size", editor::ImageOriginalSize),
+                        MenuItem::separator(),
+                        MenuItem::action("Description…", tools::EditImageDescription),
+                    ],
+                }),
                 MenuItem::separator(),
                 MenuItem::action("Larger Text", editor::IncreaseTextSize),
                 MenuItem::action("Smaller Text", editor::DecreaseTextSize),
@@ -308,6 +328,7 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::action("Line Break", editor::InsertSoftBreak),
                 MenuItem::action("Today's Date", tools::InsertDate),
                 MenuItem::separator(),
+                MenuItem::action("Image…", editor::InsertImage),
                 MenuItem::action("Link…", tools::OpenLink),
                 MenuItem::action("Comment", comments::AddComment),
                 MenuItem::separator(),

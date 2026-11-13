@@ -32,12 +32,14 @@
 //! | `pagefit:<font>\|<size>\|<line spacing>\|<a4 or letter>\|<file>` | lays the text of the file out as one paragraph in page view at those settings (2.54 cm margins) and prints what the page holds: the rows of the paragraph, the characters in a full row (mean, least, most), the rows on the first page |
 //! | `print:pdf:<path>`    | makes the exact PDF "Print…" would hand to the print panel (the open document laid out as page view lays it out, whatever the window shows), writes it to the path and prints what was made: `print: 12 pages, 595.28 x 841.89 pt, 5214 rows, 0 rows off, 3 images, fonts: .SFNS-Regular, Charter-Bold, Charter-Roman, made in 0.04 s`, and a second line `print: missing fonts: …` when the document asks for a font this Mac does not have. `rows off` counts the rows the PDF sets in another face than the layout measured: 0 when the paper shows what page view shows |
 //! | `print:job:<path>`    | the same PDF through the real macOS print operation as a save job, both panels off: what "Save as PDF" in the print panel would write. Everything of "Print…" but the panel. Prints `print: job saved to <path>` or why it was not |
+//! | `image:<path>`        | inserts the image file at the caret, as "Insert > Image…" does once the file is chosen in the open panel (which a scripted run never opens); waits until the picture is stored and in the text and prints `image: inserted <id> 1600x1067 at block 3`, or the sentence that says why the file could not be used |
+//! | `image:select:<n>`    | puts the caret on the n-th image of the document (from 1): the image is selected |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), images (`images=N`: how many the document holds, and while the caret is on one `image=[block=3 width=50% natural=1600x1067@144 align=center ready]`: its block counted from 0, its width as a share of the text column, its pixel size and the density its file declares, its alignment, and `ready`, `loading`, `missing` or `broken` for its picture, then `alt="..."` when it has a description), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `dump:<path>`         | writes the whole text in the editor to a file, its blocks one to a line as the document model joins them: what the writer has on screen, to hold against what the library has |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
@@ -106,6 +108,11 @@ use gpui::{AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, px, size};
 use writer_ui::theme::{self, ActiveTheme, ThemeMode};
 
 use crate::{screenshot, workspace::Workspace};
+
+/// How long the step `image:<path>` waits for the picture to be stored and
+/// to arrive in the text (a photograph of a hundred megabytes is converted
+/// on the way).
+const IMAGE_PATIENCE: Duration = Duration::from_secs(60);
 
 /// Environment variable holding the script (or `@path`).
 pub const AUTOMATION_ENV: &str = "THE_WRITER_AUTOMATION";
@@ -180,7 +187,17 @@ pub enum Step {
     /// Lay a text out on a page and say what the page holds.
     PageFit(crate::workspace::PageFit),
     Print(PrintStep),
+    Image(ImageStep),
     Quit,
+}
+
+/// What an `image:` step does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImageStep {
+    /// Insert this file at the caret.
+    Insert(PathBuf),
+    /// Put the caret on the n-th image of the document, counted from 1.
+    Select(usize),
 }
 
 /// What a `print:` step does with the pages of the open document.
@@ -507,6 +524,22 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 "pdf" => Step::Print(PrintStep::Pdf(PathBuf::from(path))),
                 "job" => Step::Print(PrintStep::Job(PathBuf::from(path))),
                 other => bail!("unknown print step {other:?}: expected pdf:<path> or job:<path>"),
+            }
+        }
+        "image" => {
+            if let Some(number) = arg.strip_prefix("select:") {
+                let number: usize = number
+                    .trim()
+                    .parse()
+                    .context("expected image:select:<n>, counted from 1")?;
+                if number == 0 {
+                    bail!("images are counted from 1");
+                }
+                Step::Image(ImageStep::Select(number))
+            } else if arg.is_empty() {
+                bail!("expected the path of an image file, or select:<n>");
+            } else {
+                Step::Image(ImageStep::Insert(PathBuf::from(unescape(arg))))
             }
         }
         "zoom" => {
@@ -1012,6 +1045,79 @@ async fn execute(
             }
             frame_pause(window, view, cx).await;
         }
+        Step::Image(ImageStep::Insert(path)) => {
+            let path = absolute(path);
+            let workspace = workspace_handle(window, cx)?;
+            // What is there before: the images of the document, and the
+            // notes at the bottom (a file that cannot be used says so in
+            // one).
+            let (images, notes) = workspace.update(cx, |workspace, window, cx| -> Result<_> {
+                if workspace.open_document_id().is_none() {
+                    bail!("no document is open");
+                }
+                let images = workspace.editor().read(cx).document().images().count();
+                let notes = workspace.toast_layer().read(cx).ids();
+                workspace.editor().clone().update(cx, |editor, cx| {
+                    editor.insert_image_files(vec![path.clone()], window, cx)
+                });
+                Ok((images, notes))
+            })??;
+            let started = Instant::now();
+            loop {
+                let said = workspace.update(cx, |workspace, _, cx| {
+                    let editor = workspace.editor().read(cx);
+                    if editor.document().images().count() > images {
+                        return Some(match editor.selected_image() {
+                            Some((block, image)) => format!(
+                                "inserted {} {}x{} at block {block}",
+                                image.id, image.pixels.0, image.pixels.1
+                            ),
+                            None => "inserted".to_string(),
+                        });
+                    }
+                    let layer = workspace.toast_layer().read(cx);
+                    layer
+                        .ids()
+                        .into_iter()
+                        .zip(layer.toasts())
+                        .find(|(id, _)| !notes.contains(id))
+                        .map(|(_, toast)| toast.message.to_string())
+                })?;
+                if let Some(said) = said {
+                    eprintln!("[automation] image: {said}");
+                    break;
+                }
+                if started.elapsed() > IMAGE_PATIENCE {
+                    bail!("the image did not arrive in the text");
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(20))
+                    .await;
+            }
+            frame_pause(window, view, cx).await;
+        }
+        Step::Image(ImageStep::Select(number)) => {
+            workspace_handle(window, cx)?.update(cx, |workspace, _, cx| -> Result<()> {
+                let editor = workspace.editor().clone();
+                let block = editor
+                    .read(cx)
+                    .document()
+                    .images()
+                    .nth(number - 1)
+                    .map(|(block, _)| block)
+                    .ok_or_else(|| anyhow!("the document has no image {number}"))?;
+                editor.update(cx, |editor, cx| {
+                    editor.edit(
+                        |state| state.set_caret(writer_core::Position::new(block, 0)),
+                        cx,
+                    );
+                    editor.scroll_to_caret(writer_editor::Autoscroll::Fit, cx);
+                });
+                eprintln!("[automation] image: selected image {number} (block {block})");
+                Ok(())
+            })??;
+            frame_pause(window, view, cx).await;
+        }
         Step::Zoom(what) => {
             workspace_handle(window, cx)?.update(cx, |workspace, window, cx| {
                 workspace.zoom_step(&what, window, cx)
@@ -1486,9 +1592,10 @@ pub fn describe_state(
     };
     let zoom = workspace.describe_zoom(cx);
     let print = workspace.describe_printing();
+    let images = workspace.describe_images(cx);
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
-         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] \
+         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] {images} \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \

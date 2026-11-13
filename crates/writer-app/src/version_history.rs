@@ -214,7 +214,13 @@ struct PreviewBlock {
     marker: Option<&'static str>,
     quote: bool,
     code: bool,
+    /// An image: `text` is its description, or [`IMAGE_WITHOUT_DESCRIPTION`].
+    image: bool,
 }
+
+/// What the preview of a version shows for an image that has no
+/// description. (The preview is text: it shows no picture.)
+pub const IMAGE_WITHOUT_DESCRIPTION: &str = "Image";
 
 /// The text of one version, ready to draw.
 #[derive(Clone, Debug, PartialEq)]
@@ -428,7 +434,14 @@ impl VersionHistory {
                     .iter()
                     .take(PREVIEW_BLOCKS)
                     .map(|block| PreviewBlock {
-                        text: SharedString::from(block.text().to_string()),
+                        // An image reads as what it shows.
+                        text: match block.as_image() {
+                            Some(image) if image.description.is_empty() => {
+                                SharedString::from(IMAGE_WITHOUT_DESCRIPTION)
+                            }
+                            Some(image) => SharedString::from(image.description.clone()),
+                            None => SharedString::from(block.text().to_string()),
+                        },
                         heading: block.kind().heading_level(),
                         marker: match block.kind() {
                             BlockKind::BulletItem => Some("\u{2022}"),
@@ -440,6 +453,7 @@ impl VersionHistory {
                         },
                         quote: matches!(block.kind(), BlockKind::Quote),
                         code: block.kind().is_code(),
+                        image: block.kind().is_image(),
                     })
                     .collect();
                 Preview {
@@ -586,6 +600,8 @@ impl VersionHistory {
                 .when(block.code, |el| {
                     el.font_family(theme.fonts.mono.clone()).text_size(px(12.))
                 })
+                // What stands for a picture is not the document's text.
+                .when(block.image, |el| el.text_color(colors.muted))
                 .children(
                     block
                         .marker

@@ -2845,3 +2845,322 @@ fn a_change_arrives_while_a_key_is_being_chosen_or_a_font(cx: &mut TestAppContex
     .unwrap();
     assert!(read.content.contains("A paragraph the agent added."));
 }
+
+// ----- images ------------------------------------------------------------------------------
+
+/// The app open on "Harbour": a paragraph, an image at half the width on
+/// the right with a description, a paragraph. The picture is in the
+/// library.
+fn desk_with_a_picture(
+    cx: &mut TestAppContext,
+) -> (Desk, DocumentId, writer_core::Image, &mut VisualTestContext) {
+    use super::images::{picture, stored_png};
+    let (dir, lock, library) = library_on_disk(cx);
+    let image = stored_png(&library, 400, 300, [50, 80, 190], cx);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Harbour"),
+        Block::paragraph("The boats came by road every spring."),
+        picture(
+            &image,
+            50,
+            writer_core::Alignment::Right,
+            "The harbour at dusk",
+        ),
+        Block::paragraph("Nobody remembers who paid for it."),
+    ]);
+    let id = add_document(&library, None, &document, cx);
+    let (desk, vcx) = open_desk(dir, lock, library, cx);
+    assert_eq!(
+        desk.workspace
+            .read_with(vcx, |workspace, _| workspace.open_document_id()),
+        Some(id)
+    );
+    (desk, id, image, vcx)
+}
+
+/// The images of the open document: block, id, width in percent,
+/// alignment.
+fn pictures(
+    desk: &Desk,
+    cx: &mut VisualTestContext,
+) -> Vec<(usize, writer_core::ImageId, u16, writer_core::Alignment)> {
+    desk.workspace.read_with(cx, |workspace, cx| {
+        let document = workspace.editor().read(cx).document();
+        document
+            .images()
+            .map(|(index, image)| {
+                (
+                    index,
+                    image.id,
+                    image.width.percent(),
+                    document.block(index).unwrap().alignment(),
+                )
+            })
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn an_agent_adds_an_image_to_the_open_document_and_the_writer_can_take_it_out(
+    cx: &mut TestAppContext,
+) {
+    use super::images::{file_in, id_of, let_pictures_arrive, png, status};
+    let (desk, id, cx) = desk_with_notes(cx);
+    let files = tempfile::tempdir().unwrap();
+    let bytes = png(640, 400, [200, 60, 40]);
+    let path = file_in(files.path(), "chart.png", &bytes);
+    // The writer has typed something that is not saved yet.
+    set_caret(&desk, 1, 0, cx);
+    type_text(&desk.workspace, "Typed. ", cx);
+    let depth = desk
+        .workspace
+        .read_with(cx, |w, cx| w.editor().read(cx).state().undo_depth());
+
+    let tool = desk.tool();
+    let added = ask(cx, move || {
+        tool.add_image(&agent::AddImageRequest {
+            document: id.into(),
+            path: path.to_string_lossy().into_owned(),
+            description: "Salt by month".into(),
+            width_percent: Some(40),
+            write: claude(),
+            ..Default::default()
+        })
+    })
+    .expect("the app took the image");
+    assert_eq!(added.images_added, 1);
+
+    // The picture is in the text, at the end, as the agent asked for it,
+    // and what the writer typed is there.
+    let image = id_of(&bytes);
+    assert_eq!(
+        pictures(&desk, cx),
+        [(3, image, 40, writer_core::Alignment::Center)]
+    );
+    assert!(editor_text(&desk.workspace, cx).contains("Typed. The first paragraph is short."));
+    let described = desk.workspace.read_with(cx, |w, cx| {
+        w.editor()
+            .read(cx)
+            .document()
+            .block(3)
+            .and_then(|block| block.as_image())
+            .map(|image| image.description.clone())
+    });
+    assert_eq!(described.as_deref(), Some("Salt by month"));
+    // The bytes came with the request and are in the library; the editor
+    // shows them.
+    let stored = desk.library.read_with(cx, |library, _| {
+        library
+            .store()
+            .image_bytes(&writer_app::images::stored_id(image))
+            .unwrap()
+    });
+    assert_eq!(stored.as_deref(), Some(bytes.as_slice()));
+    let_pictures_arrive(cx);
+    assert_eq!(
+        status(&desk.workspace, image, cx),
+        writer_editor::ImageStatus::Ready
+    );
+    // Nothing is left to save, and the note offers to take it back.
+    assert_eq!(save_state(&desk, cx), Some(SaveState::Saved));
+    assert_eq!(
+        notes_shown(&desk, cx),
+        [(
+            "Claude added an image to \u{201c}Notes\u{201d}".to_string(),
+            Some("Undo".to_string())
+        )]
+    );
+    assert_eq!(
+        desk.workspace
+            .read_with(cx, |w, cx| w.editor().read(cx).state().undo_depth()),
+        depth + 1,
+        "one step on top of the writer's own"
+    );
+
+    press_note(&desk, "Claude added an image to \u{201c}Notes\u{201d}", cx);
+    assert!(pictures(&desk, cx).is_empty());
+    assert!(editor_text(&desk.workspace, cx).contains("Typed. "));
+    // The bytes stay in the library (the version from before the change,
+    // and the redo of the writer, can name them).
+    assert!(
+        desk.library
+            .read_with(cx, |library, _| library.store().image_count().unwrap())
+            >= 1
+    );
+}
+
+#[gpui::test]
+fn an_agents_edit_of_the_text_keeps_the_image_and_its_width(cx: &mut TestAppContext) {
+    let (desk, id, image, cx) = desk_with_a_picture(cx);
+    let before = pictures(&desk, cx);
+    assert_eq!(
+        before,
+        [(2, image.id, 50, writer_core::Alignment::Right)]
+    );
+
+    // A word in the paragraph above the picture, and one below it.
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.edit(&edit(id, "every spring", "every autumn"))
+            .and_then(|_| tool.edit(&edit(id, "Nobody remembers", "Nobody knows")))
+    })
+    .unwrap();
+    assert_eq!(
+        editor_text(&desk.workspace, cx),
+        "Harbour\nThe boats came by road every autumn.\n\nNobody knows who paid for it."
+    );
+    assert_eq!(pictures(&desk, cx), before, "the image is as it was");
+    let description = desk.workspace.read_with(cx, |w, cx| {
+        w.editor()
+            .read(cx)
+            .document()
+            .block(2)
+            .and_then(|block| block.as_image())
+            .map(|image| image.description.clone())
+    });
+    assert_eq!(description.as_deref(), Some("The harbour at dusk"));
+
+    // An insert at the end leaves it alone too.
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.insert(&InsertRequest {
+            document: id.into(),
+            markdown: "One more paragraph.".into(),
+            write: claude(),
+            ..Default::default()
+        })
+    })
+    .unwrap();
+    assert_eq!(pictures(&desk, cx), before);
+}
+
+#[gpui::test]
+fn an_agent_that_moves_the_line_of_an_image_moves_the_image_with_its_width(
+    cx: &mut TestAppContext,
+) {
+    use super::images::{let_pictures_arrive, status};
+    let (desk, id, image, cx) = desk_with_a_picture(cx);
+    let_pictures_arrive(cx);
+
+    // The agent reads the document: the image is one line of Markdown.
+    let tool = desk.tool();
+    let read = ask(cx, move || {
+        tool.read(&ReadRequest {
+            document: id.into(),
+            ..Default::default()
+        })
+    })
+    .unwrap();
+    let line = format!("![The harbour at dusk](image:{})", image.id);
+    assert!(read.content.contains(&line), "{}", read.content);
+    assert_eq!(read.images.len(), 1);
+    assert_eq!(
+        (read.images[0].width_percent, read.images[0].align.as_str()),
+        (50, "right")
+    );
+
+    // It writes the document back with the picture first.
+    let rewritten = format!(
+        "# Harbour\n\n{line}\n\nThe boats came by road every spring.\n\nNobody remembers who paid for it."
+    );
+    let tool = desk.tool();
+    let changed = ask(cx, move || {
+        tool.replace_document(&ReplaceDocumentRequest {
+            document: id.into(),
+            markdown: rewritten,
+            write: claude(),
+            ..Default::default()
+        })
+    })
+    .unwrap();
+    assert_eq!((changed.images_added, changed.images_removed), (0, 0));
+    // In the open editor the image stands where the line was put, as wide
+    // as it was and on the same side.
+    assert_eq!(
+        pictures(&desk, cx),
+        [(1, image.id, 50, writer_core::Alignment::Right)]
+    );
+    let_pictures_arrive(cx);
+    assert_eq!(
+        status(&desk.workspace, image.id, cx),
+        writer_editor::ImageStatus::Ready
+    );
+
+    // A rewrite that leaves the line out removes the image. The writer
+    // takes back what the agent did: both changes are one run under one
+    // note, and its Undo takes the whole run out, so the image is where
+    // it was before the agent came.
+    let tool = desk.tool();
+    let changed = ask(cx, move || {
+        tool.replace_document(&ReplaceDocumentRequest {
+            document: id.into(),
+            markdown: "# Harbour\n\nOnly words now.".into(),
+            write: claude(),
+            ..Default::default()
+        })
+    })
+    .unwrap();
+    assert_eq!(changed.images_removed, 1);
+    assert!(pictures(&desk, cx).is_empty());
+    cx.dispatch_action(writer_app::live::UndoAgentChange);
+    cx.run_until_parked();
+    assert_eq!(
+        pictures(&desk, cx),
+        [(2, image.id, 50, writer_core::Alignment::Right)]
+    );
+    assert_eq!(
+        editor_text(&desk.workspace, cx),
+        "Harbour\nThe boats came by road every spring.\n\nNobody remembers who paid for it."
+    );
+}
+
+/// An image whose bytes the library does not have shows as missing, and
+/// gets its picture the moment an agent brings the bytes, with a change to
+/// any document.
+#[gpui::test]
+fn a_missing_image_gets_its_picture_when_an_agent_brings_the_bytes(cx: &mut TestAppContext) {
+    use super::images::{file_in, id_of, let_pictures_arrive, png, status};
+    let (dir, lock, library) = library_on_disk(cx);
+    let bytes = png(320, 200, [60, 160, 90]);
+    let image = writer_core::Image::new(id_of(&bytes), (320, 200), 72);
+    let open = add_document(
+        &library,
+        None,
+        &Document::from_blocks(vec![
+            Block::paragraph("A picture that is not here:"),
+            Block::image(image.clone()),
+        ]),
+        cx,
+    );
+    let other = add_document(&library, None, &simple_document("Other", "Text."), cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        assert!(workspace.open_document(open, true, window, cx));
+    });
+    let_pictures_arrive(cx);
+    assert_eq!(
+        status(&desk.workspace, image.id, cx),
+        writer_editor::ImageStatus::Missing
+    );
+
+    // The agent adds the same picture to another document.
+    let files = tempfile::tempdir().unwrap();
+    let path = file_in(files.path(), "found.png", &bytes);
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.add_image(&agent::AddImageRequest {
+            document: other.into(),
+            path: path.to_string_lossy().into_owned(),
+            write: claude(),
+            ..Default::default()
+        })
+    })
+    .unwrap();
+    let_pictures_arrive(cx);
+    assert_eq!(
+        status(&desk.workspace, image.id, cx),
+        writer_editor::ImageStatus::Ready
+    );
+    // The open document did not change.
+    assert_eq!(save_state(&desk, cx), Some(SaveState::Saved));
+}

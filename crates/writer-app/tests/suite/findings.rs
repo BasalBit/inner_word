@@ -585,3 +585,127 @@ fn the_title_follows_the_text_after_every_change(cx: &mut TestAppContext) {
     assert_eq!(title(vcx), "Launch notes");
     assert_eq!(stored_title(vcx), "Launch notes");
 }
+
+// ----- images ------------------------------------------------------------------------------------
+
+/// Writing around an image. Backspace at the start of the paragraph below
+/// an image used to be the way an image was lost by accident: it selects
+/// the image first, and only the second press deletes it. And an image
+/// that is the first thing in a document had no line above it to click:
+/// `shift-enter` on the image starts one, and so does "Paragraph Above" in
+/// its menu, with the pointer.
+#[gpui::test]
+fn backspace_below_an_image_selects_it_first_and_a_line_can_be_written_above_one(
+    cx: &mut TestAppContext,
+) {
+    use super::images::{file_in, id_of, images_in, png, selected_image};
+    use writer_ui::ContextMenu;
+
+    init(cx);
+    let library = library(cx);
+    let files = tempfile::tempdir().unwrap();
+    let bytes = png(320, 200, [200, 60, 40]);
+    let path = file_in(files.path(), "first.png", &bytes);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let kinds = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            w.editor()
+                .read(cx)
+                .document()
+                .blocks()
+                .iter()
+                .map(|block| block.kind().name())
+                .collect::<Vec<_>>()
+        })
+    };
+    let caret = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| w.editor().read(cx).selection().head)
+    };
+
+    // A new document, and a picture as the first thing in it: the empty
+    // paragraph becomes the image.
+    vcx.simulate_keystrokes("cmd-n");
+    vcx.run_until_parked();
+    vcx.update(|_, cx| writer_app::images::choose_files_beforehand(vec![path], cx));
+    vcx.dispatch_action(editor::InsertImage);
+    vcx.run_until_parked();
+    assert_eq!(kinds(vcx), ["image"]);
+    assert_eq!(
+        selected_image(&workspace, vcx).map(|(block, image)| (block, image.id)),
+        Some((0, id_of(&bytes)))
+    );
+
+    // shift-enter on the image: a line above it, with the caret in it.
+    vcx.simulate_keystrokes("shift-enter");
+    assert_eq!(kinds(vcx), ["paragraph", "image"]);
+    assert_eq!(caret(vcx), Position::new(0, 0));
+    vcx.simulate_input("Above.");
+    // enter on the image: a line below it.
+    vcx.simulate_keystrokes("down");
+    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+    vcx.simulate_keystrokes("enter");
+    assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
+    assert_eq!(caret(vcx), Position::new(2, 0));
+    vcx.simulate_input("Below.");
+    assert_eq!(editor_text(&workspace, vcx), "Above.\n\nBelow.");
+
+    // Backspace at the start of the paragraph below: the image is
+    // selected, and nothing is gone.
+    vcx.simulate_keystrokes("cmd-left backspace");
+    assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
+    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+    assert_eq!(editor_text(&workspace, vcx), "Above.\n\nBelow.");
+    // The second press deletes it.
+    vcx.simulate_keystrokes("backspace");
+    assert_eq!(kinds(vcx), ["paragraph", "paragraph"]);
+    vcx.simulate_keystrokes("cmd-z");
+    assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
+
+    // The same from above: delete at the end of the paragraph before it.
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| state.set_caret(Position::new(0, "Above.".len())),
+            cx,
+        );
+    });
+    vcx.simulate_keystrokes("delete");
+    assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
+    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(1));
+
+    // An empty paragraph above an image: delete in it takes the empty
+    // line away and selects the image, in one step.
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| state.set_caret(Position::new(0, "Above.".len())),
+            cx,
+        );
+    });
+    vcx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(editor_text(&workspace, vcx), "
+
+Below.");
+    vcx.simulate_keystrokes("delete");
+    assert_eq!(kinds(vcx), ["image", "paragraph"]);
+    assert_eq!(selected_image(&workspace, vcx).map(|(block, _)| block), Some(0));
+
+    // With the pointer: the image is the first block again, and its menu
+    // has "Paragraph Above".
+    let on_the_picture = workspace
+        .read_with(vcx, |w, cx| w.editor().read(cx).image_bounds(0))
+        .expect("the picture is laid out")
+        .center();
+    vcx.simulate_mouse_move(on_the_picture, None, Modifiers::default());
+    vcx.simulate_mouse_down(on_the_picture, MouseButton::Right, Modifiers::default());
+    vcx.simulate_mouse_up(on_the_picture, MouseButton::Right, Modifiers::default());
+    vcx.run_until_parked();
+    assert!(
+        vcx.update(|window, cx| ContextMenu::choose("Paragraph Above", window, cx)),
+        "the menu of an image has Insert > Paragraph Above"
+    );
+    vcx.run_until_parked();
+    assert_eq!(kinds(vcx), ["paragraph", "image", "paragraph"]);
+    assert_eq!(caret(vcx), Position::new(0, 0));
+    assert_eq!(images_in(&workspace, vcx).len(), 1);
+    assert!(editor_focused(&workspace, vcx));
+}

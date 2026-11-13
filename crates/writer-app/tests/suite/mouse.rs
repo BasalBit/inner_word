@@ -217,6 +217,15 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
                 "Centre",
                 "Right",
                 "Justify",
+                "Image >",
+                "Larger",
+                "Smaller",
+                "25 %",
+                "50 %",
+                "75 %",
+                "100 %",
+                "Original Size",
+                "Description…",
                 "Larger Text",
                 "Smaller Text",
                 "Clear Formatting",
@@ -224,7 +233,14 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
         ),
         (
             "Insert",
-            &["Divider", "Page Break", "Today's Date", "Link…", "Comment"],
+            &[
+                "Divider",
+                "Page Break",
+                "Today's Date",
+                "Image…",
+                "Link…",
+                "Comment",
+            ],
         ),
         (
             "View",
@@ -1129,4 +1145,105 @@ fn tooltips_say_what_a_control_is_and_keep_out_of_the_way_of_its_menu(cx: &mut T
     vcx.run_until_parked();
     assert_ne!(vcx.debug_bounds("tooltip"), Some(before));
     let _ = workspace;
+}
+
+// ----- an image's description --------------------------------------------------------------------
+
+/// What an image shows is written with the pointer alone (and the words):
+/// a right-click on the picture, "Description…", and the button "Done".
+/// A click somewhere else instead of the button keeps what was typed too;
+/// "Remove" and "Cancel" are buttons.
+#[gpui::test]
+fn the_description_of_an_image_with_the_pointer_alone(cx: &mut TestAppContext) {
+    use super::images::{images_in, picture, stored_png};
+    use writer_core::Alignment;
+    use writer_editor_tools::ToolKind;
+
+    init(cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 240, [60, 160, 90], cx);
+    let document = Document::from_blocks(vec![
+        picture(&image, 60, Alignment::Center, ""),
+        Block::paragraph("The boats came by road every spring."),
+    ]);
+    let id = add_document(&library, None, &document, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(id, true, window, cx);
+    });
+    vcx.run_until_parked();
+    let on_the_picture = |cx: &mut VisualTestContext| {
+        workspace
+            .read_with(cx, |w, cx| w.editor().read(cx).image_bounds(0))
+            .expect("the picture is laid out")
+            .center()
+    };
+    let description =
+        |cx: &mut VisualTestContext| images_in(&workspace, cx)[0].1.description.clone();
+    let tool = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| w.tools().read(cx).active_tool())
+    };
+    let open = |cx: &mut VisualTestContext| {
+        right_click_at(on_the_picture(cx), cx);
+        click_menu_item("Description…", cx);
+        assert_eq!(tool(cx), Some(ToolKind::ImageDescription));
+        // The field has the keyboard: what is typed goes into it.
+        assert!(!editor_focused(&workspace, cx));
+    };
+
+    // Done.
+    open(vcx);
+    vcx.simulate_input("The harbour at dusk");
+    assert_eq!(description(vcx), "", "not before it is kept");
+    click("image-description-done", vcx);
+    assert_eq!(tool(vcx), None);
+    assert_eq!(description(vcx), "The harbour at dusk");
+    assert!(editor_focused(&workspace, vcx));
+
+    // A click in the text instead of the button: what was typed is kept.
+    open(vcx);
+    let field = workspace.read_with(vcx, |w, cx| {
+        w.tools().read(cx).image_description_field_text(cx)
+    });
+    assert_eq!(field.as_deref(), Some("The harbour at dusk"));
+    // The field opens with its text selected: what is typed takes its
+    // place.
+    vcx.simulate_input("The harbour, from the pier");
+    let typed = workspace
+        .read_with(vcx, |w, cx| {
+            w.tools().read(cx).image_description_field_text(cx)
+        })
+        .expect("the field is open");
+    assert!(typed.ends_with("The harbour, from the pier"), "{typed:?}");
+    assert_ne!(typed, "The harbour at dusk");
+    assert_eq!(description(vcx), "The harbour at dusk", "not before it is kept");
+    let in_the_text = workspace.read_with(vcx, |w, cx| {
+        let bounds = w
+            .editor()
+            .read(cx)
+            .position_bounds(Position::new(1, 10))
+            .expect("the paragraph is on screen");
+        point(bounds.left() + px(2.), bounds.center().y)
+    });
+    vcx.simulate_click(in_the_text, Modifiers::default());
+    vcx.run_until_parked();
+    assert_eq!(tool(vcx), None);
+    assert_eq!(description(vcx), typed, "a click outside keeps the description");
+    assert!(editor_focused(&workspace, vcx));
+
+    // Cancel: nothing changes.
+    open(vcx);
+    vcx.simulate_input(" that nobody wants");
+    click("image-description-cancel", vcx);
+    assert_eq!(tool(vcx), None);
+    assert_eq!(description(vcx), typed);
+
+    // Remove.
+    open(vcx);
+    click("image-description-remove", vcx);
+    assert_eq!(tool(vcx), None);
+    assert_eq!(description(vcx), "");
+    // One step of undo each.
+    vcx.simulate_keystrokes("cmd-z");
+    assert_eq!(description(vcx), typed);
 }

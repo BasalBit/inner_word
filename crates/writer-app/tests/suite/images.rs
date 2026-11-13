@@ -2013,3 +2013,106 @@ fn a_scripted_run_inserts_and_selects_images_and_its_state_says_what_is_there(
         "{line}"
     );
 }
+
+// ----- Vim mode ---------------------------------------------------------------------------------
+
+/// Vim mode on, in the assembled app. What the keys do to a block without
+/// text is the engine's and is held there (`crates/writer-vim/tests/images.rs`);
+/// this holds the app to it: an image is one stop, shows as selected, and
+/// no command takes it apart.
+#[gpui::test]
+fn in_vim_mode_an_image_is_one_stop_and_stays_whole(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 300, BLUE, cx);
+    let document = Document::from_blocks(vec![
+        Block::paragraph("Above."),
+        picture(&image, 50, Alignment::Right, "The harbour at dusk"),
+        Block::paragraph("Below."),
+    ]);
+    let (_, workspace, cx) = open_with(&document, &library, cx);
+    workspace.update(cx, |w, cx| w.toggle_vim_mode(cx));
+    cx.run_until_parked();
+    let mode = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            let vim = w.vim().read(cx);
+            vim.is_attached().then(|| vim.mode())
+        })
+    };
+    assert_eq!(mode(cx), Some(writer_vim_mode::Mode::Normal));
+    let caret = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| w.editor().read(cx).selection().head)
+    };
+    let whole = |cx: &mut VisualTestContext| {
+        let found = images_in(&workspace, cx);
+        assert_eq!(found.len(), 1, "one image");
+        let (block, found) = &found[0];
+        assert_eq!(found.id, image.id);
+        assert_eq!(found.width, ImageWidth::from_percent(50));
+        assert_eq!(found.description, "The harbour at dusk");
+        assert_eq!(
+            workspace.read_with(cx, |w, cx| {
+                w.editor()
+                    .read(cx)
+                    .document()
+                    .block(*block)
+                    .unwrap()
+                    .alignment()
+            }),
+            Alignment::Right
+        );
+        *block
+    };
+
+    // j and k stop on the image once.
+    cx.simulate_input("gg");
+    assert_eq!(caret(cx), Position::new(0, 0));
+    cx.simulate_input("j");
+    assert_eq!(selected_image(&workspace, cx).map(|(block, _)| block), Some(1));
+    // It shows as every selected image does: the handles are there, and
+    // the caret is the picture's own box, not a block of Vim's on it.
+    workspace.read_with(cx, |w, cx| {
+        let editor = w.editor().read(cx);
+        assert_eq!(editor.config().caret_style, writer_editor::CaretStyle::Block);
+        let box_of_the_picture = editor.image_bounds(1).expect("the picture is laid out");
+        assert_eq!(editor.caret_bounds(), Some(box_of_the_picture));
+        let handles = editor.image_handle_bounds().expect("the handles of a selected image");
+        assert_eq!(handles[0].center(), box_of_the_picture.origin);
+    });
+    cx.simulate_input("j");
+    assert_eq!(caret(cx), Position::new(2, 0));
+    cx.simulate_input("k");
+    assert_eq!(selected_image(&workspace, cx).map(|(block, _)| block), Some(1));
+    cx.simulate_input("k");
+    assert_eq!(caret(cx), Position::new(0, 0));
+
+    // J on the line above joins nothing into the image, and x on the
+    // image takes nothing away.
+    cx.simulate_input("J");
+    assert_eq!(editor_text(&workspace, cx), "Above.\n\nBelow.");
+    assert_eq!(whole(cx), 1);
+    cx.simulate_input("jx");
+    assert_eq!(editor_text(&workspace, cx), "Above.\n\nBelow.");
+    assert_eq!(whole(cx), 1);
+
+    // dd takes the image out whole, and p puts it back as it was.
+    cx.simulate_input("dd");
+    assert!(images_in(&workspace, cx).is_empty());
+    assert_eq!(editor_text(&workspace, cx), "Above.\nBelow.");
+    cx.simulate_input("p");
+    assert_eq!(whole(cx), 2, "after the line the caret was on");
+    cx.simulate_input("uu");
+    assert_eq!(whole(cx), 1);
+    assert_eq!(editor_text(&workspace, cx), "Above.\n\nBelow.");
+
+    // i and a letter on the image: a paragraph below it.
+    caret_on(&workspace, 1, cx);
+    cx.simulate_input("iX");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(mode(cx), Some(writer_vim_mode::Mode::Normal));
+    assert_eq!(editor_text(&workspace, cx), "Above.\n\nX\nBelow.");
+    assert_eq!(whole(cx), 1);
+    // And the image is still shown after all of it.
+    let_pictures_arrive(cx);
+    assert_eq!(status(&workspace, image.id, cx), ImageStatus::Ready);
+}

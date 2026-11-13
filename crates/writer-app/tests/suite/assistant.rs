@@ -2498,3 +2498,175 @@ fn the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment(cx: &mu
         assert!(notice.size.height < gpui::px(220.), "{:?}", notice.size);
     }
 }
+
+// ----- images ------------------------------------------------------------------------------
+
+/// The side chat reads an image as a line of Markdown and never sees the
+/// picture. An answer that has the line gets the image back when it is
+/// applied, as the document has it; an image of another document comes in
+/// by its id; and a path in an answer is never read.
+#[gpui::test]
+fn the_side_chat_reads_an_image_as_a_line_and_an_answer_that_names_it_brings_it_back(
+    cx: &mut TestAppContext,
+) {
+    use super::images::{images_in, picture, stored_png};
+    use writer_core::{Alignment, Document};
+
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 300, [50, 80, 190], cx);
+    let elsewhere = stored_png(&library, 300, 300, [200, 60, 40], cx);
+    let first = "The keeper climbed the stairs at dusk.";
+    let last = "The lamp was already lit.";
+    let id = add_document(
+        &library,
+        None,
+        &Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "The Lighthouse"),
+            Block::paragraph(first),
+            picture(&image, 50, Alignment::Right, "The lamp room"),
+            Block::paragraph(last),
+        ]),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| w.open_document(id, true, window, cx));
+    vcx.run_until_parked();
+
+    // What the assistant is sent: the image is one line, with its
+    // description and its id. No bytes, no path.
+    let line = format!("![The lamp room](image:{})", image.id);
+    let open = workspace
+        .read_with(vcx, |w, cx| w.assistant_open_document(cx))
+        .expect("a document is open");
+    assert!(open.markdown.contains(&line), "{}", open.markdown);
+
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    let panel = side(&workspace, vcx);
+    let ask = |reply: &str, cx: &mut VisualTestContext| {
+        fake.reply(reply);
+        panel.update_in(cx, |panel, window, cx| panel.send("Go on.", window, cx));
+        cx.run_until_parked();
+        panel.read_with(cx, |panel, _| {
+            panel.transcript().last_answer().expect("an answer").id
+        })
+    };
+    let state = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            let document = w.editor().read(cx).document();
+            document
+                .blocks()
+                .iter()
+                .map(|block| match block.as_image() {
+                    Some(image) => format!(
+                        "[{} {}% {:?} {:?}]",
+                        image.id,
+                        image.width.percent(),
+                        block.alignment(),
+                        image.description
+                    ),
+                    None => block.text().to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let picture_line = format!("[{} 50% Right \"The lamp room\"]", image.id);
+    assert_eq!(
+        state(vcx),
+        ["The Lighthouse", first, picture_line.as_str(), last]
+    );
+
+    // An answer that turns the three blocks round: the image line stands
+    // first now. Replace Selection over all three.
+    let answer = ask(&format!("{line}\n\n{last}\n\n{first}"), vcx);
+    select(
+        &workspace,
+        TextRange::new(Position::new(1, 0), Position::new(3, last.len())),
+        vcx,
+    );
+    assert!(panel.update(vcx, |panel, cx| panel.apply(
+        ApplyKind::ReplaceSelection,
+        answer,
+        cx
+    )));
+    vcx.run_until_parked();
+    // The image moved with its line, as wide as it was and on its side.
+    assert_eq!(
+        state(vcx),
+        ["The Lighthouse", picture_line.as_str(), last, first]
+    );
+    // One step of undo.
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update(vcx, |editor, cx| editor.edit(|state| state.undo(), cx));
+    vcx.run_until_parked();
+    assert_eq!(
+        state(vcx),
+        ["The Lighthouse", first, picture_line.as_str(), last]
+    );
+
+    // An image of another document, named by its id (the assistant read
+    // it there with its tools): it comes in at its own size.
+    let answer = ask(&format!("![A red boat](image:{})", elsewhere.id), vcx);
+    select(
+        &workspace,
+        TextRange::empty(Position::new(3, last.len())),
+        vcx,
+    );
+    assert!(panel.update(vcx, |panel, cx| panel.apply(
+        ApplyKind::InsertAtCaret,
+        answer,
+        cx
+    )));
+    vcx.run_until_parked();
+    let found = images_in(&workspace, vcx);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[1].1.id, elsewhere.id);
+    assert_eq!(found[1].1.description, "A red boat");
+    // 300 pixels on a column of 451 points.
+    assert_eq!(found[1].1.width.percent(), 67);
+
+    // A path, an address and an id the library does not have: none of
+    // them becomes an image, and no file is read. Each stays a link.
+    let pictures = library.read_with(vcx, |library, _| library.store().image_count().unwrap());
+    for destination in [
+        "/etc/hosts",
+        "~/Pictures/secret.png",
+        "file:///etc/hosts",
+        "https://example.com/harbour.png",
+        "image:00112233445566778899aabbccddeeff",
+    ] {
+        let answer = ask(&format!("![x]({destination})"), vcx);
+        let end = editor.read_with(vcx, |editor, _| {
+            let document = editor.document();
+            let last = document.block_count() - 1;
+            Position::new(last, document.block(last).unwrap().len())
+        });
+        select(&workspace, TextRange::empty(end), vcx);
+        assert!(
+            panel.update(vcx, |panel, cx| panel.apply(
+                ApplyKind::InsertAtCaret,
+                answer,
+                cx
+            )),
+            "{destination}"
+        );
+        vcx.run_until_parked();
+        assert_eq!(images_in(&workspace, vcx).len(), 2, "{destination} became an image");
+        let linked = editor.read_with(vcx, |editor, _| {
+            editor.document().blocks().iter().any(|block| {
+                block
+                    .text_spans()
+                    .any(|(_, _, attrs)| attrs.link.as_deref() == Some(destination))
+            })
+        });
+        assert!(linked, "{destination} stays a link");
+    }
+    assert_eq!(
+        library.read_with(vcx, |library, _| library.store().image_count().unwrap()),
+        pictures,
+        "nothing was stored"
+    );
+}

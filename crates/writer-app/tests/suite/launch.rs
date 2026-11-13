@@ -876,3 +876,192 @@ fn a_tool_that_does_not_let_go_is_named(cx: &mut TestAppContext) {
         Acquired::Lock(_)
     ));
 }
+
+// ----- images ------------------------------------------------------------------------------
+
+/// An agent adds a picture with the tool while the app is closed: the next
+/// launch shows it.
+#[gpui::test]
+fn an_image_the_tool_added_while_the_app_was_closed_is_shown(cx: &mut TestAppContext) {
+    use super::images::{file_in, id_of, images_in, let_pictures_arrive, png, status};
+    init(cx);
+    let disk = Disk::new();
+    let id = first_launch(
+        &disk,
+        &simple_document("Harbour", "The boats came by road."),
+        None,
+        Position::new(1, 4),
+        cx,
+    );
+
+    // The tool, as an agent runs it: the file is read, made into what the
+    // library stores, and the document gets a block that names it.
+    let files = tempfile::tempdir().unwrap();
+    let bytes = png(640, 400, [50, 80, 190]);
+    let path = file_in(files.path(), "chart.png", &bytes);
+    let added = writer_agent::Library::at(disk.dir.path())
+        .add_image(&writer_agent::AddImageRequest {
+            document: writer_agent::Target::Id(id.0),
+            path: path.to_string_lossy().into_owned(),
+            description: "Salt by month".into(),
+            write: writer_agent::WriteOptions::by("Claude"),
+            ..Default::default()
+        })
+        .expect("the tool writes while no app has the library");
+    assert_eq!(added.images_added, 1);
+
+    let (library, workspace, vcx) = launch(&disk, cx);
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    let found = images_in(&workspace, vcx);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].1.id, id_of(&bytes));
+    assert_eq!(found[0].1.description, "Salt by month");
+    let_pictures_arrive(vcx);
+    assert_eq!(
+        status(&workspace, found[0].1.id, vcx),
+        writer_editor::ImageStatus::Ready
+    );
+    // The text was changed outside: the document opens at its start and
+    // says so, as for any change of an agent.
+    assert_eq!(selection(&workspace, vcx), Selection::caret(Position::new(0, 0)));
+    assert!(toasts(&workspace, vcx).contains(&CHANGED_OUTSIDE.to_string()));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.save_state()),
+        Some(SaveState::Saved)
+    );
+    // The version from before the agent's change is kept.
+    let labels: Vec<String> = library.read_with(vcx, |library, _| {
+        library
+            .store()
+            .snapshot_labels(id)
+            .unwrap()
+            .into_values()
+            .collect()
+    });
+    assert!(
+        labels.iter().any(|label| label.contains("Claude")),
+        "{labels:?}"
+    );
+}
+
+/// A document can name an image the library does not have (the file of
+/// the pictures was lost, a library was put together from parts). It
+/// opens with a placeholder in the picture's place, and what is saved
+/// still names the image: the block is never dropped.
+#[gpui::test]
+fn a_document_whose_picture_is_missing_opens_with_a_placeholder_and_saves_unchanged(
+    cx: &mut TestAppContext,
+) {
+    use super::images::{images_in, let_pictures_arrive, picture, status, stored_png};
+    init(cx);
+    let disk = Disk::new();
+    let (id, image) = {
+        let (library, workspace, vcx) = launch(&disk, cx);
+        let image = stored_png(&library, 400, 300, [200, 60, 40], vcx);
+        let document = Document::from_blocks(vec![
+            Block::paragraph("Above."),
+            picture(
+                &image,
+                50,
+                writer_core::Alignment::Right,
+                "The harbour at dusk",
+            ),
+            Block::paragraph("Below."),
+        ]);
+        let id = add_document(&library, None, &document, vcx);
+        workspace.update_in(vcx, |workspace, window, cx| {
+            assert!(workspace.open_document(id, true, window, cx));
+        });
+        let_pictures_arrive(vcx);
+        assert_eq!(
+            status(&workspace, image.id, vcx),
+            writer_editor::ImageStatus::Ready
+        );
+        quit(&workspace, vcx);
+        (id, image)
+    };
+    cx.run_until_parked();
+
+    // The pictures are gone: `images.db` and what belongs to it.
+    let aside = disk.dir.path().join("moved away");
+    std::fs::create_dir_all(&aside).unwrap();
+    let mut moved = 0;
+    for name in ["images.db", "images.db-wal", "images.db-shm"] {
+        let file = disk.dir.path().join(name);
+        if file.exists() {
+            std::fs::rename(&file, aside.join(name)).unwrap();
+            moved += 1;
+        }
+    }
+    assert!(moved >= 1, "there was a file of pictures");
+    let stored_before = disk.outside(|store| store.document(id).unwrap().content);
+
+    let (library, workspace, vcx) = launch(&disk, cx);
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(id));
+    // The block is there, with everything the document knows about it.
+    let found = images_in(&workspace, vcx);
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        (found[0].0, found[0].1.id, found[0].1.width.percent()),
+        (1, image.id, 50)
+    );
+    assert_eq!(found[0].1.description, "The harbour at dusk");
+    let_pictures_arrive(vcx);
+    assert_eq!(
+        status(&workspace, image.id, vcx),
+        writer_editor::ImageStatus::Missing
+    );
+    // Its box keeps its place: the picture's size is in the block.
+    assert!(
+        workspace
+            .read_with(vcx, |w, cx| w.editor().read(cx).image_bounds(1))
+            .is_some()
+    );
+    // Nothing to save, and nothing was written.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.save_state()),
+        Some(SaveState::Saved)
+    );
+    assert_eq!(
+        library.read_with(vcx, |library, _| library.document(id).unwrap().content),
+        stored_before
+    );
+
+    // The writer goes on writing: what is saved names the image as before.
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_caret(Position::new(2, "Below.".len()));
+                state.insert_text(" More.")
+            },
+            cx,
+        );
+    });
+    let_it_save(&workspace, vcx);
+    let saved = library.read_with(vcx, |library, _| library.document(id).unwrap().content);
+    let reread = writer_core::Document::from_json(&saved).unwrap();
+    let kept = reread.block(1).and_then(|block| block.as_image()).cloned();
+    assert_eq!(
+        kept.as_ref().map(|image| (image.id, image.width.percent())),
+        Some((image.id, 50))
+    );
+    assert_eq!(reread.plain_text(), "Above.\n\nBelow. More.");
+    quit(&workspace, vcx);
+    cx.run_until_parked();
+
+    // The file of the pictures comes back (from a backup of the Mac):
+    // the next launch shows the picture again.
+    for name in ["images.db", "images.db-wal", "images.db-shm"] {
+        let file = aside.join(name);
+        if file.exists() {
+            std::fs::rename(&file, disk.dir.path().join(name)).unwrap();
+        }
+    }
+    let (_library, workspace, vcx) = launch(&disk, cx);
+    let_pictures_arrive(vcx);
+    assert_eq!(
+        status(&workspace, image.id, vcx),
+        writer_editor::ImageStatus::Ready
+    );
+}

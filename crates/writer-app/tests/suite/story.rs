@@ -82,6 +82,8 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
     cx.update(|cx| {
         writer_editor_tools::set_font_families(["Charter", "Georgia", "Menlo"], cx);
     });
+    // Where "Print…" sends its pages in a test: a recorder, never a panel.
+    let print_jobs = cx.update(writer_app::printing::record);
     let home = tempfile::tempdir().unwrap();
     let database = home.path().join("library.db");
     let out = tempfile::tempdir().unwrap();
@@ -243,6 +245,94 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
         assert_eq!(larger.alignment(), Alignment::Left);
         assert!(larger.text_size().expect("a size of its own") > 17.);
         written.check_invariants().unwrap();
+
+        // ----- a picture ------------------------------------------------------
+        // "Image" in the palette. The file is named beforehand, as it
+        // would be chosen in the open panel: a screenshot of a Retina
+        // display, 800 pixels that are 400 points.
+        let picture = writer_image::fixtures::png_at(800, 500, [50, 80, 190], 144);
+        let picture_path = out.path().join("harbour at night.png");
+        std::fs::write(&picture_path, &picture).unwrap();
+        vcx.update(|_, cx| {
+            writer_app::images::choose_files_beforehand(vec![picture_path.clone()], cx)
+        });
+        vcx.simulate_keystrokes("cmd-shift-p");
+        vcx.simulate_input("insert image");
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        let selected = |cx: &mut VisualTestContext| {
+            workspace
+                .read_with(cx, |w, cx| w.editor().read(cx).selected_image())
+                .expect("the picture is in the text, and selected")
+        };
+        let last = written.block_count();
+        let (at, inserted) = selected(vcx);
+        assert_eq!(at, last, "after the line the caret was in");
+        assert_eq!(inserted.id, super::images::id_of(&picture));
+        // At its own size on the page (400 of 451 points), in the middle.
+        assert_eq!(inserted.width.percent(), 89);
+        assert_eq!(document(&workspace, vcx).blocks()[at].alignment(), Alignment::Center);
+        assert!(editor_focused(&workspace, vcx));
+        // Smaller and larger, with the keys that size the text.
+        vcx.simulate_keystrokes("cmd-shift-, cmd-shift-,");
+        assert_eq!(selected(vcx).1.width.percent(), 75);
+        vcx.simulate_keystrokes("cmd-shift-.");
+        assert_eq!(selected(vcx).1.width.percent(), 80);
+        // To the right, and one block up.
+        vcx.simulate_keystrokes("cmd-shift-r alt-up");
+        let (at, _) = selected(vcx);
+        assert_eq!(at, last - 1);
+        assert_eq!(document(&workspace, vcx).blocks()[at].alignment(), Alignment::Right);
+        assert_eq!(document(&workspace, vcx).blocks()[last].text(), "Larger");
+        // What it shows, from its menu.
+        vcx.simulate_keystrokes("ctrl-enter");
+        vcx.run_until_parked();
+        assert!(vcx.update(|window, cx| {
+            writer_ui::ContextMenu::choose("Description…", window, cx)
+        }));
+        vcx.run_until_parked();
+        assert_eq!(tool(&workspace, vcx), Some(ToolKind::ImageDescription));
+        vcx.simulate_input("The harbour at night");
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        assert_eq!(selected(vcx).1.description, "The harbour at night");
+        assert!(editor_focused(&workspace, vcx));
+        // Exported as Markdown, the picture is a file in a folder beside
+        // the text.
+        let with_picture = tempfile::tempdir().unwrap();
+        let markdown_path = with_picture.path().join("with a picture.md");
+        export_row(&workspace, 0, &markdown_path, vcx);
+        let markdown = std::fs::read_to_string(&markdown_path).expect("the Markdown file");
+        assert!(markdown.contains("![The harbour at night]("), "{markdown}");
+        let folder = with_picture.path().join("The Harbour images");
+        let files: Vec<_> = std::fs::read_dir(&folder)
+            .expect("the folder of the pictures")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(std::fs::read(&files[0]).unwrap(), picture);
+        // Printed, it is on paper.
+        vcx.simulate_keystrokes("cmd-shift-p");
+        vcx.simulate_input("print");
+        vcx.simulate_keystrokes("enter");
+        for _ in 0..20_000 {
+            vcx.run_until_parked();
+            if !print_jobs.borrow().is_empty()
+                && workspace.read_with(vcx, |w, _| w.printing()).is_none()
+            {
+                break;
+            }
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(print_jobs.borrow().len(), 1);
+        assert_eq!(print_jobs.borrow()[0].pdf.report.images, 1);
+        assert!(editor_focused(&workspace, vcx));
+        // And deleted with one key, it is gone: the text is what it was.
+        assert_eq!(selected(vcx).0, last - 1);
+        vcx.simulate_keystrokes("backspace");
+        assert_eq!(document(&workspace, vcx).plain_text(), written.plain_text());
+        assert!(!document(&workspace, vcx).has_images());
 
         // ----- a comment ------------------------------------------------------
         vcx.simulate_keystrokes("cmd-up down shift-alt-right shift-alt-right cmd-alt-m");

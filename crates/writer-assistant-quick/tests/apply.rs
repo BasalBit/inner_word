@@ -574,9 +574,7 @@ fn with_an_image() -> (Document, writer_core::Image) {
 }
 
 #[gpui::test]
-fn an_answer_that_names_an_image_of_the_document_brings_it_back_as_it_was(
-    cx: &mut TestAppContext,
-) {
+fn an_answer_that_names_an_image_of_the_document_brings_it_back_as_it_was(cx: &mut TestAppContext) {
     setup(cx);
     let (document, image) = with_an_image();
     let (editor, cx) = open_editor(document, cx);
@@ -600,8 +598,14 @@ fn an_answer_that_names_an_image_of_the_document_brings_it_back_as_it_was(
             "the image is the document's own again: its id, its width, its description"
         );
         assert_eq!(block.alignment(), writer_core::Alignment::Right);
-        assert_eq!(document.block(1).map(|block| block.text()), Some("The boats came in."));
-        assert_eq!(document.block(2).map(|block| block.text()), Some("Then it was dark."));
+        assert_eq!(
+            document.block(1).map(|block| block.text()),
+            Some("The boats came in.")
+        );
+        assert_eq!(
+            document.block(2).map(|block| block.text()),
+            Some("Then it was dark.")
+        );
         assert_eq!(document.block_count(), 3);
     });
 }
@@ -627,7 +631,10 @@ fn an_answer_never_makes_an_image_of_a_file_or_of_an_id_the_document_does_not_ha
             answer_fragment(&format!("![x]({destination})"), editor.document())
         });
         assert!(
-            fragment.blocks().iter().all(|block| block.as_image().is_none()),
+            fragment
+                .blocks()
+                .iter()
+                .all(|block| block.as_image().is_none()),
             "{destination} became an image"
         );
         assert!(!fragment.is_empty(), "{destination} left nothing");
@@ -636,7 +643,11 @@ fn an_answer_never_makes_an_image_of_a_file_or_of_an_id_the_document_does_not_ha
     // Inserted below, the path is a link in the text and nothing else.
     assert!(below(&editor, &capture, "![x](/etc/hosts)", cx).is_some());
     editor.read_with(cx, |editor, _| {
-        assert_eq!(editor.document().images().count(), 1, "only the image that was there");
+        assert_eq!(
+            editor.document().images().count(),
+            1,
+            "only the image that was there"
+        );
         let inserted = editor.document().block(1).expect("the inserted block");
         assert!(inserted.as_image().is_none());
         let linked = inserted

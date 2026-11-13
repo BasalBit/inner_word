@@ -1006,9 +1006,7 @@ impl QuickChat {
             return;
         };
         let item = match message.role {
-            Role::Assistant => {
-                answer_clipboard(&message.text, self.editor.read(cx).document())
-            }
+            Role::Assistant => answer_clipboard(&message.text, self.editor.read(cx).document()),
             Role::User => ClipboardItem::new_string(message.text.clone()),
         };
         cx.write_to_clipboard(item);

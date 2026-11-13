@@ -292,7 +292,7 @@ fn bold_and_italic_are_the_bold_and_italic_faces() {
 }
 
 #[test]
-fn a_row_of_another_width_than_the_layout_measured_is_counted() {
+fn a_row_of_other_advances_than_the_layout_measured_is_counted() {
     // A row placed at CoreText's own advances: Courier New's is 1229 units of
     // 2048.
     let advance = 1229. / 2048. * 14.;
@@ -302,9 +302,19 @@ fn a_row_of_another_width_than_the_layout_measured_is_counted() {
         glyph.x = index as f32 * advance;
     }
     row.width = text.len() as f32 * advance;
+    // The layout measured every glyph twice as wide.
     let mut doubled = row.clone();
     doubled.baseline = 130.;
     doubled.width *= 2.;
+    for glyph in &mut doubled.glyphs {
+        glyph.x *= 2.;
+    }
+    // Only the width differs, with every glyph inside the row where CoreText
+    // has it: what the row's ends do in its line (a tab's stop, a contextual
+    // form) and not another face.
+    let mut only_wider = row.clone();
+    only_wider.baseline = 160.;
+    only_wider.width += 30.;
     // A row without text is as wide as nothing.
     let empty = TextRow {
         text: String::new(),
@@ -323,13 +333,38 @@ fn a_row_of_another_width_than_the_layout_measured_is_counted() {
         vec![
             Item::Row(row),
             Item::Row(doubled),
+            Item::Row(only_wider),
             Item::Row(empty),
             Item::Row(empty_but_wide),
         ],
     )]);
-    assert_eq!((pdf.report.rows, pdf.report.rows_off), (4, 2));
-    // Both rows with text are whole and in place all the same.
-    assert_eq!(file.page_text(0).trim(), format!("{text}\n{text}"));
+    assert_eq!((pdf.report.rows, pdf.report.rows_off), (5, 2));
+    // The rows with text are whole all the same (PDFKit reads the doubled one
+    // as letters with gaps between them).
+    let page_text = file.page_text(0);
+    let mut lines = page_text.trim().lines();
+    assert_eq!(lines.next(), Some(text));
+    assert!(
+        squeezed(&page_text).starts_with(&format!("{}placedatthefont", squeezed(text))),
+        "{page_text}"
+    );
+    assert!(page_text.trim_end().ends_with(text), "{page_text}");
+
+    // A row too short to have clusters inside it is judged by its width,
+    // unless it holds a tab, whose width depends on where the row stands.
+    let short = |text: &str, wider: f32| {
+        let mut row = fixed_row(text, courier(), 14., 72., 100.);
+        for (index, glyph) in row.glyphs.iter_mut().enumerate() {
+            glyph.x = index as f32 * advance;
+        }
+        row.width = text.len() as f32 * advance + wider;
+        Item::Row(row)
+    };
+    let (pdf, _) = write(&[page(
+        A4,
+        vec![short("ab", 0.), short("ab", 20.), short("a\tb", 20.)],
+    )]);
+    assert_eq!((pdf.report.rows, pdf.report.rows_off), (3, 1));
 
     // The same text in a proportional font at the fixed pitch: the text is
     // whole, every glyph starts where the layout said, and the row is counted.

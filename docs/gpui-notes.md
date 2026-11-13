@@ -813,6 +813,12 @@ unless it says "read".
   Checked with the editor's demo (`print:<path>`): Charter in four faces, Helvetica Neue,
   Menlo, the interface font and the emoji and CJK fallbacks came out at the layout's
   widths in every row (0 rows off of 37; 0 of 35,178 in a generated book).
+  `rows_off` compares the places of the glyphs inside a row, pair of clusters by pair,
+  and not the row's width: GPUI shapes the whole hard line and the layout cuts the row
+  out of it, while the PDF writer shapes the row alone, so a tab on a wrapped row (its
+  stop is counted from the line's start) and a script face's contextual forms at a row's
+  ends (Zapfino) give another width in the right face. Comparing widths counted 2 rows of
+  8 off in a document of code with tabs and 13 of 418 in Zapfino, with every face right.
 - **Where a single shaped line has its baseline.** `ShapedLine::paint(origin,
   line_height, ..)` centres the line in its box with the layout's own numbers
   (`$G/src/text_system/line.rs`): the baseline is at `origin.y + (line_height - ascent -
@@ -867,9 +873,9 @@ unless it says "read".
   UTF-16 units, 1.2 em). Real glyphs at those places make PDFKit see spaces inside words
   ("Fi xed pi t ch"), unless the font is that wide: **Courier New is** (1229 of 2048
   units). Documents whose pages go through the PDF writer in a test of the editor are set
-  in Courier New, and their text is compared with white space removed. The row widths of
-  the fake are 0.6 em per character too, so `Report::rows_off` is 0 for Courier New rows
-  and counts the others. Two more things are the fake's and not the Mac's: a shaped
+  in Courier New, and their text is compared with white space removed. The glyphs of
+  the fake are 0.6 em apart, so `Report::rows_off` is 0 for Courier New rows and counts
+  the others. Two more things are the fake's and not the Mac's: a shaped
   line's `descent` is negative there (the font's sign; the Mac's line layout has it
   positive), so a label's baseline, centred with it, is lower than its row's in a test and
   on it with real fonts; and the theme names the first family of each font stack

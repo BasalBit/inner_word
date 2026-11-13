@@ -34,9 +34,10 @@
 //! layout shaped; the writer asks CoreText for the glyphs of the same text in the
 //! same fonts and puts each where its cluster starts in the layout. So justified
 //! rows, inline code at its smaller size and right-aligned text are on paper where
-//! they are on screen without any of that being computed twice. A row that CoreText
-//! measures at another width than the layout did was set in another face; it is
-//! still whole and in place, and [`Report::rows_off`] counts it.
+//! they are on screen without any of that being computed twice. A row whose glyphs
+//! CoreText spaces otherwise than the layout did (inside the row, where nothing of
+//! the rest of its line counts) was set in another face; it is still whole and in
+//! place, and [`Report::rows_off`] counts it.
 //!
 //! The crate builds and tests in the default `target/` directory, not in `target-pure`
 //! (see its manifest).

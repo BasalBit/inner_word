@@ -113,8 +113,9 @@ pub struct TextRow {
     /// [`TextRow::x`], and the fraction of [`TextRow::size`] it is drawn at (inline
     /// code is smaller). Ascending by byte within a run of one direction.
     pub glyphs: Vec<GlyphStart>,
-    /// The row's shaped advance width as the layout has it. The writer compares its
-    /// own with it: a row that comes out another width was set in another face.
+    /// The row's shaped advance width as the layout has it. The writer judges a
+    /// row by the places of its glyphs ([`crate::Report::rows_off`]); the width
+    /// is what it compares for a row too short for that.
     pub width: f32,
 }
 

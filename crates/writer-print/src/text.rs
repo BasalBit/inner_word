@@ -8,11 +8,16 @@
 //! CJK character comes from when the row's font has none), at the place the
 //! layout names for its cluster.
 //!
-//! With the font the layout shaped with, CoreText gives the glyphs the layout got
-//! (it is the same call on the same text), and they land where the screen shows
-//! them. With another font the text is still whole and every cluster still starts
-//! where the layout put it; only the spacing inside is off, and the row is
-//! counted ([`crate::Report::rows_off`]).
+//! With the font the layout shaped with, CoreText gives the glyphs the layout got,
+//! and they land where the screen shows them. It is the same call on nearly the
+//! same text: the layout shaped the whole hard line and cut the row out of it,
+//! the writer shapes the row alone, so what depends on the rest of the line (the
+//! stop of a tab, a contextual form or kerning at the row's ends) can come out
+//! differently, and every cluster is put where the layout put it all the same.
+//! With another font the text is still whole and every cluster still starts
+//! where the layout put it; only the spacing inside clusters is off, and the
+//! row is counted ([`crate::Report::rows_off`], judged by `advances_apart`
+//! inside the row and not by the row's width).
 //!
 //! CoreText counts in UTF-16 code units; the page counts in UTF-8 bytes.
 //! [`Units`] is the map between them.
@@ -178,6 +183,64 @@ fn starts_by_byte(glyphs: &[GlyphStart]) -> Vec<GlyphStart> {
     starts
 }
 
+/// How far CoreText's advances inside a row are from the layout's, in points:
+/// the sum over every pair of neighbouring clusters of the difference between
+/// the distance the layout put between them and the distance CoreText puts
+/// between them. `None` when the row has no pair that can be compared.
+///
+/// The layout shaped the whole hard line and cut the row out of it; the writer
+/// shapes the row alone. In the layout's face the two agree on everything that
+/// does not depend on what stands outside the row, so only that is compared,
+/// and what depends on more is left out: a tab (its stop is measured from the
+/// start of the line), the row's first and last cluster (contextual forms and
+/// kerning across the row's ends), a space (justification widens it), and a
+/// pair that straddles a change of size (inline code) or that CoreText orders
+/// the other way (the row alone may take another direction). A face that is not
+/// the layout's moves nearly every pair.
+fn advances_apart(
+    text: &str,
+    starts: &[GlyphStart],
+    anchors: &[Option<(u32, f64)>],
+) -> Option<f64> {
+    if starts.len() < 4 {
+        return None;
+    }
+    let last = starts.len() - 1;
+    let is_blank = |index: usize| {
+        text.get(starts[index].byte as usize..)
+            .and_then(|rest| rest.chars().next())
+            .is_none_or(char::is_whitespace)
+    };
+    // The clusters in the order the layout put them in, left to right.
+    let mut order: Vec<usize> = (0..starts.len()).collect();
+    order.sort_by(|a, b| starts[*a].x.total_cmp(&starts[*b].x));
+    let mut apart = 0.;
+    let mut compared = 0;
+    for pair in order.windows(2) {
+        let (left, right) = (pair[0], pair[1]);
+        if [left, right]
+            .iter()
+            .any(|index| *index == 0 || *index == last || is_blank(*index))
+        {
+            continue;
+        }
+        let (start, end) = (starts[left], starts[right]);
+        if start.scale != end.scale {
+            continue;
+        }
+        let (Some((_, from)), Some((_, to))) = (anchors[left], anchors[right]) else {
+            continue;
+        };
+        let core_text = (to - from) * f64::from(start.scale);
+        if core_text < 0. {
+            continue;
+        }
+        apart += (f64::from(end.x - start.x) - core_text).abs();
+        compared += 1;
+    }
+    (compared > 0).then_some(apart)
+}
+
 impl PdfWriter {
     /// Draws one row of text and counts it.
     pub(crate) fn draw_row(&mut self, row: &TextRow, page_height: f32) {
@@ -198,9 +261,6 @@ impl PdfWriter {
             .map(|run| (run.end, self.fonts.font(&run.font, row.size)))
             .collect();
         let (runs, width) = shape(&row.text, &units, &fonts);
-        if (width - wanted).abs() > slack {
-            self.report.rows_off += 1;
-        }
 
         // Where the layout starts each cluster, and the CoreText x of the
         // first glyph of each: a glyph keeps its distance from that one.
@@ -219,6 +279,15 @@ impl PdfWriter {
             if anchor.is_none_or(|(byte, _)| glyph.byte < byte) {
                 *anchor = Some((glyph.byte, glyph.x));
             }
+        }
+        let off = match advances_apart(&row.text, &starts, &anchors) {
+            Some(apart) => apart > slack,
+            // Nothing inside the row to compare: its width, unless a tab
+            // makes that depend on where the row stands in its line.
+            None => !row.text.contains('\t') && (width - wanted).abs() > slack,
+        };
+        if off {
+            self.report.rows_off += 1;
         }
 
         let size = f64::from(row.size);
@@ -353,7 +422,155 @@ fn font_at(font: &CTFont, scaled: &mut Vec<(u32, CTFont)>, scale: u32, size: f64
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::{FontSpec, JobInfo, RowRun, fonts::Fonts, page::Color};
+
+    fn family(name: &str) -> Arc<FontSpec> {
+        Arc::new(FontSpec {
+            family: name.to_string(),
+            weight: 400.,
+            italic: false,
+            fallbacks: Vec::new(),
+        })
+    }
+
+    /// The rows of one hard line as the editor's layout makes them on a Mac:
+    /// CoreText shapes the whole line in `shaped_in`, the line is wrapped after
+    /// a space where it is wider than `room`, and every row is cut out of the
+    /// shaped line (its glyphs keep their places, measured from the row's
+    /// start). The rows name `named` as their font.
+    fn rows_of_a_line(
+        line: &str,
+        shaped_in: &Arc<FontSpec>,
+        named: &Arc<FontSpec>,
+        size: f32,
+        room: f64,
+    ) -> Vec<TextRow> {
+        let font = Fonts::new().font(shaped_in, size);
+        let units = Units::new(line);
+        let (runs, width) = shape(line, &units, &[(line.len(), font)]);
+        let glyphs: Vec<&LineGlyph> = runs.iter().flat_map(|run| &run.glyphs).collect();
+        // The x a byte starts at: its first glyph's, or the end of the line.
+        let x_of = |byte: usize| {
+            glyphs
+                .iter()
+                .filter(|glyph| glyph.byte as usize >= byte)
+                .map(|glyph| glyph.x)
+                .reduce(f64::min)
+                .unwrap_or(width)
+        };
+        let breaks: Vec<usize> = line
+            .char_indices()
+            .filter(|(_, character)| *character == ' ')
+            .map(|(byte, _)| byte + 1)
+            .chain([line.len()])
+            .collect();
+        let mut rows = Vec::new();
+        let mut start = 0;
+        while start < line.len() {
+            let from = x_of(start);
+            let end = breaks
+                .iter()
+                .copied()
+                .filter(|end| *end > start)
+                .take_while(|end| x_of(*end) - from <= room)
+                .last()
+                .unwrap_or_else(|| breaks.iter().copied().find(|end| *end > start).unwrap());
+            let starts = glyphs
+                .iter()
+                .filter(|glyph| (start..end).contains(&(glyph.byte as usize)))
+                .map(|glyph| GlyphStart {
+                    byte: glyph.byte - start as u32,
+                    x: (glyph.x - from) as f32,
+                    scale: 1.,
+                })
+                .collect();
+            rows.push(TextRow {
+                text: line[start..end].to_string(),
+                x: 72.,
+                baseline: 100.,
+                size,
+                runs: vec![RowRun {
+                    end: end - start,
+                    font: named.clone(),
+                    color: Color {
+                        r: 0.,
+                        g: 0.,
+                        b: 0.,
+                    },
+                }],
+                glyphs: starts,
+                width: (x_of(end) - from) as f32,
+            });
+            start = end;
+        }
+        rows
+    }
+
+    /// How many of `rows` the writer counts as off.
+    fn rows_off(rows: &[TextRow]) -> usize {
+        let mut writer = PdfWriter::new(&JobInfo {
+            title: "Rows".to_string(),
+            creator: "The Writer 0.0.0".to_string(),
+        });
+        for row in rows {
+            writer.draw_row(row, 842.);
+        }
+        assert_eq!(writer.report.rows, rows.len());
+        writer.report.rows_off
+    }
+
+    const PROSE: &str = "Affluent officials flicked through the office files, \
+        fifty-five of them, and the fiery waffles were quite effective. \
+        The quick brown fox jumps over the lazy dog; Sphinx of black quartz, \
+        judge my vow. Typography takes time, and fine kerning AV To Ty Wa \
+        is what a careful setter looks for in every line of a long book.";
+
+    #[test]
+    fn a_row_cut_out_of_its_line_is_the_layouts_in_the_layouts_face() {
+        for name in [
+            "Charter",
+            "Zapfino",
+            "Helvetica Neue",
+            "Menlo",
+            "Hoefler Text",
+        ] {
+            let face = family(name);
+            let rows = rows_of_a_line(PROSE, &face, &face, 14., 300.);
+            assert!(rows.len() > 3, "{name}: {} rows", rows.len());
+            assert_eq!(rows_off(&rows), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_tab_on_a_row_that_does_not_start_its_line_is_no_other_face() {
+        let line = "build:\tcargo build --release -p writer-app && cargo test \
+            -p writer-print\tand then\tthe tabs\tland on\trows further on";
+        for name in ["Menlo", "Charter"] {
+            let face = family(name);
+            let rows = rows_of_a_line(line, &face, &face, 12., 200.);
+            assert!(
+                rows.iter().skip(1).any(|row| row.text.contains('\t')),
+                "{name}: no tab on a later row"
+            );
+            assert_eq!(rows_off(&rows), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn rows_measured_in_one_face_and_set_in_another_are_counted() {
+        for (measured, set) in [
+            ("Charter", "Helvetica Neue"),
+            ("Helvetica Neue", "Charter"),
+            ("Menlo", "Charter"),
+            ("Charter", "Zapfino"),
+        ] {
+            let rows = rows_of_a_line(PROSE, &family(measured), &family(set), 14., 300.);
+            assert_eq!(rows_off(&rows), rows.len(), "{measured} set in {set}");
+        }
+    }
 
     #[test]
     fn utf16_units_and_utf8_bytes_map_onto_each_other() {

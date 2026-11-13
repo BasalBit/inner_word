@@ -109,9 +109,14 @@ pub struct Report {
     pub pages: usize,
     /// The number of rows of text ([`crate::TextRow`]) on them.
     pub rows: usize,
-    /// Rows whose CoreText width differs from [`crate::TextRow::width`] by more
-    /// than the larger of half a point and half a percent: another face than the
-    /// layout's was resolved for them.
+    /// Rows CoreText sets at other advances than the layout measured: another
+    /// face than the layout's was resolved for them. Judged inside the row, pair
+    /// of clusters by pair, leaving out what depends on the rest of the hard line
+    /// the row was cut from (a tab, the row's first and last cluster) and what
+    /// the layout widens or shrinks itself (spaces, inline code at its edges); a
+    /// row off by more than the larger of half a point and half a percent of its
+    /// width is counted. A row too short for that is judged by its width
+    /// ([`crate::TextRow::width`]), unless it holds a tab.
     pub rows_off: usize,
     /// The PostScript names of the fonts that were drawn with, sorted.
     pub fonts: Vec<String>,

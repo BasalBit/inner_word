@@ -1143,7 +1143,9 @@ fn malformed_json_is_repaired_or_rejected() {
         "{}",
         r#"{"blocks":{}}"#,
         r#"{"format":"x","blocks":[]}"#,
-        r#"{"version":2,"blocks":[]}"#,
+        // Version 2 is the format with images, which this build reads; the
+        // one after it is refused.
+        r#"{"version":3,"blocks":[]}"#,
         "{\"blocks\":[",
     ];
     for j in bad {

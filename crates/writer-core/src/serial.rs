@@ -1,6 +1,6 @@
 //! JSON serialisation of documents and fragments.
 //!
-//! # Format (version 1)
+//! # Format (versions 1 and 2)
 //!
 //! ```json
 //! {
@@ -22,8 +22,9 @@
 //! `"type"`, plain text has no `"runs"`, default settings have no
 //! `"settings"`. Run lengths are UTF-8 byte lengths. Block keys: `id`,
 //! `type` (`paragraph`, `heading`, `bullet`, `numbered`, `todo`, `quote`,
-//! `code`, `divider`, `page_break`), `level`, `checked`, `lang`, `align`,
-//! `indent`, `size`, `text`, `runs`. Run keys: `len`, `bold`, `italic`,
+//! `code`, `divider`, `page_break`, `image`), `level`, `checked`, `lang`,
+//! `image`, `px`, `ppi`, `width`, `alt`, `align`, `indent`, `size`, `text`,
+//! `runs`. Run keys: `len`, `bold`, `italic`,
 //! `underline`, `strike`, `code`, `highlight`, `color` (`#rrggbb`), `font`,
 //! `link`, `comments` (thread ids). Settings keys: `page` (`paper`, `width`,
 //! `height`, `orientation`, `margins`), `typography` (`font`, `size`,
@@ -32,9 +33,37 @@
 //! document follows the app's setting, which is also how a document written
 //! before the key existed reads).
 //!
+//! # Images (version 2)
+//!
+//! ```json
+//! { "id": 7, "type": "image", "image": "3f2a9c1b5d6e7f80a1b2c3d4e5f60718",
+//!   "px": [1600, 1067], "ppi": 144, "width": 500, "alt": "The harbour at dusk", "align": "center" }
+//! ```
+//!
+//! `image` is the [`ImageId`] of the stored bytes (32 lowercase hex
+//! digits), `px` their pixel size, `ppi` their density (omitted when 72),
+//! `width` the share of the column in thousandths (omitted when 1000) and
+//! `alt` the description (omitted when empty). An image block has no
+//! `indent`, `size`, `text` or `runs`, and its `align` is never
+//! `"justify"`.
+//!
+//! The compact form holds the token `"image":"<32 hex digits>"` exactly so,
+//! without a space: whoever keeps the bytes finds the images a stored
+//! document names by looking for that token, without reading the document.
+//! The key must keep its name.
+//!
+//! A document or a fragment is written with `"version": 2` only when it
+//! holds an image, and with `"version": 1` otherwise, exactly as before
+//! images existed. A build from before them refuses a version 2 document
+//! as "newer than this app supports", which is the point: it would read an
+//! image as an empty paragraph and write that back. A document without an
+//! image is still read by every build.
+//!
 //! Reading is lenient: unknown keys are ignored, values of the wrong type
 //! fall back to defaults, and every model invariant is repaired (see
-//! [`Document::from_blocks`]). Reading fails only when the input is not
+//! [`Document::from_blocks`]). An image block whose `image` is not an id
+//! becomes a paragraph holding its `alt`; a missing or unreadable `px`
+//! reads as `[1, 1]`. Reading fails only when the input is not
 //! JSON, is not an object with a `blocks` array, names another format, or
 //! has a newer version than this build understands.
 
@@ -45,7 +74,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::attrs::{CommentId, Highlight, InlineAttrs, Rgb};
-use crate::block::{Alignment, Block, BlockId, BlockKind};
+use crate::block::{Alignment, Block, BlockId, BlockKind, Image, ImageId, ImageWidth};
 use crate::comments::{CommentThread, Reply, ReplyId};
 use crate::document::Document;
 use crate::fragment::Fragment;
@@ -58,8 +87,24 @@ use crate::settings::{
 pub const DOCUMENT_FORMAT: &str = "the-writer-document";
 /// The `"format"` tag of serialised fragments.
 pub const FRAGMENT_FORMAT: &str = "the-writer-fragment";
-/// The current format version written by this build.
-pub const FORMAT_VERSION: u64 = 1;
+/// The newest format version this build reads, and the one it writes for a
+/// document or a fragment that holds an image. Without an image it writes
+/// [`FORMAT_VERSION_WITHOUT_IMAGES`].
+pub const FORMAT_VERSION: u64 = 2;
+/// The format version written for a document or a fragment without an
+/// image: the format as it was before images, which every build reads.
+pub const FORMAT_VERSION_WITHOUT_IMAGES: u64 = 1;
+
+/// The version to write `blocks` with: 2 as soon as one of them is an
+/// image, so that a build that does not know images refuses the document
+/// instead of reading the image as an empty paragraph.
+fn version_for(blocks: &[Block]) -> u64 {
+    if blocks.iter().any(|b| b.kind.is_image()) {
+        FORMAT_VERSION
+    } else {
+        FORMAT_VERSION_WITHOUT_IMAGES
+    }
+}
 
 /// Why a document or fragment could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,6 +177,19 @@ struct BlockOut<'a> {
     checked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     lang: Option<&'a str>,
+    /// The id of an image's stored bytes. Written compact this is the
+    /// token `"image":"<32 hex digits>"` the library looks for: the key
+    /// keeps its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    px: Option<[u32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ppi: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alt: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     align: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +226,7 @@ impl<'a> BlockOut<'a> {
                     .collect(),
             )
         };
+        let image = b.kind.image();
         BlockOut {
             id: with_id.then_some(b.id.0),
             kind: (b.kind != BlockKind::Paragraph).then(|| b.kind.name()),
@@ -177,6 +236,17 @@ impl<'a> BlockOut<'a> {
                 BlockKind::CodeBlock { language } => language.as_deref(),
                 _ => None,
             },
+            image: image.map(|i| i.id.to_string()),
+            px: image.map(|i| [i.pixels.0, i.pixels.1]),
+            ppi: image
+                .map(|i| i.density)
+                .filter(|d| *d != Image::DEFAULT_DENSITY),
+            width: image
+                .map(|i| i.width.thousandths())
+                .filter(|w| *w != ImageWidth::FULL.thousandths()),
+            alt: image
+                .map(|i| i.description.as_str())
+                .filter(|d| !d.is_empty()),
             align: (b.alignment != Alignment::Left).then(|| b.alignment.name()),
             indent: (b.indent != 0).then_some(b.indent),
             size: b.text_size,
@@ -306,7 +376,7 @@ impl Serialize for Document {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         DocOut {
             format: DOCUMENT_FORMAT,
-            version: FORMAT_VERSION,
+            version: version_for(&self.blocks),
             settings: SettingsOut::new(&self.settings),
             blocks: self.blocks.iter().map(|b| BlockOut::new(b, true)).collect(),
             comments: self
@@ -346,7 +416,7 @@ impl Serialize for Fragment {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         FragmentOut {
             format: FRAGMENT_FORMAT,
-            version: FORMAT_VERSION,
+            version: version_for(&self.blocks),
             blocks: self
                 .blocks
                 .iter()
@@ -441,8 +511,19 @@ fn get_f32(o: &Map<String, Value>, k: &str) -> Option<f32> {
         .filter(|f| f.is_finite())
 }
 
-/// Checks the header and returns the object and its version.
+/// Checks the header and returns the object.
 fn header<'a>(v: &'a Value, format: &str) -> Result<&'a Map<String, Value>, LoadError> {
+    header_read_by(v, format, FORMAT_VERSION)
+}
+
+/// [`header`] as a build reads it whose newest version is `newest`: the
+/// whole of what decides whether a build takes a document or refuses it as
+/// too new.
+fn header_read_by<'a>(
+    v: &'a Value,
+    format: &str,
+    newest: u64,
+) -> Result<&'a Map<String, Value>, LoadError> {
     let o = v
         .as_object()
         .ok_or_else(|| LoadError::NotADocument("expected a JSON object".into()))?;
@@ -452,8 +533,8 @@ fn header<'a>(v: &'a Value, format: &str) -> Result<&'a Map<String, Value>, Load
     {
         return Err(LoadError::NotADocument(format!("unknown format {f:?}")));
     }
-    let version = get_u64(o, "version").unwrap_or(FORMAT_VERSION).max(1);
-    if version > FORMAT_VERSION {
+    let version = get_u64(o, "version").unwrap_or(newest).max(1);
+    if version > newest {
         return Err(LoadError::UnsupportedVersion(version));
     }
     // Future migrations from older versions go here.
@@ -505,13 +586,51 @@ fn parse_kind(o: &Map<String, Value>) -> BlockKind {
         },
         "divider" => BlockKind::Divider,
         "page_break" => BlockKind::PageBreak,
+        // Without an id there is no image to show: `parse_block` keeps the
+        // description as a paragraph.
+        "image" => parse_image(o).map_or(BlockKind::Paragraph, BlockKind::Image),
         _ => BlockKind::Paragraph,
     }
 }
 
+/// The image of a block of type `image`; `None` when `image` is not an id.
+/// Everything else has a fallback: a missing or unreadable `px` is 1 × 1,
+/// `ppi` 72, `width` the whole column, `alt` empty. Out-of-range values
+/// are repaired with the block.
+fn parse_image(o: &Map<String, Value>) -> Option<Image> {
+    let id = get_str(o, "image").and_then(ImageId::parse)?;
+    let pixel = |v: &Value| -> Option<u32> {
+        let n = v.as_u64().or_else(|| {
+            v.as_f64()
+                .filter(|f| f.is_finite() && *f >= 0.0)
+                .map(|f| f as u64)
+        })?;
+        Some(n.min(u64::from(u32::MAX)) as u32)
+    };
+    let pixels = match o.get("px").and_then(Value::as_array).map(Vec::as_slice) {
+        Some([w, h]) => pixel(w).zip(pixel(h)),
+        _ => None,
+    }
+    .unwrap_or((1, 1));
+    let small = |k: &str| get_u64(o, k).map(|n| n.min(u64::from(u16::MAX)) as u16);
+    Some(Image {
+        id,
+        pixels,
+        density: small("ppi").unwrap_or(Image::DEFAULT_DENSITY),
+        width: small("width").map_or(ImageWidth::FULL, ImageWidth::new),
+        description: get_str(o, "alt").unwrap_or("").to_string(),
+    })
+}
+
 fn parse_block(v: &Value) -> Option<Block> {
     let o = v.as_object()?;
-    let text = get_str(o, "text").unwrap_or("").to_string();
+    let kind = parse_kind(o);
+    let mut text = get_str(o, "text").unwrap_or("").to_string();
+    if text.is_empty() && kind == BlockKind::Paragraph && get_str(o, "type") == Some("image") {
+        // An image that names no stored bytes: what is left of it is its
+        // description, and that is kept as text.
+        text = get_str(o, "alt").unwrap_or("").to_string();
+    }
     let runs: Vec<Run> = match o.get("runs").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(parse_run).collect(),
         None if text.is_empty() => Vec::new(),
@@ -520,7 +639,7 @@ fn parse_block(v: &Value) -> Option<Block> {
             attrs: InlineAttrs::default(),
         }],
     };
-    let mut b = Block::new(parse_kind(o));
+    let mut b = Block::new(kind);
     b.id = BlockId(get_u64(o, "id").unwrap_or(0));
     b.alignment = get_str(o, "align")
         .and_then(Alignment::from_name)
@@ -868,5 +987,335 @@ mod tests {
         assert_eq!(Fragment::from_json(&json).unwrap(), f);
         let doc_json = Document::new().to_json();
         assert_eq!(Fragment::from_json(&doc_json).unwrap().blocks().len(), 1);
+    }
+
+    // ----- images -----------------------------------------------------------------
+
+    const HARBOUR: &str = "3f2a9c1b5d6e7f80a1b2c3d4e5f60718";
+
+    /// The example of the module documentation, as it is written compact.
+    const HARBOUR_BLOCK: &str = r#"{"id":7,"type":"image","image":"3f2a9c1b5d6e7f80a1b2c3d4e5f60718","px":[1600,1067],"ppi":144,"width":500,"alt":"The harbour at dusk","align":"center"}"#;
+
+    fn harbour() -> Image {
+        Image {
+            width: ImageWidth::new(500),
+            description: "The harbour at dusk".into(),
+            ..Image::new(ImageId::parse(HARBOUR).unwrap(), (1600, 1067), 144)
+        }
+    }
+
+    fn document_of(blocks: &str) -> String {
+        format!(r#"{{"format":"the-writer-document","version":2,"blocks":[{blocks}]}}"#)
+    }
+
+    #[test]
+    fn an_image_round_trips_byte_for_byte() {
+        let json = document_of(HARBOUR_BLOCK);
+        let d = Document::from_json(&json).unwrap();
+        d.check_invariants().unwrap();
+        assert_eq!(d.block_count(), 1);
+        let b = &d.blocks()[0];
+        assert_eq!(b.id(), BlockId(7));
+        assert_eq!(b.as_image(), Some(&harbour()));
+        assert_eq!(b.alignment(), Alignment::Center);
+        assert_eq!(d.to_json(), json);
+        // The same through serde, and the pretty form reads back equal.
+        let via_serde: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(via_serde, d);
+        assert_eq!(serde_json::to_string(&via_serde).unwrap(), json);
+        assert_eq!(Document::from_json(&d.to_json_pretty()).unwrap(), d);
+        // The documentation's example, with its spaces and line break.
+        let spaced = r#"{ "blocks": [
+            { "id": 7, "type": "image", "image": "3f2a9c1b5d6e7f80a1b2c3d4e5f60718",
+              "px": [1600, 1067], "ppi": 144, "width": 500, "alt": "The harbour at dusk", "align": "center" }
+        ] }"#;
+        assert_eq!(Document::from_json(spaced).unwrap().to_json(), json);
+        // Built from the model it is the same text.
+        let built = Document::from_blocks(vec![
+            Block::image(harbour()).with_alignment(Alignment::Center),
+        ]);
+        assert_eq!(
+            built.to_json(),
+            document_of(&HARBOUR_BLOCK.replace(r#""id":7"#, r#""id":1"#))
+        );
+    }
+
+    #[test]
+    fn an_image_omits_what_has_its_default() {
+        let plain = Image::new(ImageId::parse(HARBOUR).unwrap(), (640, 480), 72);
+        let d = Document::from_blocks(vec![Block::image(plain.clone())]);
+        let json = d.to_json();
+        assert_eq!(
+            json,
+            document_of(
+                r#"{"id":1,"type":"image","image":"3f2a9c1b5d6e7f80a1b2c3d4e5f60718","px":[640,480]}"#
+            )
+        );
+        let back = Document::from_json(&json).unwrap();
+        assert_eq!(back, d);
+        assert_eq!(back.blocks()[0].as_image(), Some(&plain));
+        assert_eq!(back.blocks()[0].alignment(), Alignment::Left);
+        // Each key appears as soon as its value is not the default, and
+        // only then.
+        let with = |change: &dyn Fn(&mut Image)| {
+            let mut image = plain.clone();
+            change(&mut image);
+            Document::from_blocks(vec![Block::image(image)]).to_json()
+        };
+        let ppi = with(&|i| i.density = 144);
+        assert!(ppi.contains(r#""ppi":144"#), "{ppi}");
+        assert!(!ppi.contains("width") && !ppi.contains("alt"), "{ppi}");
+        let width = with(&|i| i.width = ImageWidth::new(999));
+        assert!(width.contains(r#""width":999"#), "{width}");
+        assert!(!width.contains("ppi") && !width.contains("alt"), "{width}");
+        let alt = with(&|i| i.description = "A \"quoted\" boat".into());
+        assert!(alt.contains(r#""alt":"A \"quoted\" boat""#), "{alt}");
+        assert!(!alt.contains("ppi") && !alt.contains("width"), "{alt}");
+        // No key of a text block is written for an image.
+        for key in ["indent", "size", "text", "runs", "level", "lang", "checked"] {
+            assert!(!json.contains(&format!("\"{key}\"")), "{key}: {json}");
+        }
+    }
+
+    #[test]
+    fn the_token_the_library_looks_for_is_written_without_a_space() {
+        let d = Document::from_blocks(vec![
+            Block::paragraph("before"),
+            Block::image(harbour()),
+            Block::paragraph("after"),
+        ]);
+        let token = format!(r#""image":"{HARBOUR}""#);
+        assert_eq!(d.to_json().matches(&token).count(), 1, "{}", d.to_json());
+        // A fragment holds the same token.
+        let f = d.to_fragment();
+        assert_eq!(f.to_json().matches(&token).count(), 1, "{}", f.to_json());
+        // Text that looks like the token is written as text, with its
+        // quotes escaped: it cannot be mistaken for an image.
+        let fake = Document::from_blocks(vec![Block::paragraph(&token)]);
+        assert!(!fake.to_json().contains(&token), "{}", fake.to_json());
+    }
+
+    #[test]
+    fn the_version_is_two_only_with_an_image() {
+        let text =
+            Document::from_blocks(vec![Block::paragraph("a"), Block::new(BlockKind::Divider)]);
+        assert!(
+            text.to_json()
+                .starts_with(r#"{"format":"the-writer-document","version":1,"#),
+            "{}",
+            text.to_json()
+        );
+        assert!(
+            text.to_fragment()
+                .to_json()
+                .starts_with(r#"{"format":"the-writer-fragment","version":1,"#)
+        );
+        let with = Document::from_blocks(vec![Block::paragraph("a"), Block::image(harbour())]);
+        assert!(
+            with.to_json()
+                .starts_with(r#"{"format":"the-writer-document","version":2,"#),
+            "{}",
+            with.to_json()
+        );
+        assert!(
+            with.to_fragment()
+                .to_json()
+                .starts_with(r#"{"format":"the-writer-fragment","version":2,"#)
+        );
+        assert_eq!(Document::from_json(&with.to_json()).unwrap(), with);
+        assert_eq!(
+            Fragment::from_json(&with.to_fragment().to_json()).unwrap(),
+            with.to_fragment()
+        );
+        // A fragment of the text alone is version 1 again, and so is the
+        // document once the image is gone.
+        assert!(
+            with.block_fragment(0..1)
+                .to_json()
+                .starts_with(r#"{"format":"the-writer-fragment","version":1,"#)
+        );
+        let mut e = crate::EditorState::new(with);
+        e.set_caret(crate::Position::new(1, 0));
+        assert!(e.backspace());
+        assert!(
+            e.document()
+                .to_json()
+                .starts_with(r#"{"format":"the-writer-document","version":1,"#)
+        );
+    }
+
+    #[test]
+    fn a_build_from_before_images_refuses_a_document_with_one() {
+        let with: Value = serde_json::from_str(&document_of(HARBOUR_BLOCK)).unwrap();
+        // The reader as it was while the newest version was 1.
+        assert_eq!(
+            header_read_by(&with, DOCUMENT_FORMAT, 1).err(),
+            Some(LoadError::UnsupportedVersion(2))
+        );
+        assert_eq!(
+            header_read_by(&with, FRAGMENT_FORMAT, 1).err(),
+            Some(LoadError::UnsupportedVersion(2))
+        );
+        // It still takes every document without an image this build writes.
+        let without: Value = serde_json::from_str(&Document::new().to_json()).unwrap();
+        assert!(header_read_by(&without, DOCUMENT_FORMAT, 1).is_ok());
+        // And this build refuses what comes after it, in the same words.
+        assert!(header(&with, DOCUMENT_FORMAT).is_ok());
+        let later = r#"{"version": 3, "blocks": []}"#;
+        assert_eq!(
+            Document::from_json(later).err(),
+            Some(LoadError::UnsupportedVersion(3))
+        );
+        assert_eq!(
+            Fragment::from_json(later).err(),
+            Some(LoadError::UnsupportedVersion(3))
+        );
+        assert_eq!(
+            LoadError::UnsupportedVersion(2).to_string(),
+            "document format version 2 is newer than this app supports"
+        );
+        assert_eq!(FORMAT_VERSION, 2);
+        assert_eq!(FORMAT_VERSION_WITHOUT_IMAGES, 1);
+    }
+
+    #[test]
+    fn an_image_is_read_leniently() {
+        let read = |block: &str| {
+            let d = Document::from_json(&format!(r#"{{"blocks":[{block}]}}"#)).unwrap();
+            d.check_invariants().unwrap();
+            d
+        };
+        // Without an id that can be read there is no image: the description
+        // stays, as a paragraph.
+        for bad in [
+            r#""image":"nope","#,
+            r#""image":"3f2a9c1b5d6e7f80a1b2c3d4e5f6071","#,
+            r#""image":"3f2a9c1b5d6e7f80a1b2c3d4e5f607180","#,
+            r#""image":"3f2a9c1b5d6e7f80a1b2c3d4e5f6071g","#,
+            r#""image":7,"#,
+            r#""image":null,"#,
+            r#""image":["3f2a9c1b5d6e7f80a1b2c3d4e5f60718"],"#,
+            "",
+        ] {
+            let d = read(&format!(
+                r#"{{"id":4,"type":"image",{bad}"px":[10,10],"alt":"The harbour at dusk","align":"center"}}"#
+            ));
+            assert_eq!(d.block_count(), 1, "{bad}");
+            let b = &d.blocks()[0];
+            assert_eq!(b.kind(), &BlockKind::Paragraph, "{bad}");
+            assert_eq!(b.text(), "The harbour at dusk", "{bad}");
+            assert_eq!(b.id(), BlockId(4), "{bad}");
+            assert_eq!(b.alignment(), Alignment::Center, "{bad}");
+            assert!(!d.has_images());
+            // What is written then is a document without an image.
+            assert!(d.to_json().contains(r#""version":1"#), "{bad}");
+        }
+        // Nothing at all to keep: an empty paragraph.
+        let d = read(r#"{"type":"image"}"#);
+        assert_eq!(d.blocks()[0].kind(), &BlockKind::Paragraph);
+        assert_eq!(d.blocks()[0].text(), "");
+
+        // An id in capitals is the same id.
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{}","px":[3,4]}}"#,
+            HARBOUR.to_uppercase()
+        ));
+        let image = d.blocks()[0].as_image().unwrap();
+        assert_eq!(image.id.to_string(), HARBOUR);
+        assert_eq!(image.pixels, (3, 4));
+
+        // A missing or unreadable pixel size is 1 x 1; the image stays.
+        for px in [
+            "",
+            r#""px":null,"#,
+            r#""px":"1600x1067","#,
+            r#""px":[1600],"#,
+            r#""px":[1600,1067,3],"#,
+            r#""px":[1600,"x"],"#,
+            r#""px":[-5,10],"#,
+            r#""px":{"w":1,"h":2},"#,
+        ] {
+            let d = read(&format!(r#"{{"type":"image",{px}"image":"{HARBOUR}"}}"#));
+            let image = d.blocks()[0].as_image().expect(px);
+            assert_eq!(image.pixels, (1, 1), "{px}");
+            assert_eq!(image.density, 72, "{px}");
+            assert_eq!(image.width, ImageWidth::FULL, "{px}");
+            assert_eq!(image.description, "", "{px}");
+        }
+        // Zero is not a size, and numbers beyond the type are its largest.
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{HARBOUR}","px":[0,1e300]}}"#
+        ));
+        assert_eq!(d.blocks()[0].as_image().unwrap().pixels, (1, u32::MAX));
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{HARBOUR}","px":[640.9,480]}}"#
+        ));
+        assert_eq!(d.blocks()[0].as_image().unwrap().pixels, (640, 480));
+
+        // Everything else is brought into range, as for every block.
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{HARBOUR}","px":[8,6],"ppi":5,"width":7,
+                "alt":"  two\r\nlines\t ","align":"justify","indent":3,"size":30}}"#
+        ));
+        let b = &d.blocks()[0];
+        let image = b.as_image().unwrap();
+        assert_eq!(image.density, Image::MIN_DENSITY);
+        assert_eq!(image.width, ImageWidth::MIN);
+        assert_eq!(image.description, "two lines");
+        assert_eq!(b.alignment(), Alignment::Left);
+        assert_eq!(b.indent(), 0);
+        assert_eq!(b.text_size(), None);
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{HARBOUR}","px":[8,6],"ppi":1e9,"width":70000,"alt":7,"align":"right"}}"#
+        ));
+        let b = &d.blocks()[0];
+        let image = b.as_image().unwrap();
+        assert_eq!(image.density, Image::MAX_DENSITY);
+        assert_eq!(image.width, ImageWidth::FULL);
+        assert_eq!(image.description, "");
+        assert_eq!(b.alignment(), Alignment::Right);
+        // Values of the wrong type fall back to the defaults.
+        let d = read(&format!(
+            r#"{{"type":"image","image":"{HARBOUR}","px":[8,6],"ppi":"dense","width":"half"}}"#
+        ));
+        let image = d.blocks()[0].as_image().unwrap();
+        assert_eq!(image.density, 72);
+        assert_eq!(image.width, ImageWidth::FULL);
+
+        // Text an image block came with is not lost: it follows the image
+        // in a paragraph of its own.
+        let d = read(&format!(
+            r#"{{"id":2,"type":"image","image":"{HARBOUR}","px":[8,6],"text":"caption","align":"center"}}"#
+        ));
+        assert_eq!(d.block_count(), 2);
+        assert!(d.blocks()[0].kind().is_image());
+        assert_eq!(d.blocks()[0].id(), BlockId(2));
+        assert_eq!(d.blocks()[1].text(), "caption");
+
+        // The keys of an image mean nothing on another kind of block.
+        let d = read(&format!(
+            r#"{{"text":"plain","image":"{HARBOUR}","px":[8,6],"alt":"not this"}}"#
+        ));
+        assert_eq!(d.blocks()[0].kind(), &BlockKind::Paragraph);
+        assert_eq!(d.blocks()[0].text(), "plain");
+        assert!(d.to_json().contains(r#""version":1"#));
+    }
+
+    #[test]
+    fn a_fragment_keeps_an_image_whole() {
+        let f = Fragment::new(vec![
+            Block::paragraph("above"),
+            Block::image(harbour()).with_alignment(Alignment::Right),
+        ]);
+        let json = f.to_json();
+        assert!(!json.contains("\"id\""), "{json}");
+        let back = Fragment::from_json(&json).unwrap();
+        assert_eq!(back, f);
+        assert_eq!(back.blocks()[1].as_image(), Some(&harbour()));
+        assert_eq!(back.blocks()[1].alignment(), Alignment::Right);
+        // A whole document read as a fragment brings its images along.
+        let d = Document::from_json(&document_of(HARBOUR_BLOCK)).unwrap();
+        let from_document = Fragment::from_json(&d.to_json()).unwrap();
+        assert_eq!(from_document.blocks()[0].as_image(), Some(&harbour()));
     }
 }

@@ -2116,3 +2116,47 @@ fn in_vim_mode_an_image_is_one_stop_and_stays_whole(cx: &mut TestAppContext) {
     let_pictures_arrive(cx);
     assert_eq!(status(&workspace, image.id, cx), ImageStatus::Ready);
 }
+
+// ----- words ------------------------------------------------------------------------------------
+
+/// The welcome document says how a picture comes in and what there is to
+/// do with one, and names the two keys that size it by what they are by
+/// default.
+#[gpui::test]
+fn the_welcome_document_says_how_a_picture_comes_in(cx: &mut TestAppContext) {
+    init(cx);
+    let text = writer_app::welcome::welcome_document().plain_text();
+    assert!(
+        text.contains(
+            "Image… in the Insert menu puts a picture into the text, and so does Image in the \
+             insert menu, a paste, or an image file dragged in from the Finder."
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("⇧⌘. and ⇧⌘, make the selected picture larger and smaller."),
+        "{text}"
+    );
+    // The keys it names are the keys of the two commands.
+    cx.update(|cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let keys = |action: &dyn Action| -> Vec<String> {
+            keymap
+                .bindings_for_action(action)
+                .filter(|binding| !menus::is_menu_key_binding(binding))
+                .map(|binding| binding.keystrokes()[0].unparse())
+                .collect()
+        };
+        assert!(
+            keys(&editor::IncreaseTextSize).contains(&"cmd-shift-.".to_string()),
+            "{:?}",
+            keys(&editor::IncreaseTextSize)
+        );
+        assert!(
+            keys(&editor::DecreaseTextSize).contains(&"cmd-shift-,".to_string()),
+            "{:?}",
+            keys(&editor::DecreaseTextSize)
+        );
+    });
+}

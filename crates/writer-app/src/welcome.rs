@@ -85,7 +85,7 @@ pub const WELCOME_TITLE: &str = "Welcome to The Writer";
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
 /// insert menus, Markdown shortcuts, spelling, page view, comments, Vim
-/// mode, the assistant, agents, export and print.
+/// mode, the assistant, agents, export and print, and pictures.
 pub fn welcome_document() -> Document {
     Document::from_blocks(vec![
         heading(1, WELCOME_TITLE),
@@ -131,7 +131,16 @@ pub fn welcome_document() -> Document {
         ),
         paragraph(
             "Type {k:/} at the start of an empty line for the insert menu: headings, lists, \
-             quotes, code blocks, dividers and page breaks.",
+             quotes, code blocks, dividers, page breaks and pictures.",
+        ),
+        heading(2, "Pictures"),
+        paragraph(
+            "{b:Image…} in the Insert menu puts a picture into the text, and so does \
+             {b:Image} in the insert menu, a paste, or an image file dragged in from the \
+             Finder. Click a picture to select it: a corner resizes it, a drag moves it, and \
+             a right-click has its size, its place on the line and {b:Description…}, a line \
+             that says what it shows. {k:⇧⌘.} and {k:⇧⌘,} make the selected picture larger \
+             and smaller. Exports and prints carry your pictures.",
         ),
         heading(2, "Markdown shortcuts"),
         paragraph("Markdown typed at the start of a line turns into formatting as you go."),

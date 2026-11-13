@@ -432,6 +432,11 @@ impl Workspace {
     /// The open document as the side chat sends it with a message: its
     /// text as Markdown as it is in the editor right now, its title and
     /// its path in the library. `None` without an open document.
+    ///
+    /// An image of the document is one line of that Markdown,
+    /// `![description](image:<id>)`: the assistant is told what the image
+    /// shows, in the writer's words, and which image it is. The picture
+    /// itself is never sent, in neither chat.
     pub fn assistant_open_document(&self, cx: &App) -> Option<OpenDocument> {
         let open = self.assistant.open.borrow().clone()?;
         Some(open_document(

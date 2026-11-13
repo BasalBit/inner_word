@@ -98,9 +98,10 @@ it cannot take. Your keys are stored with your library.
 A few keys are not shortcuts and stay as they are: the keys of Vim mode; the
 "/" that opens the insert menu while you type, and Tab, which takes its marked
 row; the keys inside an open right-click menu (the arrows, Return, Escape and
-the letters that jump to an item); and what a click does with a key held
+the letters that jump to an item); what a click does with a key held
 (Command-click opens a link, Shift-click extends the selection, Control-click
-is a right-click). With Vim mode on, Vim sees a key in the text before any
+is a right-click); and Escape while you drag or resize a picture, which
+leaves the picture as it was. With Vim mode on, Vim sees a key in the text before any
 shortcut does: a shortcut without Command on a key that Vim uses does not run
 in Normal mode, and the list tells you when you choose such a key. While a
 right-click menu is open, a shortcut without Command does nothing.

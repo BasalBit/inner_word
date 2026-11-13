@@ -445,9 +445,32 @@ mod tests {
             vec!["comment", "add"],
             vec!["history", "restore"],
             vec!["export"],
+            vec!["image", "add"],
+            vec!["image", "list"],
         ] {
             let expected: Vec<String> = expected.into_iter().map(str::to_string).collect();
             assert!(commands.contains(&expected), "{expected:?} is not shown");
+        }
+    }
+
+    /// What an agent has to know about images, whatever the wording: how one reads, that
+    /// the line keeps it and its absence removes it, how one is added, and how to look at
+    /// one.
+    #[test]
+    fn the_text_says_how_images_read_and_how_one_is_added() {
+        let text = spec().render();
+        for needed in [
+            "`![description](image:<id>)`",
+            "Keep that line as it is and the image stays, with its size",
+            "the image is removed (the version kept before your change still has it)",
+            "image add doc:12 ~/Pictures/harbour.jpg --alt \"The harbour at dusk\"",
+            "`![what it shows](/absolute/path.png)`",
+            "PNG, JPEG, GIF, HEIC, TIFF, WebP and BMP",
+            "an address on the web stays a link",
+            "export the document as Markdown to a file",
+            "runs across an image",
+        ] {
+            assert!(text.contains(needed), "the skill does not say: {needed}");
         }
     }
 

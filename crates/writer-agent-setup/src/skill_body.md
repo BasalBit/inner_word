@@ -69,6 +69,16 @@ writer set doc:12 --file rewritten.md
 
 `edit` replaces an exact piece of text. `--old` is the text as `get --format text` prints it (a piece copied from the Markdown is found too) and must stand in the document exactly once: quote enough of the words around the change to make it so. The words you quote and leave as they are keep their formatting, and so does everything around them, with its comments. When the text occurs several times the error lists the places with their numbers; `--occurrence <n>` takes one of them and `--all` every one. `find doc:12 "some words"` shows where a text stands without changing anything. `insert` also takes `--at-start`, `--before <heading>` and `--end-of <heading>`. `replace-section` replaces what stands under a heading and keeps the heading. `set` replaces the whole text and is the last resort.
 
+Images. A document can hold images. When you read a document as Markdown an image is a line `![description](image:<id>)`. Keep that line as it is and the image stays, with its size. Leave it out of a text you write back and the image is removed (the version kept before your change still has it). To add an image, give a local file:
+
+```
+writer image add doc:12 ~/Pictures/harbour.jpg --alt "The harbour at dusk"
+writer image list doc:12
+writer export doc:12 --to ~/Desktop/chapter.md
+```
+
+or write `![what it shows](/absolute/path.png)` in the Markdown you send. PNG, JPEG, GIF, HEIC, TIFF, WebP and BMP work; an address on the web stays a link. `image add` takes `--width <percent>` (a share of the text column), `--align left|center|right` and `--at` with a place; `image list` prints the images of a document with their sizes. `edit` refuses an `--old` that runs across an image: replace the text before and after it separately, or give `--old` as Markdown with the image's line in it. You cannot see a picture through this tool: to see an image, export the document as Markdown to a file. The pictures are written into a folder beside it.
+
 Organise:
 
 ```
@@ -123,7 +133,7 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 
 - 0: done.
 - 1: failed. The message says why.
-- 2: the command line is wrong. Read the command's `--help`.
+- 2: the command line is wrong, or what it asks for cannot be done as asked (a file that is no image, a text to replace that runs across an image). The message says which; the command's `--help` has the rest.
 - 3: not found (a document, a folder, a heading, a comment thread, a version). The message says what there is; check the id or the path with `list` or `search`.
 - 4: a name fits several items. The message lists them with their ids: use the id. For a heading that occurs several times, pass `--occurrence <n>`.
 - 5: The Writer is open and did not make the change. The message says why, whether anything was changed, and what to do; see "While The Writer is open".

@@ -26,11 +26,11 @@ use std::{
     time::Duration,
 };
 
-use gpui::{Action, Modifiers, TestAppContext};
+use gpui::{Action, TestAppContext};
 use writer_app::{
     SaveState,
     automation::{ImageStep, Script, Step, describe_state},
-    export::{ExportScope, pictures_sentence},
+    export::{ExportChoice, ExportDestination, ExportScope, pictures_sentence, short_path},
     images::{self, COLLECT_DELAY, LOOK_EVERY, REFUSALS_NAMED, more_refused},
     menus, pasteboard,
     printing,
@@ -39,11 +39,11 @@ use writer_app::{
     version_history::{IMAGE_WITHOUT_DESCRIPTION, VersionHistory},
     workspace::{AUTOSAVE_DELAY, SELECT_AN_IMAGE_FIRST, is_image_command},
 };
-use writer_core::{Alignment, Image, ImageId, ImageWidth, Position, Selection};
+use writer_core::{Alignment, DocumentSettings, Image, ImageId, ImageWidth, Position};
 use writer_editor::{ImageStatus, NewImageSource, actions as editor};
 use writer_editor_tools::{ToolKind, actions as tools};
 use writer_export::ExportFormat;
-use writer_library::{ImageFormat, Library, NewImage, StoredImageId};
+use writer_library::{Clock, ImageFormat, Library, NewImage, StoredImageId};
 use writer_ui::ContextMenu;
 
 use super::*;
@@ -1389,5 +1389,627 @@ fn the_menu_bar_has_insert_image_and_format_image(cx: &mut TestAppContext) {
     assert_eq!(
         action("Format", "Description…"),
         "editor_tools::EditImageDescription"
+    );
+}
+
+// ----- exports ----------------------------------------------------------------------------------
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+#[gpui::test]
+fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let bytes = png(400, 300, BLUE);
+    let image = stored_png(&library, 400, 300, BLUE, cx);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Harbour"),
+        Block::paragraph("Before."),
+        picture(&image, 50, Alignment::Center, "The harbour at dusk"),
+        Block::paragraph("After."),
+    ]);
+    let (_, workspace, cx) = open_with(&document, &library, cx);
+    let prepare = |format: ExportFormat, cx: &mut VisualTestContext| {
+        workspace
+            .update(cx, |w, cx| w.prepare_export(ExportScope::Document, format, cx))
+            .expect("the export is made")
+    };
+
+    // A Word document holds the picture.
+    let docx = prepare(ExportFormat::Docx, cx);
+    assert_eq!(docx.file_name, "Harbour.docx");
+    assert!(docx.assets.is_empty(), "nothing goes beside a Word document");
+    assert!(
+        contains(&docx.bytes, b"word/media/image1.png"),
+        "the package has the picture among its parts"
+    );
+
+    // Plain text has the description on a line of its own.
+    let plain = String::from_utf8(prepare(ExportFormat::PlainText, cx).bytes).unwrap();
+    assert!(
+        plain.lines().any(|line| line == "The harbour at dusk"),
+        "{plain:?}"
+    );
+
+    // A Markdown file links the picture in a folder beside it.
+    let markdown = prepare(ExportFormat::Markdown, cx);
+    assert_eq!(markdown.file_name, "Harbour.md");
+    let digits: String = image.id.to_string().chars().take(8).collect();
+    let linked = format!("Harbour images/image-{digits}.png");
+    assert_eq!(
+        markdown
+            .assets
+            .iter()
+            .map(|asset| asset.path.as_str())
+            .collect::<Vec<_>>(),
+        [linked.as_str()]
+    );
+    assert_eq!(markdown.assets[0].bytes, bytes);
+    assert_eq!(markdown.pictures_folder(), Some("Harbour images"));
+    let text = String::from_utf8(markdown.bytes.clone()).unwrap();
+    assert!(text.contains("![The harbour at dusk]("), "{text}");
+    assert!(
+        text.contains(&linked) || text.contains(&linked.replace(' ', "%20")),
+        "the Markdown links the file: {text}"
+    );
+    assert!(!text.contains("image:"), "{text}");
+
+    // Through the save panel, under a name of the writer's own: the
+    // folder keeps the name the links have.
+    let out = tempfile::tempdir().unwrap();
+    let target = out.path().join("Chapter one.md");
+    workspace.update_in(cx, |w, window, cx| {
+        w.export(
+            ExportChoice::new(
+                ExportScope::Document,
+                ExportFormat::Markdown,
+                ExportDestination::File,
+            ),
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path(), "the save panel opened");
+    let chosen = target.clone();
+    cx.simulate_new_path_selection(move |_| Some(chosen));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+    let written = out.path().join("Harbour images").join(format!("image-{digits}.png"));
+    assert_eq!(std::fs::read(&written).unwrap(), bytes);
+    assert_eq!(
+        toasts(&workspace, cx),
+        [format!(
+            "Exported “Harbour” to {}. Its 1 picture is in “Harbour images”.",
+            short_path(&target)
+        )]
+    );
+    assert_eq!(
+        pictures_sentence(3, "Part one images", 4),
+        "Their 3 pictures are in “Part one images”."
+    );
+    clear_toasts(&workspace, cx);
+
+    // Markdown for the clipboard names the image as the library does:
+    // there is no place to put a file.
+    workspace.update_in(cx, |w, window, cx| {
+        w.export(
+            ExportChoice::new(
+                ExportScope::Document,
+                ExportFormat::Markdown,
+                ExportDestination::Clipboard,
+            ),
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    let copied = cx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    assert!(
+        copied.contains(&format!("![The harbour at dusk](image:{})", image.id)),
+        "{copied}"
+    );
+
+    // A Word document without a picture says nothing about pictures, and
+    // an image whose bytes the library does not have is exported as what
+    // it shows.
+    let missing = Image::new(ImageId::from_bytes([9; 16]), (800, 600), 72);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |editor, cx| {
+        editor.edit(
+            |state| {
+                state.set_caret(Position::new(3, 0));
+                let mut missing = missing.clone();
+                missing.description = "A map that is gone".to_string();
+                state.insert_image(missing, Alignment::Left)
+            },
+            cx,
+        );
+    });
+    let markdown = prepare(ExportFormat::Markdown, cx);
+    assert_eq!(markdown.assets.len(), 1, "only the picture that is there");
+    let plain = String::from_utf8(prepare(ExportFormat::PlainText, cx).bytes).unwrap();
+    assert!(plain.contains("A map that is gone"), "{plain:?}");
+    let docx = prepare(ExportFormat::Docx, cx);
+    assert!(contains(&docx.bytes, b"word/media/image1.png"));
+    assert!(!contains(&docx.bytes, b"word/media/image2.png"));
+}
+
+// ----- print ------------------------------------------------------------------------------------
+
+/// Lets the editor's background layout measure every block.
+fn settle(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) {
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    for _ in 0..5000 {
+        if !editor.read_with(cx, |editor, _| editor.layout_pending()) {
+            return;
+        }
+        cx.executor().advance_clock(Duration::from_millis(2));
+        cx.run_until_parked();
+    }
+    panic!("the background layout did not settle");
+}
+
+/// A document in page view with a picture used twice, a picture the
+/// library does not have, and enough text for a second page.
+fn illustrated(image: &Image) -> Document {
+    let missing = Image::new(ImageId::from_bytes([9; 16]), (800, 600), 72);
+    let mut blocks = vec![
+        Block::with_text(BlockKind::heading(1), "Harbour"),
+        picture(image, 100, Alignment::Center, "The harbour at dusk"),
+    ];
+    blocks.extend((0..12).map(|index| {
+        Block::paragraph(&format!(
+            "Paragraph {index}. The boats came by road every spring, and nobody asked why."
+        ))
+    }));
+    blocks.push(picture(image, 25, Alignment::Right, ""));
+    blocks.push(picture(&missing, 50, Alignment::Left, "A map that is gone"));
+    blocks.push(Block::paragraph("The end."));
+    Document::from_blocks(blocks).with_settings(DocumentSettings {
+        page_view: true,
+        ..DocumentSettings::default()
+    })
+}
+
+fn print_and_wait(
+    workspace: &Entity<Workspace>,
+    jobs: &std::rc::Rc<std::cell::RefCell<Vec<printing::PrintJob>>>,
+    cx: &mut VisualTestContext,
+) -> printing::PrintJob {
+    let before = jobs.borrow().len();
+    cx.dispatch_action(writer_app::actions::Print);
+    for _ in 0..20_000 {
+        cx.run_until_parked();
+        if jobs.borrow().len() > before && workspace.read_with(cx, |w, _| w.printing()).is_none() {
+            return jobs.borrow().last().unwrap().clone();
+        }
+        cx.executor().advance_clock(Duration::from_millis(1));
+    }
+    panic!("the pages were never done");
+}
+
+#[gpui::test]
+fn a_print_has_the_pictures_of_the_document(cx: &mut TestAppContext) {
+    init(cx);
+    let jobs = cx.update(printing::record);
+    let library = library(cx);
+    let image = stored_png(&library, 800, 500, GREEN, cx);
+    let (_, workspace, cx) = open_with(&illustrated(&image), &library, cx);
+
+    let job = print_and_wait(&workspace, &jobs, cx);
+    // One picture is in the PDF (used twice, held once); the one the
+    // library does not have is its box and its description.
+    assert_eq!(job.pdf.report.images, 1);
+    assert_eq!(job.pdf.report.images_unreadable, 0);
+    settle(&workspace, cx);
+    let pages = workspace.read_with(cx, |w, cx| w.editor().read(cx).page_count());
+    assert_eq!(Some(job.pdf.report.pages), pages, "page view's pages");
+    assert!(job.pdf.report.pages >= 2);
+    let file = writer_print::PdfFile::open(job.pdf.bytes()).expect("a PDF");
+    assert_eq!(file.page_count(), job.pdf.report.pages);
+
+    // The job made at once (a scripted step) has the picture too.
+    let at_once = workspace
+        .update_in(cx, |w, window, cx| w.print_job(window, cx))
+        .expect("a document is open");
+    assert_eq!(at_once.pdf.report.images, 1);
+    assert_eq!(at_once.pdf.report.pages, job.pdf.report.pages);
+    assert!(
+        job.pdf.len() > 2_000,
+        "the PDF holds more than its text: {} bytes",
+        job.pdf.len()
+    );
+}
+
+/// With a library on disk the pictures of a print are read through the
+/// provider's own connection, in the task that makes the pages, before
+/// the first page is made.
+#[gpui::test]
+fn on_disk_a_print_reads_its_pictures_in_the_background(cx: &mut TestAppContext) {
+    init(cx);
+    let jobs = cx.update(printing::record);
+    let disk = Disk::new();
+    let (library, workspace, cx) = disk.launch(None, cx);
+    let image = stored_png(&library, 800, 500, GREEN, cx);
+    let id = add_document(&library, None, &illustrated(&image), cx);
+    workspace.update_in(cx, |w, window, cx| {
+        assert!(w.open_document(id, true, window, cx));
+    });
+    cx.run_until_parked();
+
+    // A slice is one block, and the next comes a millisecond of the test
+    // clock later: the job can be seen while it prepares.
+    cx.update(|_, cx| printing::set_slice(Duration::ZERO, cx));
+    let preparing = Some(writer_app::workspace::Printing::Preparing);
+    cx.dispatch_action(writer_app::actions::Print);
+    assert_eq!(workspace.read_with(cx, |w, _| w.printing()), preparing);
+    assert!(jobs.borrow().is_empty());
+    let job = print_and_wait_for(&workspace, &jobs, cx);
+    // The picture came through the provider's own connection to
+    // images.db.
+    assert_eq!(job.pdf.report.images, 1);
+    // Cancelled on the way: nothing is handed over.
+    cx.dispatch_action(writer_app::actions::Print);
+    assert_eq!(workspace.read_with(cx, |w, _| w.printing()), preparing);
+    cx.dispatch_action(writer_app::actions::CancelPrint);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |w, _| w.printing()), None);
+    assert_eq!(jobs.borrow().len(), 1);
+}
+
+/// Waits for the job a "Print…" that was already dispatched hands over.
+fn print_and_wait_for(
+    workspace: &Entity<Workspace>,
+    jobs: &std::rc::Rc<std::cell::RefCell<Vec<printing::PrintJob>>>,
+    cx: &mut VisualTestContext,
+) -> printing::PrintJob {
+    for _ in 0..20_000 {
+        cx.run_until_parked();
+        if !jobs.borrow().is_empty() && workspace.read_with(cx, |w, _| w.printing()).is_none() {
+            return jobs.borrow().last().unwrap().clone();
+        }
+        cx.executor().advance_clock(Duration::from_millis(1));
+    }
+    panic!("the pages were never done");
+}
+
+// ----- the collector ----------------------------------------------------------------------------
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn collected_at(library: &Entity<Library>, cx: &mut VisualTestContext) -> Option<i64> {
+    library.read_with(cx, |library, _| {
+        library.setting::<i64>(keys::IMAGES_COLLECTED_AT).unwrap()
+    })
+}
+
+#[gpui::test]
+fn the_collector_runs_a_moment_after_a_launch_and_not_again_within_a_day(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    let disk = Disk::new();
+    let files = tempfile::tempdir().unwrap();
+    let first = png(200, 120, RED);
+    let second = png(220, 120, GREEN);
+    let clock = Clock::manual(1_800_000_000_000);
+
+    // The first launch, as `main` starts it.
+    {
+        let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+        vcx.update(|_, cx| images::collect_in_background(&library, cx));
+        vcx.simulate_keystrokes("cmd-n");
+        vcx.run_until_parked();
+        insert_files(
+            &workspace,
+            vec![file_in(files.path(), "first.png", &first)],
+            vcx,
+        );
+        vcx.run_until_parked();
+        assert_eq!(images_in(&workspace, vcx).len(), 1);
+        let_it_save(&workspace, vcx);
+        assert_eq!(collected_at(&library, vcx), None, "not before its time");
+        assert!(disk.in_the_copy(id_of(&first)).is_none());
+
+        clock.advance_ms(20_000);
+        vcx.executor().advance_clock(COLLECT_DELAY);
+        vcx.run_until_parked();
+        assert_eq!(
+            collected_at(&library, vcx),
+            Some(clock.now_ms()),
+            "the run is noted with its time"
+        );
+        // The picture is named, and it is there; and the run ended by
+        // bringing the copy of the pictures among the backups up to date.
+        assert_eq!(disk.stored(id_of(&first)).as_deref(), Some(first.as_slice()));
+        assert_eq!(
+            disk.in_the_copy(id_of(&first)).as_deref(),
+            Some(first.as_slice())
+        );
+        quit(&workspace, vcx);
+    }
+    let ran = clock.now_ms();
+
+    // An hour later, a second launch: the collector does not run again,
+    // and a picture that came in since is copied among the backups.
+    clock.advance_ms(60 * 60 * 1000);
+    {
+        let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+        vcx.update(|_, cx| images::collect_in_background(&library, cx));
+        vcx.simulate_keystrokes("cmd-down");
+        insert_files(
+            &workspace,
+            vec![file_in(files.path(), "second.png", &second)],
+            vcx,
+        );
+        vcx.run_until_parked();
+        assert_eq!(images_in(&workspace, vcx).len(), 2);
+        assert!(disk.in_the_copy(id_of(&second)).is_none());
+        vcx.executor().advance_clock(COLLECT_DELAY);
+        vcx.run_until_parked();
+        assert_eq!(collected_at(&library, vcx), Some(ran), "no second run");
+        assert_eq!(
+            disk.in_the_copy(id_of(&second)).as_deref(),
+            Some(second.as_slice())
+        );
+        quit(&workspace, vcx);
+    }
+
+    // More than a day after the run: the next launch runs it again.
+    clock.advance_ms(DAY_MS);
+    let (library, _workspace, vcx) = disk.launch(Some(&clock), cx);
+    vcx.update(|_, cx| images::collect_in_background(&library, cx));
+    vcx.executor().advance_clock(COLLECT_DELAY);
+    vcx.run_until_parked();
+    assert_eq!(collected_at(&library, vcx), Some(clock.now_ms()));
+    assert!(clock.now_ms() > ran + DAY_MS);
+    // Both pictures are named by the document and are there.
+    assert!(disk.stored(id_of(&first)).is_some());
+    assert!(disk.stored(id_of(&second)).is_some());
+}
+
+/// While the app stays open it looks once a day at which images are
+/// named, and deletes nothing: an image that only the undo history holds
+/// is still in the file, however long the app has been open.
+#[gpui::test]
+fn while_the_app_stays_open_it_looks_once_a_day_and_deletes_nothing(cx: &mut TestAppContext) {
+    init(cx);
+    let disk = Disk::new();
+    let files = tempfile::tempdir().unwrap();
+    let undone = png(200, 120, RED);
+    let later = png(220, 120, GREEN);
+    let clock = Clock::manual(1_800_000_000_000);
+    let (library, workspace, vcx) = disk.launch(Some(&clock), cx);
+    vcx.update(|_, cx| images::collect_in_background(&library, cx));
+    vcx.simulate_keystrokes("cmd-n");
+    vcx.run_until_parked();
+    vcx.simulate_input("A line.");
+
+    // A picture comes in and is taken out again with undo: nothing that
+    // is stored names it, only the undo history of the open editor.
+    insert_files(
+        &workspace,
+        vec![file_in(files.path(), "undone.png", &undone)],
+        vcx,
+    );
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-z");
+    assert!(images_in(&workspace, vcx).is_empty());
+    let_it_save(&workspace, vcx);
+
+    // The run at launch.
+    clock.advance_ms(20_000);
+    vcx.executor().advance_clock(COLLECT_DELAY);
+    vcx.run_until_parked();
+    let ran = collected_at(&library, vcx).expect("the collector ran");
+    assert!(disk.stored(id_of(&undone)).is_some());
+
+    // The app stays open for forty days, and the writer adds a picture
+    // on the way. Every day the app looks; it never deletes. (The
+    // keyboard is in the library meanwhile: a caret that blinks in the
+    // text is a timer every half second of the test's clock.)
+    vcx.simulate_keystrokes("cmd-0");
+    vcx.run_until_parked();
+    assert!(!editor_focused(&workspace, vcx));
+    for day in 1..=40 {
+        if day == 2 {
+            insert_files(
+                &workspace,
+                vec![file_in(files.path(), "later.png", &later)],
+                vcx,
+            );
+            vcx.run_until_parked();
+            let_it_save(&workspace, vcx);
+            assert!(
+                disk.in_the_copy(id_of(&later)).is_none(),
+                "not copied before the next look"
+            );
+        }
+        clock.advance_ms(DAY_MS);
+        vcx.executor().advance_clock(LOOK_EVERY);
+        vcx.run_until_parked();
+        if day == 2 {
+            // The look ends by bringing the copy up to date: that it ran
+            // can be seen there.
+            assert_eq!(
+                disk.in_the_copy(id_of(&later)).as_deref(),
+                Some(later.as_slice())
+            );
+        }
+    }
+    assert_eq!(
+        collected_at(&library, vcx),
+        Some(ran),
+        "the look is not the collector"
+    );
+    assert_eq!(
+        disk.stored(id_of(&undone)).as_deref(),
+        Some(undone.as_slice()),
+        "unnamed for forty days, and still there"
+    );
+
+    // Redo brings the image back, and its picture is there to show.
+    vcx.simulate_keystrokes("cmd-1");
+    vcx.run_until_parked();
+    assert!(editor_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-z");
+    assert!(images_in(&workspace, vcx).is_empty(), "the later picture is undone");
+    vcx.simulate_keystrokes("cmd-shift-z cmd-shift-z");
+    let_pictures_arrive(vcx);
+    let found: Vec<ImageId> = images_in(&workspace, vcx)
+        .into_iter()
+        .map(|(_, image)| image.id)
+        .collect();
+    assert!(found.contains(&id_of(&later)), "{found:?}");
+    assert_eq!(status(&workspace, id_of(&later), vcx), ImageStatus::Ready);
+}
+
+/// A library in memory has no file to collect in.
+#[gpui::test]
+fn a_library_in_memory_has_no_collector(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    cx.update(|cx| images::collect_in_background(&library, cx));
+    let (_workspace, vcx) = open_workspace(&library, cx);
+    vcx.executor().advance_clock(COLLECT_DELAY * 2);
+    vcx.run_until_parked();
+    assert_eq!(collected_at(&library, vcx), None);
+}
+
+// ----- versions ---------------------------------------------------------------------------------
+
+#[gpui::test]
+fn the_version_history_shows_an_image_as_what_it_reads_and_a_restore_brings_it_back(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    let library = library(cx);
+    let described = stored_png(&library, 400, 300, RED, cx);
+    let plain = stored_png(&library, 300, 300, GREEN, cx);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Chapter"),
+        picture(&described, 50, Alignment::Right, "The harbour at dusk"),
+        picture(&plain, 100, Alignment::Center, ""),
+        Block::paragraph("Text."),
+    ]);
+    let (id, workspace, cx) = open_with(&document, &library, cx);
+    library.update(cx, |library, cx| {
+        library.create_snapshot(id, cx).expect("a version");
+    });
+
+    // The writer deletes both pictures.
+    caret_on(&workspace, 1, cx);
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(images_in(&workspace, cx).len(), 1);
+    let on_image = selected_image(&workspace, cx).map(|(block, _)| block);
+    if on_image.is_none() {
+        caret_on(&workspace, 1, cx);
+    }
+    cx.simulate_keystrokes("backspace");
+    assert!(images_in(&workspace, cx).is_empty());
+
+    // The preview is text: an image is its description, or "Image".
+    cx.simulate_keystrokes("cmd-shift-p");
+    cx.simulate_input("version history");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let view = workspace
+        .read_with(cx, |w, cx| w.modal_layer().read(cx).active::<VersionHistory>())
+        .expect("the version history is open");
+    assert_eq!(IMAGE_WITHOUT_DESCRIPTION, "Image");
+    // The newest version is what opening the history kept (the text
+    // without the pictures); the one before it has them.
+    cx.simulate_keystrokes("end");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.preview_text()),
+        "Chapter\nThe harbour at dusk\nImage\nText."
+    );
+
+    // Restoring brings the blocks back as they were, and their pictures.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(editor_focused(&workspace, cx));
+    let back = images_in(&workspace, cx);
+    assert_eq!(
+        back.iter()
+            .map(|(block, image)| (*block, image.id, image.width.percent()))
+            .collect::<Vec<_>>(),
+        [(1, described.id, 50), (2, plain.id, 100)]
+    );
+    assert_eq!(back[0].1.description, "The harbour at dusk");
+    let_pictures_arrive(cx);
+    assert_eq!(status(&workspace, described.id, cx), ImageStatus::Ready);
+    assert_eq!(status(&workspace, plain.id, cx), ImageStatus::Ready);
+}
+
+// ----- scripted runs ----------------------------------------------------------------------------
+
+#[gpui::test]
+fn a_scripted_run_inserts_and_selects_images_and_its_state_says_what_is_there(
+    cx: &mut TestAppContext,
+) {
+    // The steps.
+    let script = Script::parse(
+        "image:/some/tmp/my\\sharbour.png; image:select:2; image: relative.png ;IMAGE:Select:1",
+    )
+    .expect("the steps parse");
+    assert_eq!(
+        script.steps,
+        [
+            Step::Image(ImageStep::Insert(PathBuf::from("/some/tmp/my harbour.png"))),
+            Step::Image(ImageStep::Select(2)),
+            Step::Image(ImageStep::Insert(PathBuf::from("relative.png"))),
+            Step::Image(ImageStep::Insert(PathBuf::from("Select:1"))),
+        ]
+    );
+    for wrong in ["image", "image:", "image:select:0", "image:select:two"] {
+        assert!(Script::parse(wrong).is_err(), "{wrong:?} is no step");
+    }
+
+    // The state line.
+    init(cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 300, RED, cx);
+    let missing = Image::new(ImageId::from_bytes([9; 16]), (1600, 1067), 144);
+    let document = Document::from_blocks(vec![
+        Block::with_text(BlockKind::heading(1), "Harbour"),
+        picture(&image, 50, Alignment::Center, "The harbour at dusk"),
+        Block::paragraph("Text."),
+        picture(&missing, 100, Alignment::Right, ""),
+    ]);
+    let (_, workspace, cx) = open_with(&document, &library, cx);
+    let state = |cx: &mut VisualTestContext| {
+        workspace.update_in(cx, |workspace, window, cx| {
+            describe_state(workspace, window, cx)
+        })
+    };
+    let_pictures_arrive(cx);
+    caret_on(&workspace, 2, cx);
+    let line = state(cx);
+    assert!(line.contains(" images=2 vim="), "{line}");
+    assert!(!line.contains("image=["), "{line}");
+
+    caret_on(&workspace, 1, cx);
+    let_pictures_arrive(cx);
+    let line = state(cx);
+    assert!(
+        line.contains(
+            " images=2 image=[block=1 width=50% natural=400x300@72 align=center ready \
+             alt=\"The harbour at dusk\"] vim="
+        ),
+        "{line}"
+    );
+    caret_on(&workspace, 3, cx);
+    let_pictures_arrive(cx);
+    let line = state(cx);
+    assert!(
+        line.contains(" images=2 image=[block=3 width=100% natural=1600x1067@144 align=right missing] "),
+        "{line}"
     );
 }

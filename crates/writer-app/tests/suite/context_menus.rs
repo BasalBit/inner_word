@@ -872,3 +872,221 @@ fn the_format_bar_comes_up_over_a_mouse_selection(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert!(second.read_with(vcx, |w, cx| w.tools().read(cx).format_bar_enabled()));
 }
+
+// ----- an image --------------------------------------------------------------------------------
+
+/// The open context menu's item called `label`: the labels of its submenu.
+fn submenu(label: &str, cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|window, cx| {
+        let menu = ContextMenu::current(window, cx).expect("a menu is open");
+        menu.read(cx)
+            .items()
+            .iter()
+            .find(|item| item.title().as_ref() == label)
+            .and_then(|item| item.submenu_items())
+            .unwrap_or_else(|| panic!("{label:?} is no submenu"))
+            .iter()
+            .map(|item| {
+                if item.is_separator() {
+                    "-".to_string()
+                } else {
+                    item.title().to_string()
+                }
+            })
+            .collect()
+    })
+}
+
+/// Opens the submenu `parent` of the open menu with a click on its row,
+/// and clicks the row of its item `label`.
+fn click_in_submenu(parent: &str, label: &str, cx: &mut VisualTestContext) {
+    let row = cx.update(|window, cx| {
+        let menu = ContextMenu::current(window, cx).expect("a menu is open");
+        let menu = menu.read(cx);
+        let ix = menu
+            .labels()
+            .iter()
+            .position(|item| item == parent)
+            .unwrap_or_else(|| panic!("no item {parent:?} in {:?}", menu.labels()));
+        menu.item_bounds(ix).expect("the menu was drawn").center()
+    });
+    cx.simulate_mouse_move(row, None, Modifiers::default());
+    cx.simulate_click(row, Modifiers::default());
+    cx.run_until_parked();
+    let ix = submenu(parent, cx)
+        .iter()
+        .position(|item| item == label)
+        .unwrap_or_else(|| panic!("{parent} has no {label:?}"));
+    let at = cx.update(|window, cx| {
+        let menu = ContextMenu::current(window, cx).expect("the menu is still open");
+        let menu = menu.read(cx);
+        assert!(menu.open_submenu().is_some(), "{parent} opened");
+        menu.submenu_item_bounds(ix)
+            .expect("the submenu was drawn")
+            .center()
+    });
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    cx.simulate_click(at, Modifiers::default());
+    cx.run_until_parked();
+}
+
+/// One more kind of object: an image. A right-click on the picture selects
+/// it and opens its menu; an item of each submenu is clicked; the menu's
+/// two keys open it at the picture; "Add Comment" is there and dimmed (no
+/// thread can be anchored to an image); "Delete Image" takes it out.
+#[gpui::test]
+fn a_right_click_on_an_image_opens_its_menu(cx: &mut TestAppContext) {
+    use super::images::{images_in, picture, selected_image, stored_png};
+    use writer_core::Alignment;
+
+    init(cx);
+    let library = library(cx);
+    let image = stored_png(&library, 400, 300, [200, 60, 40], cx);
+    let document = Document::from_blocks(vec![
+        picture(&image, 100, Alignment::Center, ""),
+        Block::paragraph("The boats came by road every spring."),
+    ]);
+    let id = add_document(&library, None, &document, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(id, true, window, cx);
+    });
+    vcx.run_until_parked();
+    // The caret is in the text under the picture.
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update(vcx, |editor, cx| {
+        editor.edit(|state| state.set_caret(Position::new(1, 3)), cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(selected_image(&workspace, vcx), None);
+    let on_the_picture = |cx: &mut VisualTestContext| {
+        workspace
+            .read_with(cx, |w, cx| w.editor().read(cx).image_bounds(0))
+            .expect("the picture is laid out")
+            .center()
+    };
+    let block = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, cx| {
+            let document = w.editor().read(cx).document();
+            let block = document.block(0).unwrap();
+            let image = block.as_image().expect("the first block is the image");
+            (image.width.percent(), block.alignment())
+        })
+    };
+
+    // A right-click on the picture: it is selected, and the menu is its
+    // own.
+    right_click_at(on_the_picture(vcx), vcx);
+    let labels = open_menu("an image", vcx);
+    assert_eq!(selected_image(&workspace, vcx).map(|(at, _)| at), Some(0));
+    assert_eq!(
+        labels,
+        [
+            "Cut",
+            "Copy",
+            "Paste",
+            "Paste as Plain Text",
+            "-",
+            "Size",
+            "Align",
+            "Description…",
+            "-",
+            "Insert",
+            "-",
+            "Find in Document",
+            "Select All",
+            "-",
+            "Add Comment",
+            "-",
+            "Delete Image",
+        ],
+        "the menu of an image"
+    );
+    assert_eq!(
+        submenu("Size", vcx),
+        ["Larger", "Smaller", "-", "25 %", "50 %", "75 %", "100 %", "Original Size"]
+    );
+    assert_eq!(submenu("Align", vcx), ["Left", "Centre", "Right"]);
+    assert_eq!(
+        submenu("Insert", vcx),
+        [
+            "Paragraph Above",
+            "Paragraph Below",
+            "-",
+            "Divider",
+            "Page Break",
+            "Image…",
+            "Today's Date",
+            "Link"
+        ]
+    );
+    // No thread can be anchored to an image.
+    assert!(dimmed("Add Comment", vcx));
+    assert!(!dimmed("Delete Image", vcx));
+    assert!(!dimmed("Description…", vcx));
+
+    // An item of each submenu, with the pointer.
+    click_in_submenu("Size", "50 %", vcx);
+    assert_eq!(menu(vcx), None, "choosing closes the menu");
+    assert_eq!(block(vcx), (50, Alignment::Center));
+    assert!(editor_focused(&workspace, vcx));
+
+    right_click_at(on_the_picture(vcx), vcx);
+    click_in_submenu("Align", "Right", vcx);
+    assert_eq!(block(vcx), (50, Alignment::Right));
+
+    right_click_at(on_the_picture(vcx), vcx);
+    click_in_submenu("Insert", "Paragraph Above", vcx);
+    // A line above the image that was the first thing in the document,
+    // with the caret in it.
+    let kinds = workspace.read_with(vcx, |w, cx| {
+        w.editor()
+            .read(cx)
+            .document()
+            .blocks()
+            .iter()
+            .map(|block| block.kind().name())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(kinds, ["paragraph", "image", "paragraph"]);
+    assert_eq!(selection(&workspace, vcx).head, Position::new(0, 0));
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.run_until_parked();
+    assert_eq!(images_in(&workspace, vcx)[0].0, 0);
+
+    // "Description…" opens the field under the picture.
+    right_click_at(on_the_picture(vcx), vcx);
+    click_item("Description…", vcx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.tools().read(cx).active_tool()),
+        Some(ToolKind::ImageDescription)
+    );
+    vcx.simulate_input("A red boat");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(images_in(&workspace, vcx)[0].1.description, "A red boat");
+    assert!(editor_focused(&workspace, vcx));
+
+    // The two keys of the menu, with the caret on the image.
+    assert_eq!(selected_image(&workspace, vcx).map(|(at, _)| at), Some(0));
+    for key in ["ctrl-enter", "shift-f10"] {
+        vcx.simulate_keystrokes(key);
+        vcx.run_until_parked();
+        let labels = open_menu("an image, from the keyboard", vcx);
+        assert_eq!(labels.last().map(String::as_str), Some("Delete Image"), "{key}");
+        assert!(dimmed("Add Comment", vcx), "{key}");
+        dismiss(vcx);
+    }
+
+    // "Delete Image".
+    right_click_at(on_the_picture(vcx), vcx);
+    click_item("Delete Image", vcx);
+    assert!(images_in(&workspace, vcx).is_empty());
+    assert_eq!(
+        editor_text(&workspace, vcx),
+        "The boats came by road every spring."
+    );
+    vcx.simulate_keystrokes("cmd-z");
+    vcx.run_until_parked();
+    assert_eq!(images_in(&workspace, vcx).len(), 1, "one step of undo");
+}

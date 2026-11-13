@@ -2672,6 +2672,95 @@ fn a_picture_is_asked_for_once_whatever_happens_to_its_block(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn a_change_from_elsewhere_in_the_middle_of_a_drag_ends_it_or_lets_it_go_on(
+    cx: &mut TestAppContext,
+) {
+    setup(cx);
+    let images = FakeImages::new();
+    let photo = images.add_png(800, 600);
+    let (editor, cx) = open_with(
+        flow(vec![
+            paragraph(0),
+            picture(&photo, 400, Alignment::Left),
+            paragraph(1),
+            paragraph(2),
+        ]),
+        &images,
+        cx,
+    );
+    let id = editor.read_with(cx, |editor, _| editor.document().blocks()[1].id());
+    let middle = picture_bounds(&editor, 1, cx).center();
+    click(cx, middle, 1, Modifiers::none());
+
+    // A handle is held while somebody else adds a paragraph above: the
+    // image is another block now, the same image, and the resize goes on.
+    let grip = handle(&editor, 3, cx);
+    press(cx, grip);
+    drag_to(cx, grip + point(px(40.), px(0.)));
+    let target = elsewhere(&editor, cx, |state| {
+        state.set_caret(Position::new(0, 0));
+        state.insert_paragraph_break();
+    });
+    editor.update(cx, |editor, cx| {
+        editor.adopt_document(target, cx);
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.document().blocks()[2].id(), id);
+        let (image, _) = boxed(editor, 2);
+        assert!(
+            (f32::from(image.size.width) - 320.).abs() < 0.4,
+            "{image:?}"
+        );
+    });
+    drag_to(cx, grip + point(px(70.), px(0.)));
+    release(cx, grip + point(px(70.), px(0.)));
+    assert_eq!(width_of(&editor, 2, cx), 500);
+
+    // A handle is held while somebody else deletes the image: the next
+    // move of the pointer ends the drag, and the release does nothing.
+    let grip = handle(&editor, 3, cx);
+    press(cx, grip);
+    drag_to(cx, grip + point(px(20.), px(0.)));
+    let target = elsewhere(&editor, cx, |state| {
+        state.set_caret(Position::new(2, 0));
+        state.backspace();
+    });
+    editor.update(cx, |editor, cx| {
+        editor.adopt_document(target.clone(), cx);
+    });
+    cx.run_until_parked();
+    drag_to(cx, grip + point(px(60.), px(0.)));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.drag, None);
+        assert!(editor.drag_escape.is_none());
+        assert_eq!(editor.layout.borrow().image_preview(), None);
+    });
+    release(cx, grip + point(px(60.), px(0.)));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.document(), &target));
+    assert_eq!(kinds(&editor, cx), ["paragraph"; 4]);
+
+    // The same for a picture that is being moved.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(kinds(&editor, cx)[2], "image");
+    let grab = picture_bounds(&editor, 2, cx).center();
+    press(cx, grab);
+    let (top, _) = span_of(&editor, 0, cx);
+    drag_to(cx, point(grab.x, top + px(2.)));
+    assert!(editor.read_with(cx, |editor, _| editor.painted_drop_line.is_some()));
+    editor.update(cx, |editor, cx| {
+        editor.adopt_document(target.clone(), cx);
+    });
+    cx.run_until_parked();
+    release(cx, point(grab.x, top + px(2.)));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.drag, None);
+        assert_eq!(editor.document(), &target);
+        assert_eq!(editor.painted_drop_line, None);
+    });
+}
+
+#[gpui::test]
 fn a_larger_zoom_asks_for_a_finer_picture_and_paints_the_one_it_has_meanwhile(
     cx: &mut TestAppContext,
 ) {

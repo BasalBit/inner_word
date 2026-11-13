@@ -416,10 +416,14 @@ pub fn run(
                     "after-heading",
                     "end-of-section",
                 ];
-                arguments.set(
-                    "position",
-                    one_of(spec, "at", place, &places)?.replace('-', "_"),
-                );
+                // The library's own spelling (before_heading, which its messages use)
+                // is the same place.
+                let dashed = place.replace('_', "-");
+                let chosen = match one_of(spec, "at", &dashed, &places) {
+                    Ok(word) => word.to_string(),
+                    Err(_) => one_of(spec, "at", place, &places)?.to_string(),
+                };
+                arguments.set("position", chosen.replace('-', "_"));
             }
             if let Some(width) = parsed.value("width") {
                 // "50" and "50%" are both a way to write it.

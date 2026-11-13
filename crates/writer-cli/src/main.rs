@@ -94,7 +94,7 @@ fn main() -> ExitCode {
             };
             match outcome {
                 Ok(reply) => print(&render(&reply, globals.json)),
-                Err(failure) => fail(globals.json, &failure),
+                Err(failure) => fail_in(Some(spec), globals.json, &failure),
             }
         }
     }
@@ -179,17 +179,46 @@ fn hint(kind: ErrorKind) -> Option<&'static str> {
     }
 }
 
-/// Writes a failure to standard error and gives its exit code.
-fn fail(as_json: bool, failure: &Failure) -> ExitCode {
-    let mut stderr = std::io::stderr().lock();
+/// The hint for a failure of `spec`, the command that ran: the options a message of the
+/// command layer means are the options of that command.
+fn hint_in(spec: Option<&spec::Spec>, failure: &Failure) -> Option<&'static str> {
+    let has = |name: &str| spec.is_some_and(|spec| spec.options.iter().any(|o| o.name == name));
     // Several headings with one text are told apart by number, items by id.
     let headings = failure.kind == ErrorKind::Ambiguous
         && failure.data["candidates"][0]["kind"] == json!("heading");
-    let hint = if headings {
-        Some("Here: --occurrence <n> takes the heading with that number.")
-    } else {
-        hint(failure.kind)
-    };
+    if headings {
+        return Some(if has("heading-occurrence") {
+            "Here: --heading-occurrence <n> takes the heading with that number."
+        } else {
+            "Here: --occurrence <n> takes the heading with that number."
+        });
+    }
+    // A place at a heading (`writer image add --at`).
+    if failure.kind == ErrorKind::Invalid && has("at") && has("heading") {
+        if failure.message == writer_mcp::POSITION_NEEDS_A_HEADING {
+            return Some(
+                "Here: --heading <text> names it; \"writer info <document>\" lists the headings.",
+            );
+        }
+        if failure.message == writer_mcp::POSITION_TAKES_NO_HEADING {
+            return Some(
+                "Here: --at before-heading, after-heading or end-of-section, with --heading \
+                 <text>; without --heading the place is --at end or --at start.",
+            );
+        }
+    }
+    hint(failure.kind)
+}
+
+/// Writes a failure to standard error and gives its exit code.
+fn fail(as_json: bool, failure: &Failure) -> ExitCode {
+    fail_in(None, as_json, failure)
+}
+
+/// [`fail`] for a failure of the command `spec`.
+fn fail_in(spec: Option<&spec::Spec>, as_json: bool, failure: &Failure) -> ExitCode {
+    let mut stderr = std::io::stderr().lock();
+    let hint = hint_in(spec, failure);
     let _ = if as_json {
         let mut data = failure.data.clone();
         if let (Some(hint), Some(fields)) = (hint, data.as_object_mut()) {

@@ -1223,6 +1223,16 @@ pub enum InsertPosition {
     EndOfSection,
 }
 
+/// The message of a request whose position is relative to a heading and names none.
+/// Front ends compare against it to add the option to type next.
+pub const POSITION_NEEDS_A_HEADING: &str =
+    "this position is relative to a heading: name the heading";
+
+/// The message of a request that names a heading for a position that is not relative to
+/// one. Front ends compare against it to add the option to type next.
+pub const POSITION_TAKES_NO_HEADING: &str = "a heading was named, but the position is not \
+     relative to one: choose before_heading, after_heading or end_of_section";
+
 impl InsertPosition {
     /// Reads a name: `start`, `end`, `before_heading`, `after_heading`, `end_of_section`
     /// (dashes work as underscores do).

@@ -24,8 +24,9 @@ use crate::sections::{Heading, find_heading};
 use crate::types::{
     AddImageRequest, ContentChanged, CreateDocumentRequest, DocumentCreated, DocumentSummary,
     DocumentText, EditRequest, FindRequest, FindResults, FolderSummary, ImageSummary,
-    InsertPosition, InsertRequest, MatchedAs, ReadRequest, ReplaceDocumentRequest,
-    ReplaceSectionRequest, Target, TextFormat, Time, WriteOptions,
+    InsertPosition, InsertRequest, MatchedAs, POSITION_NEEDS_A_HEADING, POSITION_TAKES_NO_HEADING,
+    ReadRequest, ReplaceDocumentRequest, ReplaceSectionRequest, Target, TextFormat, Time,
+    WriteOptions,
 };
 
 /// How many occurrences [`Library::find`] returns unless the request says.
@@ -448,15 +449,10 @@ pub(crate) fn edit(session: &mut Session<'_>, request: &EditRequest) -> Result<C
 /// a heading name one, the others none.
 fn check_place(position: InsertPosition, heading: bool) -> Result<()> {
     if position.needs_heading() && !heading {
-        return Err(Error::invalid(
-            "this position is relative to a heading: name the heading",
-        ));
+        return Err(Error::invalid(POSITION_NEEDS_A_HEADING));
     }
     if !position.needs_heading() && heading {
-        return Err(Error::invalid(
-            "a heading was named, but the position is not relative to one: choose \
-                 before_heading, after_heading or end_of_section",
-        ));
+        return Err(Error::invalid(POSITION_TAKES_NO_HEADING));
     }
     Ok(())
 }

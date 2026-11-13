@@ -610,3 +610,71 @@ fn the_server_adds_an_image_from_a_whole_path_and_reads_images_as_lines() {
     assert_eq!(exported["assets"].as_array().unwrap().len(), 1);
     client.close();
 }
+
+/// What "writer image add" says about a heading names its own options, and the command
+/// the message names then works.
+#[test]
+fn what_image_add_says_about_a_heading_names_its_own_options() {
+    let sandbox = Sandbox::new();
+    assert_eq!(
+        sandbox.create(
+            "Trip",
+            None,
+            "# Trip\n\n## Notes\n\nOne.\n\n## Notes\n\nTwo.\n"
+        ),
+        "doc:1"
+    );
+    sandbox.picture("map.png", (40, 30), [10, 120, 40]);
+    let add = |more: &[&'static str]| {
+        let mut args = vec!["image", "add", "doc:1", "map.png", "--dry-run"];
+        args.extend_from_slice(more);
+        args
+    };
+
+    // A heading that occurs twice: the option is --heading-occurrence.
+    let twice = sandbox.fail(&add(&["--at", "after-heading", "--heading", "Notes"]), 4);
+    assert!(
+        twice.ends_with("\nHere: --heading-occurrence <n> takes the heading with that number.\n"),
+        "{twice}"
+    );
+    sandbox.ok(&add(&[
+        "--at",
+        "after-heading",
+        "--heading",
+        "Notes",
+        "--heading-occurrence",
+        "2",
+    ]));
+
+    // A heading without a place at one: the message names the places, the hint the option,
+    // and both spellings are the place.
+    let no_place = sandbox.fail(&add(&["--heading", "Trip"]), 2);
+    assert!(
+        no_place.contains("choose before_heading, after_heading or end_of_section")
+            && no_place.contains("\nHere: --at before-heading, after-heading or end-of-section, with --heading <text>"),
+        "{no_place}"
+    );
+    sandbox.ok(&add(&["--heading", "Trip", "--at", "before_heading"]));
+    sandbox.ok(&add(&["--heading", "Trip", "--at", "before-heading"]));
+    let wrong = sandbox.fail(&add(&["--heading", "Trip", "--at", "before_headin"]), 2);
+    assert!(
+        wrong.contains("\"before_headin\" is none of them"),
+        "{wrong}"
+    );
+
+    // A place at a heading without one: the hint names --heading.
+    let no_heading = sandbox.fail(&add(&["--at", "end-of-section"]), 2);
+    assert_eq!(
+        no_heading,
+        "writer: this position is relative to a heading: name the heading\nHere: --heading <text> \
+         names it; \"writer info <document>\" lists the headings.\n"
+    );
+    sandbox.ok(&add(&["--at", "end-of-section", "--heading", "Trip"]));
+
+    // Where a command has --occurrence for a heading, the hint stays that.
+    let get = sandbox.fail(&["get", "doc:1", "--section", "Notes"], 4);
+    assert!(
+        get.ends_with("\nHere: --occurrence <n> takes the heading with that number.\n"),
+        "{get}"
+    );
+}

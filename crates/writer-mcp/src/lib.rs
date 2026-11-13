@@ -37,7 +37,9 @@ use std::io;
 
 pub use protocol::{Server, ServerInfo};
 pub use tools::{Failure, Reply, Toolbox};
-pub use writer_agent::{ErrorKind, Item, Library};
+pub use writer_agent::{
+    ErrorKind, Item, Library, POSITION_NEEDS_A_HEADING, POSITION_TAKES_NO_HEADING,
+};
 
 /// The name of the server in the protocol (`serverInfo.name`) and the name agents
 /// register it under.

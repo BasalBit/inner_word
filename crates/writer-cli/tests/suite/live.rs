@@ -14,7 +14,7 @@ const CHAPTER: &str = "# Chapter 1\n\nThe keeper could not swim. The *Maren* lef
 /// `doc:1` "The Salt Road/Chapter 1", `doc:2` "Ideas", `doc:3` "Gone" in the trash, and
 /// the folder "Attic" (with `doc:4`) in the trash.
 fn library() -> Sandbox {
-    let sandbox = Sandbox::new();
+    let sandbox = Sandbox::new().fake_page_check();
     assert_eq!(
         sandbox.create("Chapter 1", Some("The Salt Road"), CHAPTER),
         "doc:1"
@@ -87,6 +87,13 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
     app.served();
 
     sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
+    // A page: the tool reads it, checks it (the fake check) and hands the app its files.
+    std::fs::create_dir_all(sandbox.work().join("site")).unwrap();
+    std::fs::write(
+        sandbox.work().join("site/index.html"),
+        "<!doctype html><title>Harbour map</title><h1>The harbour</h1><p>Piers and gulls.</p>",
+    )
+    .unwrap();
     // One command line (or more) for every command that changes the library, with the
     // operation the app is asked for. `{version}` is the oldest version of doc:1.
     let lines: Vec<(&str, Vec<&str>, &str)> = vec![
@@ -187,6 +194,20 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
             "create_document",
         ),
         (
+            "page add",
+            vec![
+                "page",
+                "add",
+                "site",
+                "--source-url",
+                "https://claude.ai/artifact/harbour",
+                "--folder",
+                "Pages",
+                "--create-folders",
+            ],
+            "add_page",
+        ),
+        (
             "duplicate",
             vec!["duplicate", "doc:2"],
             "duplicate_document",
@@ -238,6 +259,11 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
         }
         args.extend(["--author", "Claude"]);
         let result = sandbox.json(&args);
+        // `page add` prints one result for each page.
+        let result = match result.get("pages") {
+            Some(pages) => pages[0].clone(),
+            None => result,
+        };
         assert_eq!(result["changed"], true, "{args:?}: {result}");
         assert_eq!(result["dry_run"], false, "{args:?}: {result}");
         // The app made the change, and the result says so (as the status did).
@@ -376,7 +402,20 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
     app.served();
 
     let picture = sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
+    let site = sandbox.work().join("site");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(
+        site.join("index.html"),
+        "<!doctype html><title>Harbour map</title><h1>The harbour</h1><p>Piers.</p>",
+    )
+    .unwrap();
     let calls: Vec<(&str, Value, &str)> = vec![
+        (
+            // The server reads, checks (the fake check) and hands the app the files.
+            "add_page",
+            json!({ "path": site.to_str().unwrap(), "source_url": "https://claude.ai/artifact/harbour" }),
+            "add_page",
+        ),
         (
             "add_comment",
             json!({ "document": 1, "quote": "could not swim", "body": "Hm." }),

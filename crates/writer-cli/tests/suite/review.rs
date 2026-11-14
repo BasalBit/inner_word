@@ -373,10 +373,16 @@ fn export_writes_a_document_or_a_folder_to_a_file() {
     assert!(
         sandbox
             .fail(
-                &["export", "doc:1", "--to", "out/x.pdf", "--format", "pdf"],
+                &["export", "doc:1", "--to", "out/x.odt", "--format", "odt"],
                 2
             )
             .contains("\"format\" must be one of")
+    );
+    // The formats of a page are not for a text.
+    assert!(
+        sandbox
+            .fail(&["export", "doc:1", "out/x.pdf"], 15)
+            .contains("is a document, not a page")
     );
 }
 

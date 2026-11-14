@@ -12,5 +12,6 @@ mod suite {
     mod live;
     mod mcp;
     mod output;
+    mod pages;
     mod review;
 }

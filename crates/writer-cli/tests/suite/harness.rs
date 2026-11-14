@@ -39,6 +39,9 @@ impl Run {
 /// A temporary home and library.
 pub struct Sandbox {
     root: tempfile::TempDir,
+    /// What the environment of every process has besides `HOME`, `THE_WRITER_DATA_DIR`
+    /// and `PATH` ([`Sandbox::fake_page_check`], [`Sandbox::real_page_check`]).
+    env: Vec<(&'static str, PathBuf)>,
 }
 
 impl Sandbox {
@@ -47,12 +50,40 @@ impl Sandbox {
             .prefix("writer-cli-test-")
             .tempdir()
             .expect("a temporary directory");
-        let sandbox = Sandbox { root };
-        for dir in [sandbox.home(), sandbox.library(), sandbox.work()] {
+        let sandbox = Sandbox {
+            root,
+            env: Vec::new(),
+        };
+        for dir in [sandbox.home(), sandbox.library(), sandbox.work(), sandbox.tmp()] {
             std::fs::create_dir_all(&dir).expect("a folder in the temporary directory");
         }
         sandbox.assert_isolated();
         sandbox
+    }
+
+    /// The same sandbox, where pages are checked by the fake check
+    /// (`THE_WRITER_PAGE_CHECK=fake`, read by a debug build only): the text of the page
+    /// with its tags taken out, nothing blocked, no WebKit. Its temporary directory is
+    /// the sandbox's own.
+    pub fn fake_page_check(mut self) -> Sandbox {
+        self.env.push(("THE_WRITER_PAGE_CHECK", PathBuf::from("fake")));
+        self.env.push(("TMPDIR", self.tmp()));
+        self
+    }
+
+    /// The same sandbox, where pages are checked for real (WebKit in the tool's child,
+    /// offscreen) and the tool may fetch from 127.0.0.1 (`THE_WRITER_FETCH_LOCAL=1`, read
+    /// by a debug build only), where the test's own server is. Its temporary directory,
+    /// where the checks and WebKit's rule list are, is the sandbox's own.
+    pub fn real_page_check(mut self) -> Sandbox {
+        self.env.push(("THE_WRITER_FETCH_LOCAL", PathBuf::from("1")));
+        self.env.push(("TMPDIR", self.tmp()));
+        self
+    }
+
+    /// The temporary directory of the processes of a sandbox for pages.
+    pub fn tmp(&self) -> PathBuf {
+        self.root.path().join("tmp")
     }
 
     /// The temporary directory everything of this test is in.
@@ -114,6 +145,7 @@ impl Sandbox {
             .env("HOME", self.home())
             .env("THE_WRITER_DATA_DIR", self.library())
             .env("PATH", "/usr/bin:/bin")
+            .envs(self.env.iter().map(|(name, value)| (*name, value)))
             .current_dir(self.work())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -383,14 +415,25 @@ impl LiveApp {
             .lock()
             .expect("nobody else has the library of the test");
         let database = data_dir.join(writer_store::DATABASE_FILE_NAME);
+        let database_for_thread = database.clone();
         let mut store = writer_store::Store::open(&database).expect("the library opens");
         let listener = Listener::bind(data_dir).expect("the app listens");
         let closer = listener.closer();
         let (tell, served) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
-            while let Some(incoming) = listener.accept() {
+            while let Some(mut incoming) = listener.accept() {
                 if !incoming.begin() {
                     continue;
+                }
+                // The app's listener stores the files of a page before the request is
+                // queued, and the main thread only writes the row.
+                if live::carries_page_files(incoming.request()) {
+                    let mut files = writer_store::ImageFile::beside(&database_for_thread);
+                    if let Err(error) = live::store_page_files(incoming.request_mut(), &mut files)
+                    {
+                        incoming.answer(live::Answer::failed(&error)).ok();
+                        continue;
+                    }
                 }
                 let request = incoming.request();
                 let executed = live::execute(&mut store, request);

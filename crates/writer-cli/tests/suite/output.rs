@@ -86,7 +86,7 @@ fn the_overview_lists_every_command_and_each_has_help_with_an_example() {
             "{expected} is not in the overview: {names:?}"
         );
     }
-    assert_eq!(names.len(), 39, "{names:?}");
+    assert_eq!(names.len(), 41, "{names:?}");
 
     for name in &names {
         let mut args: Vec<&str> = name.split(' ').collect();

@@ -1103,7 +1103,12 @@ pub fn versions(list: &VersionList) -> String {
 
 /// `writer history show`: the text and nothing else.
 pub fn version_text(text: &VersionText) -> String {
-    text.content.clone()
+    let mut out = text.content.clone();
+    // The text a page showed ends where it ends; printed, it ends with a line.
+    if text.document.is_page() && !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// `writer history restore`.

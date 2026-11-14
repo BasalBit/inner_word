@@ -197,7 +197,7 @@ fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
     let numbers: Vec<u8> = of_the_tool.iter().map(|(code, _)| *code).collect();
     assert_eq!(
         numbers,
-        (0..=13).collect::<Vec<u8>>(),
+        (0..=15).collect::<Vec<u8>>(),
         "the exit codes of the tool changed: bring the skill up to date ({codes})"
     );
 
@@ -238,6 +238,8 @@ fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
         (11, "another tool is writing"),
         (12, "exists"),
         (13, "cannot be read"),
+        (14, "kept whole"),
+        (15, "a page where a document is needed"),
     ] {
         let tool = &of_the_tool[code as usize].1;
         let skill = of_the_skill[code as usize].1;
@@ -250,6 +252,84 @@ fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
             "the skill does not say \"{word}\" for exit code {code}: {skill}"
         );
     }
+}
+
+/// The examples of pages run against the built tool, as an agent runs them: through the
+/// shell (which turns `~` into the home directory), with the fake check
+/// (`THE_WRITER_PAGE_CHECK=fake`, which a debug build reads), and a library, a home and a
+/// temporary directory that exist only for this test. Each one has to succeed.
+#[test]
+fn the_examples_of_pages_run_against_the_built_tool() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let root = root.path().canonicalize().unwrap();
+    let (home, library, work, tmp) = (
+        root.join("home"),
+        root.join("library"),
+        root.join("work"),
+        root.join("tmp"),
+    );
+    for dir in [&home, &library, &work, &tmp, &home.join("Desktop")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let explainer = home.join("Downloads/explainer");
+    std::fs::create_dir_all(&explainer).unwrap();
+    std::fs::write(
+        explainer.join("index.html"),
+        "<!doctype html><title>Explainer</title><h1>How tides work</h1><p>The moon.</p>",
+    )
+    .unwrap();
+    let second = work.join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(second.join("index.html"), "<title>Second</title><p>Two.</p>").unwrap();
+    std::fs::write(
+        work.join("pages.json"),
+        r#"[{"path": "second", "source_url": "https://claude.ai/artifact/second"}]"#,
+    )
+    .unwrap();
+    let run = |line: &str| {
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(line)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &home)
+            .env("TMPDIR", &tmp)
+            .env("THE_WRITER_DATA_DIR", &library)
+            .env("THE_WRITER_PAGE_CHECK", "fake")
+            .current_dir(&work)
+            .output()
+            .expect("run the shell");
+        assert!(
+            output.status.success(),
+            "{line}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("output is text")
+    };
+    let tool = format!("'{}'", writer().display());
+    // The examples name page:12: eleven documents come first.
+    for n in 1..=11 {
+        run(&format!("{tool} create \"Note {n}\" --content \"Note.\""));
+    }
+    let examples: Vec<&str> = example_lines()
+        .into_iter()
+        .filter(|line| line.contains("page:12") || line.starts_with("writer page"))
+        .collect();
+    assert!(examples.len() >= 5, "{examples:?}");
+    let mut said = Vec::new();
+    for line in examples {
+        let line = line.replacen("writer", &tool, 1);
+        said.push(run(&line));
+    }
+    let all = said.concat();
+    assert!(
+        all.contains("added page:12 \u{201c}Explainer\u{201d} in Claude Pages"),
+        "{all}"
+    );
+    assert!(all.contains("added page:13 \u{201c}Second\u{201d}"), "{all}");
+    assert!(all.contains("How tides work"), "{all}");
+    assert!(home.join("Desktop/page.pdf").is_file());
 }
 
 #[test]

@@ -474,6 +474,51 @@ mod tests {
         }
     }
 
+    /// What the text says about pages, as the design has it: the paragraph and the recipe
+    /// for copying the user's claude.ai artifacts.
+    #[test]
+    fn the_text_says_what_a_page_is_and_how_artifacts_are_copied() {
+        let text = spec().render();
+        for needed in [
+            "Pages. A page is a web page kept in the library as it was made, with its styles, \
+             scripts, fonts, pictures and sounds, so that it shows the same offline and for good.",
+            "`writer page add ~/Downloads/explainer --source-url https://claude.ai/artifact/\u{2026} \
+             --folder \"Claude Pages\" --create-folders`",
+            "A folder is taken whole and opens with its `index.html` (`--entry` names another file).",
+            "a page that needs something that cannot be stored (data from a service, an embedded \
+             site) is not added, exit code 14 says why, and nothing is saved.",
+            "With `--source-url`, adding the same address again changes nothing when the page is \
+             the same and updates it (keeping the old one as a version) when it changed.",
+            "`writer pages` lists the pages with their addresses.",
+            "`writer get page:12` gives the text the page shows.",
+            "`writer export page:12 ~/Desktop/page.pdf` makes a PDF of it.",
+            "A page cannot be edited (exit code 15).",
+            "`--include-trashed` adds it anyway",
+            "are for the user: pass them on.",
+            "To copy the user's claude.ai artifacts into The Writer (Claude Code): list them with \
+             the Artifact tool (`action: \"list\"`, `scope: \"mine\"`, `limit: 200`)",
+            "run `writer pages --json` and skip every artifact whose address is there with a \
+             `content_at` later than the artifact's last update",
+            "and no `out_dir`: the default folder needs no approval",
+            "List its assets too (`action: \"list\"`, `scope: \"assets\"`, its `url`)",
+            "\"externals\": {\"<asset url>\": \"<saved file>\"}",
+            "run `writer page add --list <file> --folder \"Claude Pages\" --create-folders --author \
+             Claude`",
+            "Report what was added, updated, unchanged, trashed and not added, with the reasons \
+             and the warnings.",
+            "export its content as HTML first and add that.",
+            "read its rows with the ArtifactData tool and keep them as a document beside the page, \
+             titled \"<page title> (saved data)\", with `writer create`.",
+        ] {
+            assert!(text.contains(needed), "the skill does not say: {needed}");
+        }
+        let commands = mentioned_commands();
+        for expected in [vec!["page", "add"], vec!["page", "list"]] {
+            let expected: Vec<String> = expected.into_iter().map(str::to_string).collect();
+            assert!(commands.contains(&expected), "{expected:?} is not shown");
+        }
+    }
+
     /// What the text has to teach, whatever its wording.
     #[test]
     fn the_text_teaches_the_rules() {

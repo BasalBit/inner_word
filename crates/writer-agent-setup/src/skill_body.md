@@ -79,6 +79,18 @@ writer export doc:12 --to ~/Desktop/chapter.md
 
 or write `![what it shows](/absolute/path.png)` in the Markdown you send. PNG, JPEG, GIF, HEIC, TIFF, WebP and BMP work; an address on the web stays a link. `image add` takes `--width <percent>` (a share of the text column), `--align left|center|right` and `--at` with a place; `image list` prints the images of a document with their sizes. `edit` refuses an `--old` that runs across an image (`find` says so of such a place): replace the text before and after it separately, or give `--old` as Markdown with the image's line in it. You cannot see a picture through this tool: to see an image, export the document as Markdown to a file. The pictures are written into a folder beside it.
 
+Pages. A page is a web page kept in the library as it was made, with its styles, scripts, fonts, pictures and sounds, so that it shows the same offline and for good. Add one from a file or a folder on this Mac: `writer page add ~/Downloads/explainer --source-url https://claude.ai/artifact/… --folder "Claude Pages" --create-folders`. A folder is taken whole and opens with its `index.html` (`--entry` names another file). Everything the page loads from the web (fonts, libraries) is downloaded now and stored; a page that needs something that cannot be stored (data from a service, an embedded site) is not added, exit code 14 says why, and nothing is saved. With `--source-url`, adding the same address again changes nothing when the page is the same and updates it (keeping the old one as a version) when it changed. `writer pages` lists the pages with their addresses. `writer get page:12` gives the text the page shows. `writer export page:12 ~/Desktop/page.pdf` makes a PDF of it. A page cannot be edited (exit code 15). A page in the trash is not added again (the line says "trashed"; `--include-trashed` adds it anyway). Warnings under a page's line (a piece it names that was not kept, data it kept on claude.ai) are for the user: pass them on.
+
+```
+writer page add ~/Downloads/explainer --source-url https://claude.ai/artifact/ExampleArtifactId00002 --folder "Claude Pages" --create-folders
+writer page add --list pages.json --folder "Claude Pages" --create-folders --author Claude
+writer page list --json
+writer get page:12
+writer export page:12 ~/Desktop/page.pdf
+```
+
+To copy the user's claude.ai artifacts into The Writer (Claude Code): list them with the Artifact tool (`action: "list"`, `scope: "mine"`, `limit: 200`); run `writer pages --json` and skip every artifact whose address is there with a `content_at` later than the artifact's last update (and say which were skipped because they are in the trash). For each other one: list its files (`action: "list"`, `scope: "files"`, its `url`) and read them all (`action: "read"`, its `url`, `paths` with every published path, and no `out_dir`: the default folder needs no approval; use the folder the result names). A single-page artifact is its page alone (`action: "read"` names the saved file); add the folder that holds it all the same. List its assets too (`action: "list"`, `scope: "assets"`, its `url`); read each by its id (`action: "read"`, `path` the asset id) and note the asset's url and the file it was saved to. Write a list `[{"path": "<folder>", "source_url": "<url as the list gave it>", "title": "<title>", "externals": {"<asset url>": "<saved file>"}}, …]` and run `writer page add --list <file> --folder "Claude Pages" --create-folders --author Claude`. Report what was added, updated, unchanged, trashed and not added, with the reasons and the warnings. An artifact made from a type (a Claude Docs document, a deck) shows its content by connecting to claude.ai: such a page is not added; export its content as HTML first and add that. A page that uses claude.ai's own storage (`window.claude`, the `db` capability) is added, and its saved data stays on claude.ai: read its rows with the ArtifactData tool and keep them as a document beside the page, titled "<page title> (saved data)", with `writer create`.
+
 Organise:
 
 ```
@@ -145,5 +157,7 @@ writer export "The Salt Road" --to ~/Desktop/salt-road.docx
 - 11: another tool is writing to the library at this moment. Run the command again.
 - 12: the file an export would write exists. Choose another path, or pass `--overwrite`.
 - 13: the stored document cannot be read as a document. Leave it alone and tell the user.
+- 14: the page could not be kept whole: it needs something that cannot be stored (data from a service, an embedded site, a piece that could not be fetched). Nothing was saved. Tell the user the reasons the message gives; do not try to rewrite the page.
+- 15: a page where a document is needed, or the reverse. A page cannot be edited; to bring a newer copy, add it again with `page add` and its source address.
 
 Installed by The Writer {{VERSION}}. The app's Agents panel updates or removes this skill.

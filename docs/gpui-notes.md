@@ -289,6 +289,14 @@ Painting (paint phase only):
 - `window.paint_shadows(bounds, corner_radii, &[BoxShadow])`, `paint_path(Path, color)`
   (`PathBuilder`), `paint_svg`, `paint_image`, `paint_underline(origin, width, &UnderlineStyle)`,
   `paint_strikethrough`.
+- **Never `paint_path`.** On every resize the Metal renderer (`$G/src/platform/mac/metal_renderer.rs`)
+  makes a path intermediate texture the size of the window and a 4x MSAA copy of it; they are
+  committed when the first path is drawn and held until the next resize. One path on screen
+  cost 100 MB of graphics memory at 1400x900 pt and about 400 MB on a large Retina window
+  (measured for 0.8.1: the tick of a checked to-do was the only path). So our crates draw no
+  paths: the tick is a sprite the editor draws itself (`writer-editor/src/tick.rs`,
+  `paint_image`, its unused sprites handed to `drop_image`), and a test of the editor fails on
+  `paint_path` or `PathBuilder` in its sources. The PDF of a print draws its own strokes.
 - Order: later paint calls are on top. `window.paint_layer(bounds, |window| ..)` only batches
   for performance. Floating things: `deferred`/`defer_draw` (prepaint).
 - Clip: `window.with_content_mask(Some(ContentMask { bounds }), |window| ..)` (intersects
@@ -722,6 +730,14 @@ Task::ready(value)
   that awaits a timer then saves; replacing drops (cancels) the previous one.
 - Caret blink: a looping `cx.spawn` that awaits a 500ms timer and calls `this.update(cx, |_, cx| cx.notify())`,
   breaking when the update errors; reset it on every edit/caret move so the caret is solid while typing.
+- **No blink in a window that is not active** (since 0.8.1, the editor and `TextField`): each
+  redraw is a whole frame of the window, and a tiled window in the background stays visible.
+  Keep `window_active` from `window.is_window_active()` and `cx.observe_window_activation`,
+  start the blink in one place only (`Editor::restart_blink`, `TextField::reset_blink`) and only
+  when focused and active, stop it in its shown half when the window goes to the background,
+  start it again when it comes back. A scripted run (`draw_as_active`) draws a steady caret in
+  its background window. GPUI also blurs the focused element of an inactive window at its next
+  frame, which stopped both blinks before; the rule does not count on that frame.
 - `cx.defer(|cx| ..)`, `cx.defer_in(window, |this, window, cx| ..)`, `window.defer(cx, |window, cx| ..)`:
   run after the current effect cycle.
 - **"cannot update X while it is already being updated"** (and "cannot read …"): an entity is

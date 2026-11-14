@@ -2372,6 +2372,131 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
 }
 
+/// A page and an app from before pages (0.7.0, which speaks version 2 of the channel):
+/// that app does not know `add_page`, and refuses every line of another version whole.
+/// The page the tool prepared went in the line, with its files.
+#[test]
+fn an_app_from_before_pages_refuses_a_page_whole() {
+    let fx = closed_fixture();
+    fx.create(None, "# Chapter 1\n\nText.\n");
+    let folder = fx.page_folder(
+        "page",
+        &[(
+            "index.html",
+            "<!doctype html><title>Old app</title><p>Hello.</p>",
+        )],
+    );
+    let before = fx.dump();
+    let app = RawApp::open(&fx, |_| {
+        b"{\"version\":2,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":2,\
+          \"tool\":3}}\n"
+            .to_vec()
+    });
+    let error = fx
+        .library
+        .add_page(&AddPageRequest {
+            path: folder.to_string_lossy().into_owned(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.exit_code(), 5);
+    let message = error.to_string();
+    assert!(
+        message.contains("the app speaks version 2 of their channel, this tool version 3"),
+        "{message}"
+    );
+    assert!(message.contains("nothing was changed"), "{message}");
+    assert_eq!(error.report().nothing_changed, Some(true));
+    assert_eq!(
+        refusal(Err::<(), _>(error)),
+        Refusal::Protocol { app: 2, tool: 3 }
+    );
+    let lines: Vec<serde_json::Value> = app
+        .requests
+        .try_iter()
+        .map(|line| serde_json::from_str(&line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["version"], 3);
+    assert_eq!(lines[0]["op"], "add_page");
+    let page = &lines[0]["request"]["prepared"];
+    assert_eq!(page["state"], "page");
+    use base64::Engine;
+    let html = std::fs::read(folder.join("index.html")).unwrap();
+    let blob = page["blobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|blob| blob["file"] == writer_page::file_id_hex(&html))
+        .expect("the page's file is in the line");
+    assert_eq!(
+        blob["data"],
+        base64::engine::general_purpose::STANDARD.encode(&html)
+    );
+    assert!(blob.get("stored").is_none(), "{blob}");
+    drop(app);
+    assert_eq!(fx.dump(), before, "refused, not half applied");
+    assert!(!fx.images_path().exists());
+}
+
+/// The largest page there can be, in one request to the app, in a build without
+/// optimisations: a line of more than 80 megabytes is written before the connection is
+/// made, read and taken apart on the listener's thread, and the app stores the files it
+/// was handed.
+#[test]
+fn a_page_as_large_as_a_page_can_be_goes_through_the_channel() {
+    let fx = closed_fixture();
+    fx.create(None, "# Chapter 1\n\nText.\n");
+    // Two files of 31 MB and the page that names them: 62 MB of distinct bytes.
+    const SIZE: usize = 31 * 1024 * 1024;
+    let mut files = Vec::new();
+    for (name, seed) in [("a.bin", 1u8), ("b.bin", 2u8)] {
+        let bytes: Vec<u8> = (0..SIZE)
+            .map(|at| (at as u8).wrapping_mul(31).wrapping_add(seed))
+            .collect();
+        files.push((name, bytes));
+    }
+    let folder = fx.page_folder(
+        "large page",
+        &[(
+            "index.html",
+            "<!doctype html><title>Large</title><a href=a.bin>a</a> <a href=b.bin>b</a>",
+        )],
+    );
+    for (name, bytes) in &files {
+        std::fs::write(folder.join(name), bytes).unwrap();
+    }
+    let app = StandIn::open(&fx);
+    app.names();
+    let library = fx.library.clone();
+    let started = Instant::now();
+    let added = library
+        .add_page(&AddPageRequest {
+            path: folder.to_string_lossy().into_owned(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+    let took = started.elapsed();
+    assert!(added.written.changed && added.written.app_is_open);
+    assert_eq!(added.files, 3);
+    assert!(added.bytes > 62 * 1024 * 1024, "{}", added.bytes);
+    assert_eq!(app.changes(), ["add_page"]);
+    let store = fx.store();
+    for (_, bytes) in &files {
+        let id = writer_store::FileId::of(bytes);
+        assert!(
+            store.file_bytes(&id).unwrap().as_deref() == Some(bytes.as_slice()),
+            "the app stored other bytes than the file has"
+        );
+    }
+    eprintln!(
+        "a page of {} bytes through the channel: {took:?}",
+        added.bytes
+    );
+}
+
 /// The largest picture the library holds, in one request to the app: a line of more
 /// than twenty megabytes goes over the socket, is read and taken apart on the listener's
 /// thread, and the app stores the bytes it was handed.

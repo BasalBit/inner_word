@@ -1480,3 +1480,140 @@ fn the_counts_of_a_page_are_those_of_its_text() {
     let document = writer_core::Fragment::from_plain_text(&text).to_document();
     assert_eq!(added.page.characters, document.stats().characters as u64);
 }
+
+// ----- the checker in a child process ------------------------------------------------------
+
+/// A program that stands in for `writer __page-check` and `__page-pdf`: a shell script
+/// that does what `body` says, with `$1` the argument and `$2` the directory.
+fn checker_program(fx: &Fixture, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = fx.dir.path().join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn the_checker_runs_as_a_child_with_its_input_closed_and_its_time_bounded() {
+    let fx = closed_fixture();
+    let folder = fx.page_folder("child", &[("index.html", "<title>Child</title><p>Hi.</p>")]);
+    let input = writer_page::read_input(&folder, None).unwrap();
+    let bundle = writer_page::bundle(input, &MapFetcher::new()).unwrap();
+    let seen = fx.dir.path().join("seen");
+    // A child that reads its standard input (end of file at once), says where it was
+    // asked to look, finds the request and the files there, and answers one line.
+    let report = writer_page::CheckReport {
+        engine: "a stand-in".into(),
+        elapsed_ms: 3,
+        loads: vec![writer_page::LoadReport {
+            path: "index.html".into(),
+            title: "Child".into(),
+            text: "Hi.".into(),
+            finished: true,
+            ..Default::default()
+        }],
+        failure: None,
+    };
+    let answer = serde_json::to_string(&report).unwrap();
+    let good = checker_program(
+        &fx,
+        "good",
+        &format!(
+            "cat > /dev/null\n\
+             [ \"$1\" = __page-check ] || exit 3\n\
+             [ -f \"$2/request.json\" ] && [ -f \"$2/files/index.html\" ] || exit 4\n\
+             echo \"$2\" > '{}'\n\
+             echo 'some words before the answer'\n\
+             echo '{answer}'",
+            seen.display()
+        ),
+    );
+    let checked = writer_agent::ProcessChecker::with_program(good)
+        .check(&bundle)
+        .unwrap();
+    assert_eq!(checked, report);
+    let dir = PathBuf::from(std::fs::read_to_string(&seen).unwrap().trim());
+    assert!(
+        dir.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("check-"),
+        "{}",
+        dir.display()
+    );
+    assert!(
+        !dir.exists(),
+        "the directory of the check is removed afterwards"
+    );
+    {
+        use std::os::unix::fs::MetadataExt;
+        let parent = std::fs::metadata(dir.parent().unwrap()).unwrap();
+        assert_eq!(parent.mode() & 0o777, 0o700, "only this user enters it");
+    }
+
+    // A child that fails: its last line of standard error says why.
+    let failing = checker_program(
+        &fx,
+        "failing",
+        "echo 'starting' >&2\necho 'there is no window server' >&2\nexit 1",
+    );
+    let error = writer_agent::ProcessChecker::with_program(failing)
+        .check(&bundle)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Failed);
+    assert_eq!(
+        error.to_string(),
+        "the page could not be checked: there is no window server"
+    );
+    // One that answers nothing that can be read.
+    let mumbling = checker_program(&fx, "mumbling", "echo 'not json'");
+    let error = writer_agent::ProcessChecker::with_program(mumbling)
+        .check(&bundle)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("the page could not be checked: its checker answered nothing"),
+        "{error}"
+    );
+    // One that does not finish is killed.
+    let hanging = checker_program(&fx, "hanging", "sleep 30");
+    let started = std::time::Instant::now();
+    let error = writer_agent::ProcessChecker::with_program(hanging)
+        .with_time_limit(Duration::from_millis(300))
+        .check(&bundle)
+        .unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(
+        error.to_string().contains("did not finish within"),
+        "{error}"
+    );
+    // One that is not there.
+    let error = writer_agent::ProcessChecker::with_program(fx.dir.path().join("nothing"))
+        .check(&bundle)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Failed);
+
+    // A PDF: the child writes the file it is given.
+    let printer = checker_program(
+        &fx,
+        "printer",
+        "[ \"$1\" = __page-pdf ] || exit 3\n[ -f \"$2/request.json\" ] || exit 4\nprintf '%%PDF-1.4' > \"$3\"",
+    );
+    let out = fx.dir.path().join("printed.pdf");
+    writer_agent::ProcessChecker::with_program(printer.clone())
+        .print(&folder, &out)
+        .expect_err("the folder of the page is no served directory");
+    let served = fx.dir.path().join("served");
+    std::fs::create_dir_all(&served).unwrap();
+    std::fs::write(served.join("request.json"), "{}").unwrap();
+    writer_agent::ProcessChecker::with_program(printer)
+        .print(&served, &out)
+        .unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), b"%PDF-1.4");
+    let silent = checker_program(&fx, "silent", "exit 0");
+    let error = writer_agent::ProcessChecker::with_program(silent)
+        .print(&served, &fx.dir.path().join("none.pdf"))
+        .unwrap_err();
+    assert!(error.to_string().contains("wrote no file"), "{error}");
+}

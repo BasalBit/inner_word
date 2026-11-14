@@ -136,16 +136,22 @@ struct Ran {
 }
 
 /// Reads all of a pipe on a thread of its own, so that a child that writes much to the
-/// other pipe never waits for this one.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+/// other pipe never waits for this one. What it read arrives once the pipe is closed.
+fn drain(pipe: Option<impl Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (send, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
         if let Some(mut pipe) = pipe {
             pipe.read_to_end(&mut out).ok();
         }
-        out
-    })
+        send.send(out).ok();
+    });
+    read
 }
+
+/// How long the output of a child that ended is waited for: a process it started may
+/// hold its pipes open.
+const OUTPUT_PATIENCE: Duration = Duration::from_secs(2);
 
 /// Waits for `child` until `limit`; kills it then. `None`: it was killed.
 fn wait_or_kill(
@@ -187,14 +193,18 @@ fn run(program: &Path, args: &[&std::ffi::OsStr], limit: Duration, what: &str) -
             "{what}: its checker could not be watched ({error})"
         ))
     })?;
-    let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
     let Some(status) = status else {
         return Err(Error::failed(format!(
             "{what}: it did not finish within {} s",
             limit.as_secs().max(1)
         )));
     };
+    let read = |pipe: std::sync::mpsc::Receiver<Vec<u8>>| {
+        String::from_utf8_lossy(&pipe.recv_timeout(OUTPUT_PATIENCE).unwrap_or_default())
+            .into_owned()
+    };
+    let stdout = read(stdout);
+    let stderr = read(stderr);
     Ok(Ran {
         success: status.success(),
         code: status.code(),

@@ -4,9 +4,24 @@
 use crate::SCHEME;
 
 /// How long after a real click or key of the reader a link may still be opened in the
-/// browser. A script's `a.click()` looks to WebKit like the reader's click; it is
-/// told apart only by time.
+/// browser. A script's `a.click()` looks to WebKit like the reader's click: it is told
+/// apart by time and by the link ([`reader_opened`]).
 pub(crate) const READER_WINDOW_S: f64 = 1.0;
+
+/// Whether a navigation to `url` is the reader opening a link: the reader acted
+/// ([`reader_acted`]) on a link (`reader_link`: the one under the pointer when the
+/// button went down, or the one with the focus when `enter` was pressed, as the page's
+/// document answered in the client's world), and `url` is that link's address. A
+/// page's listener of the reader's click or key that clicks another link opens nothing.
+pub(crate) fn reader_opened(
+    last_event: Option<f64>,
+    now: f64,
+    user_initiated: Option<bool>,
+    reader_link: Option<&str>,
+    url: &str,
+) -> bool {
+    reader_acted(last_event, now, user_initiated) && reader_link == Some(url)
+}
 
 /// Whether the reader acted: a real `mouseUp:` or `keyDown:` of the view no more than
 /// [`READER_WINDOW_S`] before `now` (both in seconds of the system's uptime, the clock
@@ -146,6 +161,31 @@ mod tests {
         assert!(reader_acted(Some(99.9), 100.0, Some(true)));
         assert!(!reader_acted(Some(99.9), 100.0, Some(false)));
         assert!(!reader_acted(None, 100.0, Some(true)));
+    }
+
+    #[test]
+    fn only_the_link_the_reader_acted_on_opens() {
+        let url = "https://example.com/a";
+        assert!(reader_opened(Some(99.5), 100.0, None, Some(url), url));
+        // Another link, a script clicked: the reader acted, but not on it.
+        assert!(!reader_opened(
+            Some(99.5),
+            100.0,
+            None,
+            Some(url),
+            "https://example.com/b"
+        ));
+        // The reader clicked beside every link, or pressed another key.
+        assert!(!reader_opened(Some(99.5), 100.0, None, None, url));
+        // The link, but long after the reader acted.
+        assert!(!reader_opened(Some(97.0), 100.0, None, Some(url), url));
+        assert!(!reader_opened(
+            Some(99.5),
+            100.0,
+            Some(false),
+            Some(url),
+            url
+        ));
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! is, plus muted media, with a data store of its own. The check adds a probe and its
 //! message handler in a content world of its own (`writer-check`): a listener for
 //! `securitypolicyviolation` in every frame, at document start, which the page's
-//! scripts cannot reach, remove or forge. Each HTML file is loaded at
+//! scripts cannot reach, remove or forge; the probe also makes every picture and frame
+//! under `loading="lazy"` eager, since the check never scrolls. Each HTML file is loaded at
 //! `writer-page://check/<path>`; after `load` the check waits until no request was
 //! answered or blocked for 500 ms (at least `settle_min`, at most `settle_max`), and
 //! reads the title, the first heading and the text in the same world.
@@ -77,6 +78,26 @@ const PROBE: &str = r#"(() => {
     post({ kind: 'error', message: 'Unhandled rejection: ' + String(reason && reason.message || reason),
            source: '', line: 0 });
   });
+  // A picture or a frame under loading="lazy" is asked for only near the screen, and
+  // the check never scrolls: each is made eager as soon as it is in the document (or
+  // made lazy later), so that what it asks for is seen like everything else.
+  const eager = (element) => {
+    if ((element.localName === 'img' || element.localName === 'iframe')
+        && String(element.getAttribute('loading') || '').trim().toLowerCase() === 'lazy') {
+      element.setAttribute('loading', 'eager');
+    }
+  };
+  const sweep = (node) => {
+    if (node.nodeType !== 1) return;
+    eager(node);
+    node.querySelectorAll('img[loading], iframe[loading]').forEach(eager);
+  };
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'attributes') eager(record.target);
+      else record.addedNodes.forEach(sweep);
+    }
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['loading'] });
   post({ kind: 'ready', type: String(document.contentType || '') });
 })();"#;
 

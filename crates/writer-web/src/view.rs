@@ -4,8 +4,10 @@
 //! The subclass overrides, for a view of the window (`WebPage`):
 //!
 //! * `keyDown:` / `keyUp:`: asks `PageEvents::takes_key` and hands a key the owner
-//!   takes to GPUI's view instead of the page; stamps the time of the reader's key;
-//! * `mouseUp:`: stamps the time of the reader's click (the gate of links);
+//!   takes to GPUI's view instead of the page; stamps the time of the reader's key and,
+//!   for `enter`, asks which link has the focus (the gate of links);
+//! * `mouseDown:`: asks which link lies under the pointer (the gate of links);
+//!   `mouseUp:` stamps the time of the reader's click;
 //! * `hitTest:` and `mouseMoved:`: a point inside a hole is not the web view's, so
 //!   AppKit hit-tests the next sibling, GPUI's view (a toast over the page);
 //! * `becomeFirstResponder`: `PageEvents::wants_focus` for a focus that did not come
@@ -56,6 +58,13 @@ pub(crate) struct ViewShared {
     pub focusing: Cell<bool>,
     /// The `timestamp` of the last real `mouseUp:` or `keyDown:` that reached the page.
     pub last_reader_event: Cell<Option<f64>>,
+    /// The link the reader acted on, as the page's document answered in the client's
+    /// world: the one under the pointer at the last real `mouseDown:`, the one with the
+    /// focus at the last `enter`. None after any other key or a press beside a link, and
+    /// once that link was opened. Only a navigation to its address opens outside.
+    pub reader_link: RefCell<Option<String>>,
+    /// Counts the questions about `reader_link`: an answer to an older one is dropped.
+    pub reader_asked: Cell<u64>,
     /// Holes, in the view's own points from its top left.
     pub holes: RefCell<Vec<Rect>>,
     /// The link under the pointer, as WebKit reported it last.
@@ -91,6 +100,8 @@ impl ViewShared {
             web_view: Cell::new(NIL),
             focusing: Cell::new(false),
             last_reader_event: Cell::new(None),
+            reader_link: RefCell::new(None),
+            reader_asked: Cell::new(0),
             holes: RefCell::new(Vec::new()),
             hovered_link: RefCell::new(None),
             pointed_link: RefCell::new(None),
@@ -118,6 +129,16 @@ impl Host for ViewHost {
 
     fn last_reader_event(&self) -> Option<f64> {
         self.0.last_reader_event.get()
+    }
+
+    fn reader_link(&self) -> Option<String> {
+        self.0.reader_link.borrow().clone()
+    }
+
+    fn link_opened(&self) {
+        // One act of the reader opens its link once: a page's script that clicks the
+        // same link again opens nothing.
+        *self.0.reader_link.borrow_mut() = None;
     }
 
     fn finished(&self, _navigation: Id) {
@@ -307,6 +328,13 @@ extern "C" fn key_down(this: &Object, _: Sel, event: Id) {
             }
             let at: f64 = msg_send![event, timestamp];
             shared.last_reader_event.set(Some(at));
+            // `enter` (return, or enter of the keypad) opens the link that has the focus;
+            // any other key opens none.
+            if press.key_code == 36 || press.key_code == 76 {
+                ask_for_the_reader_link(this, &shared, focused_link());
+            } else {
+                forget_the_reader_link(&shared);
+            }
         }
         let _: () = msg_send![super(this, class!(WKWebView)), keyDown: event];
     }
@@ -337,13 +365,86 @@ extern "C" fn key_up(this: &Object, _: Sel, event: Id) {
     }
 }
 
-/// Asks the page which link lies under the pointer of `event` (in a world of the
-/// client, which the page's scripts cannot reach), before the click goes on to the
-/// page: WebKit answers it before it builds the menu of the click.
-unsafe fn ask_for_the_link(this: &Object, shared: &Rc<ViewShared>, event: Id) {
+/// Finds a link from an element (in the client's world): the element or one of its
+/// ancestors, across the edges of shadow trees, that is an `a` (of HTML or of SVG) with
+/// an address; its address resolved as a navigation resolves it.
+const LINK_OF: &str = r#"const XLINK = 'http://www.w3.org/1999/xlink';
+const linkOf = (start) => {
+  for (let node = start; node; node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null) {
+    if (node.localName === 'a' && (node.hasAttribute('href') || node.hasAttributeNS(XLINK, 'href'))) {
+      const raw = typeof node.href === 'string' ? node.href
+        : (node.getAttribute('href') || node.getAttributeNS(XLINK, 'href') || '');
+      try { return new URL(raw, node.baseURI).href; } catch (_) { return ''; }
+    }
+  }
+  return '';
+};"#;
+
+/// The link that has the focus, through frames of the page's own origin and shadow
+/// trees ("" for none).
+fn focused_link() -> String {
+    const BODY: &str = r#"let element = document.activeElement;
+  for (;;) {
+    while (element && element.shadowRoot && element.shadowRoot.activeElement) element = element.shadowRoot.activeElement;
+    if (!element || (element.localName !== 'iframe' && element.localName !== 'frame')) break;
+    let inner = null;
+    try { inner = element.contentDocument; } catch (_) {}
+    if (!inner) return '';
+    element = inner.activeElement;
+  }
+  return element ? linkOf(element) : '';"#;
+    format!("(() => {{\n{LINK_OF}\n{BODY}\n}})()")
+}
+
+/// The link at a point of the view (CSS pixels from its top left), through frames of
+/// the page's own origin and shadow trees ("" for none).
+fn link_at(x: f64, y: f64) -> String {
+    const BODY: &str = r#"let element = document.elementFromPoint(x, y);
+  for (;;) {
+    while (element && element.shadowRoot) {
+      const inner = element.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === element) break;
+      element = inner;
+    }
+    if (!element || (element.localName !== 'iframe' && element.localName !== 'frame')) break;
+    let inner = null;
+    try { inner = element.contentDocument; } catch (_) {}
+    if (!inner) return '';
+    const box = element.getBoundingClientRect();
+    x -= box.left + element.clientLeft;
+    y -= box.top + element.clientTop;
+    element = inner.elementFromPoint(x, y);
+  }
+  return element ? linkOf(element) : '';"#;
+    format!("(() => {{\n{LINK_OF}\nlet x = {x}, y = {y};\n{BODY}\n}})()")
+}
+
+/// Asks the page's document a question about a link (in a world of the client, which
+/// the page's scripts cannot reach), before the event goes on to the page: WebKit
+/// answers it before it handles the event, so the answer is there before the menu of
+/// a click is built and before a navigation of the click is decided.
+unsafe fn ask_about_a_link(this: &Object, script: &str, answer: impl Fn(Option<String>) + 'static) {
+    // SAFETY: WebKit's own selectors on a live view.
+    unsafe {
+        let this = this as *const Object as Id;
+        let block = ConcreteBlock::new(move |result: Id, _error: Id| {
+            let link = crate::page::js_text(result);
+            answer(Some(link).filter(|link| !link.is_empty()));
+        })
+        .copy();
+        let world: Id = msg_send![class!(WKContentWorld), defaultClientWorld];
+        let _: () = msg_send![this,
+            evaluateJavaScript: nsstring(script)
+            inFrame: NIL
+            inContentWorld: world
+            completionHandler: &*block];
+    }
+}
+
+/// The point of `event` in CSS pixels from the view's top left.
+unsafe fn css_point(this: &Object, event: Id) -> (f64, f64) {
     // SAFETY: AppKit's and WebKit's own selectors on a live view and event.
     unsafe {
-        *shared.pointed_link.borrow_mut() = None;
         let this = this as *const Object as Id;
         let point: NSPoint = msg_send![event, locationInWindow];
         let local: NSPoint = msg_send![this, convertPoint: point fromView: NIL];
@@ -352,26 +453,45 @@ unsafe fn ask_for_the_link(this: &Object, shared: &Rc<ViewShared>, event: Id) {
         let (x, y) = frame::to_top_left(local.x, local.y, bounds.size.height, flipped != NO);
         let zoom: f64 = msg_send![this, pageZoom];
         let zoom = if zoom > 0. { zoom } else { 1. };
-        let script = format!(
-            "(() => {{ const e = document.elementFromPoint({}, {}); \
-             const a = e && e.closest ? e.closest('a[href]') : null; return a ? String(a.href) : ''; }})()",
-            x / zoom,
-            y / zoom
-        );
+        (x / zoom, y / zoom)
+    }
+}
+
+/// The link under the pointer of a right-click, for its menu.
+unsafe fn ask_for_the_link(this: &Object, shared: &Rc<ViewShared>, event: Id) {
+    *shared.pointed_link.borrow_mut() = None;
+    // SAFETY: as `css_point` and `ask_about_a_link`.
+    unsafe {
+        let (x, y) = css_point(this, event);
         let weak = Rc::downgrade(shared);
-        let block = ConcreteBlock::new(move |result: Id, _error: Id| {
+        ask_about_a_link(this, &link_at(x, y), move |link| {
             if let Some(shared) = weak.upgrade() {
-                let link = crate::page::js_text(result);
-                *shared.pointed_link.borrow_mut() = Some(link).filter(|link| !link.is_empty());
+                *shared.pointed_link.borrow_mut() = link;
             }
-        })
-        .copy();
-        let world: Id = msg_send![class!(WKContentWorld), defaultClientWorld];
-        let _: () = msg_send![this,
-            evaluateJavaScript: nsstring(&script)
-            inFrame: NIL
-            inContentWorld: world
-            completionHandler: &*block];
+        });
+    }
+}
+
+/// No link is the reader's until a new question is answered.
+fn forget_the_reader_link(shared: &ViewShared) {
+    shared.reader_asked.set(shared.reader_asked.get() + 1);
+    *shared.reader_link.borrow_mut() = None;
+}
+
+/// The link the reader acts on (`script` answers it), for the gate of links.
+unsafe fn ask_for_the_reader_link(this: &Object, shared: &Rc<ViewShared>, script: String) {
+    forget_the_reader_link(shared);
+    let asked = shared.reader_asked.get();
+    let weak = Rc::downgrade(shared);
+    // SAFETY: as `ask_about_a_link`.
+    unsafe {
+        ask_about_a_link(this, &script, move |link| {
+            if let Some(shared) = weak.upgrade()
+                && shared.reader_asked.get() == asked
+            {
+                *shared.reader_link.borrow_mut() = link;
+            }
+        });
     }
 }
 
@@ -392,6 +512,10 @@ extern "C" fn mouse_down(this: &Object, _: Sel, event: Id) {
             let flags: usize = msg_send![event, modifierFlags];
             if flags & menu::CONTROL != 0 {
                 ask_for_the_link(this, &shared, event);
+                forget_the_reader_link(&shared);
+            } else {
+                let (x, y) = css_point(this, event);
+                ask_for_the_reader_link(this, &shared, link_at(x, y));
             }
         }
         let _: () = msg_send![super(this, class!(WKWebView)), mouseDown: event];

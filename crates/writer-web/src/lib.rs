@@ -263,8 +263,11 @@ pub trait PageEvents: 'static {
     /// A key the view received: true hands it to the owner's view instead of the page.
     fn takes_key(&self, key: &KeyPress) -> bool;
     /// A link to another site (http, https, mailto) that the reader opened: a navigation
-    /// within 1 s of a real mouseUp:/keyDown: of the view (and `_isUserInitiated` where it
-    /// answers), or the menu's "Open Link in Browser". A script's click never comes here.
+    /// to the address of the link the reader acted on (the one under the pointer at a real
+    /// mouseDown:, the one with the focus at a real `enter`), within 1 s of a real
+    /// mouseUp:/keyDown: of the view (and `_isUserInitiated` where it answers), once per
+    /// act; or the menu's "Open Link in Browser". A script's click never comes here, also
+    /// not one in a listener of the reader's click or key that clicks another link.
     fn open_externally(&self, url: String);
     /// A page's `alert`: at most one in 5 s comes here; the others are answered and
     /// dropped.

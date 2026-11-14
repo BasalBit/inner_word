@@ -607,6 +607,12 @@ fn main() -> ExitCode {
     if wanted("view") {
         the_view(&mut report, &server, &rules);
     }
+    if wanted("gate") {
+        the_gate_opens_only_the_link_the_reader_acted_on(&mut report, &server, &rules);
+    }
+    if wanted("lazy") {
+        lazy_pieces_are_asked_for(&mut report, &server, &rules);
+    }
     if wanted("switched") {
         pages_switched_during_loads(&mut report, &rules);
     }
@@ -1666,6 +1672,199 @@ fn the_view(report: &mut Report, server: &Server, rules: &Path) {
         host.first_responder() == host.gpui,
         "a dropped page gives the first responder back to GPUI's view",
     );
+}
+
+/// A page whose own listeners click another link on every click and every key of the
+/// reader: only the link the reader clicked, or pressed enter on, opens (ISO-4).
+fn the_gate_opens_only_the_link_the_reader_acted_on(
+    report: &mut Report,
+    server: &Server,
+    rules: &Path,
+) {
+    let page = format!(
+        r#"<!doctype html><html><head><title>Gate</title>
+<style>body {{ margin: 0; font: 16px sans-serif; }} a, p {{ display: inline-block; padding: 20px; margin: 0; }}</style></head>
+<body>
+<p><a id="real" href="{real}">The link the reader opens</a></p>
+<p><a id="other" href="{other}">The link the page wants opened</a></p>
+<p id="text">Plain words to click on</p>
+<p><input id="field" value=""></p>
+<svg width="200" height="40"><a id="drawn" href="{drawn}"><text x="10" y="25">A drawn link</text></a></svg>
+<p><iframe id="frame" src="inner.html" style="width: 400px; height: 80px; border: 0"></iframe></p>
+<script>
+ const other = () => document.getElementById('other').click();
+ document.addEventListener('click', (event) => {{ if (event.target.id !== 'other') other(); }}, true);
+ document.addEventListener('keydown', () => other(), true);
+ document.addEventListener('mouseup', () => setTimeout(other, 50));
+</script>
+</body></html>"#,
+        real = server.url("real"),
+        other = server.url("other"),
+        drawn = server.url("drawn"),
+    );
+    let inner = format!(
+        r#"<!doctype html><style>body {{ margin: 0; }} a {{ display: inline-block; padding: 20px; }}</style>
+<a id="framed" href="{framed}" target="_blank">A link in a frame</a>"#,
+        framed = server.url("framed")
+    );
+    let host = Host::new();
+    let (view, events) = host.page(
+        vec![("index.html", html(&page)), ("inner.html", html(&inner))],
+        "index.html",
+        rules,
+    );
+    let real = server.url("real");
+    let other = server.url("other");
+    let opened = || events.opened.borrow().clone();
+    let settle = || wait(Duration::from_millis(700));
+    let click_on = |id: &str| -> bool {
+        match middle_of(&view, id) {
+            Some((x, y)) => {
+                host.mouse(1, x, y);
+                host.mouse(2, x, y);
+                true
+            }
+            None => false,
+        }
+    };
+
+    // A click on plain words: the page's listeners click another link, nothing opens.
+    report.check(click_on("text"), "the words have a place on the page");
+    settle();
+    report.check(
+        opened().is_empty(),
+        &format!("a click on words does not open the link the page clicks ({:?})", opened()),
+    );
+    // A key typed in a field, and enter in it: nothing opens.
+    view.focus();
+    let _ = eval(&view, "document.getElementById('field').focus(); 1");
+    host.key(true, 0, "a", 0);
+    host.key(false, 0, "a", 0);
+    host.key(true, 36, "\r", 0);
+    host.key(false, 36, "\r", 0);
+    settle();
+    report.check(
+        opened().is_empty(),
+        &format!("a key in a field does not open the link the page clicks ({:?})", opened()),
+    );
+    // Enter on the focused link opens that link and no other.
+    let _ = eval(&view, "document.getElementById('real').focus(); 1");
+    host.key(true, 36, "\r", 0);
+    host.key(false, 36, "\r", 0);
+    testing::run_until(Duration::from_secs(3), || !opened().is_empty());
+    settle();
+    report.check(
+        opened() == vec![real.clone()],
+        &format!("enter on a link opens that link and no other ({:?})", opened()),
+    );
+    // A click on the link opens it, and the page's clicks of the other link do not.
+    report.check(click_on("real"), "the link has a place on the page");
+    testing::run_until(Duration::from_secs(3), || opened().len() > 1);
+    settle();
+    report.check(
+        opened() == vec![real.clone(), real.clone()],
+        &format!("a click on a link opens that link and no other ({:?})", opened()),
+    );
+    // A link of an SVG drawing is a link too.
+    report.check(click_on("drawn"), "the drawn link has a place on the page");
+    testing::run_until(Duration::from_secs(3), || opened().len() > 2);
+    settle();
+    report.check(
+        opened().last() == Some(&server.url("drawn")) && opened().len() == 3,
+        &format!("a click on a link of a drawing opens it ({:?})", opened()),
+    );
+    // A link in a frame of the page's own files that opens in a window of its own (one
+    // that would open in the frame itself is the frame's navigation to another site,
+    // which the page's policy, frame-src, stops before WebKit asks).
+    let framed = eval(
+        &view,
+        "(() => { const f = document.getElementById('frame').getBoundingClientRect(); \
+         const r = document.getElementById('frame').contentDocument.getElementById('framed').getBoundingClientRect(); \
+         return JSON.stringify([f.left + r.left + r.width / 2, f.top + r.top + r.height / 2]); })()",
+    )
+    .ok()
+    .and_then(|text| serde_json::from_str::<Vec<f64>>(&text).ok());
+    match framed {
+        Some(point) if point.len() == 2 => {
+            host.mouse(1, point[0], point[1]);
+            host.mouse(2, point[0], point[1]);
+            testing::run_until(Duration::from_secs(3), || opened().len() > 3);
+            settle();
+            report.check(
+                opened().last() == Some(&server.url("framed")) && opened().len() == 4,
+                &format!("a click on a link in a frame of the page opens it ({:?})", opened()),
+            );
+        }
+        _ => report.check(false, &format!("the link in the frame has a place ({framed:?})")),
+    }
+    report.check(
+        !opened().contains(&other),
+        &format!("the link only the page clicked never opened ({:?})", opened()),
+    );
+}
+
+/// A picture and a frame under `loading="lazy"` far below the first screen are asked
+/// for by the check: one that is not among the page's files is missing, one on the web
+/// is blocked (ISO-3).
+fn lazy_pieces_are_asked_for(report: &mut Report, server: &Server, rules: &Path) {
+    let page = format!(
+        r#"<!doctype html><html><head><title>Lazy</title></head><body>
+<h1>Lazy</h1><div style="height: 6000px">tall</div>
+<img loading="lazy" src="pics/late.png" alt="late">
+<iframe loading="lazy" src="frames/late.html"></iframe>
+<img loading="lazy" src="{web}" alt="from the web">
+<div id="later"></div>
+<script>
+ const img = document.createElement('img');
+ img.loading = 'lazy';
+ img.src = 'pics/added.png';
+ document.getElementById('later').appendChild(img);
+</script>
+</body></html>"#,
+        web = server.url("lazy.png")
+    );
+    let png = writer_png();
+    let missing = |files: Vec<(&str, ServedFile)>| {
+        let outcome = check_blocking(input(source(files), "index.html", &[], rules));
+        let load = outcome.loads.first().cloned();
+        (outcome, load)
+    };
+    let (outcome, load) = missing(vec![("index.html", html(&page))]);
+    report.check(outcome.failure.is_none(), &format!("the lazy check ran ({:?})", outcome.failure));
+    let load = load.unwrap_or_default();
+    let mut gone = load.missing.clone();
+    gone.sort();
+    report.check(
+        gone == vec!["frames/late.html", "pics/added.png", "pics/late.png"],
+        &format!("lazy pieces that are not there are missing ({:?})", load.missing),
+    );
+    let blocked = blocked_paths(&outcome);
+    report.check(
+        blocked.iter().any(|(url, _)| url.ends_with("/lazy.png")),
+        &format!("a lazy picture on the web is blocked ({blocked:?})"),
+    );
+    let (_, load) = missing(vec![
+        ("index.html", html(&page)),
+        ("pics/late.png", file("image/png", &png)),
+        ("pics/added.png", file("image/png", &png)),
+        ("frames/late.html", html("<!doctype html><title>Late</title><p>late</p>")),
+    ]);
+    let load = load.unwrap_or_default();
+    report.check(
+        load.finished && load.missing.is_empty(),
+        &format!("with them there nothing is missing ({:?})", load.missing),
+    );
+}
+
+/// A PNG of one pixel.
+fn writer_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
 }
 
 fn menu_flag_ctrl() -> usize {

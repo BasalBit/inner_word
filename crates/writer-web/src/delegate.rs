@@ -28,6 +28,12 @@ pub(crate) trait Host {
     fn own_host(&self) -> String;
     /// When the reader last clicked or pressed a key in the view (NSEvent time).
     fn last_reader_event(&self) -> Option<f64>;
+    /// The address of the link the reader acted on (clicked, or pressed enter on).
+    fn reader_link(&self) -> Option<String> {
+        None
+    }
+    /// The reader's link was handed to the browser.
+    fn link_opened(&self) {}
     fn finished(&self, navigation: Id);
     fn failed(&self, navigation: Id, message: String);
     fn terminated(&self);
@@ -187,9 +193,10 @@ unsafe fn url_of_request(request: Id) -> String {
     }
 }
 
-/// Whether the reader acted for `action` (the gate of `policy::reader_acted`, with
-/// `_isUserInitiated` where the navigation action answers it).
-unsafe fn reader_acted(host: &dyn Host, action: Id) -> bool {
+/// Whether the reader opened `url` with `action` (the gate of `policy::reader_opened`:
+/// the link the reader acted on, the time, and `_isUserInitiated` where the navigation
+/// action answers it).
+unsafe fn reader_opened(host: &dyn Host, action: Id, url: &str) -> bool {
     // SAFETY: the private selector is sent only where it is answered.
     let user_initiated = unsafe {
         if responds(action, sel!(_isUserInitiated)) {
@@ -199,7 +206,13 @@ unsafe fn reader_acted(host: &dyn Host, action: Id) -> bool {
             None
         }
     };
-    policy::reader_acted(host.last_reader_event(), uptime(), user_initiated)
+    policy::reader_opened(
+        host.last_reader_event(),
+        uptime(),
+        user_initiated,
+        host.reader_link().as_deref(),
+        url,
+    )
 }
 
 extern "C" fn decide_action(
@@ -232,7 +245,7 @@ extern "C" fn decide_action(
             false
         };
         let link = kind == LINK_ACTIVATED;
-        let reader = link && reader_acted(&*host, action);
+        let reader = link && reader_opened(&*host, action, &url);
         let own_host = host.own_host();
         let decision = policy::decide(&Navigation {
             url: &url,
@@ -250,6 +263,7 @@ extern "C" fn decide_action(
             }
             Decision::OpenOutside => {
                 decide(handler, POLICY_CANCEL);
+                host.link_opened();
                 host.open_externally(url);
             }
         }
@@ -344,12 +358,15 @@ extern "C" fn create_web_view(
         };
         let request: Id = msg_send![action, request];
         let url = url_of_request(request);
-        let reader = reader_acted(&*host, action);
+        let reader = reader_opened(&*host, action, &url);
         match policy::new_window(&url, &host.own_host(), reader) {
             NewWindow::LoadHere => {
                 let _: Id = msg_send![web_view, loadRequest: request];
             }
-            NewWindow::OpenOutside => host.open_externally(url),
+            NewWindow::OpenOutside => {
+                host.link_opened();
+                host.open_externally(url);
+            }
             NewWindow::Nothing => host.cancelled(&url),
         }
         NIL

@@ -1356,7 +1356,7 @@ fn the_app_stores_what_a_request_brings_and_opens_no_path() {
         Duration::from_secs(1),
     ))
     .unwrap();
-    assert_eq!(sent["version"], 2);
+    assert_eq!(sent["version"], live::PROTOCOL_VERSION);
     assert_eq!(sent["op"], "insert");
     let brought = &sent["request"]["images"][0];
     assert_eq!(brought["source"], "/no/such/folder/brought.png");

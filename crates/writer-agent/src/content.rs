@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use writer_core::{BlockId, CommentId, Document, DocumentSettings, Orientation, PaperSize, Stats};
-use writer_store::{DocumentContent, DocumentId, DocumentMeta, SnapshotMeta, Store};
+use writer_store::{DocumentContent, DocumentId, DocumentKind, DocumentMeta, SnapshotMeta, Store};
 
 use crate::error::{Error, Result, quoted_excerpt};
 use crate::resolve::{UNTITLED, title_of};
@@ -54,9 +54,32 @@ pub(crate) fn parse(meta: &DocumentMeta, content: &str) -> Result<Document> {
     })
 }
 
-/// Loads the document `meta` names.
+/// The error of a text operation on a page: a page is kept as it was saved.
+pub(crate) fn is_a_page(meta: &DocumentMeta) -> Error {
+    Error::WrongKind {
+        id: meta.id.0,
+        name: quoted_excerpt(title_of(meta)),
+        is_page: true,
+    }
+}
+
+/// The error of a page operation on a text.
+pub(crate) fn is_a_text(meta: &DocumentMeta) -> Error {
+    Error::WrongKind {
+        id: meta.id.0,
+        name: quoted_excerpt(title_of(meta)),
+        is_page: false,
+    }
+}
+
+/// Loads the document `meta` names. A page is refused with [`Error::WrongKind`]: its
+/// content is its manifest, never a document, and every operation on the text of a
+/// document comes through here.
 pub(crate) fn load(store: &Store, meta: &DocumentMeta) -> Result<Loaded> {
     let stored = store.document(meta.id)?;
+    if stored.meta.kind == DocumentKind::Page {
+        return Err(is_a_page(&stored.meta));
+    }
     let document = parse(&stored.meta, &stored.content)?;
     let custom_title = title_is_chosen(store, &stored.meta, &document);
     Ok(Loaded {
@@ -82,11 +105,19 @@ pub(crate) fn derived_title(document: &Document) -> String {
 /// the text gives (and not the name of a copy, "Title copy", which goes back to following
 /// the text with the first change).
 pub(crate) fn title_is_chosen(store: &Store, meta: &DocumentMeta, document: &Document) -> bool {
+    title_flag_set(store, meta) || named_outside(&meta.title, document)
+}
+
+/// Whether the flag "somebody chose this title" is set for the document `meta` (and not
+/// left over from a deleted document that had its id). For a page it is the whole
+/// answer: a page has no text its title follows, only the title it gave when it was
+/// taken.
+pub(crate) fn title_flag_set(store: &Store, meta: &DocumentMeta) -> bool {
     let flag: Option<TitleFlag> = store.setting(&title_flag_key(meta.id)).ok().flatten();
     match flag {
         Some(TitleFlag::Plain(true)) => true,
-        Some(TitleFlag::For(created_at)) if created_at == meta.created_at => true,
-        _ => named_outside(&meta.title, document),
+        Some(TitleFlag::For(created_at)) => created_at == meta.created_at,
+        _ => false,
     }
 }
 
@@ -229,6 +260,8 @@ pub(crate) enum Reason {
     CommentDeleted,
     /// An earlier version is restored.
     Restore,
+    /// A page is brought to a newer copy of itself.
+    Update,
 }
 
 impl Reason {
@@ -241,6 +274,7 @@ impl Reason {
             Reason::Section => "a section was replaced",
             Reason::CommentDeleted => "a comment was deleted",
             Reason::Restore => "a version was restored",
+            Reason::Update => "an update",
         };
         format!("Before {what} by {author}")
     }

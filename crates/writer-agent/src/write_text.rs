@@ -139,6 +139,9 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
+        if meta.kind == writer_store::DocumentKind::Page {
+            return crate::pages::read(&session.store, &index, &meta, request);
+        }
         let loaded = content::load(&session.store, &meta)?;
         let document = &loaded.document;
         let summary = index.document_summary(&session.store, &loaded.meta);
@@ -189,6 +192,7 @@ impl Library {
             section: heading.map(|heading| heading.info(document)),
             comments,
             images,
+            page: None,
         })
     }
 
@@ -198,6 +202,9 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
+        if meta.kind == writer_store::DocumentKind::Page {
+            return crate::pages::find(&session.store, &index, &meta, request);
+        }
         let loaded = content::load(&session.store, &meta)?;
         let matches = matching::find(&loaded.document, &request.text, false)?;
         Ok(FindResults {
@@ -301,6 +308,8 @@ pub(crate) fn create_document(
             created_at: now,
             updated_at: now,
             trashed_at: None,
+            kind: writer_store::DocumentKind::Text,
+            source_url: None,
         };
         return Ok(DocumentCreated {
             document,

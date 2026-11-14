@@ -21,6 +21,9 @@ unicode-segmentation.workspace = true
 writer-image.workspace = true
 # The bytes of an image as an agent is handed them.
 base64 = "0.22"
+# Pages: an HTML file or folder made into the files the library keeps, its check as
+# data, its manifest.
+writer-page.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

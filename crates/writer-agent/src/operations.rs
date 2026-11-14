@@ -14,7 +14,7 @@ use crate::attach::Prepare;
 use crate::error::{Error, Result};
 use crate::library::{Library, Session};
 use crate::types::*;
-use crate::{comments, items, versions, write_text};
+use crate::{comments, items, pages, versions, write_text};
 
 fn as_json<T: Serialize>(result: T) -> Result<Value> {
     serde_json::to_value(result)
@@ -33,6 +33,8 @@ macro_rules! operations {
         /// [`Library`] that writes, with the request of that operation as it is.
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         #[serde(tag = "op", content = "request", rename_all = "snake_case")]
+        // One per request, never in a collection: the request of a page is not boxed.
+        #[allow(clippy::large_enum_variant)]
         pub enum Operation {
             /// Says whether the app takes changes from agents. Changes nothing, saves
             /// nothing.
@@ -123,6 +125,12 @@ operations! {
     /// file is read here, by whoever asks, and travels with the request. See
     /// [`AddImageRequest`].
     add_image / AddImage(AddImageRequest) -> ContentChanged = write_text::add_image;
+    /// Adds a page: a web page from a file or a folder on this Mac, kept whole and
+    /// offline with everything it loads. The file or folder is read, what the page names
+    /// on the web is fetched and the page is checked here, by whoever asks, and the page
+    /// travels with the request. With a source address the page there is updated, or
+    /// left as it is when it is the same. See [`AddPageRequest`].
+    add_page / AddPage(AddPageRequest) -> PageAdded = pages::add_page;
 
     /// Renames a document, or gives its title back to its text. See
     /// [`RenameDocumentRequest`].

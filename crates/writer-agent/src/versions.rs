@@ -50,6 +50,9 @@ impl Library {
         let index = Index::load(store)?;
         let snapshot = snapshot(store, request.version)?;
         let meta = store.document_meta(snapshot.meta.document_id)?;
+        if meta.kind == writer_store::DocumentKind::Page {
+            return crate::pages::read_version(store, &index, &meta, &snapshot, request.format);
+        }
         let document = content::parse(&meta, &snapshot.content)?;
         Ok(VersionText {
             document: index.document_summary(store, &meta),
@@ -86,6 +89,9 @@ pub(crate) fn restore_version(
                 expected.id,
             )));
         }
+    }
+    if meta.kind == writer_store::DocumentKind::Page {
+        return crate::pages::restore_version(session, &index, &meta, &snapshot, request);
     }
     let loaded = content::load(store, &meta)?;
     let restored = content::parse(&meta, &snapshot.content)?;

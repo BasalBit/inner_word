@@ -14,15 +14,15 @@ use writer_agent::live::{
     Request,
 };
 use writer_agent::{
-    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
-    DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
-    EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest, FindRequest,
-    FolderInfoRequest, InfoRequest, InsertPosition, InsertRequest, Library, ListCommentsRequest,
-    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, Placement, ReadRequest,
-    ReadVersionRequest, RecentRequest, Refusal, RenameDocumentRequest, RenameFolderRequest,
-    ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest,
-    RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target, TrashDocumentRequest,
-    TrashFolderRequest, TreeRequest, WriteOptions,
+    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
+    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
+    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest,
+    FindRequest, FolderInfoRequest, InfoRequest, InsertPosition, InsertRequest, Library,
+    ListCommentsRequest, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, Placement,
+    ReadRequest, ReadVersionRequest, RecentRequest, Refusal, RenameDocumentRequest,
+    RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest,
+    RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target,
+    TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
 };
 use writer_store::instance_lock::{self, InstanceLock};
 use writer_store::{DocumentId, Store};
@@ -382,7 +382,7 @@ fn a_change_made_while_the_app_is_open_is_carried_out_by_the_app() {
 /// An app of 0.6.0 answered a real run with `"app_is_open": false, "app_takes_changes":
 /// false` in the result, although it had made the change. A tool of today that is
 /// answered so says what is true all the same: it handed the change to the app.
-/// (Since the channel speaks version 2 an app of 0.6.0 refuses a tool of today whole,
+/// (Since the channel speaks version 2 or later an app of 0.6.0 refuses a tool of today whole,
 /// `versions_of_the_channel_that_do_not_fit_tell_each_other`; what is held here is that
 /// the tool does not take who made a change from the answer, whoever answers.)
 #[test]
@@ -483,6 +483,39 @@ fn steps(pictures: &Path) -> Vec<Step> {
     };
     let harbour = picture("harbour.png", (640, 400), [30, 90, 160]);
     let square = picture("square.png", (48, 48), [200, 40, 40]);
+    // A page, outside both libraries, that names a style sheet on the web.
+    let page = pictures.join("orbitarium");
+    fn write_page(page: &Path, words: &str) {
+        std::fs::create_dir_all(page).unwrap();
+        std::fs::write(
+            page.join("index.html"),
+            format!(
+                "<!doctype html><title>Orbitarium</title>\
+                 <link rel=stylesheet href=\"https://fonts.example.com/k.css\">\
+                 <h1>Orbitarium</h1><p>{words} words.</p>"
+            ),
+        )
+        .unwrap();
+    }
+    fn with_web(library: &Library) -> Library {
+        library
+            .clone()
+            .with_fetcher(std::sync::Arc::new(writer_page::MapFetcher::new().with(
+                "https://fonts.example.com/k.css",
+                "text/css",
+                "body { color: #222 }",
+            )))
+    }
+    fn orbitarium(page: &Path) -> AddPageRequest {
+        AddPageRequest {
+            path: page.to_string_lossy().into_owned(),
+            source_url: Some("https://claude.ai/artifact/Orbit".into()),
+            folder: Some(Target::path("Claude Pages")),
+            create_folders: true,
+            write: claude(),
+            ..Default::default()
+        }
+    }
     // The ids of the threads of the chapter, and of the replies of the first.
     fn threads(library: &Library) -> Vec<(u64, Vec<u64>)> {
         library
@@ -701,6 +734,75 @@ fn steps(pictures: &Path) -> Vec<Step> {
                 write: claude(),
                 ..Default::default()
             })
+        }),
+        // Pages: one from a folder, with a piece from the web; the same again; a newer
+        // copy; a text operation on it; its first version back; to the trash, where it is
+        // left, and added as new all the same.
+        step("add_page", {
+            let page = page.clone();
+            move |library| {
+                write_page(&page, "First");
+                with_web(library).add_page(&orbitarium(&page))
+            }
+        }),
+        step("add_page", {
+            let page = page.clone();
+            move |library| with_web(library).add_page(&orbitarium(&page))
+        }),
+        step("add_page", {
+            let page = page.clone();
+            move |library| {
+                write_page(&page, "Second");
+                with_web(library).add_page(&orbitarium(&page))
+            }
+        }),
+        step("edit", move |library| {
+            library.edit(&edit(
+                library,
+                Target::path("Claude Pages/Orbitarium"),
+                "Second",
+                "x",
+            ))
+        }),
+        step("rename_document", move |library| {
+            library.rename_document(&RenameDocumentRequest {
+                document: Target::path("Claude Pages/Orbitarium"),
+                title: "My Orbitarium".into(),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("restore_version", move |library| {
+            let versions = library
+                .versions(&ListVersionsRequest {
+                    document: Target::path("Claude Pages/My Orbitarium"),
+                })
+                .unwrap()
+                .versions;
+            library.restore_version(&RestoreVersionRequest {
+                version: versions.last().expect("a version").id.0,
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("trash_document", move |library| {
+            library.trash_document(&TrashDocumentRequest {
+                document: Target::path("Claude Pages/My Orbitarium"),
+                write: claude(),
+            })
+        }),
+        step("add_page", {
+            let page = page.clone();
+            move |library| with_web(library).add_page(&orbitarium(&page))
+        }),
+        step("add_page", {
+            let page = page.clone();
+            move |library| {
+                with_web(library).add_page(&AddPageRequest {
+                    include_trashed: true,
+                    ..orbitarium(&page)
+                })
+            }
         }),
         // Documents as items.
         step("create_document", move |library| {
@@ -980,7 +1082,7 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
         "the steps above and the table of operations (src/operations.rs) name different \
          operations: an operation that writes has to be in both"
     );
-    assert_eq!(table.len(), 25);
+    assert_eq!(table.len(), 26);
 
     // What a search finds is the same too (the index is not in the dump).
     for query in ["dusk", "lighthouse", "Rewritten", "notes", "year"] {
@@ -1193,6 +1295,9 @@ fn nothing_writes_to_a_library_but_through_the_table() {
         "versions",
         "read_version",
         "export",
+        "with_page_checker",
+        "with_fetcher",
+        "pages",
     ];
     fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -2074,17 +2179,17 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     // A newer app refuses this tool's request, in a form every version reads.
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":7,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":7,\
-          \"tool\":2},\"more\":[1,2]}\n"
+          \"tool\":3},\"more\":[1,2]}\n"
             .to_vec()
     });
     let error = change(&fx.library).unwrap_err();
     let message = error.to_string();
     assert_eq!(
         refusal(Err::<(), _>(error)),
-        Refusal::Protocol { app: 7, tool: 2 }
+        Refusal::Protocol { app: 7, tool: 3 }
     );
     assert!(
-        message.contains("the app speaks version 7 of their channel, this tool version 2"),
+        message.contains("the app speaks version 7 of their channel, this tool version 3"),
         "{message}"
     );
     assert!(message.contains("nothing was changed"), "{message}");
@@ -2113,13 +2218,13 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         BufReader::new(stream).read_line(&mut answer).unwrap();
         serde_json::from_str(&answer).unwrap_or_else(|_| panic!("{answer:?}"))
     };
-    let answer = ask(r#"{"version":3,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
+    let answer = ask(r#"{"version":4,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
     assert_eq!(
         answer,
         serde_json::json!({
-            "version": 2,
+            "version": 3,
             "answer": "refused",
-            "refusal": {"why": "protocol", "app": 2, "tool": 3},
+            "refusal": {"why": "protocol", "app": 3, "tool": 4},
         })
     );
     // And a tool from before images (0.6.0 spoke version 1): its requests bring no
@@ -2135,9 +2240,29 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         assert_eq!(
             ask(&line),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "answer": "refused",
-                "refusal": {"why": "protocol", "app": 2, "tool": 1},
+                "refusal": {"why": "protocol", "app": 3, "tool": 1},
+            }),
+            "{line}"
+        );
+    }
+    // And a tool from before pages (0.7.0 spoke version 2): it would not know a page
+    // the app may hand it in an answer, and an app of version 2 would not know a page's
+    // request. Refused whole too.
+    for line in [
+        format!(
+            r#"{{"version":2,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words"}}}}"#,
+            chapter.id
+        ),
+        r#"{"version":2,"wait_ms":1000,"op":"flush"}"#.to_string(),
+    ] {
+        assert_eq!(
+            ask(&line),
+            serde_json::json!({
+                "version": 3,
+                "answer": "refused",
+                "refusal": {"why": "protocol", "app": 3, "tool": 2},
             }),
             "{line}"
         );
@@ -2145,7 +2270,7 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
     app.names();
     // What is no request is answered as a failure.
-    for line in ["nonsense", "{}", r#"{"version":2,"op":"sing"}"#] {
+    for line in ["nonsense", "{}", r#"{"version":3,"op":"sing"}"#] {
         let answer = ask(line);
         assert_eq!(answer["answer"], "failed", "{line}");
         assert_eq!(answer["error"]["code"], "invalid", "{line}");
@@ -2153,24 +2278,24 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     assert_eq!(app.names(), [] as [&str; 0], "none of it reached the app");
     // A request as the documentation writes it is served.
     let answer = ask(&format!(
-        r#"{{"version":2,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
+        r#"{{"version":3,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
         chapter.id
     ));
-    assert_eq!(answer["version"], 2);
+    assert_eq!(answer["version"], 3);
     assert_eq!(answer["answer"], "done");
     assert_eq!(answer["result"]["replacements"], 1);
     assert_eq!(answer["result"]["changed"], true);
     assert_eq!(app.changes(), ["edit"]);
-    let answer = ask(r#"{"version":2,"wait_ms":1000,"op":"flush"}"#);
+    let answer = ask(r#"{"version":3,"wait_ms":1000,"op":"flush"}"#);
     assert_eq!(
         answer["result"],
         serde_json::json!({"takes_changes": true, "app_version": env!("CARGO_PKG_VERSION")})
     );
-    let answer = ask(r#"{"version":2,"wait_ms":1000,"op":"hello"}"#);
+    let answer = ask(r#"{"version":3,"wait_ms":1000,"op":"hello"}"#);
     assert_eq!(answer["result"]["takes_changes"], true);
     // A failure travels with its kind and comes out as the error it was.
     let answer = ask(&format!(
-        r#"{{"version":2,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
+        r#"{{"version":3,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
         chapter.id
     ));
     assert_eq!(answer["answer"], "failed");
@@ -2189,11 +2314,11 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
     let file = fx.picture("harbour.png", (64, 40), [30, 90, 160]);
     let before = fx.dump();
-    // What the listener of 0.6.0 writes for a request of version 2 (its `parse_request`
+    // What the listener of 0.6.0 writes for a request of version 3 (its `parse_request`
     // compares the number first and reads nothing else of the line).
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":1,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":1,\
-          \"tool\":2}}\n"
+          \"tool\":3}}\n"
             .to_vec()
     });
     let added = fx.library.add_image(&AddImageRequest {
@@ -2214,7 +2339,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
         assert_eq!(error.exit_code(), 5);
         let message = error.to_string();
         assert!(
-            message.contains("the app speaks version 1 of their channel, this tool version 2"),
+            message.contains("the app speaks version 1 of their channel, this tool version 3"),
             "{message}"
         );
         assert!(message.contains("nothing was changed"), "{message}");
@@ -2223,7 +2348,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
         assert_eq!(report.nothing_changed, Some(true));
         assert_eq!(
             refusal(Err::<(), _>(error)),
-            Refusal::Protocol { app: 1, tool: 2 }
+            Refusal::Protocol { app: 1, tool: 3 }
         );
     }
     // Both requests said which version they are, and brought the bytes of the file.
@@ -2236,7 +2361,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&file).unwrap());
     for line in &lines {
-        assert_eq!(line["version"], 2);
+        assert_eq!(line["version"], 3);
         assert_eq!(line["request"]["images"][0]["data"], bytes.as_str());
     }
     assert_eq!(lines[0]["op"], "add_image");

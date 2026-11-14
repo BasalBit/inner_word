@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
 use writer_store::instance_lock;
 
 use super::{Answer, AnswerLine, LONGEST_WAIT, PROTOCOL_VERSION, Refusal, Request};
@@ -56,7 +55,7 @@ fn process_exists(pid: u32) -> bool {
 
 /// `dir`, made sure to be a directory of this user that nobody else can enter. It is
 /// created when it is missing; one that belongs to somebody else, or is a link, is refused.
-fn private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -189,8 +188,18 @@ pub(crate) fn write_line(
     line: &impl serde::Serialize,
     limit: Duration,
 ) -> io::Result<()> {
+    write_text(stream, &line_of(line)?, limit)
+}
+
+/// One line of JSON, with its line break: what [`write_text`] sends.
+pub(crate) fn line_of(line: &impl serde::Serialize) -> io::Result<String> {
     let mut text = serde_json::to_string(line).map_err(io::Error::other)?;
     text.push('\n');
+    Ok(text)
+}
+
+/// Writes a line made by [`line_of`] to `stream`.
+pub(crate) fn write_text(stream: &mut UnixStream, text: &str, limit: Duration) -> io::Result<()> {
     stream.set_write_timeout(Some(limit.max(Duration::from_millis(1))))?;
     stream.write_all(text.as_bytes())?;
     stream.flush()
@@ -419,6 +428,10 @@ impl Drop for Listener {
 }
 
 /// Reads a request, or says what to answer to a line that is none.
+///
+/// The version is read first, with a struct that has nothing else (a line can hold a
+/// page of 64 MB: it is not built into a value of its own to be looked at), and the
+/// request is read from the line once, when its version is this one.
 fn parse_request(line: &str) -> Result<Request, Box<AnswerLine>> {
     let answer = |answer: Answer| {
         Box::new(AnswerLine {
@@ -431,18 +444,23 @@ fn parse_request(line: &str) -> Result<Request, Box<AnswerLine>> {
             "the request cannot be read: {error}"
         ))))
     };
-    let value: Value = serde_json::from_str(line).map_err(|error| unreadable(&error))?;
-    let version = value
-        .get("version")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| unreadable(&"it names no version of the protocol"))?;
+    /// What every version of the protocol has in a line: its number.
+    #[derive(serde::Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: Option<u64>,
+    }
+    let said: Version = serde_json::from_str(line).map_err(|error| unreadable(&error))?;
+    let Some(version) = said.version else {
+        return Err(unreadable(&"it names no version of the protocol"));
+    };
     if version != u64::from(PROTOCOL_VERSION) {
         return Err(answer(Answer::refused(Refusal::Protocol {
             app: PROTOCOL_VERSION,
             tool: u32::try_from(version).unwrap_or(u32::MAX),
         })));
     }
-    serde_json::from_value(value).map_err(|error| unreadable(&error))
+    serde_json::from_str(line).map_err(|error| unreadable(&error))
 }
 
 /// Closes a [`Listener`] from anywhere: the app's quit hook has one.
@@ -552,6 +570,12 @@ impl Incoming {
     /// What was asked.
     pub fn request(&self) -> &Request {
         &self.request
+    }
+
+    /// What was asked, to change before it is carried out: the app's listener stores
+    /// the files of a page there and empties them ([`super::store_page_files`]).
+    pub fn request_mut(&mut self) -> &mut Request {
+        &mut self.request
     }
 
     /// Says that the request is being carried out now. **Call it right before the first

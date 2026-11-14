@@ -107,6 +107,9 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
+        if meta.kind == writer_store::DocumentKind::Page {
+            return Ok(crate::pages::comments(&session.store, &index, &meta));
+        }
         let loaded = content::load(&session.store, &meta)?;
         let mut threads = thread_infos(&loaded.document);
         if request.open_only {

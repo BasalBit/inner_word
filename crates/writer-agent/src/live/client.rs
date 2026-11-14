@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use writer_store::instance_lock;
 
-use super::socket::{read_line, write_line};
+use super::socket::{line_of, read_line, write_line, write_text};
 use super::{ANSWER_GRACE, Answer, AppState, Operation, PROTOCOL_VERSION, RequestLine};
 use crate::error::{Error, Refusal};
 
@@ -44,19 +44,31 @@ pub(crate) fn change(socket: &Path, operation: &Operation, patience: Duration) -
     if !std::fs::metadata(socket).is_ok_and(|found| found.uid() == user_id()) {
         return Sent::Gone;
     }
-    let Ok(mut stream) = UnixStream::connect(socket) else {
-        return Sent::Gone;
-    };
+    // The whole line is written before the connection is made: the listener gives a
+    // connection up that sends nothing for a second, and the line of a page of 64 MB
+    // takes longer than that to write (as base64, in a build without optimisations).
     let line = RequestLine {
         version: PROTOCOL_VERSION,
         wait_ms: patience.as_millis().try_into().unwrap_or(u64::MAX),
         operation,
     };
+    let line = match line_of(&line) {
+        Ok(line) => line,
+        Err(error) => {
+            // Nothing was sent.
+            return Sent::Failed(Error::failed(format!(
+                "the change cannot be written for The Writer ({error}); nothing was changed"
+            )));
+        }
+    };
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return Sent::Gone;
+    };
     // The app says so itself when it could not take the request up in time. One that did
     // take it up is given a little longer for its answer (never more than the patience
     // itself, so that a caller in a hurry is not kept).
     let wait = patience + ANSWER_GRACE.min(patience);
-    if write_line(&mut stream, &line, patience.max(Duration::from_secs(1))).is_err() {
+    if write_text(&mut stream, &line, patience.max(Duration::from_secs(1))).is_err() {
         // The app closed its end before it had the whole request. It has carried
         // nothing out; it may have said why (it is quitting).
         let said = read_line(&mut stream, GONE_WORD, Instant::now() + GONE_WORD);

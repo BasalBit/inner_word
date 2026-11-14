@@ -178,6 +178,9 @@ pub(crate) fn rename_document(
 ) -> Result<DocumentChanged> {
     let index = Index::load(session.store)?;
     let meta = index.live_document(session.store, &request.document)?;
+    if meta.kind == writer_store::DocumentKind::Page {
+        return crate::pages::rename(session, &index, &meta, request);
+    }
     let loaded = content::load(session.store, &meta)?;
     let title = if request.follow_text {
         content::derived_title(&loaded.document)

@@ -32,10 +32,10 @@
 //! One request and one answer per connection, each one line of JSON.
 //!
 //! ```text
-//! {"version":2,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
-//! {"version":2,"answer":"done","result":{ ...what Library::edit returns... }}
-//! {"version":2,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
-//! {"version":2,"answer":"refused","refusal":{"why":"switched_off"}}
+//! {"version":3,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
+//! {"version":3,"answer":"done","result":{ ...what Library::edit returns... }}
+//! {"version":3,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
+//! {"version":3,"answer":"refused","refusal":{"why":"switched_off"}}
 //! ```
 //!
 //! A [`Request`] is one [`Operation`]: an operation of [`Library`](crate::Library) that
@@ -61,6 +61,17 @@
 //! ([`Refusal::Protocol`], which the tool words for an app of another version). The
 //! images of one request weigh [`MAX_ATTACHED_BYTES`] together at most; a line may be
 //! 256 MB long.
+//!
+//! **Version 3** added pages: `add_page`, whose request carries the page the tool read,
+//! fetched and checked (`prepared`, [`PreparedPage`](crate::PreparedPage)), its files as
+//! base64, one page per request and [`MAX_PAGE_BYTES`] at most. The tool does all of the
+//! preparing; the app never reads a path an agent named and never fetches for an agent.
+//! The app's listener stores the files of such a request before it queues it
+//! ([`store_page_files`]), so that the main thread only writes the row, and refuses it at
+//! once while the owner's switch is off ([`carries_page_files`]). An app of version 2
+//! does not know `add_page`, so the number changed again. The tool writes the whole line
+//! before it connects, and the listener reads the version of a line before the rest of
+//! it.
 //!
 //! `wait_ms` is how long the tool waits for the app to take the request up. An app that
 //! is busy for longer answers [`Refusal::TooLate`] at that moment by itself, and does not
@@ -97,6 +108,8 @@
 pub(crate) mod client;
 mod socket;
 
+pub(crate) use socket::private_dir;
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -105,14 +118,20 @@ use writer_store::{DocumentId, FolderId, Store};
 
 use crate::error::{Candidate, Error, ErrorKind, ItemKind, Occurrence};
 use crate::library::Session;
+use crate::types::PreparedPage;
 
 pub use crate::error::Refusal;
 pub use crate::operations::Operation;
 pub use socket::{Closer, Incoming, Listener};
 
-/// The version of the protocol this build speaks: 2 since requests bring image files
-/// with them (the module's notes say what each version added).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// The version of the protocol this build speaks: 3 since a request can bring a page
+/// with its files (the module's notes say what each version added).
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// What the files of the page one request brings may weigh, in bytes as the library
+/// stores them (before they are written as base64): 64 MB, the most a page can be. The
+/// tool refuses more before it sends anything, and the app refuses it again.
+pub const MAX_PAGE_BYTES: usize = 64 * 1024 * 1024;
 
 /// What the images of one request may weigh together, in bytes as the library stores
 /// them (before they are written as base64): 32 MB, two pictures of the largest size
@@ -241,6 +260,59 @@ pub(crate) struct RequestLine<'a> {
     pub(crate) wait_ms: u64,
     #[serde(flatten)]
     pub(crate) operation: &'a Operation,
+}
+
+/// Whether the request is an add_page that is not a dry run and carries blobs: the
+/// listener refuses it at once (Refusal::SwitchedOff) while the owner's switch is off.
+pub fn carries_page_files(request: &Request) -> bool {
+    match &request.operation {
+        Operation::AddPage(add) => {
+            !add.write.dry_run
+                && matches!(&add.prepared, Some(PreparedPage::Page(page)) if !page.blobs.is_empty())
+        }
+        _ => false,
+    }
+}
+
+/// For the app's listener thread, before it queues a request (and only while the
+/// switch is on): stores the blobs of an add_page that is not a dry run through
+/// `files`, each after checking that `FileId::of(data)` is its `file`, empties their
+/// data, marks them stored. Any other request is left as it is.
+///
+/// A blob that fails the check stops the storing with [`Error::Invalid`] (answer the
+/// request with it: what is stored by then is named by nothing, and goes with the
+/// collector). The main thread then writes the row, and the store refuses it when a
+/// file is not there after all (`StoreError::FilesMissing`).
+pub fn store_page_files(
+    request: &mut Request,
+    files: &mut writer_store::ImageFile,
+) -> std::result::Result<(), Error> {
+    let Operation::AddPage(add) = &mut request.operation else {
+        return Ok(());
+    };
+    if add.write.dry_run {
+        return Ok(());
+    }
+    let Some(PreparedPage::Page(page)) = &mut add.prepared else {
+        return Ok(());
+    };
+    let total: u64 = page.blobs.iter().map(|blob| blob.size).sum();
+    if total > MAX_PAGE_BYTES as u64 {
+        return Err(Error::invalid(crate::pages::too_heavy_sentence(total)));
+    }
+    for blob in &mut page.blobs {
+        if blob.stored {
+            continue;
+        }
+        crate::pages::check_blob(blob)?;
+        let stored = files.put_file(&blob.data)?;
+        if stored.id.to_hex() != blob.file {
+            return Err(Error::invalid(crate::pages::DAMAGED_BLOB));
+        }
+        blob.data = Vec::new();
+        blob.stored = true;
+    }
+    Ok(())
 }
 
 // ----- the answer --------------------------------------------------------------------------
@@ -390,6 +462,25 @@ enum Detail {
     FileExists {
         path: std::path::PathBuf,
     },
+    PageIncomplete {
+        name: String,
+        problems: Vec<WireProblem>,
+    },
+    WrongKind {
+        id: i64,
+        name: String,
+        is_page: bool,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// A [`writer_page::Problem`] as it travels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct WireProblem {
+    what: String,
+    reason: String,
 }
 
 impl WireError {
@@ -455,6 +546,24 @@ impl WireError {
                 reason: reason.clone(),
             }),
             Error::FileExists { path } => Some(Detail::FileExists { path: path.clone() }),
+            Error::PageIncomplete { name, problems } => Some(Detail::PageIncomplete {
+                name: name.clone(),
+                problems: problems
+                    .iter()
+                    .map(|problem| WireProblem {
+                        what: problem.what.clone(),
+                        reason: problem.reason.clone(),
+                    })
+                    .collect(),
+            }),
+            Error::WrongKind { id, name, is_page } => Some(Detail::WrongKind {
+                id: *id,
+                name: name.clone(),
+                is_page: *is_page,
+            }),
+            Error::Failed { message } => Some(Detail::Failed {
+                message: message.clone(),
+            }),
             // What the app cannot run into while it carries an operation out, and what
             // cannot be taken apart: the kind and the message travel.
             Error::AppIsOpen { .. }
@@ -523,6 +632,15 @@ impl WireError {
             },
             Ok(Detail::Unreadable { id, name, reason }) => Error::Unreadable { id, name, reason },
             Ok(Detail::FileExists { path }) => Error::FileExists { path },
+            Ok(Detail::PageIncomplete { name, problems }) => Error::PageIncomplete {
+                name,
+                problems: problems
+                    .into_iter()
+                    .map(|problem| writer_page::Problem::new(problem.what, problem.reason))
+                    .collect(),
+            },
+            Ok(Detail::WrongKind { id, name, is_page }) => Error::WrongKind { id, name, is_page },
+            Ok(Detail::Failed { message }) => Error::Failed { message },
             Err(_) => Error::InApp {
                 kind: ErrorKind::ALL
                     .into_iter()

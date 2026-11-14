@@ -107,6 +107,8 @@ fn meaning(kind: ErrorKind) -> &'static str {
         ErrorKind::Busy => "another tool is writing",
         ErrorKind::FileExists => "the file exists",
         ErrorKind::Unreadable => "the document cannot be read",
+        ErrorKind::PageIncomplete => "the page could not be kept whole",
+        ErrorKind::WrongKind => "a page where a document is needed, or the other way round",
     }
 }
 

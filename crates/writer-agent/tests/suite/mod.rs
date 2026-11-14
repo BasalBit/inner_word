@@ -5,6 +5,7 @@ mod comments;
 mod images;
 mod items;
 pub mod live;
+mod pages;
 pub mod rules;
 mod text;
 mod versions_export;
@@ -61,7 +62,12 @@ pub fn closed_fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let clock = Clock::manual(START);
     let data = dir.path().join("data");
-    let library = Library::at(&data).with_clock(clock.clone());
+    // Pages are checked by the fake check, and nothing is fetched from the network: an
+    // address that a test does not answer is not there ("HTTP 404").
+    let library = Library::at(&data)
+        .with_clock(clock.clone())
+        .with_page_checker(std::sync::Arc::new(writer_agent::StaticChecker))
+        .with_fetcher(std::sync::Arc::new(writer_page::MapFetcher::new()));
     // The whole point: never the user's library.
     assert!(library.data_dir().starts_with(dir.path()));
     assert!(
@@ -212,6 +218,19 @@ impl Fixture {
         std::fs::write(&path, writer_image::fixtures::png(size.0, size.1, rgb))
             .expect("the picture is written");
         path
+    }
+
+    /// A folder of a web page in the fixture's directory (outside the library), with
+    /// these files (path in the folder, content). Files that are there already are
+    /// written over.
+    pub fn page_folder(&self, name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let folder = self.dir.path().join(name);
+        for (path, content) in files {
+            let path = folder.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("the folder of the page");
+            std::fs::write(&path, content).expect("a file of the page");
+        }
+        folder
     }
 
     /// The images of a stored document, in order: the index of the block, the image and

@@ -124,6 +124,8 @@ impl Index {
             created_at: Time(meta.created_at),
             updated_at: Time(meta.updated_at),
             trashed_at: meta.trashed_at.map(Time),
+            kind: meta.kind,
+            source_url: meta.source_url.clone(),
         }
     }
 

@@ -4,14 +4,14 @@
 use std::time::{Duration, Instant};
 
 use writer_agent::{
-    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
-    DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
-    EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest, InsertPosition, InsertRequest,
-    Library, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, Refusal,
-    RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest,
-    ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest,
-    SearchRequest, Target, TextFormat, TrashDocumentRequest, TrashFolderRequest, TreeRequest,
-    WriteOptions,
+    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
+    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
+    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest,
+    InsertPosition, InsertRequest, Library, ListVersionsRequest, MoveDocumentRequest,
+    MoveFolderRequest, ReadRequest, Refusal, RenameDocumentRequest, RenameFolderRequest,
+    ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest,
+    RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target, TextFormat,
+    TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
 };
 use writer_core::Document;
 use writer_store::instance_lock::{self, HolderKind};
@@ -106,6 +106,27 @@ pub fn every_write(
                         .to_string_lossy()
                         .into_owned(),
                     description: "A blue rectangle".into(),
+                    write: o(),
+                    ..Default::default()
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "add_page",
+            library
+                .add_page(&AddPageRequest {
+                    path: fx
+                        .page_folder(
+                            "every write page",
+                            &[(
+                                "index.html",
+                                "<!doctype html><title>Every write</title><p>A page.</p>",
+                            )],
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    folder: Some(Target::path("Pages")),
+                    create_folders: true,
                     write: o(),
                     ..Default::default()
                 })
@@ -1354,8 +1375,13 @@ fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it()
     // As schema version 1 left it: without the index version 2 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(fx.library.database_path()).unwrap();
-        conn.execute_batch("DROP INDEX documents_meta; PRAGMA user_version = 1;")
-            .unwrap();
+        // Schema 4 added the two columns of pages and the index of their addresses.
+        conn.execute_batch(
+            "DROP INDEX documents_meta; DROP INDEX documents_by_source_url; \
+             ALTER TABLE documents DROP COLUMN source_url; \
+             ALTER TABLE documents DROP COLUMN kind; PRAGMA user_version = 1;",
+        )
+        .unwrap();
     };
     downgrade();
     // The app (of that older version) has it open: reading cannot upgrade it, and says so

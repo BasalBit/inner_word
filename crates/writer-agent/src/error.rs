@@ -112,11 +112,18 @@ pub enum ErrorKind {
     FileExists,
     /// The stored content of the document cannot be read as a document.
     Unreadable,
+    /// A page cannot be kept whole: something it needs could not be fetched, or it asks
+    /// for something that cannot be kept (data from a service, an embedded site). Nothing
+    /// was saved.
+    PageIncomplete,
+    /// A text operation on a page (a page cannot be edited), or a page operation on a
+    /// text.
+    WrongKind,
 }
 
 impl ErrorKind {
     /// Every kind, in the order of their exit codes.
-    pub const ALL: [ErrorKind; 13] = [
+    pub const ALL: [ErrorKind; 15] = [
         ErrorKind::Failed,
         ErrorKind::Invalid,
         ErrorKind::NotFound,
@@ -130,12 +137,14 @@ impl ErrorKind {
         ErrorKind::Busy,
         ErrorKind::FileExists,
         ErrorKind::Unreadable,
+        ErrorKind::PageIncomplete,
+        ErrorKind::WrongKind,
     ];
 
     /// A short stable name for machine-readable output: `"failed"`, `"invalid"`,
     /// `"not_found"`, `"ambiguous"`, `"app_is_open"`, `"no_match"`, `"not_unique"`,
     /// `"confirmation_required"`, `"wrong_state"`, `"library_not_found"`, `"busy"`,
-    /// `"file_exists"`, `"unreadable"`.
+    /// `"file_exists"`, `"unreadable"`, `"page_incomplete"`, `"wrong_kind"`.
     pub fn code(self) -> &'static str {
         match self {
             ErrorKind::Failed => "failed",
@@ -151,6 +160,8 @@ impl ErrorKind {
             ErrorKind::Busy => "busy",
             ErrorKind::FileExists => "file_exists",
             ErrorKind::Unreadable => "unreadable",
+            ErrorKind::PageIncomplete => "page_incomplete",
+            ErrorKind::WrongKind => "wrong_kind",
         }
     }
 
@@ -162,8 +173,9 @@ impl ErrorKind {
     /// [`ConfirmationRequired`](ErrorKind::ConfirmationRequired), 9
     /// [`WrongState`](ErrorKind::WrongState), 10
     /// [`LibraryNotFound`](ErrorKind::LibraryNotFound), 11 [`Busy`](ErrorKind::Busy), 12
-    /// [`FileExists`](ErrorKind::FileExists), 13 [`Unreadable`](ErrorKind::Unreadable).
-    /// Never 0.
+    /// [`FileExists`](ErrorKind::FileExists), 13 [`Unreadable`](ErrorKind::Unreadable), 14
+    /// [`PageIncomplete`](ErrorKind::PageIncomplete), 15
+    /// [`WrongKind`](ErrorKind::WrongKind). Never 0.
     pub fn exit_code(self) -> u8 {
         match self {
             ErrorKind::Failed => 1,
@@ -179,6 +191,8 @@ impl ErrorKind {
             ErrorKind::Busy => 11,
             ErrorKind::FileExists => 12,
             ErrorKind::Unreadable => 13,
+            ErrorKind::PageIncomplete => 14,
+            ErrorKind::WrongKind => 15,
         }
     }
 }
@@ -364,6 +378,35 @@ pub enum Error {
         /// What the library said.
         source: writer_store::StoreError,
     },
+    /// A page cannot be kept whole: each problem names a piece and why (something it
+    /// needs could not be fetched, it asks for something that cannot be kept, it is over
+    /// a limit). Nothing was saved.
+    #[error("{}", page_incomplete_message(.name, .problems))]
+    PageIncomplete {
+        /// The page's name as it would have been shown (its title, else the name of its
+        /// file or folder), without quotation marks.
+        name: String,
+        /// Why, one problem per piece, in the order they were found.
+        problems: Vec<writer_page::Problem>,
+    },
+    /// A text operation on a page (a page is kept as it was saved, and its text cannot
+    /// be changed), or a page operation on a text.
+    #[error("{}", wrong_kind_message(.name, *.is_page))]
+    WrongKind {
+        /// The item's id.
+        id: i64,
+        /// Its title, quoted.
+        name: String,
+        /// Whether the item is a page (and the operation was one for a text).
+        is_page: bool,
+    },
+    /// Something else went wrong, said in words: pages cannot be checked here, the page
+    /// could not be checked (no window server, WebKit gone), a PDF could not be made.
+    #[error("{message}")]
+    Failed {
+        /// What happened.
+        message: String,
+    },
 }
 
 impl Error {
@@ -384,7 +427,11 @@ impl Error {
             Error::FileExists { .. } => ErrorKind::FileExists,
             Error::OutdatedLibrary { .. } => ErrorKind::AppIsOpen,
             Error::InApp { kind, .. } => *kind,
-            Error::Io { .. } | Error::Store(_) | Error::Pictures { .. } => ErrorKind::Failed,
+            Error::Io { .. } | Error::Store(_) | Error::Pictures { .. } | Error::Failed { .. } => {
+                ErrorKind::Failed
+            }
+            Error::PageIncomplete { .. } => ErrorKind::PageIncomplete,
+            Error::WrongKind { .. } => ErrorKind::WrongKind,
         }
     }
 
@@ -424,6 +471,39 @@ impl Error {
         Error::Invalid {
             message: message.into(),
         }
+    }
+
+    /// An [`Error::Failed`] with this message.
+    pub fn failed(message: impl Into<String>) -> Error {
+        Error::Failed {
+            message: message.into(),
+        }
+    }
+
+    /// The error of the command layer for a failure to make a page, in the words of
+    /// `writer-page` (which this crate wraps and does not reword).
+    pub fn of_page(error: writer_page::PageError) -> Error {
+        use writer_page::PageError;
+        match error {
+            PageError::Input { message } => Error::Invalid { message },
+            PageError::Incomplete { name, problems } => Error::PageIncomplete { name, problems },
+            error @ (PageError::CheckFailed { .. } | PageError::Unreadable { .. }) => {
+                Error::failed(error.sentence())
+            }
+            PageError::Io { path, error } if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Error::FileExists { path }
+            }
+            PageError::Io { path, error } => Error::Io {
+                path,
+                source: error,
+            },
+        }
+    }
+}
+
+impl From<writer_page::PageError> for Error {
+    fn from(error: writer_page::PageError) -> Error {
+        Error::of_page(error)
     }
 }
 
@@ -644,6 +724,26 @@ fn ambiguous_message(kind: ItemKind, reference: &str, candidates: &[Candidate]) 
         }
     }
     message
+}
+
+fn page_incomplete_message(name: &str, problems: &[writer_page::Problem]) -> String {
+    // The sentence of `writer-page`, whole: the command layer does not reword it.
+    writer_page::PageError::Incomplete {
+        name: name.to_string(),
+        problems: problems.to_vec(),
+    }
+    .sentence()
+}
+
+fn wrong_kind_message(name: &str, is_page: bool) -> String {
+    if is_page {
+        format!(
+            "{name} is a page: it is kept as it was saved, and its text cannot be changed. To \
+             bring a newer copy, add it again with its source address."
+        )
+    } else {
+        format!("{name} is a document, not a page.")
+    }
 }
 
 fn no_match_message(text: &str, hint: Option<&str>) -> String {

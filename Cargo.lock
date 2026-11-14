@@ -6874,6 +6874,7 @@ dependencies = [
  "writer-core",
  "writer-export",
  "writer-image",
+ "writer-page",
  "writer-store",
 ]
 
@@ -6894,12 +6895,14 @@ dependencies = [
  "anyhow",
  "block",
  "gpui",
+ "image",
  "libc",
  "objc",
  "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",
+ "smallvec",
  "tempfile",
  "unicode-segmentation",
  "writer-agent",
@@ -6916,10 +6919,12 @@ dependencies = [
  "writer-keymap",
  "writer-keymap-ui",
  "writer-library",
+ "writer-page",
  "writer-print",
  "writer-spell",
  "writer-ui",
  "writer-vim-mode",
+ "writer-web",
 ]
 
 [[package]]

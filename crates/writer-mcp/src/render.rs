@@ -935,6 +935,8 @@ pub fn exported(exported: &Exported) -> String {
         ExportFormat::Markdown => "Markdown",
         ExportFormat::Docx => "DOCX",
         ExportFormat::PlainText => "plain text",
+        ExportFormat::Html => "a web page folder",
+        ExportFormat::Pdf => "PDF",
     };
     out.push_str(&format!(
         "Exported \"{}\" ({}) to {} ({format}, {} bytes).\n",

@@ -1,12 +1,14 @@
 //! The [`Library`] handle: where the library is, and how it is opened for one operation.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use writer_store::instance_lock::{self, Acquired, HolderKind, InstanceLock};
 use writer_store::{Clock, OpenOptions, ReadOnlyLibrary, Store};
 
+use crate::checker::PageChecker;
 use crate::error::{Error, Refusal, Result};
 use crate::live::{self, Change, Operation};
 use crate::types::{LibraryStatus, WriteOptions, Written};
@@ -23,7 +25,7 @@ pub const DEFAULT_AUTHOR: &str = "Agent";
 /// is the text on screen. Writing takes the lock of the data directory for the duration
 /// of the operation; while the app has it, the operation is handed to the app, which
 /// carries it out and answers ([`crate::live`]). See the [crate documentation](crate).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Library {
     pub(crate) data_dir: PathBuf,
     pub(crate) clock: Clock,
@@ -31,7 +33,42 @@ pub struct Library {
     pub(crate) app_patience: Duration,
     pub(crate) save_patience: Duration,
     pub(crate) base_dir: Option<PathBuf>,
+    /// Who checks a page that is added, and prints one that is exported as a PDF. None
+    /// unless one was installed ([`Library::with_page_checker`]).
+    pub(crate) page_checker: Option<Arc<dyn PageChecker>>,
+    /// Who fetches what a page names on the web, once for every page this library adds.
+    pub(crate) fetcher: Arc<dyn writer_page::Fetcher>,
 }
+
+impl std::fmt::Debug for Library {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Library")
+            .field("data_dir", &self.data_dir)
+            .field("clock", &self.clock)
+            .field("patience", &self.patience)
+            .field("app_patience", &self.app_patience)
+            .field("save_patience", &self.save_patience)
+            .field("base_dir", &self.base_dir)
+            .field("page_checker", &self.page_checker.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The fetcher of a library that was given none: `/usr/bin/curl`, public addresses only,
+/// each address once ([`writer_page::CachingFetcher`]). In a debug build
+/// `THE_WRITER_FETCH_LOCAL=1` lets it ask 127.0.0.1 and `localhost` too, for the tests of
+/// the tool, whose server is there; a released tool does not read the variable.
+fn default_fetcher() -> Arc<dyn writer_page::Fetcher> {
+    let mut curl = writer_page::CurlFetcher::new();
+    if cfg!(debug_assertions) && std::env::var(FETCH_LOCAL_ENV).is_ok_and(|value| value == "1") {
+        curl = curl.allowing_local();
+    }
+    Arc::new(writer_page::CachingFetcher::new(Arc::new(curl)))
+}
+
+/// The variable a debug build reads to let the default fetcher ask this Mac
+/// (`THE_WRITER_FETCH_LOCAL=1`): for tests that run a server on 127.0.0.1.
+pub const FETCH_LOCAL_ENV: &str = "THE_WRITER_FETCH_LOCAL";
 
 impl Library {
     /// The library in the data directory `data_dir` (the directory that holds
@@ -44,6 +81,8 @@ impl Library {
             app_patience: live::ANSWER_PATIENCE,
             save_patience: live::SAVE_PATIENCE,
             base_dir: None,
+            page_checker: None,
+            fetcher: default_fetcher(),
         }
     }
 
@@ -104,6 +143,25 @@ impl Library {
     /// `add_image` asks for an absolute path.
     pub fn with_base_dir(mut self, base_dir: impl Into<PathBuf>) -> Library {
         self.base_dir = Some(base_dir.into());
+        self
+    }
+
+    /// The same library with a checker for the pages it adds, and the printer of the
+    /// pages it exports as a PDF. None by default: add_page and a PDF export fail with
+    /// `failed`, "pages cannot be checked here". The `writer` binary installs
+    /// [`ProcessChecker::current_exe`](crate::ProcessChecker::current_exe); a test
+    /// [`StaticChecker`](crate::StaticChecker).
+    pub fn with_page_checker(mut self, checker: Arc<dyn PageChecker>) -> Library {
+        self.page_checker = Some(checker);
+        self
+    }
+
+    /// The same library with another fetcher for what the pages it adds name on the web.
+    /// Default: `CachingFetcher` over `CurlFetcher::new()`. Tests give a
+    /// `writer_page::MapFetcher`, or a `CurlFetcher` allowed to ask their server on
+    /// 127.0.0.1.
+    pub fn with_fetcher(mut self, fetcher: Arc<dyn writer_page::Fetcher>) -> Library {
+        self.fetcher = fetcher;
         self
     }
 

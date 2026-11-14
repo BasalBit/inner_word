@@ -154,6 +154,7 @@
 
 mod attach;
 mod browse;
+mod checker;
 mod comments;
 mod content;
 mod diff;
@@ -165,6 +166,7 @@ pub mod live;
 mod markdown_in;
 mod matching;
 mod operations;
+mod pages;
 mod resolve;
 mod rewrite;
 mod sections;
@@ -172,7 +174,10 @@ mod types;
 mod versions;
 mod write_text;
 
+pub use checker::{
+    CHECK_ARGUMENT, FAKE_CHECK_ENV, PDF_ARGUMENT, PageChecker, ProcessChecker, StaticChecker,
+};
 pub use error::{Candidate, Error, ErrorKind, ErrorReport, ItemKind, Occurrence, Refusal, Result};
-pub use library::{DEFAULT_AUTHOR, Library};
+pub use library::{DEFAULT_AUTHOR, FETCH_LOCAL_ENV, Library};
 pub use types::*;
 pub use writer_store::{Clock, DATA_DIR_ENV};

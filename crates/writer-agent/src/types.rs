@@ -2,10 +2,11 @@
 //! end prints the results, an MCP server returns them, and both can read the requests
 //! from JSON (every request field but the item it names is optional there).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-pub use writer_store::{DocumentId, FolderId, SnapshotId};
+pub use writer_store::{DocumentId, DocumentKind, FolderId, SnapshotId};
 
 use crate::error::{Occurrence, Refusal};
 
@@ -35,7 +36,7 @@ use crate::error::{Occurrence, Refusal};
 /// | Written | Means |
 /// |---|---|
 /// | `12`, `#12`, `id:12` | the id 12 (of a document or a folder, whichever the request asks for) |
-/// | `doc:12`, `document:12` | the document 12 |
+/// | `doc:12`, `document:12`, `page:12` | the document 12 (a page is a document of the library) |
 /// | `folder:3` | the folder 3 |
 /// | anything else | a path |
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -85,7 +86,10 @@ impl Target {
             }
             number(&trimmed[prefix.len()..])
         };
-        if let Some(id) = prefixed("doc:").or_else(|| prefixed("document:")) {
+        if let Some(id) = prefixed("doc:")
+            .or_else(|| prefixed("document:"))
+            .or_else(|| prefixed("page:"))
+        {
             return Target::DocumentId(id);
         }
         if let Some(id) = prefixed("folder:") {
@@ -401,14 +405,21 @@ pub enum ExportFormat {
     /// A Word document, `.docx`.
     #[serde(alias = "word")]
     Docx,
-    /// Plain text, `.txt`.
+    /// Plain text, `.txt`. For a page: the text the page shows.
     #[serde(alias = "text", alias = "txt", alias = "plain")]
     PlainText,
+    /// A page as a folder of web files that opens offline: its served files (or, with
+    /// [`ExportRequest::original`], the files it was added from). Only for a page.
+    #[serde(alias = "folder", alias = "htm")]
+    Html,
+    /// A page as WebKit prints it, `.pdf`, on the default paper. Only for a page.
+    Pdf,
 }
 
 impl ExportFormat {
     /// Reads a name or a file extension: `markdown` or `md`, `docx` or `word`, `text`,
-    /// `txt`, `plain` or `plain_text` (case does not matter, a leading dot is ignored).
+    /// `txt`, `plain` or `plain_text`, `html`, `htm` or `folder`, `pdf` (case does not
+    /// matter, a leading dot is ignored).
     pub fn parse(name: &str) -> Option<ExportFormat> {
         match name
             .trim()
@@ -419,26 +430,38 @@ impl ExportFormat {
             "markdown" | "md" => Some(ExportFormat::Markdown),
             "docx" | "word" => Some(ExportFormat::Docx),
             "text" | "txt" | "plain" | "plain_text" | "plaintext" => Some(ExportFormat::PlainText),
+            "html" | "htm" | "folder" => Some(ExportFormat::Html),
+            "pdf" => Some(ExportFormat::Pdf),
             _ => None,
         }
     }
 
-    /// The name JSON carries: `"markdown"`, `"docx"`, `"plain_text"`.
+    /// The name JSON carries: `"markdown"`, `"docx"`, `"plain_text"`, `"html"`, `"pdf"`.
     pub fn name(self) -> &'static str {
         match self {
             ExportFormat::Markdown => "markdown",
             ExportFormat::Docx => "docx",
             ExportFormat::PlainText => "plain_text",
+            ExportFormat::Html => "html",
+            ExportFormat::Pdf => "pdf",
         }
     }
 
-    /// The file extension without the dot: `"md"`, `"docx"`, `"txt"`.
+    /// The file extension without the dot: `"md"`, `"docx"`, `"txt"`, `"pdf"`; `""` for
+    /// a folder (`Html`).
     pub fn extension(self) -> &'static str {
         match self {
             ExportFormat::Markdown => "md",
             ExportFormat::Docx => "docx",
             ExportFormat::PlainText => "txt",
+            ExportFormat::Html => "",
+            ExportFormat::Pdf => "pdf",
         }
+    }
+
+    /// Whether it is a format of a page only (a folder of web files, a PDF).
+    pub fn is_for_pages(self) -> bool {
+        matches!(self, ExportFormat::Html | ExportFormat::Pdf)
     }
 }
 
@@ -535,6 +558,20 @@ pub struct DocumentSummary {
     pub updated_at: Time,
     /// When it went to the trash; `None` for a document that is not in the trash.
     pub trashed_at: Option<Time>,
+    /// What the item is: a text (`"text"`), or a page (`"page"`), a web page kept as it
+    /// was made, which cannot be edited.
+    #[serde(default)]
+    pub kind: DocumentKind,
+    /// For a page: the address it came from, when one was given (in its normal form).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+}
+
+impl DocumentSummary {
+    /// Whether it is a page.
+    pub fn is_page(&self) -> bool {
+        self.kind == DocumentKind::Page
+    }
 }
 
 /// A folder as listings and results show it.
@@ -845,8 +882,11 @@ pub struct DocumentInfo {
     pub resolved_comments: usize,
     /// How many versions of it the library keeps.
     pub versions: usize,
-    /// Its page and type settings.
+    /// Its page and type settings (for a page: the defaults; a page has none of its own).
     pub settings: DocumentSettingsInfo,
+    /// For a page: what it is made of, where it came from, when it was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageSummary>,
 }
 
 /// A request for what is known about one folder.
@@ -954,6 +994,11 @@ pub struct DocumentText {
     /// for), in its order. In Markdown each is a line `![description](image:<id>)`.
     #[serde(default)]
     pub images: Vec<ImageSummary>,
+    /// For a page: what it is made of, where it came from, when it was taken. Its
+    /// `content` is the text the page showed (the same in Markdown and as plain text; as
+    /// JSON, the page's manifest without the text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageSummary>,
 }
 
 /// An image of a document, as a result shows it.
@@ -1498,6 +1543,187 @@ pub struct AddImageRequest {
     pub write: WriteOptions,
 }
 
+// ----- pages -----------------------------------------------------------------------------
+
+/// A request to add a page: a web page (an HTML file, or a folder with one) kept in the
+/// library as it was made, with everything it loads, so that it shows the same offline
+/// and for good.
+///
+/// The file or folder is read, every piece the page loads from the web (fonts,
+/// libraries) is fetched once, and the page is loaded with the network blocked to see
+/// that it is whole ([`Library::add_page`](crate::Library::add_page)). A page that needs
+/// something that cannot be kept (data from a service, an embedded site) is not added
+/// ([`Error::PageIncomplete`](crate::Error::PageIncomplete)), and nothing is saved.
+///
+/// With a source address the page is the page at that address: adding it again changes
+/// nothing when it is the same ([`PageOutcome::Unchanged`]) and updates it, keeping the
+/// page as it was as a version, when it changed ([`PageOutcome::Updated`]). A page with
+/// that address in the trash is left there ([`PageOutcome::Trashed`]) unless
+/// `include_trashed` says to add it as new.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddPageRequest {
+    /// A file or a folder: absolute, `~/...`, or relative to `base_dir`. A folder is
+    /// taken whole; a file is taken with the local files it names, and its folder is
+    /// never walked.
+    pub path: String,
+    /// The HTML file of a folder the page opens with, by its path in the folder. Without
+    /// it: `index.html`, else `index.htm`, else the one HTML file at the top.
+    pub entry: Option<String>,
+    /// The title. Without it: the title the page gives, else its first heading, else the
+    /// name of the file or folder.
+    pub title: Option<String>,
+    /// The folder to add it in. Without it: the top of the library. An update leaves a
+    /// page where it is.
+    pub folder: Option<Target>,
+    /// When `folder` is a path that does not exist yet, create it.
+    pub create_folders: bool,
+    /// The address the page came from (`https://claude.ai/artifact/…`). Stored and
+    /// looked up in its normal form.
+    pub source_url: Option<String>,
+    /// Pieces the caller already has: address -> local file (absolute, ~/..., or relative
+    /// to base_dir). Read in the process that was asked; they travel inside `prepared`.
+    pub externals: BTreeMap<String, String>,
+    /// Add the page as new even when a page with this address is in the trash.
+    pub include_trashed: bool,
+    /// Filled by Library::add_page (Prepare), which always prepares again and drops one
+    /// it was handed. What travels to the app. The MCP front end and `--list` refuse
+    /// arguments that name it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared: Option<PreparedPage>,
+    /// What a relative `path` (and a relative file of `externals`) is relative to.
+    /// Never sent to the app: the files are read before the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
+}
+
+/// What the process that was asked found when it prepared a page: what travels to the
+/// app in [`AddPageRequest::prepared`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+// A request carries one of them, once: the size of the page is not worth a box.
+#[allow(clippy::large_enum_variant)]
+pub enum PreparedPage {
+    /// The page with this address is the same as the one given (the same fingerprint):
+    /// nothing was fetched or checked, and nothing is written.
+    Unchanged {
+        /// The page that is there.
+        page: DocumentId,
+        /// The fingerprint of the input, which the page that is there has.
+        fingerprint: String,
+    },
+    /// The page with this address is in the trash, and the request did not say to add
+    /// it again: nothing was fetched, and nothing is written.
+    Trashed {
+        /// The page in the trash.
+        page: DocumentId,
+    },
+    /// The page, checked whole, with its files. A dry run's travels with every
+    /// `Blob::data` empty.
+    Page(writer_page::Prepared),
+}
+
+/// What became of a page that was added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageOutcome {
+    /// A new page.
+    Added,
+    /// The page with this address changed: it has the new content now, and the page as
+    /// it was is kept as a version.
+    Updated,
+    /// The page with this address is the same: nothing was written.
+    Unchanged,
+    /// The page with this address is in the trash: it was not added again.
+    Trashed,
+}
+
+impl PageOutcome {
+    /// The word for it: `"added"`, `"updated"`, `"unchanged"`, `"trashed"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            PageOutcome::Added => "added",
+            PageOutcome::Updated => "updated",
+            PageOutcome::Unchanged => "unchanged",
+            PageOutcome::Trashed => "trashed",
+        }
+    }
+}
+
+/// What adding a page did (or, in a dry run, would do).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PageAdded {
+    /// The page as it is after the change: a new one (in a dry run with the id 0), the
+    /// one that was updated, the one that is there unchanged, the one in the trash.
+    pub page: DocumentSummary,
+    /// What became of it.
+    pub outcome: PageOutcome,
+    /// The version kept of the page as it was before an update.
+    pub snapshot: Option<VersionInfo>,
+    /// How many files the page is shown from.
+    pub files: usize,
+    /// How many bytes it holds: its files and the files it was added from, each once.
+    pub bytes: u64,
+    /// How many pieces of it came from the web.
+    pub externals: usize,
+    /// What could not be kept and is not a reason to refuse the page, one sentence each
+    /// (an address it names that was not kept, data it kept on claude.ai). For the user.
+    pub warnings: Vec<String>,
+    /// About the write itself.
+    #[serde(flatten)]
+    pub written: Written,
+}
+
+/// What a page is made of, where it came from and when it was taken.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageSummary {
+    /// The address it came from, when one was given.
+    pub source_url: Option<String>,
+    /// The HTML file it opens with.
+    pub entry: String,
+    /// How many files it is shown from.
+    pub files: usize,
+    /// How many bytes it holds: its files and the files it was added from, each once.
+    pub bytes: u64,
+    /// How many pieces of it came from the web.
+    pub externals: usize,
+    /// The manifest's added_at: when this content was taken.
+    pub content_at: Time,
+    /// What checked it (`"WebKit 621.1"`).
+    pub engine: String,
+    /// The manifest's checked.warnings.
+    pub warnings: Vec<String>,
+}
+
+/// A request for the pages of the library.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PagesRequest {
+    /// Only the pages in this folder (at any depth). Without it: every page.
+    pub folder: Option<Target>,
+}
+
+/// The pages of the library, live and in the trash, the one updated last first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PagesList {
+    /// The pages.
+    pub pages: Vec<PageListed>,
+}
+
+/// A page in a [`PagesList`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PageListed {
+    /// The page.
+    pub page: DocumentSummary,
+    /// What it is made of, where it came from, when it was taken.
+    pub summary: PageSummary,
+    /// Whether it is in the trash.
+    pub trashed: bool,
+}
+
 // ----- names, places, the trash ----------------------------------------------------------
 
 /// A request to rename a document. The name is kept the way a rename in the app is kept:
@@ -1984,10 +2210,14 @@ pub struct ExportRequest {
     /// Markdown when that says nothing.
     pub format: Option<ExportFormat>,
     /// Replace the file when it exists. Without it an existing file fails the request
-    /// with [`Error::FileExists`](crate::Error::FileExists).
+    /// with [`Error::FileExists`](crate::Error::FileExists). For a page written as a
+    /// folder: replace the files of the folder that have the names of the page's files.
     pub overwrite: bool,
     /// Report what would be written, and write nothing.
     pub dry_run: bool,
+    /// For a page written as a folder ([`ExportFormat::Html`]): the files it was added
+    /// from, as they were, instead of the files it is shown from.
+    pub original: bool,
 }
 
 /// What an export wrote.
@@ -2009,6 +2239,13 @@ pub struct Exported {
     /// images.
     #[serde(default)]
     pub assets: Vec<PathBuf>,
+    /// For a page written as a folder: how many files are in it. 0 otherwise.
+    #[serde(default)]
+    pub files: usize,
+    /// What was left out, one sentence each: the pages of a folder that is exported as
+    /// one file, the files of a page the library does not have.
+    #[serde(default)]
+    pub warnings: Vec<String>,
     /// Whether this was a dry run: nothing was written.
     pub dry_run: bool,
 }
@@ -2024,6 +2261,9 @@ mod tests {
         assert_eq!(Target::parse("#12"), Target::Id(12));
         assert_eq!(Target::parse("id:12"), Target::Id(12));
         assert_eq!(Target::parse("doc:12"), Target::DocumentId(12));
+        assert_eq!(Target::parse("page:12"), Target::DocumentId(12));
+        assert_eq!(Target::parse("Page:12"), Target::DocumentId(12));
+        assert_eq!(Target::parse("page:"), Target::path("page:"));
         assert_eq!(Target::parse("Document:12"), Target::DocumentId(12));
         assert_eq!(Target::parse("folder:3"), Target::FolderId(3));
         assert_eq!(Target::parse("folder:x"), Target::path("folder:x"));
@@ -2082,6 +2322,7 @@ mod tests {
             Target::path("#12"),
             Target::path("id:12"),
             Target::path("doc:12"),
+            Target::path("page:12"),
             Target::path("Document:12"),
             Target::path("folder:3"),
             Target::path("/1984"),
@@ -2190,7 +2431,19 @@ mod tests {
             assert_eq!(ExportFormat::parse(format.extension()), Some(format));
         }
         assert_eq!(ExportFormat::parse(".DOCX"), Some(ExportFormat::Docx));
-        assert_eq!(ExportFormat::parse("pdf"), None);
+        // The formats of a page.
+        for format in [ExportFormat::Html, ExportFormat::Pdf] {
+            assert_eq!(ExportFormat::parse(format.name()), Some(format));
+            assert!(format.is_for_pages());
+            assert_eq!(
+                serde_json::from_str::<ExportFormat>(&format!("\"{}\"", format.name())).unwrap(),
+                format
+            );
+        }
+        assert_eq!(ExportFormat::parse(".pdf"), Some(ExportFormat::Pdf));
+        assert_eq!(ExportFormat::parse("folder"), Some(ExportFormat::Html));
+        assert_eq!(ExportFormat::parse("rtf"), None);
+        assert!(!ExportFormat::Markdown.is_for_pages());
         assert_eq!(
             InsertPosition::parse("end-of-section"),
             Some(InsertPosition::EndOfSection)

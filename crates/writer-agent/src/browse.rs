@@ -186,6 +186,9 @@ impl Library {
         let store = &session.store;
         let index = Index::load(store)?;
         let meta = index.document(store, &request.document)?;
+        if meta.kind == writer_store::DocumentKind::Page {
+            return crate::pages::info(store, &index, &meta);
+        }
         let loaded = content::load(store, &meta)?;
         let document = &loaded.document;
         let stats = document.stats();
@@ -204,6 +207,7 @@ impl Library {
             resolved_comments: resolved,
             versions: store.snapshots(meta.id)?.len(),
             settings: content::settings_info(document.settings()),
+            page: None,
         })
     }
 

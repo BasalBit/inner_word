@@ -14,7 +14,7 @@ use writer_export::{
     ExportOptions, ExportSource, ImageData, ImageFileFormat, ImageSource, MarkdownImages,
     export_package, images_dir_name,
 };
-use writer_store::{DocumentMeta, FolderNode, ImageFormat, Store};
+use writer_store::{DocumentKind, DocumentMeta, FolderNode, ImageFormat, Store};
 
 use crate::content;
 use crate::error::{Error, Result};
@@ -34,11 +34,22 @@ fn collect(node: &FolderNode, documents: &mut Vec<DocumentMeta>) {
     }
 }
 
-fn store_format(format: ExportFormat) -> writer_export::ExportFormat {
+/// The exporter's format for a format of a text; `None` for the formats of a page.
+fn store_format(format: ExportFormat) -> Option<writer_export::ExportFormat> {
     match format {
-        ExportFormat::Markdown => writer_export::ExportFormat::Markdown,
-        ExportFormat::Docx => writer_export::ExportFormat::Docx,
-        ExportFormat::PlainText => writer_export::ExportFormat::PlainText,
+        ExportFormat::Markdown => Some(writer_export::ExportFormat::Markdown),
+        ExportFormat::Docx => Some(writer_export::ExportFormat::Docx),
+        ExportFormat::PlainText => Some(writer_export::ExportFormat::PlainText),
+        ExportFormat::Html | ExportFormat::Pdf => None,
+    }
+}
+
+/// "2 pages were left out: a page is exported on its own, as a folder."
+fn pages_left_out(count: usize) -> String {
+    if count == 1 {
+        "1 page was left out: a page is exported on its own, as a folder.".to_string()
+    } else {
+        format!("{count} pages were left out: a page is exported on its own, as a folder.")
     }
 }
 
@@ -82,7 +93,7 @@ impl ImageSource for Pictures<'_> {
 
 /// Writes `bytes` to `path` so that a reader never sees half of them: beside the file
 /// first, then in its place.
-fn write_whole(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut partial = path.to_path_buf().into_os_string();
     partial.push(format!(".partial-{}", std::process::id()));
     let partial = PathBuf::from(partial);
@@ -108,6 +119,12 @@ impl Library {
     /// The images of a Markdown export are written as files into the folder
     /// `<name> images` beside the file, and the Markdown links them there
     /// ([`Exported::assets`] lists them); a DOCX holds its pictures.
+    ///
+    /// A page is written as a folder of web files that opens offline (its served files,
+    /// or with `original` the files it was added from), as a PDF the way WebKit prints
+    /// it (`.pdf`; it needs the page checker, [`Library::with_page_checker`]), or as its
+    /// text (`.txt`). Markdown and DOCX are formats of a text, and a page in a folder
+    /// that is exported as one file is left out (a warning says so).
     pub fn export(&self, request: &ExportRequest) -> Result<Exported> {
         let targets = (request.document.as_ref(), request.folder.as_ref());
         if matches!(targets, (Some(_), Some(_)) | (None, None)) {
@@ -118,23 +135,49 @@ impl Library {
         if request.path.as_os_str().is_empty() {
             return Err(Error::invalid("name the file to write"));
         }
-        let format = request
-            .format
-            .or_else(|| {
-                request
-                    .path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .and_then(ExportFormat::parse)
+        let absolute = |path: &Path| -> Result<PathBuf> {
+            Ok(if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir().map_err(io(path))?.join(path)
             })
-            .unwrap_or_default();
-        let path: PathBuf = if request.path.is_absolute() {
-            request.path.clone()
-        } else {
-            std::env::current_dir()
-                .map_err(io(&request.path))?
-                .join(&request.path)
         };
+        let path: PathBuf = absolute(&request.path)?;
+        // From the path: `.md`, `.docx`, `.txt`, and `.pdf` for a page (a folder has no
+        // ending, so `html` is only taken when it is named).
+        let guessed = request.format.or_else(|| {
+            request
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(ExportFormat::parse)
+                .filter(|format| *format != ExportFormat::Html)
+        });
+
+        let session = self.reader()?;
+        let store = &session.store;
+        let index = Index::load(store)?;
+        let named = match targets.0 {
+            Some(target) => Some(index.document(store, target)?),
+            None => None,
+        };
+        // A page has formats of its own.
+        if let Some(meta) = &named
+            && meta.kind == DocumentKind::Page
+        {
+            let format = crate::pages::export_format(meta, request)?;
+            return crate::pages::export(self, store, &index, meta, request, format, path);
+        }
+        if guessed.is_some_and(ExportFormat::is_for_pages) {
+            return Err(match &named {
+                Some(meta) => crate::content::is_a_text(meta),
+                None => Error::invalid(
+                    "a folder is exported as one file of text (Markdown, DOCX or plain text); \
+                     a web page folder and a PDF are made of a page",
+                ),
+            });
+        }
+        let format = guessed.unwrap_or_default();
         if path.is_dir() {
             return Err(Error::invalid(format!(
                 "{} is a directory; name the file to write",
@@ -145,12 +188,10 @@ impl Library {
             return Err(Error::FileExists { path });
         }
 
-        let session = self.reader()?;
-        let store = &session.store;
-        let index = Index::load(store)?;
+        let mut warnings = Vec::new();
         let (title, metas): (String, Vec<DocumentMeta>) = match targets {
-            (Some(target), _) => {
-                let meta = index.document(store, target)?;
+            (Some(_), _) => {
+                let meta = named.expect("the document was found above");
                 (title_of(&meta).to_string(), vec![meta])
             }
             (_, Some(target)) => {
@@ -169,10 +210,19 @@ impl Library {
                         }
                     }
                 }
+                let before = metas.len();
+                metas.retain(|meta| meta.kind != DocumentKind::Page);
+                let pages = before - metas.len();
+                if pages > 0 {
+                    warnings.push(pages_left_out(pages));
+                }
                 if metas.is_empty() {
-                    return Err(Error::invalid(
-                        "there is no document in that folder, so there is nothing to export",
-                    ));
+                    return Err(Error::invalid(if pages > 0 {
+                        "there is no document in that folder, only pages, so there is nothing \
+                         to export as one file: a page is exported on its own, as a folder"
+                    } else {
+                        "there is no document in that folder, so there is nothing to export"
+                    }));
                 }
                 (
                     folder.map_or_else(|| LIBRARY_NAME.to_string(), |folder| folder.name),
@@ -212,7 +262,10 @@ impl Library {
         options.markdown.images = MarkdownImages::Files {
             dir: images_dir_name(&file_name),
         };
-        let exported = export_package(&source, store_format(format), &options);
+        let Some(store_format) = store_format(format) else {
+            unreachable!("the formats of a page are taken apart above");
+        };
+        let exported = export_package(&source, store_format, &options);
         if let Some(source) = pictures.failed.into_inner() {
             return Err(Error::Pictures { source });
         }
@@ -251,6 +304,8 @@ impl Library {
                 .iter()
                 .map(|meta| index.document_summary(store, meta))
                 .collect(),
+            files: 0,
+            warnings,
             dry_run: request.dry_run,
         })
     }

@@ -1123,8 +1123,10 @@ pub(crate) fn export(
             {
                 std::fs::create_dir_all(parent).map_err(io(parent))?;
             }
+            // Beside the file, so that nobody sees half of it; it still ends in `.pdf`,
+            // for whatever the printer makes of a file's name.
             let mut partial = path.clone().into_os_string();
-            partial.push(format!(".partial-{}", std::process::id()));
+            partial.push(format!(".partial-{}.pdf", std::process::id()));
             let partial = PathBuf::from(partial);
             let printed = checker.print(&dir.path, &partial);
             if let Err(error) = printed {

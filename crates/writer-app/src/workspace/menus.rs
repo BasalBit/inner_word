@@ -440,13 +440,24 @@ impl Workspace {
             });
         });
 
-        // A row of the library: export and version history.
+        // A row of the library: export and version history; on the row of a
+        // page with an address, the address; on the library and a folder,
+        // "Import Page…" (with a page engine), which adds pages there.
         let weak = cx.weak_entity();
         self.panel.update(cx, |panel, _| {
-            panel.set_menu_extension(move |target, _, _| match target {
+            panel.set_menu_extension(move |target, _, cx| match target {
                 LibraryMenuTarget::Document(id) => {
                     let (export, history) = (weak.clone(), weak.clone());
-                    vec![
+                    let source = weak.upgrade().and_then(|this| {
+                        this.read(cx)
+                            .library
+                            .read(cx)
+                            .document_meta(id)
+                            .ok()
+                            .filter(|meta| meta.kind == writer_library::DocumentKind::Page)
+                            .and_then(|meta| meta.source_url)
+                    });
+                    let mut items = vec![
                         ContextMenuItem::new("Export…", move |window, cx| {
                             export
                                 .update(cx, |this, cx| {
@@ -459,11 +470,32 @@ impl Workspace {
                                 .update(cx, |this, cx| this.show_version_history_of(id, window, cx))
                                 .ok();
                         }),
-                    ]
+                    ];
+                    if let Some(source) = source {
+                        let (copied, opened) = (source.clone(), source);
+                        let workspace = weak.clone();
+                        items.push(ContextMenuItem::new("Copy Page Address", move |_, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
+                            workspace
+                                .update(cx, |this, cx| {
+                                    this.show_toast(
+                                        Toast::new("Copied the page's address.")
+                                            .duration(std::time::Duration::from_secs(3)),
+                                        cx,
+                                    )
+                                })
+                                .ok();
+                        }));
+                        items.push(ContextMenuItem::new(
+                            "Open Page Address in Browser",
+                            move |_, cx| cx.open_url(&opened),
+                        ));
+                    }
+                    items
                 }
                 LibraryMenuTarget::Folder(id) => {
-                    let export = weak.clone();
-                    vec![ContextMenuItem::new(
+                    let (export, import) = (weak.clone(), weak.clone());
+                    let mut items = vec![ContextMenuItem::new(
                         "Export Folder…",
                         move |window, cx| {
                             export
@@ -472,7 +504,25 @@ impl Workspace {
                                 })
                                 .ok();
                         },
-                    )]
+                    )];
+                    if crate::pages::engine(cx).is_some() {
+                        items.push(ContextMenuItem::new("Import Page…", move |window, cx| {
+                            import
+                                .update(cx, |this, cx| {
+                                    this.choose_pages_to_import(Some(id), window, cx)
+                                })
+                                .ok();
+                        }));
+                    }
+                    items
+                }
+                LibraryMenuTarget::Library if crate::pages::engine(cx).is_some() => {
+                    let import = weak.clone();
+                    vec![ContextMenuItem::new("Import Page…", move |window, cx| {
+                        import
+                            .update(cx, |this, cx| this.choose_pages_to_import(None, window, cx))
+                            .ok();
+                    })]
                 }
                 _ => Vec::new(),
             });

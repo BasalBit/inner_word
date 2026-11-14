@@ -796,6 +796,199 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+// ----- adding pages: the seams of the import ----------------------------------------
+
+/// Whether "Import Page…" may open the macOS open panel, and the paths a
+/// test named instead.
+#[derive(Default)]
+struct ImportChooser {
+    panel: bool,
+    beforehand: VecDeque<Vec<PathBuf>>,
+}
+
+impl Global for ImportChooser {}
+
+/// From now on "Import Page…" asks for files and folders in the macOS open
+/// panel. Called by `main` in a launch that is not scripted, and by nothing
+/// else.
+pub fn use_open_panel(cx: &mut App) {
+    cx.default_global::<ImportChooser>().panel = true;
+}
+
+/// Names the files and folders the next "Import Page…" takes, instead of
+/// asking for them in a panel (once; a second call names those of the one
+/// after). For tests.
+pub fn choose_beforehand(paths: Vec<PathBuf>, cx: &mut App) {
+    cx.default_global::<ImportChooser>()
+        .beforehand
+        .push_back(paths);
+}
+
+/// What "Import Page…" takes: the paths a test named, or what the person
+/// chose in the open panel (files and folders, several), or nothing (a run
+/// that was not told to open the panel: a test, a scripted run).
+pub(crate) fn choose_inputs(cx: &mut App) -> gpui::Task<Option<Vec<PathBuf>>> {
+    let chooser = cx.default_global::<ImportChooser>();
+    if let Some(paths) = chooser.beforehand.pop_front() {
+        return gpui::Task::ready(Some(paths).filter(|paths| !paths.is_empty()));
+    }
+    if !chooser.panel {
+        return gpui::Task::ready(None);
+    }
+    let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: true,
+        directories: true,
+        multiple: true,
+        prompt: Some("Import".into()),
+    });
+    cx.spawn(async move |_| match receiver.await {
+        Ok(Ok(paths)) => paths.filter(|paths| !paths.is_empty()),
+        _ => None,
+    })
+}
+
+/// The fetcher a test installed ([`set_fetcher`]).
+struct InstalledFetcher(Arc<dyn writer_page::Fetcher>);
+impl Global for InstalledFetcher {}
+
+/// The fetcher the import asks for what a page names on the web, instead
+/// of `curl` (tests: a `writer_page::MapFetcher`, or one of their own that
+/// waits). Each gesture wraps it in a `writer_page::CachingFetcher`.
+pub fn set_fetcher(fetcher: Arc<dyn writer_page::Fetcher>, cx: &mut App) {
+    cx.set_global(InstalledFetcher(fetcher));
+}
+
+/// What one gesture of adding pages fetches with: each address once
+/// (`CachingFetcher`) through the fetcher a test installed, else `curl`
+/// for public addresses only. A run on the fake engine never reaches the
+/// network: without a fetcher of the test's, nothing is fetched (every
+/// external is "not there"). `THE_WRITER_FETCH_LOCAL=1` lets a debug build
+/// fetch from this Mac (a scripted run against a server on 127.0.0.1), as
+/// the tool's does; a release build does not read it.
+pub(crate) fn fetcher_for_a_gesture(cx: &App) -> Arc<dyn writer_page::Fetcher> {
+    let inner: Arc<dyn writer_page::Fetcher> = match cx.try_global::<InstalledFetcher>() {
+        Some(installed) => installed.0.clone(),
+        None if matches!(engine(cx), Some(PageEngine::Fake(_))) => {
+            Arc::new(writer_page::MapFetcher::new())
+        }
+        None => {
+            let local = cfg!(debug_assertions)
+                && std::env::var(writer_agent::FETCH_LOCAL_ENV).is_ok_and(|value| value == "1");
+            if local {
+                Arc::new(writer_page::CurlFetcher::new().allowing_local())
+            } else {
+                Arc::new(writer_page::CurlFetcher::new())
+            }
+        }
+    };
+    Arc::new(writer_page::CachingFetcher::new(inner))
+}
+
+/// Whether `path` is something the import takes as a page: an `.html` or
+/// `.htm` file, or a folder (whose `index.html`, or one HTML file at its
+/// top, opens the page). Everything else among dropped files is left out.
+pub fn is_page_input(path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    path.is_file()
+        && path.extension().is_some_and(|ending| {
+            ending.eq_ignore_ascii_case("html") || ending.eq_ignore_ascii_case("htm")
+        })
+}
+
+/// What a page is called before its title is known: the name of the file
+/// without its ending, or of the folder.
+pub fn input_name(path: &Path) -> String {
+    let name = if path.is_dir() {
+        path.file_name()
+    } else {
+        path.file_stem()
+    };
+    name.map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Why pages cannot be added in this run (no page engine): the sentence of
+/// `writer_web::available`, or that this run shows no pages.
+pub fn cannot_add_sentence(cx: &App) -> String {
+    match cx.try_global::<Unavailable>() {
+        Some(why) => format!("Pages cannot be added: {}", why.0),
+        None => "Pages cannot be added in this run.".to_string(),
+    }
+}
+
+/// What WebKit's check found, as the bundler reads it (the same mapping as
+/// the tool's child, `writer __page-check`).
+pub fn report_of(outcome: writer_web::CheckOutcome) -> writer_page::CheckReport {
+    writer_page::CheckReport {
+        engine: outcome.engine,
+        elapsed_ms: u64::try_from(outcome.elapsed.as_millis()).unwrap_or(u64::MAX),
+        loads: outcome
+            .loads
+            .into_iter()
+            .map(|load| writer_page::LoadReport {
+                path: load.path,
+                title: load.title,
+                first_heading: load.first_heading,
+                text: load.text,
+                finished: load.finished,
+                navigation_error: load.navigation_error,
+                crashed: load.crashed,
+                missing: load.missing,
+                blocked: load
+                    .blocked
+                    .into_iter()
+                    .map(|(url, directive)| writer_page::Blocked { url, directive })
+                    .collect(),
+                script_errors: load.script_errors,
+                requests: load.requests,
+                unwatched_frames: load.unwatched_frames,
+            })
+            .collect(),
+        failure: outcome.failure,
+    }
+}
+
+/// Checks `bundle` with the installed engine: WebKit loads its served files
+/// offscreen with the network blocked (on the main thread: call it outside
+/// any update, from a task between two awaits; its answer comes from the
+/// run loop), the fake answers with what the test set
+/// ([`FakePages::set_check`]) or with `writer_page::static_check`.
+pub(crate) fn check_bundle(
+    engine: &PageEngine,
+    bundle: &writer_page::Bundle,
+    rules_dir: PathBuf,
+) -> Answer<writer_page::CheckReport> {
+    let (tx, rx) = answer();
+    match engine {
+        PageEngine::WebKit => {
+            let request = writer_page::check_request(bundle);
+            let source = writer_web::MemorySource::new(bundle.served.iter().map(|file| {
+                (
+                    file.path.clone(),
+                    ServedFile {
+                        media_type: file.media_type.clone(),
+                        bytes: file.bytes.clone(),
+                    },
+                )
+            }));
+            let input = writer_web::CheckInput {
+                source: Arc::new(source),
+                entry: request.entry,
+                also: request.also,
+                settle_min: std::time::Duration::from_millis(request.settle_min_ms),
+                settle_max: std::time::Duration::from_millis(request.settle_max_ms),
+                limit: std::time::Duration::from_millis(request.limit_ms),
+                rules_dir,
+            };
+            writer_web::check(input, move |outcome| tx.send(report_of(outcome)));
+        }
+        PageEngine::Fake(fake) => fake.check(bundle, tx),
+    }
+    rx
+}
+
 // ----- the fake engine --------------------------------------------------------------
 
 /// What the fake engine records, and the levers a test pulls. One open view
@@ -827,6 +1020,12 @@ struct FakeState {
     /// What a find answers: whether the page's text holds the query.
     text: String,
     evaluated: Vec<String>,
+    /// Checks are answered only when the test lets them ([`FakePages::hold_checks`]).
+    checks_held: bool,
+    /// The checks that wait for that.
+    waiting_checks: Vec<(AnswerTx<writer_page::CheckReport>, writer_page::CheckReport)>,
+    /// How many checks were asked for.
+    checks: usize,
 }
 
 impl FakePages {
@@ -921,6 +1120,45 @@ impl FakePages {
     /// The answer [`FakePages::set_check`] left, taken.
     pub fn take_check(&self) -> Option<writer_page::CheckReport> {
         self.state.borrow_mut().check.take()
+    }
+
+    /// From now on a check is answered only at [`FakePages::release_checks`]
+    /// (a test holds the import in "checking").
+    pub fn hold_checks(&self) {
+        self.state.borrow_mut().checks_held = true;
+    }
+
+    /// Answers the checks that wait, and every later one at once.
+    pub fn release_checks(&self) {
+        let waiting = {
+            let mut state = self.state.borrow_mut();
+            state.checks_held = false;
+            std::mem::take(&mut state.waiting_checks)
+        };
+        for (tx, report) in waiting {
+            tx.send(report);
+        }
+    }
+
+    /// How many checks the import asked for.
+    pub fn checks_asked(&self) -> usize {
+        self.state.borrow().checks
+    }
+
+    /// The fake's check of `bundle`: what [`FakePages::set_check`] left, else
+    /// `writer_page::static_check`; held while [`FakePages::hold_checks`] says so.
+    fn check(&self, bundle: &writer_page::Bundle, tx: AnswerTx<writer_page::CheckReport>) {
+        let report = self
+            .take_check()
+            .unwrap_or_else(|| writer_page::static_check(bundle));
+        let mut state = self.state.borrow_mut();
+        state.checks += 1;
+        if state.checks_held {
+            state.waiting_checks.push((tx, report));
+        } else {
+            drop(state);
+            tx.send(report);
+        }
     }
 
     /// A key the view received: when the app takes it (`takes_key`), it is

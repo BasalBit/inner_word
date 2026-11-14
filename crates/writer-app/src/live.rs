@@ -30,6 +30,18 @@
 //!    (up to [`COMPOSITION_PATIENCE`]; a composition is never broken),
 //!    and the requests behind it wait with it.
 //!
+//! # The files of a page
+//!
+//! A page an agent adds travels with its files (`add_page`, up to 64 MB
+//! before base64). They are not written on the main thread: the thread
+//! that accepts the request stores them through a connection of its own
+//! to `images.db` before it queues the request
+//! (`writer_agent::live::store_page_files`), so the main thread only
+//! writes the page's row. While the owner's switch is off that thread
+//! refuses such a request at once and stores nothing: it knows the switch
+//! ([`set_switch`], which the workspace calls whenever the setting is read
+//! or changed).
+//!
 //! # Quitting
 //!
 //! [`close`] runs in the quit hook (`cmd-q`, the last window closed,
@@ -55,13 +67,17 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context as TaskContext, Poll, Waker},
     time::Duration,
 };
 
 use gpui::{App, AsyncApp, Global, Subscription, Task, WindowHandle, actions};
 use writer_agent::live::{Answer, Closer, Incoming, Listener, Refusal};
+use writer_library::store::{DATABASE_FILE_NAME, ImageFile};
 use writer_ui::CommandDescriptor;
 
 use crate::workspace::Workspace;
@@ -251,6 +267,8 @@ pub struct Channel {
     socket: PathBuf,
     closer: Closer,
     queue: Handoff<Incoming>,
+    /// The owner's switch as the accepting thread knows it.
+    switch: Arc<AtomicBool>,
     _task: Task<()>,
     _quit: Subscription,
 }
@@ -275,10 +293,35 @@ pub fn open(
     let socket = listener.path().to_path_buf();
     let queue = Handoff::new();
     let accepted = queue.clone();
+    // The switch as it is now; the workspace keeps it in step from here on.
+    let on = window
+        .read(cx)
+        .map(|workspace| workspace.agents_may_change(cx))
+        .unwrap_or(true);
+    let switch = Arc::new(AtomicBool::new(on));
+    let known = switch.clone();
+    let database = data_dir.join(DATABASE_FILE_NAME);
     let spawned = std::thread::Builder::new()
         .name("the-writer-agents".to_string())
         .spawn(move || {
-            while let Some(incoming) = listener.accept() {
+            // The page files of a request are written through this
+            // connection, never on the main thread.
+            let mut files: Option<ImageFile> = None;
+            while let Some(mut incoming) = listener.accept() {
+                if writer_agent::live::carries_page_files(incoming.request()) {
+                    if !known.load(Ordering::SeqCst) {
+                        // Refused at once: nothing is stored.
+                        refuse(incoming, Refusal::SwitchedOff);
+                        continue;
+                    }
+                    let files = files.get_or_insert_with(|| ImageFile::beside(&database));
+                    if let Err(error) =
+                        writer_agent::live::store_page_files(incoming.request_mut(), files)
+                    {
+                        incoming.answer(Answer::failed(&error)).ok();
+                        continue;
+                    }
+                }
                 if let Err(incoming) = accepted.push(incoming) {
                     refuse(incoming, Refusal::Quitting);
                     break;
@@ -303,10 +346,29 @@ pub fn open(
         socket: socket.clone(),
         closer,
         queue,
+        switch,
         _task: task,
         _quit: quit,
     });
     Ok(socket)
+}
+
+/// Tells the thread that accepts requests where the owner's switch stands
+/// ("Agents can make changes while The Writer is open"): while it is off a
+/// request that brings the files of a page is refused there, before any of
+/// them is stored. The workspace calls it whenever the setting is read or
+/// changed. Does nothing without a channel.
+pub fn set_switch(on: bool, cx: &App) {
+    if let Some(channel) = cx.try_global::<Channel>() {
+        channel.switch.store(on, Ordering::SeqCst);
+    }
+}
+
+/// Where the thread that accepts requests has the owner's switch; `None`
+/// without a channel. For tests.
+pub fn switch_known_to_the_listener(cx: &App) -> Option<bool> {
+    cx.try_global::<Channel>()
+        .map(|channel| channel.switch.load(Ordering::SeqCst))
 }
 
 /// What `main` does once the main window is open: opens the channel for

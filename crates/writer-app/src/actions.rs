@@ -137,6 +137,9 @@ actions!(
         ImportPage,
         /// Stop adding the pages that are being added.
         CancelAddingPages,
+        /// Show what came of the pages added last: every page with its
+        /// outcome and its whole sentence (the summary's "Show Why").
+        ShowPageReport,
         /// Load the open page again, as it was stored.
         ReloadPage,
         /// Copy the address the open page came from.
@@ -422,6 +425,19 @@ pub fn page_commands() -> Vec<CommandDescriptor> {
             .keywords(["add", "web page", "html", "artifact", "offline", "folder"]),
         CommandDescriptor::new("Cancel adding pages", CATEGORY_PAGES, CancelAddingPages)
             .keywords(["stop", "import", "abort"]),
+        CommandDescriptor::new(
+            "Show the report of the pages added last",
+            CATEGORY_PAGES,
+            ShowPageReport,
+        )
+        .keywords([
+            "why",
+            "not added",
+            "warnings",
+            "import",
+            "refused",
+            "show why",
+        ]),
         CommandDescriptor::new("Reload page", CATEGORY_PAGES, ReloadPage)
             .keywords(["refresh", "again", "web page"]),
         CommandDescriptor::new("Copy page address", CATEGORY_PAGES, CopyPageAddress)

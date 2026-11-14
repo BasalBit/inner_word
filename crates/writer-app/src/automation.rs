@@ -34,12 +34,19 @@
 //! | `print:job:<path>`    | the same PDF through the real macOS print operation as a save job, both panels off: what "Save as PDF" in the print panel would write. Everything of "Print…" but the panel. Prints `print: job saved to <path>` or why it was not |
 //! | `image:<path>`        | inserts the image file at the caret, as "Insert > Image…" does once the file is chosen in the open panel (which a scripted run never opens); waits until the picture is stored and in the text and prints `image: inserted <id> 1600x1067 at block 3`, or the sentence that says why the file could not be used |
 //! | `image:select:<n>`    | puts the caret on the n-th image of the document (from 1): the image is selected |
+//! | `page:make:<folder>[\|<entry>]` | stores a folder (or file) that is offline already as a page in the folder selected in the library, as it is (nothing fetched, no WebKit check: QA only), and opens it |
+//! | `page:import:<path>`  | adds a file or folder as a page, as File > Import Page… does once it is chosen (what it names on the web fetched, the check), in the folder selected in the library; waits until it is done and prints a line per page (`page: added page:12 “Orbitarium” 31 files 1.0 MB`, its warnings under it, or `page: not added: <the sentence>`) and the summary |
+//! | `page:wait[:<ms>]`    | waits until the open page reports that it loaded (fails after `ms`, 10 s unless given) |
+//! | `page:text`           | prints the open page's text as the check read it, its length first |
+//! | `page:find:<query>`   | opens the find strip of the open page with that query |
+//! | `page:js:<script>`    | evaluates a script in the open page and prints the answer |
+//! | `page:menu`           | opens the page's context menu, as `ctrl-enter` does |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), images (`images=N`: how many the document holds, and while the caret is on one `image=[block=3 width=50% natural=1600x1067@144 align=center ready]`: its block counted from 0, its width as a share of the text column, its pixel size and the density its file declares, its alignment, and `ready`, `loading`, `missing` or `broken` for its picture, then `alt="..."` when it has a description), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), images (`images=N`: how many the document holds, and while the caret is on one `image=[block=3 width=50% natural=1600x1067@144 align=center ready]`: its block counted from 0, its width as a share of the text column, its pixel size and the density its file declares, its alignment, and `ready`, `loading`, `missing` or `broken` for its picture, then `alt="..."` when it has a description), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), the open page (`web=[id=12 state=loaded zoom=100% overlay=none\|waiting\|snapshot\|holes:N focus=page\|find\|elsewhere responder=web\|gpui\|none find="q":found missing=0]`, or `web=[none]`), the pages being added (`adding=[2/3 "Orbitarium" fetching]` with `fetching`, `checking` or `storing`, or `adding=[idle]`), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `dump:<path>`         | writes the whole text in the editor to a file, its blocks one to a line as the document model joins them: what the writer has on screen, to hold against what the library has |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
@@ -198,6 +205,11 @@ pub enum PageStep {
     /// Store this folder (or file), offline already, as a page in the
     /// folder selected in the library, and open it (`page:make:<path>[|<entry>]`).
     Make(PathBuf, Option<String>),
+    /// Add this file or folder as a page, as File > Import Page… does once
+    /// it is chosen (fetching what it names on the web, the check), in the
+    /// folder selected in the library; wait until it is done and log one
+    /// line per page (`page:import:<path>`).
+    Import(PathBuf),
     /// Wait until the open page reports that it loaded, at most this long.
     Wait(Duration),
     /// Log the open page's text, its length first.
@@ -595,6 +607,13 @@ fn parse_page_step(arg: &str) -> Result<PageStep> {
             }
             PageStep::Make(PathBuf::from(path), entry.filter(|entry| !entry.is_empty()))
         }
+        "import" => {
+            let path = unescape(rest.trim());
+            if path.is_empty() {
+                bail!("expected page:import:<file or folder>");
+            }
+            PageStep::Import(PathBuf::from(path))
+        }
         "wait" => PageStep::Wait(if rest.trim().is_empty() {
             PAGE_WAIT
         } else {
@@ -610,8 +629,8 @@ fn parse_page_step(arg: &str) -> Result<PageStep> {
         }
         "menu" => PageStep::Menu,
         other => bail!(
-            "unknown page step {other:?}: expected make:<folder>, wait, text, find:<query>, \
-             js:<script> or menu"
+            "unknown page step {other:?}: expected make:<folder>, import:<path>, wait, text, \
+             find:<query>, js:<script> or menu"
         ),
     })
 }
@@ -1587,6 +1606,61 @@ async fn run_page_step(step: PageStep, window: AnyWindowHandle, cx: &mut AsyncAp
                 Err(why) => bail!("page: {} was not made: {why}", path.display()),
             }
         }
+        PageStep::Import(path) => {
+            let path = absolute(path);
+            let started = Instant::now();
+            let asked = workspace.update(cx, |workspace, window, cx| {
+                let folder = workspace.panel().read(cx).selected_folder();
+                workspace.import_pages(vec![path.clone()], folder, window, cx)
+            })?;
+            let Some(asked) = asked else {
+                bail!("page:import: pages cannot be added in this run");
+            };
+            let Some(report) = asked.await else {
+                bail!("page:import: the import of {} did not end", path.display());
+            };
+            let library = workspace.update(cx, |workspace, _, _| workspace.library().clone())?;
+            for page in &report.pages {
+                let line = match &page.outcome {
+                    crate::workspace::PageOutcome::Added {
+                        id,
+                        files,
+                        bytes,
+                        warnings,
+                        ..
+                    } => {
+                        let title = library
+                            .read_with(cx, |library, _| {
+                                library.document_meta(*id).map(|meta| meta.title)
+                            })
+                            .ok()
+                            .and_then(Result::ok)
+                            .unwrap_or_else(|| page.name.clone());
+                        let mut line = format!(
+                            "added page:{} \u{201c}{title}\u{201d} {files} files {}",
+                            id.0,
+                            writer_page::megabytes(*bytes)
+                        );
+                        for warning in warnings {
+                            line.push_str(&format!("\n[automation] page:   {warning}"));
+                        }
+                        line
+                    }
+                    crate::workspace::PageOutcome::NotAdded { sentence } => {
+                        format!("not added: {sentence}")
+                    }
+                    crate::workspace::PageOutcome::Cancelled => {
+                        format!("not added \u{201c}{}\u{201d}: cancelled", page.name)
+                    }
+                };
+                eprintln!("[automation] page: {line}");
+            }
+            eprintln!(
+                "[automation] page: {} ({:.2} s)",
+                report.summary(),
+                started.elapsed().as_secs_f64()
+            );
+        }
         PageStep::Wait(limit) => {
             let started = Instant::now();
             let loaded = workspace.update(cx, |workspace, _, _| workspace.page_loaded())?;
@@ -1816,13 +1890,14 @@ pub fn describe_state(
     let print = workspace.describe_printing();
     let images = workspace.describe_images(cx);
     let web = workspace.describe_page(window, cx);
+    let adding = workspace.describe_adding();
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
          modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] {images} \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
-         limit={:?} web=[{web}] live=[{live}]{agents}{assistant}{font_list}",
+         limit={:?} web=[{web}] adding=[{adding}] live=[{live}]{agents}{assistant}{font_list}",
         workspace.open_item_id().map(|id| id.0),
         workspace
             .document_title()

@@ -210,8 +210,10 @@ pub fn sentence(who: &str, operation: &str, names: &Names) -> String {
         "replace_document" => format!("rewrote {document}"),
         "edit" | "insert" | "replace_section" => format!("changed {document}"),
         "add_image" => format!("added an image to {document}"),
-        // A page (an update of one is worded by the outcome: WP9).
+        // A page: added, or brought up to date from its address (the note
+        // tells the two apart by what changed: `operation_words`).
         "add_page" => format!("added {document}"),
+        UPDATED_PAGE => format!("updated {document}"),
         "rename_document" => match (&names.document_before, &names.document) {
             (Some(before), Some(now)) if before != now => {
                 format!("renamed {} to {}", quoted(before), quoted(now))
@@ -250,6 +252,24 @@ pub fn sentence(who: &str, operation: &str, names: &Names) -> String {
         _ => "changed the library".to_string(),
     };
     format!("{who} {did}")
+}
+
+/// The words [`sentence`] takes for an `add_page` that updated a page
+/// (the old one was kept as a version) instead of adding one: not an
+/// operation of the channel, only what the note says of it.
+pub const UPDATED_PAGE: &str = "add_page:updated";
+
+/// The name [`sentence`] is given for `request`, which made `changes`: the
+/// operation's own, except for an `add_page` that created nothing (it
+/// updated the page with that address).
+fn operation_words<'a>(request: &'a Request, changes: &[Change]) -> &'a str {
+    let created = changes
+        .iter()
+        .any(|change| matches!(change, Change::DocumentCreated { .. }));
+    match request.name() {
+        "add_page" if !created => UPDATED_PAGE,
+        name => name,
+    }
 }
 
 /// What the note says about a run of `count` changes: "Claude made 20
@@ -398,6 +418,9 @@ impl Workspace {
         if let Err(error) = stored {
             self.toast_error(format!("Could not save the setting: {error}"), cx);
         }
+        // What the thread that accepts requests goes by (the library's
+        // event says the same; this holds when the setting did not change).
+        crate::live::set_switch(self.agents_may_change(cx), cx);
     }
 
     // ----- a request ------------------------------------------------------------------
@@ -754,7 +777,11 @@ impl Workspace {
                 run
             }
             None => AgentChanges {
-                message: sentence(&who, request.name(), &self.names(changes, before, cx)),
+                message: sentence(
+                    &who,
+                    operation_words(request, changes),
+                    &self.names(changes, before, cx),
+                ),
                 who,
                 count: 1,
                 subject,
@@ -765,14 +792,15 @@ impl Workspace {
         self.show_agent_note(cx);
     }
 
-    /// What the note offers for `changes` as things are now.
+    /// What the note offers for `changes` as things are now. A page that
+    /// is open (one an agent updated reloads by itself) offers nothing.
     fn offer_for(&self, changes: &AgentChanges, cx: &App) -> Option<Offer> {
         if changes.undo.is_some() {
             return Some(Offer::Undo);
         }
         match changes.subject {
             Subject::Document(id)
-                if self.open_document_id() != Some(id)
+                if self.open_item_id() != Some(id)
                     && self.library.read(cx).tree().find_document(id).is_some() =>
             {
                 Some(Offer::Open)

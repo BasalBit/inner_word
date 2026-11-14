@@ -66,6 +66,7 @@ pub mod library_search;
 pub mod live;
 pub mod menus;
 pub mod page_export;
+pub mod page_report;
 pub mod pages;
 pub mod palette;
 pub mod pasteboard;

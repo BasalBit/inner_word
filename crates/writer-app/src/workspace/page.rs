@@ -1309,6 +1309,14 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &tools::FindPrevious, window, cx| {
                 this.find_in_page(true, window, cx)
             }))
+            // Files dropped on the page: the web view takes no drops, so
+            // they reach GPUI's view, and the web pages among them are
+            // added (`page_import.rs`).
+            .on_drop::<gpui::ExternalPaths>(cx.listener(
+                |this, paths: &gpui::ExternalPaths, window, cx| {
+                    this.files_dropped_on_page(paths.paths().to_vec(), window, cx);
+                },
+            ))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, window, _| {

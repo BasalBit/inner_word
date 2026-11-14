@@ -82,6 +82,7 @@ mod live;
 mod measure;
 mod menus;
 mod page;
+mod page_import;
 mod page_probe;
 mod print;
 mod render;
@@ -126,7 +127,8 @@ use crate::{
 pub use assistant::{library_attachments, library_tool_server};
 pub use images::{SELECT_AN_IMAGE_FIRST, is_image_command};
 pub use live::{
-    AgentChanges, ChangeCost, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence,
+    AgentChanges, ChangeCost, Names, Offer, Subject, UPDATED_PAGE, Undo as AgentUndo, run_sentence,
+    sentence,
 };
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub(crate) use page::fake_printed;
@@ -135,6 +137,10 @@ pub use page::{
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
     Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_STEPS, PageState,
     holes_in as page_holes_in, page_key_bindings,
+};
+pub use page_import::{
+    AddedPage, AddingPhase, AddingProgress, NOTE_DELAY as ADDING_NOTE_DELAY, PageOutcome,
+    PagesReport, SUMMARY_STAYS as PAGES_SUMMARY_STAYS,
 };
 pub use page_probe::{PageFit, characters_per_row};
 pub use print::{
@@ -269,6 +275,8 @@ pub struct Workspace {
     pub(crate) zoom: zoom::ZoomState,
     /// The print job that is preparing or in the print panel.
     pub(crate) print: print::PrintState,
+    /// The pages that are being added (`page_import.rs`).
+    pub(crate) adding: page_import::AddingState,
     /// Where the pictures of the documents are: the provider the editor
     /// has, which a print and an export ask too.
     pub(crate) images: std::rc::Rc<crate::images::LibraryImages>,
@@ -404,9 +412,13 @@ impl Workspace {
             cx.subscribe_in(&comments, window, Self::on_comments_event),
             cx.subscribe_in(&vim, window, Self::on_vim_event),
             cx.observe_global::<FontLibrary>(Self::store_recent_fonts),
-            // The note of a print that is preparing can go by ways the
-            // workspace is not told of (`print.rs`, `print_note_went`).
-            cx.observe(&toast_layer, Self::print_note_went),
+            // The note of a print that is preparing, and the one of pages
+            // being added, can go by ways the workspace is not told of
+            // (`print.rs`, `print_note_went`; `page_import.rs`).
+            cx.observe(&toast_layer, |this, layer, cx| {
+                this.print_note_went(layer.clone(), cx);
+                this.adding_note_went(layer, cx);
+            }),
             // A modal that closes gives focus back to where it was. When
             // that place is gone (a popup that closed meanwhile), focus
             // would be nowhere and no key would reach anything.
@@ -512,10 +524,12 @@ impl Workspace {
             text_commands: text_commands(),
             zoom,
             print: print::PrintState::default(),
+            adding: page_import::AddingState::default(),
             images,
             _subscriptions: subscriptions,
         };
         this.extend_the_menus_of_other_crates(cx);
+        this.connect_page_drops(window);
         this.connect_vim_spelling(cx);
         this.restore_session(window, cx);
         this.report_unread_shortcuts(cx);
@@ -1052,7 +1066,11 @@ impl Workspace {
         let recent = self.recent_commands(cx);
         // While a page is open the commands that act on a text are not
         // offered (they have no handler: the menu bar greys them out).
-        let left_out = self.commands_not_for_the_open_page();
+        let mut left_out = self.commands_not_for_the_open_page();
+        // Without a page engine nothing can be imported.
+        if crate::pages::engine(cx).is_none() {
+            left_out.push(gpui::Action::name(&ImportPage));
+        }
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let commands = crate::commands::all(cx)
@@ -1516,8 +1534,11 @@ impl Workspace {
                 self.open_document(*id, *focus_editor, window, cx);
             }
             LibraryPanelEvent::Dismissed => self.focus_editor(window, cx),
-            // Pages dropped on the sidebar: taken in by the import of pages (WP9).
-            LibraryPanelEvent::DropPaths { .. } => {}
+            // Files dropped on the sidebar: the web pages among them are
+            // added in the folder under the pointer (`page_import.rs`).
+            LibraryPanelEvent::DropPaths { paths, folder } => {
+                self.import_dropped(paths.clone(), *folder, window, cx);
+            }
         }
     }
 
@@ -1532,6 +1553,11 @@ impl Workspace {
             LibraryEvent::SettingChanged { key } => {
                 if keys::USER_SETTINGS.contains(&key.as_ref()) {
                     self.reload_settings(cx);
+                }
+                // The thread that accepts agents' requests refuses the
+                // files of a page by itself while the switch is off.
+                if key.as_ref() == crate::live::CHANGES_SETTING {
+                    crate::live::set_switch(self.agents_may_change(cx), cx);
                 }
             }
             LibraryEvent::DocumentRenamed(id) => {
@@ -1831,8 +1857,10 @@ impl Workspace {
     ) {
         self.toast_layer.update(cx, |layer, cx| layer.clear(cx));
         // The note of a print that is preparing went with the others: the
-        // work must not go on unseen (`print.rs`).
+        // work must not go on unseen (`print.rs`). So did the one of pages
+        // being added (`page_import.rs`).
         self.notifications_dismissed(cx);
+        self.adding_notifications_dismissed(cx);
     }
 
     pub(crate) fn on_close_window(

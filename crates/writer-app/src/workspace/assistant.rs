@@ -70,7 +70,9 @@ use gpui::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement,
     ParentElement as _, Styled as _, Subscription, Window, div,
 };
-use writer_assistant::{Attachment, Availability, Mode, OpenDocument, Selection, ToolServer};
+use writer_assistant::{
+    Attachment, Availability, Mode, OpenDocument, OpenKind, Selection, ToolServer,
+};
 use writer_assistant_quick::{QuickChat, QuickChatEvent};
 use writer_assistant_ui::{
     ApplyKind, AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
@@ -93,6 +95,16 @@ use crate::{
 struct OpenRef {
     id: DocumentId,
     title: String,
+    /// The open item is a page: its address and the text it showed (a page
+    /// does not change while it is open, so the text is taken once).
+    page: Option<OpenPage>,
+}
+
+/// What the side chat is told about an open page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenPage {
+    source_url: Option<String>,
+    text: Rc<str>,
 }
 
 /// The assistant as one workspace holds it.
@@ -218,7 +230,9 @@ fn notice_accepted(library: &Library) -> bool {
 }
 
 /// The open document as the side chat sends it: its Markdown as it is in
-/// `editor` right now, its title and its path in the library.
+/// `editor` right now, its title and its path in the library. For an open
+/// page: the text the page showed, and what it is (`OpenKind::Page`), so
+/// that the assistant is told it cannot be changed.
 fn open_document(open: &OpenRef, editor: &Editor, library: &Library) -> OpenDocument {
     let folder = library
         .document_meta(open.id)
@@ -226,11 +240,21 @@ fn open_document(open: &OpenRef, editor: &Editor, library: &Library) -> OpenDocu
         .and_then(|meta| meta.folder_id);
     let mut path = library.folder_path(folder);
     path.push(open.title.clone());
+    let (markdown, kind) = match &open.page {
+        Some(page) => (
+            page.text.to_string(),
+            OpenKind::Page {
+                source_url: page.source_url.clone(),
+            },
+        ),
+        None => (apply::document_markdown(editor), OpenKind::Text),
+    };
     OpenDocument {
         id: Some(open.id.0),
         title: open.title.clone(),
         path: path.join("/"),
-        markdown: apply::document_markdown(editor),
+        markdown,
+        kind,
     }
 }
 
@@ -431,7 +455,8 @@ impl Workspace {
 
     /// The open document as the side chat sends it with a message: its
     /// text as Markdown as it is in the editor right now, its title and
-    /// its path in the library. `None` without an open document.
+    /// its path in the library; for an open page the text it showed. `None`
+    /// without an open item.
     ///
     /// An image of the document is one line of that Markdown,
     /// `![description](image:<id>)`: the assistant is told what the image
@@ -454,10 +479,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let open = self.session.as_ref().map(|session| OpenRef {
-            id: session.id,
-            title: self.display_title(),
-        });
+        let open = match (&self.session, &self.page) {
+            (Some(session), _) => Some(OpenRef {
+                id: session.id,
+                title: self.display_title(),
+                page: None,
+            }),
+            (None, Some(page)) => Some(OpenRef {
+                id: page.id,
+                title: self.display_title(),
+                page: Some(OpenPage {
+                    source_url: page.source_url.clone(),
+                    text: Rc::from(page.manifest.text.as_str()),
+                }),
+            }),
+            (None, None) => None,
+        };
         *self.assistant.open.borrow_mut() = open.clone();
         if let Some(quick) = self.assistant.quick.clone()
             && quick.read(cx).is_open()
@@ -485,7 +522,9 @@ impl Workspace {
         let Some(side) = self.assistant.side.clone() else {
             return;
         };
-        let title = self.session.as_ref().map(|_| self.display_title());
+        // The title of the open item, a text or a page (a page has no
+        // caret and no selection: nothing can be put into it).
+        let title = self.open_item_id().map(|_| self.display_title());
         let renamed = {
             let mut open = self.assistant.open.borrow_mut();
             match (open.as_mut(), title) {
@@ -521,7 +560,7 @@ impl Workspace {
     /// had been written of it is there after the relaunch (as an answer
     /// that was stopped).
     pub(crate) fn store_assistant_conversation(&mut self, cx: &mut Context<Self>) {
-        let (Some(side), Some(id)) = (self.assistant.side.clone(), self.open_document_id()) else {
+        let (Some(side), Some(id)) = (self.assistant.side.clone(), self.open_item_id()) else {
             return;
         };
         let transcript = side.read(cx).transcript().clone();
@@ -732,7 +771,8 @@ impl Workspace {
         if !self.assistant.shown {
             return;
         }
-        if self.session.is_none() {
+        // A page is asked about as a text is (its text is sent).
+        if self.open_item_id().is_none() {
             self.show_toast(
                 Toast::new("Open a document to ask the assistant about it"),
                 cx,
@@ -770,7 +810,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.assistant.shown || self.session.is_none() {
+        if !self.assistant.shown || self.open_item_id().is_none() {
             return;
         }
         let in_quick = self

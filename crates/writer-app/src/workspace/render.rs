@@ -981,6 +981,7 @@ impl Render for Workspace {
         // The commands of an open page, and the commands of a document that
         // say what a page is.
         root = self.page_actions(root, cx);
+        root = self.adding_actions(root, cx);
         // "Print" while there is a document and somewhere for the job to
         // go, "Cancel printing" while pages are being prepared.
         root = self.print_actions(root, cx);

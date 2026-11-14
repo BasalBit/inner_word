@@ -13,6 +13,11 @@
 //! | The files "Insert > Image…" asks for | [`use_open_panel`], [`choose_files_beforehand`] |
 //! | The bytes for the exporters | [`StoreImages`] |
 //! | Bytes nothing names any more; a copy that is behind, a damaged file set aside | [`collect_in_background`] |
+//! | The files of a page that is being added, stored off the main thread | [`LibraryImages::put_files`] |
+//!
+//! A web page dropped on the text (an `.html` file or a folder) is no
+//! picture: the provider hands it to the import of pages
+//! ([`LibraryImages::set_page_import`]) and takes the rest as pictures.
 //!
 //! # Nothing large on the main thread
 //!
@@ -181,6 +186,21 @@ pub struct LibraryImages {
     refusals: Rc<RefCell<Refusals>>,
     /// Who hears that a picture was stored ([`LibraryImages::on_stored`]).
     stored: Rc<RefCell<Option<Stored>>>,
+    /// Who takes the web pages dropped on the text
+    /// ([`LibraryImages::set_page_import`]), and the ones of the drop that
+    /// is coming in.
+    pages: Rc<RefCell<PageDrop>>,
+}
+
+/// What is called with the web pages of one drop on the text.
+type PageImport = Rc<dyn Fn(Vec<PathBuf>, &mut App)>;
+
+/// The web pages of a drop on the text, gathered until the editor has asked
+/// for every file of it.
+#[derive(Default)]
+struct PageDrop {
+    import: Option<PageImport>,
+    gathered: Vec<PathBuf>,
 }
 
 /// What is called when a picture was stored.
@@ -200,7 +220,91 @@ impl LibraryImages {
             toasts: toasts.downgrade(),
             refusals: Rc::default(),
             stored: Rc::default(),
+            pages: Rc::default(),
         })
+    }
+
+    /// `import` is called with the web pages (`.html` and `.htm` files,
+    /// folders) of a drop on the text, instead of their being taken as
+    /// pictures: the workspace adds them as pages. The other files of the
+    /// drop are pictures, as before.
+    pub fn set_page_import(&self, import: impl Fn(Vec<PathBuf>, &mut App) + 'static) {
+        self.pages.borrow_mut().import = Some(Rc::new(import));
+    }
+
+    /// Whether `source` is a web page the import of pages takes; then it is
+    /// gathered with the others of its drop, which go to the import together
+    /// once the editor has asked for every file of the drop (it asks for the
+    /// next as soon as one is answered).
+    fn took_as_a_page(&self, source: &NewImageSource, cx: &mut App) -> bool {
+        let NewImageSource::File(path) = source else {
+            return false;
+        };
+        if self.pages.borrow().import.is_none() || !crate::pages::is_page_input(path) {
+            return false;
+        }
+        let first = {
+            let mut pages = self.pages.borrow_mut();
+            pages.gathered.push(path.clone());
+            pages.gathered.len() == 1
+        };
+        if first {
+            let pages = self.pages.clone();
+            cx.spawn(async move |cx| {
+                // A turn of the main thread: the rest of the drop is asked
+                // for meanwhile.
+                cx.background_executor().timer(Duration::ZERO).await;
+                cx.update(|cx| {
+                    let (import, gathered) = {
+                        let mut pages = pages.borrow_mut();
+                        (pages.import.clone(), std::mem::take(&mut pages.gathered))
+                    };
+                    if let Some(import) = import {
+                        import(gathered, cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
+        true
+    }
+
+    /// Stores the files of a page that is being added (`blobs`: each one's
+    /// id as 32 hex digits and its bytes), off the main thread for a library
+    /// on disk (the provider's own connection, as for a picture), at once
+    /// for one in memory. Each is stored once, after checking that its bytes
+    /// are the ones its id names. `Err` is the reason, for the sentence that
+    /// says the page was not added.
+    pub fn put_files(
+        &self,
+        blobs: Vec<(String, Vec<u8>)>,
+        cx: &mut App,
+    ) -> Task<Result<(), String>> {
+        fn put_all(
+            blobs: Vec<(String, Vec<u8>)>,
+            mut put: impl FnMut(&[u8]) -> store::Result<writer_library::FileInfo>,
+        ) -> Result<(), String> {
+            for (id, bytes) in blobs {
+                let stored = put(&bytes).map_err(|error| error.to_string())?;
+                if stored.id.to_hex() != id {
+                    return Err("a file of the page is not what its name says".to_string());
+                }
+            }
+            Ok(())
+        }
+        match &self.file {
+            Some(file) => {
+                let file = file.clone();
+                cx.background_spawn(async move {
+                    let mut file = file.lock().unwrap_or_else(PoisonError::into_inner);
+                    put_all(blobs, |bytes| file.put_file(bytes))
+                })
+            }
+            None => Task::ready(self.library.update(cx, |library, _| {
+                put_all(blobs, |bytes| library.put_file(bytes))
+            })),
+        }
     }
 
     /// `heard` is called on the main thread whenever a picture was stored
@@ -326,6 +430,10 @@ impl ImageProvider for LibraryImages {
     }
 
     fn import(&self, source: NewImageSource, cx: &mut App) -> Task<Option<Image>> {
+        // A web page is no picture: the import of pages takes it.
+        if self.took_as_a_page(&source, cx) {
+            return Task::ready(None);
+        }
         // A new gesture, or one more picture of the same one?
         let now = cx.background_executor().now();
         {

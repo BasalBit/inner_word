@@ -55,6 +55,7 @@ fn main() {
             // panel and leaves the pasteboard alone: it is the user's.
             if script.is_none() {
                 writer_app::images::use_open_panel(cx);
+                writer_app::pages::use_open_panel(cx);
                 writer_app::pasteboard::use_system(cx);
             }
             // Pages are shown with WebKit, in every run of the real binary

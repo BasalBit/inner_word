@@ -505,13 +505,12 @@ pub fn key_at_page(action: &dyn Action, cx: &App) -> Option<String> {
     let keymap = keymap.borrow();
     keymap
         .bindings_for_action(action)
-        .filter(|binding| {
+        .rfind(|binding| {
             let (matched, _) = keymap.bindings_for_input(binding.keystrokes(), &contexts);
             matched
                 .iter()
                 .any(|found| found.action().partial_eq(binding.action()))
         })
-        .last()
         .map(crate::keymap::keys_of)
 }
 

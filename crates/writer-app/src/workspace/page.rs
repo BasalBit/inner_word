@@ -730,10 +730,11 @@ impl Workspace {
         }
         let had_focus = self.page_has_focus(window);
         self.page = None;
-        if self.load_page(id, window, cx) && had_focus {
-            if let Some(focus) = self.page_focus_handle() {
-                window.focus(&focus);
-            }
+        if self.load_page(id, window, cx)
+            && had_focus
+            && let Some(focus) = self.page_focus_handle()
+        {
+            window.focus(&focus);
         }
     }
 

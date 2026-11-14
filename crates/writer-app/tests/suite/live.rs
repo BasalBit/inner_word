@@ -3241,9 +3241,7 @@ fn an_agent_adds_a_page_and_updates_it_while_it_is_open(cx: &mut TestAppContext)
             Some("Open".to_string())
         )
     );
-    let live = desk
-        .workspace
-        .update_in(cx, |w, window, cx| describe_state(w, window, cx));
+    let live = desk.workspace.update_in(cx, describe_state);
     assert!(live.contains("cost=[save "), "{live}");
 
     // Open opens the page.

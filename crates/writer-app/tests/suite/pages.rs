@@ -54,14 +54,14 @@ fn add_page(
 
 /// A workspace on the fake engine with a text and a page, the page open
 /// and its element focused.
-fn open_page<'a>(
-    cx: &'a mut TestAppContext,
+fn open_page(
+    cx: &mut TestAppContext,
 ) -> (
     Rc<FakePages>,
     Entity<Workspace>,
     DocumentId,
     DocumentId,
-    &'a mut VisualTestContext,
+    &mut VisualTestContext,
 ) {
     init(cx);
     let fake = cx.update(pages::use_fake);
@@ -485,12 +485,12 @@ fn the_context_menu_key_is_taken_from_the_page(cx: &mut TestAppContext) {
         labels.iter().any(|label| label == "Copy Page Address"),
         "{labels:?}"
     );
-    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    vcx.update(writer_ui::ContextMenu::dismiss);
     vcx.run_until_parked();
     assert!(fake.press("shift-f10"));
     vcx.run_until_parked();
     assert!(vcx.update(|window, cx| writer_ui::ContextMenu::is_open(window, cx)));
-    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    vcx.update(writer_ui::ContextMenu::dismiss);
     vcx.run_until_parked();
     // WebKit's own menu gets the app's items, each with its key.
     let titles = fake.menu_titles();
@@ -751,7 +751,7 @@ fn the_title_and_the_status_items_of_a_page_have_their_menus(cx: &mut TestAppCon
         "{title:?}"
     );
     assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
-    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    vcx.update(writer_ui::ContextMenu::dismiss);
     vcx.run_until_parked();
     // The zoom in the status bar.
     let bounds = vcx
@@ -762,7 +762,7 @@ fn the_title_and_the_status_items_of_a_page_have_their_menus(cx: &mut TestAppCon
     let zoom = labels(vcx);
     assert!(zoom.iter().any(|label| label == "300 %"), "{zoom:?}");
     assert!(!zoom.iter().any(|label| label == "Fit Width"), "{zoom:?}");
-    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    vcx.update(writer_ui::ContextMenu::dismiss);
     // The words of the page.
     assert!(
         vcx.debug_bounds("status-statistics").is_some(),
@@ -939,14 +939,14 @@ fn report(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> PagesRep
 }
 
 /// A workspace on the fake engine whose fetcher answers `fetcher`.
-fn import_desk<'a>(
+fn import_desk(
     fetcher: Arc<dyn Fetcher>,
-    cx: &'a mut TestAppContext,
+    cx: &mut TestAppContext,
 ) -> (
     Rc<FakePages>,
     Entity<Workspace>,
     DocumentId,
-    &'a mut VisualTestContext,
+    &mut VisualTestContext,
 ) {
     init(cx);
     let fake = cx.update(pages::use_fake);

@@ -1785,10 +1785,15 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   address in a string, `window.claude`) is a warning. Limits: 32 MB a file, 64 MB a page,
   2,000 files, 500 pieces from the web, 101 HTML files, 120 s of check. The text of a page
   is what it shows (`innerText`) and then what it holds unshown (closed `<details>`, hidden
-  chapters), for search, agents and the assistant.
+  chapters), for search, agents and the assistant; what layout shows apart stays apart (a
+  tag after a word, a chip, the gutter of a listing, the labels of an axis: each junction
+  is measured and marked before `innerText` is read, only white space is added).
 - **A single file is never a walk of its folder**: an `.html` file is taken with the local
-  files its references name, and a literal path to a file beside it (a narration a button
-  plays) is named in a warning, "add the folder". A folder is taken whole.
+  files its references name, never a hidden file nor a document it only links to, and a
+  literal path to a file beside it (a narration a button plays, also in an event handler,
+  which is read as a script) is named in a warning, "add the folder". A folder is taken
+  whole; opened with another entry it is another input. A page is exported as a folder
+  whole or not at all.
 - **Adding pages in the app** (`workspace/page_import.rs`): File > Import Page… (the open
   panel, files and folders, several; with a page engine only), "Import Page…" in the menu
   of the library and of a folder row, and `.html` / `.htm` files or folders dropped on the
@@ -1805,14 +1810,25 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   push it out, and a click that takes it away cancels. **One summary per gesture** ("2
   pages added, 1 not added", "Added “Orbitarium”"), with **Show Why** when a page was
   refused, has warnings or files were left out: the command "Show the report of the pages
-  added last" opens a dialog of the modal layer with every page and its whole sentence, and
-  Copy (`tab` goes from page to page, `escape` closes). The app's import gives no source
-  address: importing a file again is a new page.
+  added last" (also File > Show Report of Pages Added Last…, for whoever missed the toast)
+  opens a dialog of the modal layer with every page and its whole sentence, and Copy (`tab`
+  goes from page to page, `escape` closes). The app's import gives no source address:
+  importing a file again is a new page.
 - **Isolation** (`writer-web`, docs/pages-design.md section 5): the scheme `writer-page`,
-  each page its own host (`page-<id>`); the CSP and a content rule list block every request
-  to `http(s)`, `ws(s)`, `ftp` and `file`; WebRTC and media devices are off
-  (`_setPeerConnectionEnabled:` and `_setMediaDevicesEnabled:`, private and required: a
-  macOS without them has no pages); navigation away, forms, downloads, new windows,
+  each page its own host, **its id and the moment its row was made**
+  (`page-12-1731600000000`, `pages::page_host`): the views of a run share one store of
+  website data, kept per origin, and SQLite gives the id of a page erased for good to the
+  next row, so with the id alone a new page read the local storage, IndexedDB and cookies
+  of the erased one (an update keeps the row and its origin). The CSP and a content rule
+  list block every request to `http(s)`, `ws(s)`, `ftp` and `file`; WebRTC and media
+  devices are off (`_setPeerConnectionEnabled:` and `_setMediaDevicesEnabled:`), and so is
+  the data store's preconnect (`_WKWebsiteDataStoreConfiguration`
+  `initNonPersistentConfiguration`, `setAllowsServerPreconnect: NO`, then
+  `WKWebsiteDataStore _initWithConfiguration:`; without it WebKit looks up and connects to
+  the host of a link a script clicks, DNS, TCP and TLS, before the policy refuses the
+  navigation: a channel out of an offline page). All of these are private and required: a
+  macOS without them has no pages (`writer_web::check_selectors`, `selectors.rs`; trimming
+  that list drops the guard). Navigation away, forms, downloads, new windows,
   autoplay, AirPlay, camera, microphone, link previews and the inspector are off; storage
   lasts while the app runs (one non-persistent data store); no bridge to the app. **A link
   to another site opens in the default browser only when the reader acted** (a real click
@@ -1834,14 +1850,24 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   the view hands to GPUI's view. `PageView` is a place where text is typed (a page has
   fields), so no page command can be given a bare letter. A modal or a context menu over the
   page is drawn over a snapshot of it (the view hidden; the picture handed to
-  `Window::drop_image` when the overlay closes); a toast gets a hole in the view (drawn and
+  `Window::drop_image` when the overlay closes, and when the page closes under it, as an
+  item opened from quick open, the library search, a row's menu or the version history
+  closes it: `Workspace::discard_page`, the one way a page session ends; one left behind
+  is a texture the size of the page in GPUI's atlas for the life of the window); a toast gets a hole in the view (drawn and
   hit-tested: a click on its button reaches GPUI). The title and the status bar have the
   page's items (its words, its zoom 50 to 300 %, the sparkle); find is a strip in the
-  find bar's key context; the theme reaches the view; a crash of the WebContent process
+  find bar's key context, with Aa, previous, next and close for the pointer (none takes
+  the keyboard; the press that gives the page the keyboard is on the page's area, not on
+  the element that holds the strip, or a press into the strip's field would end in the
+  page); the theme reaches the view; a crash of the WebContent process
   reloads once and shows "This page stopped working." the second time within 10 s. The
   commands of a text are greyed out and left out of the palette; those of a document that
-  mean nothing on a page (document settings, spelling language, save now, comments, the
-  fits of the zoom, the quick chat) say what a page is in a toast. Print is WebKit's print
+  mean nothing on a page (document settings, the size and spacing of body text, take title
+  from text, spelling language, save now, comments, the fits of the zoom, the quick chat)
+  say what a page is in a toast from their keys and the menu bar, and the palette leaves
+  them out too, with the zoom steps past 300 % (`commands_not_for_the_open_page`); it names
+  "Rename document" and "Go to text" "Rename page" and "Go to page" while a page is open
+  (`Workspace::page_title_of`, the old title kept among the keywords). Print is WebKit's print
   of the view through the same print target; Export writes the served files as a folder
   that opens offline, or a PDF; the version history shows a version's text and restores it.
 - **Agents' pages** (`writer page add`, `add_page`, "Agents"): prepared and checked by the

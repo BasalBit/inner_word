@@ -1058,7 +1058,12 @@ key window (keys, the first responder, the cursor) was not checked by a person y
   becomes a `RenderImage` (`RenderImage::new(smallvec![image::Frame::new(pixels)])`) that the
   element paints itself (`window.paint_image(bounds, Corners::default(), image, 0, false)`);
   the view is hidden once it is there, shown again when the overlay closes, and the picture
-  is handed to `window.drop_image` in the next prepaint. **Never through `img(Arc<Image>)`**:
+  is handed to `window.drop_image` in the next prepaint. **That prepaint never comes for an
+  element that is gone**: when the page closes under the overlay (an item chosen in quick
+  open), the session hands its pictures to `window.drop_image` as it ends
+  (`Workspace::discard_page`); one left behind is a texture the size of the page in the
+  atlas for the life of the window (24 switches: 55 MB to 335 MB of IOAccelerator memory,
+  measured with `footprint`). **Never through `img(Arc<Image>)`**:
   the asset cache keeps every decoded image for the life of the app (the spike went from
   388 MB to 1162 MB over twenty palettes). A test counts snapshots made against dropped.
 - **Holes for toasts.** A toast over a live page gets a hole in the view: a `CAShapeLayer`
@@ -1084,6 +1089,28 @@ key window (keys, the first responder, the cursor) was not checked by a person y
   `unregisterDraggedTypes` when it is made (`pages::take_no_drops`), so files dragged over
   a page reach GPUI's view under it and the page element's `on_drop::<ExternalPaths>`
   (read from AppKit's drag destinations; a real drop from the Finder is a hand check).
+- **A parent's mouse-down runs after its child's.** GPUI's bubble phase runs every hovered
+  listener from the front to the back until one stops propagation, and a `TextField`
+  focuses itself on mouse down without stopping it. So a `window.focus(..)` in an
+  ancestor's `on_mouse_down` wins over the field's: the page element had one, and a press
+  into the find strip's field (a child of the element) gave the keyboard to the page. Put
+  such a handler on the area it is for, not on an element that holds fields too (gpui
+  0.2.2, `elements/div.rs` and `window.rs`, read; the test
+  `a_press_into_the_find_field_gives_it_the_keyboard`).
+- **A connection ahead of a navigation.** WebKit preconnects (DNS, TCP, TLS) to the host
+  of a main-frame link while it asks the navigation policy, also for a link a script
+  clicks, before the policy can cancel it. The data stores are made from
+  `_WKWebsiteDataStoreConfiguration` (`initNonPersistentConfiguration`,
+  `setAllowsServerPreconnect:` NO) with `-[WKWebsiteDataStore _initWithConfiguration:]`
+  (`writer-web/src/config.rs`); the three are private and among what
+  `writer_web::available` requires (`selectors.rs`), so a macOS without them has no pages
+  rather than leaky ones.
+- **One data store, an origin per page.** Every view of a run shares one non-persistent
+  data store (`config.rs`, `VIEW_STORE`), and local storage, IndexedDB and cookies are kept
+  per origin in it. A row id alone is no origin: SQLite gives the id of a row deleted for
+  good to the next one. The host is the id and the moment the row was made
+  (`pages::page_host`). Nothing of it reaches the disk (`<data dir>/WebKit/` holds only the
+  rule list).
 - **The view can outlive the window** (the window closes, the app quits, the workspace is
   dropped after AppKit let go of the window): `WebPage::new` retains GPUI's view and `Drop`
   releases it, keeps no window pointer, asks `[webView window]` and gives the first

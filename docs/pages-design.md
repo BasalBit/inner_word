@@ -801,6 +801,7 @@ The view gives it no way to the network, to the user's files or to the app.
 | A link a script "clicks" (`a.click()`, a dispatched event) to another site | cancelled; nothing opens | the same policy: no reader action in the last second |
 | `target=_blank`, `window.open` | own file: loaded in the same view; another site after the reader's click: the default browser; otherwise nothing | `WKUIDelegate createWebViewWithConfiguration…` returns nil |
 | WebRTC (`RTCPeerConnection`, its ICE requests over STUN and TURN), media devices | **off**: `RTCPeerConnection` is not defined, nothing is sent | `-[WKPreferences _setPeerConnectionEnabled:]` NO and `_setMediaDevicesEnabled:` NO (private; both required, below). CSP does not cover ICE and the rule list sees only URL loads: a critic's probe with this design's CSP and rule list got 5 STUN binding requests and 10 TURN packets on 127.0.0.1, and none with the switch off |
+| A connection opened ahead of a navigation (DNS, TCP and TLS to the host of a link while the policy is asked; also for a link a script clicks, which the policy then cancels) | **off**: nothing is looked up or connected | the data stores are made from `_WKWebsiteDataStoreConfiguration` (`initNonPersistentConfiguration`, `setAllowsServerPreconnect:` NO) through `-[WKWebsiteDataStore _initWithConfiguration:]` (private; required, below). Found by the WP3 tests: without it a script's `a.click()` made the Mac connect to any host the page names, a channel out of an offline page |
 | Form submission | blocked | CSP `form-action 'none'`, navigation policy |
 | Service workers | not possible on a custom scheme; the data store is not persistent | WebKit |
 | Downloads (`<a download>`, attachments, a response WebKit cannot show) | cancelled (question 8) | `decidePolicyForNavigationResponse`, `navigationAction.shouldPerformDownload` |
@@ -819,7 +820,7 @@ The view gives it no way to the network, to the user's files or to the app.
 | Web Inspector | off | `inspectable = NO` where the view answers it (macOS 13.3); its default before |
 | Keyboard focus | `tab` moves through links as well as fields, so a link can be reached and opened (`enter`) without a mouse | `preferences.tabFocusesLinks = YES` (it is NO by default) |
 | A bridge to the app | **none** | the view adds no `WKScriptMessageHandler` and no `WKUserScript` (the check has both, and only the check, in its own content world) |
-| Storage (`localStorage`, `IndexedDB`, cookies) | kept while the app runs, per page, gone at quit (question 2) | one `WKWebsiteDataStore.nonPersistentDataStore` per app run, shared by every view; each page its own host |
+| Storage (`localStorage`, `IndexedDB`, cookies) | kept while the app runs, per page, gone at quit (question 2); never written to disk | one non-persistent data store per app run, shared by every view; each page its own host, **its id and the moment its row was made** (`page-12-1731600000000`, `writer_app::pages::page_host`): SQLite gives the id of a page erased for good to the next row (`INTEGER PRIMARY KEY` without `AUTOINCREMENT`), and with the id alone the new page read what the erased one left (review of the build, ISO-1). An update keeps the row and so its storage |
 | `window.claude` (claude.ai capabilities) | not there; pages that need it say so or fail quietly | nothing to do |
 
 The rule list is compiled into a `WKContentRuleListStore storeWithURL:` at
@@ -860,7 +861,7 @@ it raises an exception and ends the app. So `writer_web::available() -> Result<(
 String>` is asked before anything of WebKit is made: macOS 12.3 or later
 (`NSProcessInfo isOperatingSystemAtLeastVersion:`) **and** `check_selectors()`, which asks
 the runtime for every class and selector the crate sends, the two private switches of
-WebRTC included. Its error is the sentence the app and the tool show: "Pages need macOS
+WebRTC and the data store's preconnect switch included. Its error is the sentence the app and the tool show: "Pages need macOS
 12.3 or later." / "This macOS does not have what pages need to stay offline
 (_setPeerConnectionEnabled:)". When it fails the app installs no page engine (a page
 shows its text, Import Page… is not there) and `writer page add` fails with `failed` and
@@ -1051,7 +1052,12 @@ over the page's bounds is hidden (spike finding c). One approach for each case:
   page element draws it and the web view is hidden. Until then the web view stays (the
   overlay shows 55 to 90 ms late rather than over a blank area). When the overlay
   closes, the web view is shown again and, in the next prepaint, the snapshot is handed
-  to `window.drop_image` and dropped.
+  to `window.drop_image` and dropped. **When the page itself goes while the overlay is
+  up** (an item opened from quick open or the library search, Move to Trash from a row's
+  menu, a restored version), that prepaint never comes: the session hands its snapshot
+  and what waits to be dropped to the window as it ends (`Workspace::discard_page`, the
+  one way a page session ends). Found in the review of the build (PAGE-APP-1): 24 switches
+  through quick open left 280 MB of textures in the atlas.
 - **Memory.** The snapshot comes back as BGRA pixels (`writer_web::Bitmap`, decoded from
   the `NSImage`'s `CGImage` in `writer-web`, no PNG on the way) and becomes a
   `gpui::RenderImage` that the element paints itself (`window.paint_image`), never through
@@ -1103,14 +1109,21 @@ over the page's bounds is hidden (spike finding c). One approach for each case:
 - The commands that act on a text (`text_commands()`, the image commands, spelling's
   word commands) have no handler while a page is open: the menu bar greys them out, as
   with no document. The palette leaves them out while a page is open
-  (`PaletteDelegate` is given the commands without those whose action is in that set and
-  not available on the focused path, `window.is_action_available`).
+  (`Workspace::commands_not_for_the_open_page`).
 - The commands of a document that would do something else on a page say what a page is,
-  in one toast (`workspace::page::NOT_FOR_A_PAGE` and its siblings, wording below):
+  in one toast, from their keys and the menu bar (`workspace::page::NOT_FOR_A_PAGE` and
+  its siblings, wording below). **The palette leaves these out too** (as built, after the
+  review of the build, PAGE-APP-4): it offers what can be done to a page, not 25 commands
+  that only answer with a toast; with them go the comment commands that would do nothing
+  (show or hide comments, reply, edit, resolve, delete, copy) and the zoom steps past the
+  page's 300 % (400 % would silently be 300 %). Two commands keep their action and are
+  named for a page while one is open: "Rename document" is "Rename page", "Go to text" is
+  "Go to page" (`Workspace::page_title_of`; the old title stays among the keywords).
 
 | Command | Toast |
 |---|---|
 | Document settings, page view on or off, orientation, body text size, line spacing | "A page is shown as it was made: it has no document settings." |
+| Take title from text | "A page keeps the title it was given: rename it to change it." |
 | Spelling language | "A page is not checked for spelling." |
 | Save now | "A page is stored as it was added; there is nothing to save." |
 | Add comment, next and previous comment, go to comments | "A page has no comments." |
@@ -1129,7 +1142,17 @@ wrapping, case insensitive unless "case sensitive" is on). The field's `Cancel`
 (`escape`) closes the strip and gives the keyboard back to the page. `FindAndReplace`
 opens the same strip (a page cannot be changed). The strip is GPUI's and lies above the
 web view's frame, not over it. A hit of the library search on a page opens the page with
-the strip on the query.
+the strip on the query, which is looked for once the page has loaded (the view is made at
+the page's first frame, after the strip was given the query; found by the integration,
+49ef86c).
+
+**Its buttons, for the pointer** (as built, PAGE-APP-2): "Aa" (match case, drawn on and
+off), previous, next and close, as the text's find bar has them, each with a tooltip that
+asks the keymap for its key where the strip is (`KeyHint::for_action_at` with the strip's
+focus handle). None takes the keyboard. The press that gives the page the keyboard (on
+what stands in for the view while it is hidden) is on the page's area and not on the page
+element, which holds the strip too: GPUI runs a parent's mouse-down listener after the
+child's, so a press into the strip's field ended with the page focused (PAGE-APP-3).
 
 **Its keys are the find bar's.** The strip's element has the key context of the find bar,
 `writer_editor_tools::FIND_BAR_CONTEXT` (`FindBar`), and is a child of the page element
@@ -1531,6 +1554,7 @@ A paragraph "Pages" after "Images", and the recipe. The text, to be held by its 
 |---|---|---|---|---|
 | Import page… (`workspace::ImportPage`) | none | File > Import Page… (after New Folder) | the library's empty space and folder rows: "Import Page…" | a page engine is installed |
 | Cancel adding pages (`workspace::CancelAddingPages`) | none | File > Cancel Adding Pages | the note's button "Cancel" | pages are being added in the app |
+| Show the report of the pages added last (`workspace::ShowPageReport`) | none | File > Show Report of Pages Added Last… (added after the review of the build, PAGE-APP-6: the summary's Show Why stays 10 s) | the summary's button "Show Why" | always (without a report it says that no pages were added since the app was opened) |
 | Reload page (`workspace::ReloadPage`) | none | View > Reload Page | page (both menus), title | a page is open |
 | Copy page address (`workspace::CopyPageAddress`) | none | File > Copy Page Address | page, title, library row | a page with a source |
 | Open page address in browser (`workspace::OpenPageAddress`) | none | File > Open Page Address in Browser | the same | a page with a source |
@@ -1540,7 +1564,8 @@ A paragraph "Pages" after "Images", and the recipe. The text, to be held by its 
 The existing commands that work on a page: Print, Cancel printing, Export
 (`cmd-shift-s`), Version history, Rename document, Reveal in library, Zoom in, out, actual
 size and the steps, Go to text (`cmd-1`), Copy, Select all (the root's captures, section
-6). No new default key: a page is read, not worked in, and the keys a reader needs are
+6); Rename and Go to text are named "Rename page" and "Go to page" in the palette while
+a page is open. No new default key: a page is read, not worked in, and the keys a reader needs are
 WebKit's own.
 
 **Adding pages in the app** (WP9). A gesture (File > Import Page…, a drop) can take
@@ -1593,14 +1618,14 @@ with ours), the library row's menu, File > Import Page…, and drops:
   The place name **"On a page"** in `shortcuts::Place::of_predicate`. The namespace `page`
   goes into `KEY_GROUPS`, and `page::OpenContextMenu` gets its title in `KEY_TITLES`
   ("Show the page's context menu"), as the other context-menu keys have.
-- New rows: Import page…, Cancel adding pages, Reload page, Copy page address, Open page
-  address in browser (Anywhere: they are window commands); Show the page's context menu,
-  Find, Find and replace, Find next, Find previous (On a page): **10 rows, 10 entries**.
-  The find strip adds none (its keys are the find bar's rows). With every part shown the
-  list has **382 rows** (372 today) and the shortcuts file **407 entries** (397); without
-  the assistant **352 rows**, the same 407 entries. The builder counts again in a
-  scripted run (`keys:cmd-/; state` and "Export…") and writes the real numbers into
-  CLAUDE.md.
+- New rows: Import page…, Cancel adding pages, Show the report of the pages added last,
+  Reload page, Copy page address, Open page address in browser (Anywhere: they are window
+  commands); Show the page's context menu, Find, Find and replace, Find next, Find
+  previous (On a page): **11 rows, 11 entries** (the plan had 10: the report's command
+  came with WP9). The find strip adds none (its keys are the find bar's rows). As built,
+  with every part shown the list has **383 rows** (372 before pages) and the shortcuts file
+  **408 entries** (397); without the assistant **353 rows**, the same 408 entries
+  (`tests/suite/pages.rs`, `the_list_of_shortcuts_has_the_rows_of_pages`).
 - `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file` and
   `two_rows_under_one_place_name_are_in_the_same_place` must hold with the new context.
 
@@ -2147,7 +2172,7 @@ pub fn print_blocking(input: PdfInput) -> Result<PrintedPdf, String>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Appearance { Light, Dark, System }
 pub struct ViewConfig {
-    pub host: String,                    // "page-12"
+    pub host: String,                    // "page-12-1731600000000" (id and created_at)
     pub entry: String,
     pub source: Arc<dyn PageSource>,
     pub rules_dir: PathBuf,
@@ -2908,3 +2933,33 @@ the code or the critic's own experiment (in this session's scratchpad,
 | technical-T23 | accepted | `-q` first; the output file removed on any failure or status other than 200. |
 | technical-T24 | accepted | `sha1_smol` 1.0.1 (in `Cargo.lock`) is in WP2's list; `objc::runtime::BOOL` everywhere; an x86_64 `cargo check` of `writer-web` where the target is installed. |
 | technical-T25 | accepted | The occlusion call is optional (`respondsToSelector:`); a WP3 test reads text written from `requestAnimationFrame`. |
+
+## What the build changed
+
+What the build of 2026-11-14 (861d74a onwards) found and did otherwise than planned
+above, and what the review of the build changed. Each line has the commit and why; the
+sections above say the same where they are about it.
+
+| What | Where | Why |
+|---|---|---|
+| The data stores of the view and the check are made with `_WKWebsiteDataStoreConfiguration` `setAllowsServerPreconnect:` NO and `_initWithConfiguration:`, private and required by `available()` | writer-web, 28149d1, b01a25f (section 5) | WebKit preconnects (DNS, TCP, TLS) to the host of a main-frame link while it asks the policy, also for a link a script clicks: a page could make the Mac look up any name, a channel out of an offline page. Found by WP3's tests |
+| AppKit ends `runOperationModalForWindow:` on a thread of its own; `printOperationDidRun:success:contextInfo:` is carried to the main thread before anything else is done | writer-web, 28149d1 (`print.rs`) | The end arrived off the main thread, where nothing of AppKit or GPUI may be touched |
+| The CSP reports a request of a cross-origin frame by the frame's origin only, so the check names the frame and not its path | writer-web, 28149d1 | WebKit's report, as found |
+| Closed `<details>` and hidden chapters: the shown text by `checkVisibility`, then a walk of what is closed | writer-web, 28149d1 (section 3, R3) | `innerText` alone left them out |
+| The link of WebKit's menu is found with `elementFromPoint` (in the client's content world) on `rightMouseDown:` and a `ctrl` mouse-down | writer-web, 28149d1 | The private hover callback the plan named never came |
+| The web view takes no drops (`unregisterDraggedTypes`, `pages::take_no_drops`), so files dropped on a page reach GPUI's view and are added | writer-app, 5ec0624 | The plan said the view takes no drops; WebKit took a dropped file itself, and its navigation to the file was cancelled: nothing happened |
+| A seventh page command, "Show the report of the pages added last" (`ShowPageReport`), with the summary's Show Why; the list has 11 new rows: 383 rows (353 without the assistant) and 408 entries | writer-app, 18331a2, d50c7f6 (section 10) | The report of a gesture had to be reachable after its toast |
+| The hidden text of two elements in one block is two words ("Closed 2 days ago Closed 7 days ago", not "agoClosed") | writer-web, 32f3352 | Found in the archive's pages |
+| A page's text keeps apart what layout shows apart (a tag after a word, a chip, the gutter of a listing, the labels of an axis: "membersRECOMMENDED", "18import", "050100"); each junction is measured and marked before `innerText` is read | writer-web, b9ccacd (review of the build) | Search and agents read glued words |
+| A page that is refused is named by the title it was given | writer-agent, 174e38f | The archive's Docs artifact was refused as "Claude Docs" |
+| A page opened from the library search is searched for the query once it has loaded | writer-app, 49ef86c (section 6, find) | The view did not exist yet when the strip was given the query |
+| A page's origin is its id and the moment its row was made (`page-12-1731600000000`) | writer-app, e978fbd (review ISO-1; section 5) | SQLite gives the id of a page erased for good to the next row, and the views share one store of website data per origin: a new page read the storage of the erased one. A test of writer-web holds that a page's storage is its own origin's and never reaches the disk (b9ccacd) |
+| The snapshot under a modal is dropped when the page goes under it (`Workspace::discard_page`) | writer-app, e978fbd (review PAGE-APP-1; section 6, overlays) | 24 switches through quick open left 280 MB of textures in GPUI's atlas |
+| The find strip has Aa, previous, next and close for the pointer, and a press into its field keeps the keyboard there | writer-app, e978fbd (PAGE-APP-2, PAGE-APP-3; section 6, find) | Product rule 1; the page element's mouse-down ran after the field's and took the keyboard |
+| Over a page the palette leaves out the commands that only say what a page is, and names "Rename page" and "Go to page" | writer-app, e978fbd (PAGE-APP-4; section 6) | About 25 commands answered with a toast or did nothing |
+| "Take title from text" on a page: "A page keeps the title it was given: rename it to change it." | writer-app, e978fbd (PAGE-APP-5) | It said that a page has no document settings |
+| File > Show Report of Pages Added Last… | writer-app, e978fbd (PAGE-APP-6; section 10) | The report was reachable with the pointer only for the 10 s of the summary |
+| The app's half of a page's link and alert events is tested (open in the browser, "The page says", nothing from a page that is no longer open) | writer-app, e978fbd (DOC-5) | No test of the assembled app posted them |
+| A single file never takes a hidden file nor a document it only links to; a folder opened with another entry is another input; a page is written as a folder whole or not at all; an event handler is read as a script | writer-page, 6d788a4 (review of the build) | A page beside `.ssh/` named its key and the check made the key its text; a re-add with `--entry` was "unchanged"; a failed write left half a folder; a sound an `onclick` plays was not said |
+| An export of a page as Markdown or DOCX is answered with the formats a page has; a folder with `artifact-type/` that cannot be kept whole is refused as an artifact made from a type; `add_page` says `openWorldHint` true; `--list` says when a relative path was taken from the folder of the list | writer-agent, writer-mcp, writer-cli, d2ff3e8 (review of the build) | The answers named the wrong thing or nothing |
+| The skill's recipe reads every artifact as files, lists assets only where the assets capability is declared, changes nothing on claude.ai, skips an artifact only when its `content_at` is two days or more after its update, and exports a Docs document instead of reading its type's files | writer-agent-setup, ef9b0da (review of the build; section 9, the skill) | The recipe's calls are held against what the Artifact tool does |

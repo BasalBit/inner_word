@@ -132,6 +132,17 @@ actions!(
         FocusAssistant,
         /// Show or hide the assistant's side chat.
         ToggleAssistant,
+        /// Add a web page (an HTML file or a folder) to the library, kept
+        /// whole and offline.
+        ImportPage,
+        /// Stop adding the pages that are being added.
+        CancelAddingPages,
+        /// Load the open page again, as it was stored.
+        ReloadPage,
+        /// Copy the address the open page came from.
+        CopyPageAddress,
+        /// Open the address the open page came from in the browser.
+        OpenPageAddress,
     ]
 );
 
@@ -146,6 +157,8 @@ pub const CATEGORY_GO: &str = "Go";
 pub const CATEGORY_VIEW: &str = "View";
 /// Category of the app-wide commands.
 pub const CATEGORY_APP: &str = "App";
+/// Category of the commands about pages (web pages kept in the library).
+pub const CATEGORY_PAGES: &str = "Pages";
 /// Category of the assistant's commands. They are listed only while the
 /// assistant is shown (its engine is installed and the setting is on):
 /// see [`crate::commands::set_category_hidden`].
@@ -398,6 +411,27 @@ pub fn commands() -> Vec<CommandDescriptor> {
             .keywords(["toast", "message", "clear"]),
         CommandDescriptor::new("About The Writer", CATEGORY_APP, About).keywords(["version"]),
         CommandDescriptor::new("Quit The Writer", CATEGORY_APP, Quit).keywords(["exit"]),
+    ]
+}
+
+/// The commands about pages. None has a key by default: a page is read,
+/// not worked in, and the keys a reader needs are WebKit's own.
+pub fn page_commands() -> Vec<CommandDescriptor> {
+    vec![
+        CommandDescriptor::new("Import page…", CATEGORY_PAGES, ImportPage)
+            .keywords(["add", "web page", "html", "artifact", "offline", "folder"]),
+        CommandDescriptor::new("Cancel adding pages", CATEGORY_PAGES, CancelAddingPages)
+            .keywords(["stop", "import", "abort"]),
+        CommandDescriptor::new("Reload page", CATEGORY_PAGES, ReloadPage)
+            .keywords(["refresh", "again", "web page"]),
+        CommandDescriptor::new("Copy page address", CATEGORY_PAGES, CopyPageAddress)
+            .keywords(["url", "link", "source", "web page"]),
+        CommandDescriptor::new(
+            "Open page address in browser",
+            CATEGORY_PAGES,
+            OpenPageAddress,
+        )
+        .keywords(["url", "link", "source", "safari", "web page"]),
     ]
 }
 

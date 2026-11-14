@@ -70,7 +70,7 @@ use crate::commands;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 19] = [
+const KEY_GROUPS: [(&str, &str); 20] = [
     // The keys of the menu bar that are no commands of the palette: hide
     // the app, hide the others, minimize the window. They are keys like
     // every other (and were in the shortcuts file without being in the
@@ -101,6 +101,8 @@ const KEY_GROUPS: [(&str, &str); 19] = [
     ("focus", ""),
     // The keys of this list itself.
     ("keymap_view", ""),
+    // An open page: its context menu.
+    ("page", ""),
 ];
 
 /// The action namespaces of the assistant's chats. Their keys are left out
@@ -137,6 +139,9 @@ pub enum Place {
     FindBar,
     /// In the link field.
     LinkField,
+    /// On an open page (a web page of the library): the page has the
+    /// keyboard, and text is typed there (its fields).
+    Page,
     /// In the list of comment threads.
     CommentList,
     /// In the comment list while it asks whether a comment is to be
@@ -195,6 +200,7 @@ impl Place {
             Place::Text => "In the text",
             Place::FindBar => "In the find bar",
             Place::LinkField => "In the link field",
+            Place::Page => "On a page",
             Place::CommentList => "In the comment list",
             Place::CommentConfirm => "Confirming in the comment list",
             Place::CommentField => "Writing a comment",
@@ -236,6 +242,8 @@ impl Place {
             Place::FindBar
         } else if has("LinkPopover") {
             Place::LinkField
+        } else if has(crate::pages::PAGE_VIEW) {
+            Place::Page
         } else if has("CommentComposer") {
             Place::CommentField
         } else if has("CommentThreads") && has("confirming") && !has("!confirming") {
@@ -556,10 +564,11 @@ fn plain_words(title: &str) -> String {
 
 /// Keys without a descriptor whose action's name alone does not say what
 /// they do: the action, and the title of its row.
-const KEY_TITLES: [(&str, &str); 3] = [
+const KEY_TITLES: [(&str, &str); 4] = [
     ("app::Hide", "Hide The Writer"),
     ("app::HideOthers", "Hide the other apps"),
     ("app::Minimize", "Minimize the window"),
+    ("page::OpenContextMenu", "Show the page's context menu"),
 ];
 
 /// The title of a command that has no descriptor, from its action's name.

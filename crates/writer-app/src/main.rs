@@ -57,6 +57,18 @@ fn main() {
                 writer_app::images::use_open_panel(cx);
                 writer_app::pasteboard::use_system(cx);
             }
+            // Pages are shown with WebKit, in every run of the real binary
+            // (scripted runs too: they draw offscreen-safe, in the
+            // background), unless the environment says no or this macOS
+            // cannot keep a page offline (then a page shows its text).
+            if !writer_app::pages::switched_off_by_env()
+                && let Err(why) = writer_app::pages::use_webkit(cx)
+            {
+                eprintln!("The Writer: pages are shown as text: {why}");
+            }
+            if script.is_some() {
+                writer_app::pages::draw_when_covered(cx);
+            }
             // kill, a closed terminal and ctrl-c quit like cmd-q: the open
             // document is saved first.
             writer_app::signals::quit_on_termination_signals(cx);

@@ -57,6 +57,15 @@ writer-print.workspace = true
 # Image files (no GPUI): a file, a paste or a drop made into what the
 # library stores.
 writer-image.workspace = true
+# Pages (no GPUI): the manifest of a page, its files, the bundler.
+writer-page.workspace = true
+# Pages (no GPUI): WebKit, the view of an open page above GPUI's view, the
+# check, the print to a PDF.
+writer-web.workspace = true
+# A snapshot of a page (BGRA pixels) made into what GPUI paints, as the
+# editor's pictures are (`image::Frame`, `smallvec`).
+image = { version = "0.25", default-features = false }
+smallvec = "1"
 # localtime_r for the times in the version history.
 libc.workspace = true
 # Window capture for visual QA: the NSWindow number behind a GPUI window.

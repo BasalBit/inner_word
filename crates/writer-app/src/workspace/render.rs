@@ -316,7 +316,7 @@ impl Workspace {
             .text_size(UI_TEXT_BASE)
             .text_color(colors.muted)
             .child(self.display_title());
-        if self.session.is_none() {
+        if self.session.is_none() && self.page.is_none() {
             return div().max_w_full().child(title).into_any_element();
         }
         let chevron = div()
@@ -633,11 +633,17 @@ impl Workspace {
                 window.dispatch_action(Box::new(crate::actions::TogglePageView), cx);
             }))
         });
-        let counts: Vec<String> = [&status.words, &status.characters, &status.reading]
+        let mut counts: Vec<String> = [&status.words, &status.characters, &status.reading]
             .into_iter()
             .filter(|text| !text.is_empty())
             .cloned()
             .collect();
+        // A page: the words of its text.
+        if let Some(words) = self.page_words()
+            && self.settings.status_words
+        {
+            counts.push(words);
+        }
         let zoom = self.render_zoom_item(tips, cx);
         let statistics = (!counts.is_empty()).then(|| {
             self.status_item(
@@ -654,7 +660,7 @@ impl Workspace {
         // The assistant's side chat, for the pointer: a small control at
         // the end of the bar, lit while the side chat is in front. Only
         // while the assistant is shown and a document is open.
-        let assistant = (self.assistant.shown && self.session.is_some()).then(|| {
+        let assistant = (self.assistant.shown && self.open_item_id().is_some()).then(|| {
             let in_front = self.right.shown == Some(RightPanel::Assistant);
             let hint = KeyHint::for_action(&crate::actions::FocusAssistant, cx);
             div()
@@ -798,7 +804,10 @@ impl Workspace {
         )
     }
 
-    fn render_editor_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_editor_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.page.is_some() {
+            return self.render_page(window, cx);
+        }
         if self.session.is_none() {
             return self.render_empty_state(cx);
         }
@@ -834,6 +843,9 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_window_title(window);
         self.keep_focus_on_screen(window, cx);
+        // The view of an open page: its first responder, its overlays, its
+        // theme, in step with this frame.
+        self.sync_page_view(window, cx);
         let theme = cx.theme();
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
@@ -864,7 +876,7 @@ impl Render for Workspace {
         // over it).
         let tips = !writer_ui::ContextMenu::is_open(window, cx);
         let titlebar = self.render_titlebar(layout.sidebar.is_some(), tips, cx);
-        let editor_area = self.render_editor_area(cx);
+        let editor_area = self.render_editor_area(window, cx);
         let editor_area = self.with_quick_chat(editor_area);
         let status_bar = self.render_status_bar(tips, cx);
         let picker_close = self.render_picker_close(window, cx);
@@ -966,6 +978,9 @@ impl Render for Workspace {
         }
         // The zoom of the text, while there is a text.
         root = self.zoom_actions(root, cx);
+        // The commands of an open page, and the commands of a document that
+        // say what a page is.
+        root = self.page_actions(root, cx);
         // "Print" while there is a document and somewhere for the job to
         // go, "Cancel printing" while pages are being prepared.
         root = self.print_actions(root, cx);

@@ -210,6 +210,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A page is opened as a page: its content is a manifest, never a
+        // text (`page.rs`).
+        if self.open_document_id() != Some(id) && self.is_page(id, cx) {
+            return self.open_page(id, focus_editor, window, cx);
+        }
         if self.open_document_id() != Some(id) && !self.load_into_editor(id, window, cx) {
             return false;
         }
@@ -227,6 +232,14 @@ impl Workspace {
     ) -> bool {
         // Never leave the open document behind unsaved.
         self.flush(cx);
+        // A page that is open goes (its view with it).
+        if self.page.is_some() {
+            let had_focus = self.page_has_focus(window);
+            self.close_page(window, cx);
+            if had_focus {
+                window.focus(&gpui::Focusable::focus_handle(&self.editor, cx));
+            }
+        }
 
         let stored = match self.library.read(cx).document(id) {
             Ok(stored) => stored,
@@ -397,6 +410,12 @@ impl Workspace {
 
     /// Closes the open document (saving it first) and shows the empty state.
     pub fn close_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page.is_some() {
+            self.close_page(window, cx);
+            self.assistant_document_changed(window, cx);
+            cx.emit(WorkspaceEvent::DocumentClosed);
+            return;
+        }
         if self.session.is_none() {
             return;
         }
@@ -1059,9 +1078,10 @@ impl Workspace {
     /// The title for the titlebar band: the open document's title (see
     /// [`Session::title`]), or the app name.
     pub(crate) fn display_title(&self) -> String {
-        match &self.session {
-            Some(session) => display_title(&session.title),
-            None => "The Writer".to_string(),
+        match (&self.session, &self.page) {
+            (Some(session), _) => display_title(&session.title),
+            (None, Some(page)) => display_title(&page.title),
+            (None, None) => "The Writer".to_string(),
         }
     }
 
@@ -1088,6 +1108,11 @@ impl Workspace {
     ) -> bool {
         if !self.open_document(id, true, window, cx) {
             return false;
+        }
+        // A page: the find strip on the query.
+        if self.open_page_id() == Some(id) {
+            self.open_find_strip(Some(query), window, cx);
+            return true;
         }
         let found = first_occurrence(self.editor.read(cx).document(), query);
         if let Some(range) = found {

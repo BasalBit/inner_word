@@ -188,8 +188,30 @@ pub enum Step {
     PageFit(crate::workspace::PageFit),
     Print(PrintStep),
     Image(ImageStep),
+    Page(PageStep),
     Quit,
 }
+
+/// What a `page:` step does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PageStep {
+    /// Store this folder (or file), offline already, as a page in the
+    /// folder selected in the library, and open it (`page:make:<path>[|<entry>]`).
+    Make(PathBuf, Option<String>),
+    /// Wait until the open page reports that it loaded, at most this long.
+    Wait(Duration),
+    /// Log the open page's text, its length first.
+    Text,
+    /// Open the find strip with this query.
+    Find(String),
+    /// Evaluate this script in the open page and log the answer.
+    Js(String),
+    /// Open the page's context menu, as `ctrl-enter` does.
+    Menu,
+}
+
+/// How long `page:wait` waits unless the step says otherwise.
+pub const PAGE_WAIT: Duration = Duration::from_secs(10);
 
 /// What an `image:` step does.
 #[derive(Clone, Debug, PartialEq)]
@@ -542,6 +564,7 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 Step::Image(ImageStep::Insert(PathBuf::from(unescape(arg))))
             }
         }
+        "page" => Step::Page(parse_page_step(arg)?),
         "zoom" => {
             if arg.is_empty() {
                 bail!("expected a zoom: in, out, actual, fit, page, life, auto, a percentage");
@@ -553,6 +576,43 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
         )),
         "quit" | "exit" => Step::Quit,
         other => bail!("unknown step {other:?}"),
+    })
+}
+
+/// The steps of `page:` (`make:<path>[|<entry>]`, `wait[:<ms>]`, `text`,
+/// `find:<query>`, `js:<script>`, `menu`).
+fn parse_page_step(arg: &str) -> Result<PageStep> {
+    let (what, rest) = arg.split_once(':').unwrap_or((arg, ""));
+    Ok(match what.trim() {
+        "make" => {
+            let rest = unescape(rest.trim());
+            let (path, entry) = match rest.split_once('|') {
+                Some((path, entry)) => (path.trim().to_string(), Some(entry.trim().to_string())),
+                None => (rest.clone(), None),
+            };
+            if path.is_empty() {
+                bail!("expected page:make:<folder>[|<entry>]");
+            }
+            PageStep::Make(PathBuf::from(path), entry.filter(|entry| !entry.is_empty()))
+        }
+        "wait" => PageStep::Wait(if rest.trim().is_empty() {
+            PAGE_WAIT
+        } else {
+            Duration::from_millis(rest.trim().parse().context("expected milliseconds")?)
+        }),
+        "text" => PageStep::Text,
+        "find" => PageStep::Find(unescape(rest)),
+        "js" => {
+            if rest.is_empty() {
+                bail!("expected page:js:<script>");
+            }
+            PageStep::Js(unescape(rest))
+        }
+        "menu" => PageStep::Menu,
+        other => bail!(
+            "unknown page step {other:?}: expected make:<folder>, wait, text, find:<query>, \
+             js:<script> or menu"
+        ),
     })
 }
 
@@ -1045,6 +1105,10 @@ async fn execute(
             }
             frame_pause(window, view, cx).await;
         }
+        Step::Page(step) => {
+            run_page_step(step, window, cx).await?;
+            frame_pause(window, view, cx).await;
+        }
         Step::Image(ImageStep::Insert(path)) => {
             let path = absolute(path);
             let workspace = workspace_handle(window, cx)?;
@@ -1456,6 +1520,128 @@ fn workspace_handle(
         .ok_or_else(|| anyhow!("the window does not show a workspace"))
 }
 
+/// Carries out one `page:` step.
+async fn run_page_step(step: PageStep, window: AnyWindowHandle, cx: &mut AsyncApp) -> Result<()> {
+    let workspace = workspace_handle(window, cx)?;
+    match step {
+        PageStep::Make(path, entry) => {
+            let path = absolute(path);
+            let made = workspace.update(cx, |workspace, window, cx| {
+                let folder = workspace.panel().read(cx).selected_folder();
+                let library = workspace.library().clone();
+                let made = crate::pages::make_page(&library, &path, entry.as_deref(), folder, cx);
+                if let Ok(meta) = &made {
+                    workspace.open_document(meta.id, false, window, cx);
+                }
+                made
+            })?;
+            match made {
+                Ok(meta) => {
+                    let manifest = workspace
+                        .update(cx, |workspace, _, _| workspace.page_manifest().cloned())?;
+                    let (files, bytes) = manifest
+                        .map(|manifest| (manifest.files.len(), manifest.served_bytes()))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "[automation] page: made page:{} “{}” {files} files {}",
+                        meta.id.0,
+                        meta.title,
+                        writer_page::megabytes(bytes)
+                    );
+                }
+                Err(why) => bail!("page: {} was not made: {why}", path.display()),
+            }
+        }
+        PageStep::Wait(limit) => {
+            let started = Instant::now();
+            let loaded = workspace.update(cx, |workspace, _, _| workspace.page_loaded())?;
+            let Some(loaded) = loaded else {
+                bail!("page:wait: no page is open");
+            };
+            let timer = cx.background_executor().timer(limit);
+            let outcome = futures_select(loaded, timer).await;
+            match outcome {
+                Some(()) => eprintln!(
+                    "[automation] page: loaded after {:.0} ms",
+                    started.elapsed().as_secs_f64() * 1000.
+                ),
+                None => {
+                    let state = workspace.update(cx, |workspace, _, _| workspace.page_state())?;
+                    bail!(
+                        "page:wait: the page did not load within {} ms ({state:?})",
+                        limit.as_millis()
+                    );
+                }
+            }
+        }
+        PageStep::Text => {
+            let text = workspace.update(cx, |workspace, _, _| {
+                workspace
+                    .page_manifest()
+                    .map(|manifest| manifest.text.clone())
+            })?;
+            let Some(text) = text else {
+                bail!("page:text: no page is open");
+            };
+            let mut shown: String = text.chars().take(TEXT_DUMP_CHARS).collect();
+            if text.chars().count() > TEXT_DUMP_CHARS {
+                shown.push('…');
+            }
+            eprintln!(
+                "[automation] page: text of {} characters: {shown:?}",
+                text.chars().count()
+            );
+        }
+        PageStep::Find(query) => {
+            workspace.update(cx, |workspace, window, cx| {
+                workspace.open_find_strip(Some(&query), window, cx)
+            })?;
+        }
+        PageStep::Js(script) => {
+            let answer =
+                workspace.update(cx, |workspace, _, _| workspace.evaluate_in_page(&script))?;
+            let Some(answer) = answer else {
+                bail!("page:js: no page is shown");
+            };
+            match answer.await {
+                Some(Ok(value)) => eprintln!("[automation] page: js answered {value:?}"),
+                Some(Err(error)) => eprintln!("[automation] page: js failed: {error}"),
+                None => eprintln!("[automation] page: js got no answer"),
+            }
+        }
+        PageStep::Menu => {
+            workspace.update(cx, |workspace, window, cx| {
+                if let Some(focus) = workspace.page_focus_handle() {
+                    window.focus(&focus);
+                }
+                window.dispatch_action(Box::new(crate::workspace::OpenPageContextMenu), cx);
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Whichever of two futures is ready first: the first's output, or `None`
+/// when the second (a timer) came first.
+async fn futures_select<T>(
+    first: impl std::future::Future<Output = Option<T>>,
+    second: impl std::future::Future<Output = ()>,
+) -> Option<T> {
+    use std::{pin::pin, task::Poll};
+    let mut first = pin!(first);
+    let mut second = pin!(second);
+    std::future::poll_fn(move |cx| {
+        if let Poll::Ready(value) = first.as_mut().poll(cx) {
+            return Poll::Ready(value);
+        }
+        if second.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 /// One line about the workspace, for the `state` step.
 pub fn describe_state(
     workspace: &mut Workspace,
@@ -1594,15 +1780,19 @@ pub fn describe_state(
     let zoom = workspace.describe_zoom(cx);
     let print = workspace.describe_printing();
     let images = workspace.describe_images(cx);
+    let web = workspace.describe_page(window, cx);
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
          modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] {images} \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
-         limit={:?} live=[{live}]{agents}{assistant}{font_list}",
-        workspace.open_document_id().map(|id| id.0),
-        workspace.document_title().unwrap_or_default(),
+         limit={:?} web=[{web}] live=[{live}]{agents}{assistant}{font_list}",
+        workspace.open_item_id().map(|id| id.0),
+        workspace
+            .document_title()
+            .or(workspace.page_title())
+            .unwrap_or_default(),
         workspace.save_state(),
         workspace.is_saving_in_background(),
         workspace.modal_layer().read(cx).has_modal(),

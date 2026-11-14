@@ -81,6 +81,7 @@ mod images;
 mod live;
 mod measure;
 mod menus;
+mod page;
 mod page_probe;
 mod print;
 mod render;
@@ -128,6 +129,12 @@ pub use live::{
     AgentChanges, ChangeCost, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence,
 };
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
+pub use page::{
+    CRASH_AGAIN_WITHIN, NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NO_SPELLING_ON_A_PAGE,
+    NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
+    Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_STEPS, PageState,
+    holes_in as page_holes_in, page_key_bindings,
+};
 pub use page_probe::{PageFit, characters_per_row};
 pub use print::{
     NOTE_DELAY as PRINT_NOTE_DELAY, PANEL_COULD_NOT_OPEN, Printing, SCRIPTED_RUN_HAS_NO_PANEL,
@@ -213,6 +220,8 @@ pub struct Workspace {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) settings: Settings,
     pub(crate) session: Option<Session>,
+    /// The open page; never together with a session (`page.rs`).
+    pub(crate) page: Option<page::PageSession>,
     /// The background half of the autosave.
     pub(crate) saver: saver::Saver,
     /// What the last save cost.
@@ -478,6 +487,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             settings,
             session: None,
+            page: None,
             saver,
             last_save: None,
             sidebar_dragging: false,
@@ -673,7 +683,9 @@ impl Workspace {
     /// palette commands still have a target.
     pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_modal(window, cx);
-        if self.session.is_some() {
+        if let Some(focus) = self.page_focus_handle() {
+            window.focus(&focus);
+        } else if self.session.is_some() {
             window.focus(&self.editor.focus_handle(cx));
         } else {
             window.focus(&self.focus_handle);
@@ -839,8 +851,9 @@ impl Workspace {
     /// the text is the thing that is not on screen).
     fn focus_fallback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editor = self.editor.focus_handle(cx);
-        let target = match self.session {
-            Some(_) if !editor.is_focused(window) => editor,
+        let target = match (&self.session, self.page_focus_handle()) {
+            (_, Some(page)) if !page.is_focused(window) => page,
+            (Some(_), _) if !editor.is_focused(window) => editor,
             _ => self.focus_handle.clone(),
         };
         window.focus(&target);
@@ -1036,9 +1049,16 @@ impl Workspace {
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = cx.weak_entity();
         let recent = self.recent_commands(cx);
+        // While a page is open the commands that act on a text are not
+        // offered (they have no handler: the menu bar greys them out).
+        let left_out = self.commands_not_for_the_open_page();
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
-                let delegate = PaletteDelegate::new(workspace, recent, cx);
+                let commands = crate::commands::all(cx)
+                    .into_iter()
+                    .filter(|command| !left_out.contains(&command.action_name()))
+                    .collect();
+                let delegate = PaletteDelegate::with_commands(workspace, commands, recent);
                 let rows = picker_rows(window, 14);
                 Picker::modal(delegate, window, cx)
                     .width(px(MODAL_WIDTH))
@@ -1513,15 +1533,24 @@ impl Workspace {
                     self.reload_settings(cx);
                 }
             }
-            LibraryEvent::DocumentRenamed(id) => self.document_renamed(*id, cx),
+            LibraryEvent::DocumentRenamed(id) => {
+                self.document_renamed(*id, cx);
+                self.page_renamed(*id, window, cx);
+            }
             LibraryEvent::DocumentSaved { id, .. } => {
                 if self.open_document_id() == Some(*id) {
                     self.refresh_title(window, cx);
+                }
+                if self.open_page_id() == Some(*id) {
+                    self.page_changed_in_library(*id, window, cx);
                 }
             }
             LibraryEvent::DocumentTrashed(id) => {
                 if self.open_document_id() == Some(*id) {
                     self.open_document_left(window, cx);
+                }
+                if self.open_page_id() == Some(*id) {
+                    self.open_page_left(window, cx);
                 }
             }
             LibraryEvent::FolderTrashed { documents, .. } => {
@@ -1530,6 +1559,12 @@ impl Workspace {
                     .is_some_and(|open| documents.contains(&open))
                 {
                     self.open_document_left(window, cx);
+                }
+                if self
+                    .open_page_id()
+                    .is_some_and(|open| documents.contains(&open))
+                {
+                    self.open_page_left(window, cx);
                 }
             }
             LibraryEvent::DocumentPurged(id) => {
@@ -1873,6 +1908,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         use writer_ui::text_field as field;
+        // A page with the keyboard: WebKit acts on its selection, or on a
+        // field of the page.
+        if self.edit_on_page(command, window) {
+            cx.stop_propagation();
+            return;
+        }
         let for_field: Box<dyn gpui::Action> = match command {
             EditCommand::Undo => Box::new(field::Undo),
             EditCommand::Redo => Box::new(field::Redo),

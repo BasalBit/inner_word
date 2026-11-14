@@ -141,7 +141,14 @@ pub fn places() -> Places {
         button, confirm, focus, modal, picker, segmented, text_field::KEY_CONTEXT as FIELD, toggle,
     };
 
-    let mut places = Places::new().typing(EDITOR).typing(FIELD);
+    // An open page has fields of its own: text is typed there, so no key of
+    // a page command can take a letter from the page.
+    let mut places = Places::new()
+        .typing(EDITOR)
+        .typing(FIELD)
+        .typing(crate::pages::PAGE_VIEW);
+    // The find strip of a page is the find bar, inside the page.
+    places = places.inside(tools::FIND_BAR_CONTEXT, crate::pages::PAGE_VIEW);
     // The tools are only around the text: "Find" and "Add or edit link"
     // are bound on their key context, and are commands of the text to
     // whoever presses their keys (the list has them "In the text"). A

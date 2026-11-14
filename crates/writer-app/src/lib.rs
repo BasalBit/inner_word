@@ -65,6 +65,7 @@ pub mod keymap;
 pub mod library_search;
 pub mod live;
 pub mod menus;
+pub mod pages;
 pub mod palette;
 pub mod pasteboard;
 pub mod pinch;
@@ -140,6 +141,9 @@ pub fn init(cx: &mut App) {
     // the answers): their keys come after the editor's and the tools'.
     writer_assistant_ui::init(cx);
     writer_assistant_quick::init(cx);
+    // An open page: its context menu's keys, and the find keys once more
+    // (the tools bind them where a text is, which a page is not).
+    cx.bind_keys(workspace::page_key_bindings());
 
     register_commands(cx);
 
@@ -184,6 +188,8 @@ fn register_commands(cx: &mut App) {
     commands::register(zoom::commands(), cx);
     // Beside "Agents": what an agent changed last, to undo and to go to.
     commands::register(live::commands(), cx);
+    // Pages: importing them, and what works on an open one.
+    commands::register(actions::page_commands(), cx);
     // The editor and its tools title their commands Like This; the rest of
     // the app says them like this.
     commands::register(commands::in_sentence_case(writer_editor::commands()), cx);

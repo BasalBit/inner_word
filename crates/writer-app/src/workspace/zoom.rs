@@ -132,6 +132,9 @@ impl Workspace {
     /// What the status bar shows for the zoom: "125 %". Empty without a
     /// document.
     pub fn zoom_label(&self, cx: &App) -> String {
+        if let Some(percent) = self.page_zoom() {
+            return percent_label(f32::from(percent));
+        }
         if self.session.is_none() {
             return String::new();
         }
@@ -191,6 +194,9 @@ impl Workspace {
         root: Stateful<gpui::Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<gpui::Div> {
+        if self.page.is_some() {
+            return self.page_zoom_actions(root, cx);
+        }
         if self.session.is_none() {
             return root;
         }
@@ -226,6 +232,41 @@ impl Workspace {
                 action.as_ref(),
                 cx.listener(move |this, _: &dyn gpui::Action, _, cx| {
                     this.set_zoom(Zoom::Percent(percent), cx);
+                }),
+            );
+        }
+        root
+    }
+
+    /// The zoom commands on an open page: in, out, actual size and the steps
+    /// set the view's page zoom; the fits say that a page has none.
+    fn page_zoom_actions(
+        &self,
+        root: Stateful<gpui::Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let no_fit = |this: &mut Self, cx: &mut Context<Self>| {
+            this.say_about_page(super::NO_FIT_ON_A_PAGE, cx)
+        };
+        let mut root = root
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.step_page_zoom(true, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.step_page_zoom(false, cx)))
+            .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.set_page_zoom(100, cx)))
+            .on_action(cx.listener(move |this, _: &FitWidth, _, cx| no_fit(this, cx)))
+            .on_action(cx.listener(move |this, _: &FitPage, _, cx| no_fit(this, cx)))
+            .on_action(cx.listener(move |this, _: &Automatic, _, cx| no_fit(this, cx)))
+            .on_action(cx.listener(move |this, _: &LifeSize, _, cx| no_fit(this, cx)));
+        for percent in MENU_STEPS {
+            let Some(action) = zoom::step_action(percent) else {
+                continue;
+            };
+            if percent == 100 {
+                continue;
+            }
+            root = root.on_boxed_action(
+                action.as_ref(),
+                cx.listener(move |this, _: &dyn gpui::Action, _, cx| {
+                    this.set_page_zoom(percent, cx);
                 }),
             );
         }
@@ -343,7 +384,9 @@ impl Workspace {
         tips: bool,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<gpui::Div>> {
-        self.session.as_ref()?;
+        if self.session.is_none() && self.page.is_none() {
+            return None;
+        }
         let label = self.zoom_label(cx);
         let hint = KeyHint::for_action(&ZoomIn, cx);
         let item = self
@@ -368,6 +411,28 @@ impl Workspace {
     /// width of the window, a whole page, the size of the paper), then
     /// the steps. The one in force is checked.
     pub(crate) fn zoom_menu_items(&self, cx: &App) -> Vec<ContextMenuItem> {
+        // A page: in, out, actual size and the steps up to 300 %.
+        if let Some(current) = self.page_zoom() {
+            let mut items = vec![
+                ContextMenuItem::action("Zoom In", ZoomIn),
+                ContextMenuItem::action("Zoom Out", ZoomOut),
+                ContextMenuItem::separator(),
+                ContextMenuItem::action("Actual Size", ActualSize).checked(current == 100),
+                ContextMenuItem::separator(),
+            ];
+            for percent in MENU_STEPS {
+                if percent == 100 || percent > 300 {
+                    continue;
+                }
+                if let Some(action) = zoom::step_action(percent) {
+                    items.push(
+                        ContextMenuItem::action_boxed(percent_label(f32::from(percent)), action)
+                            .checked(current == percent),
+                    );
+                }
+            }
+            return items;
+        }
         let editor = self.editor.read(cx);
         let current = editor.zoom();
         let page_view = editor.page_view();

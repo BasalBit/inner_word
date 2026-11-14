@@ -14,6 +14,7 @@ mod keymap;
 mod launch;
 mod live;
 mod mouse;
+mod pages;
 mod print;
 mod saving;
 mod session;

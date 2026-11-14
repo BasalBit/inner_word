@@ -1002,6 +1002,95 @@ editor's demo in a real window (`cargo run -p writer-editor --example demo`).
   drag:40,10; screenshot:..; release`). A pointer that is put outside the viewport that
   way scrolls the view for as long as it stays there, as a real one does.
 
+## A native view in the window
+
+What it takes to put an AppKit view (WebKit's `WKWebView`, for a page) into a GPUI window
+and keep the two in step. The code: `crates/writer-web` (the view, its subclass, no GPUI),
+`crates/writer-app/src/workspace/page.rs` (the element, focus, overlays) and `pages.rs`
+(the inbox, the keys). Everything here was run on this Mac in scripted runs and in
+`writer-web`'s own test program unless it says "read"; **what a person does in an active
+key window (keys, the first responder, the cursor) was not checked by a person yet**
+(`docs/pages-design.md`, section 13, checks 1 and 2).
+
+- **Where it sits.** A subview of the window's `contentView`, ordered above GPUI's view
+  (`addSubview:positioned:NSWindowAbove relativeTo:<GPUI's view>`; GPUI's view is
+  `crate::screenshot::native_view(window)`, which panics on a test window: ask it only for
+  the real engine). As a sibling and not a subview of GPUI's view, key equivalents reach
+  GPUI's view first (the spike's finding, read from AppKit's order and seen in a
+  background run) and GPUI's own drawing is left alone. The window's `screenshot:` step
+  captures native subviews.
+- **Its frame follows an element.** The page element is a `canvas`; in its prepaint it
+  hands its bounds to the view: GPUI's window coordinates (logical pixels from the top
+  left) made into the superview's (from the bottom left unless the superview is flipped,
+  `writer_web::frame`). Same bounds, nothing sent. The view is made in the first prepaint
+  (it needs the window's native view) and the element borrows it with `try_borrow_mut`:
+  AppKit may draw the window while the view is lent to WebKit's print operation.
+- **AppKit's callbacks never enter GPUI.** `render` runs inside an update, and
+  `makeFirstResponder:` calls the subclass's `becomeFirstResponder` synchronously; a
+  callback that updated GPUI there would borrow the app a second time and panic. So every
+  notifying callback (loaded, failed, crashed, wants focus, a link, an alert, a menu item,
+  and the answers of snapshot, find, evaluate and print) only pushes into an
+  `Rc<RefCell<Inbox>>` and wakes the task that drains it (`pages::post`,
+  `pages::next_events`); the task acts in an update of its own. A key the view hands to
+  GPUI is dispatched by that task with `cx.update(|window, cx| window.dispatch_keystroke(..))`,
+  **not** inside `update_in` of the workspace: the workspace's handlers would be leased
+  twice (it panicked). `takes_key` and `menu_items`, which must answer at once, answer from
+  a snapshot the workspace writes (`pages::PageKeys`) and read no GPUI global.
+- **One focus.** Every frame, after the focus is known to be on screen: when the page
+  element has GPUI's focus and no modal or context menu is open, the web view is made first
+  responder; otherwise GPUI's view is. `WebPage::focus` and `unfocus` set a flag for the
+  length of the call, so `becomeFirstResponder` reports `wants_focus` only for a focus that
+  did not come from the owner (a click into the page while the keyboard was in the
+  library). That report is taken in the same frame (`pages::take_wants_focus`): a frame
+  drawn before the task ran would otherwise take the first responder back from the page.
+- **Which keys the view hands on.** The subclass's `keyDown:` asks `takes_key`; the answer
+  comes from a copy of the installed bindings (`Keymap::new(cx.key_bindings().borrow()
+  .bindings().cloned().collect())`) and `keymap.bindings_for_input(&[keystroke],
+  &[KeyContext::parse("Workspace"), KeyContext::parse("PageView")])`, refreshed whenever
+  `cx.key_bindings().borrow().version()` changes (looked at every frame). A key that is
+  taken is sent to GPUI's view (`keyDown:`), and so is its `keyUp:`. An AppKit key event is
+  made into a GPUI keystroke by its key code for the named keys and by
+  `charactersIgnoringModifiers` for the rest (`pages::keystroke_of`).
+- **GPUI draws under it.** GPUI draws the whole window in one layer and the native view
+  lies above it, so whatever GPUI draws over the view's bounds (a modal, a context menu, a
+  toast, a tooltip) is hidden. A modal or a context menu: the view makes a snapshot
+  (`takeSnapshotWithConfiguration:`, 55 to 90 ms), which comes back as BGRA pixels and
+  becomes a `RenderImage` (`RenderImage::new(smallvec![image::Frame::new(pixels)])`) that the
+  element paints itself (`window.paint_image(bounds, Corners::default(), image, 0, false)`);
+  the view is hidden once it is there, shown again when the overlay closes, and the picture
+  is handed to `window.drop_image` in the next prepaint. **Never through `img(Arc<Image>)`**:
+  the asset cache keeps every decoded image for the life of the app (the spike went from
+  388 MB to 1162 MB over twenty palettes). A test counts snapshots made against dropped.
+- **Holes for toasts.** A toast over a live page gets a hole in the view: a `CAShapeLayer`
+  mask with the even-odd rule (what is drawn) **and** `hitTest:` of the subclass answering
+  nil inside it (what is hit; a layer mask changes no hit-testing), so AppKit hit-tests the
+  next sibling, GPUI's view: a click on a toast's button, the wheel and the cursor over a
+  toast reach GPUI. A toast's bounds are known only after it was drawn and move while it
+  comes in (`ToastLayer::toast_bounds` gives the last frame's), so the workspace asks for
+  more frames (up to 30) until the holes are where the toasts are.
+- **A covered background window draws nothing.** WebKit marks a view whose window is
+  covered as hidden after a second or two (`document.visibilityState` "hidden") and stops
+  drawing it: a scripted run, which stays in the background, took blank screenshots.
+  `_setWindowOcclusionDetectionEnabled:` NO on the web view (private, asked with
+  `respondsToSelector:`) keeps it drawing; only a scripted run sends it
+  (`pages::draw_when_covered`).
+- **WebKit work that may call back into the window is started outside any update**: the
+  print of the view (`runOperationModalForWindow:…` may call the window's delegate) from
+  the print job's task after a zero timer, between two awaits, as `printing::show_panel`;
+  the offscreen check of an import (an offscreen window of WebKit's own) from the import's
+  task between two awaits. Their answers come from the run loop and only send.
+- **Drops.** A `WKWebView` takes dropped files itself (and the navigation to the file is
+  cancelled by the page's policy: nothing happens). The app sends it
+  `unregisterDraggedTypes` when it is made (`pages::take_no_drops`), so files dragged over
+  a page reach GPUI's view under it and the page element's `on_drop::<ExternalPaths>`
+  (read from AppKit's drag destinations; a real drop from the Finder is a hand check).
+- **The view can outlive the window** (the window closes, the app quits, the workspace is
+  dropped after AppKit let go of the window): `WebPage::new` retains GPUI's view and `Drop`
+  releases it, keeps no window pointer, asks `[webView window]` and gives the first
+  responder back only when that window is there and the web view has it.
+- **Every `BOOL`** of a `ClassDecl` method and of a `msg_send!` result is
+  `objc::runtime::BOOL` (an `i8` on x86_64), never a Rust `bool`.
+
 ## Testing
 
 Source: `$G/src/app/test_context.rs`, `$G/src/platform/test/`, `$G/../gpui-macros-0.2.2/src/test.rs`.

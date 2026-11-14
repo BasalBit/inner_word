@@ -269,10 +269,11 @@ if [[ $SMOKE -eq 1 ]]; then
 
     # With the app open on that library: the app shows what the tool wrote, reading still
     # works, and a change the tool makes is carried out by the app: it arrives in the
-    # window and in the library. The script of the app waits for two changes by agents,
+    # window and in the library; a page the tool adds (its check in WebKit, in a child of the
+    # bundled tool) is stored by the app. The script of the app waits for three changes by agents,
     # prints what it shows, switches "Agents can make changes while The Writer is open"
     # off and waits to be told to quit.
-    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; state; agents:2:120000; wait:300; state; dump; agents:off; state; log:the switch is off; wait:120000; quit" \
+    THE_WRITER_AUTOMATION="wait:1500; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; state; agents:3:180000; wait:300; state; keys:cmd-p; type:Tool smoke; keys:enter; wait:300; dump; agents:off; state; log:the switch is off; wait:120000; quit" \
         "$APP/Contents/MacOS/$BIN_NAME" >"$TOOL_LOG" 2>&1 &
     APP_PID=$!
     # wait_for_log <text> <what>: until the app's log has the text.
@@ -301,19 +302,31 @@ if [[ $SMOKE -eq 1 ]]; then
     sed 's/^/    /' "$TOOL_OUT"
     run_tool 0 create "Written while open" --content "Stored through the app." --author Smoke
     sed 's/^/    /' "$TOOL_OUT"
+    # A tiny page, offline already: the tool checks it in WebKit and the app stores it.
+    SMOKE_PAGE="$WORK/smoke-page"
+    mkdir -p "$SMOKE_PAGE"
+    printf '%s\n' '<!doctype html><html><head><meta charset="utf-8"><title>Smoke Page</title></head>' \
+        '<body><h1>Smoke Page</h1><p>Kept whole by the bundled tool.</p></body></html>' >"$SMOKE_PAGE/index.html"
+    run_tool 0 page add "$SMOKE_PAGE" --author Smoke
+    sed 's/^/    /' "$TOOL_OUT"
+    tool_said "added page:"
     wait_for_log 'the switch is off' "the changes of the tool had arrived"
-    grep -q 'changes=2 last="Smoke ' "$TOOL_LOG" \
-        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not count two changes by the tool"; }
+    grep -q 'changes=3 last="Smoke added “Smoke Page”"' "$TOOL_LOG" \
+        || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not count three changes by the tool, the page last"; }
     grep -q 'text: .*Added while the app was open\.' "$TOOL_LOG" \
         || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the text the tool appended is not in the window of the app"; }
-    echo "the app made both changes and shows the appended text"
+    echo "the app made the three changes and shows the appended text"
     run_tool 0 list
     tool_said "Written while open"
     run_tool 0 get "Tool smoke test"
     tool_said "Added while the app was open."
     run_tool 0 get "Written while open"
     tool_said "Stored through the app."
-    echo "both changes are in the library"
+    run_tool 0 pages
+    tool_said "Smoke Page"
+    run_tool 0 get "Smoke Page"
+    tool_said "Kept whole by the bundled tool."
+    echo "the three changes are in the library, the page with its text"
     # With the owner's switch off the old rule holds: a change is refused with the exit
     # code for "the app is open" (5), says why, and changes nothing. Reading goes on.
     grep -q 'live=\[channel=open switch=off' "$TOOL_LOG" \
@@ -322,7 +335,9 @@ if [[ $SMOKE -eq 1 ]]; then
     sed 's/^/    /' "$TOOL_OUT"
     tool_said "switched off"
     run_tool 5 append "Tool smoke test" --content "This must not be stored."
+    run_tool 5 page add "$SMOKE_PAGE" --title "Refused page" --author Smoke
     run_tool 0 list
+    if grep -q "Refused page" "$TOOL_OUT"; then die "a page was added with the switch off"; fi
     if grep -q "Refused while open" "$TOOL_OUT"; then die "a document was created with the switch off"; fi
     run_tool 0 get "Tool smoke test"
     if grep -q "This must not be stored." "$TOOL_OUT"; then die "a document was changed with the switch off"; fi

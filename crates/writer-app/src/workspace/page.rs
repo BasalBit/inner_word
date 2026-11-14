@@ -1208,6 +1208,8 @@ impl Workspace {
                             if draw_when_covered {
                                 pages::keep_drawing_when_covered(web.native_view());
                             }
+                            // Files dragged over the page are the app's to add.
+                            pages::take_no_drops(web.native_view());
                             PageViewHandle::WebKit(web)
                         }),
                         ViewSeed::Fake(fake) => Some(PageViewHandle::Fake(fake)),

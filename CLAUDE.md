@@ -8,8 +8,10 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | Crate | Kind | Responsibility |
 |---|---|---|
 | `crates/writer-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
-| `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. `library.db` is at schema 3 since documents may hold images: a version that does not know them refuses the library. |
+| `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`writer_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
 | `crates/writer-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
+| `crates/writer-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
+| `crates/writer-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `writer-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`). |
 | `crates/writer-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
 | `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
@@ -19,16 +21,16 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody) and the library sidebar panel. |
+| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages) and the library sidebar panel (a page's row has a globe; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them). |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
-| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `writer-store`, `writer-core`, `writer-export` and `writer-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. |
-| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (36 tools, 12 of them read-only; `add_image` is among those that change the library, and no tool returns a picture). |
-| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts (`writer image add`, `writer images` among its commands), and `writer mcp`, the MCP server. Ships inside the app bundle at `Contents/MacOS/writer`. |
+| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `writer-store`, `writer-core`, `writer-export` and `writer-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. Pages too: `add_page` is prepared (read, fetched, checked by a `PageChecker`) by whoever asks, and added, updated by its address (a version kept first), confirmed unchanged or left in the trash; `pages`, and a page's branch of every read, of the versions and of export (a folder, the original, text, a PDF); exit codes 14 (`page_incomplete`) and 15 (`wrong_kind`). |
+| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (37 tools, 12 of them read-only; `add_image` and `add_page`, one page a call, are among those that change the library, `list_pages` is hidden behind `writer pages`, and no tool returns a picture). |
+| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts (`writer image add`, `writer images`, `writer page add` with `--list`, `writer pages` among its commands), and `writer mcp`, the MCP server. WebKit never runs in its process: `writer __page-check <dir>` and `writer __page-pdf <dir> <out>` are its children (`src/page_check.rs`, not in the help). Ships inside the app bundle at `Contents/MacOS/writer`. |
 | `crates/writer-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`writer agents ...`) and by the app (the Agents panel). |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
@@ -43,7 +45,9 @@ the list of its read-only tools and for the folders installers put a program in;
 `library → {store, ui}`, `image → store`, `export → core`, `cli → {agent, mcp, agent-setup}`,
 `mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`,
 `{app, agent} → image`, `app → print` (`print` depends on nothing of ours: the editor's print pass
-fills its pages, the app has a PDF made of them and hands it to the system). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
+fills its pages, the app has a PDF made of them and hands it to the system),
+`{app, agent, mcp} → page`, `{app, cli} → web` (`page` and `web` depend on nothing of ours; the
+app and the tool's children map WebKit's check to the bundler's report). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
 (the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
 live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
 the tool out on the library's own store; `crates/writer-app/src/live.rs` and
@@ -59,6 +63,8 @@ cargo build -p writer-app            # debug build
 cargo run -p writer-app              # run the app
 cargo test -p <crate>                # per-crate tests (GPUI crates)
 CARGO_TARGET_DIR=target-pure cargo test -p writer-core   # pure crates use target-pure
+CARGO_TARGET_DIR=target-pure cargo test -p writer-page   # the bundler (no network: MapFetcher, a server on 127.0.0.1)
+CARGO_TARGET_DIR=target-pure cargo test -p writer-web    # WebKit, offscreen, in a program of its own
 THE_WRITER_DATA_DIR=/some/tmp cargo run -p writer-app   # run against a throwaway library
 CARGO_TARGET_DIR=target-pure cargo build -p writer-cli   # the `writer` tool (target-pure/debug/writer)
 cargo build -p writer-cli            # the same beside a debug app (target/debug/writer), where the Agents panel looks for it
@@ -102,14 +108,22 @@ same PDF through the real macOS print operation as a save job, without a panel; 
 "Printing"), `image:<path>` (inserts the image file at the caret as Insert > Image… does once
 the file is chosen, waits until it is stored and in the text and says `image: inserted <id>
 1600x1067 at block 3`, or the sentence for a file that cannot be used) and `image:select:<n>`
-(puts the caret on the n-th image, from 1; see "Images"),
+(puts the caret on the n-th image, from 1; see "Images"), `page:make:<folder>[|<entry>]`
+(stores a folder that is offline already as a page, as it is: QA only), `page:import:<path>`
+(adds a file or folder as File > Import Page… does once it is chosen, waits until it is done
+and says `page: added page:12 “Orbitarium” 31 files 1.0 MB` or `page: not added: <the
+sentence>`), `page:wait[:<ms>]` (until the open page has loaded), `page:text`,
+`page:find:<query>`, `page:js:<script>` and `page:menu` (see "Pages"),
 `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=[idle]`,
 `print=[preparing 40%]`, `print=[panel]`), images (`images=3`, and with the caret on one
 `image=[block=2 width=50% natural=1600x1067@144 align=center ready alt="..."]`: the block
 from 0, the width as a share of the text column, pixels and pixels per inch, and `ready`,
-`loading`, `missing` or `broken` for its picture),
+`loading`, `missing` or `broken` for its picture), the open page (`web=[id=12 state=loaded
+zoom=100% overlay=none|waiting|snapshot|holes:N focus=page|find|elsewhere responder=web|gpui
+find="q":found missing=0]` or `web=[none]`), the pages being added (`adding=[2/3 "Orbitarium"
+fetching]`, `checking`, `storing`, or `adding=[idle]`),
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
 is open (`font_list=[target=... query=... rows=N selected=... in_use=... missing=...]`), agents that
@@ -195,7 +209,14 @@ start to answer. With the book of 10,000 blocks open the same three are 136, 150
 window: the 16 MB picture holds the main thread for 206 ms, 60 more than the smallest.
 The way to take the write off the main thread, should that ever be too long, is for the
 channel's listener to store what a request brings through an `ImageFile` of its own before
-the request is queued; it is not built):
+the request is queued; it is built for pages, not for pictures). **A page an agent adds**
+(`writer page add`) is stored that way: the thread that accepts the request writes its
+files into `images.db` through a connection of its own before the request is queued, so the
+main thread writes the page's row only. Measured when pages were added, in the debug build
+with the debug tool and the real check, a page with 16 MB of files: "change" 1.8 ms with a
+short document open and 0.9 ms with the book of 10,000 blocks open (its save first, 21 ms,
+is the book's flush), "window" 0.1 ms; the tool 5 s from start to answer, most of it the
+check in WebKit:
 
 ```bash
 THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
@@ -205,6 +226,8 @@ THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:
 # state: live=[... cost=[save 6.2 ms, change 153.3 ms, window 14.4 ms]]   (release)
 #   time writer --library <dir> image add doc:<id> /some/tmp/16mb.png --author Claude
 # state: live=[... cost=[save 2.6 ms, change 189.3 ms, window 13.2 ms]]   (release, the book open)
+#   time writer --library <dir> page add /some/tmp/heavy-page --author Claude   # index.html and 16 MB beside it
+# state: live=[... cost=[save 21.2 ms, change 0.9 ms, window 0.1 ms]]      (debug, the book open)
 ```
 
 What spell checking costs in a book (measured for 0.2.0: the text on screen is checked
@@ -248,7 +271,13 @@ the pasteboard (the decision, and the read against a pasteboard of the test's ow
 commands and their keys, the exports, a print, the collector's timers, the preview of a
 version, Vim mode on an image (the image's menu is in `context_menus.rs`, its description
 with the pointer in `mouse.rs`, agents in `live.rs` and `launch.rs`, the assistant in
-`assistant.rs`).
+`assistant.rs`); `tests/suite/pages.rs` holds pages in the assembled app on the fake page
+engine (no test makes a `WKWebView`): opening one, the commands that do not apply, focus
+and the first responder, the snapshot under an overlay and the holes of toasts, find, zoom,
+theme, a crash, print, export, its versions, and adding pages (Import Page…, drops on the
+sidebar, a page and the text, a refusal and Show Why, Cancel while a fetch is held, the
+note, files that were lost, no engine); agents' pages are in `live.rs`, the side chat over a
+page in `assistant.rs`, the library's menus in `context_menus.rs`.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -267,6 +296,18 @@ and without either the panel was "cancelled". A paste looks at the system pasteb
 picture only where `main` said so (`pasteboard::use_system`); a test says what is "on" it
 (`pasteboard::stand_in`), and a scripted run has none. Do not script Copy or Cut on an image
 either: it puts the picture on the user's clipboard.
+
+**Tests never make a `WKWebView` and never reach the network.** A workspace shows pages only
+when the app was given a page engine: `main` installs WebKit (`writer_app::pages::use_webkit`)
+in every run of the real binary, scripted ones too, unless `THE_WRITER_PAGES=off` or this
+macOS cannot keep a page offline; a test installs the fake (`pages::use_fake`, which draws a
+page's text in a GPUI element and answers the check with `writer_page::static_check` or what
+the test set), and without one a page shows its text and nothing can be added. The import
+asks the open panel only where `main` said so (`pages::use_open_panel`); a test names the
+paths (`pages::choose_beforehand`). It fetches with `curl` for public addresses, except
+where a test installed a fetcher (`pages::set_fetcher`, a `writer_page::MapFetcher` or one of
+its own); on the fake engine without one nothing is fetched at all. Real WebKit is tested in
+`writer-web`'s own program and in the cases of `writer-cli` that run the built tool.
 
 **Tests never call the real Claude Code** (every message spends the user's own allowance,
 and its answers are not the same twice). A workspace has an assistant only when the app
@@ -334,6 +375,17 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   a local path in an answer is invented or was planted in a text the model read; reading it
   would let the text of a document pull a file of the user's into the document at the press
   of a button. (Agents, which have the file system anyway, do read local paths: "Agents".)
+- **Pages.** With a page open the side chat is sent the text the page showed (the
+  manifest's `text`, what is not shown included) in place of the Markdown, after one
+  sentence (`writer_assistant::PAGE_PREFACE`: "The open item is a page: a web page saved in
+  the library, shown as it was made. It cannot be changed. Its text, as the page showed
+  it:"), with `kind="page"` and its address in the tag (`OpenDocument::kind`, `OpenKind`),
+  and its system prompt says what such an item is. A page too long to send whole goes as
+  its beginning and its end (it has no headings to make an outline of). `cmd-3` and the
+  side chat's commands work over a page (`Workspace::open_item_id`); Insert at Caret and
+  Replace Selection are off (no caret, no selection), Copy works; the conversation is the
+  page's own (`assistant.conversation.<id>`). The quick chat does not open on a page: its
+  key says so in a toast and names the side chat's key.
 - **The slot at the right is shared with the comments, one at a time**
   (`workspace/right_panel.rs`). A panel is there when it has something to show (comments:
   the document has a thread or one is being written; side chat: the user has it open).
@@ -488,15 +540,19 @@ open" below).
     lock file names a channel, at once and without trying the lock; otherwise it takes the
     lock and writes. `live::execute` runs the same function on the store the app hands in.
     One request and one answer per connection, each one line of JSON with a version
-    (`{"version":2,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
+    (`{"version":3,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
     result as the direct write gives it, the error as it was (`WireError`), or a
-    `Refusal`. **The protocol is version 2** (`live::PROTOCOL_VERSION`) since requests
-    bring image files with them ("Images" below). A request reads past a field it does
-    not know, so an app of version 1 (0.6.0) would have taken such a request, kept the
+    `Refusal`. **The protocol is version 3** (`live::PROTOCOL_VERSION`): version 2 since
+    requests bring image files with them ("Images" below), version 3 since an `add_page`
+    brings the files of a page ("Pages"). A request reads past a field it does not know,
+    so an app of version 1 (0.6.0) would have taken a request with a picture, kept the
     image as a link and answered "done"; with the number changed the two versions refuse
     each other whole, a `flush` included (`Refusal::Protocol`: exit code 5 with the
     sentence for an app of another version, "nothing was changed" in it; a test sends a
-    request with a picture to a stand-in that answers as 0.6.0 does).
+    request with a picture to a stand-in that answers as 0.6.0 does, and a page to one
+    that answers as 0.7.0 does). The tool writes the whole line before it connects (a
+    page is up to 86 MB of base64, and the listener gives a connection up after a second
+    without a byte), and the app reads the version before it reads the request.
   - **Where the socket is.** `the-writer-<uid>/<pid>-<n>.sock` in the user's temporary
     directory (mode 0700, the socket 0600, the peer's user checked): a socket path holds
     about a hundred bytes and a data directory can be longer. The lock file of the data
@@ -595,6 +651,31 @@ open" below).
     (`Occurrence::across_image`), which `edit` would refuse.
   - **The skill** has a paragraph "Images" (`writer-agent-setup/src/skill_body.md`; a
     test holds what it has to say, and its examples are run against the built tool).
+- **Pages** (the whole feature is in "Pages" below; `docs/pages-design.md` is its design).
+  `writer page add <file|folder>... [--entry] [--title] [--source-url] [--folder]
+  [--create-folders] [--include-trashed] [--author] [--dry-run] [--json]`, or `--list
+  <file.json|->` for many pages with their own addresses and the pieces the agent has
+  already (`externals`: address to a saved file; the recipe of the skill passes claude.ai's
+  assets that way); the MCP tool `add_page`, one page a call. Each input is one line of
+  output: `added`, `updated` (the page as it was kept as a version first), `unchanged` (the
+  same fingerprint from the same address: nothing fetched, nothing written), `trashed` (a
+  page with that address is in the trash, so it is not added again unless
+  `--include-trashed`), or `not added` with the sentence. **A page is read, fetched and
+  checked in the process that was asked** (`impl Prepare for AddPageRequest` always
+  prepares again, and a request that names `prepared` is refused by both front ends): the
+  check runs in a child of the tool (`writer __page-check <dir>`, standard input closed,
+  killed at 135 s), never in the MCP server's process and never in the app for an agent.
+  Exit code 14 (`page_incomplete`): the page cannot be kept whole, the reasons named,
+  nothing saved; 15 (`wrong_kind`): a text operation on a page (`edit`, `append`, `image
+  add`, comments) or a page operation on a text. `writer pages [--json]` lists them with
+  their addresses and `content_at` (when this content was taken), `writer get page:12` gives
+  the text a page showed, `writer export page:12 <dir>` the served files as a folder
+  (`--original`: the input as it was added), `writer export page:12 x.pdf` WebKit's print
+  (`writer __page-pdf`). `page:<id>` is the reference of a page in every output; `doc:` and
+  `page:` are read alike. While the app is open the tool still prepares the page and the
+  app's listener stores its files before the request is queued ("While the app is open",
+  "Pages"); the note says "Claude added “Orbitarium”" (Open) or "Claude updated
+  “Orbitarium”" (an open page reloads, and the note has no button).
 - **Who says what.** `writer-agent` words its errors for both front ends and names fields
   ("occurrence", "permanently"). The command line adds the option to type next, worded
   for the command that failed (`writer-cli/src/main.rs`, `hint_in`: `--occurrence`,
@@ -672,8 +753,11 @@ open" below).
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
   `writer-store`, `writer-image`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
-  `writer-agent-setup`, `writer-assistant`, `writer-keymap`) build and test with
-  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds. `writer-print` has no
+  `writer-agent-setup`, `writer-assistant`, `writer-keymap`, `writer-page`, `writer-web`) build and test with
+  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds (`writer-page` and
+  `writer-web` compile again in `target/` when the app links them; both are small).
+  `writer-web`'s `tests/webkit.rs` is a program of its own (`harness = false`): WebKit wants
+  the main thread of the process. `writer-print` has no
   GPUI in it and builds and tests in `target/` all the same (`cargo test -p writer-print`):
   CoreText, CoreGraphics and font-kit are compiled there for gpui already, the crate is only
   ever linked into GPUI crates, and a second copy of that stack in `target-pure` would cost
@@ -790,7 +874,14 @@ typed, `20mm`, `0.75in`), "Rename document", "Reveal in library", "Welcome docum
 and the seven commands of an image (see "Images"): "Image" (Insert > Image…, the open panel),
 "Image width 25 %", "50 %", "75 %" and "100 %", "Image original size" and "Image
 description". The four widths, the original size and the description need a selected image
-and say so in a toast without one. In the settings `up` / `down` move, `left` /
+and say so in a toast without one. The six commands of pages (see "Pages"): "Import page…"
+(File > Import Page…, the open panel, files and folders; only with a page engine), "Cancel
+adding pages", "Show the report of the pages added last" (the summary's Show Why), "Reload
+page", "Copy page address" and "Open page address in browser" (a page with an address). On
+an open page (key context `PageView`) `ctrl-enter` / `shift-f10` open the page's context
+menu and `cmd-f`, `cmd-opt-f`, `cmd-g`, `cmd-shift-g` find in the page: the four find keys
+are bound once more there, with the defaults the text's tools have, because the tools are
+not on a page's path. In the settings `up` / `down` move, `left` /
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
@@ -1034,13 +1125,17 @@ document"). Three crates: `writer-keymap` knows what a change is,
   one row** (`tests/suite/keybindings.rs`,
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
-  list has 372 rows (371 commands in places and the `/` of the insert menu, which is no
-  binding) and the shortcuts file 397 entries, one for each key context: 13 rows stand for
-  several key contexts, 26 more than there are rows. Without the assistant: 342 rows, and
-  the same 397 entries. (Counted in a scripted run: `keys:cmd-/; state` has `rows=N`, and
-  "Export…" writes the file; the sixteen zoom commands are among them, and since 0.6.0 nine
-  more without a key: Print and Cancel printing, "Anywhere", and the seven commands of an
-  image, "In the text".)
+  list has 383 rows (382 commands in places and the `/` of the insert menu, which is no
+  binding) and the shortcuts file 408 entries, one for each key context: 13 rows stand for
+  several key contexts, 26 more than there are rows. Without the assistant: 353 rows, and
+  the same 408 entries. (Counted in a scripted run for 0.8.0: `keys:cmd-/; state` has
+  `rows=N`, and "Export…" writes the file; the sixteen zoom commands are among them, since
+  0.6.0 nine more without a key: Print and Cancel printing, "Anywhere", and the seven
+  commands of an image, "In the text"; and since 0.8.0 the eleven of pages: Import page…,
+  Cancel adding pages, Show the report of the pages added last, Reload page, Copy page
+  address and Open page address in browser "Anywhere", without a key; Show the page's
+  context menu, Find, Find and replace, Find next and Find previous "On a page", with the
+  keys of the text's.)
 - **A place name is a promise.** Two rows under one place name ("In the library") are in
   the same place to whoever reads the list: a key of the one given to the other is "taken"
   and never "used in another place", in the question about a key and in the plan of an
@@ -1650,6 +1745,138 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   call what the listeners call), the open panel, a HEIC from Photos, and everything on an
   Intel Mac.
 
+## Pages
+
+A page is a web page (an HTML file or a folder, with its styles, scripts, fonts, pictures
+and sounds; a claude.ai artifact) kept in the library beside the documents, shown rendered
+in a WebKit view in the window and working **offline for good**: everything it needs is
+downloaded once, when it is added, and stored; showing it never touches the network. A page
+that cannot be kept whole is not kept at all, and the reason names what is missing. The
+design, with its reasons and its review, is `docs/pages-design.md`. Where it lives:
+`writer-store` (the row and the files), `writer-page` (the bundler), `writer-web` (WebKit),
+`writer-agent` / `writer-cli` / `writer-mcp` (agents, "Agents"), `crates/writer-app/src/pages.rs`
+(the page engine, the page source, the seams of the import), `workspace/page.rs` (the open
+page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app),
+`page_export.rs` (its export).
+
+- **In the library**: a row of `documents` with `kind = 'page'` (schema 4), in the tree among
+  the documents with a globe on its row, in the trash, the versions, the search (its text)
+  and quick open like a document. Its content is the manifest (`writer_page::Manifest`: the
+  served files and the original ones by path, file id and media type, the pieces fetched
+  from the web, the source address, a fingerprint of the input, when it was taken, what the
+  check found, and the text the page showed). Its files are in `images.db`, table `files`,
+  stored once each by the hash of their bytes (`FileId`; a font that ten pages use is one
+  row), kept by the copy among the backups and deleted by nothing but the collector, as
+  pictures are. **The store names no file it does not have**: `create_page` and
+  `save_page` refuse a manifest that names a missing file (`FilesMissing`), and the two
+  kinds never save over each other (`WrongKind`). The title is the page's `document.title`
+  after its scripts ran, else its first `<h1>`, else the name of the file or folder; a
+  rename sets the flag of a chosen title, which an update keeps.
+- **Whole or nothing** (`writer_page::bundle`, then the check, then `prepare`): every
+  reference of the HTML, SVG, CSS and JS is found and every piece on the web is fetched once
+  (`curl`, public addresses only, redirects followed and checked hop by hop, 30 s an
+  address, 180 s a page) and stored under `_external/<host>/…`, the references rewritten to
+  relative paths. Then the served files are loaded offscreen with the network blocked: a
+  `Content-Security-Policy` on every answer names every request that would leave, in a
+  content world of the check's own that the page's scripts cannot reach. A page that asks
+  for anything it does not have (a piece that could not be fetched, a path it lacks, data
+  from a service, an embedded site, a frame that cannot be watched) is refused, the first
+  five problems named, "Nothing was saved." What is not fetched and is no reason (an
+  address in a string, `window.claude`) is a warning. Limits: 32 MB a file, 64 MB a page,
+  2,000 files, 500 pieces from the web, 101 HTML files, 120 s of check. The text of a page
+  is what it shows (`innerText`) and then what it holds unshown (closed `<details>`, hidden
+  chapters), for search, agents and the assistant.
+- **A single file is never a walk of its folder**: an `.html` file is taken with the local
+  files its references name, and a literal path to a file beside it (a narration a button
+  plays) is named in a warning, "add the folder". A folder is taken whole.
+- **Adding pages in the app** (`workspace/page_import.rs`): File > Import Page… (the open
+  panel, files and folders, several; with a page engine only), "Import Page…" in the menu
+  of the library and of a folder row, and `.html` / `.htm` files or folders dropped on the
+  sidebar (the folder under the pointer), on an open page (the web view takes no drops, so
+  GPUI's view and the page element get them) or on the text (the provider of pictures hands
+  web pages to the import, `LibraryImages::set_page_import`). What is no page is left out
+  and counted. A gesture is read and fetched on a thread of its own, checked by the page
+  engine (WebKit's check on the main thread, from the task between two awaits), judged in
+  the background, its files stored in the background through the pictures' connection
+  (`LibraryImages::put_files`) and its row written on the main thread
+  (`Library::create_page`). The first page of a gesture opens unless another item was
+  opened meanwhile. After 0.4 s a note says what is going on with Cancel, which is the
+  command "Cancel adding pages"; like the note of a print it comes back when newer notes
+  push it out, and a click that takes it away cancels. **One summary per gesture** ("2
+  pages added, 1 not added", "Added “Orbitarium”"), with **Show Why** when a page was
+  refused, has warnings or files were left out: the command "Show the report of the pages
+  added last" opens a dialog of the modal layer with every page and its whole sentence, and
+  Copy (`tab` goes from page to page, `escape` closes). The app's import gives no source
+  address: importing a file again is a new page.
+- **Isolation** (`writer-web`, docs/pages-design.md section 5): the scheme `writer-page`,
+  each page its own host (`page-<id>`); the CSP and a content rule list block every request
+  to `http(s)`, `ws(s)`, `ftp` and `file`; WebRTC and media devices are off
+  (`_setPeerConnectionEnabled:` and `_setMediaDevicesEnabled:`, private and required: a
+  macOS without them has no pages); navigation away, forms, downloads, new windows,
+  autoplay, AirPlay, camera, microphone, link previews and the inspector are off; storage
+  lasts while the app runs (one non-persistent data store); no bridge to the app. **A link
+  to another site opens in the default browser only when the reader acted** (a real click
+  or key in the view within a second, or "Open Link in Browser" of its menu): a script's
+  click opens nothing. `alert` is a toast "The page says: …". The rule list is compiled into
+  `<data directory>/WebKit/` (the tool's children: `$TMPDIR/the-writer-<uid>/WebKit/`) under
+  one fixed identifier, never into WebKit's default store.
+- **macOS 12.3 for pages.** `writer_web::available()` asks the version and every selector it
+  sends; when it fails there is no page engine: a page shows its text with the sentence, and
+  nothing can be added (the app keeps its floor of 10.15.7 for documents).
+- **The open page** (`workspace/page.rs`): `Workspace::session` is `None` and
+  `Workspace::page` holds it (`open_item_id` is either). The `WKWebView` is a native subview
+  above GPUI's view, kept on the bounds of the page element; GPUI's focus on the element and
+  AppKit's first responder on the view are kept in step every frame; every callback of
+  AppKit only posts to the page's inbox, and a task of the workspace acts on it
+  (docs/gpui-notes.md, "A native view in the window"). Keys: command keys reach GPUI first;
+  everything else goes to the page, except a key the keymap binds where a page has the
+  keyboard (`ctrl-enter`, `shift-f10`: the page's own menu as a GPUI context menu), which
+  the view hands to GPUI's view. `PageView` is a place where text is typed (a page has
+  fields), so no page command can be given a bare letter. A modal or a context menu over the
+  page is drawn over a snapshot of it (the view hidden; the picture handed to
+  `Window::drop_image` when the overlay closes); a toast gets a hole in the view (drawn and
+  hit-tested: a click on its button reaches GPUI). The title and the status bar have the
+  page's items (its words, its zoom 50 to 300 %, the sparkle); find is a strip in the
+  find bar's key context; the theme reaches the view; a crash of the WebContent process
+  reloads once and shows "This page stopped working." the second time within 10 s. The
+  commands of a text are greyed out and left out of the palette; those of a document that
+  mean nothing on a page (document settings, spelling language, save now, comments, the
+  fits of the zoom, the quick chat) say what a page is in a toast. Print is WebKit's print
+  of the view through the same print target; Export writes the served files as a folder
+  that opens offline, or a PDF; the version history shows a version's text and restores it.
+- **Agents' pages** (`writer page add`, `add_page`, "Agents"): prepared and checked by the
+  tool, never by the app. While the app is open the request carries the files as base64
+  (protocol 3, one page a request, 64 MB at most) and **the thread that accepts it stores
+  them before the request is queued** (`writer_agent::live::store_page_files`, through an
+  `ImageFile` of its own), so the main thread writes only the row (about a millisecond for
+  16 MB, "Build and test"). That thread knows the owner's switch (`live::set_switch`, from
+  the setting whenever it is read or changed): with it off a request with page files is
+  refused there at once and nothing is stored. The note: "Claude added “X”" (Open), "Claude
+  updated “X”" (the open page reloads; no button).
+- **The page engine** (`pages::PageEngine`, an app global like the print target):
+  `WebKit` in every run of the real binary unless `THE_WRITER_PAGES=off` or
+  `available()` fails; `Fake` in tests (`pages::use_fake`: a GPUI element draws the page's
+  text, the check answers with `static_check` or what `FakePages::set_check` left, and the
+  fake records what the view was asked: opened, finds, zoom, snapshots made and dropped,
+  the first responder, edits, reloads, holes; `hold_checks` / `release_checks` hold an
+  import in "checking"); none: a page shows its text and nothing can be added. A scripted
+  run switches WebKit's occlusion detection off for its view (`pages::draw_when_covered`),
+  or a covered background window draws the page blank.
+- **Scripted runs**: `page:make:<folder>[|<entry>]` stores a folder that is offline already
+  as it is (QA: the archive's `offline/index.html`), `page:import:<path>` adds one as the
+  import does (with the real check), `page:wait`, `page:text`, `page:find:<q>`,
+  `page:js:<script>`, `page:menu`; `state` has `web=[…]` and `adding=[…]`. Copy Page Address
+  puts text on the clipboard: do not script it.
+- **Not in this version**: a page added from an address (fetching a live site), a page's
+  storage kept across launches, its downloads, `<input type=file>`, `window.print()`,
+  editing or commenting a page, the quick chat on a page, the pinch on a page, a zoom kept
+  per page, more than one live view, single-file HTML export, re-importing a file in the app
+  to update its page, finding across the other HTML files of a page.
+- **Checked by hand only, or by nothing**: keys, the first responder and the cursor in a
+  real active key window, the print panel on a page, a drop from the Finder, the sound that
+  does not autoplay, a link opening Safari, a page with Wi-Fi off, scrolling, the theme
+  (`docs/pages-design.md`, section 13: checks 1 to 10, for a person).
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
@@ -1671,7 +1898,8 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   `writer-ui`. Each offers a hook through which the app adds its items
   (`Workspace::extend_the_menus_of_other_crates`: Add Comment and Go to Comment in the text
   menu, and Ask the Assistant while the assistant is shown; Export and Version History on
-  library rows). The text menu has a second hook for
+  library rows, Copy Page Address and Open Page Address in Browser on the row of a page with
+  an address, Import Page… on the library and on a folder row). The text menu has a second hook for
   what goes first (`EditorTools::set_text_menu_leading_extension`): the spell checker's
   suggestions on a marked word.
 - **An image** is everything with the pointer (the editor's `mouse.rs`, the tools'
@@ -1692,6 +1920,12 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   save: neither moves the keyboard, which is what closes the popover otherwise). The menu
   bar has the same under
   Format > Image, and Insert > Image… opens the macOS open panel (several files at once).
+- **A page** is everything with the pointer: a right-click in it opens WebKit's own menu,
+  cut down (no Reload, Download, Inspect, new windows) and extended with the app's items
+  (Find in Page…, Reload Page, the address, Print…, Export…, Version History…; "Open Link in
+  Browser" on a link); the title's chevron and the status bar's zoom have the page's menus;
+  `.html` files and folders dropped on the sidebar, a page or the text are added
+  ("Pages"); File > Import Page… opens the open panel.
 - **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),

@@ -161,6 +161,31 @@ pub fn keep_drawing_when_covered(native: *mut std::ffi::c_void) {
     }
 }
 
+/// Tells the web view at `native` to take no drops: files dragged over a
+/// page then reach GPUI's view under it, and the page element adds them
+/// as pages (WebKit would otherwise take a dropped file itself, and its
+/// navigation to the file is cancelled: nothing would happen).
+#[allow(unexpected_cfgs)]
+pub fn take_no_drops(native: *mut std::ffi::c_void) {
+    use objc::{
+        msg_send,
+        runtime::{BOOL, NO, Object},
+        sel, sel_impl,
+    };
+    let view = native as *mut Object;
+    if view.is_null() {
+        return;
+    }
+    // SAFETY: a live WKWebView on the main thread; the selector is asked
+    // before it is sent.
+    unsafe {
+        let answers: BOOL = msg_send![view, respondsToSelector: sel!(unregisterDraggedTypes)];
+        if answers != NO {
+            let _: () = msg_send![view, unregisterDraggedTypes];
+        }
+    }
+}
+
 /// Whether the environment asks for no pages (`THE_WRITER_PAGES=off`).
 pub fn switched_off_by_env() -> bool {
     std::env::var(PAGES_ENV).is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))

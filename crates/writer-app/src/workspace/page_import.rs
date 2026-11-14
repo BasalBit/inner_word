@@ -201,10 +201,15 @@ impl PagesReport {
             .sum()
     }
 
-    /// Whether the summary offers "Show Why": a page was not added, has
-    /// warnings, or files were left out.
+    /// Whether the summary offers "Show Why": a page was refused, has
+    /// warnings, or files were left out (a page that was not begun because
+    /// the writer cancelled has nothing to explain).
     pub fn needs_why(&self) -> bool {
-        self.not_added() > 0 || self.warnings() > 0 || !self.left_out.is_empty()
+        let refused = self
+            .pages
+            .iter()
+            .any(|page| matches!(page.outcome, PageOutcome::NotAdded { .. }));
+        refused || self.warnings() > 0 || !self.left_out.is_empty()
     }
 
     /// "3 files were not pages and were left out".
@@ -374,6 +379,12 @@ impl Workspace {
     /// Whether pages are being added.
     pub fn is_adding_pages(&self) -> bool {
         self.adding.running
+    }
+
+    /// The provider of pictures over the library, which also stores the
+    /// files of pages that are being added.
+    pub fn library_images(&self) -> &std::rc::Rc<crate::images::LibraryImages> {
+        &self.images
     }
 
     /// The page that is being added now, and where it is.

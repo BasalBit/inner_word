@@ -819,9 +819,9 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
     let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
     vcx.update(|_, cx| {
         let rows = writer_app::shortcuts::collect_shortcuts(cx);
-        // Without the assistant (no engine in this test): 352 rows, ten of
-        // them about pages; the file has every one of its 407 entries.
-        assert_eq!(rows.len(), 352);
+        // Without the assistant (no engine in this test): 353 rows, eleven
+        // of them about pages; the file has every one of its 408 entries.
+        assert_eq!(rows.len(), 353);
         let on_a_page: Vec<String> = rows
             .iter()
             .filter(|row| row.place == writer_app::shortcuts::Place::Page)
@@ -841,7 +841,760 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
             writer_app::workspace::shortcuts_file_catalogue(cx)
                 .entries()
                 .len(),
-            407
+            408
         );
     });
+}
+
+// ----- adding pages in the app -------------------------------------------------------
+
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+use writer_app::{
+    actions::{CancelAddingPages, ImportPage, ShowPageReport},
+    page_report::PageReport,
+    workspace::{ADDING_NOTE_DELAY, PageOutcome, PagesReport},
+};
+use writer_library::DocumentKind;
+use writer_page::{Blocked, CheckReport, FetchError, Fetched, Fetcher, LoadReport, MapFetcher};
+
+const GRADES: &str = "<!doctype html><html><head><title>Grades</title></head>\
+<body><p>Marks.</p></body></html>";
+
+/// Writes `files` (path in the folder, text) into a new temporary folder.
+fn files_of(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, text) in files {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    dir
+}
+
+/// Lets the app work until no page is being added any more.
+fn wait_until_added(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) {
+    let started = Instant::now();
+    loop {
+        cx.run_until_parked();
+        if !workspace.read_with(cx, |w, _| w.is_adding_pages()) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the pages were not added"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    cx.run_until_parked();
+}
+
+/// The pages of the library: id, title, folder.
+fn pages_in(
+    workspace: &Entity<Workspace>,
+    cx: &mut VisualTestContext,
+) -> Vec<(DocumentId, String, Option<writer_library::FolderId>)> {
+    workspace.read_with(cx, |w, cx| {
+        w.library()
+            .read(cx)
+            .all_documents()
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.kind == DocumentKind::Page)
+            .map(|entry| (entry.meta.id, entry.meta.title, entry.meta.folder_id))
+            .collect()
+    })
+}
+
+/// The notes at the bottom with the labels of their buttons.
+fn notes(
+    workspace: &Entity<Workspace>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, Option<String>)> {
+    workspace.read_with(cx, |w, cx| {
+        w.toast_layer()
+            .read(cx)
+            .toasts()
+            .map(|toast| {
+                (
+                    toast.message.to_string(),
+                    toast.action_label().map(ToString::to_string),
+                )
+            })
+            .collect()
+    })
+}
+
+fn report(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> PagesReport {
+    workspace
+        .read_with(cx, |w, _| w.last_pages_report().cloned())
+        .expect("a gesture ended")
+}
+
+/// A workspace on the fake engine whose fetcher answers `fetcher`.
+fn import_desk<'a>(
+    fetcher: Arc<dyn Fetcher>,
+    cx: &'a mut TestAppContext,
+) -> (
+    Rc<FakePages>,
+    Entity<Workspace>,
+    DocumentId,
+    &'a mut VisualTestContext,
+) {
+    init(cx);
+    let fake = cx.update(pages::use_fake);
+    cx.update(|cx| pages::set_fetcher(fetcher, cx));
+    let library = library(cx);
+    let text = add_document(
+        &library,
+        None,
+        &simple_document("Notes", "A short text."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    (fake, workspace, text, vcx)
+}
+
+/// File > Import Page… takes what was chosen: a file and a folder, each a
+/// page, fetched, checked and stored; the first opens; one summary.
+#[gpui::test]
+fn import_page_adds_a_file_and_a_folder_and_opens_the_first(cx: &mut TestAppContext) {
+    let fetcher = MapFetcher::new().with(
+        "https://fonts.example.test/geist.css",
+        "text/css",
+        "body { font-family: Geist }",
+    );
+    let (fake, workspace, text, vcx) = import_desk(Arc::new(fetcher), cx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(text)
+    );
+    let input = files_of(&[
+        (
+            "harbour.html",
+            "<!doctype html><html><head><title>Harbour Guide</title>\
+             <link rel=\"stylesheet\" href=\"https://fonts.example.test/geist.css\"></head>\
+             <body><p>The boats come by road.</p></body></html>",
+        ),
+        (
+            "Orbitarium/index.html",
+            "<!doctype html><html><head><title>Orbitarium</title>\
+             <link rel=\"stylesheet\" href=\"sky.css\"></head><body><h1>The sky</h1></body></html>",
+        ),
+        ("Orbitarium/sky.css", "h1 { color: navy }"),
+    ]);
+    let file = input.path().join("harbour.html");
+    let folder = input.path().join("Orbitarium");
+    assert!(available(&ImportPage, vcx));
+    vcx.update(|_, cx| pages::choose_beforehand(vec![file.clone(), folder.clone()], cx));
+    vcx.dispatch_action(ImportPage);
+    assert!(workspace.read_with(vcx, |w, _| w.is_adding_pages()));
+    assert!(available(&CancelAddingPages, vcx));
+    wait_until_added(&workspace, vcx);
+
+    let mut added = pages_in(&workspace, vcx);
+    added.sort_by_key(|(id, _, _)| id.0);
+    let titles: Vec<&str> = added.iter().map(|(_, title, _)| title.as_str()).collect();
+    assert_eq!(titles, ["Harbour Guide", "Orbitarium"], "{added:?}");
+    assert_eq!(fake.checks_asked(), 2);
+    // The first page of the gesture opened.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_page_id()),
+        Some(added[0].0)
+    );
+    let report = report(&workspace, vcx);
+    assert_eq!(report.added(), 2);
+    match &report.pages[0].outcome {
+        PageOutcome::Added {
+            files, externals, ..
+        } => {
+            assert_eq!(*externals, 1, "the style sheet on the web is kept");
+            assert_eq!(*files, 2);
+        }
+        other => panic!("{other:?}"),
+    }
+    // The page's files are in the library, the piece from the web among
+    // them, and the view serves them.
+    let manifest = workspace
+        .read_with(vcx, |w, _| w.page_manifest().cloned())
+        .unwrap();
+    assert!(
+        manifest
+            .files
+            .iter()
+            .any(|file| file.path.starts_with("_external/fonts.example.test/")),
+        "{manifest:?}"
+    );
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| pages::missing_files(
+            w.library().read(cx),
+            &manifest
+        )),
+        0
+    );
+    // One summary, without a button (everything was added, the first is open).
+    assert_eq!(
+        notes(&workspace, vcx),
+        [("2 pages added".to_string(), None)]
+    );
+    assert!(state_line(&workspace, vcx).contains("adding=[idle]"));
+    assert!(!available(&CancelAddingPages, vcx));
+}
+
+/// A page that cannot be kept whole is not added; the summary says so and
+/// Show Why opens the report with the whole sentence; `escape` closes it.
+#[gpui::test]
+fn a_refusal_is_summed_up_and_show_why_has_the_whole_sentence(cx: &mut TestAppContext) {
+    let (fake, workspace, text, vcx) = import_desk(Arc::new(MapFetcher::new()), cx);
+    let input = files_of(&[("grades.html", GRADES)]);
+    fake.set_check(CheckReport {
+        engine: "fake".into(),
+        elapsed_ms: 3,
+        loads: vec![LoadReport {
+            path: "grades.html".into(),
+            title: "Grades".into(),
+            finished: true,
+            blocked: vec![Blocked {
+                url: "https://api.example.test/grades".into(),
+                directive: "connect-src".into(),
+            }],
+            ..LoadReport::default()
+        }],
+        failure: None,
+    });
+    let path = input.path().join("grades.html");
+    workspace.update_in(vcx, |w, window, cx| {
+        w.import_pages(vec![path], None, window, cx).unwrap();
+    });
+    wait_until_added(&workspace, vcx);
+    assert!(pages_in(&workspace, vcx).is_empty(), "nothing was saved");
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(text),
+        "the text stays open"
+    );
+    let shown = notes(&workspace, vcx);
+    assert_eq!(
+        shown,
+        [(
+            "\u{201c}Grades\u{201d} was not added".to_string(),
+            Some("Show Why".to_string())
+        )]
+    );
+    let report = report(&workspace, vcx);
+    let PageOutcome::NotAdded { sentence } = &report.pages[0].outcome else {
+        panic!("{report:?}");
+    };
+    assert!(
+        sentence.contains("https://api.example.test/grades"),
+        "{sentence}"
+    );
+    assert!(sentence.ends_with("Nothing was saved."), "{sentence}");
+
+    // The button of the summary is the command "Show the report of the
+    // pages added last".
+    let layer = workspace.read_with(vcx, |w, _| w.toast_layer().clone());
+    let id = layer.read_with(vcx, |layer, _| layer.ids()[0]);
+    layer.update_in(vcx, |layer, window, cx| {
+        assert!(layer.run_action(id, window, cx));
+    });
+    vcx.run_until_parked();
+    let dialog = workspace
+        .read_with(vcx, |w, cx| w.modal_layer().read(cx).active::<PageReport>())
+        .expect("Show Why opens the report");
+    let copied = dialog.read_with(vcx, |dialog, _| dialog.text());
+    assert!(copied.contains(sentence.as_str()), "{copied}");
+    assert!(
+        copied.contains("\u{201c}Grades\u{201d}: not added"),
+        "{copied}"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(!workspace.read_with(vcx, |w, cx| w.modal_layer().read(cx).has_modal()));
+    // From the palette too.
+    vcx.dispatch_action(ShowPageReport);
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, cx| {
+        w.modal_layer().read(cx).active::<PageReport>().is_some()
+    }));
+}
+
+/// Files dropped on the sidebar go into the folder under the pointer, on
+/// an open page and on the text into the folder selected; what is no page
+/// is left out and counted.
+#[gpui::test]
+fn pages_dropped_on_the_sidebar_a_page_and_the_text_are_added(cx: &mut TestAppContext) {
+    let (_fake, workspace, text, vcx) = import_desk(Arc::new(MapFetcher::new()), cx);
+    let folder = workspace.update(vcx, |w, cx| {
+        w.library()
+            .update(cx, |library, cx| {
+                library.create_folder(None, "Claude Pages", cx)
+            })
+            .unwrap()
+            .id
+    });
+    vcx.run_until_parked();
+    let input = files_of(&[
+        (
+            "one.html",
+            "<html><head><title>One</title></head><body>1</body></html>",
+        ),
+        (
+            "two.htm",
+            "<html><head><title>Two</title></head><body>2</body></html>",
+        ),
+        (
+            "three.html",
+            "<html><head><title>Three</title></head><body>3</body></html>",
+        ),
+        ("notes.txt", "not a page"),
+    ]);
+    let at = |name: &str| input.path().join(name);
+
+    // The sidebar: the panel says where.
+    let panel = workspace.read_with(vcx, |w, _| w.panel().clone());
+    let dropped = vec![at("one.html"), at("notes.txt")];
+    panel.update(vcx, |_, cx| {
+        cx.emit(writer_library::LibraryPanelEvent::DropPaths {
+            paths: dropped,
+            folder: Some(folder),
+        })
+    });
+    wait_until_added(&workspace, vcx);
+    let added = pages_in(&workspace, vcx);
+    assert_eq!(added.len(), 1);
+    assert_eq!((added[0].1.as_str(), added[0].2), ("One", Some(folder)));
+    let one = added[0].0;
+    let report = report(&workspace, vcx);
+    assert_eq!(
+        writer_app::page_report::left_out_names(&report),
+        ["notes.txt"]
+    );
+    assert_eq!(
+        notes(&workspace, vcx).last().cloned(),
+        Some((
+            "Added \u{201c}One\u{201d}. 1 file was not a page and was left out".to_string(),
+            Some("Show Why".to_string())
+        ))
+    );
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_page_id()), Some(one));
+
+    // On the open page.
+    workspace.update_in(vcx, |w, window, cx| {
+        w.files_dropped_on_page(vec![at("two.htm")], window, cx)
+            .unwrap();
+    });
+    wait_until_added(&workspace, vcx);
+    let added = pages_in(&workspace, vcx);
+    let two = added
+        .iter()
+        .find(|(_, title, _)| title == "Two")
+        .expect("Two")
+        .0;
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_page_id()), Some(two));
+
+    // On the text: the editor hands the web page to the import of pages,
+    // and nothing comes into the text.
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(text, true, window, cx));
+    });
+    vcx.run_until_parked();
+    let before = stored_text(
+        &workspace.read_with(vcx, |w, _| w.library().clone()),
+        text,
+        vcx,
+    );
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    editor.update_in(vcx, |editor, window, cx| {
+        editor.drop_files(
+            &[at("three.html")],
+            gpui::point(gpui::px(200.), gpui::px(200.)),
+            window,
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+    wait_until_added(&workspace, vcx);
+    assert!(
+        pages_in(&workspace, vcx)
+            .iter()
+            .any(|(_, title, _)| title == "Three"),
+        "the page dropped on the text was added"
+    );
+    // The page opened in place of the text, which is as it was: no
+    // picture came in.
+    let three = pages_in(&workspace, vcx)
+        .into_iter()
+        .find(|(_, title, _)| title == "Three")
+        .unwrap()
+        .0;
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_page_id()),
+        Some(three)
+    );
+    assert_eq!(
+        stored_text(
+            &workspace.read_with(vcx, |w, _| w.library().clone()),
+            text,
+            vcx
+        ),
+        before
+    );
+    assert!(
+        !notes(&workspace, vcx)
+            .iter()
+            .any(|(message, _)| message.contains("could not be used")),
+        "{:?}",
+        notes(&workspace, vcx)
+    );
+}
+
+/// A fetcher that answers only when the test lets it.
+#[derive(Default)]
+struct HeldFetcher {
+    open: Mutex<bool>,
+    moved: Condvar,
+    asked: AtomicUsize,
+}
+
+impl HeldFetcher {
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.moved.notify_all();
+    }
+
+    fn wait_until_asked(&self, cx: &mut VisualTestContext) {
+        let started = Instant::now();
+        while self.asked.load(Ordering::SeqCst) == 0 {
+            cx.run_until_parked();
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "nothing was fetched"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        cx.run_until_parked();
+    }
+}
+
+impl Fetcher for HeldFetcher {
+    fn fetch(&self, url: &str) -> Result<Fetched, FetchError> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.moved.wait(open).unwrap();
+        }
+        Ok(Fetched {
+            final_url: url.to_string(),
+            media_type: Some("text/css".to_string()),
+            bytes: b"body {}".to_vec(),
+        })
+    }
+}
+
+const HELD: &str = "<html><head><title>Held</title>\
+<link rel=\"stylesheet\" href=\"https://cdn.example.test/held.css\"></head><body>x</body></html>";
+
+/// While a fetch takes long the note says so with Cancel; Cancel stops it
+/// and nothing is written.
+#[gpui::test]
+fn cancel_while_a_fetch_is_held_adds_nothing(cx: &mut TestAppContext) {
+    let fetcher = Arc::new(HeldFetcher::default());
+    let (fake, workspace, _text, vcx) = import_desk(fetcher.clone(), cx);
+    let input = files_of(&[("held.html", HELD)]);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.import_pages(vec![input.path().join("held.html")], None, window, cx)
+            .unwrap();
+    });
+    fetcher.wait_until_asked(vcx);
+    assert!(
+        state_line(&workspace, vcx).contains("adding=[1/1 \"held\" fetching]"),
+        "{}",
+        state_line(&workspace, vcx)
+    );
+    assert!(
+        notes(&workspace, vcx).is_empty(),
+        "no note before its moment"
+    );
+    vcx.executor().advance_clock(ADDING_NOTE_DELAY);
+    vcx.run_until_parked();
+    assert_eq!(
+        notes(&workspace, vcx),
+        [(
+            "Adding \u{201c}held\u{201d}\u{2026} (fetching what it loads from the web)".to_string(),
+            Some("Cancel".to_string())
+        )]
+    );
+    vcx.dispatch_action(CancelAddingPages);
+    vcx.run_until_parked();
+    assert!(!workspace.read_with(vcx, |w, _| w.is_adding_pages()));
+    fetcher.release();
+    std::thread::sleep(Duration::from_millis(50));
+    vcx.run_until_parked();
+    assert!(pages_in(&workspace, vcx).is_empty());
+    assert_eq!(fake.checks_asked(), 0, "what was being fetched was dropped");
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w
+            .library()
+            .read(cx)
+            .store()
+            .file_count()
+            .unwrap()),
+        0
+    );
+    assert_eq!(
+        notes(&workspace, vcx),
+        [("Stopped adding pages: none was added".to_string(), None)]
+    );
+    assert!(report(&workspace, vcx).cancelled);
+}
+
+/// The note does not go while pages are being added: pushed out by newer
+/// notes it comes back, taken away by the writer it stops the work.
+#[gpui::test]
+fn the_note_comes_back_when_pushed_out_and_a_click_on_it_cancels(cx: &mut TestAppContext) {
+    let fetcher = Arc::new(HeldFetcher::default());
+    let (_fake, workspace, _text, vcx) = import_desk(fetcher.clone(), cx);
+    let input = files_of(&[("held.html", HELD)]);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.import_pages(vec![input.path().join("held.html")], None, window, cx)
+            .unwrap();
+    });
+    fetcher.wait_until_asked(vcx);
+    vcx.executor().advance_clock(ADDING_NOTE_DELAY);
+    vcx.run_until_parked();
+    let note = workspace
+        .read_with(vcx, |w, _| w.adding_note())
+        .expect("the note");
+    for n in 0..4 {
+        workspace.update(vcx, |w, cx| {
+            w.show_toast(
+                Toast::new(format!("Other {n}")).duration(Duration::from_secs(60)),
+                cx,
+            )
+        });
+    }
+    vcx.run_until_parked();
+    let again = workspace
+        .read_with(vcx, |w, _| w.adding_note())
+        .expect("shown again");
+    assert_ne!(again, note);
+    assert!(
+        workspace.read_with(vcx, |w, cx| w.toast_layer().read(cx).ids().contains(&again)),
+        "as the newest"
+    );
+    assert!(workspace.read_with(vcx, |w, _| w.is_adding_pages()));
+    // A click on the note takes it away: the work stops.
+    let layer = workspace.read_with(vcx, |w, _| w.toast_layer().clone());
+    layer.update(vcx, |layer, cx| {
+        layer.dismiss(again, cx);
+        layer.dismiss(layer.ids()[0], cx);
+    });
+    vcx.run_until_parked();
+    assert!(!workspace.read_with(vcx, |w, _| w.is_adding_pages()));
+    fetcher.release();
+    std::thread::sleep(Duration::from_millis(50));
+    vcx.run_until_parked();
+    assert!(pages_in(&workspace, vcx).is_empty());
+}
+
+/// A store that lost the files of a page (a write in the background that
+/// did not land): the row is refused, the page is not added.
+#[gpui::test]
+fn a_page_whose_files_were_lost_is_not_added(cx: &mut TestAppContext) {
+    let (_fake, workspace, _text, vcx) = import_desk(Arc::new(MapFetcher::new()), cx);
+    workspace.read_with(vcx, |w, _| w.library_images().lose_page_files(true));
+    let input = files_of(&[("grades.html", GRADES)]);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.import_pages(vec![input.path().join("grades.html")], None, window, cx)
+            .unwrap();
+    });
+    wait_until_added(&workspace, vcx);
+    assert!(pages_in(&workspace, vcx).is_empty());
+    let report = report(&workspace, vcx);
+    let PageOutcome::NotAdded { sentence } = &report.pages[0].outcome else {
+        panic!("{report:?}");
+    };
+    assert!(
+        sentence.starts_with(
+            "\u{201c}Grades\u{201d} was not added: its files could not be stored in the library"
+        ),
+        "{sentence}"
+    );
+}
+
+/// A folder the bundler cannot use is refused in the app's words (no
+/// option of the command line).
+#[gpui::test]
+fn an_input_that_cannot_be_used_says_so_in_the_apps_words(cx: &mut TestAppContext) {
+    let (_fake, workspace, _text, vcx) = import_desk(Arc::new(MapFetcher::new()), cx);
+    let input = files_of(&[
+        ("Two pages/a.html", "<html><body>a</body></html>"),
+        ("Two pages/b.html", "<html><body>b</body></html>"),
+    ]);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.import_pages(vec![input.path().join("Two pages")], None, window, cx)
+            .unwrap();
+    });
+    wait_until_added(&workspace, vcx);
+    let report = report(&workspace, vcx);
+    let PageOutcome::NotAdded { sentence } = &report.pages[0].outcome else {
+        panic!("{report:?}");
+    };
+    assert!(
+        sentence.starts_with("\u{201c}Two pages\u{201d} was not added: "),
+        "{sentence}"
+    );
+    assert!(!sentence.contains("--entry"), "{sentence}");
+    assert!(sentence.ends_with("Nothing was saved."), "{sentence}");
+}
+
+/// Without a page engine nothing is imported: no Import Page…, and a drop
+/// of a web page says why.
+#[gpui::test]
+fn without_an_engine_there_is_no_import(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Notes", "A text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert!(!available(&ImportPage, vcx));
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let titles: Vec<String> = workspace.read_with(vcx, |w, cx| {
+        w.modal_layer()
+            .read(cx)
+            .active::<CommandPalette>()
+            .expect("the palette")
+            .read(cx)
+            .delegate
+            .listed_titles()
+    });
+    assert!(
+        !titles.iter().any(|title| title == "Import page…"),
+        "{titles:?}"
+    );
+    vcx.simulate_keystrokes("escape");
+    let input = files_of(&[("grades.html", GRADES)]);
+    let panel = workspace.read_with(vcx, |w, _| w.panel().clone());
+    let dropped = vec![input.path().join("grades.html")];
+    panel.update(vcx, |_, cx| {
+        cx.emit(writer_library::LibraryPanelEvent::DropPaths {
+            paths: dropped,
+            folder: None,
+        })
+    });
+    vcx.run_until_parked();
+    assert!(
+        toasts(&workspace, vcx)
+            .iter()
+            .any(|message| message == "Pages cannot be added in this run."),
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+    assert!(pages_in(&workspace, vcx).is_empty());
+}
+
+#[test]
+fn the_summary_says_what_came_of_a_gesture() {
+    let page = |name: &str, outcome: PageOutcome| writer_app::workspace::AddedPage {
+        path: PathBuf::from(format!("/in/{name}.html")),
+        name: name.to_string(),
+        outcome,
+    };
+    let added = |name: &str, warnings: usize| {
+        page(
+            name,
+            PageOutcome::Added {
+                id: DocumentId(1),
+                files: 3,
+                bytes: 1_000_000,
+                externals: 2,
+                warnings: (0..warnings).map(|n| format!("warning {n}")).collect(),
+            },
+        )
+    };
+    let refused = |name: &str| {
+        page(
+            name,
+            PageOutcome::NotAdded {
+                sentence: format!(
+                    "\u{201c}{name}\u{201d} was not added: it could not be kept whole. Nothing was saved."
+                ),
+            },
+        )
+    };
+    let report = |pages: Vec<writer_app::workspace::AddedPage>,
+                  left_out: usize,
+                  cancelled: bool| PagesReport {
+        pages,
+        left_out: (0..left_out)
+            .map(|n| PathBuf::from(format!("/in/{n}.txt")))
+            .collect(),
+        cancelled,
+    };
+    let one = report(vec![added("Orbitarium", 0)], 0, false);
+    assert_eq!(one.summary(), "Added \u{201c}Orbitarium\u{201d}");
+    assert!(!one.needs_why());
+    let warned = report(vec![added("Desk", 1)], 0, false);
+    assert_eq!(
+        warned.summary(),
+        "Added \u{201c}Desk\u{201d}, with 1 warning"
+    );
+    assert!(warned.needs_why());
+    assert_eq!(
+        report(vec![refused("Growth")], 0, false).summary(),
+        "\u{201c}Growth\u{201d} was not added"
+    );
+    let mixed = report(vec![added("A", 0), added("B", 0), refused("C")], 3, false);
+    assert_eq!(
+        mixed.summary(),
+        "2 pages added, 1 not added. 3 files were not pages and were left out"
+    );
+    assert_eq!(
+        report(vec![refused("A"), refused("B")], 0, false).summary(),
+        "None of the 2 pages was added"
+    );
+    assert_eq!(
+        report(Vec::new(), 1, false).summary(),
+        "1 file was not a page and was left out"
+    );
+    assert_eq!(
+        report(
+            vec![added("A", 0), page("B", PageOutcome::Cancelled)],
+            0,
+            true
+        )
+        .summary(),
+        "Stopped adding pages: 1 page added, 1 not added"
+    );
+    let text = mixed.text();
+    assert!(
+        text.contains("\u{201c}C\u{201d}: not added\n  \u{201c}C\u{201d} was not added"),
+        "{text}"
+    );
+    assert!(text.contains("/in/2.txt"), "{text}");
+}
+
+#[test]
+fn a_page_input_is_an_html_file_or_a_folder() {
+    let input = files_of(&[
+        ("a.html", "x"),
+        ("b.HTM", "x"),
+        ("c.txt", "x"),
+        ("d/index.html", "x"),
+    ]);
+    let at = |name: &str| input.path().join(name);
+    assert!(pages::is_page_input(&at("a.html")));
+    assert!(pages::is_page_input(&at("b.HTM")));
+    assert!(!pages::is_page_input(&at("c.txt")));
+    assert!(pages::is_page_input(&at("d")));
+    assert!(!pages::is_page_input(Path::new("/no/such/page.html")));
+    assert_eq!(pages::input_name(&at("a.html")), "a");
+    assert_eq!(pages::input_name(&at("d")), "d");
 }

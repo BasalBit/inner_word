@@ -190,6 +190,9 @@ pub struct LibraryImages {
     /// ([`LibraryImages::set_page_import`]), and the ones of the drop that
     /// is coming in.
     pages: Rc<RefCell<PageDrop>>,
+    /// A test's stand-in for a store that lost what it was given
+    /// ([`LibraryImages::lose_page_files`]).
+    lose_page_files: std::cell::Cell<bool>,
 }
 
 /// What is called with the web pages of one drop on the text.
@@ -221,7 +224,17 @@ impl LibraryImages {
             refusals: Rc::default(),
             stored: Rc::default(),
             pages: Rc::default(),
+            lose_page_files: std::cell::Cell::new(false),
         })
+    }
+
+    /// From now on [`LibraryImages::put_files`] answers that the files are
+    /// stored and stores none: what a write in the background that was lost
+    /// (a full disk) looks like to the one that writes the page's row. For
+    /// tests.
+    #[doc(hidden)]
+    pub fn lose_page_files(&self, lose: bool) {
+        self.lose_page_files.set(lose);
     }
 
     /// `import` is called with the web pages (`.html` and `.htm` files,
@@ -292,6 +305,9 @@ impl LibraryImages {
                 }
             }
             Ok(())
+        }
+        if self.lose_page_files.get() {
+            return Task::ready(Ok(()));
         }
         match &self.file {
             Some(file) => {

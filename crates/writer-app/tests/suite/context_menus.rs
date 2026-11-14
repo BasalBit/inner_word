@@ -1104,3 +1104,106 @@ fn a_right_click_on_an_image_opens_its_menu(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert_eq!(images_in(&workspace, vcx).len(), 1, "one step of undo");
 }
+
+/// With a page engine the library and its folder rows offer "Import
+/// Page…", which adds pages there; the row of a page with an address has
+/// the address's two items.
+#[gpui::test]
+fn the_library_menus_import_pages_and_a_page_row_has_its_address(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(writer_app::pages::use_fake);
+    cx.update(|cx| {
+        writer_app::pages::set_fetcher(std::sync::Arc::new(writer_page::MapFetcher::new()), cx)
+    });
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        library.create_folder(None, "Claude Pages", cx).unwrap().id
+    });
+    add_document(&library, None, &simple_document("Notes", "A text."), cx);
+    let page = {
+        let library = library.clone();
+        let bundle = writer_app::pages::offline_bundle(
+            "harbour",
+            "index.html",
+            vec![(
+                "index.html".to_string(),
+                b"<html><head><title>Harbour</title></head><body>x</body></html>".to_vec(),
+            )],
+        );
+        cx.update(|cx| {
+            writer_app::pages::store_offline_bundle(
+                &library,
+                bundle,
+                None,
+                Some("https://example.com/harbour"),
+                cx,
+            )
+            .unwrap()
+            .id
+        })
+    };
+    let (workspace, vcx) = open_workspace(&library, cx);
+
+    let at = library_row(&workspace, LibraryItem::Document(page), vcx);
+    right_click_at(at, vcx);
+    let labels = open_menu("a page row", vcx);
+    assert_has(
+        &labels,
+        &[
+            "Export…",
+            "Version History…",
+            "Copy Page Address",
+            "Open Page Address in Browser",
+        ],
+        "a page row",
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+
+    // A folder row: the pages go into that folder.
+    let input = tempfile::tempdir().unwrap();
+    let file = input.path().join("orbitarium.html");
+    std::fs::write(
+        &file,
+        "<html><head><title>Orbitarium</title></head><body>The sky.</body></html>",
+    )
+    .unwrap();
+    let at = library_row(&workspace, LibraryItem::Folder(folder), vcx);
+    right_click_at(at, vcx);
+    let labels = open_menu("a folder row", vcx);
+    assert_has(&labels, &["Import Page…"], "a folder row");
+    vcx.update(|_, cx| writer_app::pages::choose_beforehand(vec![file], cx));
+    click_item("Import Page…", vcx);
+    let started = std::time::Instant::now();
+    while workspace.read_with(vcx, |w, _| w.is_adding_pages()) {
+        vcx.run_until_parked();
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    vcx.run_until_parked();
+    let in_folder = workspace.read_with(vcx, |w, cx| {
+        w.library()
+            .read(cx)
+            .all_documents()
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.meta.folder_id == Some(folder))
+            .map(|entry| entry.meta.title)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(in_folder, ["Orbitarium"]);
+
+    // The library itself: the empty area under the rows.
+    let sidebar = bounds_of("sidebar", vcx);
+    let rows = workspace.read_with(vcx, |w, cx| w.panel().read(cx).visible_items().len());
+    let last_row = library_row(
+        &workspace,
+        workspace.read_with(vcx, |w, cx| w.panel().read(cx).visible_items()[rows - 1]),
+        vcx,
+    );
+    let empty = point(last_row.x, last_row.y + ROW_HEIGHT * 4.);
+    assert!(empty.y < sidebar.bottom() - px(60.));
+    right_click_at(empty, vcx);
+    let labels = open_menu("the empty library area", vcx);
+    assert_has(&labels, &["Import Page…"], "the empty library area");
+}

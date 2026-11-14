@@ -3161,3 +3161,185 @@ fn a_missing_image_gets_its_picture_when_an_agent_brings_the_bytes(cx: &mut Test
     // The open document did not change.
     assert_eq!(save_state(&desk, cx), Some(SaveState::Saved));
 }
+
+// ----- pages from agents -------------------------------------------------------------
+
+/// A name as the note quotes it.
+fn q(name: &str) -> String {
+    format!("\u{201c}{name}\u{201d}")
+}
+
+/// The tool as an agent runs it, with the check of the tests (no WebKit)
+/// and nothing fetched from the web.
+fn page_tool(desk: &Desk) -> agent::Library {
+    desk.tool()
+        .with_page_checker(std::sync::Arc::new(agent::StaticChecker))
+        .with_fetcher(std::sync::Arc::new(writer_page::MapFetcher::new()))
+}
+
+/// A folder with one `index.html`.
+fn page_folder(html: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    dir
+}
+
+fn orbitarium(body: &str) -> String {
+    format!(
+        "<!doctype html><html><head><title>Orbitarium</title></head><body><p>{body}</p></body></html>"
+    )
+}
+
+fn add_page(folder: &tempfile::TempDir) -> agent::AddPageRequest {
+    agent::AddPageRequest {
+        path: folder.path().display().to_string(),
+        source_url: Some("https://claude.ai/artifact/orbitarium".into()),
+        write: claude(),
+        ..agent::AddPageRequest::default()
+    }
+}
+
+fn file_count(desk: &Desk, cx: &mut VisualTestContext) -> u64 {
+    desk.library
+        .read_with(cx, |library, _| library.store().file_count().unwrap())
+}
+
+/// An agent adds a page while a text is open: the files were stored by the
+/// thread that accepted the request, the main thread wrote the row, the
+/// text is untouched, the note offers to open the page. Then the agent
+/// brings a newer copy of the page while it is open: it reloads, the note
+/// says "updated" and has no button.
+#[gpui::test]
+fn an_agent_adds_a_page_and_updates_it_while_it_is_open(cx: &mut TestAppContext) {
+    let (dir, lock, library) = library_on_disk(cx);
+    let fake = cx.update(writer_app::pages::use_fake);
+    let id = add_document(&library, None, &notes(), cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    let before = editor_text(&desk.workspace, cx);
+
+    let first = page_folder(&orbitarium("The sky at night."));
+    let tool = page_tool(&desk);
+    let request = add_page(&first);
+    let added = ask(cx, move || tool.add_page(&request)).unwrap();
+    assert_eq!(added.outcome, agent::PageOutcome::Added);
+    let page = added.page.id;
+    assert!(
+        file_count(&desk, cx) > 0,
+        "the page's files are in images.db"
+    );
+    // The text is as it was, and still open.
+    assert_eq!(editor_text(&desk.workspace, cx), before);
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.open_document_id()),
+        Some(id)
+    );
+    assert!(in_tree(&desk, page, cx));
+    assert_eq!(
+        last_note(&desk, cx),
+        (
+            format!("Claude added {}", q("Orbitarium")),
+            Some("Open".to_string())
+        )
+    );
+    let live = desk
+        .workspace
+        .update_in(cx, |w, window, cx| describe_state(w, window, cx));
+    assert!(live.contains("cost=[save "), "{live}");
+
+    // Open opens the page.
+    press_note(&desk, &format!("Claude added {}", q("Orbitarium")), cx);
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.open_page_id()),
+        Some(page)
+    );
+    assert_eq!(fake.opened().len(), 1);
+
+    // A newer copy from the same address, while the page is open.
+    let newer = page_folder(&orbitarium("The sky at dawn."));
+    let tool = page_tool(&desk);
+    let request = add_page(&newer);
+    let updated = ask(cx, move || tool.add_page(&request)).unwrap();
+    assert_eq!(updated.outcome, agent::PageOutcome::Updated);
+    assert!(
+        updated.snapshot.is_some(),
+        "the page as it was is a version"
+    );
+    assert_eq!(updated.page.id, page);
+    assert_eq!(
+        last_note(&desk, cx),
+        (format!("Claude updated {}", q("Orbitarium")), None)
+    );
+    // The view loaded the new page.
+    assert_eq!(fake.opened().len(), 2);
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.open_page_id()),
+        Some(page)
+    );
+    let text = desk
+        .workspace
+        .read_with(cx, |w, _| w.page_manifest().map(|m| m.text.clone()))
+        .unwrap();
+    assert!(text.contains("The sky at dawn."), "{text}");
+
+    // The same again changes nothing, and says nothing.
+    let tool = page_tool(&desk);
+    let request = add_page(&newer);
+    let unchanged = ask(cx, move || tool.add_page(&request)).unwrap();
+    assert_eq!(unchanged.outcome, agent::PageOutcome::Unchanged);
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.agent_change_count()),
+        2
+    );
+}
+
+/// With the owner's switch off the thread that accepts requests refuses a
+/// page at once: nothing of it is stored. The switch as the Agents panel
+/// sets it (the library's setting) reaches that thread too.
+#[gpui::test]
+fn with_the_switch_off_a_page_is_refused_before_its_files_are_stored(cx: &mut TestAppContext) {
+    let (desk, _id, cx) = desk_with_notes(cx);
+    assert_eq!(
+        cx.update(|_, cx| live::switch_known_to_the_listener(cx)),
+        Some(true)
+    );
+    desk.workspace.update(cx, |workspace, cx| {
+        workspace.set_agents_may_change(false, cx)
+    });
+    assert_eq!(
+        cx.update(|_, cx| live::switch_known_to_the_listener(cx)),
+        Some(false)
+    );
+    let folder = page_folder(&orbitarium("The sky at night."));
+    let tool = page_tool(&desk);
+    let request = add_page(&folder);
+    let refused = ask(cx, move || tool.add_page(&request)).unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            agent::Error::AppIsOpen {
+                why: Refusal::SwitchedOff,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(file_count(&desk, cx), 0, "nothing was stored");
+    assert!(notes_shown(&desk, cx).is_empty());
+
+    // Switched on in the Agents panel's way: the setting of the library.
+    desk.library.update(cx, |library, cx| {
+        library
+            .set_setting(live::CHANGES_SETTING, &true, cx)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| live::switch_known_to_the_listener(cx)),
+        Some(true)
+    );
+    let tool = page_tool(&desk);
+    let request = add_page(&folder);
+    let added = ask(cx, move || tool.add_page(&request)).unwrap();
+    assert_eq!(added.outcome, agent::PageOutcome::Added);
+    assert!(file_count(&desk, cx) > 0);
+}

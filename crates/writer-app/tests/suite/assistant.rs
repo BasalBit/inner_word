@@ -2674,3 +2674,101 @@ fn the_side_chat_reads_an_image_as_a_line_and_an_answer_that_names_it_brings_it_
         "nothing was stored"
     );
 }
+
+/// Over an open page the side chat opens (`cmd-3`), is sent the text the
+/// page showed with the sentence that says what a page is, offers nothing
+/// to put into the page, and keeps a conversation of the page's own.
+#[gpui::test]
+fn the_side_chat_over_a_page_sends_its_text(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    cx.update(writer_app::pages::use_fake);
+    let library = library(cx);
+    let text = add_document(
+        &library,
+        None,
+        &simple_document("The Lighthouse", "The keeper climbed the stairs at dusk."),
+        cx,
+    );
+    let bundle = writer_app::pages::offline_bundle(
+        "harbour",
+        "index.html",
+        vec![(
+            "index.html".to_string(),
+            b"<!doctype html><html><head><title>Harbour Guide</title></head>\
+              <body><p>The boats come by road every spring.</p></body></html>"
+                .to_vec(),
+        )],
+    );
+    let page = {
+        let library = library.clone();
+        cx.update(|cx| {
+            writer_app::pages::store_offline_bundle(
+                &library,
+                bundle,
+                None,
+                Some("https://example.com/harbour"),
+                cx,
+            )
+            .unwrap()
+            .id
+        })
+    };
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(page, true, window, cx));
+    });
+    vcx.run_until_parked();
+
+    // What the side chat is handed: the page's text, as a page.
+    let open = workspace
+        .read_with(vcx, |w, cx| w.assistant_open_document(cx))
+        .expect("the page is the open item");
+    assert_eq!(open.id, Some(page.0));
+    assert_eq!(open.title, "Harbour Guide");
+    assert_eq!(
+        open.kind,
+        writer_assistant::OpenKind::Page {
+            source_url: Some("https://example.com/harbour".into())
+        }
+    );
+    assert!(
+        open.markdown
+            .contains("The boats come by road every spring.")
+    );
+
+    // cmd-3 from the page opens the side chat (it does not say "open a
+    // document").
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(side_has_keyboard(&workspace, vcx));
+    let panel = side(&workspace, vcx);
+    assert_eq!(
+        panel.read_with(vcx, |panel, _| panel.document().and_then(|d| d.id)),
+        Some(page.0)
+    );
+    fake.reply("It is a guide to the harbour.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("What is this page about?", window, cx)
+    });
+    vcx.run_until_parked();
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.starts_with(writer_assistant::PAGE_PREFACE), "{sent}");
+    assert!(sent.contains("kind=\"page\""), "{sent}");
+    assert!(
+        sent.contains("The boats come by road every spring."),
+        "{sent}"
+    );
+    assert!(sent.ends_with("What is this page about?"), "{sent}");
+
+    // The conversation is the page's own, and stays with it.
+    let stored = library.read_with(vcx, |library, _| conversations::load(library, page));
+    assert_eq!(answers(&stored), ["It is a guide to the harbour."]);
+    assert!(
+        library
+            .read_with(vcx, |library, _| conversations::load(library, text))
+            .is_empty()
+    );
+}

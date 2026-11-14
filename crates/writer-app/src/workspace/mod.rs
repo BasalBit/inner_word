@@ -137,7 +137,7 @@ pub use page::{
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
     Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_AT_MOST, PAGE_ZOOM_STEPS,
     PageState,
-    TITLE_OF_A_PAGE, holes_in as page_holes_in, page_key_bindings,
+    TITLE_OF_A_PAGE, VIM_OFF_FOR_TEXTS, VIM_ON_FOR_TEXTS, holes_in as page_holes_in, page_key_bindings,
 };
 pub use page_import::{
     AddedPage, AddingPhase, AddingProgress, NOTE_DELAY as ADDING_NOTE_DELAY, PageOutcome,
@@ -1307,10 +1307,21 @@ impl Workspace {
     }
 
     /// Turns Vim mode on or off (a setting). The mode indicator in the
-    /// status bar shows the result.
+    /// status bar shows the result; over a page, which has no Vim mode and
+    /// no indicator, a toast says what was switched.
     pub fn toggle_vim_mode(&mut self, cx: &mut Context<Self>) {
         let on = !self.settings.vim_mode;
         self.write_setting(keys::VIM_MODE, &on, cx);
+        if self.page.is_some() {
+            self.say_about_page(
+                if on {
+                    page::VIM_ON_FOR_TEXTS
+                } else {
+                    page::VIM_OFF_FOR_TEXTS
+                },
+                cx,
+            );
+        }
     }
 
     /// Attaches or detaches Vim mode as the setting says, and has held

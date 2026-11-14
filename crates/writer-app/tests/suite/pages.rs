@@ -19,7 +19,7 @@ use writer_app::{
     settings::keys,
     workspace::{
         NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE,
-        PageState, TITLE_OF_A_PAGE,
+        PageState, TITLE_OF_A_PAGE, VIM_OFF_FOR_TEXTS, VIM_ON_FOR_TEXTS,
     },
 };
 use writer_ui::Toast;
@@ -426,6 +426,55 @@ fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
         assert!(!w.modal_layer().read(cx).has_modal());
         assert!(w.open_document_id().is_none());
     });
+}
+
+/// PAGE-APP-9: Vim mode switched over a page is switched for the texts, and
+/// a toast says so (a page has no Vim mode and no indicator of it).
+#[gpui::test]
+fn vim_mode_switched_over_a_page_says_that_it_is_for_texts(cx: &mut TestAppContext) {
+    let (_fake, workspace, text, _page, vcx) = open_page(cx);
+    let vim_on = |vcx: &mut VisualTestContext| {
+        workspace.read_with(vcx, |w, cx| {
+            w.library().read(cx).setting_or(keys::VIM_MODE, false)
+        })
+    };
+    assert!(!vim_on(vcx));
+    // The key, with the keyboard in the page.
+    assert!(page_focused(&workspace, vcx));
+    vcx.simulate_keystrokes("cmd-alt-v");
+    vcx.run_until_parked();
+    assert!(vim_on(vcx));
+    let said = toasts(&workspace, vcx);
+    assert!(said.iter().any(|toast| toast == VIM_ON_FOR_TEXTS), "{said:?}");
+    // The command, from wherever it comes.
+    workspace.update(vcx, |w, cx| {
+        w.toast_layer().update(cx, |layer, cx| layer.clear(cx));
+    });
+    vcx.update(|window, cx| {
+        window.dispatch_action(Box::new(writer_app::actions::ToggleVimMode), cx)
+    });
+    vcx.run_until_parked();
+    assert!(!vim_on(vcx));
+    let said = toasts(&workspace, vcx);
+    assert!(said.iter().any(|toast| toast == VIM_OFF_FOR_TEXTS), "{said:?}");
+    // In a text the indicator says it, and no toast does.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        assert!(workspace.open_document(text, true, window, cx));
+        workspace.toast_layer().update(cx, |layer, cx| layer.clear(cx));
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.dispatch_action(Box::new(writer_app::actions::ToggleVimMode), cx)
+    });
+    vcx.run_until_parked();
+    assert!(vim_on(vcx));
+    let said = toasts(&workspace, vcx);
+    assert!(
+        !said
+            .iter()
+            .any(|toast| toast == VIM_ON_FOR_TEXTS || toast == VIM_OFF_FOR_TEXTS),
+        "{said:?}"
+    );
 }
 
 #[gpui::test]
@@ -1001,6 +1050,77 @@ fn export_writes_the_folder_and_the_pdf_of_a_page(cx: &mut TestAppContext) {
     vcx.simulate_new_path_selection(|_| Some(pdf.clone()));
     vcx.run_until_parked();
     assert_eq!(std::fs::read(&pdf).unwrap(), pages::fake_pdf());
+}
+
+/// DOC-12: an export of a folder as one file leaves its pages out and says
+/// how many.
+#[gpui::test]
+fn a_folder_export_leaves_its_pages_out_and_says_so(cx: &mut TestAppContext) {
+    use writer_app::export::{
+        ExportChoice, ExportDestination, ExportScope, ExportTarget, pages_left_out_sentence,
+    };
+    init(cx);
+    let _fake = cx.update(pages::use_fake);
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        library.create_folder(None, "Travels", cx).unwrap().id
+    });
+    let chapter = add_document(
+        &library,
+        Some(folder),
+        &simple_document("Chapter 1", "The ferry came in late."),
+        cx,
+    );
+    add_document(
+        &library,
+        Some(folder),
+        &simple_document("Chapter 2", "By morning the fog had gone."),
+        cx,
+    );
+    for name in ["harbour", "ferries"] {
+        let bundle = pages::offline_bundle(
+            name,
+            "index.html",
+            vec![("index.html".to_string(), HARBOUR.as_bytes().to_vec())],
+        );
+        let library = library.clone();
+        cx.update(|cx| {
+            pages::store_offline_bundle(&library, bundle, Some(folder), None, cx)
+                .expect("the page is stored")
+        });
+    }
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        assert!(workspace.open_document(chapter, true, window, cx));
+    });
+    vcx.run_until_parked();
+    let out = tempfile::tempdir().unwrap();
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.export_target(
+            ExportTarget::Folder(folder),
+            ExportChoice::new(
+                ExportScope::Folder,
+                writer_export::ExportFormat::PlainText,
+                ExportDestination::File,
+            ),
+            window,
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+    vcx.simulate_new_path_selection(|_| Some(out.path().join("travels.txt")));
+    vcx.run_until_parked();
+    let text = std::fs::read_to_string(out.path().join("travels.txt")).expect("written");
+    assert!(text.contains("The ferry came in late."), "{text}");
+    assert!(text.contains("By morning the fog had gone."), "{text}");
+    assert!(!text.contains("The boats come by road"), "no page: {text}");
+    assert!(!text.contains("Harbour Guide"), "no page: {text}");
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter().any(|toast| toast.starts_with("Exported 2 documents")
+            && toast.ends_with(&pages_left_out_sentence(2))),
+        "{said:?}"
+    );
 }
 
 #[gpui::test]

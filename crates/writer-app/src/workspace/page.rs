@@ -108,6 +108,11 @@ pub const NOTHING_TO_SAVE_ON_A_PAGE: &str =
     "A page is stored as it was added; there is nothing to save.";
 /// The comment commands on a page.
 pub const NO_COMMENTS_ON_A_PAGE: &str = "A page has no comments.";
+/// "Turn Vim mode on or off" on a page, after it was switched on: the mode
+/// is the texts', and a page has none.
+pub const VIM_ON_FOR_TEXTS: &str = "Vim mode is on for texts. A page has no Vim mode.";
+/// "Turn Vim mode on or off" on a page, after it was switched off.
+pub const VIM_OFF_FOR_TEXTS: &str = "Vim mode is off for texts. A page has no Vim mode.";
 /// The fits of the zoom on a page.
 pub const NO_FIT_ON_A_PAGE: &str = "A page is drawn at its own size: it has no fit.";
 /// What a step of the zoom past [`PAGE_ZOOM_STEPS`] says on a page.

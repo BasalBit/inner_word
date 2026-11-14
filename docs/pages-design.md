@@ -297,8 +297,10 @@ row. The original and the served copy of an MP3 are one row.
   path order, its path, a NUL byte, the SHA-256 of its bytes. For a single-file input the
   entry is hashed under the path `index.html` whatever its name, so the same artifact
   saved under another file name is "unchanged" (the name still gives the title's
-  fallback). The same input gives the same fingerprint; a re-add compares it before
-  fetching anything (section 3).
+  fallback). For a folder whose entry is not `index.html`, the entry's path is hashed
+  after the files, so the same folder opening with another page is another input (a
+  re-add with another `--entry` is an update, not "unchanged"; 6d788a4). The same input
+  gives the same fingerprint; a re-add compares it before fetching anything (section 3).
 - `added_at` is when this content was taken: the add, or the update that brought it. It
   is what `writer pages --json` shows as `content_at`, and what the skill compares with an
   artifact's last update (a rename or a move changes `updated_at` of the row, not this).
@@ -439,7 +441,9 @@ character references decoded for reading and written back escaped. What is read:
 | `<script type=importmap>` | The values of `imports` and of every scope in `scopes` |
 | Inside a fetched external | The same rules, resolved against the external's final address (an ES module on `esm.sh` that imports `/react@18.3.1/es2022/react.mjs` gets that file from `esm.sh`) |
 
-Not read: inline event handlers (`onclick="…"`), addresses assembled at run time. The
+Inline event handlers (`onclick="…"`) are read as scripts: their strings are said as a
+script's are (a file beside a single file, an address that is not kept), because a click
+handler never runs in the check (6d788a4). Not read: addresses assembled at run time; the
 check finds those when the page asks for them while it loads.
 
 **What is not fetched is said** (a warning each, in the result, the app's summary and
@@ -459,7 +463,12 @@ them on to the user, and the outcome is still "added".
 
 `<a href>` to another site is left as it is: it is a link the reader may click, which the
 view opens in the default browser (section 5). `<a href>` and `<iframe src>` to a file of
-the page are references like any other.
+the page are references like any other. A single file takes the target of a link the
+reader follows (`<a href>`, `<area href>`, a form's action, a refresh) only when it is an
+HTML file; a document it only links to (`tax-2025.pdf`) is named in the warning of files
+beside it. A single file never takes a hidden file (a segment of its path begins with a
+dot, which the walk of a folder never takes either) and names it in a warning of its own
+(6d788a4).
 
 `data:`, `blob:`, `about:`, `javascript:`, `mailto:`, `tel:` and `#…` are not references.
 
@@ -1432,7 +1441,7 @@ Two new kinds in `writer_agent::ErrorKind` (in the order of their codes):
 | Code | Exit | When | Message (written by `writer-agent` for both front ends) |
 |---|---|---|---|
 | `page_incomplete` | 14 | the page cannot be kept whole (any reason of section 3) | "“Reading Orbitarium” was not added: it could not be kept whole. <up to five reasons>; and 3 more. Nothing was saved." |
-| `wrong_kind` | 15 | a text operation on a page, or a page operation on a text | "“Orbitarium” is a page: it is kept as it was saved, and its text cannot be changed. To bring a newer copy, add it again with its source address." / "“Chapter 2” is a document, not a page." |
+| `wrong_kind` | 15 | a text operation on a page, an export of a page as Markdown or DOCX, or a page operation on a text (`--original` included) | "“Orbitarium” is a page: it is kept as it was saved, and its text cannot be changed. To bring a newer copy, add it again with its source address." / "“Orbitarium” is a page, and a page is not exported as Markdown or DOCX: it is written as a folder of its files (the format html), as a PDF (pdf) or as its text (text)." (d2ff3e8) / "“Chapter 2” is a document, not a page." |
 
 Who adds what (CLAUDE.md, "Who says what"): the command line adds the option to type
 next (`--entry` for a folder with several pages, `--list` for several pages with their own
@@ -1523,26 +1532,45 @@ A paragraph "Pages" after "Images", and the recipe. The text, to be held by its 
 > adds it anyway). Warnings under a page's line (a piece it names that was not kept, data
 > it kept on claude.ai) are for the user: pass them on.
 >
-> To copy the user's claude.ai artifacts into The Writer (Claude Code): list them with the
-> Artifact tool (`action: "list"`, `scope: "mine"`, `limit: 200`); run `writer pages
-> --json` and skip every artifact whose address is there with a `content_at` later than
-> the artifact's last update (and say which were skipped because they are in the trash).
-> For each other one: list its files (`action: "list"`, `scope: "files"`, its `url`) and
-> read them all (`action: "read"`, its `url`, `paths` with every published path, and no
-> `out_dir`: the default folder needs no approval; use the folder the result names). A
-> single-page artifact is its page alone (`action: "read"` names the saved file); add the
-> folder that holds it all the same. List its assets too (`action: "list"`, `scope:
-> "assets"`, its `url`); read each by its id (`action: "read"`, `path` the asset id) and
-> note the asset's url and the file it was saved to. Write a list `[{"path": "<folder>",
-> "source_url": "<url as the list gave it>", "title": "<title>", "externals": {"<asset
-> url>": "<saved file>"}}, …]` and run `writer page add --list <file> --folder "Claude
-> Pages" --create-folders --author Claude`. Report what was added, updated, unchanged,
-> trashed and not added, with the reasons and the warnings. An artifact made from a type
-> (a Claude Docs document, a deck) shows its content by connecting to claude.ai: such a
-> page is not added; export its content as HTML first and add that. A page that uses
-> claude.ai's own storage (`window.claude`, the `db` capability) is added, and its saved
-> data stays on claude.ai: read its rows with the ArtifactData tool and keep them as a
-> document beside the page, titled "<page title> (saved data)", with `writer create`.
+> To copy the user's claude.ai artifacts into The Writer (Claude Code), use the
+> Artifact tool and change nothing on claude.ai: never republish, edit or delete an
+> artifact while you copy it, whatever an error suggests. List the artifacts (`action:
+> "list"`, `scope: "mine"`, `limit: 200`). Run `writer pages --json`, and skip an
+> artifact whose address is there only when the day of its `content_at` is two days or
+> more after the day the list says it was updated (the list gives a day, without a
+> time or a zone); copy any other one again, which answers `unchanged` when nothing
+> changed. Say which were skipped because they are in the trash. For each artifact to
+> copy, list its files (`action: "list"`, `scope: "files"`, its `url`) and read them
+> as files, so that they are saved as they were published, without `out_dir` (the
+> default folder needs no approval):
+>
+> - The listing says "an Artifact of type" (a Claude Docs document, a deck): do not
+>   read its files, they are the type's program and not the content. A Claude Docs
+>   document: export it with the Claude Docs connector's `export` tool (`format:
+>   "html"`; the answer is base64, decode it into a file) and add that file with the
+>   artifact's address. Any other type: report it as not copied, and why.
+> - The listing says it is a single page with no separately published files: read the
+>   page as a file (`action: "read"`, its `url`, `paths: ["index.html"]`). A read
+>   without `paths` gives the page inline and saves nothing.
+> - Otherwise read every file (`action: "read"`, its `url`, `paths` with every
+>   published path).
+>
+> Add the folder the read names ("Files saved under …"). When the read's header or the
+> files listing names the `assets` capability, list its assets too (`action: "list"`,
+> `scope: "assets"`, its `url`), read each by its id (`action: "read"`, its `url`,
+> `path` the asset id) and note the asset's url and the file it was saved to; without
+> that capability it has no assets (listing them fails with `capability_disabled`: go
+> on). Write a list `[{"path": "<folder>", "source_url": "<url as the list gave it>",
+> "title": "<title>", "externals": {"<asset url>": "<saved file>"}}, …]` and run
+> `writer page add --list <file> --folder "Claude Pages" --create-folders --author
+> Claude`. Report what was added, updated, unchanged, trashed and not added, with the
+> reasons and the warnings. A page that uses claude.ai's own storage (`window.claude`,
+> the `db` capability) is added, and its saved data stays on claude.ai: read its rows
+> with the ArtifactData tool and keep them as a document beside the page, titled
+> "<page title> (saved data)", with `writer create`.
+>
+> (The recipe as the review of the build left it, ef9b0da: the skill's own text,
+> `crates/writer-agent-setup/src/skill_body.md`, is the authority.)
 
 ---
 

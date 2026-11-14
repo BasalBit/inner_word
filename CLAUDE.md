@@ -46,12 +46,13 @@ the list of its read-only tools and for the folders installers put a program in;
 `mcp → agent`, `agent → {store, core, export}`, `app → {agent-setup, agent}`,
 `{app, agent} → image`, `app → print` (`print` depends on nothing of ours: the editor's print pass
 fills its pages, the app has a PDF made of them and hands it to the system),
-`{app, agent, mcp} → page`, `{app, cli} → web` (`page` and `web` depend on nothing of ours; the
+`{app, agent, mcp, cli} → page`, `{app, cli} → web` (`page` and `web` depend on nothing of ours; the
 app and the tool's children map WebKit's check to the bundler's report). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
 (the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
 live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
 the tool out on the library's own store; `crates/writer-app/src/live.rs` and
-`workspace/live.rs` are the only callers), and the assistant has that crate in its build
+`workspace/live.rs` are the only callers; `pages.rs` also reads the name of one variable,
+`writer_agent::FETCH_LOCAL_ENV`), and the assistant has that crate in its build
 through `assistant → mcp`, which reads the table of the server's tools. Every internal
 crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
@@ -82,6 +83,10 @@ recipe in `docs/gpui-notes.md`):
 # THE_WRITER_SEED_DEMO=1: a few folders and documents in an empty library (optional)
 # THE_WRITER_EXPORT_DIR:  file exports are written there, without the save panel (optional)
 # THE_WRITER_ASSISTANT_FAKE=ready: the assistant on the fake engine (optional, see "The assistant")
+# THE_WRITER_FETCH_LOCAL=1: a debug build (app and tool) fetches a page's pieces from 127.0.0.1
+#   and localhost too, for a test's own server (optional; a release build does not read it)
+# THE_WRITER_PAGE_CHECK=fake: a debug `writer` checks a page with the static check in its own
+#   process, without WebKit (optional; a release tool always runs the real check)
 THE_WRITER_DATA_DIR=/some/tmp \
 THE_WRITER_SEED_DEMO=1 \
 THE_WRITER_EXPORT_DIR=/some/tmp/out \
@@ -1787,7 +1792,13 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   is what it shows (`innerText`) and then what it holds unshown (closed `<details>`, hidden
   chapters), for search, agents and the assistant; what layout shows apart stays apart (a
   tag after a word, a chip, the gutter of a listing, the labels of an axis: each junction
-  is measured and marked before `innerText` is read, only white space is added).
+  is measured and marked before `innerText` is read, only white space is added). The text
+  is that of every HTML file the check loads (the entry first, the others under their
+  titles), so the words a page counts (status bar, `writer list`) can be many more than
+  the entry shows (Nimbus Landing Variants: 54,000 words, of which 6,900 in its
+  `index.html`), and a search can find a page by a word only another of its HTML files
+  has. `page:make` stores the static check's text (tags stripped, every file), whose
+  counts differ from an import's.
 - **A single file is never a walk of its folder**: an `.html` file is taken with the local
   files its references name, never a hidden file nor a document it only links to, and a
   literal path to a file beside it (a narration a button plays, also in an event handler,

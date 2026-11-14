@@ -135,7 +135,8 @@ pub(crate) use page::fake_printed;
 pub use page::{
     CRASH_AGAIN_WITHIN, NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NO_SPELLING_ON_A_PAGE,
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
-    Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_STEPS, PageState,
+    Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_AT_MOST, PAGE_ZOOM_STEPS,
+    PageState,
     TITLE_OF_A_PAGE, holes_in as page_holes_in, page_key_bindings,
 };
 pub use page_import::{

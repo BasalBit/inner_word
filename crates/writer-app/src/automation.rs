@@ -1244,8 +1244,12 @@ async fn execute(
             // What a zoom that follows the window comes to is known after
             // a frame.
             frame_pause(window, view, cx).await;
-            let zoom = workspace_handle(window, cx)?
-                .update(cx, |workspace, _, cx| workspace.describe_zoom(cx))?;
+            let zoom = workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
+                match workspace.page_zoom() {
+                    Some(percent) => format!("the page at {percent}%"),
+                    None => workspace.describe_zoom(cx),
+                }
+            })?;
             eprintln!("[automation] zoom {what}: {zoom}");
         }
         Step::Stall(duration) => {

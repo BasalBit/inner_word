@@ -263,10 +263,16 @@ impl Workspace {
             if percent == 100 {
                 continue;
             }
+            let largest = *super::PAGE_ZOOM_STEPS.last().unwrap_or(&300);
             root = root.on_boxed_action(
                 action.as_ref(),
                 cx.listener(move |this, _: &dyn gpui::Action, _, cx| {
-                    this.set_page_zoom(percent, cx);
+                    if percent > largest {
+                        // Not 300 % without a word.
+                        this.say_about_page(super::PAGE_ZOOM_AT_MOST, cx);
+                    } else {
+                        this.set_page_zoom(percent, cx);
+                    }
                 }),
             );
         }
@@ -580,10 +586,30 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        let what = what.trim();
+        // A page has its own zoom: in, out, actual size and a percentage;
+        // a fit says what a page is.
+        if self.page.is_some() {
+            match what {
+                "in" => self.step_page_zoom(true, cx),
+                "out" => self.step_page_zoom(false, cx),
+                "actual" => self.set_page_zoom(100, cx),
+                "fit" | "width" | "fit-width" | "page" | "fit-page" | "life" | "auto"
+                | "automatic" => self.say_about_page(super::NO_FIT_ON_A_PAGE, cx),
+                other => {
+                    let percent: u16 = other
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("on a page: in, out, actual or a percent"))?;
+                    self.set_page_zoom(percent, cx);
+                }
+            }
+            return Ok(());
+        }
         if self.session.is_none() {
             anyhow::bail!("no document is open");
         }
-        let what = what.trim();
         let number = |text: &str| -> anyhow::Result<f32> {
             text.trim()
                 .trim_end_matches('%')

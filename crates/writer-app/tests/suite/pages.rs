@@ -392,7 +392,19 @@ fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
         (Box::new(SaveNow), NOTHING_TO_SAVE_ON_A_PAGE),
         (Box::new(writer_comments::AddComment), NO_COMMENTS_ON_A_PAGE),
         (Box::new(writer_app::zoom::FitWidth), NO_FIT_ON_A_PAGE),
+        // The texts' comment panel is not switched from a page without a word.
+        (Box::new(writer_comments::ToggleComments), NO_COMMENTS_ON_A_PAGE),
+        (Box::new(writer_comments::ToggleShowResolved), NO_COMMENTS_ON_A_PAGE),
+        // Not 300 % without a word.
+        (
+            writer_app::zoom::step_action(400).unwrap(),
+            writer_app::workspace::PAGE_ZOOM_AT_MOST,
+        ),
     ];
+    let comments_shown = |vcx: &mut VisualTestContext| {
+        state_line(&workspace, vcx).contains("comments=[shown")
+    };
+    let shown_before = comments_shown(vcx);
     for (action, sentence) in cases {
         workspace.update(vcx, |w, cx| {
             w.toast_layer().update(cx, |layer, cx| layer.clear(cx));
@@ -408,6 +420,8 @@ fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
         );
     }
     // Nothing of a text happened meanwhile.
+    assert_eq!(comments_shown(vcx), shown_before);
+    assert!(state_line(&workspace, vcx).contains("zoom=100%"), "{}", state_line(&workspace, vcx));
     workspace.read_with(vcx, |w, cx| {
         assert!(!w.modal_layer().read(cx).has_modal());
         assert!(w.open_document_id().is_none());
@@ -1002,6 +1016,9 @@ fn the_versions_of_a_page_show_its_text_and_one_is_restored(cx: &mut TestAppCont
             b"<html><head><title>Harbour Guide</title></head><body><p>The ferry runs at noon.</p></body></html>".to_vec(),
         )],
     );
+    let title_before = library.read_with(vcx, |library, _| {
+        library.document_meta(page).unwrap().title
+    });
     library.update(vcx, |library, cx| {
         library.create_snapshot(page, cx).unwrap();
     });
@@ -1018,7 +1035,7 @@ fn the_versions_of_a_page_show_its_text_and_one_is_restored(cx: &mut TestAppCont
                     page,
                     &writer_library::PageContent {
                         manifest: &manifest,
-                        title: "Harbour Guide",
+                        title: "Harbour Guide, the newer one",
                         plain_text: &prepared.text,
                         word_count: 5,
                         char_count: 24,
@@ -1059,6 +1076,12 @@ fn the_versions_of_a_page_show_its_text_and_one_is_restored(cx: &mut TestAppCont
     );
     let versions = library.read_with(vcx, |library, _| library.snapshots(page).unwrap().len());
     assert_eq!(versions, 2, "the page from before the restore is kept");
+    // A title the page was never given by hand comes back with the version, as an
+    // agent's restore brings it back.
+    assert_eq!(
+        library.read_with(vcx, |library, _| library.document_meta(page).unwrap().title),
+        title_before
+    );
 }
 
 #[gpui::test]

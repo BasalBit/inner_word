@@ -110,6 +110,8 @@ pub const NOTHING_TO_SAVE_ON_A_PAGE: &str =
 pub const NO_COMMENTS_ON_A_PAGE: &str = "A page has no comments.";
 /// The fits of the zoom on a page.
 pub const NO_FIT_ON_A_PAGE: &str = "A page is drawn at its own size: it has no fit.";
+/// What a step of the zoom past [`PAGE_ZOOM_STEPS`] says on a page.
+pub const PAGE_ZOOM_AT_MOST: &str = "A page is drawn at 300 % at most.";
 /// What a page shows when its WebContent process ended twice in a row.
 pub const PAGE_STOPPED: &str = "This page stopped working.";
 
@@ -981,13 +983,27 @@ impl Workspace {
         let stats = writer_core::Fragment::from_plain_text(&manifest.text)
             .to_document()
             .stats();
+        // The version's title, unless the page was renamed (as an agent's restore
+        // does it).
+        let chosen = self
+            .library
+            .read(cx)
+            .setting::<crate::view_memory::TitleFlag>(&keys::custom_title(id))
+            .ok()
+            .flatten()
+            .is_some_and(|flag| flag.holds_for(&meta));
+        let title = if chosen {
+            meta.title.clone()
+        } else {
+            stored.meta.title.clone()
+        };
         let restored = self.library.update(cx, |library, cx| {
             library.snapshot_if_stale(id, Duration::ZERO, cx)?;
             library.save_page(
                 id,
                 &writer_library::PageContent {
                     manifest: &stored.content,
-                    title: &meta.title,
+                    title: &title,
                     plain_text: &manifest.text,
                     word_count: stats.words as u64,
                     char_count: stats.characters as u64,
@@ -1547,7 +1563,12 @@ impl Workspace {
             return;
         }
         if self.page.as_ref().is_some_and(|page| page.find.is_none()) {
-            let field = cx.new(|cx| TextField::new(window, cx).with_placeholder("Find in page"));
+            // The escape that closes the strip goes nowhere else.
+            let field = cx.new(|cx| {
+                TextField::new(window, cx)
+                    .with_placeholder("Find in page")
+                    .consume_escape()
+            });
             let subscription = cx.subscribe_in(&field, window, Self::on_find_field_event);
             let focus = cx.focus_handle();
             if let Some(page) = self.page.as_mut() {
@@ -1904,6 +1925,10 @@ impl Workspace {
         root = say::<comments::NextComment>(root, NO_COMMENTS_ON_A_PAGE, cx);
         root = say::<comments::PreviousComment>(root, NO_COMMENTS_ON_A_PAGE, cx);
         root = say::<comments::FocusComments>(root, NO_COMMENTS_ON_A_PAGE, cx);
+        // The panel's switches are the texts': flipped over a page they would change
+        // what the next text shows, with nothing to see here.
+        root = say::<comments::ToggleComments>(root, NO_COMMENTS_ON_A_PAGE, cx);
+        root = say::<comments::ToggleShowResolved>(root, NO_COMMENTS_ON_A_PAGE, cx);
         root.capture_action(cx.listener(|this, _: &AskAssistant, _, cx| {
             cx.stop_propagation();
             let key = crate::keymap::hint_in(&FocusAssistant, "Workspace > PageView", cx)

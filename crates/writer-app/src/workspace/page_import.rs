@@ -364,6 +364,15 @@ fn in_the_apps_words(name: &str, message: &str) -> String {
 }
 
 /// The sentence for a page that could not be made.
+/// The name a refused page goes by in the summary: the title the bundler or
+/// the check found, as the sentence of the refusal has it, else the input's.
+fn refused_name(name: &str, error: &writer_page::PageError) -> String {
+    match error {
+        writer_page::PageError::Incomplete { name, .. } => name.clone(),
+        _ => name.to_string(),
+    }
+}
+
 fn refusal(name: &str, error: &writer_page::PageError) -> String {
     match error {
         // Names the page, gives its reasons and ends "Nothing was saved."
@@ -1042,7 +1051,7 @@ async fn add_one(
         Some(Ok(bundle)) => bundle,
         Some(Err(error)) => {
             return Some((
-                name.clone(),
+                refused_name(&name, &error),
                 PageOutcome::NotAdded {
                     sentence: refusal(&name, &error),
                 },
@@ -1073,13 +1082,8 @@ async fn add_one(
     let mut prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            // A refusal names the page by the title the check found.
-            let named = match &error {
-                writer_page::PageError::Incomplete { name, .. } => name.clone(),
-                _ => name.clone(),
-            };
             return Some((
-                named,
+                refused_name(&name, &error),
                 PageOutcome::NotAdded {
                     sentence: refusal(&name, &error),
                 },

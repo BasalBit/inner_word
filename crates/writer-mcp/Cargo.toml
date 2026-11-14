@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 writer-agent.workspace = true
+# The size of a page in words ("11.4 MB"), and the fetcher a call of add_page gets of
+# its own.
+writer-page.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -45,6 +45,9 @@ pub struct Positional {
     pub name: &'static str,
     pub help: &'static str,
     pub required: bool,
+    /// Whether it takes every word that is left (`page add <file|folder>...`). Only the
+    /// last argument of a command can.
+    pub many: bool,
 }
 
 /// An option of a command.
@@ -102,6 +105,7 @@ const fn arg(name: &'static str, help: &'static str) -> Positional {
         name,
         help,
         required: true,
+        many: false,
     }
 }
 
@@ -110,6 +114,18 @@ const fn optional(name: &'static str, help: &'static str) -> Positional {
         name,
         help,
         required: false,
+        many: false,
+    }
+}
+
+/// An argument that may be given any number of times, none included; the last of its
+/// command.
+const fn many(name: &'static str, help: &'static str) -> Positional {
+    Positional {
+        name,
+        help,
+        required: false,
+        many: true,
     }
 }
 
@@ -599,22 +615,35 @@ the id of the copy.",
         ..writing("duplicate", Group::Documents)
     },
     Spec {
-        synopsis: "<item> --to <path>",
-        summary: "Write a document or a whole folder as Markdown, DOCX or text",
+        synopsis: "<item> <path>",
+        long_synopsis: "<item> (<path> | --to <path>)",
+        summary: "Write a document or folder as Markdown, DOCX or text, a page as files",
         about: "Writes a document to a file, or every document of a folder to one file in the order of \
 the library (\"/\" is the whole library). The format is taken from the ending of the path (.md, \
 .docx, .txt) unless --format names it. A file that exists is not replaced unless --overwrite is \
 given. Exporting only reads the library, so it works while the app is open. The images of a \
 Markdown export are written as files into a folder beside it (\"chapter images\" for \
 chapter.md) and linked from the text, which is also the way to look at a picture; a DOCX holds \
-its pictures.",
-        positionals: &[arg("item", ITEM)],
+its pictures. A page is written as a folder of web files that opens offline (--original: the \
+files it was added from, as they were), as a PDF the way WebKit prints it (a path ending in \
+.pdf), or as its text (.txt); a folder exported as one file leaves its pages out.",
+        positionals: &[
+            arg("item", ITEM),
+            optional(
+                "path",
+                "The file to write; for a page as files, the folder (the same as --to)",
+            ),
+        ],
         options: &[
-            value("to", "path", "The file to write"),
+            value("to", "path", "The file to write (the same as <path>)"),
             value(
                 "format",
-                "markdown|docx|text",
-                "The format (default: from the ending of the path)",
+                "markdown|docx|text|html|pdf",
+                "The format (default: from the ending of the path; html is a page as a folder)",
+            ),
+            switch(
+                "original",
+                "For a page written as a folder: the files it was added from, as they were",
             ),
             switch("overwrite", "Replace the file when it exists"),
         ],
@@ -622,8 +651,85 @@ its pictures.",
         examples: &[
             "writer export \"The Salt Road\" --to ~/Desktop/salt-road.docx",
             "writer export doc:12 --to chapter1.md --overwrite",
+            "writer export page:12 ~/Desktop/page.pdf",
+            "writer export page:12 ~/Desktop/orbitarium --original",
         ],
         ..reading("export", Group::Documents)
+    },
+    Spec {
+        synopsis: "<file|folder>... | --list <file>",
+        long_synopsis: "(<file|folder>... | --list <file.json|->)",
+        summary: "Add web pages from HTML files or folders, kept whole and offline",
+        about: "Adds each HTML file or folder as a page: a web page kept in the library as it was made, \
+with its styles, scripts, fonts, pictures and sounds, so that it shows the same offline and for \
+good. A folder is taken whole and opens with its index.html (--entry names another file); a file \
+is taken with the local files it names, and its folder is not walked. Everything the page loads \
+from the web (fonts, libraries) is downloaded now and stored, and the page is loaded with the \
+network blocked to see that it is whole: a page that needs something that cannot be kept (data \
+from a service, an embedded site) is not added, exit code 14 says why, and nothing is saved. \
+With --source-url, adding the same address again changes nothing when the page is the same \
+(\"unchanged\") and updates it, keeping the page as it was as a version, when it changed \
+(\"updated\"); a page with that address in the trash is not added again (\"trashed\") unless \
+--include-trashed is given. Each page is one line of output, with its warnings under it: they \
+are for the user. --list reads several pages, each with its own address, from a JSON list: \
+[{\"path\": \"<file or folder>\", \"entry\": \"...\", \"title\": \"...\", \"source_url\": \"...\", \
+\"externals\": {\"<address>\": \"<file>\"}}] (only path is needed; a relative path is taken from \
+the folder of the list; externals are pieces of the page that are files already and are not \
+fetched). Every page is tried; the exit code is that of the first one that was not added.",
+        positionals: &[many(
+            "file|folder",
+            "An HTML file, or the folder of a page (a relative path is taken from where the command runs)",
+        )],
+        options: &[
+            value(
+                "list",
+                "file.json|-",
+                "Several pages from a JSON list in a file (\"-\" is standard input)",
+            ),
+            value(
+                "entry",
+                "path",
+                "For a folder: the HTML file the page opens with (default: index.html)",
+            ),
+            value(
+                "title",
+                "title",
+                "The title (default: the page's own title, else its first heading)",
+            ),
+            value(
+                "source-url",
+                "address",
+                "The address the page came from; adding it again later updates the page",
+            ),
+            value(
+                "folder",
+                "folder",
+                "The folder to add the pages in (default: the top level)",
+            ),
+            CREATE_FOLDERS,
+            switch(
+                "include-trashed",
+                "Add a page even when the page with its address is in the trash",
+            ),
+        ],
+        examples: &[
+            "writer page add ~/Downloads/explainer --source-url https://claude.ai/artifact/ExampleArtifactId00002 --folder Pages",
+            "writer page add --list pages.json --folder \"Claude Pages\" --create-folders --author Claude",
+            "writer page add report.html chart.html --dry-run",
+        ],
+        ..writing("page add", Group::Documents)
+    },
+    Spec {
+        synopsis: "[<folder>]",
+        summary: "The pages with their addresses, when each was taken, files and size",
+        about: "Prints every page of the library (or of a folder, at any depth) on one line: its id, its \
+path, the address it came from, when its content was taken (added, or last updated) and how \
+many files and bytes it holds. Pages in the trash are listed too, marked. With --json each has \
+\"content_at\", \"updated_at\" and \"trashed\": what a copy of many pages compares against to \
+skip the ones that are in already. Also written \"writer pages\".",
+        positionals: &[optional("folder", FOLDER)],
+        examples: &["writer pages", "writer page list \"Claude Pages\" --json"],
+        ..reading("page list", Group::Documents)
     },
     // ----- Documents and folders -----------------------------------------------------
     Spec {
@@ -925,9 +1031,11 @@ agent. With --library the server works on that library.",
 
 /// The first words that open a group, with the group's own name (the first word of its
 /// commands).
-const GROUPS: [(&str, &str); 8] = [
+const GROUPS: [(&str, &str); 10] = [
     ("image", "image"),
     ("images", "image"),
+    ("page", "page"),
+    ("pages", "page"),
     ("comment", "comment"),
     ("comments", "comment"),
     ("history", "history"),
@@ -1092,6 +1200,13 @@ mod tests {
                 assert!(
                     example.contains("writer "),
                     "{}: example {example}",
+                    spec.name
+                );
+            }
+            for (index, positional) in spec.positionals.iter().enumerate() {
+                assert!(
+                    !positional.many || index + 1 == spec.positionals.len(),
+                    "{}: only the last argument takes many words",
                     spec.name
                 );
             }

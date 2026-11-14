@@ -75,7 +75,7 @@ pub fn server_info() -> ServerInfo {
 
 /// An MCP server over the operations on `library`.
 pub fn server(library: Library) -> Server<Toolbox> {
-    Server::new(Toolbox::new(library), server_info())
+    Server::new(Toolbox::new(library).fetching_afresh(), server_info())
 }
 
 /// Serves MCP on standard input and output until the input ends.

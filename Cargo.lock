@@ -6975,12 +6975,15 @@ dependencies = [
 name = "writer-cli"
 version = "0.7.0"
 dependencies = [
+ "libc",
  "serde_json",
  "tempfile",
  "writer-agent",
  "writer-agent-setup",
  "writer-mcp",
+ "writer-page",
  "writer-store",
+ "writer-web",
 ]
 
 [[package]]
@@ -7095,6 +7098,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "writer-agent",
+ "writer-page",
  "writer-store",
 ]
 

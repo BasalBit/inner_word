@@ -10,8 +10,9 @@ use writer_agent::{
     CommentChanged, CommentList, CommentThreadInfo, ContentChanged, DocumentChanged,
     DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, ExportFormat,
     Exported, FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, ImageSummary,
-    LibraryStatus, MatchedAs, SearchResults, Time, TrashEmptied, TrashItem, TrashList, Tree,
-    TreeFolder, VersionInfo, VersionList, VersionRestored, VersionText, Written,
+    LibraryStatus, MatchedAs, PageAdded, PageOutcome, PageSummary, PagesList, SearchResults, Time,
+    TrashEmptied, TrashItem, TrashList, Tree, TreeFolder, VersionInfo, VersionList,
+    VersionRestored, VersionText, Written,
 };
 
 /// A number with thin grouping: `12,345`.
@@ -43,10 +44,36 @@ pub fn time(time: Time) -> String {
 
 /// How a document is named in a sentence: `doc:12 "Book/Chapter 1"`. One that does not
 /// exist yet (a dry run reports it with the id 0) is `a new document "Book/Chapter 1"`.
+/// A page is `page:12 "Claude Pages/Orbitarium"`.
 pub fn document_name(document: &DocumentSummary) -> String {
+    let (kind, prefix) = if document.is_page() {
+        ("page", "page")
+    } else {
+        ("document", "doc")
+    };
     match document.id.0 {
-        0 => format!("a new document \"{}\"", document.path),
-        id => format!("doc:{id} \"{}\"", document.path),
+        0 => format!("a new {kind} \"{}\"", document.path),
+        id => format!("{prefix}:{id} \"{}\"", document.path),
+    }
+}
+
+/// The reference of a document as it can be passed back: `doc:12`, or `page:12` for a
+/// page.
+pub fn reference(document: &DocumentSummary) -> String {
+    if document.is_page() {
+        format!("page:{}", document.id.0)
+    } else {
+        format!("doc:{}", document.id.0)
+    }
+}
+
+/// What a line of a list says of a document's size: `1,200 words`, or `page` for a page
+/// (its words are those of the text it shows, which nobody wrote here).
+fn size_word(document: &DocumentSummary) -> String {
+    if document.is_page() {
+        "page".to_string()
+    } else {
+        plural(document.words, "word", "words")
     }
 }
 
@@ -62,10 +89,10 @@ pub fn folder_name(folder: &FolderSummary) -> String {
 /// One line for a document in a list: id, path, size, last change.
 pub fn document_line(document: &DocumentSummary) -> String {
     format!(
-        "doc:{}  {}  ({}, changed {})",
-        document.id.0,
+        "{}  {}  ({}, changed {})",
+        reference(document),
         document.path,
-        plural(document.words, "word", "words"),
+        size_word(document),
         time(document.updated_at)
     )
 }
@@ -227,10 +254,10 @@ fn tree_level(
     }
     for document in documents {
         out.push_str(&format!(
-            "{indent}{}  doc:{}  ({}, changed {})\n",
+            "{indent}{}  {}  ({}, changed {})\n",
             document.title,
-            document.id.0,
-            plural(document.words, "word", "words"),
+            reference(document),
+            size_word(document),
             time(document.updated_at)
         ));
     }
@@ -286,6 +313,9 @@ pub fn documents(list: &DocumentList) -> String {
 
 /// `writer info` for a document.
 pub fn info(info: &DocumentInfo) -> String {
+    if let Some(page) = &info.page {
+        return page_info(info, page);
+    }
     let document = &info.document;
     let settings = &info.settings;
     let mut out = String::new();
@@ -372,6 +402,183 @@ pub fn info(info: &DocumentInfo) -> String {
     out
 }
 
+/// `writer info` for a page: what it is made of, where it came from, when it was taken.
+fn page_info(info: &DocumentInfo, page: &PageSummary) -> String {
+    let document = &info.document;
+    let mut out = String::new();
+    out.push_str(&format!("{}  {}\n", reference(document), document.path));
+    out.push_str(&format!(
+        "title:     {} ({})\n",
+        document.title,
+        if info.custom_title {
+            "chosen by hand"
+        } else {
+            "the page's own"
+        }
+    ));
+    out.push_str(
+        "kind:      a page: a web page kept as it was saved and shown as it was made; its \
+         text cannot be changed\n",
+    );
+    match document.folder_id {
+        Some(folder) => out.push_str(&format!(
+            "folder:    {}  folder:{}\n",
+            document.folder, folder.0
+        )),
+        None => out.push_str("folder:    (the top level of the library)\n"),
+    }
+    out.push_str(&format!(
+        "source:    {}\n",
+        page.source_url.as_deref().unwrap_or("(none was given)")
+    ));
+    out.push_str(&format!("opens:     {}\n", page.entry));
+    out.push_str(&format!(
+        "files:     {}\n",
+        page_size(page.files, page.bytes, page.externals)
+    ));
+    out.push_str(&format!("taken:     {}\n", time(page.content_at)));
+    out.push_str(&format!("checked:   by {}\n", page.engine));
+    out.push_str(&format!(
+        "text:      {}, {} ({} without spaces), {}\n",
+        plural(document.words, "word", "words"),
+        plural(document.characters, "character", "characters"),
+        count(info.characters_no_spaces),
+        plural(info.paragraphs, "paragraph", "paragraphs"),
+    ));
+    out.push_str(&format!("created:   {}\n", time(document.created_at)));
+    out.push_str(&format!("changed:   {}\n", time(document.updated_at)));
+    if let Some(trashed) = document.trashed_at {
+        out.push_str(&format!("trashed:   {} (in the trash)\n", time(trashed)));
+    }
+    out.push_str(&format!("versions:  {}\n", info.versions));
+    if page.warnings.is_empty() {
+        out.push_str("warnings:  none\n");
+    } else {
+        out.push_str("warnings:\n");
+        for warning in &page.warnings {
+            out.push_str(&format!("  {}\n", whole_line(warning)));
+        }
+    }
+    out
+}
+
+/// `30 files, 11.4 MB, 12 pieces from the web` (the last part only when there are any).
+fn page_size(files: usize, bytes: u64, externals: usize) -> String {
+    let mut out = format!(
+        "{}, {}",
+        plural(files as u64, "file", "files"),
+        writer_page::megabytes(bytes)
+    );
+    if externals > 0 {
+        out.push_str(&format!(
+            ", {}",
+            plural(
+                externals as u64,
+                "piece from the web",
+                "pieces from the web"
+            )
+        ));
+    }
+    out
+}
+
+/// A page's name in a line about it: `page:41 “Reading Orbitarium”`, or `a new page
+/// “Reading Orbitarium”` in a dry run.
+fn page_name(page: &DocumentSummary) -> String {
+    match page.id.0 {
+        0 => format!("a new page \u{201c}{}\u{201d}", page.title),
+        id => format!("page:{id} \u{201c}{}\u{201d}", page.title),
+    }
+}
+
+/// `writer page add`, one page: what became of it, in one line, with its warnings under
+/// it.
+///
+/// ```text
+/// added page:41 “Reading Orbitarium” in Claude Pages (30 files, 11.4 MB, 12 pieces from the web)
+/// unchanged page:12 “Orbitarium” (https://claude.ai/artifact/ExampleArtifactId00002)
+/// updated page:13 “Nimbus Release Notes”: the page as it was is kept as version 88 (…)
+/// trashed page:9 “Nimbus Brand Sheet” is in the trash, so it was not added again: restore it, or add it with --include-trashed
+/// ```
+pub fn page_added(added: &PageAdded) -> String {
+    let written = &added.written;
+    let mut out = String::from(dry_run_prefix(written));
+    let name = page_name(&added.page);
+    let size = page_size(added.files, added.bytes, added.externals);
+    let mut line = match added.outcome {
+        PageOutcome::Added => {
+            let place = if added.page.folder.is_empty() {
+                "at the top of the library".to_string()
+            } else {
+                format!("in {}", added.page.folder)
+            };
+            format!("added {name} {place} ({size})")
+        }
+        PageOutcome::Updated => match &added.snapshot {
+            Some(snapshot) => format!(
+                "updated {name}: the page as it was is kept as version {} ({size})",
+                snapshot.id.0
+            ),
+            None => format!("updated {name} ({size})"),
+        },
+        PageOutcome::Unchanged => match &added.page.source_url {
+            Some(url) => format!("unchanged {name} ({url})"),
+            None => format!("unchanged {name}"),
+        },
+        PageOutcome::Trashed => format!(
+            "trashed {name} is in the trash, so it was not added again: restore it, or add it \
+             with --include-trashed"
+        ),
+    };
+    match added.warnings.len() {
+        0 => line.push('\n'),
+        n => {
+            line.push_str(&format!(
+                ", with {}:\n",
+                plural(n as u64, "warning", "warnings")
+            ));
+            for warning in &added.warnings {
+                line.push_str(&format!("  {}\n", whole_line(warning)));
+            }
+        }
+    }
+    out.push_str(&line);
+    written_suffix(written, &mut out);
+    finish(out)
+}
+
+/// `writer pages`: one line a page, the trashed ones marked.
+///
+/// ```text
+/// page:41  Claude Pages/Reading Orbitarium  https://claude.ai/artifact/ExampleArtifactId00001  taken 2026-11-13T21:04Z  30 files, 11.4 MB
+/// ```
+pub fn pages(list: &PagesList) -> String {
+    if list.pages.is_empty() {
+        return "No pages.\n".to_string();
+    }
+    let mut out = String::new();
+    for listed in &list.pages {
+        let page = &listed.page;
+        let summary = &listed.summary;
+        out.push_str(&format!(
+            "{}  {}  {}  taken {}  {}",
+            reference(page),
+            page.path,
+            summary
+                .source_url
+                .as_deref()
+                .unwrap_or("(no source address)"),
+            time(summary.content_at),
+            page_size(summary.files, summary.bytes, 0)
+        ));
+        if listed.trashed {
+            out.push_str("  (in the trash)");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// `writer info` for a folder: the folder and what is directly in it.
 pub fn folder_info(info: &FolderInfo) -> String {
     let mut out = String::new();
@@ -404,10 +611,10 @@ pub fn folder_info(info: &FolderInfo) -> String {
         }
         for document in &info.documents {
             out.push_str(&format!(
-                "  {}  doc:{}  ({}, changed {})\n",
+                "  {}  {}  ({}, changed {})\n",
                 document.title,
-                document.id.0,
-                plural(document.words, "word", "words"),
+                reference(document),
+                size_word(document),
                 time(document.updated_at)
             ));
         }
@@ -418,6 +625,10 @@ pub fn folder_info(info: &FolderInfo) -> String {
 /// `writer get`: the text and nothing else, unless the comments were asked for.
 pub fn text(text: &DocumentText) -> String {
     let mut out = text.content.clone();
+    // The text a page showed ends where it ends; printed, it ends with a line.
+    if text.page.is_some() && !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
     if let Some(threads) = &text.comments {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
@@ -719,10 +930,10 @@ pub fn trash(list: &TrashList) -> String {
     for entry in &list.entries {
         match entry {
             TrashItem::Document { document } => out.push_str(&format!(
-                "doc:{}  {}  ({}, trashed {})\n",
-                document.id.0,
+                "{}  {}  ({}, trashed {})\n",
+                reference(document),
                 document.path,
-                plural(document.words, "word", "words"),
+                size_word(document),
                 document.trashed_at.map(time).unwrap_or_default()
             )),
             TrashItem::Folder {
@@ -938,13 +1149,38 @@ pub fn exported(exported: &Exported) -> String {
         ExportFormat::Html => "a web page folder",
         ExportFormat::Pdf => "PDF",
     };
-    out.push_str(&format!(
-        "Exported \"{}\" ({}) to {} ({format}, {} bytes).\n",
-        exported.title,
-        plural(exported.documents.len() as u64, "document", "documents"),
-        exported.path.display(),
-        count(exported.bytes)
-    ));
+    let page = match exported.documents.as_slice() {
+        [document] if document.is_page() => Some(document),
+        _ => None,
+    };
+    match page {
+        Some(page) => {
+            let files = if exported.format == ExportFormat::Html {
+                format!("{}, ", plural(exported.files as u64, "file", "files"))
+            } else {
+                String::new()
+            };
+            out.push_str(&format!(
+                "Exported {} to {} ({format}, {files}{} bytes).\n",
+                document_name(page),
+                exported.path.display(),
+                count(exported.bytes)
+            ));
+            if exported.format == ExportFormat::Html && !exported.dry_run {
+                out.push_str(
+                    "Open its HTML file in a browser; a few pages need to be served (python3 -m \
+                     http.server in the folder).\n",
+                );
+            }
+        }
+        None => out.push_str(&format!(
+            "Exported \"{}\" ({}) to {} ({format}, {} bytes).\n",
+            exported.title,
+            plural(exported.documents.len() as u64, "document", "documents"),
+            exported.path.display(),
+            count(exported.bytes)
+        )),
+    }
     // The pictures a Markdown file links: where they are, so that they can be opened.
     if let Some(folder) = exported.assets.first().and_then(|file| file.parent()) {
         out.push_str(&format!(
@@ -964,6 +1200,7 @@ pub fn exported(exported: &Exported) -> String {
             out.push_str(&format!("  {name}\n"));
         }
     }
+    warnings(&exported.warnings, &mut out);
     out
 }
 
@@ -1041,6 +1278,12 @@ fn one_line(text: &str) -> String {
     }
     let cut: String = line.chars().take(MAX).collect();
     format!("{cut}...")
+}
+
+/// A text on one line, whole: line breaks become spaces. For a sentence that has to be
+/// read to its end (a warning).
+fn whole_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A text whose lines after the first are indented by `indent` spaces.

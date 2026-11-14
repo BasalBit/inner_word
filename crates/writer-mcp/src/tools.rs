@@ -13,26 +13,28 @@
 //!
 //! Three operations are not listed as tools and exist only for the command line, which
 //! asks for them with an explicit flag: `delete_document`, `delete_folder` and
-//! `empty_trash` erase for good. `list_images` is the command line's too (`writer
-//! images`): it only reads, and a model has the same list in the result of
-//! `read_document`, so the tools that read stay the ones they were.
+//! `empty_trash` erase for good. `list_images` and `list_pages` are the command line's too
+//! (`writer images`, `writer pages`): they only read, and a model has the same in the
+//! result of `read_document` and `list_library`, so the tools that read stay the ones
+//! they were.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use writer_agent::{
-    AddCommentRequest, AddImageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
+    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
     DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
     EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport, ExportRequest, FindRequest,
     FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind, Library, ListCommentsRequest,
-    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, ReadVersionRequest,
+    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, PagesRequest, ReadRequest,
+    ReadVersionRequest,
     RecentRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
     ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
     RestoreVersionRequest, SearchRequest, Target, TrashDocumentRequest, TrashFolderRequest,
     TreeRequest,
 };
 
-use crate::args::{self, boolean, integer, integer_between, one_of, string};
+use crate::args::{self, boolean, integer, integer_between, one_of, string, string_map};
 use crate::protocol::{Effect, ToolDef, ToolHost, ToolOutput};
 use crate::render;
 
@@ -458,6 +460,27 @@ fn read_version(library: &Library, arguments: Map<String, Value>) -> Result<Repl
 fn restore_version(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
     let restored = library.restore_version(&request::<RestoreVersionRequest>(arguments)?)?;
     reply(&restored, render::version_restored(&restored))
+}
+
+fn add_page(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    // What travels to the app is worked out here, always: a caller that hands in a
+    // prepared page of its own is refused (the schema has no such argument, and this
+    // says why to whoever builds the arguments by hand).
+    if arguments.contains_key("prepared") {
+        return Err(Error::invalid(PREPARED_REFUSED));
+    }
+    let added = library.add_page(&request::<AddPageRequest>(arguments)?)?;
+    reply(&added, render::page_added(&added))
+}
+
+/// Why `prepared` is not taken from a caller.
+pub const PREPARED_REFUSED: &str = "\"prepared\" cannot be given: a page is always read, fetched \
+and checked by the tool that is asked, from its path";
+
+/// The pages of the library: `writer pages`.
+fn list_pages(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let list = library.pages(&request::<PagesRequest>(arguments)?)?;
+    reply(&list, render::pages(&list))
 }
 
 fn export(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
@@ -903,6 +926,71 @@ a version first.",
             ),
             add_image,
         ),
+        add(
+            "add_page",
+            "Add pages",
+            "Adds a web page to the library from an HTML file or a folder on this Mac, kept whole: its styles, \
+scripts, fonts, pictures and sounds are stored, and everything it loads from the web is downloaded now, so that \
+it shows the same offline and for good. A folder is taken whole and opens with its index.html (entry names \
+another file). A page that needs something that cannot be kept (data from a service, an embedded site) is not \
+added: the error page_incomplete says why, and nothing is saved. With source_url, adding the same address again \
+changes nothing when the page is the same and updates it (keeping the old one as a version) when it changed; a \
+page with that address in the trash is not added again unless include_trashed is true. One page per call: each \
+is fetched and checked in WebKit, which takes seconds and can take minutes, longer than some clients wait for \
+one call. For many pages call once per page, or run the command line tool's writer page add --list, which \
+takes any number. Paths are absolute. The warnings of the result are for the user: pass them on.",
+            false,
+            writes(
+                vec![
+                    (
+                        "path",
+                        string(
+                            "The HTML file or the folder of the page: its absolute path on this Mac.",
+                        ),
+                    ),
+                    (
+                        "entry",
+                        string(
+                            "For a folder: the HTML file the page opens with, by its path in the folder. Default: index.html.",
+                        ),
+                    ),
+                    (
+                        "title",
+                        string(
+                            "The title. Default: the page's own title, else its first heading.",
+                        ),
+                    ),
+                    (
+                        "source_url",
+                        string(
+                            "The address the page came from (https://claude.ai/artifact/...): adding it again later updates this page.",
+                        ),
+                    ),
+                    (
+                        "externals",
+                        string_map(
+                            "Pieces you already have as files: each address the page names, with the absolute path of the file that is its content. They are not fetched.",
+                        ),
+                    ),
+                    (
+                        "folder",
+                        string("The folder to add it in (id or path). Default: the top level."),
+                    ),
+                    (
+                        "create_folders",
+                        boolean("Create the folder path when it does not exist yet."),
+                    ),
+                    (
+                        "include_trashed",
+                        boolean(
+                            "Add the page as new even when a page with this address is in the trash.",
+                        ),
+                    ),
+                ],
+                &["path"],
+            ),
+            add_page,
+        ),
         // ----- documents -------------------------------------------------------------
         change(
             "rename_document",
@@ -1243,7 +1331,10 @@ so a restore can itself be taken back.",
 file on disk: Markdown, DOCX or plain text. Give exactly one of document and folder. Only reads the library, \
 so it works while the app is open. A file that exists is not replaced unless overwrite is true. The images \
 of a Markdown export are written as files into a folder beside it (\"<name> images\") and linked from the \
-text: that is how to look at a picture of a document. A DOCX holds its pictures.",
+text: that is how to look at a picture of a document. A DOCX holds its pictures. A page is written as a \
+folder of web files that opens offline (format html; original: the files it was added from), as a PDF the \
+way WebKit prints it (format pdf, or a path ending in .pdf), or as its text (.txt); a folder exported as one \
+file leaves its pages out.",
             true,
             args::object(
                 vec![
@@ -1257,14 +1348,20 @@ text: that is how to look at a picture of a document. A DOCX holds its pictures.
                     (
                         "path",
                         string(
-                            "The file to write. Use an absolute path; missing directories are created.",
+                            "The file to write (for a page as a folder: the folder). Use an absolute path; missing directories are created.",
                         ),
                     ),
                     (
                         "format",
                         one_of(
-                            "The format. Default: by the ending of path (.md, .docx, .txt), else Markdown.",
-                            &["markdown", "docx", "text"],
+                            "The format. Default: by the ending of path (.md, .docx, .txt, .pdf), else Markdown (for a page: a folder).",
+                            &["markdown", "docx", "text", "html", "pdf"],
+                        ),
+                    ),
+                    (
+                        "original",
+                        boolean(
+                            "For a page written as a folder: the files it was added from, as they were, instead of the files it is shown from.",
                         ),
                     ),
                     ("overwrite", boolean("Replace the file when it exists.")),
@@ -1285,6 +1382,20 @@ text: that is how to look at a picture of a document. A DOCX holds its pictures.
 size of the picture, how wide it is drawn and where it stands.",
             reads(vec![("document", string(DOCUMENT))], &["document"]),
             list_images,
+        ),
+        hidden_read(
+            "list_pages",
+            "List the pages",
+            "The pages of the library, live and in the trash: for each its id, path, the address it came from, \
+when its content was taken, its files and size.",
+            reads(
+                vec![(
+                    "folder",
+                    string("Only the pages in this folder, at any depth (id or path)."),
+                )],
+                &[],
+            ),
+            list_pages,
         ),
         hidden(
             "delete_document",
@@ -1330,6 +1441,9 @@ pub struct Toolbox {
     library: Library,
     operations: Vec<Operation>,
     tools: Vec<ToolDef>,
+    /// Whether every call of `add_page` fetches with a cache of its own
+    /// ([`Toolbox::fetching_afresh`]).
+    afresh: bool,
 }
 
 impl Toolbox {
@@ -1352,7 +1466,18 @@ impl Toolbox {
             library,
             operations,
             tools,
+            afresh: false,
         }
+    }
+
+    /// The same operations, where each call of `add_page` gets a fetcher of its own: what
+    /// it fetched is let go of when the call ends. For the MCP server, which lives as long
+    /// as a session of its client: a library's fetcher keeps every answer it had (up to
+    /// 256 MB), which is right for one command that adds many pages and wrong for a
+    /// process that adds one page per call for hours.
+    pub fn fetching_afresh(mut self) -> Toolbox {
+        self.afresh = true;
+        self
     }
 
     /// The library the operations work on.
@@ -1400,6 +1525,10 @@ impl Toolbox {
         {
             arguments.insert("author".into(), json!(client));
         }
+        if self.afresh && operation.name == "add_page" {
+            let library = self.library.clone().with_fetcher(fresh_fetcher());
+            return (operation.run)(&library, arguments).map_err(Failure::from);
+        }
         (operation.run)(&self.library, arguments).map_err(Failure::from)
     }
 
@@ -1439,6 +1568,20 @@ impl Toolbox {
             ))
         })
     }
+}
+
+/// A fetcher as a library has it by default, with nothing fetched yet: `/usr/bin/curl`,
+/// public addresses only, each address once. A debug build lets it ask this Mac with
+/// `THE_WRITER_FETCH_LOCAL=1`, as the library's own does (for the tests, whose server is
+/// on 127.0.0.1).
+fn fresh_fetcher() -> std::sync::Arc<dyn writer_page::Fetcher> {
+    let mut curl = writer_page::CurlFetcher::new();
+    if cfg!(debug_assertions)
+        && std::env::var(writer_agent::FETCH_LOCAL_ENV).is_ok_and(|value| value == "1")
+    {
+        curl = curl.allowing_local();
+    }
+    std::sync::Arc::new(writer_page::CachingFetcher::new(std::sync::Arc::new(curl)))
 }
 
 impl ToolHost for Toolbox {
@@ -1493,6 +1636,11 @@ fn tool_text(text: &str) -> String {
         "\"writer restore <id>\" brings one back",
         "restore_document or restore_folder brings one back",
     )
+    .replace(
+        "or add it with --include-trashed",
+        "or call add_page again with include_trashed",
+    )
+    .replace("opens with --entry", "opens with entry")
 }
 
 /// What a model is told besides the message when the app is open and did not make a
@@ -1505,9 +1653,16 @@ list_comments, export) works while the app is open, and so does any tool with dr
 fn tool_error_text(failure: &Failure) -> String {
     match failure.kind {
         ErrorKind::AppIsOpen => format!("{} {WHILE_OPEN}", failure.message),
-        _ => failure.message.clone(),
+        ErrorKind::WrongKind if failure.message.contains(" is a page: ") => {
+            format!("{} {NEWER_PAGE}", failure.message)
+        }
+        _ => tool_text(&failure.message),
     }
 }
+
+/// What a model is told besides the message when it asked to change the text of a page:
+/// the tool that brings a newer copy.
+const NEWER_PAGE: &str = "That is add_page with the page's file or folder and its source_url.";
 
 #[cfg(test)]
 mod tests {
@@ -1607,7 +1762,7 @@ mod tests {
                 assert!(!properties.contains_key("dry_run"), "{}", operation.name);
             }
         }
-        assert_eq!(toolbox.tools().len(), 36);
+        assert_eq!(toolbox.tools().len(), 37);
         // Nothing that erases for good is offered as a tool.
         for tool in toolbox.tools() {
             assert!(
@@ -1628,6 +1783,7 @@ mod tests {
             "delete_folder",
             "empty_trash",
             "list_images",
+            "list_pages",
         ] {
             assert!(toolbox.operation_names().contains(&hidden));
             assert!(toolbox.tools().iter().all(|tool| tool.name != hidden));
@@ -1654,6 +1810,88 @@ mod tests {
             (&width["minimum"], &width["maximum"]),
             (&json!(5), &json!(100))
         );
+        // A page is added one per call, and the call changes the library: never a tool
+        // of the assistant, never one a client may repeat as if nothing happened.
+        let add_page = toolbox
+            .tools()
+            .iter()
+            .find(|tool| tool.name == "add_page")
+            .expect("add_page is a tool");
+        assert_eq!(add_page.effect, Effect::Add);
+        assert!(!add_page.idempotent);
+        assert!(add_page.description.contains("One page per call"));
+        assert!(add_page.description.contains("writer page add --list"));
+        let properties = add_page.input_schema["properties"].as_object().unwrap();
+        assert!(!properties.contains_key("prepared"));
+        assert_eq!(properties["externals"]["type"], "object");
+        let export = toolbox
+            .tools()
+            .iter()
+            .find(|tool| tool.name == "export")
+            .unwrap();
+        assert_eq!(
+            export.input_schema["properties"]["format"]["enum"],
+            json!(["markdown", "docx", "text", "html", "pdf"])
+        );
+        assert_eq!(
+            export.input_schema["properties"]["original"]["type"],
+            "boolean"
+        );
+    }
+
+    /// A page that comes prepared is refused, by the schema for a tool call and by the
+    /// operation for whoever builds its arguments by hand: what travels to the app is
+    /// always worked out by the tool that is asked.
+    #[test]
+    fn a_page_that_comes_prepared_is_refused() {
+        let (dir, mut toolbox) = toolbox();
+        std::fs::write(dir.path().join("index.html"), "<h1>Hi</h1>").unwrap();
+        let arguments = json!({
+            "path": dir.path().join("index.html"),
+            "prepared": { "state": "unchanged", "page": 1, "fingerprint": "x" },
+        });
+        let output = toolbox
+            .call("add_page", arguments.as_object().unwrap(), None)
+            .unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.structured["error"]["code"], "invalid");
+        let text = &output.text;
+        assert!(text.contains("There is no argument \"prepared\""), "{text}");
+        let mut by_hand = Map::new();
+        by_hand.insert("prepared".into(), json!({}));
+        let error = add_page(toolbox.library(), by_hand).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid);
+        assert_eq!(error.to_string(), PREPARED_REFUSED);
+    }
+
+    #[test]
+    fn a_model_is_told_the_tool_where_the_command_line_names_its_options() {
+        assert_eq!(
+            tool_text(
+                "trashed page:9 \u{201c}A\u{201d} is in the trash, so it was not added again: \
+                 restore it, or add it with --include-trashed\n"
+            ),
+            "trashed page:9 \u{201c}A\u{201d} is in the trash, so it was not added again: \
+             restore it, or call add_page again with include_trashed\n"
+        );
+        let failure = Failure::invalid(
+            "the folder has 3 pages at its top and no index.html: say which one opens with --entry",
+        );
+        assert!(tool_error_text(&failure).ends_with("opens with entry"));
+        let wrong = Failure::from(Error::WrongKind {
+            id: 3,
+            name: "\u{201c}Orbitarium\u{201d}".into(),
+            is_page: true,
+        });
+        let text = tool_error_text(&wrong);
+        assert!(text.ends_with(NEWER_PAGE), "{text}");
+        assert!(text.contains("add_page") && text.contains("source_url"));
+        let text_not_page = Failure::from(Error::WrongKind {
+            id: 3,
+            name: "\u{201c}Chapter 2\u{201d}".into(),
+            is_page: false,
+        });
+        assert!(!tool_error_text(&text_not_page).contains("add_page"));
     }
 
     #[test]

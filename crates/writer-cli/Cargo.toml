@@ -13,9 +13,17 @@ path = "src/main.rs"
 writer-mcp.workspace = true
 writer-agent-setup.workspace = true
 serde_json.workspace = true
+# The checker of pages the tool installs on its library (`ProcessChecker`), which runs
+# this program again as its child.
+writer-agent.workspace = true
+# The child of a check and of a PDF (`writer __page-check`, `writer __page-pdf`): the
+# check directory as data, and WebKit, which runs in that child and nowhere else in the
+# tool.
+writer-page.workspace = true
+writer-web.workspace = true
+# The user id, for the folder the rule list of WebKit is kept in.
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 writer-store.workspace = true
-# The app's end of the channel, for the thread that stands in for the app in the tests.
-writer-agent.workspace = true

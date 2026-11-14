@@ -1,9 +1,9 @@
 //! Input schemas of the tools and the check of a call's arguments against them.
 //!
 //! The schemas are JSON Schema 2020-12 and use a small part of it on purpose: an object
-//! with named properties that are strings, integers, booleans or one of a list of words,
-//! some of them required, and nothing else allowed. Every client and every model handles
-//! that part the same way.
+//! with named properties that are strings, integers, booleans, one of a list of words or
+//! an object of strings, some of them required, and nothing else allowed. Every client
+//! and every model handles that part the same way.
 //!
 //! [`check`] is the server's own validation of that part. What it finds wrong is reported
 //! as a tool failure the model can read and correct (the specification asks for input
@@ -42,6 +42,15 @@ pub fn boolean(description: &str) -> Value {
 /// A string property that is one of `choices`.
 pub fn one_of(description: &str, choices: &[&str]) -> Value {
     json!({ "type": "string", "enum": choices, "description": description })
+}
+
+/// An object property whose values are strings (`{"<address>": "<file>"}`).
+pub fn string_map(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": description,
+    })
 }
 
 /// The schema of a tool's arguments: an object with these properties and no others.
@@ -229,6 +238,10 @@ fn coerce(property: &Value, value: &Value) -> Result<Value, String> {
                 None => Err(expected),
             }
         }
+        Some("object") => match value {
+            Value::Object(map) if map.values().all(Value::is_string) => Ok(value.clone()),
+            _ => Err("an object whose values are strings".into()),
+        },
         Some("boolean") => match value {
             Value::Bool(_) => Ok(value.clone()),
             Value::String(word) if word == "true" => Ok(json!(true)),
@@ -369,5 +382,25 @@ mod tests {
             null_required.contains("\"document\" must be a string."),
             "{null_required}"
         );
+    }
+
+    #[test]
+    fn an_object_of_strings_is_taken_and_anything_else_is_refused() {
+        let schema = object(vec![("externals", string_map("Pieces."))], &[]);
+        assert_eq!(schema["properties"]["externals"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["externals"]["additionalProperties"]["type"],
+            "string"
+        );
+        let given = json!({ "externals": { "https://a/b.png": "/tmp/b.png" } });
+        let args = check(&schema, &arguments(given.clone())).unwrap();
+        assert_eq!(args.into_map()["externals"], given["externals"]);
+        for wrong in [json!({ "a": 1 }), json!("x"), json!(["a"])] {
+            let error = check(&schema, &arguments(json!({ "externals": wrong }))).unwrap_err();
+            assert!(
+                error.contains("\"externals\" must be an object whose values are strings."),
+                "{error}"
+            );
+        }
     }
 }

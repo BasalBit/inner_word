@@ -108,7 +108,7 @@ fn meaning(kind: ErrorKind) -> &'static str {
         ErrorKind::FileExists => "the file exists",
         ErrorKind::Unreadable => "the document cannot be read",
         ErrorKind::PageIncomplete => "the page could not be kept whole",
-        ErrorKind::WrongKind => "a page where a document is needed, or the other way round",
+        ErrorKind::WrongKind => "a page where a document is needed, or the reverse",
     }
 }
 
@@ -141,6 +141,7 @@ pub fn exit_codes() -> String {
 fn left_column(spec: &Spec) -> String {
     let name = match spec.name {
         "image list" => "images",
+        "page list" => "pages",
         "comment list" => "comments",
         "history list" => "history",
         "agents list" => "agents",
@@ -178,10 +179,12 @@ pub fn command(spec: &Spec) -> String {
 
     let mut rows: Vec<(String, String)> = Vec::new();
     for positional in spec.positionals {
-        rows.push((
-            format!("<{}>", positional.name),
-            positional.help.to_string(),
-        ));
+        let label = if positional.many {
+            format!("<{}>...", positional.name)
+        } else {
+            format!("<{}>", positional.name)
+        };
+        rows.push((label, positional.help.to_string()));
     }
     if !rows.is_empty() {
         out.push_str("\nArguments\n");
@@ -366,9 +369,10 @@ mod tests {
                 "the overview does not mention {word}"
             );
         }
-        // (70 before the two commands about images.)
+        // (70 before the two commands about images, 72 before the two about pages and
+        // their two exit codes.)
         assert!(
-            overview.lines().count() <= 72,
+            overview.lines().count() <= 75,
             "the overview has {} lines",
             overview.lines().count()
         );
@@ -378,7 +382,10 @@ mod tests {
         );
         assert!(overview.contains("5 The Writer is open and did not make the change"));
         assert!(overview.contains("While The Writer is open, a change is carried out by the app"));
-        assert!(overview.contains("13 the document cannot be read."));
+        assert!(overview.contains("13 the document cannot be read,"));
+        assert!(overview.contains("14 the page could not be kept whole,"));
+        assert!(overview.contains("15 a page where a document is needed, or the reverse."));
+        assert!(overview.contains("pages [<folder>]"), "{overview}");
         assert!(overview.is_ascii(), "the overview is plain ASCII");
     }
 

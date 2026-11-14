@@ -119,11 +119,12 @@ fn content(spec: &Spec, parsed: &Parsed) -> Result<Option<String>, Failure> {
 }
 
 /// The directory a relative path of an image file is taken from: the directory of the
-/// file the text came from (`--file`, or `--new-file` of an edit), else the directory the
-/// tool was started in. `None` when that directory cannot be told.
+/// file the text came from (`--file`, or `--new-file` of an edit; for `page add`, the list
+/// of pages), else the directory the tool was started in. `None` when that directory
+/// cannot be told.
 pub fn base_dir(parsed: &Parsed) -> Option<PathBuf> {
     let started_in = std::env::current_dir().ok();
-    let named = ["file", "new-file"]
+    let named = ["file", "new-file", "list"]
         .into_iter()
         .find_map(|option| parsed.value(option))
         .filter(|path| *path != "-");
@@ -194,7 +195,7 @@ fn placement(arguments: &mut Arguments, parsed: &Parsed) {
 
 /// What the command line adds when the file of `writer image add` is not there: where a
 /// path that does not start at the top was looked for.
-fn missing_file(failure: Failure, file: &str) -> Failure {
+pub fn missing_file(failure: Failure, file: &str) -> Failure {
     let relative = !file.starts_with('/') && !file.starts_with('~');
     if failure.kind != ErrorKind::Invalid
         || !failure.message.starts_with("there is no file ")
@@ -391,6 +392,12 @@ pub fn run(
             arguments.set("document", arg(0));
             call("list_images", arguments)
         }
+        "page list" => {
+            if let Some(folder) = parsed.arg(0).filter(|folder| folder.trim() != "/") {
+                arguments.set("folder", folder);
+            }
+            call("list_pages", arguments)
+        }
         "image add" => {
             arguments
                 .set("document", arg(0))
@@ -450,10 +457,26 @@ pub fn run(
             call("duplicate_document", arguments)
         }
         "export" => {
+            let path = match (parsed.arg(1), parsed.value("to")) {
+                (Some(_), Some(_)) => {
+                    return Err(Failure::invalid(format!(
+                        "give the path once: as <path> or with --to, not both\nusage: {}\nSee \"writer export --help\".",
+                        crate::spec::usage(spec)
+                    )));
+                }
+                (Some(path), None) | (None, Some(path)) => path,
+                (None, None) => {
+                    return Err(Failure::invalid(format!(
+                        "say where to write it: writer export <item> <path> (or --to <path>)\nusage: {}\nSee \"writer export --help\".",
+                        crate::spec::usage(spec)
+                    )));
+                }
+            };
             arguments
-                .set("path", required_option(parsed, spec, "to")?)
+                .set("path", path)
                 .set_some("format", parsed.value("format"))
-                .set_flag("overwrite", parsed.flag("overwrite"));
+                .set_flag("overwrite", parsed.flag("overwrite"))
+                .set_flag("original", parsed.flag("original"));
             if arg(0).trim() == "/" {
                 arguments.set("folder", "/");
                 return call("export", arguments);

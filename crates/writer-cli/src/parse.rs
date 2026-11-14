@@ -39,6 +39,9 @@ pub struct Parsed {
     /// The arguments, one place for each argument of the command's table: `None` for an
     /// optional one that was left out.
     pub positionals: Vec<Option<String>>,
+    /// The words after the first that an argument which takes many words was given
+    /// (`page add a.html b.html`: `b.html`).
+    pub more: Vec<String>,
     /// The options with a value, by name (without the dashes).
     pub values: BTreeMap<&'static str, String>,
     /// The switches that were given.
@@ -51,6 +54,19 @@ impl Parsed {
         self.positionals
             .get(index)
             .and_then(|argument| argument.as_deref())
+    }
+
+    /// Every word the arguments from the place `index` on were given: the argument at that
+    /// place and, when it takes many words, the rest.
+    pub fn args_from(&self, index: usize) -> Vec<&str> {
+        let mut words: Vec<&str> = self
+            .positionals
+            .iter()
+            .skip(index)
+            .filter_map(|argument| argument.as_deref())
+            .collect();
+        words.extend(self.more.iter().map(String::as_str));
+        words
     }
 
     /// The value of the option `name`, when given.
@@ -312,7 +328,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
             format!("<{}> is missing: {}", missing.name, missing.help),
         ));
     }
-    if words.len() > spec.positionals.len() {
+    let takes_many = spec.positionals.last().is_some_and(|last| last.many);
+    if words.len() > spec.positionals.len() && !takes_many {
         let surplus = &words[spec.positionals.len()];
         let hint = if spec.positionals.is_empty() {
             format!("\"writer {}\" takes no arguments", spec.name)
@@ -351,6 +368,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
             parsed.positionals.push(None);
         }
     }
+    parsed.more = words.collect();
     if spec.content != Content::None {
         let sources = ["content", "file"]
             .iter()
@@ -525,6 +543,21 @@ mod tests {
         assert_eq!(command(&["agents"]).1, "agents list");
         assert_eq!(command(&["agents", "--json"]).1, "agents list");
         assert_eq!(command(&["agents", "install", "--all"]).1, "agents install");
+    }
+
+    #[test]
+    fn the_last_argument_can_take_many_words() {
+        let (_, name, parsed) = command(&["page", "add", "a.html", "b", "c d", "--dry-run"]);
+        assert_eq!(name, "page add");
+        assert_eq!(parsed.args_from(0), ["a.html", "b", "c d"]);
+        let (_, _, none) = command(&["page", "add", "--list", "-"]);
+        assert!(none.args_from(0).is_empty());
+        assert_eq!(none.value("list"), Some("-"));
+        // Another command still says that a word is one too many.
+        assert!(error(&["get", "a", "b"]).contains("unexpected argument \"b\""));
+        assert_eq!(command(&["pages"]).1, "page list");
+        assert_eq!(command(&["pages", "Claude Pages"]).2.arg(0), Some("Claude Pages"));
+        assert_eq!(command(&["page", "list", "--json"]).1, "page list");
     }
 
     #[test]

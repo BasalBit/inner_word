@@ -34,17 +34,29 @@
 //! | 11 | another tool is writing to the library |
 //! | 12 | the file an export would write exists |
 //! | 13 | the stored document cannot be read |
+//! | 14 | the page could not be kept whole; nothing was saved |
+//! | 15 | a page where a document is needed, or the reverse |
 //!
 //! The codes are `writer_agent::ErrorKind::exit_code`.
+//!
+//! # Pages
+//!
+//! `writer page add` reads, fetches and checks a page in this process and its child: the
+//! check loads the page in WebKit, which runs only in `writer __page-check` (and the PDF
+//! of a page in `writer __page-pdf`), never in the tool or the MCP server themselves
+//! ([`page_check`]). [`main`] installs that checker on every library it opens.
 
 mod agents;
 mod help;
+mod page_check;
+mod pages;
 mod parse;
 mod run;
 mod spec;
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use serde_json::json;
 use writer_mcp::{ErrorKind, Failure, Library, Reply, Toolbox};
@@ -60,6 +72,10 @@ fn main() -> ExitCode {
                 return fail(false, &Failure::invalid("an argument is not valid UTF-8"));
             }
         }
+    }
+    // The children of a page's check and of its PDF are programs of their own.
+    if let Some(code) = page_check::run(&arguments) {
+        return code;
     }
     // `--json` shapes the error output too, also when the command line cannot be read.
     let wants_json = arguments
@@ -77,6 +93,9 @@ fn main() -> ExitCode {
         Action::Run(spec, parsed) => {
             if spec.name == "mcp" {
                 return serve(&globals);
+            }
+            if spec.name == "page add" {
+                return add_pages(spec, &parsed, &globals);
             }
             let outcome = if spec.name.starts_with("agents ") {
                 agents::run(spec, &parsed, &globals)
@@ -100,9 +119,58 @@ fn main() -> ExitCode {
     }
 }
 
-/// The library the command works on: `--library`, else the app's own.
+/// The library the command works on: `--library`, else the app's own. Its pages are
+/// checked (and printed) by this program, run again as a child.
 fn library(globals: &Globals) -> Result<Library, Failure> {
-    Library::locate(globals.library.as_deref()).map_err(Failure::from)
+    Library::locate(globals.library.as_deref())
+        .map(|library| library.with_page_checker(Arc::new(writer_agent::ProcessChecker::current_exe())))
+        .map_err(Failure::from)
+}
+
+/// `writer page add`: every page is tried, and each has its line. One page named on the
+/// command line is a command like any other (its failure goes to standard error); several
+/// pages, or a list, print a line for each, the failures among them, and end with the
+/// exit code of the first page that failed.
+fn add_pages(spec: &'static spec::Spec, parsed: &parse::Parsed, globals: &Globals) -> ExitCode {
+    let library = match library(globals) {
+        Ok(library) => library,
+        Err(failure) => return fail_in(Some(spec), globals.json, &failure),
+    };
+    let library = match run::base_dir(parsed) {
+        Some(folder) => library.with_base_dir(folder),
+        None => library,
+    };
+    match pages::add(&Toolbox::new(library), spec, parsed, globals) {
+        Err(failure) => fail_in(Some(spec), globals.json, &failure),
+        Ok(added) => {
+            let printed = print(&render(&added.reply, globals.json));
+            let Some(failure) = added.first_failure else {
+                return printed;
+            };
+            let mut stderr = std::io::stderr().lock();
+            let hint = hint_in(Some(spec), &failure);
+            let _ = if globals.json {
+                let mut data = failure.data.clone();
+                if let (Some(hint), Some(fields)) = (hint, data.as_object_mut()) {
+                    fields.insert("hint".into(), json!(hint));
+                }
+                writeln!(stderr, "{}", json!({ "error": data }))
+            } else {
+                let summary = format!(
+                    "writer: {} of {} {} not added (the lines above say why); the exit code is \
+                     the first one's",
+                    added.failed,
+                    added.tried,
+                    if added.tried == 1 { "page was" } else { "pages were" }
+                );
+                match hint {
+                    Some(hint) => writeln!(stderr, "{summary}\n{hint}"),
+                    None => writeln!(stderr, "{summary}"),
+                }
+            };
+            ExitCode::from(failure.kind.exit_code())
+        }
+    }
 }
 
 /// `writer mcp`: the MCP server on standard input and output.
@@ -180,6 +248,14 @@ fn hint(kind: ErrorKind) -> Option<&'static str> {
     }
 }
 
+/// The hint after an export of a page in a format of a text.
+const EXPORT_PAGE: &str = "Here: a page is written as a folder (\"writer export <page> <folder>\"), as \
+a PDF (a path ending in .pdf) or as its text (.txt).";
+
+/// The hint after a text operation on a page: how a newer copy of a page comes in.
+const NEWER_PAGE: &str = "Here: \"writer page add <file or folder> --source-url <address>\" with the \
+address the page came from brings a newer copy (\"writer info <page>\" shows the address).";
+
 /// The hint for a failure of `spec`, the command that ran: the options a message of the
 /// command layer means are the options of that command.
 fn hint_in(spec: Option<&spec::Spec>, failure: &Failure) -> Option<&'static str> {
@@ -207,6 +283,13 @@ fn hint_in(spec: Option<&spec::Spec>, failure: &Failure) -> Option<&'static str>
                  <text>; without --heading the place is --at end or --at start.",
             );
         }
+    }
+    if failure.kind == ErrorKind::WrongKind && failure.message.contains(" is a page: ") {
+        return Some(if spec.is_some_and(|spec| spec.name == "export") {
+            EXPORT_PAGE
+        } else {
+            NEWER_PAGE
+        });
     }
     hint(failure.kind)
 }

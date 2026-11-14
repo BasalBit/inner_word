@@ -501,8 +501,9 @@ dot, which the walk of a folder never takes either) and names it in a warning of
   address is the last one asked.
 - GET only, status 200 only. On any other status or a non-zero exit of curl the output
   file is removed and the answer is an error ("HTTP 404", "over 32 MB", curl's own
-  sentence). The media type comes from `Content-Type`, else from the ending of the final
-  address, else `application/octet-stream`.
+  sentence). The fetcher reports the `Content-Type` (else the ending of the final
+  address); what the piece is stored as is decided by the bundler, from its bytes first
+  and the header last ("What the build changed": a server calls fonts HTML).
 - `CurlFetcher::allowing_local()` drops the address check. Only tests use it (their
   server is on 127.0.0.1); nothing outside a test names it, and a test of `writer-page`
   holds that the default refuses 127.0.0.1.
@@ -3031,3 +3032,4 @@ sections above say the same where they are about it.
 | A link opens outside only when the navigation goes to the link the reader acted on: the one under the pointer at the real `mouseDown:` or the focused one at a real `enter`, asked in the client's content world, once per act (section 5) | writer-web, 45811e2 (review ISO-4) | Any key or click opened the gate for a second, so a page's listener could `a.click()` a link of its choosing and send the reader's browser to any address |
 | The check's probe makes pictures and frames under `loading="lazy"` eager; the bundler names a lazy one that is not among the page's files, for a folder and a single file alike (section 3) | writer-web, 45811e2; writer-page, 331e502 (review ISO-3) | The check never scrolls: a missing file far down the page was never asked for, and the page was added as whole |
 | The online test of the archive compares the font files of Google Fonts by what matters (there are some where the archive has some, no style sheet still names one on the web), every other address as it is | writer-page, d05847e | Google's style sheets name other font files as time goes on (a new `/s/<family>/v22/`, other `/l/font?kit=` addresses, a family moved between the two): the test failed on addresses while the pages were whole. Run on purpose on 2026-11-14: every original bundled, nothing missed |
+| The media type of a stored piece is decided by its bytes (a signature: fonts, pictures, sound, film), then by where the page names it (a `url()` of `@font-face` and a preload as a font are fonts, never text) and its ending, and the server's Content-Type only where those say nothing against it; bytes that are no text are never HTML (also a file of the page, and as writer-web serves a stored one); a piece from the web is never a document of the page, which the check loads and reads for text (`Bundle::html_paths`, `write_served_dir`) | writer-page, writer-web, 36c8053 (QA of the bundled 0.8.0) | Google Fonts answers some `/l/font?kit=` addresses with `text/html; charset=utf-8` for WOFF2 bytes: an add of Nimbus Brand Sheet stored 7 of its 9 kits as HTML files of the page, the check read their bytes, and the page's text grew from 4,982 to 370,903 characters (850 words to 79,760) in the search, the word counts, what agents read and the assistant's context; the kits also counted toward the 101 HTML files |

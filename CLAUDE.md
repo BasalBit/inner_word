@@ -1791,15 +1791,25 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   each one eager as soon as it is in the document, and the bundler names a local one that
   is not among the page's files before the check ("the page asks for pics/late.png when it
   is scrolled to (loading=lazy), which is not among its files"), for a folder and a single
-  file alike. What is not fetched and is no reason (an
+  file alike. **A server's Content-Type is not believed on its own word** (Google Fonts
+  answers some `/l/font?kit=…` addresses with `text/html` for WOFF2 bytes, and 0.8.0 stored
+  those fonts as HTML files of the page, whose bytes the check read as text):
+  `bundle.rs`, `what_a_piece_is`, takes the type from the bytes' signature first
+  (`writer_page::sniffed_type`: fonts, pictures, sound, film), then from where the page names
+  the piece (a `url()` of `@font-face` and a preload as a font are never text; a script, a
+  style sheet) and its ending, and the header only where those say nothing against it; bytes
+  that are no text are never HTML, also for a file of the page (`served_type`) and when
+  writer-web serves a stored one. **A piece from the web is never a document of the page**:
+  only the entry and the page's own HTML files are loaded by the check and read for text
+  (`Bundle::html_paths`, `write_served_dir`). What is not fetched and is no reason (an
   address in a string, `window.claude`) is a warning. Limits: 32 MB a file, 64 MB a page,
   2,000 files, 500 pieces from the web, 101 HTML files, 120 s of check. The text of a page
   is what it shows (`innerText`) and then what it holds unshown (closed `<details>`, hidden
   chapters), for search, agents and the assistant; what layout shows apart stays apart (a
   tag after a word, a chip, the gutter of a listing, the labels of an axis: each junction
   is measured and marked before `innerText` is read, only white space is added). The text
-  is that of every HTML file the check loads (the entry first, the others under their
-  titles), so the words a page counts (status bar, `writer list`) can be many more than
+  is that of every HTML file of the page the check loads (the entry first, the others under
+  their titles; never a piece from the web), so the words a page counts (status bar, `writer list`) can be many more than
   the entry shows (Nimbus Landing Variants: 54,000 words, of which 6,900 in its
   `index.html`), and a search can find a page by a word only another of its HTML files
   has. `page:make` stores the static check's text (tags stripped, every file), whose

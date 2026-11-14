@@ -174,6 +174,11 @@ pub struct Editor {
     pub(crate) link_tip: Option<LinkTip>,
     /// The editor's focus handle is focused (as of the last focus event).
     focused: bool,
+    /// The window is the active one (as of the last activation event).
+    /// The caret blinks only in the active window: a window in the
+    /// background (beside another, tiled) would otherwise draw a whole
+    /// frame twice a second for a caret it does not show.
+    window_active: bool,
     /// Paint the caret and the selection as in an active window even while
     /// the window is in the background.
     pub(crate) draw_as_active: bool,
@@ -181,7 +186,7 @@ pub struct Editor {
     pub(crate) blink_on: bool,
     /// The last frame painted a caret.
     pub(crate) caret_painted: bool,
-    blink_task: Option<Task<()>>,
+    pub(crate) blink_task: Option<Task<()>>,
     /// Ends the typing undo step after a pause.
     pub(crate) typing_pause: Option<Task<()>>,
     /// The background layout task, while it has work.
@@ -330,10 +335,14 @@ impl Editor {
             // The caret and the selection colour follow the window's
             // active state.
             cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
+                this.window_active = window.is_window_active();
+                if this.window_active {
                     this.restart_blink(cx);
                 } else {
+                    // Stopped in its shown half: a scripted run, which
+                    // draws the caret in the background, shows it.
                     this.blink_task = None;
+                    this.blink_on = true;
                 }
                 cx.notify();
             }),
@@ -416,6 +425,7 @@ impl Editor {
             link_hover: false,
             link_tip: None,
             focused: false,
+            window_active: window.is_window_active(),
             // A scripted run stays in the background (so it does not take
             // the keyboard from whoever is at the machine); its screenshots
             // should still show the caret.
@@ -858,10 +868,12 @@ impl Editor {
 
 impl Editor {
     /// Shows the caret and starts its blink over. Does nothing but show it
-    /// while the editor is not focused.
+    /// while the editor is not focused or its window is not the active
+    /// one (the activation observer starts it when the window becomes
+    /// active): every start of the blink comes through here.
     pub(crate) fn restart_blink(&mut self, cx: &mut Context<Self>) {
         self.blink_on = true;
-        if !self.focused {
+        if !self.focused || !self.window_active {
             self.blink_task = None;
             return;
         }

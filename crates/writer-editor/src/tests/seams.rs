@@ -732,6 +732,83 @@ fn caret_blinks_and_follows_focus_and_the_window(cx: &mut TestAppContext) {
     assert!(painted(cx));
 }
 
+/// The caret blinks only in the active window: a window in the background
+/// (tiled beside another) does not draw a frame twice a second for a caret
+/// it does not show. (GPUI also takes the focus out of a window that is
+/// not active, at its next frame; `Editor::restart_blink` does not count on
+/// that frame having been drawn.)
+#[gpui::test]
+fn the_caret_blinks_only_in_the_active_window(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    setup(cx);
+    let (editor, cx) = open(paragraphs(3), EditorConfig::full(), cx);
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(false, cx));
+    cx.run_until_parked();
+    let notified = Rc::new(Cell::new(0));
+    let _observer = cx.update(|_, cx| {
+        let notified = notified.clone();
+        cx.observe(&editor, move |_, _| notified.set(notified.get() + 1))
+    });
+    let blinking = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| editor.blink_task.is_some())
+    };
+    let notified_over = |cx: &mut gpui::VisualTestContext, millis| {
+        let before = notified.get();
+        cx.executor().advance_clock(Duration::from_millis(millis));
+        cx.run_until_parked();
+        notified.get() - before
+    };
+
+    assert!(blinking(cx), "focused in the active window");
+    assert!(notified_over(cx, 2_000) >= 3, "it blinks");
+
+    cx.deactivate_window();
+    assert!(!blinking(cx));
+    assert_eq!(
+        notified_over(cx, 3_000),
+        0,
+        "nothing to draw in the background"
+    );
+    // Nothing that shows the caret starts the blink there: typing,
+    // moving, the keyboard coming back to the text.
+    cx.simulate_input("a");
+    cx.simulate_keystrokes("left");
+    assert!(!blinking(cx));
+    cx.update(|window, _| window.blur());
+    cx.update(|window, cx| editor.read(cx).focus(window));
+    assert!(!blinking(cx));
+    // (The pause that ends the typing's undo step is a notification of
+    // its own.)
+    notified_over(cx, 3_000);
+    assert_eq!(notified_over(cx, 3_000), 0);
+    // A scripted run draws the caret in the background: steadily.
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(true, cx));
+    cx.run_until_parked();
+    let painted = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| editor.caret_painted)
+    };
+    assert!(painted(cx));
+    cx.executor().advance_clock(Duration::from_millis(600));
+    assert!(painted(cx), "shown and not blinking");
+    editor.update(cx, |editor, cx| editor.set_draw_as_active(false, cx));
+
+    // Active again: it blinks.
+    cx.update(|window, _| window.activate_window());
+    assert!(blinking(cx));
+    assert!(painted(cx));
+    cx.executor().advance_clock(Duration::from_millis(600));
+    assert!(!painted(cx), "in its hidden half");
+
+    // Leaving the window in the hidden half shows the caret again for
+    // whatever draws it in the background.
+    cx.deactivate_window();
+    assert!(!blinking(cx));
+    editor.read_with(cx, |editor, _| assert!(editor.blink_on));
+}
+
 #[gpui::test]
 fn hidden_comments_and_read_only_checks(cx: &mut TestAppContext) {
     setup(cx);

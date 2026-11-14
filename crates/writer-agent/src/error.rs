@@ -493,6 +493,13 @@ impl Error {
             PageError::Io { path, error } if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Error::FileExists { path }
             }
+            // A file the request names that is not there: the request's mistake, said in
+            // the bundler's words.
+            PageError::Io { path, error } if error.kind() == std::io::ErrorKind::NotFound => {
+                Error::Invalid {
+                    message: PageError::Io { path, error }.sentence(),
+                }
+            }
             PageError::Io { path, error } => Error::Io {
                 path,
                 source: error,

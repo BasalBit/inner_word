@@ -1617,3 +1617,62 @@ fn the_checker_runs_as_a_child_with_its_input_closed_and_its_time_bounded() {
         .unwrap_err();
     assert!(error.to_string().contains("wrote no file"), "{error}");
 }
+
+/// Not a test of its own: run by the test below in a second process, with
+/// `THE_WRITER_PAGE_CHECK=fake` in its environment.
+#[test]
+fn the_child_answers_with_the_fake_check() {
+    if std::env::var_os("WRITER_AGENT_TEST_FAKE_CHECK").is_none() {
+        return;
+    }
+    let fx = closed_fixture();
+    let folder = fx.page_folder(
+        "fake",
+        &[("index.html", "<title>Fake</title><p>Faked.</p>")],
+    );
+    let input = writer_page::read_input(&folder, None).unwrap();
+    let bundle = writer_page::bundle(input, &MapFetcher::new()).unwrap();
+    // A program that is not there is never started.
+    let checker = writer_agent::ProcessChecker::with_program(fx.dir.path().join("not there"));
+    let report = checker.check(&bundle).unwrap();
+    assert_eq!(report, writer_page::static_check(&bundle));
+    let out = fx.dir.path().join("fake.pdf");
+    checker.print(fx.dir.path(), &out).unwrap();
+    assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-1.4"));
+    println!("\nchild ok");
+}
+
+#[test]
+fn a_debug_build_checks_with_the_fake_when_the_environment_says_so() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "suite::pages::the_child_answers_with_the_fake_check",
+            "--nocapture",
+        ])
+        .env("WRITER_AGENT_TEST_FAKE_CHECK", "1")
+        .env(writer_agent::FAKE_CHECK_ENV, "fake")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("child ok"), "{stdout}");
+    // Any other value is no fake.
+    let fx = closed_fixture();
+    let folder = fx.page_folder("real", &[("index.html", "<title>Real</title>")]);
+    let input = writer_page::read_input(&folder, None).unwrap();
+    let bundle = writer_page::bundle(input, &MapFetcher::new()).unwrap();
+    if std::env::var(writer_agent::FAKE_CHECK_ENV).is_err() {
+        let error = writer_agent::ProcessChecker::with_program(fx.dir.path().join("not there"))
+            .check(&bundle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("could not be started"),
+            "{error}"
+        );
+    }
+}

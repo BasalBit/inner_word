@@ -2448,8 +2448,9 @@ fn an_app_from_before_pages_refuses_a_page_whole() {
 fn a_page_as_large_as_a_page_can_be_goes_through_the_channel() {
     let fx = closed_fixture();
     fx.create(None, "# Chapter 1\n\nText.\n");
-    // Two files of 31 MB and the page that names them: 62 MB of distinct bytes.
-    const SIZE: usize = 31 * 1024 * 1024;
+    // Two files a little under 32 MB and the page that names them: as near to the 64 MB
+    // a page may hold as two files can come.
+    const SIZE: usize = 32 * 1024 * 1024 - 64 * 1024;
     let mut files = Vec::new();
     for (name, seed) in [("a.bin", 1u8), ("b.bin", 2u8)] {
         let bytes: Vec<u8> = (0..SIZE)
@@ -2469,7 +2470,24 @@ fn a_page_as_large_as_a_page_can_be_goes_through_the_channel() {
     }
     let app = StandIn::open(&fx);
     app.names();
-    let library = fx.library.clone();
+    // Measured in this build on this Mac: about 9 s to prepare the page and 8 s for the
+    // rest (the line written, read and taken apart, the files hashed and stored with a
+    // sync), the app's part well inside the 13 s a tool waits for its answer. The suite
+    // runs its tests side by side, so this one is given room.
+    let library = fx
+        .library
+        .clone()
+        .with_app_patience(Duration::from_secs(30));
+    // What the tool does before it sends anything: the preparing of the page.
+    let started = Instant::now();
+    library
+        .add_page(&AddPageRequest {
+            path: folder.to_string_lossy().into_owned(),
+            write: super::rules::dry(),
+            ..Default::default()
+        })
+        .unwrap();
+    let preparing = started.elapsed();
     let started = Instant::now();
     let added = library
         .add_page(&AddPageRequest {
@@ -2481,7 +2499,12 @@ fn a_page_as_large_as_a_page_can_be_goes_through_the_channel() {
     let took = started.elapsed();
     assert!(added.written.changed && added.written.app_is_open);
     assert_eq!(added.files, 3);
-    assert!(added.bytes > 62 * 1024 * 1024, "{}", added.bytes);
+    assert!(added.bytes > 63 * 1024 * 1024, "{}", added.bytes);
+    assert!(
+        added.bytes <= writer_page::MAX_PAGE_BYTES,
+        "{}",
+        added.bytes
+    );
     assert_eq!(app.changes(), ["add_page"]);
     let store = fx.store();
     for (_, bytes) in &files {
@@ -2492,7 +2515,7 @@ fn a_page_as_large_as_a_page_can_be_goes_through_the_channel() {
         );
     }
     eprintln!(
-        "a page of {} bytes through the channel: {took:?}",
+        "a page of {} bytes through the channel: {took:?}, of which preparing it {preparing:?}",
         added.bytes
     );
 }

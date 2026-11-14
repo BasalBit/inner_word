@@ -27,6 +27,7 @@
 //! | Comments | [`comments`](Library::comments), [`add_comment`](Library::add_comment), [`reply`](Library::reply), [`resolve_comment`](Library::resolve_comment), [`reopen_comment`](Library::reopen_comment), [`delete_comment`](Library::delete_comment) |
 //! | History | [`versions`](Library::versions), [`read_version`](Library::read_version), [`restore_version`](Library::restore_version) |
 //! | Export | [`export`](Library::export) |
+//! | Pages | [`add_page`](Library::add_page), [`pages`](Library::pages) (and every read, item and history operation above works on a page) |
 //!
 //! # The rules
 //!
@@ -88,6 +89,20 @@
 //! and hands the bytes on with the request ([`AttachedImage`]); the app, when it is the
 //! one that carries the request out, opens no path. A file that cannot be used is a
 //! warning in the result and the image stays a link (for `add_image`: an error).
+//!
+//! **A page is kept as it was made.** A library item can be a page: a web page (an HTML
+//! file or a folder, with its styles, scripts, fonts, pictures and sounds) kept whole and
+//! offline ([`Library::add_page`]). Everything it loads from the web is fetched once when
+//! it is added, and it is checked, with the network blocked, to be whole; a page that
+//! needs something that cannot be kept is not added at all
+//! ([`Error::PageIncomplete`]). The reading, the fetching and the check happen in the
+//! process that was asked, by a [`PageChecker`] it was given
+//! ([`Library::with_page_checker`]; the `writer` tool runs itself as a child for it), and
+//! the page travels with the request ([`PreparedPage`]). A page cannot be edited: an
+//! operation on the text of a document fails on a page with [`Error::WrongKind`]. Its
+//! text (what it showed) is what a read, a search and a find see; with a source address
+//! it is the page at that address, added again unchanged, updated (the page as it was
+//! kept as a version) or left in the trash ([`PageOutcome`]).
 //!
 //! # Naming things
 //!

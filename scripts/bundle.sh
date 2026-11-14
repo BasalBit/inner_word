@@ -311,7 +311,10 @@ if [[ $SMOKE -eq 1 ]]; then
     sed 's/^/    /' "$TOOL_OUT"
     tool_said "added page:"
     wait_for_log 'the switch is off' "the changes of the tool had arrived"
-    grep -q 'changes=3 last="Smoke added “Smoke Page”"' "$TOOL_LOG" \
+    # The page is the last change. A change that arrives while the note of the one before
+    # is still up joins it ("Smoke made 3 changes in the library"), which depends on how
+    # long the check of the page took; either note is right.
+    grep -qE 'changes=3 last="Smoke (added “Smoke Page”|made [23] changes in the library)"' "$TOOL_LOG" \
         || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the app did not count three changes by the tool, the page last"; }
     grep -q 'text: .*Added while the app was open\.' "$TOOL_LOG" \
         || { sed 's/^/    /' "$TOOL_LOG" >&2; die "the text the tool appended is not in the window of the app"; }

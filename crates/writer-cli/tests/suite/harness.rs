@@ -54,7 +54,12 @@ impl Sandbox {
             root,
             env: Vec::new(),
         };
-        for dir in [sandbox.home(), sandbox.library(), sandbox.work(), sandbox.tmp()] {
+        for dir in [
+            sandbox.home(),
+            sandbox.library(),
+            sandbox.work(),
+            sandbox.tmp(),
+        ] {
             std::fs::create_dir_all(&dir).expect("a folder in the temporary directory");
         }
         sandbox.assert_isolated();
@@ -66,7 +71,8 @@ impl Sandbox {
     /// with its tags taken out, nothing blocked, no WebKit. Its temporary directory is
     /// the sandbox's own.
     pub fn fake_page_check(mut self) -> Sandbox {
-        self.env.push(("THE_WRITER_PAGE_CHECK", PathBuf::from("fake")));
+        self.env
+            .push(("THE_WRITER_PAGE_CHECK", PathBuf::from("fake")));
         self.env.push(("TMPDIR", self.tmp()));
         self
     }
@@ -76,7 +82,8 @@ impl Sandbox {
     /// by a debug build only), where the test's own server is. Its temporary directory,
     /// where the checks and WebKit's rule list are, is the sandbox's own.
     pub fn real_page_check(mut self) -> Sandbox {
-        self.env.push(("THE_WRITER_FETCH_LOCAL", PathBuf::from("1")));
+        self.env
+            .push(("THE_WRITER_FETCH_LOCAL", PathBuf::from("1")));
         self.env.push(("TMPDIR", self.tmp()));
         self
     }
@@ -429,8 +436,7 @@ impl LiveApp {
                 // queued, and the main thread only writes the row.
                 if live::carries_page_files(incoming.request()) {
                     let mut files = writer_store::ImageFile::beside(&database_for_thread);
-                    if let Err(error) = live::store_page_files(incoming.request_mut(), &mut files)
-                    {
+                    if let Err(error) = live::store_page_files(incoming.request_mut(), &mut files) {
                         incoming.answer(live::Answer::failed(&error)).ok();
                         continue;
                     }

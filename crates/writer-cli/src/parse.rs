@@ -556,7 +556,10 @@ mod tests {
         // Another command still says that a word is one too many.
         assert!(error(&["get", "a", "b"]).contains("unexpected argument \"b\""));
         assert_eq!(command(&["pages"]).1, "page list");
-        assert_eq!(command(&["pages", "Claude Pages"]).2.arg(0), Some("Claude Pages"));
+        assert_eq!(
+            command(&["pages", "Claude Pages"]).2.arg(0),
+            Some("Claude Pages")
+        );
         assert_eq!(command(&["page", "list", "--json"]).1, "page list");
     }
 

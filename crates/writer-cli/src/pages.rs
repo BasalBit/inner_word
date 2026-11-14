@@ -249,7 +249,11 @@ fn with_input(mut data: Value, path: &str) -> Value {
 /// kept whole. … Nothing was saved.`, or for a failure that has no name of a page yet,
 /// `not added “~/Downloads/x”: there is no file …`.
 fn not_added(path: &str, failure: &Failure) -> String {
-    let message = failure.message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let message = failure
+        .message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if failure.kind == ErrorKind::PageIncomplete
         && let Some(rest) = message.strip_prefix('\u{201c}')
         && let Some((name, why)) = rest.split_once("\u{201d} was not added: ")
@@ -404,7 +408,10 @@ mod tests {
         assert!(wrong(r#"[{"path": "a", "folder": "x"}]"#).contains("the field \"folder\""));
         assert!(wrong(r#"[{"path": "a", "externals": {"x": 1}}]"#).contains("\"externals\""));
         let prepared = wrong(r#"[{"path": "a"}, {"path": "b", "prepared": {}}]"#);
-        assert!(prepared.starts_with("page 2 of the list l.json names \"prepared\""), "{prepared}");
+        assert!(
+            prepared.starts_with("page 2 of the list l.json names \"prepared\""),
+            "{prepared}"
+        );
         assert_eq!(
             parse_list("[]", "x").unwrap_err().kind,
             ErrorKind::Invalid,

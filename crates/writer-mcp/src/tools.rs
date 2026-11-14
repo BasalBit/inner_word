@@ -22,16 +22,15 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use writer_agent::{
-    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest, CreateFolderRequest,
-    DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
-    EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport, ExportRequest, FindRequest,
-    FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind, Library, ListCommentsRequest,
-    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, PagesRequest, ReadRequest,
-    ReadVersionRequest,
-    RecentRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
-    ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
-    RestoreVersionRequest, SearchRequest, Target, TrashDocumentRequest, TrashFolderRequest,
-    TreeRequest,
+    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
+    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
+    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport,
+    ExportRequest, FindRequest, FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind,
+    Library, ListCommentsRequest, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest,
+    PagesRequest, ReadRequest, ReadVersionRequest, RecentRequest, RenameDocumentRequest,
+    RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest,
+    RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target,
+    TrashDocumentRequest, TrashFolderRequest, TreeRequest,
 };
 
 use crate::args::{self, boolean, integer, integer_between, one_of, string, string_map};
@@ -956,9 +955,7 @@ takes any number. Paths are absolute. The warnings of the result are for the use
                     ),
                     (
                         "title",
-                        string(
-                            "The title. Default: the page's own title, else its first heading.",
-                        ),
+                        string("The title. Default: the page's own title, else its first heading."),
                     ),
                     (
                         "source_url",

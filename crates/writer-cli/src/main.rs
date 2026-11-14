@@ -123,7 +123,9 @@ fn main() -> ExitCode {
 /// checked (and printed) by this program, run again as a child.
 fn library(globals: &Globals) -> Result<Library, Failure> {
     Library::locate(globals.library.as_deref())
-        .map(|library| library.with_page_checker(Arc::new(writer_agent::ProcessChecker::current_exe())))
+        .map(|library| {
+            library.with_page_checker(Arc::new(writer_agent::ProcessChecker::current_exe()))
+        })
         .map_err(Failure::from)
 }
 
@@ -161,7 +163,11 @@ fn add_pages(spec: &'static spec::Spec, parsed: &parse::Parsed, globals: &Global
                      the first one's",
                     added.failed,
                     added.tried,
-                    if added.tried == 1 { "page was" } else { "pages were" }
+                    if added.tried == 1 {
+                        "page was"
+                    } else {
+                        "pages were"
+                    }
                 );
                 match hint {
                     Some(hint) => writeln!(stderr, "{summary}\n{hint}"),

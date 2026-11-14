@@ -21,7 +21,8 @@ fn site(sandbox: &Sandbox, name: &str, html: &str) -> PathBuf {
     dir
 }
 
-const ORBITARIUM: &str = "<!doctype html><title>Orbitarium</title><h1>The sky</h1><p>Stars at night.</p>";
+const ORBITARIUM: &str =
+    "<!doctype html><title>Orbitarium</title><h1>The sky</h1><p>Stars at night.</p>";
 
 #[test]
 fn a_page_is_added_and_read_back_and_listed() {
@@ -45,7 +46,10 @@ fn a_page_is_added_and_read_back_and_listed() {
     );
     // A page is page:<id> everywhere; doc:<id> names it too.
     assert_eq!(sandbox.ok(&["get", "page:1"]), "The sky\nStars at night.\n");
-    assert_eq!(sandbox.ok(&["get", "doc:1", "--format", "text"]), sandbox.ok(&["get", "page:1"]));
+    assert_eq!(
+        sandbox.ok(&["get", "doc:1", "--format", "text"]),
+        sandbox.ok(&["get", "page:1"])
+    );
     let text = sandbox.json(&["get", "page:1"]);
     assert_eq!(text["document"]["kind"], "page");
     assert_eq!(text["page"]["entry"], "index.html");
@@ -57,7 +61,10 @@ fn a_page_is_added_and_read_back_and_listed() {
     assert!(manifest.contains("\"index.html\""), "{manifest}");
 
     let info = sandbox.ok(&["info", "page:1"]);
-    assert!(info.starts_with("page:1  Claude Pages/Orbitarium\n"), "{info}");
+    assert!(
+        info.starts_with("page:1  Claude Pages/Orbitarium\n"),
+        "{info}"
+    );
     for line in [
         "title:     Orbitarium (the page's own)",
         "kind:      a page",
@@ -70,7 +77,10 @@ fn a_page_is_added_and_read_back_and_listed() {
     ] {
         assert!(info.contains(line), "{line}: {info}");
     }
-    assert!(!info.contains("margins"), "a page has no page settings: {info}");
+    assert!(
+        !info.contains("margins"),
+        "a page has no page settings: {info}"
+    );
 
     let pages = sandbox.ok(&["pages"]);
     assert!(
@@ -89,12 +99,21 @@ fn a_page_is_added_and_read_back_and_listed() {
     assert_eq!(sandbox.ok(&["pages", "/"]), pages);
 
     let tree = sandbox.ok(&["list"]);
-    assert!(tree.contains("    Orbitarium  page:1  (page, changed "), "{tree}");
+    assert!(
+        tree.contains("    Orbitarium  page:1  (page, changed "),
+        "{tree}"
+    );
     let found = sandbox.ok(&["search", "stars"]);
-    assert!(found.contains("page:1  Claude Pages/Orbitarium  (page, changed"), "{found}");
+    assert!(
+        found.contains("page:1  Claude Pages/Orbitarium  (page, changed"),
+        "{found}"
+    );
     let find = sandbox.ok(&["find", "page:1", "Stars"]);
     assert!(find.contains("The text occurs once in page:1"), "{find}");
-    assert_eq!(sandbox.ok(&["comments", "page:1"]), "No comments in page:1 \"Claude Pages/Orbitarium\".\n");
+    assert_eq!(
+        sandbox.ok(&["comments", "page:1"]),
+        "No comments in page:1 \"Claude Pages/Orbitarium\".\n"
+    );
 }
 
 #[test]
@@ -116,7 +135,10 @@ fn adding_again_is_unchanged_or_updated_and_a_page_in_the_trash_is_left_there() 
         "--source-url",
         "https://Claude.AI/artifact/ExampleArtifactId00002/#top",
     ]);
-    assert_eq!(same, format!("unchanged page:1 \u{201c}Orbitarium\u{201d} ({address})\n"));
+    assert_eq!(
+        same,
+        format!("unchanged page:1 \u{201c}Orbitarium\u{201d} ({address})\n")
+    );
     let unchanged = sandbox.json(&["page", "add", "orbitarium", "--source-url", address]);
     assert_eq!(unchanged["pages"][0]["outcome"], "unchanged");
     assert_eq!(unchanged["pages"][0]["changed"], false);
@@ -136,10 +158,16 @@ fn adding_again_is_unchanged_or_updated_and_a_page_in_the_trash_is_left_there() 
         updated,
         "updated page:1 \u{201c}Orbitarium\u{201d}: the page as it was is kept as version 1 (1 file, 0.1 MB)\n"
     );
-    assert_eq!(sandbox.ok(&["get", "page:1"]), "The sky\nStars and planets.\n");
+    assert_eq!(
+        sandbox.ok(&["get", "page:1"]),
+        "The sky\nStars and planets.\n"
+    );
     let history = sandbox.ok(&["history", "page:1"]);
     assert!(history.contains("Before an update by Claude"), "{history}");
-    assert_eq!(sandbox.ok(&["history", "show", "1"]), "The sky\nStars at night.\n");
+    assert_eq!(
+        sandbox.ok(&["history", "show", "1"]),
+        "The sky\nStars at night.\n"
+    );
 
     sandbox.ok(&["trash", "page:1"]);
     let trashed = add(&[]);
@@ -152,7 +180,10 @@ fn adding_again_is_unchanged_or_updated_and_a_page_in_the_trash_is_left_there() 
     assert_eq!(listed["pages"][0]["trashed"], true);
     assert!(sandbox.ok(&["pages"]).ends_with("  (in the trash)\n"));
     let again = add(&["--include-trashed"]);
-    assert!(again.starts_with("added page:2 \u{201c}Orbitarium\u{201d} at the top of the library"), "{again}");
+    assert!(
+        again.starts_with("added page:2 \u{201c}Orbitarium\u{201d} at the top of the library"),
+        "{again}"
+    );
     sandbox.ok(&["restore", "page:1"]);
 }
 
@@ -195,12 +226,24 @@ fn a_list_adds_every_page_with_its_own_address_and_the_pieces_it_was_given() {
     assert_eq!(run.code, 2, "the first page that failed: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(lines.len(), 3, "{}", run.stdout);
-    assert_eq!(lines[0], "added page:1 \u{201c}One\u{201d} in Claude Pages (1 file, 0.1 MB)");
-    assert!(lines[1].starts_with("added page:2 \u{201c}Second\u{201d} in Claude Pages (2 files, "), "{}", lines[1]);
-    assert!(lines[1].ends_with("1 piece from the web)"), "{}", lines[1]);
-    assert!(lines[2].starts_with("not added \u{201c}../three\u{201d}: there is no file"), "{}", lines[2]);
+    assert_eq!(
+        lines[0],
+        "added page:1 \u{201c}One\u{201d} in Claude Pages (1 file, 0.1 MB)"
+    );
     assert!(
-        run.stderr.starts_with("writer: 1 of 3 pages were not added"),
+        lines[1].starts_with("added page:2 \u{201c}Second\u{201d} in Claude Pages (2 files, "),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].ends_with("1 piece from the web)"), "{}", lines[1]);
+    assert!(
+        lines[2].starts_with("not added \u{201c}../three\u{201d}: there is no file"),
+        "{}",
+        lines[2]
+    );
+    assert!(
+        run.stderr
+            .starts_with("writer: 1 of 3 pages were not added"),
         "{}",
         run.stderr
     );
@@ -217,7 +260,8 @@ fn a_list_adds_every_page_with_its_own_address_and_the_pieces_it_was_given() {
     assert_eq!(run.error()["code"], "invalid");
 
     // A list on standard input; relative paths from where the tool runs.
-    let list = json!([{ "path": "one", "source_url": "https://claude.ai/artifact/one" }]).to_string();
+    let list =
+        json!([{ "path": "one", "source_url": "https://claude.ai/artifact/one" }]).to_string();
     let run = sandbox.run_with_input(&["page", "add", "--list", "-"], &list);
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert!(run.stdout.starts_with("unchanged page:1"), "{}", run.stdout);
@@ -226,7 +270,12 @@ fn a_list_adds_every_page_with_its_own_address_and_the_pieces_it_was_given() {
     let prepared = json!([{ "path": "one", "prepared": { "state": "trashed", "page": 1 } }]);
     let run = sandbox.run_with_input(&["page", "add", "--list", "-"], &prepared.to_string());
     assert_eq!(run.code, 2);
-    assert!(run.stderr.contains("names \"prepared\", which a list cannot give"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("names \"prepared\", which a list cannot give"),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -234,24 +283,46 @@ fn what_is_for_one_page_is_refused_for_several_and_the_hint_says_how() {
     let sandbox = Sandbox::new().fake_page_check();
     site(&sandbox, "one", "<title>One</title><p>a</p>");
     site(&sandbox, "two", "<title>Two</title><p>b</p>");
-    let several = sandbox.fail(&["page", "add", "one", "two", "--source-url", "https://x.test/"], 2);
-    assert!(several.contains("--source-url is for one page, and 2 are named"), "{several}");
+    let several = sandbox.fail(
+        &[
+            "page",
+            "add",
+            "one",
+            "two",
+            "--source-url",
+            "https://x.test/",
+        ],
+        2,
+    );
+    assert!(
+        several.contains("--source-url is for one page, and 2 are named"),
+        "{several}"
+    );
     assert!(several.contains("--list <file.json>"), "{several}");
     let both = sandbox.fail(&["page", "add", "one", "--list", "x.json"], 2);
     assert!(both.contains("not both"), "{both}");
     let none = sandbox.fail(&["page", "add"], 2);
     assert!(none.contains("name the page"), "{none}");
     let address = sandbox.fail(&["page", "add", "https://claude.ai/artifact/x"], 2);
-    assert!(address.contains("fetching a live site is not supported"), "{address}");
+    assert!(
+        address.contains("fetching a live site is not supported"),
+        "{address}"
+    );
     // A folder with several pages at its top and no index.html: --entry says which.
     let dir = sandbox.work().join("multi");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.html"), "<title>A</title><p>a</p>").unwrap();
     std::fs::write(dir.join("b.html"), "<title>B</title><p>b</p>").unwrap();
     let entry = sandbox.fail(&["page", "add", "multi"], 2);
-    assert!(entry.contains("say which one opens with --entry"), "{entry}");
+    assert!(
+        entry.contains("say which one opens with --entry"),
+        "{entry}"
+    );
     let added = sandbox.ok(&["page", "add", "multi", "--entry", "b.html"]);
-    assert!(added.starts_with("added page:1 \u{201c}B\u{201d}"), "{added}");
+    assert!(
+        added.starts_with("added page:1 \u{201c}B\u{201d}"),
+        "{added}"
+    );
     // Several pages named on the command line, each its own line.
     let both = sandbox.ok(&["page", "add", "one", "two"]);
     assert_eq!(both.lines().count(), 2, "{both}");
@@ -261,7 +332,13 @@ fn what_is_for_one_page_is_refused_for_several_and_the_hint_says_how() {
 fn a_page_cannot_be_edited_and_the_codes_say_so() {
     let sandbox = Sandbox::new().fake_page_check();
     site(&sandbox, "orbitarium", ORBITARIUM);
-    sandbox.ok(&["page", "add", "orbitarium", "--source-url", "https://claude.ai/artifact/k"]);
+    sandbox.ok(&[
+        "page",
+        "add",
+        "orbitarium",
+        "--source-url",
+        "https://claude.ai/artifact/k",
+    ]);
     let doc = sandbox.create("Chapter 2", None, "Text.");
     assert_eq!(doc, "doc:2");
     sandbox.picture("pic.png", (8, 8), [1, 2, 3]);
@@ -272,7 +349,9 @@ fn a_page_cannot_be_edited_and_the_codes_say_so() {
         &["set", "page:1", "--content", "New."],
         &["replace-section", "page:1", "The sky", "--content", "x"],
         &["image", "add", "page:1", "pic.png"],
-        &["comment", "add", "page:1", "--quote", "sky", "--body", "Hm."],
+        &[
+            "comment", "add", "page:1", "--quote", "sky", "--body", "Hm.",
+        ],
     ] {
         let message = sandbox.fail(args, 15);
         assert!(
@@ -295,20 +374,37 @@ fn a_page_cannot_be_edited_and_the_codes_say_so() {
     assert!(pdf.contains("is a document, not a page"), "{pdf}");
     // What works on any item works on a page.
     sandbox.ok(&["rename", "page:1", "Sky map"]);
-    assert!(sandbox.ok(&["info", "page:1"]).contains("Sky map (chosen by hand)"));
+    assert!(
+        sandbox
+            .ok(&["info", "page:1"])
+            .contains("Sky map (chosen by hand)")
+    );
     sandbox.ok(&["move", "page:1", "Maps", "--create-folders"]);
     let copy = sandbox.ok(&["duplicate", "page:1"]);
     assert!(copy.starts_with("Copied to page:3"), "{copy}");
     let trashed = sandbox.ok(&["trash", "page:3"]);
-    assert_eq!(trashed, "Moved to the trash: page:3 \"Maps/Sky map copy\".\n");
-    assert!(sandbox.ok(&["list", "--trash"]).contains("page:3  Maps/Sky map copy  (page, trashed"));
+    assert_eq!(
+        trashed,
+        "Moved to the trash: page:3 \"Maps/Sky map copy\".\n"
+    );
+    assert!(
+        sandbox
+            .ok(&["list", "--trash"])
+            .contains("page:3  Maps/Sky map copy  (page, trashed")
+    );
     sandbox.ok(&["restore", "page:3"]);
     sandbox.ok(&["trash", "page:3", "--permanently"]);
 
     // The help of the tool explains both codes.
     let help = sandbox.ok(&["--help"]);
-    assert!(help.contains("14 the page could not be kept whole"), "{help}");
-    assert!(help.contains("15 a page where a document is needed"), "{help}");
+    assert!(
+        help.contains("14 the page could not be kept whole"),
+        "{help}"
+    );
+    assert!(
+        help.contains("15 a page where a document is needed"),
+        "{help}"
+    );
 }
 
 #[test]
@@ -322,11 +418,16 @@ fn a_page_that_cannot_be_kept_whole_is_refused_with_14_and_nothing_is_saved() {
     );
     let message = sandbox.fail(&["page", "add", "local"], 14);
     assert!(
-        message.starts_with("writer: \u{201c}Local\u{201d} was not added: it could not be kept whole."),
+        message.starts_with(
+            "writer: \u{201c}Local\u{201d} was not added: it could not be kept whole."
+        ),
         "{message}"
     );
     assert!(message.contains("http://127.0.0.1:9/a.css"), "{message}");
-    assert!(message.trim_end().ends_with("Nothing was saved."), "{message}");
+    assert!(
+        message.trim_end().ends_with("Nothing was saved."),
+        "{message}"
+    );
     let run = sandbox.run(&["page", "add", "local", "--json"]);
     assert_eq!(run.code, 14);
     assert_eq!(run.error()["code"], "page_incomplete");
@@ -344,14 +445,20 @@ fn the_warnings_of_a_page_are_printed_under_its_line() {
     );
     let added = sandbox.ok(&["page", "add", "desk"]);
     let lines: Vec<&str> = added.lines().collect();
-    assert!(lines[0].starts_with("added page:1 \u{201c}Marking Desk\u{201d}"), "{added}");
+    assert!(
+        lines[0].starts_with("added page:1 \u{201c}Marking Desk\u{201d}"),
+        "{added}"
+    );
     assert!(lines[0].ends_with(", with 1 warning:"), "{added}");
     assert_eq!(
         lines[1],
         "  it uses claude.ai's storage (window.claude): what it saved there is not in this copy"
     );
     let info = sandbox.ok(&["info", "page:1"]);
-    assert!(info.contains("warnings:\n  it uses claude.ai's storage"), "{info}");
+    assert!(
+        info.contains("warnings:\n  it uses claude.ai's storage"),
+        "{info}"
+    );
 }
 
 #[test]
@@ -374,19 +481,40 @@ fn a_page_is_exported_as_a_folder_as_the_files_it_came_from_and_as_a_pdf() {
         "p { color: red }"
     );
     // Again: the files are there, and are replaced only when asked.
-    let exists = sandbox.fail(&["export", "page:1", out.join("styled").to_str().unwrap()], 12);
+    let exists = sandbox.fail(
+        &["export", "page:1", out.join("styled").to_str().unwrap()],
+        12,
+    );
     assert!(exists.contains("--overwrite"), "{exists}");
-    sandbox.ok(&["export", "page:1", "--to", out.join("styled").to_str().unwrap(), "--overwrite"]);
-    let original = sandbox.ok(&["export", "page:1", out.join("original").to_str().unwrap(), "--original"]);
+    sandbox.ok(&[
+        "export",
+        "page:1",
+        "--to",
+        out.join("styled").to_str().unwrap(),
+        "--overwrite",
+    ]);
+    let original = sandbox.ok(&[
+        "export",
+        "page:1",
+        out.join("original").to_str().unwrap(),
+        "--original",
+    ]);
     assert!(original.contains("2 files"), "{original}");
     assert!(out.join("original/index.html").is_file());
     // The PDF of the fake check: one page. (The real one is below.)
     let pdf = sandbox.ok(&["export", "page:1", out.join("styled.pdf").to_str().unwrap()]);
     assert!(pdf.contains("(PDF, "), "{pdf}");
-    assert!(std::fs::read(out.join("styled.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(
+        std::fs::read(out.join("styled.pdf"))
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
     // Its text.
     sandbox.ok(&["export", "page:1", out.join("styled.txt").to_str().unwrap()]);
-    assert_eq!(std::fs::read_to_string(out.join("styled.txt")).unwrap(), "Styled text.\n");
+    assert_eq!(
+        std::fs::read_to_string(out.join("styled.txt")).unwrap(),
+        "Styled text.\n"
+    );
     // The path once, as an argument or with --to.
     let twice = sandbox.fail(&["export", "page:1", "a", "--to", "b"], 2);
     assert!(twice.contains("give the path once"), "{twice}");
@@ -415,7 +543,10 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
         12
     );
     assert!(tools.iter().all(|tool| tool["name"] != "list_pages"));
-    let add_page = tools.iter().find(|tool| tool["name"] == "add_page").unwrap();
+    let add_page = tools
+        .iter()
+        .find(|tool| tool["name"] == "add_page")
+        .unwrap();
     assert_eq!(add_page["annotations"]["readOnlyHint"], false);
 
     let (text, data) = client.call_ok(
@@ -427,7 +558,10 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
             "create_folders": true,
         }),
     );
-    assert_eq!(text, "added page:1 \u{201c}Orbitarium\u{201d} in Claude Pages (1 file, 0.1 MB)\n");
+    assert_eq!(
+        text,
+        "added page:1 \u{201c}Orbitarium\u{201d} in Claude Pages (1 file, 0.1 MB)\n"
+    );
     assert_eq!(data["outcome"], "added");
     assert_eq!(data["page"]["kind"], "page");
     // A second call: the server read nothing of its input meanwhile.
@@ -442,7 +576,10 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
         json!({ "path": dir.to_str().unwrap(), "prepared": { "state": "trashed", "page": 1 } }),
     );
     assert_eq!(error["code"], "invalid");
-    assert!(message.contains("There is no argument \"prepared\""), "{message}");
+    assert!(
+        message.contains("There is no argument \"prepared\""),
+        "{message}"
+    );
     // Reads of a page.
     let (read, _) = client.call_ok("read_document", json!({ "document": "page:1" }));
     assert_eq!(read, "The sky\nStars at night.\n");
@@ -456,7 +593,10 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
         json!({ "document": 1, "old_text": "sky", "new_text": "sea" }),
     );
     assert_eq!(error["code"], "wrong_kind");
-    assert!(wrong.contains("add_page") && wrong.contains("source_url"), "{wrong}");
+    assert!(
+        wrong.contains("add_page") && wrong.contains("source_url"),
+        "{wrong}"
+    );
     // A page in the trash: what to do is said in the words of the tool.
     client.call_ok("trash_document", json!({ "document": 1 }));
     let (trashed, data) = client.call_ok(
@@ -464,7 +604,10 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
         json!({ "path": dir.to_str().unwrap(), "source_url": "https://claude.ai/artifact/k" }),
     );
     assert_eq!(data["outcome"], "trashed");
-    assert!(trashed.contains("or call add_page again with include_trashed"), "{trashed}");
+    assert!(
+        trashed.contains("or call add_page again with include_trashed"),
+        "{trashed}"
+    );
     assert!(!trashed.contains("--"), "{trashed}");
     client.call_ok("restore_document", json!({ "document": 1 }));
     // Export as a folder, the original, and the PDF.
@@ -553,13 +696,25 @@ fn the_real_check_keeps_a_font_from_the_web_and_reads_the_text_webkit_shows() {
             server.port
         ),
     );
-    let added = sandbox.ok(&["page", "add", "font", "--source-url", "https://claude.ai/artifact/font"]);
+    let added = sandbox.ok(&[
+        "page",
+        "add",
+        "font",
+        "--source-url",
+        "https://claude.ai/artifact/font",
+    ]);
     assert!(
-        added.starts_with("added page:1 \u{201c}Font page\u{201d} at the top of the library (2 files, "),
+        added.starts_with(
+            "added page:1 \u{201c}Font page\u{201d} at the top of the library (2 files, "
+        ),
         "{added}"
     );
     assert!(added.contains("1 piece from the web"), "{added}");
-    assert_eq!(server.hits(), 1, "the font was fetched once, when the page was added");
+    assert_eq!(
+        server.hits(),
+        1,
+        "the font was fetched once, when the page was added"
+    );
     let text = sandbox.ok(&["get", "page:1"]);
     assert!(text.contains("Hello font"), "{text}");
     assert!(
@@ -575,8 +730,16 @@ fn the_real_check_keeps_a_font_from_the_web_and_reads_the_text_webkit_shows() {
     assert!(said.contains("(PDF, "), "{said}");
     let bytes = std::fs::read(&pdf).unwrap();
     assert!(bytes.starts_with(b"%PDF"), "a PDF");
-    assert!(bytes.len() > 2_000, "more than the fixed page of the fake: {}", bytes.len());
-    assert_eq!(server.hits(), 1, "showing and printing a page fetches nothing");
+    assert!(
+        bytes.len() > 2_000,
+        "more than the fixed page of the fake: {}",
+        bytes.len()
+    );
+    assert_eq!(
+        server.hits(),
+        1,
+        "showing and printing a page fetches nothing"
+    );
 }
 
 #[test]

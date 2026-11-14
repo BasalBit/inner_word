@@ -280,7 +280,11 @@ fn the_examples_of_pages_run_against_the_built_tool() {
     .unwrap();
     let second = work.join("second");
     std::fs::create_dir_all(&second).unwrap();
-    std::fs::write(second.join("index.html"), "<title>Second</title><p>Two.</p>").unwrap();
+    std::fs::write(
+        second.join("index.html"),
+        "<title>Second</title><p>Two.</p>",
+    )
+    .unwrap();
     std::fs::write(
         work.join("pages.json"),
         r#"[{"path": "second", "source_url": "https://claude.ai/artifact/second"}]"#,
@@ -327,7 +331,10 @@ fn the_examples_of_pages_run_against_the_built_tool() {
         all.contains("added page:12 \u{201c}Explainer\u{201d} in Claude Pages"),
         "{all}"
     );
-    assert!(all.contains("added page:13 \u{201c}Second\u{201d}"), "{all}");
+    assert!(
+        all.contains("added page:13 \u{201c}Second\u{201d}"),
+        "{all}"
+    );
     assert!(all.contains("How tides work"), "{all}");
     assert!(home.join("Desktop/page.pdf").is_file());
 }

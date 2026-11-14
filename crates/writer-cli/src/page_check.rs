@@ -29,7 +29,9 @@ pub fn run(arguments: &[String]) -> Option<ExitCode> {
     if first == CHECK_ARGUMENT {
         Some(finish(match rest {
             [dir] => check(Path::new(dir)),
-            _ => Err(Failed::usage(format!("usage: writer {CHECK_ARGUMENT} <dir>"))),
+            _ => Err(Failed::usage(format!(
+                "usage: writer {CHECK_ARGUMENT} <dir>"
+            ))),
         }))
     } else if first == PDF_ARGUMENT {
         Some(finish(match rest {
@@ -71,7 +73,11 @@ fn finish(result: Result<(), Failed>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(failed) => {
             // One line: the parent reads the last one.
-            let reason = failed.reason.split_whitespace().collect::<Vec<_>>().join(" ");
+            let reason = failed
+                .reason
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             eprintln!("{reason}");
             ExitCode::from(failed.code)
         }
@@ -155,9 +161,8 @@ fn pdf(dir: &Path, out: &Path) -> Result<(), Failed> {
         rules_dir: rules_dir()?,
     };
     let printed = writer_web::print_blocking(input).map_err(Failed::new)?;
-    std::fs::write(out, &printed.bytes).map_err(|error| {
-        Failed::new(format!("{} could not be written ({error})", out.display()))
-    })
+    std::fs::write(out, &printed.bytes)
+        .map_err(|error| Failed::new(format!("{} could not be written ({error})", out.display())))
 }
 
 /// What WebKit found, as the bundler reads it.

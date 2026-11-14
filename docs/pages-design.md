@@ -585,6 +585,18 @@ The sentence names the first five problems and counts the rest, and always ends 
 was saved." Script errors are warnings in the result, not reasons (pages written for
 claude.ai call `window.claude` and catch the error; Quiz Marking Desk does).
 
+**Lazy pieces.** The check never scrolls, and a picture or a frame under
+`loading="lazy"` is asked for only near the screen: one far down the page was never
+asked for, so a missing file there was not seen and the page was added as whole (review
+ISO-3). Two things see it now. The probe makes every `img` and `iframe` under
+`loading="lazy"` eager as soon as it is in the document, or as soon as a script makes it
+lazy (a `MutationObserver` on the document, in the probe's world; WebKit loads a deferred
+picture or frame when its `loading` stops being lazy), so what it asks for is seen as
+everything else is. And the bundler names a local one that is not among the page's files
+before the check, for a folder and a single file alike ("the page asks for pics/late.png
+when it is scrolled to (loading=lazy), which is not among its files"; `Ref::lazy`,
+`bundle::lazy_and_missing`), which also holds where the check is the static one.
+
 What the check cannot see: a request made later than its settling (a click, a timer of a
 minute), and a request made inside a worker (Appendix A: blocked, but reported to the
 worker's own scope, which the probe cannot reach). Both are blocked when the page is
@@ -854,10 +866,26 @@ last real `mouseUp:` and `keyDown:` it received (the event's `timestamp`), and a
 link-activated navigation to another site, or a `window.open` to one, is handed to
 `open_externally` only when it comes within 1 s of such an event; where
 `navigationAction._isUserInitiated` answers (private, asked with `respondsToSelector:`,
-not required), it must be true as well. Everything else is cancelled and counted
-(`ViewStats::blocked_navigations`). A WP3 test holds both ways: a click dispatched by
-`evaluate` does **not** reach `open_externally`; a synthesized `NSEvent` click on the
-link in the offscreen window does.
+not required), it must be true as well. **And it must go to the link the reader acted
+on** (review ISO-4): time alone let a page's listener of any click or key call `a.click()`
+on a link of its choosing and send the reader's browser to any address. At a real
+`mouseDown:` the subclass asks the page's document which link lies under the pointer
+(`elementFromPoint` in the client's content world, which the page's scripts cannot reach,
+as the right-click menu asks; through frames of the page's own origin, shadow trees and
+SVG links), and at a real `enter` (return or the keypad's) which link has the focus;
+the question is sent before the event goes on to the page, so its answer is there before
+the navigation of the click is decided. Any other key, a control-click and a press beside
+every link leave no link. The navigation's address must equal that link's resolved
+address (`policy::reader_opened`), and an open uses the link up (`Host::link_opened`), so
+a script that clicks the same link again opens nothing. Everything else is cancelled and
+counted (`ViewStats::blocked_navigations`). WP3 tests hold both ways: a click dispatched
+by `evaluate` does **not** reach `open_externally`; a synthesized `NSEvent` click on the
+link in the offscreen window does; a page whose listeners click another link on every
+click and key opens nothing on a click on words, a key in a field or `enter` there, and
+only the link itself on a click on it or `enter` on it (`the_gate_opens_only_the_link_the_reader_acted_on`).
+What this does not cover: an `<area>` of an image map (the point is the picture's, so it
+does not open), and a link in a frame that navigates its frame to another site (the CSP's
+`frame-src` stops it before WebKit asks; a `target=_blank` link in a frame opens).
 
 **Which macOS, and the private switches.** The calls of the view and the check are of
 macOS 11 to 12.3 (`pageZoom`, `findString:withConfiguration:completionHandler:`,
@@ -2221,8 +2249,11 @@ pub trait PageEvents: 'static {
     /// A key the view received: true hands it to the owner's view instead of the page.
     fn takes_key(&self, key: &KeyPress) -> bool;
     /// A link to another site (http, https, mailto) that the reader opened: a navigation
-    /// within 1 s of a real mouseUp:/keyDown: of the view (and `_isUserInitiated` where it
-    /// answers), or the menu's "Open Link in Browser". A script's click never comes here.
+    /// to the address of the link the reader acted on (the one under the pointer at a real
+    /// mouseDown:, the one with the focus at a real `enter`), within 1 s of a real
+    /// mouseUp:/keyDown: of the view (and `_isUserInitiated` where it answers), once per
+    /// act; or the menu's "Open Link in Browser". A script's click never comes here, also
+    /// not one in a listener of the reader's click or key that clicks another link.
     fn open_externally(&self, url: String);
     fn alert(&self, message: String);
     /// The owner's items for the right-click menu; `link` is the link under the pointer.
@@ -2289,7 +2320,8 @@ links, `available()`, one non-persistent data store per process for views, a new
 check), the check of section 3 (the view's configuration plus muted media; probe script
 and message handler only in the check, in their content world; settling; every HTML file
 within the limit; the text with what is not shown; unwatched frames), the right-click
-menu of section 6, `keyDown:`, `mouseUp:` (the time stamp), `hitTest:` (the holes) and
+menu of section 6, `keyDown:` and `mouseDown:` (the link the reader acts on), `mouseUp:`
+(the time stamp), `hitTest:` (the holes) and
 `becomeFirstResponder` (the focus flag) of the subclass, snapshots as BGRA, print to PDF
 as a save job into a temporary file, removed afterwards, for the view and offscreen.
 
@@ -2814,8 +2846,9 @@ for each, followed by `quit`, then a normal launch on the same directory.
 14. **macOS below 12.3.** Pages are off there, documents as before. The user may rather
     raise the floor of the app (question 11).
 15. **A script's link click** passing the reader-action gate: only within 1 s of a real
-    click or key of the reader in the view, which is then the reader's own doing (a page
-    can send a click of the reader to another address, as any web page can).
+    click or key of the reader in the view, and only to the link the reader clicked or
+    pressed `enter` on (since the review, ISO-4); a page can still change where that link
+    goes before the reader presses it, as any web page can.
 
 ---
 
@@ -2995,3 +3028,6 @@ sections above say the same where they are about it.
 | A duplicate of a page is listed without an address; a page is `page:<id>` in the lines of rename, move and the history errors; `export --original` of a text is `wrong_kind`; `get --format json` of a page leaves `text` out | writer-agent, writer-mcp, writer-cli, 377ea81 (review DATA-4, DOC-7, DOC-9, A13) | A copy looked like the page at its address; agents were told a page is a document |
 | Over a page the comments' switches and "Zoom to 400 %" say what a page is; the find strip's escape is handled; `zoom:` steps work on a page; a restored version brings back its title unless the page was renamed; a page the bundler refused is named by its title in the summary | writer-app, d132d74 (review PAGE-APP-7, 8, 10, 11, DATA-5, DOC-11) | They changed the texts' settings, gave 300 % without a word, or did otherwise than an agent's restore |
 | A test pins the rule list's identifier to a fingerprint of `BLOCK_RULES` | writer-web, c51f7ec (review DOC-13) | Rules changed under the old identifier would leave every library on the compiled old ones |
+| A link opens outside only when the navigation goes to the link the reader acted on: the one under the pointer at the real `mouseDown:` or the focused one at a real `enter`, asked in the client's content world, once per act (section 5) | writer-web, 45811e2 (review ISO-4) | Any key or click opened the gate for a second, so a page's listener could `a.click()` a link of its choosing and send the reader's browser to any address |
+| The check's probe makes pictures and frames under `loading="lazy"` eager; the bundler names a lazy one that is not among the page's files, for a folder and a single file alike (section 3) | writer-web, 45811e2; writer-page, 331e502 (review ISO-3) | The check never scrolls: a missing file far down the page was never asked for, and the page was added as whole |
+| The online test of the archive compares the font files of Google Fonts by what matters (there are some where the archive has some, no style sheet still names one on the web), every other address as it is | writer-page, d05847e | Google's style sheets name other font files as time goes on (a new `/s/<family>/v22/`, other `/l/font?kit=` addresses, a family moved between the two): the test failed on addresses while the pages were whole. Run on purpose on 2026-11-14: every original bundled, nothing missed |

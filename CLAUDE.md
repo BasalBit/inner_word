@@ -1786,7 +1786,12 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   content world of the check's own that the page's scripts cannot reach. A page that asks
   for anything it does not have (a piece that could not be fetched, a path it lacks, data
   from a service, an embedded site, a frame that cannot be watched) is refused, the first
-  five problems named, "Nothing was saved." What is not fetched and is no reason (an
+  five problems named, "Nothing was saved." The check never scrolls, so a picture or a
+  frame under `loading="lazy"` far down the page would never be asked for: the probe makes
+  each one eager as soon as it is in the document, and the bundler names a local one that
+  is not among the page's files before the check ("the page asks for pics/late.png when it
+  is scrolled to (loading=lazy), which is not among its files"), for a folder and a single
+  file alike. What is not fetched and is no reason (an
   address in a string, `window.claude`) is a warning. Limits: 32 MB a file, 64 MB a page,
   2,000 files, 500 pieces from the web, 101 HTML files, 120 s of check. The text of a page
   is what it shows (`innerText`) and then what it holds unshown (closed `<details>`, hidden
@@ -1842,9 +1847,16 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   that list drops the guard). Navigation away, forms, downloads, new windows,
   autoplay, AirPlay, camera, microphone, link previews and the inspector are off; storage
   lasts while the app runs (one non-persistent data store); no bridge to the app. **A link
-  to another site opens in the default browser only when the reader acted** (a real click
-  or key in the view within a second, or "Open Link in Browser" of its menu): a script's
-  click opens nothing. `alert` is a toast "The page says: …". The rule list is compiled into
+  to another site opens in the default browser only when the reader opened that link**:
+  the navigation's address is the address of the link under the pointer at a real
+  `mouseDown:` or of the focused link at a real `enter` (asked of the page's document in
+  the client's content world before the event reaches the page, through frames of the
+  page's own origin, shadow trees and SVG links), within a second of the reader's click or
+  key, once per act; or "Open Link in Browser" of its menu. A script's click opens nothing,
+  also not one in a listener of the reader's click or key that clicks another link
+  (`writer_web::policy::reader_opened`; before the review's fix, ISO-4, any click or key
+  opened the gate for a second for whatever link a script clicked). An `<area>` of an image map is not found that way (the
+  point is the picture's) and does not open. `alert` is a toast "The page says: …". The rule list is compiled into
   `<data directory>/WebKit/` (the tool's children: `$TMPDIR/the-writer-<uid>/WebKit/`) under
   one fixed identifier, never into WebKit's default store.
 - **macOS 12.3 for pages.** `writer_web::available()` asks the version and every selector it
@@ -1912,7 +1924,16 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
 - **Checked by hand only, or by nothing**: keys, the first responder and the cursor in a
   real active key window, the print panel on a page, a drop from the Finder, the sound that
   does not autoplay, a link opening Safari, a page with Wi-Fi off, scrolling, the theme
-  (`docs/pages-design.md`, section 13: checks 1 to 10, for a person).
+  (`docs/pages-design.md`, section 13: checks 1 to 10, for a person). A picture under
+  `loading="lazy"` far down a page printed offscreen (`__page-pdf`): the probe that makes
+  it eager is the check's only.
+- **The tests that reach the internet** are ignored and run on purpose only:
+  `CARGO_TARGET_DIR=target-pure cargo test -p writer-page -- --ignored archive` bundles
+  every original of the archive with the real fetcher and finds every piece the archive
+  has (read only). The font files of Google Fonts are not compared by address (its style
+  sheets name other files as time goes on, even moving a family between `/s/<family>/`
+  and a kit): enough that the page has some where the archive has some and that no style
+  sheet still names one on the web.
 
 ## Mouse
 

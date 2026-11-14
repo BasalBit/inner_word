@@ -412,4 +412,13 @@ pub mod testing {
         // SAFETY: on the main thread (the test program's).
         unsafe { crate::check::offscreen_window().cast() }
     }
+
+    /// Whether the data store of the views keeps nothing on disk.
+    pub fn view_store_is_not_persistent() -> bool {
+        use objc::{msg_send, runtime::BOOL, sel, sel_impl};
+        // SAFETY: WebKit's public `-[WKWebsiteDataStore isPersistent]`, on the main
+        // thread (the test program's).
+        let persistent: BOOL = unsafe { msg_send![crate::config::view_data_store(), isPersistent] };
+        persistent == objc::runtime::NO
+    }
 }

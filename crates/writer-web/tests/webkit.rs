@@ -418,12 +418,23 @@ impl Host {
         entry: &str,
         rules: &Path,
     ) -> (WebPage, Rc<Events>) {
+        self.page_at("page-12", files, entry, rules)
+    }
+
+    /// The same at a host of its own (`page-<id>`: the origin of the page).
+    fn page_at(
+        &self,
+        page_host: &str,
+        files: Vec<(&str, ServedFile)>,
+        entry: &str,
+        rules: &Path,
+    ) -> (WebPage, Rc<Events>) {
         let events = Rc::new(Events::default());
         let page = unsafe {
             WebPage::new(
                 self.gpui.cast(),
                 ViewConfig {
-                    host: "page-12".to_string(),
+                    host: page_host.to_string(),
                     entry: entry.to_string(),
                     source: source(files),
                     rules_dir: rules.to_path_buf(),
@@ -585,6 +596,7 @@ fn main() -> ExitCode {
     }
     if wanted("text") {
         the_text_is_read_whole(&mut report, &rules);
+        the_text_keeps_apart_what_layout_shows_apart(&mut report, &rules);
     }
     if wanted("plays") {
         nothing_plays_in_the_check(&mut report, &rules);
@@ -600,6 +612,9 @@ fn main() -> ExitCode {
     }
     if wanted("printed") {
         printed_offscreen(&mut report, &rules);
+    }
+    if wanted("storage") {
+        storage_is_the_pages_own_and_not_kept(&mut report, &rules);
     }
 
     report.check(
@@ -962,6 +977,159 @@ fn the_text_is_read_whole(report: &mut Report, rules: &Path) {
     report.check(
         !outcome.engine.is_empty(),
         &format!("the engine is named ({})", outcome.engine),
+    );
+}
+
+fn the_text_keeps_apart_what_layout_shows_apart(report: &mut Report, rules: &Path) {
+    // No white space in the source between the parts of each line below.
+    let page = r##"<!doctype html><html><head><title>Junctions</title><style>
+ body { font: 16px sans-serif; margin: 20px; }
+ .tag { margin-left: 12px; text-transform: uppercase; font-size: 11px; }
+ .chip { display: inline-block; padding: 2px 8px; border: 1px solid #ccc; }
+ .gutter { display: inline-block; width: 3em; color: #999; }
+ .axis span { display: inline-block; width: 60px; }
+ .stack span { display: inline-block; width: 100%; }
+ .wrap { width: 80px; white-space: pre-wrap; word-break: break-all; font: 14px monospace; }
+ code { padding: 0 6px; background: #eee; }
+</style></head><body>
+<p id="tag"><b>Unlimited members</b><span class="tag">Recommended</span></p>
+<p id="chip"><span class="chip">AI-era</span>No visible dates</p>
+<pre id="code"><span class="gutter">18</span>import x from 'y';</pre>
+<div class="axis"><span>0</span><span>50</span><span>100</span></div>
+<div class="stack"><span>First line</span><span>Second line</span></div>
+<p id="word"><b>Fak</b><i>turano</i> and <a href="#">link</a>, (<code>inline</code>) <code>call</code>.</p>
+<pre class="wrap"><span>aaaaaaaaaaaaaaaaaaaa</span><span>bbbbbbbbbbbbbbbbbbbb</span></pre>
+</body></html>"##;
+    let outcome = check_blocking(input(
+        source(vec![("index.html", html(page))]),
+        "index.html",
+        &[],
+        rules,
+    ));
+    let Some(load) = outcome.loads.first() else {
+        report.check(false, "the page of junctions was checked");
+        return;
+    };
+    let text = &load.text;
+    report.note(&format!("the text of junctions: {text:?}"));
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    for apart in [
+        "members RECOMMENDED",
+        "AI-era No visible dates",
+        "18 import",
+        "0 50 100",
+        "First line Second line",
+    ] {
+        report.check(flat.contains(apart), &format!("{apart:?} is apart in the text"));
+    }
+    report.check(
+        text.contains("First line
+Second line"),
+        "two boxes on two lines are two lines",
+    );
+    for together in [
+        "Fakturano and link, (inline) call.",
+        "aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb",
+    ] {
+        report.check(
+            flat.contains(together),
+            &format!("{together:?} stays as it is (a word, punctuation, a line that wraps)"),
+        );
+    }
+    let bare: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    report.check(
+        bare.contains("UnlimitedmembersRECOMMENDEDAI-eraNovisibledates18importxfrom'y';050100FirstlineSecondline")
+            && !text.contains('\u{fdd0}')
+            && !text.contains('\u{fdd1}'),
+        "only white space is added, and no mark is left",
+    );
+}
+
+fn storage_is_the_pages_own_and_not_kept(report: &mut Report, rules: &Path) {
+    let page = || {
+        vec![(
+            "index.html",
+            html("<!doctype html><title>Storage</title><p>storage</p>"),
+        )]
+    };
+    let host = Host::new();
+    let (twelve, _) = host.page_at("page-12", page(), "index.html", rules);
+    let set = eval(
+        &twelve,
+        "(() => { try { localStorage.setItem('writer-test', 'kept by 12');          sessionStorage.setItem('writer-test', 'session of 12');          return String(localStorage.getItem('writer-test')); }          catch (e) { return 'refused: ' + e; } })()",
+    );
+    report.check(
+        set.as_deref() == Ok("kept by 12"),
+        &format!("a page can keep something in its storage ({set:?})"),
+    );
+    let idb = eval_until(
+        &twelve,
+        "(() => { if (window.__idb) return window.__idb; window.__idb = '';          try { const open = indexedDB.open('writer-test', 1);          open.onupgradeneeded = () => open.result.createObjectStore('s');          open.onsuccess = () => { const tx = open.result.transaction('s', 'readwrite');            tx.objectStore('s').put('idb of 12', 'k'); tx.oncomplete = () => { window.__idb = 'stored'; }; };          open.onerror = () => { window.__idb = 'refused'; }; } catch (e) { window.__idb = 'refused: ' + e; }          return ''; })()",
+        Duration::from_secs(5),
+    );
+    report.note(&format!("IndexedDB in page-12: {idb:?}"));
+
+    let thirteen = Host::new();
+    let (other, _) = thirteen.page_at("page-13", page(), "index.html", rules);
+    let seen = eval(
+        &other,
+        "(() => { try { return String(localStorage.getItem('writer-test')); }          catch (e) { return 'refused: ' + e; } })()",
+    );
+    report.check(
+        seen.as_deref() == Ok("null"),
+        &format!("another page does not see what a page kept ({seen:?})"),
+    );
+    if idb == "stored" {
+        let other_idb = eval_until(
+            &other,
+            "(() => { if (window.__seen) return window.__seen; window.__seen = '';              indexedDB.databases().then(list => { window.__seen = JSON.stringify(list.map(d => d.name)); })              .catch(e => { window.__seen = 'refused: ' + e; }); return ''; })()",
+            Duration::from_secs(5),
+        );
+        report.check(
+            other_idb == "[]",
+            &format!("another page has none of a page's databases ({other_idb:?})"),
+        );
+    }
+
+    let again = Host::new();
+    let (same, _) = again.page_at("page-12", page(), "index.html", rules);
+    let kept = eval(
+        &same,
+        "(() => { try { return String(localStorage.getItem('writer-test')); }          catch (e) { return 'refused: ' + e; } })()",
+    );
+    report.check(
+        kept.as_deref() == Ok("kept by 12"),
+        &format!("the same page shown again while the app runs has what it kept ({kept:?})"),
+    );
+    drop((twelve, other, same));
+    drop((host, thirteen, again));
+    wait(Duration::from_millis(500));
+
+    // Nothing a page keeps is written beside the rule list (the app's <data dir>/WebKit).
+    let mut found = Vec::new();
+    let mut stack = vec![rules.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                found.push(
+                    path.strip_prefix(rules)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    report.check(
+        !found.is_empty() && found.iter().all(|name| name.starts_with("ContentRuleList")),
+        &format!("the WebKit folder holds the rule list and nothing a page kept ({found:?})"),
+    );
+    report.check(
+        testing::view_store_is_not_persistent(),
+        "the views' data store is not persistent",
     );
 }
 

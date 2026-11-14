@@ -80,19 +80,106 @@ const PROBE: &str = r#"(() => {
   post({ kind: 'ready', type: String(document.contentType || '') });
 })();"#;
 
-/// The text of a load: `innerText` (the text as shown, in reading order), then a blank
-/// line and the text that is not shown (a closed `<details>`, a tab or a chapter not
+/// The text of a load: `innerText` (the text as shown, in reading order), with the
+/// words that layout shows apart kept apart, then a blank line and the text that is
+/// not shown (a closed `<details>`, a tab or a chapter not
 /// shown, `hidden`, `display: none`): the text nodes outside `script`, `style`,
 /// `noscript`, `template` and `head` that have no layout box (their element has no
 /// client rectangles or is not visible to `checkVisibility()`, they lie in a closed
 /// `<details>` outside its `<summary>`, or they themselves have no rectangles), one
 /// line per block, the text of two elements in it a space apart unless it reads as one
 /// word, a line left out when the shown text has it already.
+///
+/// `innerText` leaves margins, padding and gaps out: a tag after a word
+/// (`<b>members</b><span class=tag>Recommended</span>`), a chip, the gutter of a code
+/// listing and the labels of a chart's axis come out glued to their neighbour
+/// ("membersRecommended", "18import", "050100"). So each junction of two shown text
+/// nodes without white space between them is measured first: where the second starts
+/// more than a quarter of an em (and twice the letter spacing) to the right of the
+/// first on the same line, or on another line with a box that is not inline between
+/// them (not a line of text that wraps), the first node gets a noncharacter
+/// (U+FDD0 for a space, U+FDD1 for a line) at its end; `innerText` is read once, the
+/// nodes are given back their text, and a mark followed by a word becomes a space or a
+/// line (one followed by white space goes). Only white space is ever added. A junction
+/// after an opening bracket or before closing punctuation is left as it is.
 const TEXT: &str = r#"(() => {
   const root = document.body || document.documentElement;
-  const shown = root ? String(root.innerText || root.textContent || '') : '';
-  const flat = shown.replace(/\s+/g, ' ');
   const skip = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'TITLE']);
+  const textNodes = () => document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode(node) {
+    for (let element = node.parentElement; element; element = element.parentElement) {
+      if (skip.has(element.tagName)) return NodeFilter.FILTER_REJECT;
+    }
+    return NodeFilter.FILTER_ACCEPT;
+  } });
+  const readShown = () => {
+    if (!root) return '';
+    const visible = [];
+    const walk = textNodes();
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      if (!node.data.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      if (range.getClientRects().length) visible.push(node);
+    }
+    // The rectangle of the first or the last character of a node (a whole code point).
+    const edge = (node, first) => {
+      const data = node.data;
+      let start, end;
+      if (first) {
+        start = data.search(/\S/);
+        end = start + (data.codePointAt(start) > 0xffff ? 2 : 1);
+      } else {
+        end = data.length;
+        start = end - 1;
+        if (start > 0 && /[\udc00-\udfff]/.test(data[start])) start -= 1;
+      }
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      const rects = range.getClientRects();
+      return rects.length ? rects[first ? 0 : rects.length - 1] : null;
+    };
+    // Whether an element that is not inline stands between two nodes.
+    const boxBetween = (a, b) => {
+      let common = a.parentElement;
+      while (common && !common.contains(b)) common = common.parentElement;
+      for (const node of [a, b]) {
+        for (let element = node.parentElement; element && element !== common; element = element.parentElement) {
+          if (getComputedStyle(element).display !== 'inline') return true;
+        }
+      }
+      return false;
+    };
+    const marks = [];
+    for (let k = 1; k < visible.length; k++) {
+      const a = visible[k - 1], b = visible[k];
+      if (!/\S$/.test(a.data) || !/^\S/.test(b.data)) continue;
+      if (/[(\[{\u201c\u2018\u00ab]$/.test(a.data) || /^[.,;:!?)\]}%\u201d\u2019\u00bb]/.test(b.data)) continue;
+      const ra = edge(a, false), rb = edge(b, true);
+      if (!ra || !rb) continue;
+      const overlap = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+      const sameLine = overlap > 0.3 * Math.min(ra.height, rb.height);
+      if (sameLine) {
+        const style = getComputedStyle(a.parentElement);
+        const size = parseFloat(style.fontSize) || 16;
+        const spacing = Math.max(0, parseFloat(style.letterSpacing) || 0);
+        if (rb.left - ra.right > 0.25 * size + 2 * spacing) marks.push([a, '\ufdd0']);
+      } else if (boxBetween(a, b)) {
+        marks.push([a, '\ufdd1']);
+      }
+    }
+    const before = marks.map(([node]) => node.data);
+    let text;
+    try {
+      for (const [node, mark] of marks) node.data = node.data + mark;
+      text = String(root.innerText || root.textContent || '');
+    } finally {
+      marks.forEach(([node], i) => { node.data = before[i]; });
+    }
+    return text.replace(/\ufdd0(?=\S)/g, ' ').replace(/\ufdd1(?=\S)/g, '\n').replace(/[\ufdd0\ufdd1]/g, '');
+  };
+  const shown = readShown();
+  const flat = shown.replace(/\s+/g, ' ');
   const blocks = new Set(['P', 'DIV', 'LI', 'UL', 'OL', 'DL', 'DT', 'DD', 'H1', 'H2', 'H3',
     'H4', 'H5', 'H6', 'SECTION', 'ARTICLE', 'ASIDE', 'HEADER', 'FOOTER', 'NAV', 'MAIN',
     'BLOCKQUOTE', 'PRE', 'TABLE', 'TBODY', 'THEAD', 'TFOOT', 'TR', 'TD', 'TH', 'CAPTION',
@@ -132,12 +219,7 @@ const TEXT: &str = r#"(() => {
     return null;
   };
   if (root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode(node) {
-      for (let element = node.parentElement; element; element = element.parentElement) {
-        if (skip.has(element.tagName)) return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    } });
+    const walker = textNodes();
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.data.trim()) continue;
       if (!hidden(node)) { flush(); block = null; continue; }

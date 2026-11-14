@@ -422,3 +422,28 @@ pub mod testing {
         persistent == objc::runtime::NO
     }
 }
+
+#[cfg(test)]
+mod rule_list_tests {
+    use super::{BLOCK_RULES, RULE_LIST_ID};
+
+    /// FNV-1a, 64 bits: enough to notice that the rules changed.
+    fn fingerprint(text: &str) -> u64 {
+        text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// The compiled rule list is looked up by its identifier and compiled again only
+    /// when it is missing: rules changed under the same identifier would leave every
+    /// library on the old ones. Whoever changes `BLOCK_RULES` changes `RULE_LIST_ID`
+    /// (`-v2`, ...) and the two values here.
+    #[test]
+    fn the_rule_list_identifier_changes_with_the_rules() {
+        assert_eq!(
+            (RULE_LIST_ID, fingerprint(BLOCK_RULES)),
+            ("writer-page-block-v1", 0x2f94_723f_e271_e28d),
+            "BLOCK_RULES changed: give RULE_LIST_ID a new version and pin both here"
+        );
+    }
+}

@@ -148,6 +148,9 @@ impl Workspace {
     /// The items of the workspace menu `kind` as things are now. Empty
     /// when the menu has nothing to act on (no document is open).
     pub fn menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<ContextMenuItem> {
+        if self.page.is_some() {
+            return self.page_menu_items(kind, cx);
+        }
         if self.session.is_none() {
             return Vec::new();
         }
@@ -233,6 +236,71 @@ impl Workspace {
                 }));
                 items
             }
+        }
+    }
+
+    /// The menus of the title and the status bar items while a page is
+    /// open: the title's has what can be done with a page, the zoom's the
+    /// page's zoom; the others have nothing to act on.
+    fn page_menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<ContextMenuItem> {
+        use crate::actions::{CopyPageAddress, OpenPageAddress, ReloadPage};
+        let has_source = self
+            .page
+            .as_ref()
+            .is_some_and(|page| page.source_url.is_some());
+        match kind {
+            MenuKind::Title => {
+                let mut items = vec![
+                    ContextMenuItem::action("Rename…", RenameDocument),
+                    ContextMenuItem::action("Reload Page", ReloadPage),
+                    ContextMenuItem::action("Find in Page…", writer_editor_tools::actions::Find),
+                ];
+                if has_source {
+                    items.push(ContextMenuItem::action(
+                        "Copy Page Address",
+                        CopyPageAddress,
+                    ));
+                    items.push(ContextMenuItem::action(
+                        "Open Page Address in Browser",
+                        OpenPageAddress,
+                    ));
+                }
+                items.push(ContextMenuItem::separator());
+                if self.can_print(cx) {
+                    items.push(ContextMenuItem::action("Print…", Print));
+                }
+                items.extend([
+                    ContextMenuItem::action("Export…", Export),
+                    ContextMenuItem::action("Version History…", ShowVersionHistory),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::action("Reveal in Library", RevealInLibrary),
+                ]);
+                if self.assistant_shown() {
+                    items.push(ContextMenuItem::separator());
+                    items.push(
+                        ContextMenuItem::action("Assistant", ToggleAssistant).checked(
+                            self.right_panel_shown() == Some(super::RightPanel::Assistant),
+                        ),
+                    );
+                }
+                items
+            }
+            MenuKind::Zoom => self.zoom_menu_items(cx),
+            MenuKind::Statistics => {
+                let weak = cx.weak_entity();
+                let on = self.settings.status_words;
+                vec![
+                    ContextMenuItem::section("Shown in the status bar"),
+                    ContextMenuItem::new("Word Count", move |_, cx| {
+                        weak.update(cx, |this, cx| {
+                            this.write_setting(keys::STATUS_WORDS, &!on, cx)
+                        })
+                        .ok();
+                    })
+                    .checked(on),
+                ]
+            }
+            MenuKind::Save | MenuKind::Page | MenuKind::Limit => Vec::new(),
         }
     }
 
@@ -433,7 +501,7 @@ impl Workspace {
     /// Shows the open document's row in the library and gives the library
     /// the keyboard.
     pub fn reveal_in_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.open_document_id() else {
+        let Some(id) = self.open_item_id() else {
             self.show_toast(Toast::new("No document is open"), cx);
             return;
         };
@@ -458,7 +526,7 @@ impl Workspace {
     /// Starts renaming the open document: its row in the library becomes a
     /// field with the name selected.
     pub fn rename_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.open_document_id() else {
+        let Some(id) = self.open_item_id() else {
             self.show_toast(Toast::new("Open a document to rename it"), cx);
             return;
         };

@@ -11,6 +11,7 @@ use gpui::TestAppContext;
 use writer_app::{
     actions::{
         CopyPageAddress, OpenDocumentSettings, ReloadPage, SaveNow, TogglePageView, UseDarkTheme,
+        UseTitleFromText,
     },
     automation::describe_state,
     pages::{self, FakePages},
@@ -18,7 +19,7 @@ use writer_app::{
     settings::keys,
     workspace::{
         NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE,
-        PageState,
+        PageState, TITLE_OF_A_PAGE,
     },
 };
 use writer_ui::Toast;
@@ -105,6 +106,16 @@ fn toasts(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Vec<Stri
 
 fn page_focused(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
     workspace.update_in(cx, |workspace, window, _| workspace.page_has_focus(window))
+}
+
+/// A click at the middle of what `selector` names.
+fn click(selector: &'static str, cx: &mut VisualTestContext) {
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is not drawn"))
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::default());
+    cx.run_until_parked();
 }
 
 fn available(action: &dyn gpui::Action, cx: &mut VisualTestContext) -> bool {
@@ -269,12 +280,115 @@ fn the_commands_of_a_text_are_not_there_on_a_page(cx: &mut TestAppContext) {
     vcx.simulate_keystrokes("escape");
 }
 
+/// Over a page the palette offers what can be done to a page: the
+/// commands of a document that would only say what a page is are left
+/// out (their keys and menu items still say it), and two are named for a
+/// page.
+#[gpui::test]
+fn the_palette_over_a_page_offers_what_a_page_can_do(cx: &mut TestAppContext) {
+    let (_fake, workspace, _text, _page, vcx) = open_page(cx);
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.run_until_parked();
+    let titles = workspace.read_with(vcx, |w, cx| {
+        let palette = w
+            .modal_layer()
+            .read(cx)
+            .active::<CommandPalette>()
+            .expect("the palette is open");
+        palette.read(cx).delegate.listed_titles()
+    });
+    for gone in [
+        "Document settings",
+        "Take title from text",
+        "Save now",
+        "Spelling language",
+        "Add comment",
+        "Next comment",
+        "Show or hide comments",
+        "Reply to comment",
+        "Zoom to fit width",
+        "Zoom to fit page",
+        "Zoom to life size",
+        "Rename document",
+        "Go to text",
+    ] {
+        assert!(
+            !titles.iter().any(|title| title == gone),
+            "{gone}: {titles:?}"
+        );
+    }
+    assert!(
+        !titles.iter().any(|title| title.starts_with("Zoom to 400")),
+        "a page goes to 300 %: {titles:?}"
+    );
+    for kept in [
+        "Rename page",
+        "Go to page",
+        "Version history",
+        "Print",
+        "Find",
+        "Zoom in",
+        "Zoom out",
+        "Reload page",
+    ] {
+        assert!(
+            titles.iter().any(|title| title == kept),
+            "{kept}: {titles:?}"
+        );
+    }
+    assert!(
+        titles.iter().any(|title| title.starts_with("Zoom to 300")),
+        "{titles:?}"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    // With the text open again they are all there, with their own names.
+    let text = workspace.read_with(vcx, |w, cx| {
+        w.library()
+            .read(cx)
+            .recent_documents(10)
+            .unwrap()
+            .into_iter()
+            .find(|meta| meta.title == "Notes")
+            .map(|meta| meta.id)
+            .unwrap()
+    });
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(text, true, window, cx));
+    });
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.run_until_parked();
+    let titles = workspace.read_with(vcx, |w, cx| {
+        w.modal_layer()
+            .read(cx)
+            .active::<CommandPalette>()
+            .expect("the palette is open")
+            .read(cx)
+            .delegate
+            .listed_titles()
+    });
+    for title in [
+        "Document settings",
+        "Add comment",
+        "Rename document",
+        "Go to text",
+    ] {
+        assert!(
+            titles.iter().any(|listed| listed == title),
+            "{title}: {titles:?}"
+        );
+    }
+    vcx.simulate_keystrokes("escape");
+}
+
 #[gpui::test]
 fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
     let (_fake, workspace, _text, _page, vcx) = open_page(cx);
     let cases: Vec<(Box<dyn gpui::Action>, &str)> = vec![
         (Box::new(OpenDocumentSettings), NOT_FOR_A_PAGE),
         (Box::new(TogglePageView), NOT_FOR_A_PAGE),
+        (Box::new(UseTitleFromText), TITLE_OF_A_PAGE),
         (Box::new(SaveNow), NOTHING_TO_SAVE_ON_A_PAGE),
         (Box::new(writer_comments::AddComment), NO_COMMENTS_ON_A_PAGE),
         (Box::new(writer_app::zoom::FitWidth), NO_FIT_ON_A_PAGE),
@@ -343,6 +457,110 @@ fn a_modal_over_the_page_has_one_snapshot_that_is_dropped(cx: &mut TestAppContex
         assert_eq!(fake.snapshots_made(), round);
         assert_eq!(fake.snapshots_dropped(), round, "every snapshot is dropped");
     }
+}
+
+/// An item opened while a modal is over the page (quick open here; the
+/// library search, a row's menu and the version history go the same way):
+/// the snapshot that stood in for the page is handed back to the window
+/// with the page, or it would stay in GPUI's atlas for the life of the
+/// window.
+#[gpui::test]
+fn the_snapshot_goes_with_a_page_left_from_a_modal(cx: &mut TestAppContext) {
+    let (fake, workspace, _text, _page, vcx) = open_page(cx);
+    let library = workspace.read_with(vcx, |w, _| w.library().clone());
+    let lighthouse = add_page(
+        &library,
+        "lighthouse",
+        "<!doctype html><title>Lighthouse Notes</title><p>The lamp turns.</p>",
+        None,
+        vcx,
+    );
+    // From the page to another page.
+    vcx.simulate_keystrokes("cmd-p");
+    vcx.run_until_parked();
+    assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
+    vcx.simulate_input("Lighthouse");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_page_id()),
+        Some(lighthouse)
+    );
+    assert_eq!(fake.snapshots_made(), 1);
+    assert_eq!(
+        fake.snapshots_dropped(),
+        1,
+        "the snapshot went with the page"
+    );
+    // From a page to the text.
+    vcx.simulate_keystrokes("cmd-p");
+    vcx.run_until_parked();
+    vcx.simulate_input("Notes");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, _| w.open_page_id()).is_none());
+    assert_eq!(fake.snapshots_made(), 2);
+    assert_eq!(
+        fake.snapshots_dropped(),
+        2,
+        "the snapshot went with the page"
+    );
+}
+
+/// Every page has an origin of its own, also a page that gets the id of
+/// one erased for good (SQLite gives it to the next row): the views of a
+/// run share one store of website data, kept per origin, and the new page
+/// must not read what the erased one left in it.
+#[gpui::test]
+fn a_page_that_gets_the_id_of_an_erased_one_has_another_origin(cx: &mut TestAppContext) {
+    init(cx);
+    let fake = cx.update(pages::use_fake);
+    let clock = writer_library::Clock::manual(1_700_000_000_000);
+    let library = cx.new(|_| Library::in_memory_with_clock(clock.clone()).expect("library"));
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
+    });
+    let first = add_page(
+        &library,
+        "a",
+        "<!doctype html><title>Page A</title><p>A.</p>",
+        None,
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(first, true, window, cx));
+    });
+    vcx.run_until_parked();
+    // Erased for good (the trash, then Empty Trash).
+    library.update(vcx, |library, cx| {
+        library.trash_document(first, cx).unwrap();
+        library.purge_document(first, cx).unwrap();
+    });
+    vcx.run_until_parked();
+    clock.advance_ms(60_000);
+    let second = add_page(
+        &library,
+        "b",
+        "<!doctype html><title>Page B</title><p>B.</p>",
+        None,
+        vcx,
+    );
+    assert_eq!(second, first, "SQLite gives the id to the next row");
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(second, true, window, cx));
+    });
+    vcx.run_until_parked();
+    let hosts = fake.hosts();
+    assert_eq!(hosts.len(), 2, "{hosts:?}");
+    assert_ne!(hosts[0], hosts[1], "one origin per page");
+    assert!(
+        hosts
+            .iter()
+            .all(|host| host.starts_with(&format!("page-{}-", first.0)))
+    );
 }
 
 #[gpui::test]
@@ -420,6 +638,81 @@ fn find_zoom_and_theme_reach_the_view(cx: &mut TestAppContext) {
     vcx.dispatch_action(UseDarkTheme);
     vcx.run_until_parked();
     assert_eq!(fake.appearance(), Some(writer_web::Appearance::Dark));
+}
+
+/// The strip's buttons, with the pointer alone: match case, previous,
+/// next and close, none of which takes the keyboard.
+#[gpui::test]
+fn the_find_strip_works_with_the_pointer(cx: &mut TestAppContext) {
+    let (fake, workspace, _text, _page, vcx) = open_page(cx);
+    vcx.dispatch_action(writer_editor_tools::actions::Find);
+    vcx.run_until_parked();
+    vcx.simulate_input("Boats");
+    vcx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.page_find(cx)),
+        Some(("Boats".to_string(), Some(true))),
+        "the page has \"boats\""
+    );
+    click("page-find-case", vcx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.page_find(cx)),
+        Some(("Boats".to_string(), Some(false))),
+        "matching case, it has no \"Boats\""
+    );
+    assert!(
+        state_line(&workspace, vcx).contains("focus=find"),
+        "the field keeps the keyboard"
+    );
+    click("page-find-case", vcx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.page_find(cx)),
+        Some(("Boats".to_string(), Some(true)))
+    );
+    let before = fake.finds().len();
+    click("page-find-next", vcx);
+    assert_eq!(fake.finds().len(), before + 1);
+    assert_eq!(fake.finds().last(), Some(&("Boats".to_string(), false)));
+    click("page-find-previous", vcx);
+    assert_eq!(fake.finds().last(), Some(&("Boats".to_string(), true)));
+    assert!(state_line(&workspace, vcx).contains("focus=find"));
+    click("page-find-close", vcx);
+    assert_eq!(workspace.read_with(vcx, |w, cx| w.page_find(cx)), None);
+    assert!(
+        page_focused(&workspace, vcx),
+        "the page has the keyboard again"
+    );
+    assert!(fake.first_responder_is_page());
+}
+
+/// A press into the strip's field while the page has the keyboard puts it
+/// in the field (the page's own press must not take it back).
+#[gpui::test]
+fn a_press_into_the_find_field_gives_it_the_keyboard(cx: &mut TestAppContext) {
+    let (fake, workspace, _text, _page, vcx) = open_page(cx);
+    vcx.dispatch_action(writer_editor_tools::actions::Find);
+    vcx.run_until_parked();
+    vcx.simulate_input("boats");
+    vcx.run_until_parked();
+    fake.click_into_page();
+    vcx.run_until_parked();
+    assert!(page_focused(&workspace, vcx));
+    click("page-find-field", vcx);
+    assert!(
+        state_line(&workspace, vcx).contains("focus=find"),
+        "{}",
+        state_line(&workspace, vcx)
+    );
+    assert!(!page_focused(&workspace, vcx));
+    assert!(!fake.first_responder_is_page(), "typing goes to the field");
+    vcx.simulate_input("!");
+    vcx.run_until_parked();
+    assert_eq!(
+        workspace
+            .read_with(vcx, |w, cx| w.page_find(cx))
+            .map(|(query, _)| query),
+        Some("boats!".to_string())
+    );
 }
 
 #[gpui::test]
@@ -550,6 +843,47 @@ fn the_page_address_is_copied(cx: &mut TestAppContext) {
         vcx.read_from_clipboard().and_then(|item| item.text()),
         Some("https://example.com/harbour".to_string())
     );
+}
+
+/// What WebKit tells about a reader's act on the page: a link to another
+/// site opens in the browser, an alert is a toast; from a page that is no
+/// longer open nothing happens.
+#[gpui::test]
+fn a_link_opens_in_the_browser_and_an_alert_is_a_toast(cx: &mut TestAppContext) {
+    let (fake, workspace, text, _page, vcx) = open_page(cx);
+    let events = fake.events().expect("the view is made");
+    events.open_externally("https://example.com/elsewhere".to_string());
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.opened_url().as_deref(),
+        Some("https://example.com/elsewhere")
+    );
+    workspace.update(vcx, |w, cx| {
+        w.toast_layer().update(cx, |layer, cx| layer.clear(cx));
+    });
+    events.alert("Saved your answers.".to_string());
+    vcx.run_until_parked();
+    assert_eq!(
+        toasts(&workspace, vcx),
+        vec!["The page says: Saved your answers.".to_string()]
+    );
+    // The text opens; the page's view went with its session.
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(text, true, window, cx));
+    });
+    vcx.run_until_parked();
+    workspace.update(vcx, |w, cx| {
+        w.toast_layer().update(cx, |layer, cx| layer.clear(cx));
+    });
+    events.open_externally("https://example.com/late".to_string());
+    events.alert("Too late.".to_string());
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.opened_url().as_deref(),
+        Some("https://example.com/elsewhere"),
+        "nothing more was opened"
+    );
+    assert!(toasts(&workspace, vcx).is_empty());
 }
 
 #[gpui::test]
@@ -1149,6 +1483,19 @@ fn a_refusal_is_summed_up_and_show_why_has_the_whole_sentence(cx: &mut TestAppCo
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     assert!(!workspace.read_with(vcx, |w, cx| w.modal_layer().read(cx).has_modal()));
+    // From the menu bar too (File > Show Report of Pages Added Last…), for
+    // whoever missed the toast and has only the pointer.
+    let in_file = writer_app::menus::app_menus()
+        .into_iter()
+        .find(|menu| menu.name.as_ref() == "File")
+        .map(|menu| writer_app::menus::menu_actions(&[menu]))
+        .unwrap_or_default();
+    assert!(
+        in_file
+            .iter()
+            .any(|(_, action)| action.name() == gpui::Action::name(&ShowPageReport)),
+        "File has the report"
+    );
     // From the palette too.
     vcx.dispatch_action(ShowPageReport);
     vcx.run_until_parked();

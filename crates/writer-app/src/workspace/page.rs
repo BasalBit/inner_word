@@ -41,15 +41,17 @@ use std::{
 
 use gpui::{
     Action, AnyElement, App, Bounds, Context, Corners, Entity, FocusHandle, Pixels, RenderImage,
-    SharedString, Subscription, Task, Window, actions, canvas, div, point, prelude::*, px,
+    SharedString, Subscription, Task, Transformation, Window, actions, canvas, div, percentage,
+    point, prelude::*, px, svg,
 };
 use writer_editor_tools::actions as tools;
 use writer_library::{DocumentId, DocumentKind, LibraryItem};
 use writer_page::Manifest;
 use writer_ui::{
-    ContextMenu, ContextMenuItem, TextField, TextFieldEvent, Toast,
+    ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, TextField, TextFieldEvent, Toast,
+    Tooltip,
     button::Button,
-    theme::{ActiveTheme, SPACE_2, SPACE_3, SPACE_4, ThemeMode, UI_TEXT_SM},
+    theme::{ActiveTheme, RADIUS_SM, SPACE_2, SPACE_3, SPACE_4, ThemeMode, UI_TEXT_SM},
 };
 use writer_web::{Appearance, EditCommand as WebEdit};
 
@@ -97,6 +99,8 @@ pub const PAGE_ZOOM_STEPS: &[u16] = &[50, 67, 75, 80, 90, 100, 110, 125, 150, 17
 
 /// What the commands of a document that do not apply to a page say.
 pub const NOT_FOR_A_PAGE: &str = "A page is shown as it was made: it has no document settings.";
+/// "Take title from text" on a page.
+pub const TITLE_OF_A_PAGE: &str = "A page keeps the title it was given: rename it to change it.";
 /// "Spelling language" on a page.
 pub const NO_SPELLING_ON_A_PAGE: &str = "A page is not checked for spelling.";
 /// "Save now" on a page.
@@ -352,6 +356,31 @@ impl Drop for PageSession {
     }
 }
 
+impl PageSession {
+    /// Hands every picture of the page that GPUI may hold in its atlas to
+    /// `Window::drop_image`: the snapshot drawn while an overlay is over the
+    /// page and the ones waiting for the next prepaint. Called before the
+    /// session goes; the prepaint that would have dropped them never runs
+    /// for a session that is gone (an item opened from quick open, the
+    /// library search, a row's menu or the version history, over the
+    /// snapshot), and each left behind is a texture the size of the page
+    /// for the life of the window.
+    fn release_pictures(&mut self, window: &mut Window) {
+        let mut pictures: Vec<Arc<RenderImage>> = self.to_drop.borrow_mut().drain(..).collect();
+        if let Overlay::Snapshot(image) = std::mem::take(&mut self.overlay) {
+            pictures.push(image);
+        }
+        for image in pictures {
+            if image.frame_count() > 0 {
+                window.drop_image(image).ok();
+            }
+            if let Some(fake) = &self.fake {
+                fake.note_dropped();
+            }
+        }
+    }
+}
+
 /// A rectangle of GPUI's window coordinates (logical pixels from the top
 /// left of the content) as `writer_web` takes it.
 fn rect_of(bounds: Bounds<Pixels>) -> writer_web::Rect {
@@ -519,7 +548,7 @@ impl Workspace {
         // empty, read-only document while the page is open.
         let had_text_focus = self.editor.read(cx).is_focused(window);
         self.close_text_for_page(cx);
-        self.page = None;
+        self.discard_page(window);
         let focus = cx.focus_handle();
         if had_text_focus {
             window.focus(&focus);
@@ -541,7 +570,7 @@ impl Workspace {
                     .unwrap_or_else(|| std::env::temp_dir().join("the-writer-WebKit"));
                 Some(ViewSeed::WebKit(
                     writer_web::ViewConfig {
-                        host: format!("page-{}", id.0),
+                        host: pages::page_host(id, stored.meta.created_at),
                         entry: manifest.entry.clone(),
                         source,
                         rules_dir,
@@ -554,6 +583,7 @@ impl Workspace {
             Some(PageEngine::Fake(fake)) => Some(ViewSeed::Fake(FakeView::new(
                 fake.clone(),
                 id,
+                &pages::page_host(id, stored.meta.created_at),
                 &manifest.entry,
                 &manifest.text,
                 events,
@@ -650,6 +680,15 @@ impl Workspace {
         true
     }
 
+    /// Drops the session of the open page, its pictures handed back to the
+    /// window first ([`PageSession::release_pictures`]). Every way a page
+    /// session ends goes through here.
+    fn discard_page(&mut self, window: &mut Window) {
+        if let Some(mut page) = self.page.take() {
+            page.release_pictures(window);
+        }
+    }
+
     /// The open text is saved and closed for a page: as `close_document`,
     /// without saying that nothing is open (the page is).
     fn close_text_for_page(&mut self, cx: &mut Context<Self>) {
@@ -669,13 +708,13 @@ impl Workspace {
     /// Closes the open page (its view goes, and its WebContent process with
     /// it). The keyboard goes to the workspace when the page had it.
     pub fn close_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(page) = self.page.take() else {
+        let Some(page) = self.page.as_ref() else {
             return;
         };
         if page.focus.contains_focused(window, cx) {
             window.focus(&self.focus_handle);
         }
-        drop(page);
+        self.discard_page(window);
         if self.session.is_none() {
             self.panel
                 .update(cx, |panel, cx| panel.set_active_document(None, cx));
@@ -729,7 +768,7 @@ impl Workspace {
             return;
         }
         let had_focus = self.page_has_focus(window);
-        self.page = None;
+        self.discard_page(window);
         if self.load_page(id, window, cx)
             && had_focus
             && let Some(focus) = self.page_focus_handle()
@@ -786,9 +825,13 @@ impl Workspace {
                 // A query the strip was given before the view could be asked (a page
                 // opened from the library search: the view is made at its first frame)
                 // is looked for now that there is something to look in.
-                let unasked = self.page.as_ref().and_then(|page| page.find.as_ref()).is_some_and(
-                    |find| find.found.is_none() && !find.field.read(cx).text().is_empty(),
-                );
+                let unasked = self
+                    .page
+                    .as_ref()
+                    .and_then(|page| page.find.as_ref())
+                    .is_some_and(|find| {
+                        find.found.is_none() && !find.field.read(cx).text().is_empty()
+                    });
                 if unasked {
                     self.find_in_page(false, window, cx);
                 }
@@ -1296,7 +1339,23 @@ impl Workspace {
             ),
             _ => None,
         };
-        area = area.child(place).children(stand_in);
+        area = area
+            .child(place)
+            .children(stand_in)
+            // A press on what stands in for the page (the view is hidden)
+            // gives it the keyboard, as a click into the page does. On the
+            // area and not on the whole element: the find strip above it is
+            // the element's too, and a press into the strip's field must
+            // leave the keyboard there (GPUI runs the parent's listener after
+            // the field's, and its focus would win).
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| {
+                    if let Some(focus) = this.page_focus_handle() {
+                        window.focus(&focus);
+                    }
+                }),
+            );
         div()
             .id("page")
             .key_context(PAGE_VIEW)
@@ -1329,17 +1388,6 @@ impl Workspace {
                     this.files_dropped_on_page(paths.paths().to_vec(), window, cx);
                 },
             ))
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, window, _| {
-                    // A press on what stands in for the page (the view is
-                    // hidden) gives it the keyboard, as a click into the
-                    // page does.
-                    if let Some(focus) = this.page_focus_handle() {
-                        window.focus(&focus);
-                    }
-                }),
-            )
             .children(strip)
             .child(area)
             .into_any_element()
@@ -1603,6 +1651,85 @@ impl Workspace {
             Some(false) => Some("Not found"),
             _ => None,
         };
+        // The strip's buttons, for the pointer (product rule 1): as the
+        // text's find bar has them. None takes the keyboard, and each says
+        // its key, asked where the strip is.
+        let button = |id: &'static str, title: &'static str, action: Option<Box<dyn Action>>| {
+            let focus = find.focus.clone();
+            div()
+                .id(id)
+                .debug_selector(|| id.to_string())
+                .flex_none()
+                .h(px(24.))
+                .min_w(px(24.))
+                .px(px(4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(RADIUS_SM)
+                .text_size(UI_TEXT_SM)
+                .text_color(colors.muted)
+                .cursor_pointer()
+                .hover(|style| style.bg(colors.hover))
+                .tooltip(move |window, cx| {
+                    let hint = action
+                        .as_ref()
+                        .and_then(|action| {
+                            KeyHint::for_action_at(action.as_ref(), &focus, window, cx)
+                        })
+                        .or_else(|| {
+                            action
+                                .is_none()
+                                .then(|| KeyHint::for_action(&writer_ui::text_field::Cancel, cx))
+                                .flatten()
+                        });
+                    cx.new(|_| Tooltip::new(title).key_hint(hint)).into()
+                })
+        };
+        let on = find.case_sensitive;
+        let case = button(
+            "page-find-case",
+            "Match case",
+            Some(Box::new(tools::ToggleCaseSensitive)),
+        )
+        .px(px(6.))
+        .border_1()
+        .border_color(if on {
+            colors.accent
+        } else {
+            gpui::transparent_black()
+        })
+        .when(on, |el| el.bg(colors.accent_subtle))
+        .child(
+            div()
+                .text_color(if on { colors.ink } else { colors.muted })
+                .child("Aa"),
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_find_case(window, cx)));
+        let previous = button(
+            "page-find-previous",
+            "Previous match",
+            Some(Box::new(tools::FindPrevious)),
+        )
+        .child(
+            svg()
+                .path(IconName::ChevronDown.path())
+                .flex_none()
+                .size(px(16.))
+                .text_color(colors.muted)
+                .with_transformation(Transformation::rotate(percentage(0.5))),
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.find_in_page(true, window, cx)));
+        let next = button(
+            "page-find-next",
+            "Next match",
+            Some(Box::new(tools::FindNext)),
+        )
+        .child(Icon::new(IconName::ChevronDown))
+        .on_click(cx.listener(|this, _, window, cx| this.find_in_page(false, window, cx)));
+        let close = button("page-find-close", "Close", None)
+            .child(Icon::new(IconName::Close))
+            .on_click(cx.listener(|this, _, window, cx| this.close_find_strip(window, cx)));
         div()
             .id("page-find")
             .debug_selector(|| "page-find".into())
@@ -1629,15 +1756,13 @@ impl Workspace {
                     this.toggle_find_case(window, cx)
                 }),
             )
-            .child(div().flex_1().min_w_0().child(find.field.clone()))
-            .when(find.case_sensitive, |el| {
-                el.child(
-                    div()
-                        .text_size(UI_TEXT_SM)
-                        .text_color(colors.muted)
-                        .child("Case sensitive"),
-                )
-            })
+            .child(
+                div()
+                    .debug_selector(|| "page-find-field".into())
+                    .flex_1()
+                    .min_w_0()
+                    .child(find.field.clone()),
+            )
             .children(status.map(|status| {
                 div()
                     .flex_none()
@@ -1645,6 +1770,10 @@ impl Workspace {
                     .text_color(colors.muted)
                     .child(status)
             }))
+            .child(case)
+            .child(previous)
+            .child(next)
+            .child(close)
             .into_any_element()
     }
 
@@ -1768,7 +1897,7 @@ impl Workspace {
         root = say::<DecreaseBodyTextSize>(root, NOT_FOR_A_PAGE, cx);
         root = say::<IncreaseLineHeight>(root, NOT_FOR_A_PAGE, cx);
         root = say::<DecreaseLineHeight>(root, NOT_FOR_A_PAGE, cx);
-        root = say::<UseTitleFromText>(root, NOT_FOR_A_PAGE, cx);
+        root = say::<UseTitleFromText>(root, TITLE_OF_A_PAGE, cx);
         root = say::<ChooseSpellingLanguage>(root, NO_SPELLING_ON_A_PAGE, cx);
         root = say::<SaveNow>(root, NOTHING_TO_SAVE_ON_A_PAGE, cx);
         root = say::<comments::AddComment>(root, NO_COMMENTS_ON_A_PAGE, cx);
@@ -1814,27 +1943,59 @@ impl Workspace {
     }
 
     /// The names of the actions the palette leaves out while a page is open:
-    /// the commands that act on a text (the tools, the image commands) and
-    /// the spelling commands that act on a word. Empty without a page.
-    pub(crate) fn commands_not_for_the_open_page(&self) -> Vec<&'static str> {
+    /// the commands that act on a text (the tools, the image commands), the
+    /// spelling commands that act on a word, the comment commands, and the
+    /// commands of a document that only say what a page is when they run
+    /// (`page_actions`, the fits of the zoom and the steps past the page's
+    /// 300 %). Their keys and their items in the menu bar keep saying it;
+    /// the palette offers what can be done. Empty without a page.
+    pub(crate) fn commands_not_for_the_open_page(&self, cx: &App) -> Vec<&'static str> {
         if self.page.is_none() {
             return Vec::new();
         }
+        use crate::{actions::*, zoom};
         use writer_spell::actions as spell;
         let mut names: Vec<&'static str> = self
             .text_commands
             .iter()
             .map(|action| action.name())
             .collect();
-        let words: [&dyn Action; 6] = [
+        let only_say: [&dyn Action; 20] = [
             &spell::NextMisspelling,
             &spell::PreviousMisspelling,
             &spell::ShowSuggestions,
             &spell::LearnSpelling,
             &spell::UnlearnSpelling,
             &spell::IgnoreSpelling,
+            &OpenDocumentSettings,
+            &TogglePageView,
+            &TogglePageOrientation,
+            &IncreaseBodyTextSize,
+            &DecreaseBodyTextSize,
+            &IncreaseLineHeight,
+            &DecreaseLineHeight,
+            &UseTitleFromText,
+            &ChooseSpellingLanguage,
+            &SaveNow,
+            &zoom::FitWidth,
+            &zoom::FitPage,
+            &zoom::LifeSize,
+            &zoom::Automatic,
         ];
-        names.extend(words.iter().map(|action| action.name()));
+        names.extend(only_say.iter().map(|action| action.name()));
+        names.extend(
+            zoom::MENU_STEPS
+                .iter()
+                .filter(|percent| **percent > *PAGE_ZOOM_STEPS.last().unwrap_or(&300))
+                .filter_map(|percent| zoom::step_action(*percent))
+                .map(|action| action.name()),
+        );
+        names.extend(
+            crate::commands::all(cx)
+                .iter()
+                .filter(|command| command.category.as_ref() == writer_comments::CATEGORY)
+                .map(|command| command.action_name()),
+        );
         // Find works on a page: it has its own handlers there.
         let find: [&dyn Action; 4] = [
             &tools::Find,
@@ -1844,6 +2005,19 @@ impl Workspace {
         ];
         names.retain(|name| !find.iter().any(|action| action.name() == *name));
         names
+    }
+
+    /// The palette's title of a command while a page is open, where its
+    /// own title names a text: "Rename page", "Go to page". The words of
+    /// the title for a text stay among its keywords, so either finds it.
+    pub(crate) fn page_title_of(command: &mut writer_ui::CommandDescriptor) {
+        let title = match command.action_name() {
+            name if name == crate::actions::RenameDocument.name() => "Rename page",
+            name if name == crate::actions::FocusEditor.name() => "Go to page",
+            _ => return,
+        };
+        let old = std::mem::replace(&mut command.title, title.into());
+        command.keywords.push(old);
     }
 
     /// A toast that says what a page is, for a command of a document.

@@ -191,6 +191,17 @@ pub fn switched_off_by_env() -> bool {
     std::env::var(PAGES_ENV).is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))
 }
 
+/// The host of a page's origin, `writer-page://<host>/`: the page's id and
+/// the moment its row was made (`page-12-1731600000000`). Every view of a
+/// run shares one store of website data, kept per origin (local storage,
+/// IndexedDB, cookies), and SQLite gives the id of a page erased for good
+/// to the next row: with the id alone a new page would read what the
+/// erased one left. An update of the page (an agent's, a restored version,
+/// adding it again) keeps its row and so its origin.
+pub fn page_host(id: DocumentId, created_at: i64) -> String {
+    format!("page-{}-{created_at}", id.0)
+}
+
 /// Where the rule list of the views is compiled and kept: `WebKit/` in the
 /// data directory of the library (`library_db`'s folder), so a test or a
 /// scripted run with `THE_WRITER_DATA_DIR` writes only there.
@@ -1027,6 +1038,8 @@ pub struct FakePages {
 #[derive(Default)]
 struct FakeState {
     opened: Vec<(DocumentId, String)>,
+    /// The origin host of each view made, in order.
+    hosts: Vec<String>,
     /// The events of the open view.
     events: Option<Rc<dyn writer_web::PageEvents>>,
     /// The inbox of the open view (snapshots and finds answer through it).
@@ -1056,6 +1069,18 @@ impl FakePages {
     /// The pages a view was made for, with the entry it loaded, in order.
     pub fn opened(&self) -> Vec<(DocumentId, String)> {
         self.state.borrow().opened.clone()
+    }
+
+    /// The host of the origin each view was given (`writer-page://<host>/`),
+    /// in the order the views were made.
+    pub fn hosts(&self) -> Vec<String> {
+        self.state.borrow().hosts.clone()
+    }
+
+    /// What WebKit tells the open view's workspace, kept by a test to post
+    /// as WebKit would (also after the view went).
+    pub fn events(&self) -> Option<Rc<dyn writer_web::PageEvents>> {
+        self.state.borrow().events.clone()
     }
 
     /// The open view reports "loaded".
@@ -1246,6 +1271,7 @@ impl FakeView {
     pub fn new(
         pages: Rc<FakePages>,
         id: DocumentId,
+        host: &str,
         entry: &str,
         text: &str,
         events: Rc<dyn writer_web::PageEvents>,
@@ -1254,6 +1280,7 @@ impl FakeView {
         {
             let mut state = pages.state.borrow_mut();
             state.opened.push((id, entry.to_string()));
+            state.hosts.push(host.to_string());
             state.events = Some(events);
             state.inbox = Some(inbox);
             state.zoom = Some(100);

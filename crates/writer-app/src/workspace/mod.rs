@@ -136,7 +136,7 @@ pub use page::{
     CRASH_AGAIN_WITHIN, NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NO_SPELLING_ON_A_PAGE,
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
     Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_STEPS, PageState,
-    holes_in as page_holes_in, page_key_bindings,
+    TITLE_OF_A_PAGE, holes_in as page_holes_in, page_key_bindings,
 };
 pub use page_import::{
     AddedPage, AddingPhase, AddingProgress, NOTE_DELAY as ADDING_NOTE_DELAY, PageOutcome,
@@ -1066,16 +1066,26 @@ impl Workspace {
         let recent = self.recent_commands(cx);
         // While a page is open the commands that act on a text are not
         // offered (they have no handler: the menu bar greys them out).
-        let mut left_out = self.commands_not_for_the_open_page();
+        let mut left_out = self.commands_not_for_the_open_page(cx);
         // Without a page engine nothing can be imported.
         if crate::pages::engine(cx).is_none() {
             left_out.push(gpui::Action::name(&ImportPage));
         }
+        let page_open = self.page.is_some();
+        let renamed = move |command: &mut writer_ui::CommandDescriptor| {
+            if page_open {
+                Self::page_title_of(command);
+            }
+        };
         self.modal_layer.update(cx, |layer, cx| {
             layer.toggle(window, cx, |window, cx| {
                 let commands = crate::commands::all(cx)
                     .into_iter()
                     .filter(|command| !left_out.contains(&command.action_name()))
+                    .map(|mut command| {
+                        renamed(&mut command);
+                        command
+                    })
                     .collect();
                 let delegate = PaletteDelegate::with_commands(workspace, commands, recent);
                 let rows = picker_rows(window, 14);

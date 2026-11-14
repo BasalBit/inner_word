@@ -186,6 +186,12 @@ fn base_menus() -> Vec<Menu> {
                 // nothing is being added (Cancel).
                 MenuItem::action("Import Page…", crate::actions::ImportPage),
                 MenuItem::action("Cancel Adding Pages", crate::actions::CancelAddingPages),
+                // Also for whoever missed the summary's "Show Why": the
+                // report of the last gesture (or that nothing was added).
+                MenuItem::action(
+                    "Show Report of Pages Added Last…",
+                    crate::actions::ShowPageReport,
+                ),
                 MenuItem::separator(),
                 MenuItem::action("Open Document…", QuickOpen),
                 MenuItem::action("Search Library…", SearchLibrary),

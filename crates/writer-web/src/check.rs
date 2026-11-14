@@ -86,7 +86,8 @@ const PROBE: &str = r#"(() => {
 /// `noscript`, `template` and `head` that have no layout box (their element has no
 /// client rectangles or is not visible to `checkVisibility()`, they lie in a closed
 /// `<details>` outside its `<summary>`, or they themselves have no rectangles), one
-/// line per block, a line left out when the shown text has it already.
+/// line per block, the text of two elements in it a space apart unless it reads as one
+/// word, a line left out when the shown text has it already.
 const TEXT: &str = r#"(() => {
   const root = document.body || document.documentElement;
   const shown = root ? String(root.innerText || root.textContent || '') : '';
@@ -100,6 +101,7 @@ const TEXT: &str = r#"(() => {
   const lines = [];
   const seen = new Set();
   let block = null;
+  let last = null;
   let buffer = '';
   const flush = () => {
     const line = buffer.replace(/\s+/g, ' ').trim();
@@ -141,7 +143,14 @@ const TEXT: &str = r#"(() => {
       if (!hidden(node)) { flush(); block = null; continue; }
       const owner = blockOf(node);
       if (owner !== block) { flush(); block = owner; }
+      // Text of two elements in one block is two words unless it reads as one (a word
+      // continued in lower case, punctuation): hidden labels, a tab's items and the
+      // titles of a chart are no "agoClosed" in the text that search and agents read.
+      if (buffer && node.parentElement !== last && /\S$/.test(buffer)
+          && /^\S/.test(node.data) && !(/[a-z]$/.test(buffer) && /^[a-z]/.test(node.data))
+          && !/^[.,;:!?)\]}%]/.test(node.data)) buffer += ' ';
       buffer += node.data;
+      last = node.parentElement;
     }
     flush();
   }

@@ -873,6 +873,7 @@ fn the_text_is_read_whole(report: &mut Report, rules: &Path) {
 <details><summary>More</summary><p>Inside the details.</p></details>
 <div hidden>Hidden chapter text.</div>
 <p style="display:none">Not displayed either.</p>
+<div style="display:none"><span>Closed 2 days ago</span><span>Closed 7 days ago</span><b>Fak</b><b>turano</b><span>05 / 05</span></div>
 <p id="late"></p><p id="raf"></p><p id="forged"></p>
 <script>
  document.title = 'Written by script';
@@ -930,6 +931,7 @@ fn the_text_is_read_whole(report: &mut Report, rules: &Path) {
         "Inside the details.",
         "Hidden chapter text.",
         "Not displayed either.",
+        "Closed 2 days ago Closed 7 days ago Fakturano 05 / 05",
     ] {
         report.check(
             rest.contains(hidden) && !shown_part.contains(hidden),

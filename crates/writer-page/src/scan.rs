@@ -517,7 +517,12 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
 
 /// `onclick`, `onload`, `onpointerdown`: an attribute whose value is a script.
 fn is_event_handler(name: &str) -> bool {
-    name.len() > 2 && name[..2].eq_ignore_ascii_case("on") && name.bytes().all(|b| b.is_ascii_alphabetic())
+    // Bytes, not a slice of the str: an attribute's name can begin with a character of
+    // several bytes (a page of the archive has one), and `name[..2]` panicked there.
+    let bytes = name.as_bytes();
+    bytes.len() > 2
+        && bytes[..2].eq_ignore_ascii_case(b"on")
+        && bytes.iter().all(|b| b.is_ascii_alphabetic())
 }
 
 /// `<meta http-equiv=refresh content="5; url=next.html">`.

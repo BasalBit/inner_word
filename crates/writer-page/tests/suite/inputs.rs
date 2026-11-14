@@ -237,6 +237,19 @@ fn a_folder_opening_with_another_entry_is_another_input() {
     assert_eq!(read_input(single.path(), Some("report.html")).unwrap().fingerprint, chosen.fingerprint);
 }
 
+/// An attribute whose name begins with a character of several bytes is no event
+/// handler, and reading it does not panic (a page of the archive has one).
+#[test]
+fn an_attribute_named_in_other_letters_is_read() {
+    let dir = folder(&[(
+        "page.html",
+        "<p \u{20ac}x=\"1\" on\u{e9}=\"new Audio('a.mp3')\" \u{1f600}=\"2\">Hi</p>",
+    )]);
+    let input = read_input(&dir.path().join("page.html"), None).unwrap();
+    assert_eq!(input_paths(&input), vec!["page.html"]);
+    assert!(input.warnings.is_empty(), "{:?}", input.warnings);
+}
+
 #[test]
 fn an_event_handler_is_read_as_a_script() {
     let dir = folder(&[

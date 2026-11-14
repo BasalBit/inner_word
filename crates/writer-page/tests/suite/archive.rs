@@ -2,6 +2,14 @@
 //! real fetcher, and every piece `archive.py` fetched for it is found and fetched again.
 //! This one reaches the internet, so it never runs by default:
 //! `CARGO_TARGET_DIR=target-pure cargo test -p writer-page -- --ignored archive`.
+//!
+//! The font files of Google Fonts are not compared by address: its style sheets name
+//! other files as time goes on (a new version in `/s/<family>/v22/`, another kit in
+//! `/l/font?kit=…`), so what `archive.py` fetched in October is not what the same style
+//! sheet names now (a family's files even move between `/s/<family>/` and a kit). For
+//! them it is enough that the page has font files of Google Fonts where the archive has
+//! them, and that no style sheet of the page still names a font file on the web: the
+//! page is whole (every other address is compared as it is).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -22,6 +30,32 @@ fn normal(url: &str) -> String {
         u.to_string()
     })
     .unwrap_or_else(|_| url.to_string())
+}
+
+/// The family of a font file of Google Fonts (`fonts.gstatic.com/s/<family>/…`, or
+/// `l/font` for a kit, which names none); None for any other address.
+fn google_font(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.host_str()? != "fonts.gstatic.com" {
+        return None;
+    }
+    let mut segments = parsed.path_segments()?;
+    Some(match (segments.next(), segments.next()) {
+        (Some("s"), Some(family)) => format!("s/{family}"),
+        (Some(first), _) => first.to_string(),
+        _ => String::new(),
+    })
+}
+
+#[test]
+fn a_font_file_of_google_fonts_is_known_by_its_family() {
+    assert_eq!(
+        google_font("https://fonts.gstatic.com/s/azeretmono/v21/3XFuErsiyJsY9O_Gepph.woff2").as_deref(),
+        Some("s/azeretmono")
+    );
+    assert_eq!(google_font("https://fonts.gstatic.com/l/font?kit=Jqz&skey=e9&v=v7").as_deref(), Some("l"));
+    assert_eq!(google_font("https://fonts.googleapis.com/css2?family=Inter"), None);
+    assert_eq!(google_font("https://cdn.jsdelivr.net/npm/x@1/x.js"), None);
 }
 
 #[test]
@@ -60,7 +94,26 @@ fn archive_every_external_of_the_originals_is_found_and_fetched() {
             }
         };
         let fetched: BTreeSet<String> = bundled.externals.iter().map(|e| normal(&e.url)).collect();
-        let missed: Vec<&String> = wanted.iter().filter(|u| !fetched.contains(*u) && !not_kept.contains(*u)).collect();
+        let fetched_fonts: BTreeSet<String> = fetched.iter().filter_map(|u| google_font(u)).collect();
+        let mut missed: Vec<String> = wanted
+            .iter()
+            .filter(|u| google_font(u).is_none() && !fetched.contains(*u) && !not_kept.contains(*u))
+            .cloned()
+            .collect();
+        // A family's files can move between `/s/<family>/` and a kit (`/l/font?kit=`),
+        // which names no family: the fonts are counted together.
+        if wanted.iter().any(|u| google_font(u).is_some()) && fetched_fonts.is_empty() {
+            missed.push("the font files of Google Fonts".to_string());
+        }
+        // Whole: no style sheet still names a font file of Google Fonts on the web (an
+        // address fetched is written as the path of its copy, `../fonts.gstatic.com/…`).
+        for file in &bundled.served {
+            if file.media_type.starts_with("text/css")
+                && String::from_utf8_lossy(&file.bytes).contains("//fonts.gstatic.com/")
+            {
+                missed.push(format!("{} still names fonts.gstatic.com", file.path));
+            }
+        }
         let dir = temp();
         write_check_dir(&bundled, &dir.path().join("check")).unwrap();
         report.push(format!(

@@ -129,6 +129,7 @@ pub use live::{
     AgentChanges, ChangeCost, Names, Offer, Subject, Undo as AgentUndo, run_sentence, sentence,
 };
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
+pub(crate) use page::fake_printed;
 pub use page::{
     CRASH_AGAIN_WITHIN, NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NO_SPELLING_ON_A_PAGE,
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
@@ -1146,7 +1147,7 @@ impl Workspace {
     /// it is open. What is on screen is saved first, so the list is up to
     /// date.
     pub fn toggle_version_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.open_document_id() else {
+        let Some(id) = self.open_item_id() else {
             self.show_toast(Toast::new("Open a document to see its versions"), cx);
             return;
         };

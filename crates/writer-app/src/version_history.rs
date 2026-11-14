@@ -216,6 +216,45 @@ struct PreviewBlock {
     code: bool,
     /// An image: `text` is its description, or [`IMAGE_WITHOUT_DESCRIPTION`].
     image: bool,
+    /// Drawn muted: what stands for a picture, the text of a page.
+    muted: bool,
+}
+
+/// The preview of a version of a page: "31 files", then its text, a
+/// paragraph a line, muted.
+fn page_preview(snapshot: writer_library::SnapshotId, manifest: &writer_page::Manifest) -> Preview {
+    let plain = |text: String, muted: bool, heading: Option<u8>| PreviewBlock {
+        text: SharedString::from(text),
+        heading,
+        marker: None,
+        quote: false,
+        code: false,
+        image: false,
+        muted,
+    };
+    let lines: Vec<&str> = manifest
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut blocks = vec![plain(
+        counted(manifest.files.len(), "file", "files"),
+        false,
+        Some(3),
+    )];
+    blocks.extend(
+        lines
+            .iter()
+            .take(PREVIEW_BLOCKS)
+            .map(|line| plain(line.to_string(), true, None)),
+    );
+    Preview {
+        snapshot,
+        blocks,
+        more: lines.len().saturating_sub(PREVIEW_BLOCKS),
+        error: None,
+    }
 }
 
 /// What the preview of a version shows for an image that has no
@@ -425,7 +464,23 @@ impl VersionHistory {
         if self.preview.as_ref().map(|preview| preview.snapshot) == Some(snapshot) {
             return;
         }
+        let page = self
+            .library
+            .read(cx)
+            .document_meta(self.document)
+            .is_ok_and(|meta| meta.kind == writer_library::DocumentKind::Page);
         self.preview = Some(match self.library.read(cx).snapshot(snapshot) {
+            // A version of a page: how many files, then the text the page
+            // showed, muted (the preview is text, not the page).
+            Ok(stored) if page => match writer_page::Manifest::from_json(&stored.content) {
+                Ok(manifest) => page_preview(snapshot, &manifest),
+                Err(error) => Preview {
+                    snapshot,
+                    blocks: Vec::new(),
+                    more: 0,
+                    error: Some(error.sentence()),
+                },
+            },
             Ok(stored) => {
                 let loaded = load_document(&stored.content);
                 let document = loaded.document;
@@ -454,6 +509,7 @@ impl VersionHistory {
                         quote: matches!(block.kind(), BlockKind::Quote),
                         code: block.kind().is_code(),
                         image: block.kind().is_image(),
+                        muted: block.kind().is_image(),
                     })
                     .collect();
                 Preview {
@@ -493,7 +549,7 @@ impl VersionHistory {
         window.defer(cx, move |window, cx| {
             workspace
                 .update(cx, |workspace, cx| {
-                    if workspace.open_document_id() == Some(document) {
+                    if workspace.open_item_id() == Some(document) {
                         workspace.restore_version(snapshot, window, cx);
                     }
                 })
@@ -601,7 +657,7 @@ impl VersionHistory {
                     el.font_family(theme.fonts.mono.clone()).text_size(px(12.))
                 })
                 // What stands for a picture is not the document's text.
-                .when(block.image, |el| el.text_color(colors.muted))
+                .when(block.muted, |el| el.text_color(colors.muted))
                 .children(
                     block
                         .marker

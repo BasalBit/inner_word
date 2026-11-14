@@ -188,6 +188,18 @@ pub struct PreparedExport {
     pub assets: Vec<ExportAsset>,
     /// How many documents it holds.
     pub documents: usize,
+    /// How many pages of the folder were left out (a page is exported on
+    /// its own, as a folder).
+    pub pages_left_out: usize,
+}
+
+/// What an export of a folder says about the pages it left out.
+pub fn pages_left_out_sentence(pages: usize) -> String {
+    if pages == 1 {
+        "1 page was left out: a page is exported on its own, as a folder.".to_string()
+    } else {
+        format!("{pages} pages were left out: a page is exported on its own, as a folder.")
+    }
 }
 
 impl PreparedExport {
@@ -463,6 +475,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A page has an export of its own: a folder that opens offline, or
+        // a PDF as printed.
+        let page = match target {
+            ExportTarget::Open => self.open_page_id(),
+            ExportTarget::Document(id) if self.is_page(id, cx) => Some(id),
+            _ => None,
+        };
+        if let Some(page) = page {
+            self.show_page_export(page, window, cx);
+            return;
+        }
         // A row of the open document is the open document.
         let target = match target {
             ExportTarget::Document(id) if self.open_document_id() == Some(id) => ExportTarget::Open,
@@ -590,6 +613,7 @@ impl Workspace {
                     bytes: exported.bytes,
                     assets: exported.assets,
                     documents: 1,
+                    pages_left_out: 0,
                 })
             }
             (ExportScope::Folder, meta) => {
@@ -609,6 +633,16 @@ impl Workspace {
                     }
                     None => (LIBRARY_ROOT_NAME.to_string(), tree.documents.clone()),
                 };
+                // A page is exported on its own, as a folder: it is left out
+                // here, and the toast says so.
+                let pages_left_out = metas
+                    .iter()
+                    .filter(|meta| meta.kind == writer_library::DocumentKind::Page)
+                    .count();
+                let metas: Vec<DocumentMeta> = metas
+                    .into_iter()
+                    .filter(|meta| meta.kind != writer_library::DocumentKind::Page)
+                    .collect();
                 let mut parts: Vec<(String, Document)> = Vec::with_capacity(metas.len());
                 for part in &metas {
                     parts.push((session_title(&part.title), text_of(part.id)?));
@@ -636,6 +670,7 @@ impl Workspace {
                     bytes: exported.bytes,
                     assets: exported.assets,
                     documents: parts.len(),
+                    pages_left_out,
                 })
             }
         }
@@ -755,6 +790,13 @@ impl Workspace {
                                     folder,
                                     prepared.documents,
                                 ));
+                            }
+                            if prepared.pages_left_out > 0 {
+                                if !said.ends_with('.') {
+                                    said.push('.');
+                                }
+                                said.push(' ');
+                                said.push_str(&pages_left_out_sentence(prepared.pages_left_out));
                             }
                             this.show_toast(Toast::new(said).success(), cx);
                         }

@@ -155,7 +155,8 @@ impl Workspace {
     /// Whether "Print" is there: a document is open and the app was given
     /// a target for print jobs.
     pub fn can_print(&self, cx: &gpui::App) -> bool {
-        self.session.is_some() && printing::target(cx).is_some()
+        let page_shown = self.page.is_some() && crate::pages::engine(cx).is_some();
+        (self.session.is_some() || page_shown) && printing::target(cx).is_some()
     }
 
     /// The note about the job that is preparing, while it is up.
@@ -215,6 +216,10 @@ impl Workspace {
     /// document, without a target, and while a job is preparing or in the
     /// print panel.
     pub fn print(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page.is_some() && self.print.stage.is_none() {
+            self.print_page(window, cx);
+            return;
+        }
         if self.session.is_none() || self.print.stage.is_some() {
             return;
         }
@@ -252,6 +257,77 @@ impl Workspace {
                 // The workspace is gone.
                 return;
             };
+            hand_over(job, target, &this, cx).await;
+        }));
+        cx.notify();
+    }
+
+    /// "Print…" on a page: WebKit prints the view as it is now into a PDF
+    /// (in its own process; the job is "preparing" with the same note and
+    /// Cancel until the PDF is there), which goes to the target as a
+    /// text's job does. `print_to_pdf` is called from the job's task,
+    /// between two awaits and outside any update: AppKit may call the
+    /// window's delegate meanwhile.
+    fn print_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = printing::target(cx) else {
+            return;
+        };
+        let Some(view) = self.page_view_handle() else {
+            return;
+        };
+        let title = self.display_title();
+        self.print.stage = Some(Printing::Preparing);
+        self.print.progress = None;
+        self.print.waiting = 0;
+        self.print.note = None;
+        self.print.title = title.clone();
+        self.print.note_task = Some(cx.spawn({
+            let title = title.clone();
+            async move |this, cx| {
+                cx.background_executor().timer(NOTE_DELAY).await;
+                this.update(cx, |this, cx| this.show_print_note(&title, cx))
+                    .ok();
+            }
+        }));
+        self.print.task = Some(cx.spawn_in(window, async move |this, cx| {
+            // A turn of the main thread first: this is called from an
+            // action handler, inside an update.
+            cx.background_executor().timer(Duration::ZERO).await;
+            let printed = super::page::print_view(&view).await;
+            match printed {
+                Ok(printed) => {
+                    let job = PrintJob {
+                        title,
+                        paper: (printed.paper.0 as f32, printed.paper.1 as f32),
+                        pdf: writer_print::Pdf::from_bytes(printed.bytes, printed.pages),
+                    };
+                    hand_over(job, target, &this, cx).await;
+                }
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.toast_error(format!("The page could not be printed: {error}"), cx);
+                        this.print_ended(cx);
+                    })
+                    .ok();
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    // ----- the stages -----------------------------------------------------------------
+}
+
+/// Hands a finished job to `target` and waits for its panel, if it goes to
+/// one; the job is over afterwards.
+async fn hand_over(
+    job: PrintJob,
+    target: PrintTarget,
+    this: &gpui::WeakEntity<Workspace>,
+    cx: &mut gpui::AsyncWindowContext,
+) {
+    {
+        {
             // Handing over. `ended`: the panel the job is in, if it is in
             // one.
             let ended = match target {
@@ -309,10 +385,11 @@ impl Workspace {
             }
             drop(job);
             this.update(cx, |this, cx| this.print_ended(cx)).ok();
-        }));
-        cx.notify();
+        }
     }
+}
 
+impl Workspace {
     /// "Cancel printing": stops preparing the pages. Nothing is handed to
     /// the target. Does nothing unless a job is preparing (a job in the
     /// print panel is cancelled there).

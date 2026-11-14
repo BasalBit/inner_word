@@ -952,6 +952,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.page.is_some() {
+            return self.restore_page_version(snapshot, window, cx);
+        }
         let Some(id) = self.open_document_id() else {
             return false;
         };

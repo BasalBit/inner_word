@@ -893,6 +893,100 @@ impl Workspace {
         Some(rx)
     }
 
+    /// Makes version `snapshot` of the open page its current content, after
+    /// keeping the page as it is now as a version; the view loads it.
+    pub(crate) fn restore_page_version(
+        &mut self,
+        snapshot: writer_library::SnapshotId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(id) = self.open_page_id() else {
+            return false;
+        };
+        let stored = match self.library.read(cx).snapshot(snapshot) {
+            Ok(stored) if stored.meta.document_id == id => stored,
+            Ok(_) => return false,
+            Err(error) => {
+                self.toast_error(format!("Could not read that version: {error}"), cx);
+                return false;
+            }
+        };
+        let manifest = match Manifest::from_json(&stored.content) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.toast_error(
+                    format!("Could not read that version: {}", error.sentence()),
+                    cx,
+                );
+                return false;
+            }
+        };
+        let Ok(meta) = self.library.read(cx).document_meta(id) else {
+            return false;
+        };
+        let stats = writer_core::Fragment::from_plain_text(&manifest.text)
+            .to_document()
+            .stats();
+        let restored = self.library.update(cx, |library, cx| {
+            library.snapshot_if_stale(id, Duration::ZERO, cx)?;
+            library.save_page(
+                id,
+                &writer_library::PageContent {
+                    manifest: &stored.content,
+                    title: &meta.title,
+                    plain_text: &manifest.text,
+                    word_count: stats.words as u64,
+                    char_count: stats.characters as u64,
+                    source_url: meta.source_url.as_deref(),
+                },
+                cx,
+            )
+        });
+        match restored {
+            Ok(_) => {
+                let when = crate::version_history::version_time_label(
+                    crate::version_history::LocalTime::from_unix_ms(stored.meta.created_at),
+                    crate::version_history::LocalTime::from_unix_ms(
+                        self.library.read(cx).clock().now_ms(),
+                    ),
+                );
+                self.dismiss_modal(window, cx);
+                if let Some(focus) = self.page_focus_handle() {
+                    window.focus(&focus);
+                }
+                self.show_toast(
+                    Toast::new(format!(
+                        "Restored {when}. The page from before is kept as a version."
+                    ))
+                    .success()
+                    .duration(Duration::from_secs(6)),
+                    cx,
+                );
+                true
+            }
+            Err(error) => {
+                self.toast_error(format!("Nothing was restored: {error}"), cx);
+                false
+            }
+        }
+    }
+
+    /// The view of the open page, shared (for a job that prints it).
+    pub(crate) fn page_view_handle(&self) -> Option<SharedView> {
+        self.page.as_ref().map(|page| page.view.clone())
+    }
+
+    /// The PDF of the open page as it is now: WebKit's print operation
+    /// into the user's default paper, or the fake engine's page. Call it
+    /// from a task, outside any update.
+    pub fn page_print_job(&self) -> Option<pages::Answer<Result<writer_web::PrintedPdf, String>>> {
+        let view = self.page_view_handle()?;
+        let (tx, rx) = pages::answer();
+        start_printing(&view, tx);
+        Some(rx)
+    }
+
     /// Evaluates `script` in the open page (scripted runs: `page:js:`).
     pub fn evaluate_in_page(&self, script: &str) -> Option<pages::Answer<Result<String, String>>> {
         let page = self.page.as_ref()?;
@@ -1095,7 +1189,11 @@ impl Workspace {
                     }
                 }
                 bounds_cell.set(Some(bounds));
-                let mut view = view.borrow_mut();
+                // A frame drawn while the view is lent out (AppKit can draw
+                // the window while WebKit prints): it stays as it is.
+                let Ok(mut view) = view.try_borrow_mut() else {
+                    return;
+                };
                 if view.is_none()
                     && let Some(seed) = seed.borrow_mut().take()
                 {
@@ -1793,4 +1891,32 @@ impl Workspace {
             .as_ref()
             .map(|page| super::counted(page.words as usize, "word", "words"))
     }
+}
+
+/// Starts the print of `view`; the answer goes to `tx` (from inside AppKit
+/// for WebKit: it only notes it).
+fn start_printing(view: &SharedView, tx: pages::AnswerTx<Result<writer_web::PrintedPdf, String>>) {
+    let view = view.borrow();
+    match view.as_ref() {
+        Some(PageViewHandle::WebKit(web)) => web.print_to_pdf(move |printed| tx.send(printed)),
+        Some(PageViewHandle::Fake(_)) => tx.send(Ok(fake_printed())),
+        None => tx.send(Err("the page is not shown yet".to_string())),
+    }
+}
+
+/// What the fake engine prints: one A4 page.
+pub(crate) fn fake_printed() -> writer_web::PrintedPdf {
+    writer_web::PrintedPdf {
+        bytes: pages::fake_pdf(),
+        pages: 1,
+        paper: (595.28, 841.89),
+    }
+}
+
+/// The PDF of a view as it is now (see [`Workspace::page_print_job`]).
+pub(crate) async fn print_view(view: &SharedView) -> Result<writer_web::PrintedPdf, String> {
+    let (tx, rx) = pages::answer();
+    start_printing(view, tx);
+    rx.await
+        .unwrap_or_else(|| Err("the print was not finished".to_string()))
 }

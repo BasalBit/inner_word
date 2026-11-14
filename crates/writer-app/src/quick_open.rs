@@ -151,19 +151,32 @@ impl PickerDelegate for QuickOpenDelegate {
         match &self.rows[ix] {
             Row::Header(title) => PickerEntry::Header((*title).into()),
             Row::Document { index, positions } => {
-                let folder = self.documents[*index].folder_label();
+                let entry = &self.documents[*index];
+                let folder = entry.folder_label();
                 let title = &self.titles[*index];
-                if folder.is_empty() {
+                // A page: the globe, and "Page" beside it.
+                let page = entry.kind == writer_library::DocumentKind::Page;
+                let icon = if page {
+                    IconName::Globe
+                } else {
+                    IconName::Document
+                };
+                let detail = match (page, folder.is_empty()) {
+                    (true, true) => "Page".to_string(),
+                    (true, false) => format!("Page \u{b7} {folder}"),
+                    (false, _) => folder,
+                };
+                if detail.is_empty() {
                     PickerItem::new(title.clone())
                         .positions(positions.clone())
-                        .icon(IconName::Document)
+                        .icon(icon)
                         .into()
                 } else {
                     let (title, positions) = clip_title(title, positions, MAX_TITLE_BESIDE_FOLDER);
                     PickerItem::new(title)
                         .positions(positions)
-                        .icon(IconName::Document)
-                        .detail(folder)
+                        .icon(icon)
+                        .detail(detail)
                         .into()
                 }
             }

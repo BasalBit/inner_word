@@ -43,6 +43,8 @@ pub struct HitRow {
     pub snippet: String,
     /// Byte offsets into `snippet` of the characters to highlight.
     pub positions: Vec<usize>,
+    /// A text or a page.
+    pub kind: writer_library::DocumentKind,
 }
 
 impl HitRow {
@@ -72,6 +74,7 @@ impl HitRow {
                 .collect();
         }
         Self {
+            kind: hit.kind,
             document_id: hit.document_id,
             title: if title.is_empty() {
                 UNTITLED.to_string()
@@ -172,7 +175,11 @@ impl PickerDelegate for LibrarySearchDelegate {
             .positions(marked)
             .detail(hit.snippet.clone())
             .detail_positions(hit.positions.clone())
-            .icon(IconName::Document)
+            .icon(if hit.kind == writer_library::DocumentKind::Page {
+                IconName::Globe
+            } else {
+                IconName::Document
+            })
             .into()
     }
 

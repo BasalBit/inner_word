@@ -1062,6 +1062,41 @@ async fn execute(
             }
             frame_pause(window, view, cx).await;
         }
+        Step::Print(PrintStep::Pdf(path))
+            if workspace_handle(window, cx)?
+                .update(cx, |workspace, _, _| workspace.open_page_id().is_some())? =>
+        {
+            // A page: WebKit's print of the view, from this task and
+            // outside any update.
+            let started = Instant::now();
+            let answer = workspace_handle(window, cx)?
+                .update(cx, |workspace, _, _| workspace.page_print_job())?
+                .ok_or_else(|| anyhow!("no page is open"))?;
+            let printed = answer
+                .await
+                .ok_or_else(|| anyhow!("the page was not printed"))?
+                .map_err(|error| anyhow!("the page was not printed: {error}"))?;
+            let path = absolute(path);
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(&path, &printed.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "[automation] print: {} pages, {:.2} x {:.2} pt (a page, WebKit), made in {:.2} s",
+                printed.pages,
+                printed.paper.0,
+                printed.paper.1,
+                started.elapsed().as_secs_f64()
+            );
+            eprintln!(
+                "[automation] print: {} bytes written to {}",
+                printed.bytes.len(),
+                path.display()
+            );
+            frame_pause(window, view, cx).await;
+        }
         Step::Print(step) => {
             let started = Instant::now();
             let job = workspace_handle(window, cx)?

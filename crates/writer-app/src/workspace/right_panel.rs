@@ -200,7 +200,7 @@ impl Workspace {
     /// Whether the side chat has something to show: the assistant is
     /// available, the user has the panel open and a document is open.
     fn assistant_panel_there(&self) -> bool {
-        self.right.assistant.is_some() && self.right.assistant_open && self.session.is_some()
+        self.right.assistant.is_some() && self.right.assistant_open && self.open_item_id().is_some()
     }
 
     /// Fills the slot at the right of the text with the panel that belongs

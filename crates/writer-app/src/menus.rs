@@ -182,6 +182,10 @@ fn base_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Document", NewDocument),
                 MenuItem::action("New Folder", NewFolder),
+                // Pages: greyed out without a page engine (Import) and while
+                // nothing is being added (Cancel).
+                MenuItem::action("Import Page…", crate::actions::ImportPage),
+                MenuItem::action("Cancel Adding Pages", crate::actions::CancelAddingPages),
                 MenuItem::separator(),
                 MenuItem::action("Open Document…", QuickOpen),
                 MenuItem::action("Search Library…", SearchLibrary),
@@ -198,6 +202,13 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::action("Version History…", ShowVersionHistory),
                 MenuItem::action("Document Settings…", OpenDocumentSettings),
                 MenuItem::action("Reveal in Library", RevealInLibrary),
+                MenuItem::separator(),
+                // An open page with the address it came from.
+                MenuItem::action("Copy Page Address", crate::actions::CopyPageAddress),
+                MenuItem::action(
+                    "Open Page Address in Browser",
+                    crate::actions::OpenPageAddress,
+                ),
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
             ],
@@ -338,6 +349,9 @@ fn base_menus() -> Vec<Menu> {
         Menu {
             name: "View".into(),
             items: vec![
+                // An open page.
+                MenuItem::action("Reload Page", crate::actions::ReloadPage),
+                MenuItem::separator(),
                 MenuItem::action("Show or Hide Library", ToggleSidebar),
                 MenuItem::action("Show or Hide Comments", comments::ToggleComments),
                 MenuItem::action("Turn Page View On or Off", TogglePageView),

@@ -534,3 +534,263 @@ fn without_an_engine_a_page_shows_its_text_and_says_why(cx: &mut TestAppContext)
             .contains("The boats come by road")
     );
 }
+
+#[gpui::test]
+fn print_hands_the_pdf_of_the_page_to_the_target(cx: &mut TestAppContext) {
+    init(cx);
+    let jobs = cx.update(writer_app::printing::record);
+    let fake = cx.update(pages::use_fake);
+    let library = library(cx);
+    let page = add_page(&library, "harbour", HARBOUR, None, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(page, true, window, cx);
+    });
+    vcx.run_until_parked();
+    fake.finish_loading();
+    assert!(available(&writer_app::actions::Print, vcx));
+    vcx.dispatch_action(writer_app::actions::Print);
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(10));
+    vcx.run_until_parked();
+    let jobs = jobs.borrow();
+    assert_eq!(jobs.len(), 1, "one job");
+    assert_eq!(jobs[0].title, "Harbour Guide");
+    assert_eq!(jobs[0].pdf.bytes(), pages::fake_pdf().as_slice());
+    assert_eq!(workspace.read_with(vcx, |w, _| w.printing()), None);
+}
+
+#[gpui::test]
+fn export_writes_the_folder_and_the_pdf_of_a_page(cx: &mut TestAppContext) {
+    let (_fake, workspace, _text, _page, vcx) = open_page(cx);
+    let out = tempfile::tempdir().unwrap();
+    vcx.simulate_keystrokes("cmd-shift-s");
+    let choices = workspace
+        .read_with(vcx, |w, cx| {
+            w.modal_layer()
+                .read(cx)
+                .active::<writer_app::page_export::PageExportPicker>()
+                .map(|picker| picker.read(cx).delegate.choices())
+        })
+        .expect("the export of a page is open");
+    use writer_app::page_export::PageExportChoice;
+    assert_eq!(
+        choices,
+        vec![PageExportChoice::Folder, PageExportChoice::Pdf]
+    );
+    // The folder, through the save panel.
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(vcx.did_prompt_for_new_path());
+    let folder = out.path().join("Harbour Guide");
+    vcx.simulate_new_path_selection(|_| Some(folder.clone()));
+    vcx.run_until_parked();
+    let html = std::fs::read_to_string(folder.join("index.html")).expect("the entry is written");
+    assert!(html.contains("The boats come by road"), "{html}");
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter()
+            .any(|toast| toast.starts_with("Exported “Harbour Guide”")
+                && toast.contains("python3 -m http.server")),
+        "{said:?}"
+    );
+    // The PDF.
+    vcx.simulate_keystrokes("cmd-shift-s");
+    vcx.simulate_keystrokes("down");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let pdf = out.path().join("Harbour Guide.pdf");
+    vcx.simulate_new_path_selection(|_| Some(pdf.clone()));
+    vcx.run_until_parked();
+    assert_eq!(std::fs::read(&pdf).unwrap(), pages::fake_pdf());
+}
+
+#[gpui::test]
+fn the_versions_of_a_page_show_its_text_and_one_is_restored(cx: &mut TestAppContext) {
+    let (fake, workspace, _text, page, vcx) = open_page(cx);
+    let library = workspace.read_with(vcx, |w, _| w.library().clone());
+    // The page as it was is kept as a version, and it is updated.
+    let newer = pages::offline_bundle(
+        "harbour",
+        "index.html",
+        vec![(
+            "index.html".to_string(),
+            b"<html><head><title>Harbour Guide</title></head><body><p>The ferry runs at noon.</p></body></html>".to_vec(),
+        )],
+    );
+    library.update(vcx, |library, cx| {
+        library.create_snapshot(page, cx).unwrap();
+    });
+    {
+        let report = writer_page::static_check(&newer);
+        let prepared = writer_page::prepare(newer, &report).unwrap();
+        let manifest = prepared.manifest(None, 1).to_json();
+        library.update(vcx, |library, cx| {
+            for blob in &prepared.blobs {
+                library.put_file(&blob.data).unwrap();
+            }
+            library
+                .save_page(
+                    page,
+                    &writer_library::PageContent {
+                        manifest: &manifest,
+                        title: "Harbour Guide",
+                        plain_text: &prepared.text,
+                        word_count: 5,
+                        char_count: 24,
+                        source_url: None,
+                    },
+                    cx,
+                )
+                .unwrap();
+        });
+    }
+    vcx.run_until_parked();
+    // The open page follows: a view of the new page.
+    assert_eq!(fake.opened().len(), 2);
+    assert!(
+        workspace
+            .read_with(vcx, |w, _| w.page_manifest().unwrap().text.clone())
+            .contains("ferry")
+    );
+    vcx.dispatch_action(writer_app::actions::ShowVersionHistory);
+    vcx.run_until_parked();
+    let history = workspace
+        .read_with(vcx, |w, cx| {
+            w.modal_layer()
+                .read(cx)
+                .active::<writer_app::version_history::VersionHistory>()
+        })
+        .expect("the version history is open");
+    let preview = history.read_with(vcx, |history, _| history.preview_text());
+    assert!(preview.starts_with("1 file"), "{preview}");
+    assert!(preview.contains("The boats come by road"), "{preview}");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(
+        workspace
+            .read_with(vcx, |w, _| w.page_manifest().unwrap().text.clone())
+            .contains("The boats come by road"),
+        "the version is the page again"
+    );
+    let versions = library.read_with(vcx, |library, _| library.snapshots(page).unwrap().len());
+    assert_eq!(versions, 2, "the page from before the restore is kept");
+}
+
+#[gpui::test]
+fn a_bare_letter_is_refused_as_a_key_of_a_page_command(cx: &mut TestAppContext) {
+    let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
+    vcx.update(|_, cx| {
+        use writer_keymap::{KeySequence, Refusal, Target};
+        let model = writer_app::keymap::model(cx).unwrap();
+        let target = Target::new("page::OpenContextMenu", Some(pages::PAGE_VIEW));
+        assert_eq!(
+            model
+                .check(&target, &KeySequence::parse("m").unwrap(), None)
+                .refusal,
+            Some(Refusal::TypesText)
+        );
+        assert_eq!(
+            model
+                .check(&target, &KeySequence::parse("ctrl-m").unwrap(), None)
+                .refusal,
+            None
+        );
+    });
+}
+
+#[gpui::test]
+fn the_title_and_the_status_items_of_a_page_have_their_menus(cx: &mut TestAppContext) {
+    let (_fake, workspace, _text, _page, vcx) = open_page(cx);
+    let labels = |vcx: &mut VisualTestContext| {
+        vcx.update(|window, cx| {
+            writer_ui::ContextMenu::current(window, cx)
+                .map(|menu| menu.read(cx).labels())
+                .unwrap_or_default()
+        })
+    };
+    let bounds = vcx
+        .debug_bounds("title-chevron")
+        .expect("the title has a chevron");
+    vcx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    vcx.run_until_parked();
+    let title = labels(vcx);
+    for item in [
+        "Rename…",
+        "Reload Page",
+        "Find in Page…",
+        "Copy Page Address",
+        "Export…",
+    ] {
+        assert!(
+            title.iter().any(|label| label == item),
+            "{item} in {title:?}"
+        );
+    }
+    assert!(
+        !title.iter().any(|label| label == "Document Settings…"),
+        "{title:?}"
+    );
+    assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
+    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    vcx.run_until_parked();
+    // The zoom in the status bar.
+    let bounds = vcx
+        .debug_bounds("status-zoom")
+        .expect("the zoom is in the status bar");
+    vcx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    vcx.run_until_parked();
+    let zoom = labels(vcx);
+    assert!(zoom.iter().any(|label| label == "300 %"), "{zoom:?}");
+    assert!(!zoom.iter().any(|label| label == "Fit Width"), "{zoom:?}");
+    vcx.update(|window, cx| writer_ui::ContextMenu::dismiss(window, cx));
+    // The words of the page.
+    assert!(
+        vcx.debug_bounds("status-statistics").is_some(),
+        "the words of the page are counted"
+    );
+}
+
+#[gpui::test]
+fn ctrl_enter_opens_the_menu_of_the_page_where_the_keyboard_is(cx: &mut TestAppContext) {
+    let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    let labels = vcx.update(|window, cx| {
+        writer_ui::ContextMenu::current(window, cx)
+            .map(|menu| menu.read(cx).labels())
+            .unwrap_or_default()
+    });
+    assert_eq!(
+        labels.first().map(String::as_str),
+        Some("Copy"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label == "Version History…"),
+        "{labels:?}"
+    );
+}
+
+#[gpui::test]
+fn the_sparkle_is_in_the_status_bar_of_a_page_while_the_assistant_is_shown(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    let fake_engine = writer_assistant::FakeBackend::new();
+    let backend = std::sync::Arc::new(fake_engine.clone());
+    cx.update(|cx| writer_app::assistant::set_backend(backend, cx));
+    cx.update(pages::use_fake);
+    let library = library(cx);
+    let page = add_page(&library, "harbour", HARBOUR, None, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(page, true, window, cx);
+    });
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, _| w.assistant_shown()));
+    assert!(
+        vcx.debug_bounds("status-assistant").is_some(),
+        "the side chat can be opened over a page"
+    );
+}

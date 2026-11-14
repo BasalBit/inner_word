@@ -60,6 +60,10 @@ comes as an outline: read the parts you need with the tools.
 - A line of the form `![description](image:<id>)` is an image in the document: you cannot \
 see it; keep the line unchanged where the image should stay, and never invent such a line \
 or a path to a file.
+- Sometimes the open item is a page instead of a document: a web page saved in the \
+library as it was made, whose tag says kind=\"page\". It cannot be changed: you are given \
+the text it showed. Answer about it, quote it and sum it up as you would any text you \
+read, and do not offer text to put into it.
 - Sometimes a list of other documents and folders of the user's library that they attached \
 as context, inside <attached> tags, with ids and paths.
 - Tools that read the library: list_library and search_library to look around, \
@@ -136,5 +140,17 @@ invent such a line or a path to a file.";
         assert!(side_system_prompt(false).contains(SENTENCE));
         assert_eq!(system_prompt(Mode::Side), SIDE_SYSTEM_PROMPT);
         assert!(!QUICK_SYSTEM_PROMPT.contains("image:"));
+    }
+
+    /// The side chat is told that the open item may be a page, which it cannot change,
+    /// with and without the tools; the quick chat never sees a page.
+    #[test]
+    fn the_side_chat_is_told_what_a_page_is() {
+        const SENTENCE: &str = "Sometimes the open item is a page instead of a document: a \
+web page saved in the library as it was made, whose tag says kind=\"page\". It cannot be \
+changed";
+        assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
+        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert!(!QUICK_SYSTEM_PROMPT.contains("page:"));
     }
 }

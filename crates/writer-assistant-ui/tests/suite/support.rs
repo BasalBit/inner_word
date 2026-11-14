@@ -373,7 +373,7 @@ pub fn choose(title: &str, cx: &mut VisualTestContext) {
 
 use std::collections::HashMap;
 
-use writer_assistant::{Attachment, Availability, Backend, OpenDocument, Transcript};
+use writer_assistant::{Attachment, Availability, Backend, OpenDocument, OpenKind, Transcript};
 use writer_assistant_ui::{
     AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
 };
@@ -490,6 +490,7 @@ pub fn open_panel_on(
                         title,
                         path: "The Salt Road".into(),
                         markdown,
+                        kind: OpenKind::Text,
                     })
                 }
             });

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use writer_assistant::{
     AssistantError, Attachment, AttachmentKind, Backend, ChatSession, FakeBackend, FakeReply,
-    MessageState, Mode, OpenDocument, Role, Selection, ToolState, Transcript, library_tools,
-    privacy_notice,
+    MessageState, Mode, OpenDocument, OpenKind, Role, Selection, ToolState, Transcript,
+    library_tools, privacy_notice,
 };
 
 /// Applies everything that is waiting in the chat's stream.
@@ -28,6 +28,7 @@ fn document() -> OpenDocument {
         title: "Chapter 2".into(),
         path: "The Salt Road/Chapter 2".into(),
         markdown: "The heron stood in the shallows.".into(),
+        kind: OpenKind::Text,
     }
 }
 
@@ -468,6 +469,7 @@ fn each_document_keeps_its_own_conversation() {
         title: "Preface".into(),
         path: "Preface".into(),
         markdown: "It began with salt.".into(),
+        kind: OpenKind::Text,
     };
     chat.ask_side("More about it.", Some(&preface));
     pump(&mut chat);

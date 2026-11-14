@@ -36,7 +36,8 @@ use gpui::{
     WindowOptions, actions, div, prelude::*, px, size,
 };
 use writer_assistant::{
-    AssistantError, Attachment, Backend, FakeBackend, FakeReply, OpenDocument, SignIn, Transcript,
+    AssistantError, Attachment, Backend, FakeBackend, FakeReply, OpenDocument, OpenKind, SignIn,
+    Transcript,
 };
 use writer_assistant_ui::{
     ApplyKind, AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
@@ -180,6 +181,7 @@ impl Demo {
                             .unwrap_or_default(),
                         path: "The Salt Road/Part one".into(),
                         markdown: document.plain_text(),
+                        kind: OpenKind::Text,
                     })
                 }
             });

@@ -136,7 +136,7 @@
 //!         let editor = editor.downgrade();
 //!         move |cx| {
 //!             let editor = editor.upgrade()?;
-//!             Some(OpenDocument { id: Some(id), title, path, markdown: document_markdown(editor.read(cx)) })
+//!             Some(OpenDocument { id: Some(id), title, path, markdown: document_markdown(editor.read(cx)), kind: OpenKind::Text })
 //!         }
 //!     });
 //!     // The documents and folders of the library, for the picker.

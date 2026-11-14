@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use serde_json::json;
 use writer_assistant::{
-    Attachment, ChatSession, EventStream, MessageState, OpenDocument, Role, Selection, Transcript,
-    library_tools,
+    Attachment, ChatSession, EventStream, MessageState, OpenDocument, OpenKind, Role, Selection,
+    Transcript, library_tools,
 };
 
 use super::support::{PATIENCE, Stage, fixture, value_after};
@@ -92,6 +92,7 @@ fn the_side_chat_sends_the_document_when_it_changed_and_names_what_is_attached()
         title: "Chapter 2".into(),
         path: "The Salt Road/Part one/Chapter 2".into(),
         markdown: "# Chapter 2\n\nThe heron stood in the shallows at dawn.".into(),
+        kind: OpenKind::Text,
     };
     chat.attach(Attachment::folder(3, "Part two", "The Salt Road/Part two"));
 
@@ -154,6 +155,7 @@ fn after_the_program_died_the_next_message_starts_it_again_with_the_conversation
         title: "Chapter 2".into(),
         path: "Chapter 2".into(),
         markdown: "The heron stood in the shallows.".into(),
+        kind: OpenKind::Text,
     };
     chat.ask_side("Is the opening too slow?", Some(&document));
     settle(&mut chat, &events);

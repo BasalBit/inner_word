@@ -55,7 +55,33 @@ pub fn quick_prompt(question: &str, selection: Option<&str>) -> String {
     )
 }
 
-/// The document that is open beside the side chat.
+/// What the open item is: a text, or a page (a web page kept in the library as it was
+/// made, which cannot be changed).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OpenKind {
+    /// A document of the library: its text is Markdown, and answers can go into it.
+    #[default]
+    Text,
+    /// A page: its text is what the page showed, and nothing can be put into it.
+    Page {
+        /// The address the page came from, when it has one.
+        source_url: Option<String>,
+    },
+}
+
+impl OpenKind {
+    /// Whether the open item is a page.
+    pub fn is_page(&self) -> bool {
+        matches!(self, OpenKind::Page { .. })
+    }
+}
+
+/// What the side chat is told before the text of an open page, in place of the line
+/// that introduces a document.
+pub const PAGE_PREFACE: &str = "The open item is a page: a web page saved in the library, \
+shown as it was made. It cannot be changed. Its text, as the page showed it:";
+
+/// The document that is open beside the side chat (or the page: [`OpenKind`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenDocument {
     /// Its id in the library, when it has one.
@@ -64,12 +90,15 @@ pub struct OpenDocument {
     pub title: String,
     /// Its path in the library: "The Salt Road/Part one/Chapter 1".
     pub path: String,
-    /// Its text as Markdown, as it is now.
+    /// Its text as Markdown, as it is now; for a page, the text the page showed.
     pub markdown: String,
+    /// A text or a page.
+    pub kind: OpenKind,
 }
 
 impl OpenDocument {
-    /// The id as the tools take it (`doc:12`), when the document has one.
+    /// The id as the tools take it (`doc:12`), when the document has one. A page keeps
+    /// `doc:<id>` too: the tools read `page:` and `doc:` alike.
     pub fn reference(&self) -> Option<String> {
         self.id.map(|id| format!("doc:{id}"))
     }
@@ -80,6 +109,7 @@ impl OpenDocument {
         self.title.hash(&mut hasher);
         self.path.hash(&mut hasher);
         self.markdown.hash(&mut hasher);
+        self.kind.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -119,7 +149,12 @@ pub fn side_prompt(
         DocumentPart::None => {}
         DocumentPart::Current(document) => parts.push(document_block(document, tools)),
         DocumentPart::Unchanged(document) => parts.push(format!(
-            "(The open document, \"{}\", has not changed since my last message.)",
+            "(The open {}, \"{}\", has not changed since my last message.)",
+            if document.kind.is_page() {
+                "page"
+            } else {
+                "document"
+            },
             document.title
         )),
     }
@@ -145,6 +180,13 @@ fn document_block(document: &OpenDocument, tools: bool) -> String {
     }
     if let Some(reference) = document.reference() {
         header.push_str(&format!(" id={}", attribute(&reference)));
+    }
+    if let OpenKind::Page { source_url } = &document.kind {
+        header.push_str(" kind=\"page\"");
+        if let Some(source_url) = source_url {
+            header.push_str(&format!(" source={}", attribute(source_url)));
+        }
+        return page_block(document, header, tools);
     }
     let markdown = document.markdown.trim_matches('\n');
     let chars = markdown.chars().count();
@@ -200,6 +242,43 @@ fn document_block(document: &OpenDocument, tools: bool) -> String {
             )
         }
     }
+}
+
+/// The open page as a block of the message: the sentence that says what a page is, then
+/// its text. A page too long to send whole is sent as its beginning and its end (with
+/// the tools, the assistant is told to read the rest with read_document): a page's text
+/// has no headings to make an outline of.
+fn page_block(document: &OpenDocument, header: String, tools: bool) -> String {
+    let text = document.markdown.trim_matches('\n');
+    let chars = text.chars().count();
+    if chars <= WHOLE_DOCUMENT_LIMIT {
+        let body = if text.trim().is_empty() {
+            "(The page shows no text.)"
+        } else {
+            text
+        };
+        return format!("{PAGE_PREFACE}\n\n{header}>\n{body}\n</open_document>");
+    }
+    let words = text.split_whitespace().count();
+    let edge = WHOLE_DOCUMENT_LIMIT / 2;
+    let beginning: String = text.chars().take(edge).collect();
+    let end: String = text.chars().skip(chars - edge).collect();
+    let header = format!("{header} words=\"{words}\" whole=\"false\"");
+    let how = match (tools, document.reference()) {
+        (true, Some(reference)) => format!(
+            "It is too long to include whole ({words} words): here are its beginning and its \
+             end. Read the rest with the read_document tool (document \"{reference}\") and look \
+             for a phrase with find_in_document before you answer about the part you cannot see."
+        ),
+        _ => format!(
+            "It is too long to include whole ({words} words): here are its beginning and its \
+             end. Say so when a question needs a part you cannot see."
+        ),
+    };
+    format!(
+        "{PAGE_PREFACE}\n\n{how}\n\n{header}>\n<beginning>\n{beginning}\n</beginning>\n\
+         <end>\n{end}\n</end>\n</open_document>"
+    )
 }
 
 /// The attached items as a block of the message.

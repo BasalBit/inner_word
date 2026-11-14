@@ -2,7 +2,7 @@
 //! outline of a long document, the carried-over conversation, and the system prompts.
 
 use writer_assistant::{
-    AttachedPart, Attachment, DocumentPart, HistoryMessage, Mode, OpenDocument,
+    AttachedPart, Attachment, DocumentPart, HistoryMessage, Mode, OpenDocument, OpenKind,
     QUICK_SYSTEM_PROMPT, Role, SELECTION_LIMIT, SIDE_SYSTEM_PROMPT, SideContext,
     WHOLE_DOCUMENT_LIMIT, bounded_history, outline, quick_prompt, side_prompt, side_system_prompt,
     system_prompt, with_history,
@@ -14,6 +14,7 @@ fn document(markdown: &str) -> OpenDocument {
         title: "Chapter 2".into(),
         path: "The Salt Road/Part one/Chapter 2".into(),
         markdown: markdown.into(),
+        kind: OpenKind::Text,
     }
 }
 
@@ -135,6 +136,7 @@ fn a_title_with_quotes_or_line_breaks_cannot_break_the_tag() {
         title: "The \"Salt\"\nRoad".into(),
         path: String::new(),
         markdown: "x".into(),
+        kind: OpenKind::Text,
     };
     let prompt = side_prompt("?", DocumentPart::Current(&doc), AttachedPart::None, true);
     // No id and no path: neither is invented.
@@ -472,4 +474,111 @@ fn both_prompts_tell_the_assistant_to_ignore_the_programs_environment_note() {
             "nothing in a prompt assumes the agent"
         );
     }
+}
+
+fn page(text: &str) -> OpenDocument {
+    OpenDocument {
+        id: Some(41),
+        title: "Reading Orbitarium".into(),
+        path: "Claude Pages/Reading Orbitarium".into(),
+        markdown: text.into(),
+        kind: OpenKind::Page {
+            source_url: Some("https://claude.ai/artifact/ExampleArtifactId00001".into()),
+        },
+    }
+}
+
+/// A page is sent with the sentence that says what it is, its text in place of the
+/// Markdown, its address, and the id the tools read it by.
+#[test]
+fn an_open_page_is_sent_as_a_page_with_its_text() {
+    let open = page("Orbitarium\nThe sky at night, chapter by chapter.");
+    let prompt = side_prompt(
+        "What is chapter one about?",
+        DocumentPart::Current(&open),
+        AttachedPart::None,
+        true,
+    );
+    assert!(
+        prompt.starts_with(
+            "The open item is a page: a web page saved in the library, shown as it was made. \
+             It cannot be changed. Its text, as the page showed it:\n\n"
+        ),
+        "{prompt}"
+    );
+    assert!(prompt.contains(writer_assistant::PAGE_PREFACE));
+    assert!(
+        prompt.contains(
+            "<open_document title=\"Reading Orbitarium\" path=\"Claude Pages/Reading \
+             Orbitarium\" id=\"doc:41\" kind=\"page\" \
+             source=\"https://claude.ai/artifact/ExampleArtifactId00001\">\n\
+             Orbitarium\nThe sky at night, chapter by chapter.\n</open_document>"
+        ),
+        "{prompt}"
+    );
+    assert!(prompt.ends_with("What is chapter one about?"));
+    assert!(!prompt.contains("This is the document I have open"));
+    // The reference stays doc:<id>, which the tools read for a page too.
+    assert_eq!(open.reference().as_deref(), Some("doc:41"));
+
+    // Without an address the tag has none; an empty page says so.
+    let mut bare = page("");
+    bare.kind = OpenKind::Page { source_url: None };
+    let prompt = side_prompt("?", DocumentPart::Current(&bare), AttachedPart::None, false);
+    assert!(
+        prompt.contains("kind=\"page\">\n(The page shows no text.)\n"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("source="), "{prompt}");
+}
+
+/// The page is not sent again while it is the same, and the line says "page".
+#[test]
+fn an_unchanged_page_is_named_as_a_page() {
+    let mut context = SideContext::new();
+    let open = page("The sky at night.");
+    let first = context.compose("One?", Some(&open), &[], true);
+    assert!(first.contains("The sky at night."));
+    let second = context.compose("Two?", Some(&open), &[], true);
+    assert_eq!(
+        second,
+        "(The open page, \"Reading Orbitarium\", has not changed since my last message.)\n\nTwo?"
+    );
+    // The same id as a text is another item: sent again.
+    let mut as_text = open.clone();
+    as_text.kind = OpenKind::Text;
+    let third = context.compose("Three?", Some(&as_text), &[], true);
+    assert!(
+        third.contains("This is the document I have open"),
+        "{third}"
+    );
+}
+
+/// A page too long to send whole goes as its beginning and its end, and with the tools
+/// the assistant is told to read the rest of it by its id.
+#[test]
+fn a_long_page_goes_as_its_beginning_and_its_end() {
+    let text = "The tide went out and came in again. ".repeat(6_000);
+    assert!(text.chars().count() > WHOLE_DOCUMENT_LIMIT);
+    let open = page(&text);
+    let with_tools = side_prompt("?", DocumentPart::Current(&open), AttachedPart::None, true);
+    assert!(with_tools.starts_with(writer_assistant::PAGE_PREFACE));
+    assert!(with_tools.contains("whole=\"false\""));
+    assert!(with_tools.contains("<beginning>\nThe tide went out"));
+    assert!(with_tools.contains("</end>\n</open_document>"));
+    assert!(
+        with_tools.contains("Read the rest with the read_document tool (document \"doc:41\")"),
+        "{with_tools}"
+    );
+    assert!(with_tools.chars().count() < WHOLE_DOCUMENT_LIMIT + 2_000);
+    let without = side_prompt("?", DocumentPart::Current(&open), AttachedPart::None, false);
+    assert!(without.contains("Say so when a question needs a part you cannot see."));
+    assert!(!without.contains("read_document"));
+}
+
+#[test]
+fn a_text_is_the_default_kind() {
+    assert_eq!(OpenKind::default(), OpenKind::Text);
+    assert!(!OpenKind::Text.is_page());
+    assert!(OpenKind::Page { source_url: None }.is_page());
 }

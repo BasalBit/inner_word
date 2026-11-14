@@ -825,8 +825,10 @@ pub fn document_changed(did: &str, changed: &DocumentChanged) -> String {
     out.push_str(dry_run_prefix(written));
     match &changed.before {
         Some(before) if before.path != changed.document.path => out.push_str(&format!(
-            "{did} doc:{} \"{}\" -> \"{}\".\n",
-            changed.document.id.0, before.path, changed.document.path
+            "{did} {} \"{}\" -> \"{}\".\n",
+            reference(&changed.document),
+            before.path,
+            changed.document.path
         )),
         Some(_) if did == "Moved" => out.push_str(&format!(
             "Moved {} to another place among the documents of its folder.\n",

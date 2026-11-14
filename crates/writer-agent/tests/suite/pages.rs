@@ -747,12 +747,15 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
         ("out/c.pdf", None),
         ("out/c", Some(ExportFormat::Html)),
         ("out/c", Some(ExportFormat::Pdf)),
+        // The files a text was added from: it was added from none.
+        ("out/c.md", None),
     ] {
         let error = library
             .export(&ExportRequest {
                 document: Some(text.id.into()),
                 path: fx.dir.path().join(path),
                 format,
+                original: path == "out/c.md",
                 ..Default::default()
             })
             .unwrap_err();
@@ -900,6 +903,12 @@ fn every_item_operation_works_on_a_page() {
         .document;
     assert_eq!(copy.kind, DocumentKind::Page);
     assert_eq!(copy.source_url, None);
+    // Listed without the address too: the copy carries the original's manifest.
+    let listed = library.pages(&PagesRequest::default()).unwrap();
+    let listed_copy = listed.pages.iter().find(|p| p.page.id == copy.id).unwrap();
+    assert_eq!(listed_copy.summary.source_url, None);
+    let listed_page = listed.pages.iter().find(|p| p.page.id == page.id).unwrap();
+    assert_eq!(listed_page.summary.source_url.as_deref(), Some(ADDRESS));
     assert_eq!(
         read(&library, copy.id, TextFormat::PlainText).content,
         read(&library, page.id, TextFormat::PlainText).content
@@ -1005,7 +1014,7 @@ fn a_page_is_read_found_listed_and_described() {
     let json = read(&library, id, TextFormat::Json);
     let manifest: serde_json::Value = serde_json::from_str(&json.content).unwrap();
     assert_eq!(manifest["entry"], "index.html");
-    assert_eq!(manifest["text"], "");
+    assert!(manifest.get("text").is_none(), "left out, not emptied");
     assert!(manifest["files"].as_array().unwrap().len() >= 3);
     // A section of a page cannot be read; its comments are none.
     let error = library

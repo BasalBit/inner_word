@@ -168,6 +168,12 @@ impl Library {
             let format = crate::pages::export_format(meta, request)?;
             return crate::pages::export(self, store, &index, meta, request, format, path);
         }
+        // `original` is the files a page was added from: a text has none.
+        if request.original
+            && let Some(meta) = &named
+        {
+            return Err(crate::content::is_a_text(meta));
+        }
         if guessed.is_some_and(ExportFormat::is_for_pages) {
             return Err(match &named {
                 Some(meta) => crate::content::is_a_text(meta),

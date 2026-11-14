@@ -102,18 +102,20 @@ fn stored_manifest(store: &Store, meta: &DocumentMeta) -> Result<(Manifest, Stri
 
 /// The manifest as `read` gives it in JSON: everything but the text.
 fn without_text(manifest: &Manifest) -> String {
-    let mut manifest = manifest.clone();
-    manifest.text.clear();
-    manifest.to_json()
+    // Left out, not emptied: `"text": ""` reads as a page that shows nothing.
+    let mut value = serde_json::to_value(manifest).expect("a manifest is JSON");
+    if let Some(object) = value.as_object_mut() {
+        object.remove("text");
+    }
+    value.to_string()
 }
 
 /// What a page is made of, as results show it.
 pub(crate) fn summary(meta: &DocumentMeta, manifest: &Manifest) -> PageSummary {
     PageSummary {
-        source_url: meta
-            .source_url
-            .clone()
-            .or_else(|| manifest.source_url.clone()),
+        // The row's address only: a duplicate carries the manifest of the page it was
+        // made from, address included, and is not the page at that address.
+        source_url: meta.source_url.clone(),
         entry: manifest.entry.clone(),
         files: manifest.files.len(),
         bytes: manifest.bytes(),

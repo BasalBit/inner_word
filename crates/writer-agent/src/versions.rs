@@ -80,13 +80,18 @@ pub(crate) fn restore_version(
         let expected = index.document(store, expected)?;
         if expected.id != meta.id {
             return Err(Error::invalid(format!(
-                "the version {} is a version of the document {} (doc:{}), not of {} \
-                     (doc:{}); nothing was restored",
+                "the version {} is a version of {} {} ({}), not of {} ({}); nothing was \
+                 restored",
                 request.version,
+                if meta.kind == writer_store::DocumentKind::Page {
+                    "the page"
+                } else {
+                    "the document"
+                },
                 quoted_excerpt(title_of(&meta)),
-                meta.id,
+                reference_of(&meta),
                 quoted_excerpt(title_of(&expected)),
-                expected.id,
+                reference_of(&expected),
             )));
         }
     }
@@ -138,4 +143,12 @@ pub(crate) fn restore_version(
         written: session.written(changed),
     };
     Ok(result)
+}
+
+/// `doc:12`, or `page:12` for a page: how a document is referred to in a sentence.
+fn reference_of(meta: &writer_store::DocumentMeta) -> String {
+    match meta.kind {
+        writer_store::DocumentKind::Page => format!("page:{}", meta.id),
+        _ => format!("doc:{}", meta.id),
+    }
 }

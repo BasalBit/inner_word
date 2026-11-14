@@ -687,13 +687,20 @@ pub fn run(
                 named.set("document", document);
                 let info = call("document_info", named)?;
                 if info.data["document"]["id"] != reply.data["document"]["id"] {
+                    // `doc:12`, or `page:12` for a page.
+                    let named = |document: &serde_json::Value| {
+                        let prefix = if document["kind"] == "page" { "page" } else { "doc" };
+                        format!(
+                            "{prefix}:{} \"{}\"",
+                            document["id"],
+                            document["path"].as_str().unwrap_or_default()
+                        )
+                    };
                     return Err(Failure::invalid(format!(
-                        "version {} is a version of doc:{} \"{}\", not of doc:{} \"{}\"",
+                        "version {} is a version of {}, not of {}",
                         arg(1),
-                        reply.data["document"]["id"],
-                        reply.data["document"]["path"].as_str().unwrap_or_default(),
-                        info.data["document"]["id"],
-                        info.data["document"]["path"].as_str().unwrap_or_default(),
+                        named(&reply.data["document"]),
+                        named(&info.data["document"]),
                     )));
                 }
             }

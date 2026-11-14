@@ -392,14 +392,21 @@ fn a_page_cannot_be_edited_and_the_codes_say_so() {
     // A page as a document's format: the other way round.
     let pdf = sandbox.fail(&["export", "doc:2", "chapter.pdf"], 15);
     assert!(pdf.contains("is a document, not a page"), "{pdf}");
+    // The files a text was added from: it has none.
+    let original = sandbox.fail(&["export", "doc:2", "chapter", "--original"], 15);
+    assert!(original.contains("is a document, not a page"), "{original}");
+    assert!(!sandbox.work().join("chapter").exists());
     // What works on any item works on a page.
-    sandbox.ok(&["rename", "page:1", "Sky map"]);
+    // A page is named page:<id> in every line, never doc:<id>.
+    let renamed = sandbox.ok(&["rename", "page:1", "Sky map"]);
+    assert!(renamed.starts_with("Renamed page:1 "), "{renamed}");
     assert!(
         sandbox
             .ok(&["info", "page:1"])
             .contains("Sky map (chosen by hand)")
     );
-    sandbox.ok(&["move", "page:1", "Maps", "--create-folders"]);
+    let moved = sandbox.ok(&["move", "page:1", "Maps", "--create-folders"]);
+    assert!(moved.starts_with("Moved page:1 "), "{moved}");
     let copy = sandbox.ok(&["duplicate", "page:1"]);
     assert!(copy.starts_with("Copied to page:3"), "{copy}");
     let trashed = sandbox.ok(&["trash", "page:3"]);

@@ -170,7 +170,7 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
     // Fetching, level by level: what a fetched style sheet or module names comes next.
     let started = Instant::now();
     let mut pieces: BTreeMap<String, Piece> = BTreeMap::new();
-    let mut problems: Vec<Problem> = Vec::new();
+    let mut problems: Vec<Problem> = lazy_and_missing(&locals, &input.entry);
     let mut seen: HashSet<String> = wanted.keys().cloned().collect();
     let mut depth = 0;
     while !wanted.is_empty() {
@@ -314,6 +314,35 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
         return Err(refuse(over));
     }
     Ok(bundle)
+}
+
+/// A picture or a frame under `loading="lazy"` that names a file of the page that is not
+/// among its files: the check may never ask for it (it is asked for only near the
+/// screen), so it is said here, for a folder and a single file alike, in the words the
+/// check uses for a file it was asked for and did not have.
+fn lazy_and_missing(locals: &[LocalFile], entry: &str) -> Vec<Problem> {
+    let files: HashSet<&str> = locals.iter().map(|l| l.path.as_str()).collect();
+    let mut problems = Vec::new();
+    let mut named: HashSet<String> = HashSet::new();
+    for local in locals {
+        let Some(scan) = &local.scan else { continue };
+        let subject = if local.path == entry { "the page" } else { local.path.as_str() };
+        for reference in scan.all_refs() {
+            if !reference.lazy {
+                continue;
+            }
+            if let Resolved::Local { path, .. } = resolve(&reference.raw, &reference.base) {
+                if path.is_empty() || path.ends_with('/') || files.contains(path.as_str()) || !named.insert(path.clone()) {
+                    continue;
+                }
+                problems.push(Problem::new(
+                    path.clone(),
+                    format!("{subject} asks for {path} when it is scrolled to (loading=lazy), which is not among its files"),
+                ));
+            }
+        }
+    }
+    problems
 }
 
 /// The import maps of the page with their addresses made absolute.

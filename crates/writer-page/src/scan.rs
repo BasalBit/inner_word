@@ -71,6 +71,10 @@ pub(crate) struct Ref {
     /// rather than one the page loads by itself (a frame): a single file takes the
     /// target only when it is a page of its own (an HTML file).
     pub navigation: bool,
+    /// The `src` of an `img` or an `iframe` with `loading="lazy"`: asked for only when
+    /// it comes near the screen, so the check may never see it (the bundler names a
+    /// local one that is not among the page's files).
+    pub lazy: bool,
 }
 
 /// An attribute whose value is a text of its own (`style`, `srcset`, `srcdoc`).
@@ -179,6 +183,7 @@ fn simple(span: Range<usize>, raw: String, ctx: Ctx, expect: Expect, base: &Url)
         with: Vec::new(),
         warn_external: false,
         navigation: false,
+        lazy: false,
     }
 }
 
@@ -429,7 +434,8 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
         }
         "iframe" | "frame" => {
             handled.push("src");
-            if let Some(r) = attr_ref(tag, "src", Ctx::Link, Expect::Any, base) {
+            if let Some(mut r) = attr_ref(tag, "src", Ctx::Link, Expect::Any, base) {
+                r.lazy = name == "iframe" && is_lazy(tag);
                 scan.refs.push(r);
             }
         }
@@ -452,7 +458,8 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
         let Some(value) = &attr.value else { continue };
         match attr_name {
             "src" | "poster" | "background" => {
-                if let Some(r) = attr_ref(tag, attr_name, Ctx::Fetch, if name == "script" { Expect::Js } else { Expect::Any }, base) {
+                if let Some(mut r) = attr_ref(tag, attr_name, Ctx::Fetch, if name == "script" { Expect::Js } else { Expect::Any }, base) {
+                    r.lazy = attr_name == "src" && name == "img" && is_lazy(tag);
                     scan.refs.push(r);
                 }
             }
@@ -513,6 +520,11 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             }
         }
     }
+}
+
+/// `loading="lazy"` (in any case, with white space around it, as a browser reads it).
+fn is_lazy(tag: &Tag) -> bool {
+    tag.value("loading").is_some_and(|value| value.trim().eq_ignore_ascii_case("lazy"))
 }
 
 /// `onclick`, `onload`, `onpointerdown`: an attribute whose value is a script.

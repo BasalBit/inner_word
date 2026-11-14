@@ -1,6 +1,6 @@
 //! The verdict: `prepare` keeps a page whole or refuses it, with every reason of section 3.
 
-use writer_page::{Blocked, CheckReport, LoadReport, PageError, limits, prepare, static_check};
+use writer_page::{Blocked, CheckReport, LoadReport, PageError, bundle, limits, prepare, read_input, static_check};
 
 use super::support::*;
 
@@ -180,4 +180,53 @@ fn a_prepared_page_travels_as_json_with_its_bytes_in_base64() {
     // Debug prints sizes, not bytes.
     let debug = format!("{:?}", prepared.blobs[0]);
     assert!(debug.contains("bytes"), "{debug}");
+}
+
+/// A picture or a frame under `loading="lazy"` far down the page is asked for only when
+/// it comes near the screen, which the check may never do: a local one that is not among
+/// the page's files is named by the bundler, for a folder and a single file alike, and a
+/// page that has it is added.
+#[test]
+fn a_lazy_picture_that_is_not_there_is_named() {
+    let page_text = "<title>Long</title><h1>Long</h1><div style=\"height:5000px\"></div>\
+        <img loading=\"lazy\" src=\"pics/late.png\" alt=\"late\">\
+        <iframe loading=LAZY src=\"frames/late.html\"></iframe>";
+    let reasons = |error: &PageError| problems(error);
+
+    // A folder without them.
+    let error = try_page(&[("index.html", page_text)], &[]).unwrap_err();
+    assert_eq!(
+        reasons(&error),
+        vec![
+            "the page asks for pics/late.png when it is scrolled to (loading=lazy), which is not among its files",
+            "the page asks for frames/late.html when it is scrolled to (loading=lazy), which is not among its files",
+        ]
+    );
+    let sentence = error.sentence();
+    assert!(sentence.starts_with("“Long” was not added: it could not be kept whole. The page asks for pics/late.png"), "{sentence}");
+
+    // A single file without them.
+    let dir = folder(&[("long.html", page_text)]);
+    let input = read_input(&dir.path().join("long.html"), None).unwrap();
+    let error = bundle(input, &web(&[])).unwrap_err();
+    assert_eq!(reasons(&error).len(), 2, "{}", error.sentence());
+    assert!(error.sentence().contains("pics/late.png"), "{}", error.sentence());
+
+    // With them, as a folder and as a single file: added.
+    let files = [
+        ("index.html", page_text),
+        ("pics/late.png", "png"),
+        ("frames/late.html", "<title>Late</title><p>late</p>"),
+    ];
+    let whole = page(&files, &[]);
+    assert!(prepare(whole.clone(), &static_check(&whole)).is_ok());
+    let dir = folder(&files);
+    let input = read_input(&dir.path().join("index.html"), None).unwrap();
+    let single = bundle(input, &web(&[])).unwrap_or_else(|e| panic!("{}", e.sentence()));
+    assert!(single.served_file("pics/late.png").is_some());
+    assert!(prepare(single.clone(), &static_check(&single)).is_ok());
+
+    // Eager pictures are left to the check, which asks for them (and a lazy one on the
+    // web is fetched as any other picture is).
+    assert!(try_page(&[("index.html", "<title>A</title><img src=\"gone.png\">")], &[]).is_ok());
 }

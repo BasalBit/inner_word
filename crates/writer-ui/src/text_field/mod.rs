@@ -298,8 +298,11 @@ pub struct TextField {
     pub(crate) selecting: bool,
     drag: Option<DragMode>,
 
-    // Caret blink.
+    // Caret blink. It runs only while the field has focus and its window is
+    // the active one: a visible window in the background would otherwise be
+    // drawn again twice a second for a caret nobody is typing at.
     has_focus: bool,
+    window_active: bool,
     caret_visible: bool,
     blink_task: Option<Task<()>>,
 
@@ -336,6 +339,14 @@ impl TextField {
                 cx.emit(TextFieldEvent::Blurred);
                 cx.notify();
             }),
+            // The caret shows only in the active window (as the editor's
+            // does), so the blink stops when the window goes to the
+            // background and starts again when it comes back.
+            cx.observe_window_activation(window, |this, window, cx| {
+                this.window_active = window.is_window_active();
+                this.reset_blink(cx);
+                cx.notify();
+            }),
         ];
         Self {
             focus_handle,
@@ -358,6 +369,7 @@ impl TextField {
             selecting: false,
             drag: None,
             has_focus: false,
+            window_active: window.is_window_active(),
             caret_visible: true,
             blink_task: None,
             _subscriptions: subscriptions,
@@ -654,31 +666,41 @@ impl TextField {
         cx.notify();
     }
 
+    /// Shows the caret and starts its blink over, while the field has focus
+    /// and its window is active; otherwise stops the blink.
     fn reset_blink(&mut self, cx: &mut Context<Self>) {
         self.caret_visible = true;
-        if self.has_focus {
-            self.blink_task = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor().timer(BLINK_INTERVAL).await;
-                    let keep_going = this.update(cx, |this, cx| {
-                        if !this.has_focus {
-                            this.caret_visible = true;
-                            return false;
-                        }
-                        this.caret_visible = !this.caret_visible;
-                        cx.notify();
-                        true
-                    });
-                    if !matches!(keep_going, Ok(true)) {
-                        break;
-                    }
-                }
-            }));
+        if !(self.has_focus && self.window_active) {
+            self.blink_task = None;
+            return;
         }
+        self.blink_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BLINK_INTERVAL).await;
+                let keep_going = this.update(cx, |this, cx| {
+                    if !(this.has_focus && this.window_active) {
+                        this.caret_visible = true;
+                        return false;
+                    }
+                    this.caret_visible = !this.caret_visible;
+                    cx.notify();
+                    true
+                });
+                if !matches!(keep_going, Ok(true)) {
+                    break;
+                }
+            }
+        }));
     }
 
     pub(crate) fn caret_visible(&self) -> bool {
         self.caret_visible
+    }
+
+    /// Whether the caret's blink is running: only while the field has focus
+    /// and its window is the active one. For tests.
+    pub fn is_blinking(&self) -> bool {
+        self.blink_task.is_some()
     }
 
     // ---------------------------------------------------------------------

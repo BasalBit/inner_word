@@ -70,6 +70,74 @@ fn selection(field: &Entity<TextField>, cx: &mut VisualTestContext) -> std::ops:
     field.read_with(cx, |field, _| field.selection())
 }
 
+/// Longer than the field's blink interval (530 ms).
+const PAST_A_BLINK: Duration = Duration::from_millis(600);
+
+/// How often the field asks to be drawn again in `duration`.
+fn notifies_during(
+    field: &Entity<TextField>,
+    duration: Duration,
+    cx: &mut VisualTestContext,
+) -> usize {
+    let count = Rc::new(Cell::new(0usize));
+    let subscription = cx.update(|_, cx| {
+        let count = count.clone();
+        cx.observe(field, move |_, _| count.set(count.get() + 1))
+    });
+    cx.executor().advance_clock(duration);
+    cx.run_until_parked();
+    drop(subscription);
+    count.get()
+}
+
+#[gpui::test]
+fn text_field_blinks_in_the_active_window(cx: &mut TestAppContext) {
+    let (field, cx, _) = field_window(cx, "Hello");
+    assert!(field.read_with(cx, |field, _| field.is_blinking()));
+    assert!(notifies_during(&field, PAST_A_BLINK, cx) >= 1);
+    assert!(notifies_during(&field, PAST_A_BLINK * 4, cx) >= 4);
+}
+
+#[gpui::test]
+fn text_field_does_not_blink_in_an_inactive_window(cx: &mut TestAppContext) {
+    let (field, cx, _) = field_window(cx, "Hello");
+    cx.deactivate_window();
+    cx.run_until_parked();
+    // Still focused in its window, but the window is in the background.
+    assert!(cx.update(|window, cx| field.read(cx).is_focused(window)));
+    assert!(!field.read_with(cx, |field, _| field.is_blinking()));
+    assert_eq!(notifies_during(&field, PAST_A_BLINK * 10, cx), 0);
+
+    // Something that would restart the blink (an edit, a move) does not
+    // start it while the window is inactive.
+    field.update(cx, |field, cx| field.set_text("Hello there", cx));
+    cx.run_until_parked();
+    assert!(!field.read_with(cx, |field, _| field.is_blinking()));
+    assert_eq!(notifies_during(&field, PAST_A_BLINK * 10, cx), 0);
+
+    // The window comes back: the blink starts again.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(field.read_with(cx, |field, _| field.is_blinking()));
+    assert!(notifies_during(&field, PAST_A_BLINK * 4, cx) >= 4);
+}
+
+#[gpui::test]
+fn text_field_does_not_start_blinking_when_focused_in_an_inactive_window(
+    cx: &mut TestAppContext,
+) {
+    let (field, cx, _) = field_window(cx, "Hello");
+    cx.update(|window, _| window.blur());
+    cx.run_until_parked();
+    assert!(!field.read_with(cx, |field, _| field.is_blinking()));
+    cx.deactivate_window();
+    cx.update(|window, cx| field.read(cx).focus(window));
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| field.read(cx).is_focused(window)));
+    assert!(!field.read_with(cx, |field, _| field.is_blinking()));
+    assert_eq!(notifies_during(&field, PAST_A_BLINK * 10, cx), 0);
+}
+
 #[gpui::test]
 fn text_field_typing_and_deleting(cx: &mut TestAppContext) {
     let (field, cx, events) = field_window(cx, "");

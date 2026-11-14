@@ -813,3 +813,35 @@ fn the_sparkle_is_in_the_status_bar_of_a_page_while_the_assistant_is_shown(
         "the side chat can be opened over a page"
     );
 }
+
+#[gpui::test]
+fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
+    let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
+    vcx.update(|_, cx| {
+        let rows = writer_app::shortcuts::collect_shortcuts(cx);
+        // Without the assistant (no engine in this test): 352 rows, ten of
+        // them about pages; the file has every one of its 407 entries.
+        assert_eq!(rows.len(), 352);
+        let on_a_page: Vec<String> = rows
+            .iter()
+            .filter(|row| row.place == writer_app::shortcuts::Place::Page)
+            .map(|row| row.title.to_string())
+            .collect();
+        assert_eq!(
+            on_a_page,
+            [
+                "Find",
+                "Find and replace",
+                "Find next",
+                "Find previous",
+                "Show the page's context menu"
+            ]
+        );
+        assert_eq!(
+            writer_app::workspace::shortcuts_file_catalogue(cx)
+                .entries()
+                .len(),
+            407
+        );
+    });
+}

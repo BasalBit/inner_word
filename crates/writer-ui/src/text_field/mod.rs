@@ -303,6 +303,10 @@ pub struct TextField {
     // drawn again twice a second for a caret nobody is typing at.
     has_focus: bool,
     window_active: bool,
+    /// Paint the caret even while the window is in the background (steady,
+    /// it does not blink there): on in a scripted run, which stays in the
+    /// background and takes screenshots, as the editor's `draw_as_active`.
+    draw_as_active: bool,
     caret_visible: bool,
     blink_task: Option<Task<()>>,
 
@@ -370,6 +374,7 @@ impl TextField {
             drag: None,
             has_focus: false,
             window_active: window.is_window_active(),
+            draw_as_active: std::env::var_os("THE_WRITER_AUTOMATION").is_some(),
             caret_visible: true,
             blink_task: None,
             _subscriptions: subscriptions,
@@ -695,6 +700,20 @@ impl TextField {
 
     pub(crate) fn caret_visible(&self) -> bool {
         self.caret_visible
+    }
+
+    /// Paints the caret (steady) even while the window is in the
+    /// background, as the editor's `set_draw_as_active` does. On from the
+    /// start in a scripted run (`THE_WRITER_AUTOMATION` is set).
+    pub fn set_draw_as_active(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.draw_as_active != on {
+            self.draw_as_active = on;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn draws_as_active(&self) -> bool {
+        self.draw_as_active
     }
 
     /// Whether the caret's blink is running: only while the field has focus

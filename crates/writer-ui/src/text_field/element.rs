@@ -167,9 +167,10 @@ impl Element for TextFieldElement {
             )
         });
         // Hidden while the window is in the background, as the editor's
-        // caret is (the blink is stopped then too).
+        // caret is (the blink is stopped then too), except in a scripted
+        // run, which draws it steady there as the editor does.
         let caret = (focused
-            && window.is_window_active()
+            && (window.is_window_active() || field.draws_as_active())
             && field.selection.is_empty()
             && field.caret_visible()
             && !field.is_disabled())

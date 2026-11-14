@@ -40,6 +40,13 @@ fn target(dir: &Path, path: &str) -> Result<PathBuf, PageError> {
 /// Writes the files of the page into `dir` (made when it is not there). A file that is
 /// there already is replaced only with `overwrite`; without it nothing is written and
 /// the error is `Io` with `AlreadyExists` for the first such file.
+///
+/// Every file is read before anything is written, so an export is whole or nothing: a
+/// file that cannot be read (the library's file of a newer version, busy past its
+/// timeout) writes nothing and makes no folder, nor does a page whose entry the library
+/// does not have (nothing written would open). A file the library does not have is
+/// left out and named in `missing`. A write that fails takes back the files and folders
+/// it made (a file it replaced stays replaced).
 pub fn write_folder(
     manifest: &Manifest,
     which: Which,
@@ -59,23 +66,106 @@ pub fn write_folder(
         }
         targets.push((file, path));
     }
-    fs::create_dir_all(dir).map_err(|error| PageError::io(dir, error))?;
-    let mut written = Written { dir: dir.to_path_buf(), files: 0, bytes: 0, missing: Vec::new() };
+
+    // Everything is read first.
+    let mut read: Vec<(&ManifestFile, PathBuf, Vec<u8>)> = Vec::with_capacity(targets.len());
+    let mut missing = Vec::new();
     for (file, path) in targets {
-        let Some(bytes) = bytes_of(&file.file).map_err(|error| PageError::io(&path, error))? else {
-            written.missing.push(file.path.clone());
-            continue;
-        };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| PageError::io(parent, error))?;
+        match bytes_of(&file.file) {
+            Ok(Some(bytes)) => read.push((file, path, bytes)),
+            Ok(None) => missing.push(file.path.clone()),
+            Err(error) => {
+                return Err(PageError::Unreadable {
+                    reason: format!(
+                        "its file {} could not be read from the library ({error}), so nothing was written",
+                        file.path
+                    ),
+                });
+            }
         }
-        if fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink() || m.is_dir()).unwrap_or(false) {
-            // Never written through a link, nor over a folder.
-            return Err(PageError::io(path, io::Error::from(io::ErrorKind::AlreadyExists)));
-        }
-        fs::write(&path, &bytes).map_err(|error| PageError::io(&path, error))?;
+    }
+    let entry_listed = files.iter().any(|file| file.path == manifest.entry);
+    if entry_listed && missing.contains(&manifest.entry) {
+        return Err(PageError::Unreadable {
+            reason: format!(
+                "the library does not have its entry {}, so nothing was written (it would not open)",
+                manifest.entry
+            ),
+        });
+    }
+    if !files.is_empty() && read.is_empty() {
+        return Err(PageError::Unreadable {
+            reason: "the library has none of its files, so nothing was written".to_string(),
+        });
+    }
+
+    let mut made = Made::default();
+    let result = write_all(dir, &read, &mut made);
+    if result.is_err() {
+        made.take_back();
+    }
+    result?;
+    let mut written = Written { dir: dir.to_path_buf(), files: 0, bytes: 0, missing };
+    for (_, _, bytes) in &read {
         written.files += 1;
         written.bytes += bytes.len() as u64;
     }
     Ok(written)
+}
+
+/// What a write made, so that a failed one can take it back.
+#[derive(Default)]
+struct Made {
+    dirs: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+impl Made {
+    fn dir_all(&mut self, dir: &Path) -> io::Result<()> {
+        let mut missing = Vec::new();
+        let mut at = Some(dir);
+        while let Some(path) = at {
+            if fs::symlink_metadata(path).is_ok() {
+                break;
+            }
+            missing.push(path.to_path_buf());
+            at = path.parent();
+        }
+        for path in missing.into_iter().rev() {
+            match fs::create_dir(&path) {
+                Ok(()) => self.dirs.push(path),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn take_back(&self) {
+        for file in self.files.iter().rev() {
+            fs::remove_file(file).ok();
+        }
+        for dir in self.dirs.iter().rev() {
+            fs::remove_dir(dir).ok();
+        }
+    }
+}
+
+fn write_all(dir: &Path, read: &[(&ManifestFile, PathBuf, Vec<u8>)], made: &mut Made) -> Result<(), PageError> {
+    made.dir_all(dir).map_err(|error| PageError::io(dir, error))?;
+    for (_, path, bytes) in read {
+        if let Some(parent) = path.parent() {
+            made.dir_all(parent).map_err(|error| PageError::io(parent, error))?;
+        }
+        let existing = fs::symlink_metadata(path);
+        if existing.as_ref().map(|m| m.file_type().is_symlink() || m.is_dir()).unwrap_or(false) {
+            // Never written through a link, nor over a folder.
+            return Err(PageError::io(path, io::Error::from(io::ErrorKind::AlreadyExists)));
+        }
+        fs::write(path, bytes).map_err(|error| PageError::io(path, error))?;
+        if existing.is_err() {
+            made.files.push(path.clone());
+        }
+    }
+    Ok(())
 }

@@ -160,6 +160,11 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
     let mut total: u64 = 0;
     let mut queue: Vec<String> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
+    // Files beside it that it names and that are not taken: said in a warning.
+    let mut beside: BTreeSet<String> = BTreeSet::new();
+    // Hidden files it names (a segment of the path begins with a dot): never taken,
+    // as the walk of a folder never takes them (`.ssh/id_ed25519`, `.env`).
+    let mut hidden: BTreeSet<String> = BTreeSet::new();
     take(&root, &entry_name, &mut taken, &mut total, &mut problems)?;
     queue.push(entry_name.clone());
 
@@ -179,6 +184,16 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
                         local
                     };
                     if taken.contains_key(&wanted) || !is_file_inside(&root, &wanted) {
+                        continue;
+                    }
+                    if is_hidden(&wanted) {
+                        hidden.insert(wanted);
+                        continue;
+                    }
+                    // A link the reader follows takes another page of it, never a
+                    // document it only links to (`<a href="tax-2025.pdf">`).
+                    if reference.navigation && Kind::of_path(&wanted) != Kind::Html {
+                        beside.insert(wanted);
                         continue;
                     }
                     if take(&root, &wanted, &mut taken, &mut total, &mut problems)? {
@@ -203,7 +218,6 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
     }
 
     // Literal paths of the page's files that name a file beside it: said, not taken.
-    let mut beside: BTreeSet<String> = BTreeSet::new();
     for (path, bytes) in &taken {
         let kind = Kind::of_path(path);
         if !kind.is_text() {
@@ -216,7 +230,11 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             }
             if let Resolved::Local { path: local, .. } = resolve(literal.value.trim(), &literal.base) {
                 if !local.is_empty() && !taken.contains_key(&local) && is_file_inside(&root, &local) {
-                    beside.insert(local);
+                    if is_hidden(&local) {
+                        hidden.insert(local);
+                    } else {
+                        beside.insert(local);
+                    }
                 }
             }
         }
@@ -236,9 +254,23 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             )
         });
     }
+    if let Some(first) = hidden.iter().next() {
+        let more = hidden.len() - 1;
+        warnings.push(if more == 0 {
+            format!(
+                "{entry_name} names {first}, a hidden file beside it; it was not taken, as a file whose name begins with a dot never is."
+            )
+        } else {
+            format!(
+                "{entry_name} names {first} and {} more hidden {} beside it; they were not taken, as a file whose name begins with a dot never is.",
+                count(more),
+                if more == 1 { "file" } else { "files" }
+            )
+        });
+    }
 
     let files: Vec<InputFile> = taken.into_iter().map(|(path, bytes)| InputFile { path, bytes }).collect();
-    let fingerprint = fingerprint_of(&files, Some(&entry_name));
+    let fingerprint = fingerprint_of(&files, Some(&entry_name), None);
     Ok(Input { name, root, entry: entry_name, files, fingerprint, single_file: true, warnings })
 }
 
@@ -260,6 +292,12 @@ fn looks_like_path(text: &str) -> bool {
     let path = text.split(['?', '#']).next().unwrap_or("");
     let name = path.rsplit('/').next().unwrap_or("");
     name.contains('.') && media_type(name) != OCTET_STREAM
+}
+
+/// Whether a path of the page has a segment that begins with a dot (`.ssh/id_ed25519`,
+/// `img/.hidden.png`): such a file is never taken, from a folder or beside a single file.
+fn is_hidden(path: &str) -> bool {
+    path.split('/').any(|segment| segment.starts_with('.'))
 }
 
 /// Whether the page's path names a plain file inside the root (no link leads out of it).
@@ -415,7 +453,7 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             format!("the folder has {} links to other files or folders, which were left out", count(links))
         });
     }
-    let fingerprint = fingerprint_of(&files, None);
+    let fingerprint = fingerprint_of(&files, None, Some(&entry));
     Ok(Input { name, root, entry, files, fingerprint, single_file: false, warnings })
 }
 
@@ -464,8 +502,11 @@ fn choose_entry(found: &[(String, u64)], entry: Option<&str>, _name: &str) -> Re
 
 /// The SHA-256, in hex, of: for each file in path order, its path, a NUL byte, the
 /// SHA-256 of its bytes. `single_entry`: the entry of a single-file input, hashed under
-/// the path `index.html` whatever its name.
-pub(crate) fn fingerprint_of(files: &[InputFile], single_entry: Option<&str>) -> String {
+/// the path `index.html` whatever its name. `folder_entry`: the entry of a folder,
+/// hashed after the files (two NUL bytes, `entry`, a NUL byte, its path) when it is not
+/// `index.html`, so that the same folder opening with another page is another input
+/// (and a folder that opens with its index.html keeps the fingerprint it had).
+pub(crate) fn fingerprint_of(files: &[InputFile], single_entry: Option<&str>, folder_entry: Option<&str>) -> String {
     let mut named: Vec<(String, [u8; 32])> = files
         .iter()
         .map(|file| {
@@ -482,6 +523,10 @@ pub(crate) fn fingerprint_of(files: &[InputFile], single_entry: Option<&str>) ->
         hasher.update(path.as_bytes());
         hasher.update([0u8]);
         hasher.update(digest);
+    }
+    if let Some(entry) = folder_entry.filter(|entry| *entry != "index.html") {
+        hasher.update(b"\0\0entry\0");
+        hasher.update(entry.as_bytes());
     }
     hex(&hasher.finalize())
 }

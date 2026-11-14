@@ -107,3 +107,17 @@ fn a_known_piece_must_be_a_file() {
     map.insert("ftp://example.com/x".to_string(), std::path::PathBuf::from("/tmp"));
     assert!(KnownPieces::read(&map, Arc::new(web(&[]))).is_err());
 }
+
+#[test]
+fn an_address_in_an_event_handler_that_is_not_kept_is_said() {
+    let bundle = page(
+        &[("index.html", r#"<button onclick="fetch('https://api.example.com/x')">Ask</button><a href="x.html" onmouseover="this.title = 'plain words'">x</a>"#)],
+        &[],
+    );
+    assert_eq!(
+        bundle.warnings,
+        vec!["it names https://api.example.com/x, which is not kept: if the page asks for it later (a button), that part will not work"]
+    );
+    // The handler is written back as it was when nothing in it changes.
+    assert!(served(&bundle, "index.html").contains(r#"onclick="fetch('https://api.example.com/x')""#));
+}

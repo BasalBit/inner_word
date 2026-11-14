@@ -67,6 +67,10 @@ pub(crate) struct Ref {
     pub with: Vec<Range<usize>>,
     /// A link that is said when it is an address on the web (a form's action, a refresh).
     pub warn_external: bool,
+    /// A link the reader follows (`<a href>`, `<area href>`, a form's action, a refresh)
+    /// rather than one the page loads by itself (a frame): a single file takes the
+    /// target only when it is a page of its own (an HTML file).
+    pub navigation: bool,
 }
 
 /// An attribute whose value is a text of its own (`style`, `srcset`, `srcdoc`).
@@ -174,6 +178,7 @@ fn simple(span: Range<usize>, raw: String, ctx: Ctx, expect: Expect, base: &Url)
         root_relative: false,
         with: Vec::new(),
         warn_external: false,
+        navigation: false,
     }
 }
 
@@ -416,7 +421,8 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
         "a" | "area" => {
             handled.extend(["href", "xlink:href"]);
             for attr in ["href", "xlink:href"] {
-                if let Some(r) = attr_ref(tag, attr, Ctx::Link, Expect::Any, base) {
+                if let Some(mut r) = attr_ref(tag, attr, Ctx::Link, Expect::Any, base) {
+                    r.navigation = true;
                     scan.refs.push(r);
                 }
             }
@@ -467,6 +473,7 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             "action" | "formaction" => {
                 if let Some(mut r) = attr_ref(tag, attr_name, Ctx::Link, Expect::Any, base) {
                     r.warn_external = true;
+                    r.navigation = true;
                     scan.refs.push(r);
                 }
             }
@@ -486,6 +493,15 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
                 scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
             }
             _ if xml && attr_name.starts_with("xmlns") => {}
+            // An event handler (`onclick`) is a script: its strings are said as a
+            // script's are (a file beside a single file, an address not kept), and an
+            // address it names is kept as a script's is. It never runs in the check
+            // unless the page is clicked, so the check cannot find what it asks for.
+            _ if is_event_handler(attr_name) => {
+                let text = value.decoded.clone();
+                let inner = scan_script(text.as_bytes(), base, base, false);
+                scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
+            }
             _ => {
                 let place = if attr_name.starts_with("data-") { Place::DataAttr } else { Place::Attr };
                 scan.literals.push(Literal {
@@ -497,6 +513,11 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             }
         }
     }
+}
+
+/// `onclick`, `onload`, `onpointerdown`: an attribute whose value is a script.
+fn is_event_handler(name: &str) -> bool {
+    name.len() > 2 && name[..2].eq_ignore_ascii_case("on") && name.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
 /// `<meta http-equiv=refresh content="5; url=next.html">`.
@@ -532,6 +553,7 @@ fn refresh_ref(tag: &Tag, base: &Url) -> Option<Ref> {
     let mut r = simple(value.span.clone(), address, Ctx::Link, Expect::Any, base);
     r.write = Write::Attr { before: content[..start].to_string(), after: content[end..].to_string() };
     r.warn_external = true;
+    r.navigation = true;
     Some(r)
 }
 

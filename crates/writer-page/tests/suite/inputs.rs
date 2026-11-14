@@ -186,3 +186,67 @@ fn a_folder_is_read_as_bytes() {
     assert_eq!(&input.files[0].bytes[..], b"\xff\xfe<\x00p\x00>\x00");
     let _ = fs::metadata(dir.path()).unwrap();
 }
+
+#[test]
+fn a_single_file_never_takes_a_hidden_file_nor_a_document_it_only_links_to() {
+    let dir = folder(&[
+        (
+            "explainer.html",
+            r#"<link rel="prefetch" href=".ssh/id_ed25519"><a href="tax-2025.pdf">taxes</a><a href="more.html">more</a>
+<script>fetch('.env').then(r => r.text()).then(t => document.body.append(t)); const key = "keys/.secret.json";</script>"#,
+        ),
+        (".ssh/id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY----- FAKE-SECRET-123"),
+        (".env", "TOKEN=FAKE-SECRET-456"),
+        ("keys/.secret.json", "{}"),
+        ("tax-2025.pdf", "%PDF"),
+        ("more.html", r#"<a href="report.docx">report</a><img src="img/more.png">"#),
+        ("report.docx", "PK"),
+        ("img/more.png", "png"),
+    ]);
+    let input = read_input(&dir.path().join("explainer.html"), None).unwrap();
+    assert_eq!(input_paths(&input), vec!["explainer.html", "img/more.png", "more.html"]);
+    assert_eq!(
+        input.warnings,
+        vec![
+            "explainer.html names report.docx and 1 more file beside it that it may load later; they were not taken. To keep them, add the folder.",
+            // `.env` has no ending of a file a page loads, so it is not named either.
+            "explainer.html names .ssh/id_ed25519 and 1 more hidden file beside it; they were not taken, as a file whose name begins with a dot never is.",
+        ]
+    );
+    let one = folder(&[("page.html", r#"<img src=".hidden.png">"#), (".hidden.png", "x")]);
+    let input = read_input(&one.path().join("page.html"), None).unwrap();
+    assert_eq!(input_paths(&input), vec!["page.html"]);
+    assert_eq!(
+        input.warnings,
+        vec!["page.html names .hidden.png, a hidden file beside it; it was not taken, as a file whose name begins with a dot never is."]
+    );
+}
+
+#[test]
+fn a_folder_opening_with_another_entry_is_another_input() {
+    let dir = folder(&[("index.html", "<p>one</p>"), ("b.html", "<p>two</p>")]);
+    let default = read_input(dir.path(), None).unwrap().fingerprint;
+    assert_eq!(read_input(dir.path(), Some("index.html")).unwrap().fingerprint, default, "the entry it would open with anyway");
+    let other = read_input(dir.path(), Some("b.html")).unwrap().fingerprint;
+    assert_ne!(other, default, "another entry, another input");
+    assert_eq!(read_input(dir.path(), Some("./b.html")).unwrap().fingerprint, other);
+
+    let single = folder(&[("report.html", "<p>one</p>"), ("img/a.png", "a")]);
+    let chosen = read_input(single.path(), None).unwrap();
+    assert_eq!(chosen.entry, "report.html");
+    assert_eq!(read_input(single.path(), Some("report.html")).unwrap().fingerprint, chosen.fingerprint);
+}
+
+#[test]
+fn an_event_handler_is_read_as_a_script() {
+    let dir = folder(&[
+        ("page.html", r#"<button onclick="new Audio('narration.mp3').play()">Play</button>"#),
+        ("narration.mp3", "x"),
+    ]);
+    let input = read_input(&dir.path().join("page.html"), None).unwrap();
+    assert_eq!(input_paths(&input), vec!["page.html"]);
+    assert_eq!(
+        input.warnings,
+        vec!["page.html names narration.mp3 beside it, which it may load later; it was not taken. To keep it, add the folder."]
+    );
+}

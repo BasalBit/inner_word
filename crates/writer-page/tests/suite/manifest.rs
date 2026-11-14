@@ -220,10 +220,90 @@ fn a_page_is_written_as_a_folder_both_ways() {
     assert_eq!(written.files, manifest.files.len());
 
     // Bytes the library does not have are said, not written.
+    let png = manifest.files.iter().find(|f| f.path == "img/map.png").unwrap().file.clone();
     let missing_dir = dir.path().join("missing");
-    let written = write_folder(&manifest, Which::Served, &missing_dir, false, &mut |_| Ok(None)).unwrap();
-    assert_eq!(written.files, 0);
-    assert_eq!(written.missing.len(), manifest.files.len());
+    let written =
+        write_folder(&manifest, Which::Served, &missing_dir, false, &mut |id| Ok(if id == png { None } else { blobs.get(id).cloned() }))
+            .unwrap();
+    assert_eq!(written.files, manifest.files.len() - 1);
+    assert_eq!(written.missing, vec!["img/map.png"]);
+    assert!(!missing_dir.join("img/map.png").exists());
+}
+
+#[test]
+fn a_page_whose_files_cannot_be_read_is_not_written_at_all() {
+    let bundle = orbitarium();
+    let (manifest, blobs) = manifest_of(&bundle);
+    let dir = temp();
+
+    // None of its files (a damaged file of the library set aside): nothing, no folder.
+    let none = dir.path().join("none");
+    let error = write_folder(&manifest, Which::Served, &none, false, &mut |_| Ok(None)).unwrap_err();
+    assert!(matches!(error, PageError::Unreadable { .. }), "{error:?}");
+    assert!(error.sentence().contains("does not have its entry index.html, so nothing was written"), "{}", error.sentence());
+    assert!(!none.exists(), "no folder is made");
+    let original = write_folder(&manifest, Which::Original, &none, false, &mut |_| Ok(None)).unwrap_err();
+    assert!(original.sentence().contains("nothing was written"), "{}", original.sentence());
+    assert!(!none.exists());
+
+    // Its entry missing: what is written would not open.
+    let entry = manifest.files.iter().find(|f| f.path == manifest.entry).unwrap().file.clone();
+    let no_entry = dir.path().join("no-entry");
+    let error =
+        write_folder(&manifest, Which::Served, &no_entry, false, &mut |id| Ok(if id == entry { None } else { blobs.get(id).cloned() }))
+            .unwrap_err();
+    assert!(error.sentence().contains("entry index.html"), "{}", error.sentence());
+    assert!(!no_entry.exists());
+
+    // A read that fails after others succeeded (a library of a newer version, busy):
+    // nothing written, and the sentence does not blame the folder written to.
+    let failing = dir.path().join("deep/failing");
+    let mut reads = 0;
+    let error = write_folder(&manifest, Which::Served, &failing, false, &mut |id| {
+        reads += 1;
+        if reads == manifest.files.len() {
+            Err(std::io::Error::other("this library was created by a newer version of The Writer"))
+        } else {
+            Ok(blobs.get(id).cloned())
+        }
+    })
+    .unwrap_err();
+    let sentence = error.sentence();
+    assert!(sentence.contains("could not be read from the library (this library was created by a newer version of The Writer), so nothing was written"), "{sentence}");
+    assert!(!sentence.contains(&failing.display().to_string()), "{sentence}");
+    assert!(!dir.path().join("deep").exists(), "no folder is made");
+
+    // A write that fails half way takes back what it made.
+    let half = dir.path().join("half");
+    fs::create_dir_all(half.join("img/map.png")).unwrap(); // a folder where a file goes
+    let error = write_folder(&manifest, Which::Served, &half, true, &mut |id| Ok(blobs.get(id).cloned())).unwrap_err();
+    assert!(matches!(error, PageError::Io { .. }), "{error:?}");
+    let left: Vec<String> = walk(&half);
+    assert_eq!(left, vec!["img/map.png/"], "only what was there before");
+}
+
+fn walk(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![(dir.to_path_buf(), String::new())];
+    while let Some((at, prefix)) = stack.pop() {
+        let mut entries: Vec<_> = fs::read_dir(&at).unwrap().map(|e| e.unwrap()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        let mut empty = true;
+        for entry in entries {
+            empty = false;
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                stack.push((entry.path(), format!("{name}/")));
+            } else {
+                out.push(name);
+            }
+        }
+        if empty && !prefix.is_empty() {
+            out.push(prefix);
+        }
+    }
+    out.sort();
+    out
 }
 
 #[test]

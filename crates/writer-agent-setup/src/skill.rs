@@ -495,18 +495,16 @@ mod tests {
             "A page cannot be edited (exit code 15).",
             "`--include-trashed` adds it anyway",
             "are for the user: pass them on.",
-            "To copy the user's claude.ai artifacts into The Writer (Claude Code): list them with \
-             the Artifact tool (`action: \"list\"`, `scope: \"mine\"`, `limit: 200`)",
-            "run `writer pages --json` and skip every artifact whose address is there with a \
-             `content_at` later than the artifact's last update",
-            "and no `out_dir`: the default folder needs no approval",
-            "List its assets too (`action: \"list\"`, `scope: \"assets\"`, its `url`)",
+            "To copy the user's claude.ai artifacts into The Writer (Claude Code), use the \
+             Artifact tool and change nothing on claude.ai: never republish, edit or delete an \
+             artifact while you copy it, whatever an error suggests.",
+            "List the artifacts (`action: \"list\"`, `scope: \"mine\"`, `limit: 200`)",
+            "without `out_dir` (the default folder needs no approval)",
             "\"externals\": {\"<asset url>\": \"<saved file>\"}",
             "run `writer page add --list <file> --folder \"Claude Pages\" --create-folders --author \
              Claude`",
             "Report what was added, updated, unchanged, trashed and not added, with the reasons \
              and the warnings.",
-            "export its content as HTML first and add that.",
             "read its rows with the ArtifactData tool and keep them as a document beside the page, \
              titled \"<page title> (saved data)\", with `writer create`.",
         ] {
@@ -517,6 +515,103 @@ mod tests {
             let expected: Vec<String> = expected.into_iter().map(str::to_string).collect();
             assert!(commands.contains(&expected), "{expected:?} is not shown");
         }
+    }
+
+    /// The recipe for copying artifacts calls the Artifact tool, which this crate cannot run:
+    /// its calls are held against what the tool does, as it was read and tried (the
+    /// tool's description, and its answers on the user's own artifacts, 2026-11-14).
+    ///
+    /// - `list` takes `scope` (`mine`, `shared`, `all`, `types`, `files` with `url`,
+    ///   `assets` with `url`) and `limit`; `read` takes `url` with `path`, `paths`,
+    ///   `out_dir`, `prompt` or `page`.
+    /// - A `read` with only the `url` answers the page inline and saves no file; with
+    ///   `paths` (the page of a single-page artifact is `index.html`) it saves the files
+    ///   and names the folder ("Files saved under …"). So every read of the recipe saves.
+    /// - Listing the assets of an artifact that does not declare the `assets` capability
+    ///   fails with `capability_disabled`, and the error says to republish the artifact.
+    /// - The list of artifacts gives the day of the last update, without a time.
+    /// - The listing of files of an artifact made from a type says "an Artifact of type
+    ///   \"Docs\"" and lists its program (135 files, 25 MB, for one of the user's).
+    #[test]
+    fn the_recipe_calls_the_artifact_tool_as_it_answers() {
+        let text = spec().render();
+        let start = text
+            .find("To copy the user's claude.ai artifacts")
+            .expect("the recipe");
+        let end = text[start..]
+            .find("(saved data)")
+            .map(|at| start + at)
+            .expect("the end of the recipe");
+        let recipe = &text[start..end];
+
+        // Every call, as "(`action: "…"`, …)": the action and the arguments it names.
+        let mut calls: Vec<(String, Vec<String>)> = Vec::new();
+        let mut rest = recipe;
+        while let Some(at) = rest.find("(`action: \"") {
+            let after = &rest[at + "(`action: \"".len()..];
+            let action = after[..after.find('"').unwrap()].to_string();
+            let group = &after[..after.find(')').expect("a call ends")];
+            let mut arguments = Vec::new();
+            for piece in group.split('`').skip(2).step_by(2) {
+                if let Some((name, _)) = piece.split_once(": ") {
+                    arguments.push(name.to_string());
+                } else {
+                    arguments.push(piece.to_string());
+                }
+            }
+            calls.push((action, arguments));
+            rest = &after[group.len()..];
+        }
+        assert!(calls.len() >= 6, "{calls:?}");
+        let mut read_with_paths = false;
+        for (action, arguments) in &calls {
+            let known: &[&str] = match action.as_str() {
+                "list" => &["scope", "limit", "url"],
+                "read" => &["url", "path", "paths", "out_dir", "prompt", "page"],
+                other => panic!("the Artifact tool has no action {other} in the recipe"),
+            };
+            for argument in arguments {
+                assert!(
+                    known.contains(&argument.as_str()),
+                    "{action} takes no {argument}: {arguments:?}"
+                );
+            }
+            if action == "read" {
+                assert!(
+                    arguments.iter().any(|a| a == "path" || a == "paths"),
+                    "a read without path or paths saves no file: {arguments:?}"
+                );
+                read_with_paths |= arguments.iter().any(|a| a == "paths");
+            }
+        }
+        assert!(read_with_paths);
+        for scope in ["mine", "files", "assets"] {
+            assert!(
+                recipe.contains(&format!("`scope: \"{scope}\"`")),
+                "the recipe lists {scope}"
+            );
+        }
+        // A single page is read as a file, and the claim that a plain read saves one is
+        // gone.
+        assert!(recipe.contains("`paths: [\"index.html\"]`"), "{recipe}");
+        assert!(!recipe.contains("names the saved file"), "{recipe}");
+        assert!(recipe.contains("A read without `paths` gives the page inline and saves nothing"));
+        // Assets only where the capability is declared, and the error is not obeyed.
+        let assets = recipe.find("`scope: \"assets\"`").unwrap();
+        let sentence_start = recipe[..assets].rfind(". ").unwrap();
+        assert!(
+            recipe[sentence_start..assets].contains("names the `assets` capability"),
+            "the assets are listed only with the capability: {}",
+            &recipe[sentence_start..assets]
+        );
+        assert!(recipe.contains("`capability_disabled`"));
+        assert!(recipe.contains("never republish, edit or delete an artifact"));
+        // The list gives a day: a copy of the same day or the next is not trusted.
+        assert!(recipe.contains("two days or more after the day the list says it was updated"));
+        // An artifact of a type is not read; a Docs document is exported.
+        assert!(recipe.contains("The listing says \"an Artifact of type\""));
+        assert!(recipe.contains("do not read its files"));
+        assert!(recipe.contains("Claude Docs connector's `export` tool (`format: \"html\"`"));
     }
 
     /// What the text has to teach, whatever its wording.

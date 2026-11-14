@@ -110,8 +110,8 @@ use writer_ui::theme::{self, ActiveTheme, Theme};
 
 use crate::{
     decorations::{
-        self, BlockContext, CheckboxHit, DecorationSink, LabelAnchor, LabelShape, PageNumber,
-        RectShape, ShapeFill, StrokeShape,
+        self, BlockContext, CheckShape, CheckboxHit, DecorationSink, LabelAnchor, LabelShape,
+        PageNumber, RectShape, ShapeFill, StrokeShape,
     },
     editor::Editor,
     layout::{
@@ -738,7 +738,8 @@ impl DecorationSink for SheetSink<'_> {
         }));
     }
 
-    fn stroke(&mut self, stroke: StrokeShape) {
+    fn check(&mut self, check: CheckShape) {
+        let stroke: StrokeShape = check.stroke();
         let Some(first) = stroke.points.first() else {
             return;
         };

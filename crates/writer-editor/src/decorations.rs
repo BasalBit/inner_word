@@ -16,10 +16,11 @@
 //!
 //! [`plan_block`] does not paint and does not know what it plans for. It
 //! works out neutral shapes (a rectangle with a fill, a radius and a
-//! border; a stroked line; a single shaped line of text with the point it
-//! is placed by) and hands them to a [`DecorationSink`]. The screen's sink
-//! ([`ScreenSink`]) turns them into what a frame paints: quads, paths and
-//! shaped lines of the frame plan, and the places a click toggles a to-do.
+//! border; the tick of a checked to-do; a single shaped line of text with
+//! the point it is placed by) and hands them to a [`DecorationSink`]. The
+//! screen's sink ([`ScreenSink`]) turns them into what a frame paints:
+//! quads, the ticks' sprites (`crate::tick`; never a GPUI path) and shaped
+//! lines of the frame plan, and the places a click toggles a to-do.
 //! The print pass has a sink of its own (`crate::print`) that turns the
 //! same shapes into the items of a printed page. So a bullet, a number or
 //! a code panel is in one place on screen and on paper because one piece
@@ -31,8 +32,8 @@
 //! [`ShapeFill::Surface`], which paper does not need.
 
 use gpui::{
-    Bounds, Font, Hsla, PathBuilder, Pixels, Point, ShapedLine, SharedString, TextRun,
-    WindowTextSystem, fill, point, px, size,
+    Bounds, Font, Hsla, Pixels, Point, ShapedLine, SharedString, TextRun, WindowTextSystem, fill,
+    point, px, size,
 };
 use writer_core::{Block, BlockKind};
 use writer_ui::theme;
@@ -44,6 +45,7 @@ use crate::{
         style::{CODE_PADDING, MARKER_GAP, MARKER_GUTTER, QUOTE_GUTTER},
     },
     paint::snap,
+    tick::TickSprites,
 };
 
 /// What `plan_block` needs to know about one block.
@@ -121,6 +123,51 @@ pub(crate) struct StrokeShape {
     pub(crate) color: Hsla,
 }
 
+/// The tick of a checked to-do box: a stroke through three points of the
+/// box, in its colour. Paper draws it as that stroke
+/// ([`CheckShape::stroke`]); the screen draws a sprite of it
+/// (`crate::tick`), because a GPUI path costs a window a texture its own
+/// size and a copy of it with four samples a pixel.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CheckShape {
+    /// The box the tick is in.
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) color: Hsla,
+}
+
+impl CheckShape {
+    /// The tick's three points, as shares of the box's side from its top
+    /// left corner.
+    pub(crate) const POINTS: [(f32, f32); 3] = [(0.25, 0.53), (0.43, 0.70), (0.76, 0.31)];
+
+    fn side(&self) -> f32 {
+        f32::from(self.bounds.size.width)
+    }
+
+    /// The width of the stroke: 12 % of the side, never under 1.4.
+    pub(crate) fn width(&self) -> Pixels {
+        px((self.side() * 0.12).max(1.4))
+    }
+
+    /// The tick as a stroke, for paper.
+    pub(crate) fn stroke(&self) -> StrokeShape {
+        let side = self.side();
+        StrokeShape {
+            points: Self::POINTS
+                .iter()
+                .map(|&(x, y)| {
+                    point(
+                        self.bounds.left() + px(side * x),
+                        self.bounds.top() + px(side * y),
+                    )
+                })
+                .collect(),
+            width: self.width(),
+            color: self.color,
+        }
+    }
+}
+
 /// Which point of a label's line is the one its place was worked out
 /// from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,7 +215,8 @@ impl LabelShape {
 /// Whoever takes the shapes [`plan_block`] works out.
 pub(crate) trait DecorationSink {
     fn rect(&mut self, rect: RectShape);
-    fn stroke(&mut self, stroke: StrokeShape);
+    /// The tick of a checked to-do box.
+    fn check(&mut self, check: CheckShape);
     fn label(&mut self, label: LabelShape);
     /// A to-do checkbox was planned: a click inside toggles the block.
     fn checkbox(&mut self, hit: CheckboxHit);
@@ -178,6 +226,9 @@ pub(crate) trait DecorationSink {
 pub(crate) struct ScreenSink<'a> {
     pub(crate) plan: &'a mut FramePlan,
     pub(crate) checkboxes: &'a mut Vec<CheckboxHit>,
+    /// The editor's sprites of ticks.
+    pub(crate) ticks: &'a mut TickSprites,
+    pub(crate) scale_factor: f32,
 }
 
 impl DecorationSink for ScreenSink<'_> {
@@ -193,19 +244,12 @@ impl DecorationSink for ScreenSink<'_> {
         self.plan.back.push(quad);
     }
 
-    fn stroke(&mut self, stroke: StrokeShape) {
-        let mut points = stroke.points.into_iter();
-        let Some(first) = points.next() else {
-            return;
-        };
-        let mut path = PathBuilder::stroke(stroke.width);
-        path.move_to(first);
-        for point in points {
-            path.line_to(point);
-        }
-        if let Ok(path) = path.build() {
-            self.plan.paths.push((path, stroke.color));
-        }
+    fn check(&mut self, check: CheckShape) {
+        // A sprite and not a stroked path: a GPUI path makes the window
+        // hold a texture of its own size and a copy with four samples a
+        // pixel until it is resized (about 100 MB at 1400 by 900 points).
+        let tick = self.ticks.tick(&check, self.scale_factor);
+        self.plan.ticks.push(tick);
     }
 
     fn label(&mut self, label: LabelShape) {
@@ -409,15 +453,8 @@ pub(crate) fn plan_block(sink: &mut impl DecorationSink, cx: &BlockContext) {
                 }
             });
             if *checked {
-                let at = |x: f32, y: f32| {
-                    point(
-                        bounds.left() + px(f32::from(side) * x),
-                        bounds.top() + px(f32::from(side) * y),
-                    )
-                };
-                sink.stroke(StrokeShape {
-                    points: vec![at(0.25, 0.53), at(0.43, 0.70), at(0.76, 0.31)],
-                    width: px((f32::from(side) * 0.12).max(1.4)),
+                sink.check(CheckShape {
+                    bounds,
                     color: colors.on_accent,
                 });
             }

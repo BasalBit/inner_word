@@ -253,6 +253,7 @@ pub mod print;
 mod scroll;
 pub mod spelling;
 mod stats;
+mod tick;
 mod view_state;
 mod zoom;
 

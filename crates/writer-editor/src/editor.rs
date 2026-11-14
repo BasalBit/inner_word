@@ -39,6 +39,7 @@ use crate::{
     popup::{Popup, PopupElement},
     scroll::{Autoscroll, PendingScroll, Scrollbar},
     spelling::SpellingMarks,
+    tick::TickSprites,
     zoom::Zoom,
 };
 
@@ -151,6 +152,8 @@ pub struct Editor {
     /// The decoded pictures of the document's images and who supplies
     /// their bytes (see `crate::images`).
     pub(crate) images: Pictures,
+    /// The sprites of the ticks of checked to-dos (see `crate::tick`).
+    pub(crate) ticks: TickSprites,
     /// Counts the documents this editor was given
     /// ([`Editor::set_document`]): a picture that was on its way into one
     /// document does not arrive in the next.
@@ -213,6 +216,10 @@ pub struct Editor {
     /// What the last frame painted for each image block on screen.
     #[cfg(test)]
     pub(crate) painted_images: Vec<crate::element::PaintedImage>,
+    /// The ticks of the last frame: where each sprite is painted, and the
+    /// sprite.
+    #[cfg(test)]
+    pub(crate) painted_ticks: Vec<(gpui::Bounds<Pixels>, std::sync::Arc<gpui::RenderImage>)>,
     /// The drop line of the last frame, in window coordinates.
     #[cfg(test)]
     pub(crate) painted_drop_line: Option<gpui::Bounds<Pixels>>,
@@ -362,6 +369,9 @@ impl Editor {
                         crate::images::RELEASED_TEXTURES.with(|count| count.set(count.get() + 1));
                     }
                 }
+                for tick in this.ticks.drain() {
+                    window.drop_image(tick).ok();
+                }
             }),
         ];
 
@@ -398,6 +408,7 @@ impl Editor {
             zoom_fine: None,
             checkbox_hits: Vec::new(),
             images: Pictures::new(),
+            ticks: TickSprites::default(),
             document_serial: 0,
             image_handles: None,
             file_drop: None,
@@ -432,6 +443,8 @@ impl Editor {
             painted_sheets: Vec::new(),
             #[cfg(test)]
             painted_images: Vec::new(),
+            #[cfg(test)]
+            painted_ticks: Vec::new(),
             #[cfg(test)]
             painted_drop_line: None,
             #[cfg(test)]

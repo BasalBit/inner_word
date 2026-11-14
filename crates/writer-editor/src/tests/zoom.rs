@@ -1618,3 +1618,85 @@ fn zooming_a_book_lays_nothing_out_again(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A checked to-do's tick is a sprite at every zoom, in both views, on
+/// exactly the device pixels of its box; and no code of the editor builds
+/// a GPUI path, which costs a window a texture its own size and a copy of
+/// it with four samples a pixel for as long as the window is not resized
+/// (`crate::tick`).
+#[gpui::test]
+fn a_tick_is_a_sprite_and_never_a_path_at_every_zoom(cx: &mut TestAppContext) {
+    setup(cx);
+    for page_view in [false, true] {
+        let document = with_view(
+            Document::from_blocks(vec![
+                Block::with_text(BlockKind::TodoItem { checked: true }, "Done"),
+                Block::with_text(BlockKind::TodoItem { checked: false }, "Open"),
+                Block::paragraph("Between them."),
+                Block::with_text(BlockKind::TodoItem { checked: true }, "Done as well"),
+            ]),
+            page_view,
+        );
+        let (editor, cx) = open_wide(document, cx);
+        let scale = cx.update(|window, _| window.scale_factor());
+        for percent in [50, 75, 100, 150, 400] {
+            zoom_to(&editor, Zoom::Percent(percent), cx);
+            let what = format!("page view {page_view}, {percent} %");
+            editor.read_with(cx, |editor, _| {
+                let checked: Vec<_> = editor
+                    .checkbox_hits
+                    .iter()
+                    .filter(|hit| hit.checked)
+                    .collect();
+                assert_eq!(checked.len(), 2, "{what}");
+                assert_eq!(editor.painted_ticks.len(), 2, "{what}");
+                for ((bounds, picture), hit) in editor.painted_ticks.iter().zip(checked) {
+                    // The box is the hit area less its slack of 3 pixels.
+                    let side = hit.bounds.size.width - px(6.);
+                    let left = f32::from(hit.bounds.left() + px(3.)) * scale;
+                    let top = f32::from(hit.bounds.top() + px(3.)) * scale;
+                    let device = |value: Pixels| f32::from(value) * scale;
+                    assert_eq!(device(bounds.left()).floor(), left.floor(), "{what}");
+                    assert_eq!(device(bounds.top()).floor(), top.floor(), "{what}");
+                    let pixels = picture.size(0);
+                    assert_eq!(
+                        pixels.width.0 as f32,
+                        (left + device(side)).ceil() - left.floor(),
+                        "{what}: as many pixels as the box covers"
+                    );
+                    assert_eq!(
+                        device(bounds.size.width).ceil(),
+                        pixels.width.0 as f32,
+                        "{what}: painted one sprite pixel to one device pixel"
+                    );
+                }
+            });
+        }
+        // The sprites of a zoom the frame left are not kept.
+        editor.read_with(cx, |editor, _| {
+            assert!(
+                (1..=2).contains(&editor.ticks.len()),
+                "{}",
+                editor.ticks.len()
+            )
+        });
+    }
+
+    // No source of the editor builds or paints a path.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let needles = [concat!("paint", "_path"), concat!("Path", "Builder")];
+    let mut stack = vec![src];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for needle in needles {
+                    assert!(!text.contains(needle), "{} has {needle}", path.display());
+                }
+            }
+        }
+    }
+}

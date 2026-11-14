@@ -21,7 +21,7 @@ use gpui::{
     App, AvailableSpace, Bounds, BoxShadow, ContentMask, Context, Corners, CursorStyle,
     DispatchPhase, Element, ElementId, ElementInputHandler, Entity, FileDropEvent, GlobalElementId,
     Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Path, Pixels, Point, RenderImage,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, RenderImage,
     ScrollWheelEvent, ShapedLine, Style, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 use writer_core::{BlockKind, ImageWidth};
@@ -41,6 +41,7 @@ use crate::{
     paint::{PlannedRow, snap},
     scroll::{PendingScroll, ScrollbarGeometry},
     spelling::{self, PlannedWave},
+    tick::PlannedTick,
 };
 
 /// Narrowest text column of a full editor.
@@ -130,8 +131,9 @@ pub(crate) struct FramePlan {
     /// The wavy underlines of misspelled words, in the text's layer.
     pub(crate) spelling: Vec<PlannedWave>,
     pub(crate) spelling_color: Hsla,
-    /// Stroked shapes over the decorations (checkbox ticks).
-    pub(crate) paths: Vec<(Path<Pixels>, Hsla)>,
+    /// The ticks of checked to-do boxes, over the text: sprites, never
+    /// GPUI paths (see `crate::tick`).
+    pub(crate) ticks: Vec<PlannedTick>,
     /// The caret and anything else over the text.
     pub(crate) front: Vec<PaintQuad>,
     /// Over everything: the chip beside the handle of an image that is
@@ -174,7 +176,7 @@ impl FramePlan {
             markers: Vec::new(),
             spelling: Vec::new(),
             spelling_color: gpui::transparent_black(),
-            paths: Vec::new(),
+            ticks: Vec::new(),
             front: Vec::new(),
             chip: None,
             image_hitboxes: Vec::new(),
@@ -368,6 +370,10 @@ impl Editor {
         for picture in self.images.take_evicted() {
             window.drop_image(picture).ok();
         }
+        // And those of the ticks the last frame did not paint.
+        for picture in self.ticks.begin_frame() {
+            window.drop_image(picture).ok();
+        }
         self.images.begin_frame();
         let mut image_handles = None;
         let scale_factor = window.scale_factor();
@@ -505,6 +511,8 @@ impl Editor {
                     &mut ScreenSink {
                         plan: &mut plan,
                         checkboxes: &mut checkboxes,
+                        ticks: &mut self.ticks,
+                        scale_factor,
                     },
                     &BlockContext {
                         index,
@@ -1024,6 +1032,16 @@ impl Editor {
                 .as_ref()
                 .map(|(_, label)| label.line.text.to_string());
         }
+        // The ticks this frame did not paint go at the start of the next.
+        self.ticks.end_frame();
+        #[cfg(test)]
+        {
+            self.painted_ticks = plan
+                .ticks
+                .iter()
+                .map(|tick| (tick.bounds, tick.picture.clone()))
+                .collect();
+        }
         self.checkbox_hits = checkboxes;
         self.image_handles = image_handles;
         self.scrollbar.geometry = scrollbar;
@@ -1321,8 +1339,10 @@ impl Element for EditorElement {
                         .ok();
                 }
             });
-            for (path, color) in plan.paths.drain(..) {
-                window.paint_path(path, color);
+            for tick in plan.ticks.drain(..) {
+                window
+                    .paint_image(tick.bounds, Corners::default(), tick.picture, 0, false)
+                    .ok();
             }
             for quad in plan.front.drain(..) {
                 window.paint_quad(quad);

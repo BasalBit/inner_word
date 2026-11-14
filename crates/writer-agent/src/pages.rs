@@ -234,7 +234,24 @@ impl Prepare for AddPageRequest {
             .as_deref()
             .map(str::trim)
             .filter(|entry| !entry.is_empty());
-        let input = writer_page::read_input(&input, entry)?;
+        // A page that is refused is named by the title it was given, where it was given
+        // one (an artifact of a type is "Claude Docs" by its own title).
+        let given = self
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string);
+        let named = |error: writer_page::PageError| match (error, &given) {
+            (writer_page::PageError::Incomplete { problems, .. }, Some(title)) => {
+                Error::PageIncomplete {
+                    name: title.clone(),
+                    problems,
+                }
+            }
+            (error, _) => Error::of_page(error),
+        };
+        let input = writer_page::read_input(&input, entry).map_err(named)?;
         // The same page again: nothing is fetched or checked.
         if let Some(url) = &source_url
             && let Some(known) =
@@ -258,12 +275,12 @@ impl Prepare for AddPageRequest {
                 library.fetcher.clone(),
             )?)
         };
-        let bundle = writer_page::bundle(input, fetcher.as_ref())?;
+        let bundle = writer_page::bundle(input, fetcher.as_ref()).map_err(named)?;
         let report = checker.check(&bundle)?;
-        let mut page = writer_page::prepare(bundle, &report)?;
+        let mut page = writer_page::prepare(bundle, &report).map_err(named)?;
         if page.distinct_bytes() > crate::live::MAX_PAGE_BYTES as u64 {
             return Err(Error::PageIncomplete {
-                name: page.title(),
+                name: given.clone().unwrap_or_else(|| page.title()),
                 problems: vec![Problem::new(
                     "the page",
                     too_heavy_sentence(page.distinct_bytes()),

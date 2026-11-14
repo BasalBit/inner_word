@@ -412,6 +412,22 @@ fn pieces_the_caller_has_are_not_fetched_and_a_piece_that_is_missing_saves_nothi
     let report = error.report();
     assert_eq!(report.code, "page_incomplete");
     assert_eq!(report.message, message);
+    // A page given a title is refused under that title, not under the one it has itself
+    // (an artifact of a type calls itself "Claude Docs").
+    let titled = library
+        .add_page(&AddPageRequest {
+            title: Some("Planning doc".to_string()),
+            ..add(&folder)
+        })
+        .unwrap_err();
+    assert_eq!(titled.kind(), ErrorKind::PageIncomplete);
+    assert!(
+        titled
+            .to_string()
+            .starts_with("\u{201c}Planning doc\u{201d} was not added: "),
+        "{titled}"
+    );
+    assert_eq!(fx.dump(), before, "nothing was saved");
 
     // With the file that stands for it: nothing is fetched, the file is taken.
     asked.asked.lock().unwrap().clear();

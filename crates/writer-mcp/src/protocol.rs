@@ -111,6 +111,9 @@ pub struct ToolDef {
     pub effect: Effect,
     /// Whether calling it again with the same arguments changes nothing further.
     pub idempotent: bool,
+    /// Whether it reaches beyond the library and this Mac (`openWorldHint`): `add_page`
+    /// downloads what a page loads from any host on the web.
+    pub open_world: bool,
 }
 
 impl ToolDef {
@@ -124,8 +127,9 @@ impl ToolDef {
             );
             annotations.insert("idempotentHint".into(), json!(self.idempotent));
         }
-        // The library is on this Mac and nowhere else.
-        annotations.insert("openWorldHint".into(), json!(false));
+        // The library is on this Mac and nowhere else; a tool that fetches from the web
+        // says so.
+        annotations.insert("openWorldHint".into(), json!(self.open_world));
         json!({
             "name": self.name,
             "title": self.title,
@@ -659,6 +663,7 @@ mod tests {
                 input_schema: json!({ "type": "object", "properties": { "text": { "type": "string" } } }),
                 effect,
                 idempotent,
+                open_world: name == "add",
             };
             Self {
                 tools: vec![
@@ -801,7 +806,9 @@ mod tests {
         assert_eq!(tools[1]["annotations"]["readOnlyHint"], false);
         assert_eq!(tools[1]["annotations"]["destructiveHint"], false);
         assert_eq!(tools[1]["annotations"]["idempotentHint"], false);
+        assert_eq!(tools[1]["annotations"]["openWorldHint"], true);
         assert_eq!(tools[2]["annotations"]["destructiveHint"], true);
+        assert_eq!(tools[2]["annotations"]["openWorldHint"], false);
         assert_eq!(tools[2]["annotations"]["idempotentHint"], true);
 
         let call = ask(

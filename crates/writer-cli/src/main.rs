@@ -290,12 +290,15 @@ fn hint_in(spec: Option<&spec::Spec>, failure: &Failure) -> Option<&'static str>
             );
         }
     }
+    if failure.kind == ErrorKind::WrongKind
+        && failure
+            .message
+            .contains(writer_agent::PAGE_IS_NOT_A_TEXT_FILE)
+    {
+        return Some(EXPORT_PAGE);
+    }
     if failure.kind == ErrorKind::WrongKind && failure.message.contains(" is a page: ") {
-        return Some(if spec.is_some_and(|spec| spec.name == "export") {
-            EXPORT_PAGE
-        } else {
-            NEWER_PAGE
-        });
+        return Some(NEWER_PAGE);
     }
     hint(failure.kind)
 }

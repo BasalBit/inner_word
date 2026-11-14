@@ -175,6 +175,15 @@ fn local_path(given: &str, base_dir: Option<&Path>, what: &str) -> Result<PathBu
     }
 }
 
+/// The folder in which a claude.ai artifact made from a type has the type's program.
+const ARTIFACT_TYPE_FOLDER: &str = "artifact-type";
+
+/// Why a folder with [`ARTIFACT_TYPE_FOLDER`] that cannot be kept whole is not added.
+pub(crate) const MADE_FROM_A_TYPE: &str = "it is a claude.ai artifact made from a type (a Claude \
+Docs document, a deck): its files are the type's program, which asks claude.ai for the content, so \
+the content is not among them. Export the content as HTML (a Claude Docs document: the Claude Docs \
+connector's export) and add that";
+
 /// Whether what a request names as its input is an address on the web.
 fn is_address(given: &str) -> bool {
     let lower = given.trim().to_ascii_lowercase();
@@ -242,11 +251,20 @@ impl Prepare for AddPageRequest {
             .map(str::trim)
             .filter(|title| !title.is_empty())
             .map(str::to_string);
+        // An artifact made from a type of claude.ai (a Claude Docs document, a deck) is
+        // the type's program, which shows the content by asking claude.ai for it: what is
+        // missing is then the content, and the refusal says so instead of naming a file of
+        // the program.
+        let typed = input.join(ARTIFACT_TYPE_FOLDER).is_dir();
         let named = |error: writer_page::PageError| match (error, &given) {
-            (writer_page::PageError::Incomplete { problems, .. }, Some(title)) => {
+            (writer_page::PageError::Incomplete { name, problems }, given) => {
                 Error::PageIncomplete {
-                    name: title.clone(),
-                    problems,
+                    name: given.clone().unwrap_or(name),
+                    problems: if typed {
+                        vec![Problem::new(ARTIFACT_TYPE_FOLDER, MADE_FROM_A_TYPE)]
+                    } else {
+                        problems
+                    },
                 }
             }
             (error, _) => Error::of_page(error),
@@ -431,6 +449,7 @@ fn store_refused(name: &str, error: StoreError) -> Error {
             id,
             name: name.to_string(),
             is_page: kind == DocumentKind::Page,
+            export: false,
         },
         other => other.into(),
     }
@@ -990,7 +1009,7 @@ pub(crate) fn export_format(meta: &DocumentMeta, request: &ExportRequest) -> Res
         },
     };
     match format {
-        ExportFormat::Markdown | ExportFormat::Docx => Err(content::is_a_page(meta)),
+        ExportFormat::Markdown | ExportFormat::Docx => Err(content::page_is_not_a_text_file(meta)),
         format => Ok(format),
     }
 }

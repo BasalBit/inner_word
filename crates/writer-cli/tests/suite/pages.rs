@@ -241,6 +241,17 @@ fn a_list_adds_every_page_with_its_own_address_and_the_pieces_it_was_given() {
         "{}",
         lines[2]
     );
+    // It says where the path was looked for: the folder of the list, not where the command
+    // runs, in a sentence of its own.
+    // (The folder is the one the tool sees, which may be the temporary directory under
+    // /private.)
+    let (_, whence) = lines[2]
+        .split_once(
+            ". A path that does not begin with / or ~/ is taken from the folder of the list: ",
+        )
+        .unwrap_or_else(|| panic!("{}", lines[2]));
+    assert!(whence.ends_with("/work/lists"), "{}", lines[2]);
+    assert!(!lines[2].contains("where the command runs"), "{}", lines[2]);
     assert!(
         run.stderr
             .starts_with("writer: 1 of 3 pages were not added"),
@@ -369,6 +380,15 @@ fn a_page_cannot_be_edited_and_the_codes_say_so() {
     // An export of a page in a format of a text: the hint says what a page is written as.
     let md = sandbox.fail(&["export", "page:1", "page.md"], 15);
     assert!(md.contains("a page is written as a folder"), "{md}");
+    // It is about formats, not about changing the text or bringing a newer copy.
+    assert!(
+        md.contains("a page is not exported as Markdown or DOCX"),
+        "{md}"
+    );
+    assert!(
+        !md.contains("cannot be changed") && !md.contains("page add"),
+        "{md}"
+    );
     // A page as a document's format: the other way round.
     let pdf = sandbox.fail(&["export", "doc:2", "chapter.pdf"], 15);
     assert!(pdf.contains("is a document, not a page"), "{pdf}");

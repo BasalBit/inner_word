@@ -187,8 +187,8 @@ fn an_image_is_added_with_every_option_and_listed() {
     let wrong: [(&[&str], &str); 7] = [
         (
             &["image", "add", "doc:1", "nothing.png"],
-            "writer: there is no file \u{201c}nothing.png\u{201d}; give the path of an image file\n\
-             A path that does not begin with / or ~/ is taken from where the command runs: ",
+            "writer: there is no file \u{201c}nothing.png\u{201d}; give the path of an image \
+             file.\nA path that does not begin with / or ~/ is taken from where the command runs: ",
         ),
         (
             &["image", "add", "doc:1", "harbour.png", "--at", "middle"],

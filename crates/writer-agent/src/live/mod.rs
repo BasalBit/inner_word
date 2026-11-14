@@ -470,6 +470,9 @@ enum Detail {
         id: i64,
         name: String,
         is_page: bool,
+        /// An answer without it is about a text operation.
+        #[serde(default)]
+        export: bool,
     },
     Failed {
         message: String,
@@ -556,10 +559,16 @@ impl WireError {
                     })
                     .collect(),
             }),
-            Error::WrongKind { id, name, is_page } => Some(Detail::WrongKind {
+            Error::WrongKind {
+                id,
+                name,
+                is_page,
+                export,
+            } => Some(Detail::WrongKind {
                 id: *id,
                 name: name.clone(),
                 is_page: *is_page,
+                export: *export,
             }),
             Error::Failed { message } => Some(Detail::Failed {
                 message: message.clone(),
@@ -639,7 +648,17 @@ impl WireError {
                     .map(|problem| writer_page::Problem::new(problem.what, problem.reason))
                     .collect(),
             },
-            Ok(Detail::WrongKind { id, name, is_page }) => Error::WrongKind { id, name, is_page },
+            Ok(Detail::WrongKind {
+                id,
+                name,
+                is_page,
+                export,
+            }) => Error::WrongKind {
+                id,
+                name,
+                is_page,
+                export,
+            },
             Ok(Detail::Failed { message }) => Error::Failed { message },
             Err(_) => Error::InApp {
                 kind: ErrorKind::ALL

@@ -12,11 +12,11 @@ use writer_agent::live::{self, Answer, Operation, Request};
 use writer_agent::{
     AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
     DeleteCommentRequest, EditRequest, Error, ErrorKind, ExportFormat, ExportRequest, FindRequest,
-    InfoRequest, InsertRequest, Library, ListCommentsRequest, ListVersionsRequest, PageAdded,
-    PageChecker, PageOutcome, PagesRequest, PreparedPage, ReadRequest, ReadVersionRequest,
-    RenameDocumentRequest, ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest,
-    SearchRequest, StaticChecker, Target, TextFormat, TrashDocumentRequest, TreeRequest,
-    WriteOptions,
+    InfoRequest, InsertRequest, Library, ListCommentsRequest, ListVersionsRequest,
+    PAGE_IS_NOT_A_TEXT_FILE, PageAdded, PageChecker, PageOutcome, PagesRequest, PreparedPage,
+    ReadRequest, ReadVersionRequest, RenameDocumentRequest, ReplaceDocumentRequest,
+    ReplaceSectionRequest, ReplyRequest, SearchRequest, StaticChecker, Target, TextFormat,
+    TrashDocumentRequest, TreeRequest, WriteOptions,
 };
 use writer_page::{Bundle, CheckReport, FetchError, Fetched, Fetcher, MapFetcher};
 use writer_store::{DocumentKind, Store};
@@ -685,6 +685,24 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
                 })
                 .map(drop),
         ),
+    ];
+    for (name, result) in results {
+        let error = result.expect_err(name);
+        assert_eq!(error.kind(), ErrorKind::WrongKind, "{name}: {error}");
+        assert_eq!(error.exit_code(), 15, "{name}");
+        assert_eq!(error.code(), "wrong_kind", "{name}");
+        assert_eq!(
+            error.to_string(),
+            "\u{201c}Orbitarium\u{201d} is a page: it is kept as it was saved, and its text \
+             cannot be changed. To bring a newer copy, add it again with its source address.",
+            "{name}"
+        );
+        let report = error.report();
+        assert_eq!(report.code, "wrong_kind");
+    }
+    // An export as Markdown or DOCX changes nothing either, and is answered with the
+    // formats a page has (not with how a newer copy comes in).
+    let exports = [
         (
             "export as Markdown",
             library
@@ -707,19 +725,18 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
                 .map(drop),
         ),
     ];
-    for (name, result) in results {
+    for (name, result) in exports {
         let error = result.expect_err(name);
         assert_eq!(error.kind(), ErrorKind::WrongKind, "{name}: {error}");
         assert_eq!(error.exit_code(), 15, "{name}");
-        assert_eq!(error.code(), "wrong_kind", "{name}");
         assert_eq!(
             error.to_string(),
-            "\u{201c}Orbitarium\u{201d} is a page: it is kept as it was saved, and its text \
-             cannot be changed. To bring a newer copy, add it again with its source address.",
+            "\u{201c}Orbitarium\u{201d} is a page, and a page is not exported as Markdown or \
+             DOCX: it is written as a folder of its files (the format html), as a PDF (pdf) or as \
+             its text (text).",
             "{name}"
         );
-        let report = error.report();
-        assert_eq!(report.code, "wrong_kind");
+        assert!(error.to_string().contains(PAGE_IS_NOT_A_TEXT_FILE));
     }
     assert_eq!(fx.dump(), before, "nothing was changed");
     assert!(!fx.dir.path().join("out/page.md").exists());
@@ -751,6 +768,13 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
             is_page: true,
+            export: false,
+        },
+        Error::WrongKind {
+            id: 3,
+            name: "\u{201c}Orbitarium\u{201d}".into(),
+            is_page: true,
+            export: true,
         },
         Error::PageIncomplete {
             name: "Orbitarium".into(),
@@ -766,6 +790,76 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
         assert_eq!(travelled.kind(), error.kind());
         assert_eq!(format!("{travelled:?}"), format!("{error:?}"));
     }
+}
+
+/// A claude.ai artifact made from a type (a Claude Docs document) is the type's program,
+/// which asks claude.ai for the content: its refusal says that, not which file of the
+/// program asked for something it does not have.
+#[test]
+fn an_artifact_made_from_a_type_is_refused_as_one() {
+    let fx = fixture();
+    fx.create(None, "# A text\n\nFirst.\n");
+    let files: &[(&str, &str)] = &[
+        (
+            "index.html",
+            "<!doctype html><title>Claude Docs</title><p>Loading the document.</p>",
+        ),
+        (
+            "artifact-type/thumbnail/render.html",
+            "<!doctype html><title>Thumbnail</title><img src=\"__thumb/data.png\" alt=\"\">",
+        ),
+    ];
+    let folder = fx.page_folder("growth", files);
+    // As WebKit finds it: the thumbnail asks for a file the artifact does not publish.
+    struct Thumbnail;
+    impl PageChecker for Thumbnail {
+        fn check(&self, bundle: &Bundle) -> writer_agent::Result<CheckReport> {
+            let mut report = StaticChecker.check(bundle)?;
+            for load in &mut report.loads {
+                if let Some(dir) = load.path.strip_suffix("render.html") {
+                    load.missing.push(format!("{dir}__thumb/data.json"));
+                }
+            }
+            Ok(report)
+        }
+
+        fn print(&self, dir: &Path, out: &Path) -> writer_agent::Result<()> {
+            StaticChecker.print(dir, out)
+        }
+    }
+    let library = fx
+        .library
+        .clone()
+        .with_fetcher(Arc::new(MapFetcher::new()))
+        .with_page_checker(Arc::new(Thumbnail));
+    let before = fx.dump();
+    let error = library
+        .add_page(&AddPageRequest {
+            title: Some("Nimbus Planning Doc".to_string()),
+            ..with_address(&folder, "https://claude.ai/artifact/ExampleArtifactId00003")
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::PageIncomplete, "{error}");
+    assert_eq!(
+        error.to_string(),
+        "\u{201c}Nimbus Planning Doc\u{201d} was not added: it could not be kept whole. It is \
+         a claude.ai artifact made from a type (a Claude Docs document, a deck): its files are \
+         the type's program, which asks claude.ai for the content, so the content is not among \
+         them. Export the content as HTML (a Claude Docs document: the Claude Docs connector's \
+         export) and add that. Nothing was saved."
+    );
+    assert_eq!(fx.dump(), before, "nothing was saved");
+
+    // The same files in a folder of another name: the file is named, as for any page.
+    let other: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, html)| (path.trim_start_matches("artifact-type/"), *html))
+        .collect();
+    let folder = fx.page_folder("plain", &other);
+    let error = library.add_page(&add(&folder)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::PageIncomplete, "{error}");
+    assert!(error.to_string().contains("__thumb/data.json"), "{error}");
+    assert!(!error.to_string().contains("claude.ai artifact"), "{error}");
 }
 
 #[test]

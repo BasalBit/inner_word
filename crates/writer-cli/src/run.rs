@@ -193,9 +193,15 @@ fn placement(arguments: &mut Arguments, parsed: &Parsed) {
         .set_some("after", parsed.value("after"));
 }
 
-/// What the command line adds when the file of `writer image add` is not there: where a
-/// path that does not start at the top was looked for.
+/// What the command line adds when the file of `writer image add` or `writer page add` is
+/// not there: where a path that does not start at the top was looked for.
 pub fn missing_file(failure: Failure, file: &str) -> Failure {
+    missing_file_in(failure, file, None)
+}
+
+/// [`missing_file`] for a path that was taken from the folder `list` of a list of pages
+/// (`writer page add --list <file>`), not from where the command runs.
+pub fn missing_file_in(failure: Failure, file: &str, list: Option<&Path>) -> Failure {
     let relative = !file.starts_with('/') && !file.starts_with('~');
     if failure.kind != ErrorKind::Invalid
         || !failure.message.starts_with("there is no file ")
@@ -203,12 +209,24 @@ pub fn missing_file(failure: Failure, file: &str) -> Failure {
     {
         return failure;
     }
-    let started_in = std::env::current_dir()
-        .map(|dir| dir.display().to_string())
-        .unwrap_or_else(|_| "the directory the command runs in".to_string());
+    let whence = match list {
+        Some(folder) => format!("the folder of the list: {}", folder.display()),
+        None => format!(
+            "where the command runs: {}",
+            std::env::current_dir()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_else(|_| "the directory the command runs in".to_string())
+        ),
+    };
+    // The two sentences are joined on one line where a list prints them.
+    let first = failure.message.trim_end();
+    let stop = if first.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
     Failure::invalid(format!(
-        "{}\nA path that does not begin with / or ~/ is taken from where the command runs: {started_in}",
-        failure.message
+        "{first}{stop}\nA path that does not begin with / or ~/ is taken from {whence}"
     ))
 }
 

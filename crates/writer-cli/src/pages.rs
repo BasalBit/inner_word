@@ -158,6 +158,12 @@ pub fn add(
         common.insert("author".into(), json!(author));
     }
 
+    // Where a relative path of the list was taken from, for the line of a page that is not
+    // there (a list on standard input has none: its paths are taken from here).
+    let list_folder = parsed
+        .value("list")
+        .filter(|list| *list != "-")
+        .and_then(|_| crate::run::base_dir(parsed));
     let mut results: Vec<(Entry, Result<Reply, Failure>)> = Vec::new();
     for entry in entries {
         let mut arguments = common.clone();
@@ -182,7 +188,9 @@ pub fn add(
                     "there is no operation add_page",
                 ))
             })
-            .map_err(|failure| crate::run::missing_file(failure, &entry.path));
+            .map_err(|failure| {
+                crate::run::missing_file_in(failure, &entry.path, list_folder.as_deref())
+            });
         results.push((entry, result));
     }
 

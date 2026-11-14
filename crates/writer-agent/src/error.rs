@@ -390,8 +390,9 @@ pub enum Error {
         problems: Vec<writer_page::Problem>,
     },
     /// A text operation on a page (a page is kept as it was saved, and its text cannot
-    /// be changed), or a page operation on a text.
-    #[error("{}", wrong_kind_message(.name, *.is_page))]
+    /// be changed), an export of a page in a format of a text, or a page operation on a
+    /// text.
+    #[error("{}", wrong_kind_message(.name, *.is_page, *.export))]
     WrongKind {
         /// The item's id.
         id: i64,
@@ -399,6 +400,9 @@ pub enum Error {
         name: String,
         /// Whether the item is a page (and the operation was one for a text).
         is_page: bool,
+        /// Whether the operation was an export (of a page as Markdown or DOCX), which
+        /// changes nothing and is answered with the formats a page has.
+        export: bool,
     },
     /// Something else went wrong, said in words: pages cannot be checked here, the page
     /// could not be checked (no window server, WebKit gone), a PDF could not be made.
@@ -742,8 +746,17 @@ fn page_incomplete_message(name: &str, problems: &[writer_page::Problem]) -> Str
     .sentence()
 }
 
-fn wrong_kind_message(name: &str, is_page: bool) -> String {
-    if is_page {
+/// The words of an export of a page as Markdown or DOCX, which the front ends look for to
+/// add the formats in their own words (`--format`, the tool's `format`).
+pub const PAGE_IS_NOT_A_TEXT_FILE: &str = "a page is not exported as Markdown or DOCX";
+
+fn wrong_kind_message(name: &str, is_page: bool, export: bool) -> String {
+    if is_page && export {
+        format!(
+            "{name} is a page, and {PAGE_IS_NOT_A_TEXT_FILE}: it is written as a folder of its \
+             files (the format html), as a PDF (pdf) or as its text (text)."
+        )
+    } else if is_page {
         format!(
             "{name} is a page: it is kept as it was saved, and its text cannot be changed. To \
              bring a newer copy, add it again with its source address."

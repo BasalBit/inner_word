@@ -487,6 +487,10 @@ fn export(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Err
     reply(&exported, render::exported(&exported))
 }
 
+/// The tools that reach beyond the library and this Mac (`openWorldHint: true`): adding a
+/// page downloads the fonts, libraries and pictures it loads, from whatever host it names.
+const REACHES_THE_WEB: [&str; 1] = ["add_page"];
+
 fn operations() -> Vec<Operation> {
     let read = |name, title, description, schema, run| Operation {
         name,
@@ -1457,6 +1461,7 @@ impl Toolbox {
                 input_schema: operation.schema.clone(),
                 effect: operation.effect,
                 idempotent: operation.idempotent,
+                open_world: REACHES_THE_WEB.contains(&operation.name),
             })
             .collect();
         Toolbox {
@@ -1598,9 +1603,10 @@ impl ToolHost for Toolbox {
             .find(|operation| operation.listed && operation.name == name)?;
         Some(match self.run_operation(operation, arguments, client) {
             Ok(reply) => ToolOutput::ok(tool_text(&reply.text), reply.data),
-            Err(failure) => {
-                ToolOutput::error(tool_error_text(&failure), json!({ "error": failure.data }))
-            }
+            Err(failure) => ToolOutput::error(
+                tool_error_text(&failure, operation.effect != Effect::Read),
+                json!({ "error": failure.data }),
+            ),
         })
     }
 }
@@ -1646,11 +1652,19 @@ fn tool_text(text: &str) -> String {
 const WHILE_OPEN: &str = "Everything that only reads (list_library, search_library, read_document, \
 list_comments, export) works while the app is open, and so does any tool with dry_run.";
 
-/// The message of a failure as a model should read it in a tool result.
-fn tool_error_text(failure: &Failure) -> String {
+/// The message of a failure as a model should read it in a tool result. `writes`: the tool
+/// that failed is one that changes something.
+fn tool_error_text(failure: &Failure, writes: bool) -> String {
     match failure.kind {
         ErrorKind::AppIsOpen => format!("{} {WHILE_OPEN}", failure.message),
-        ErrorKind::WrongKind if failure.message.contains(" is a page: ") => {
+        ErrorKind::WrongKind
+            if failure
+                .message
+                .contains(writer_agent::PAGE_IS_NOT_A_TEXT_FILE) =>
+        {
+            format!("{} {PAGE_FORMATS}", failure.message)
+        }
+        ErrorKind::WrongKind if writes && failure.message.contains(" is a page: ") => {
             format!("{} {NEWER_PAGE}", failure.message)
         }
         _ => tool_text(&failure.message),
@@ -1660,6 +1674,11 @@ fn tool_error_text(failure: &Failure) -> String {
 /// What a model is told besides the message when it asked to change the text of a page:
 /// the tool that brings a newer copy.
 const NEWER_PAGE: &str = "That is add_page with the page's file or folder and its source_url.";
+
+/// What a model is told besides the message when it asked for a page as Markdown or DOCX:
+/// the arguments of export that write a page.
+const PAGE_FORMATS: &str = "That is export with format \"html\" and a folder as path, \"pdf\" \
+or \"text\" (or a path ending in .pdf or .txt).";
 
 #[cfg(test)]
 mod tests {
@@ -1874,21 +1893,38 @@ mod tests {
         let failure = Failure::invalid(
             "the folder has 3 pages at its top and no index.html: say which one opens with --entry",
         );
-        assert!(tool_error_text(&failure).ends_with("opens with entry"));
+        assert!(tool_error_text(&failure, true).ends_with("opens with entry"));
         let wrong = Failure::from(Error::WrongKind {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
             is_page: true,
+            export: false,
         });
-        let text = tool_error_text(&wrong);
+        let text = tool_error_text(&wrong, true);
         assert!(text.ends_with(NEWER_PAGE), "{text}");
         assert!(text.contains("add_page") && text.contains("source_url"));
+        // A tool that only reads is not sent to add a page.
+        assert!(!tool_error_text(&wrong, false).contains("add_page"));
         let text_not_page = Failure::from(Error::WrongKind {
             id: 3,
             name: "\u{201c}Chapter 2\u{201d}".into(),
             is_page: false,
+            export: false,
         });
-        assert!(!tool_error_text(&text_not_page).contains("add_page"));
+        assert!(!tool_error_text(&text_not_page, true).contains("add_page"));
+        // An export of a page as Markdown: the formats a page has, not add_page.
+        let export = Failure::from(Error::WrongKind {
+            id: 3,
+            name: "\u{201c}Orbitarium\u{201d}".into(),
+            is_page: true,
+            export: true,
+        });
+        let text = tool_error_text(&export, false);
+        assert!(text.ends_with(PAGE_FORMATS), "{text}");
+        assert!(
+            !text.contains("add_page") && !text.contains("cannot be changed"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1978,21 +2014,21 @@ mod tests {
         assert_eq!(off.data["code"], "app_is_open");
         assert_eq!(off.data["refusal"]["why"], "switched_off");
         assert_eq!(off.data["nothing_changed"], true);
-        let text = tool_error_text(&off);
+        let text = tool_error_text(&off, true);
         assert!(text.starts_with("The Writer is open (process 7)"), "{text}");
         assert!(text.contains("switched off"), "{text}");
         assert!(text.contains("Ask the user to switch on"), "{text}");
         assert!(text.contains("try again"), "{text}");
         assert!(text.ends_with(WHILE_OPEN), "{text}");
         // An app from before 0.6.0: the user has to quit it, or update it.
-        let old = tool_error_text(&failure(Refusal::OldVersion));
+        let old = tool_error_text(&failure(Refusal::OldVersion), true);
         assert!(old.contains("Ask the user to quit The Writer"), "{old}");
         assert!(old.contains("nothing was changed"), "{old}");
         // An answer that did not arrive: nobody is told that nothing was changed.
         let lost = failure(Refusal::AnswerLost);
         assert_eq!(lost.data["nothing_changed"], false);
         assert_eq!(lost.data["refusal"]["why"], "answer_lost");
-        let text = tool_error_text(&lost);
+        let text = tool_error_text(&lost, true);
         assert!(!text.contains("nothing was changed"), "{text}");
         assert!(text.contains("read the document again"), "{text}");
         // The tools the text names are tools of this server.
@@ -2007,6 +2043,6 @@ mod tests {
             assert!(WHILE_OPEN.contains(tool) && names.contains(&tool), "{tool}");
         }
         let other = Failure::invalid("no");
-        assert_eq!(tool_error_text(&other), "no");
+        assert_eq!(tool_error_text(&other, true), "no");
     }
 }

@@ -60,6 +60,17 @@ pub(crate) fn is_a_page(meta: &DocumentMeta) -> Error {
         id: meta.id.0,
         name: quoted_excerpt(title_of(meta)),
         is_page: true,
+        export: false,
+    }
+}
+
+/// The error of an export of a page as Markdown or DOCX: a page has formats of its own.
+pub(crate) fn page_is_not_a_text_file(meta: &DocumentMeta) -> Error {
+    Error::WrongKind {
+        id: meta.id.0,
+        name: quoted_excerpt(title_of(meta)),
+        is_page: true,
+        export: true,
     }
 }
 
@@ -69,6 +80,7 @@ pub(crate) fn is_a_text(meta: &DocumentMeta) -> Error {
         id: meta.id.0,
         name: quoted_excerpt(title_of(meta)),
         is_page: false,
+        export: false,
     }
 }
 

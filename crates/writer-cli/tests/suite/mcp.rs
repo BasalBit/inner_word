@@ -55,7 +55,8 @@ fn the_handshake_the_tool_list_and_a_clean_exit() {
         assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{name}");
         let annotations = &tool["annotations"];
         assert!(annotations["readOnlyHint"].is_boolean(), "{name}");
-        assert_eq!(annotations["openWorldHint"], false, "{name}");
+        // Only adding a page reaches the web (it downloads what the page loads).
+        assert_eq!(annotations["openWorldHint"], name == "add_page", "{name}");
         let reads = annotations["readOnlyHint"] == true;
         let properties = tool["inputSchema"]["properties"].as_object().unwrap();
         assert_eq!(

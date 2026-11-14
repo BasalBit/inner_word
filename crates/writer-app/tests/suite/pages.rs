@@ -446,7 +446,26 @@ fn a_crash_loads_again_and_a_second_shows_that_the_page_stopped(cx: &mut TestApp
 fn the_context_menu_key_is_taken_from_the_page(cx: &mut TestAppContext) {
     let (fake, workspace, _text, _page, vcx) = open_page(cx);
     // A letter, space and escape belong to the page.
-    for key in ["a", "space", "escape", "up", "tab"] {
+    for key in [
+        "a",
+        "j",
+        "k",
+        "shift-a",
+        "space",
+        "enter",
+        "escape",
+        "up",
+        "down",
+        "left",
+        "right",
+        "tab",
+        "shift-tab",
+        "backspace",
+        "pagedown",
+        "pageup",
+        "home",
+        "end",
+    ] {
         assert!(!fake.press(key), "{key} stays in the page");
     }
     // ctrl-enter and shift-f10 open the page's menu.

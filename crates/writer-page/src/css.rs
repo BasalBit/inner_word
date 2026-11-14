@@ -8,6 +8,8 @@ use std::ops::Range;
 pub(crate) enum CssKind {
     Import,
     Url,
+    /// A `url(…)` inside an `@font-face` rule: a font.
+    Font,
     ImageSet,
     /// Any other string: not a reference (it may name an address, which is said).
     Plain,
@@ -47,6 +49,10 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
     let mut pending_import = false;
     let mut depth: usize = 0;
     let mut image_sets: Vec<usize> = Vec::new();
+    // Braces open, and the brace depth inside an `@font-face` rule while in one.
+    let mut braces: usize = 0;
+    let mut pending_font_face = false;
+    let mut font_face: Option<usize> = None;
     while i < n {
         let b = bytes[i];
         if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
@@ -86,6 +92,9 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
             if bytes[i + 1..j].eq_ignore_ascii_case(b"import") {
                 pending_import = true;
             }
+            if bytes[i + 1..j].eq_ignore_ascii_case(b"font-face") {
+                pending_font_face = true;
+            }
             i = j;
             continue;
         }
@@ -101,7 +110,10 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
             if j < n && bytes[j] == b'(' {
                 let name = String::from_utf8_lossy(&bytes[i..j]).to_ascii_lowercase();
                 if name == "url" {
-                    let (item, end) = url_function(bytes, j + 1, pending_import);
+                    let (mut item, end) = url_function(bytes, j + 1, pending_import);
+                    if let Some(item) = item.as_mut().filter(|item| item.kind == CssKind::Url && font_face.is_some()) {
+                        item.kind = CssKind::Font;
+                    }
                     if let Some(item) = item {
                         scan.items.push(item);
                     }
@@ -127,7 +139,26 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
                 }
                 depth = depth.saturating_sub(1);
             }
-            b';' | b'{' | b'}' => pending_import = false,
+            b'{' => {
+                pending_import = false;
+                braces += 1;
+                if pending_font_face && font_face.is_none() {
+                    font_face = Some(braces);
+                }
+                pending_font_face = false;
+            }
+            b'}' => {
+                pending_import = false;
+                pending_font_face = false;
+                if font_face == Some(braces) {
+                    font_face = None;
+                }
+                braces = braces.saturating_sub(1);
+            }
+            b';' => {
+                pending_import = false;
+                pending_font_face = false;
+            }
             _ => {}
         }
         i += 1;

@@ -6,5 +6,6 @@ mod manifest;
 mod references;
 mod rewriting;
 mod support;
+mod types;
 mod verdict;
 mod warnings;

@@ -36,6 +36,8 @@ pub(crate) enum Ctx {
 pub(crate) enum Expect {
     Css,
     Js,
+    /// A `url()` of `@font-face`, a `<link rel=preload as=font>`: never text.
+    Font,
     Any,
 }
 
@@ -216,6 +218,7 @@ pub(crate) fn scan_style(bytes: &[u8], base: &Url) -> Scan {
             CssKind::Url | CssKind::ImageSet => {
                 scan.refs.push(simple(item.span, item.value, Ctx::Fetch, Expect::Any, base))
             }
+            CssKind::Font => scan.refs.push(simple(item.span, item.value, Ctx::Fetch, Expect::Font, base)),
         }
     }
     scan
@@ -406,6 +409,8 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
                     Expect::Css
                 } else if rels.iter().any(|r| r == "modulepreload") || as_ == "script" || as_ == "worker" {
                     Expect::Js
+                } else if as_ == "font" {
+                    Expect::Font
                 } else {
                     Expect::Any
                 };

@@ -19,7 +19,10 @@ use crate::html::quoted_attr;
 use crate::importmap::{ImportMap, MapKind};
 use crate::input::{Input, too_heavy, too_large, too_many_files};
 use crate::limits::{ALSO_LOADS, FETCH_BUDGET, FETCH_PARALLEL, MAX_DEPTH, MAX_EXTERNALS, MAX_FILE_BYTES, MAX_FILES, MAX_PAGE_BYTES};
-use crate::media::{Kind, essence, file_id_hex, find, is_html_type, media_type, served_type, OCTET_STREAM};
+use crate::media::{
+    Kind, OCTET_STREAM, essence, file_id_hex, find, is_html_type, is_text_type, looks_like_html, looks_like_svg,
+    looks_like_text, media_type, served_type, sniffed_type,
+};
 use crate::naming::{external_dir, external_path};
 use crate::resolve::{
     Resolved, absolute_reference, as_specifier, local_base, local_root, normal_address, relative_reference, resolve,
@@ -79,11 +82,15 @@ pub struct External {
 }
 
 impl Bundle {
-    /// The served HTML files: the entry first, then the others by path.
+    /// The served HTML files, the documents of the page that the check loads and reads
+    /// for text: the entry first, then the others by path. A piece fetched from the web is
+    /// never one of them, whatever its type (an HTML file a script fetches from a CDN is
+    /// a piece of the page, not a page of it).
     pub fn html_paths(&self) -> Vec<String> {
+        let external: HashSet<&str> = self.externals.iter().map(|e| e.path.as_str()).collect();
         let mut out = vec![self.entry.clone()];
         for file in &self.served {
-            if file.path != self.entry && is_html_type(&file.media_type) {
+            if file.path != self.entry && !external.contains(file.path.as_str()) && is_html_type(&file.media_type) {
                 out.push(file.path.clone());
             }
         }
@@ -155,7 +162,7 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
         .files
         .iter()
         .map(|file| {
-            let kind = Kind::of_path(&file.path);
+            let kind = Kind::of_file(&file.path, &file.bytes);
             let scan = kind.is_text().then(|| scan_file(kind, &file.bytes, &local_base(&file.path)));
             LocalFile { path: file.path.clone(), bytes: file.bytes.clone(), scan }
         })
@@ -211,8 +218,7 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
                 problems.push(too_large(&url, fetched.bytes.len() as u64));
                 continue;
             }
-            let kind = kind_of(&fetched, expect);
-            let media = piece_type(&fetched, kind);
+            let (kind, media) = what_a_piece_is(&fetched, expect);
             let scan = if kind.is_text() {
                 Url::parse(&fetched.final_url).ok().map(|base| scan_file(kind, &fetched.bytes, &base))
             } else {
@@ -441,41 +447,82 @@ fn fetch_all(fetcher: &dyn Fetcher, urls: &[String], started: Instant) -> Vec<Re
         .collect()
 }
 
-/// What a fetched piece is: by its media type, else by the ending of its address, else
-/// by where it is named (a style sheet, a script) when the type says nothing.
-fn kind_of(fetched: &Fetched, expect: Expect) -> Kind {
-    let media = fetched.media_type.clone().unwrap_or_default();
-    let by_type = Kind::of_type(&media);
-    if by_type != Kind::Other {
-        return by_type;
-    }
-    let path = Url::parse(&fetched.final_url).map(|u| u.path().to_ascii_lowercase()).unwrap_or_default();
-    if path.ends_with(".css") || fetched.final_url.contains("fonts.googleapis.com/css") {
-        return Kind::Css;
-    }
-    if path.ends_with(".js") || path.ends_with(".mjs") || path.ends_with("/+esm") {
-        return Kind::Js;
-    }
-    let vague = matches!(essence(&media).as_str(), "" | "text/plain" | OCTET_STREAM | "binary/octet-stream");
-    match expect {
-        Expect::Css if vague => Kind::Css,
-        Expect::Js if vague => Kind::Js,
-        _ => Kind::Other,
-    }
-}
+/// What a fetched piece is and the media type it is stored and served with. The server's
+/// Content-Type is the last thing believed, because servers say wrong things (Google
+/// Fonts answers some `/l/font?kit=…` addresses with `text/html` for WOFF2 bytes):
+///
+/// 1. Bytes of a binary format are what their signature says (`sniffed_type`).
+/// 2. A font (a `url()` of `@font-face`, a preload as a font) is never text.
+/// 3. Other bytes that are no text are never stored as text: the type the header or the
+///    ending gives when it is not one of text, else `application/octet-stream`.
+/// 4. Text: the header when it names a style sheet, a script or SVG; HTML only when the
+///    bytes begin as HTML (`looks_like_html`), and then the piece is still no document of
+///    the page (`Bundle::html_paths`); otherwise by the ending of its address, by where it
+///    is named (a style sheet, a script), by SVG's own beginning, and last the header
+///    unless it says HTML.
+fn what_a_piece_is(fetched: &Fetched, expect: Expect) -> (Kind, String) {
+    let bytes = &fetched.bytes;
+    let header = fetched.media_type.as_deref().map(str::trim).unwrap_or("").to_string();
+    let path = Url::parse(&fetched.final_url).map(|u| u.path().to_string()).unwrap_or_default();
+    let by_ending = media_type(&path);
+    let vague = |t: &str| matches!(essence(t).as_str(), "" | "text/plain" | OCTET_STREAM | "binary/octet-stream");
 
-/// The media type a piece is served with: what the server said, else by its ending;
-/// a style sheet and a script always with a type the browser takes for one.
-fn piece_type(fetched: &Fetched, kind: Kind) -> String {
-    let given = fetched.media_type.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| {
-        let path = Url::parse(&fetched.final_url).map(|u| u.path().to_string()).unwrap_or_default();
-        media_type(&path).to_string()
-    });
-    match kind {
-        Kind::Css if Kind::of_type(&given) != Kind::Css => "text/css".to_string(),
-        Kind::Js if Kind::of_type(&given) != Kind::Js => "text/javascript".to_string(),
-        _ => given.trim().to_string(),
+    if let Some(found) = sniffed_type(bytes) {
+        return (Kind::Other, found.to_string());
     }
+    let not_text = |t: &str| !t.is_empty() && !vague(t) && !is_text_type(t);
+    if expect == Expect::Font {
+        let font = [header.as_str(), by_ending]
+            .into_iter()
+            .find(|t| not_text(t))
+            .map(str::to_string)
+            .unwrap_or_else(|| OCTET_STREAM.to_string());
+        return (Kind::Other, font);
+    }
+    if !looks_like_text(bytes) {
+        let typed = [header.as_str(), by_ending].into_iter().find(|t| not_text(t)).unwrap_or(OCTET_STREAM);
+        return (Kind::Other, typed.to_string());
+    }
+
+    let html = looks_like_html(bytes);
+    match Kind::of_type(&header) {
+        Kind::Css | Kind::Js | Kind::Svg => return (Kind::of_type(&header), header),
+        Kind::Html if html => return (Kind::Other, header),
+        _ => {}
+    }
+    // The header says nothing of use, or HTML where the bytes are none.
+    let header_says_html = is_html_type(&header);
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".css") || fetched.final_url.contains("fonts.googleapis.com/css") {
+        return (Kind::Css, "text/css".to_string());
+    }
+    if lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs") || lower.ends_with("/+esm") {
+        return (Kind::Js, "text/javascript".to_string());
+    }
+    if !html && (vague(&header) || header_says_html) {
+        match expect {
+            Expect::Css => return (Kind::Css, "text/css".to_string()),
+            Expect::Js => return (Kind::Js, "text/javascript".to_string()),
+            _ => {}
+        }
+    }
+    if looks_like_svg(bytes) || (by_ending == "image/svg+xml" && !html && !lower.ends_with(".svgz")) {
+        return (Kind::Svg, "image/svg+xml".to_string());
+    }
+    if html {
+        // A web page from the web, named as no document (a script's string, an object):
+        // kept as HTML, never loaded as a page of the page.
+        return (Kind::Other, if header.is_empty() || vague(&header) { "text/html".to_string() } else { header });
+    }
+    if !header.is_empty() && !header_says_html {
+        return (Kind::Other, header);
+    }
+    let typed = match by_ending {
+        "text/html" | "application/xhtml+xml" => "text/plain",
+        OCTET_STREAM if header_says_html => "text/plain",
+        found => found,
+    };
+    (Kind::Other, typed.to_string())
 }
 
 struct Rewriter {

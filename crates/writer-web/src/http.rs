@@ -173,15 +173,31 @@ pub(crate) fn served_type(media_type: &str, bytes: &[u8]) -> String {
     if essence != "text/html" {
         return media_type.to_string();
     }
-    let declares = bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+    let bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF])
         || bytes.starts_with(&[0xFE, 0xFF])
-        || bytes.starts_with(&[0xFF, 0xFE])
-        || declares_charset(bytes);
+        || bytes.starts_with(&[0xFF, 0xFE]);
+    if !bom && is_binary(bytes) {
+        // Bytes that are no text are never served as HTML: 0.8.0 stored some fonts of
+        // Google Fonts as `text/html`, because their server says so, and a font loaded as
+        // a document would be its bytes as text.
+        return "application/octet-stream".to_string();
+    }
+    let declares = bom || declares_charset(bytes);
     if declares || std::str::from_utf8(bytes).is_err() {
         "text/html".to_string()
     } else {
         "text/html; charset=utf-8".to_string()
     }
+}
+
+/// Whether bytes hold one that no text has (the "binary data bytes" of the WHATWG's MIME
+/// sniffing: controls other than tab, line feed, form feed, carriage return and escape)
+/// in their first 1445 bytes.
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .take(1445)
+        .any(|&b| matches!(b, 0x00..=0x08 | 0x0B | 0x0E..=0x1A | 0x1C..=0x1F))
 }
 
 /// Whether the first 1024 bytes of an HTML file have a `<meta>` that names a charset
@@ -411,6 +427,15 @@ mod tests {
         );
         assert_eq!(
             served_type("text/html", b"\xEF\xBB\xBF<p>x</p>"),
+            "text/html"
+        );
+        // Bytes that are no text (a font a server called HTML) are never served as HTML.
+        assert_eq!(
+            served_type("text/html; charset=utf-8", b"wOF2\x00\x01\x00\x00\x00\x00"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            served_type("text/html", b"\xFF\xFE<\x00p\x00>\x00"),
             "text/html"
         );
         // A <meta> without a charset is no declaration.

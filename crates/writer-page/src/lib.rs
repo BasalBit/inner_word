@@ -52,7 +52,7 @@ pub use crate::fetch::{
 pub use crate::input::{Input, InputFile, read_input};
 pub use crate::limits::*;
 pub use crate::manifest::{Checked, Manifest, ManifestFile};
-pub use crate::media::{file_id_hex, is_file_id, media_type};
+pub use crate::media::{file_id_hex, is_file_id, media_type, sniffed_type};
 pub use crate::prepare::{Blob, CheckSummary, PathEntry, Prepared, prepare};
 pub use crate::source_url::normal_source_url;
 

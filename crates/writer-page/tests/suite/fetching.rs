@@ -85,6 +85,15 @@ fn answer(mut stream: TcpStream, port: u16, log: Arc<Mutex<Vec<Seen>>>) {
             format!("@font-face{{src:url(/font.woff2)}} body{{background:url(http://127.0.0.1:{port}/bg.png)}}").as_bytes(),
         ),
         "/font.woff2" => respond(&mut stream, "200 OK", "Content-Type: font/woff2\r\n", b"wOF2"),
+        // As fonts.gstatic.com answers some kits: WOFF2 bytes called HTML.
+        "/fonts.css" => respond(
+            &mut stream,
+            "200 OK",
+            "Content-Type: text/css; charset=utf-8\r\n",
+            b"@font-face{font-family:A;src:url(/l/font?kit=html&v=9) format('woff2')}@font-face{font-family:B;src:url(/l/font?kit=woff2&v=9) format('woff2')}",
+        ),
+        "/l/font?kit=html&v=9" => respond(&mut stream, "200 OK", "Content-Type: text/html; charset=utf-8\r\n", &super::types::woff2(7)),
+        "/l/font?kit=woff2&v=9" => respond(&mut stream, "200 OK", "Content-Type: font/woff2\r\n", &super::types::woff2(8)),
         "/bg.png" => respond(&mut stream, "200 OK", "", b"PNG"),
         "/redirect" => respond(&mut stream, "302 Found", "Location: /ok.css\r\n", b""),
         "/to-private" => respond(&mut stream, "301 Moved Permanently", "Location: http://10.0.0.1/x\r\n", b""),
@@ -281,4 +290,27 @@ fn each_address_is_fetched_once_per_command() {
     bundle(read_input(a.path(), None).unwrap(), &caching).unwrap();
     bundle(read_input(b.path(), None).unwrap(), &caching).unwrap();
     assert_eq!(counting.asked.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_font_a_server_calls_html_is_stored_as_a_font_through_curl() {
+    let server = Server::start();
+    let work = temp();
+    let kit = server.url("/l/font?kit=html&v=9");
+    let fetched = fetcher(work.path()).fetch(&kit).unwrap();
+    assert_eq!(fetched.media_type.as_deref(), Some("text/html; charset=utf-8"), "what the server said");
+    let dir = folder(&[(
+        "index.html",
+        &format!(r#"<title>Branding</title><link rel="stylesheet" href="{}"><p>The words of the page.</p>"#, server.url("/fonts.css")),
+    )]);
+    let bundle = bundle(read_input(dir.path(), None).unwrap(), &fetcher(work.path())).unwrap();
+    for url in [kit, server.url("/l/font?kit=woff2&v=9")] {
+        let path = stored(&bundle, &url);
+        let file = bundle.served.iter().find(|f| f.path == path).unwrap();
+        assert_eq!(file.media_type, "font/woff2", "{url}");
+    }
+    assert_eq!(bundle.html_paths(), vec!["index.html".to_string()]);
+    assert!(writer_page::check_request(&bundle).also.is_empty());
+    let prepared = writer_page::prepare(bundle.clone(), &writer_page::static_check(&bundle)).unwrap();
+    assert_eq!(prepared.manifest(None, 1).text, "The words of the page.");
 }

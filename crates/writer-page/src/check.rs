@@ -2,7 +2,7 @@
 //! `request.json` and the served files) and what it answers, and the fake check of the
 //! tests (docs/pages-design.md, sections 3 and 4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use crate::error::PageError;
 use crate::html::{Token, decode, tokenize};
 use crate::limits::{ALSO_LOADS, CHECK_LIMIT_MS, MAX_TITLE_CHARS, SETTLE_MAX_MS, SETTLE_MIN_MS};
 use crate::manifest::Manifest;
-use crate::media::{is_html_type, media_type};
+use crate::media::{is_html_type, looks_like_text, media_type, sniffed_type};
 
 /// What the check is asked: the entry, the other HTML files, the media type of every
 /// served path, and how long to wait.
@@ -137,23 +137,26 @@ pub fn write_served_dir(
     make_private_dir(dir).map_err(|error| PageError::io(dir, error))?;
     let files = dir.join("files");
     fs::create_dir_all(&files).map_err(|error| PageError::io(&files, error))?;
+    // The other documents of the page: HTML by its type and its bytes, and no piece from
+    // the web (a page stored by 0.8.0 may have a font typed text/html among its pieces).
+    let external: HashSet<&str> = manifest.externals.iter().map(|e| e.path.as_str()).collect();
+    let mut also: Vec<String> = Vec::new();
     for file in &manifest.files {
         let target = under(&files, &file.path).map_err(|error| PageError::Unreadable { reason: error.to_string() })?;
-        let Some(bytes) = bytes_of(&file.file).map_err(|error| PageError::io(&target, error))? else {
-            continue;
-        };
+        let bytes = bytes_of(&file.file).map_err(|error| PageError::io(&target, error))?;
+        let document = file.path != manifest.entry
+            && !external.contains(file.path.as_str())
+            && is_html_type(&file.media_type)
+            && bytes.as_deref().map(|b| sniffed_type(b).is_none() && looks_like_text(b)).unwrap_or(true);
+        if document && also.len() < ALSO_LOADS {
+            also.push(file.path.clone());
+        }
+        let Some(bytes) = bytes else { continue };
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|error| PageError::io(parent, error))?;
         }
         fs::write(&target, bytes).map_err(|error| PageError::io(&target, error))?;
     }
-    let also: Vec<String> = manifest
-        .files
-        .iter()
-        .filter(|f| f.path != manifest.entry && is_html_type(&f.media_type))
-        .map(|f| f.path.clone())
-        .take(ALSO_LOADS)
-        .collect();
     let request = CheckRequest {
         entry: manifest.entry.clone(),
         also,

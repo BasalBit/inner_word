@@ -423,6 +423,37 @@ fn find_zoom_and_theme_reach_the_view(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_page_opened_from_the_library_search_is_searched_once_it_has_loaded(cx: &mut TestAppContext) {
+    let (fake, workspace, text, page, vcx) = open_page(cx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        assert!(workspace.open_document(text, true, window, cx));
+    });
+    vcx.run_until_parked();
+    let before = fake.finds().len();
+    // The view is made at the page's first frame, after the strip was given the query.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        assert!(workspace.open_search_hit(page, "boats", window, cx));
+    });
+    vcx.run_until_parked();
+    fake.finish_loading();
+    vcx.run_until_parked();
+    assert_eq!(
+        fake.finds()[before..].last(),
+        Some(&("boats".to_string(), false)),
+        "the query is looked for in the page"
+    );
+    assert_eq!(
+        workspace.read_with(vcx, |w, cx| w.page_find(cx)),
+        Some(("boats".to_string(), Some(true)))
+    );
+    let asked = fake.finds().len();
+    // A load after it was answered (a reload) does not ask again.
+    fake.finish_loading();
+    vcx.run_until_parked();
+    assert_eq!(fake.finds().len(), asked);
+}
+
+#[gpui::test]
 fn a_crash_loads_again_and_a_second_shows_that_the_page_stopped(cx: &mut TestAppContext) {
     let (fake, workspace, _text, _page, vcx) = open_page(cx);
     fake.finish_loading();

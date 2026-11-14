@@ -783,6 +783,15 @@ impl Workspace {
                         waiter.send(());
                     }
                 }
+                // A query the strip was given before the view could be asked (a page
+                // opened from the library search: the view is made at its first frame)
+                // is looked for now that there is something to look in.
+                let unasked = self.page.as_ref().and_then(|page| page.find.as_ref()).is_some_and(
+                    |find| find.found.is_none() && !find.field.read(cx).text().is_empty(),
+                );
+                if unasked {
+                    self.find_in_page(false, window, cx);
+                }
             }
             PageEvent::Failed(message) => {
                 if let Some(page) = self.page.as_mut() {

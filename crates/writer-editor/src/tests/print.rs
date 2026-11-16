@@ -22,7 +22,7 @@ use writer_ui::theme::{self, ThemeMode};
 
 use super::slice::{open, setup};
 use crate::{
-    Autoscroll, Editor, EditorConfig, PrintProgress, Zoom,
+    Autoscroll, Editor, EditorConfig, PrintPass, PrintProgress, Zoom,
     layout::{
         style::{MARKER_GAP, QUOTE_GUTTER},
         wrap::INLINE_CODE_SCALE,
@@ -403,6 +403,51 @@ fn the_pass_holds_the_document_as_it_was(cx: &mut TestAppContext) {
         row_texts(&pages)[0].concat(),
         "As it was. And more, typed while the pages are made."
     );
+}
+
+/// A pass over a document that no editor shows (`PrintPass::new`, what a
+/// PDF export of the library makes) hands out the very pages the editor's
+/// own pass hands out for the same document, whatever the editor shows;
+/// numbered on from another document, only the numbers differ.
+#[gpui::test]
+fn a_pass_over_any_document_is_the_editors_pass(cx: &mut TestAppContext) {
+    setup(cx);
+    let document = paged(mixed());
+    let (editor, cx) = open(document.clone(), EditorConfig::full(), cx);
+    // The editor shows something else than paper: flow view, a zoom.
+    editor.update(cx, |editor, cx| {
+        editor.set_page_view(false, cx);
+        editor.set_zoom(Zoom::Percent(150), cx);
+    });
+    cx.run_until_parked();
+    let editors = pages_of(&editor, cx);
+    assert!(editors.len() > 5, "{} pages", editors.len());
+    let alone = cx.update(|window, cx| PrintPass::new(document.clone(), window, cx).run_to_end());
+    assert_eq!(alone, editors);
+
+    // The same, numbered from 7: every page as it was, but its number.
+    let numbered = cx.update(|window, cx| {
+        let mut pass = PrintPass::new(document.clone(), window, cx);
+        pass.number_pages_from(7);
+        pass.run_to_end()
+    });
+    assert_eq!(numbered.len(), editors.len());
+    for (index, (numbered, plain)) in numbered.iter().zip(&editors).enumerate() {
+        let number = |page: &Page| {
+            labels_of(page)
+                .last()
+                .map(|label| label.text.clone())
+                .expect("a page number")
+        };
+        assert_eq!(number(plain), (index + 1).to_string());
+        assert_eq!(number(numbered), (index + 7).to_string());
+        let without_number = |page: &Page| {
+            let mut items = page.items.clone();
+            items.pop();
+            items
+        };
+        assert_eq!(without_number(numbered), without_number(plain));
+    }
 }
 
 #[gpui::test]

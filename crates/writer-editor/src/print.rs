@@ -8,6 +8,14 @@
 //! blocks in slices of a few milliseconds and hands out finished
 //! [`writer_print::Page`]s: plain data that a PDF writer draws.
 //!
+//! [`PrintPass::new`] is the same pass over any document, one that no
+//! editor shows (a document of the library exported as a PDF): the editor's
+//! own pass is that pass over a copy of its document, so there is one way
+//! of laying a document out for paper. Several passes make one PDF of
+//! several documents (a folder): each lays its document out on its own
+//! paper, and [`PrintPass::number_pages_from`] makes the numbers of the
+//! pages go on from the document before.
+//!
 //! # The same pages as page view
 //!
 //! The pass does not have a pagination of its own. It builds the
@@ -168,6 +176,8 @@ pub struct PrintPass {
     ordinals: (usize, Vec<Option<usize>>),
     /// Where the bytes of a picture come from ([`PrintPass::set_images`]).
     images: Option<ImageBytes>,
+    /// The number the first page carries ([`PrintPass::number_pages_from`]).
+    first_number: usize,
 }
 
 /// Answers with the stored bytes of an image, or with `None` when there
@@ -191,7 +201,27 @@ impl Editor {
     /// The only thing taken from the window is its text system (GPUI has
     /// none without a window).
     pub fn print_pass(&self, window: &Window, cx: &App) -> PrintPass {
-        let document = self.state.document().clone();
+        PrintPass::laid_out(
+            self.state.document().clone(),
+            self.state.revision(),
+            window,
+            cx,
+        )
+    }
+}
+
+impl PrintPass {
+    /// A pass over `document`, laid out as page view lays it out (its
+    /// paper, margins and typography; Paper's colours; zoom 1): what
+    /// [`Editor::print_pass`] makes of an editor's document, for a document
+    /// that no editor shows. Only the text system is taken from the window.
+    pub fn new(document: Document, window: &Window, cx: &App) -> PrintPass {
+        PrintPass::laid_out(document, 0, window, cx)
+    }
+
+    /// The pass over `document`; `revision` is what the layout's cache is
+    /// stamped with (the editor's own, or 0).
+    fn laid_out(document: Document, revision: u64, window: &Window, cx: &App) -> PrintPass {
         let settings = document.settings();
         let geometry = PageGeometry::new(&settings.page);
         // Paper's colours and this Mac's fonts: what page view shows in the
@@ -243,7 +273,7 @@ impl Editor {
                     baseline: baseline.into(),
                 }
             });
-        let mut layout = DocumentLayout::new(&document, self.state.revision());
+        let mut layout = DocumentLayout::new(&document, revision);
         layout.set_env(env, &document);
         PrintPass {
             document,
@@ -257,11 +287,17 @@ impl Editor {
             specs: HashMap::new(),
             ordinals: (0, Vec::new()),
             images: None,
+            first_number: 1,
         }
     }
-}
 
-impl PrintPass {
+    /// The number the first page of this pass carries, 1 unless set here:
+    /// a document that follows others in one PDF goes on counting from
+    /// them. Set it before the first [`PrintPass::advance`].
+    pub fn number_pages_from(&mut self, first: usize) {
+        self.first_number = first.max(1);
+    }
+
     /// The size of the document's paper in points, orientation applied.
     pub fn paper(&self) -> (f32, f32) {
         self.document.settings().page.page_size()
@@ -347,7 +383,7 @@ impl PrintPass {
             let mut items = self.open.pop_front().unwrap_or_default();
             if let Some(number) = &self.number {
                 items.push(Item::Label(Label {
-                    text: (self.handed + 1).to_string(),
+                    text: (self.first_number + self.handed).to_string(),
                     font: number.font.clone(),
                     size: number.size,
                     color: number.color,

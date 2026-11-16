@@ -48,7 +48,7 @@
 //! | Mark misspelled words (a spell checker) | [`Editor::set_spelling_marks`] per block and block revision with a [`SpellingMarksOutcome`], [`Editor::spelling_checked`], [`Editor::first_unchecked_spelling_block`], [`Editor::spelling_marks`], [`Editor::spelling_mark_at`], [`Editor::next_spelling_mark`], [`Editor::previous_spelling_mark`], [`Editor::spelling_mark_count`], [`Editor::invalidate_spelling_marks`], [`Editor::clear_spelling_marks`], [`Editor::set_spelling_marks_visible`], [`ContextMenuRequest::spelling_mark`] |
 //! | Status bar numbers | [`Editor::stats`], [`Editor::stats_pending`], [`Editor::selection_stats`], [`Editor::page_count`], [`Editor::caret_page`], [`Editor::layout_pending`], [`EditorEvent::StatsChanged`], [`EditorEvent::LayoutSettled`] |
 //! | Remember the view | [`Editor::view_state`], [`Editor::restore_view_state`] with [`ViewState`] |
-//! | Print | [`Editor::print_pass`]: a [`PrintPass`] that lays the document out as page view does and hands out its pages as data ([`writer_print::Page`]) in slices ([`PrintPass::advance`], [`PrintPass::progress`], [`PrintPass::paper`]); the bytes of its pictures come from [`PrintPass::set_images`] ([`PrintPass::images`] says which) |
+//! | Print | [`Editor::print_pass`]: a [`PrintPass`] that lays the document out as page view does and hands out its pages as data ([`writer_print::Page`]) in slices ([`PrintPass::advance`], [`PrintPass::progress`], [`PrintPass::paper`]); the bytes of its pictures come from [`PrintPass::set_images`] ([`PrintPass::images`] says which); [`PrintPass::new`] is the same pass over a document no editor shows (a PDF export of the library), and [`PrintPass::number_pages_from`] numbers on from the documents before it in one PDF |
 //! | Images | an [`ImageProvider`] per editor ([`Editor::set_image_provider`], [`Editor::images_changed`]); [`Editor::selected_image`], [`Editor::image_bounds`], [`Editor::image_handle_bounds`], [`Editor::image_status`] with an [`ImageStatus`]; the ways in: [`actions::InsertImage`], [`Editor::insert_image_files`], [`Editor::drop_files`], `Paste`, and [`Editor::can_paste`]; the size: [`actions::ImageWidth25`] and its siblings, [`actions::ImageOriginalSize`], and "larger" / "smaller" on a selected image; everything else through [`Editor::edit`] (`state.set_image_description(..)`); [`FakeImages`] for tests |
 //! | Focus | `Focusable` (`editor.focus_handle(cx)`), [`Editor::focus`], [`Editor::is_focused`] |
 //! | A small input | [`EditorConfig::compact`], [`Editor::plain_text`], [`Editor::set_plain_text`], [`Editor::clear`], [`EditorEvent::Submitted`] |
@@ -105,6 +105,9 @@
 //! the page break marker, the placeholder). The module `print` says how
 //! the pages stay page view's by construction. Making a PDF of the pages
 //! and handing it to the system is `writer-print`'s and the app's.
+//! [`PrintPass::new`] is that pass over any document: the app exports a
+//! document of the library as a PDF with it, and the editor's own pass is
+//! the same pass over a copy of its document.
 //!
 //! ## Images
 //!

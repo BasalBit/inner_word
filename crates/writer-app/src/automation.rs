@@ -32,6 +32,7 @@
 //! | `pagefit:<font>\|<size>\|<line spacing>\|<a4 or letter>\|<file>` | lays the text of the file out as one paragraph in page view at those settings (2.54 cm margins) and prints what the page holds: the rows of the paragraph, the characters in a full row (mean, least, most), the rows on the first page |
 //! | `print:pdf:<path>`    | makes the exact PDF "Print…" would hand to the print panel (the open document laid out as page view lays it out, whatever the window shows), writes it to the path and prints what was made: `print: 12 pages, 595.28 x 841.89 pt, 5214 rows, 0 rows off, 3 images, fonts: .SFNS-Regular, Charter-Bold, Charter-Roman, made in 0.04 s`, and a second line `print: missing fonts: …` when the document asks for a font this Mac does not have. `rows off` counts the rows the PDF sets in another face than the layout measured: 0 when the paper shows what page view shows |
 //! | `print:job:<path>`    | the same PDF through the real macOS print operation as a save job, both panels off: what "Save as PDF" in the print panel would write. Everything of "Print…" but the panel. Prints `print: job saved to <path>` or why it was not |
+//! | `export:wait[:<ms>]`  | waits until the PDF export that was chosen (the picker's "PDF file", `action:workspace::ExportPdf`) has written its file into `THE_WRITER_EXPORT_DIR`, for at most `ms` milliseconds (60000 unless given), and prints what was made: `export: “Novel” written to <path>: 31 pages, 595.28 x 841.89 pt, 1204 rows, 0 rows off, 0 images, fonts: …, made in 0.21 s`; fails with the reason when nothing was written (cancelled, another job under way) or none ended in time. Each export is told once |
 //! | `image:<path>`        | inserts the image file at the caret, as "Insert > Image…" does once the file is chosen in the open panel (which a scripted run never opens); waits until the picture is stored and in the text and prints `image: inserted <id> 1600x1067 at block 3`, or the sentence that says why the file could not be used |
 //! | `image:select:<n>`    | puts the caret on the n-th image of the document (from 1): the image is selected |
 //! | `page:make:<folder>[\|<entry>]` | stores a folder (or file) that is offline already as a page in the folder selected in the library, as it is (nothing fetched, no WebKit check: QA only), and opens it |
@@ -46,7 +47,7 @@
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
 //! | `log:<text>`          | prints the text                                              |
 //! | `info`                | prints window bounds, scale factor, appearance, theme, focus |
-//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), images (`images=N`: how many the document holds, and while the caret is on one `image=[block=3 width=50% natural=1600x1067@144 align=center ready]`: its block counted from 0, its width as a share of the text column, its pixel size and the density its file declares, its alignment, and `ready`, `loading`, `missing` or `broken` for its picture, then `alt="..."` when it has a description), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), the open page (`web=[id=12 state=loaded zoom=100% overlay=none\|waiting\|snapshot\|holes:N focus=page\|find\|elsewhere responder=web\|gpui\|none find="q":found missing=0]`, or `web=[none]`), the pages being added (`adding=[2/3 "Orbitarium" fetching]` with `fetching`, `checking` or `storing`, or `adding=[idle]`), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
+//! | `state`               | prints the workspace state: document, save state, modal, open context menu, focus, printing (`print=[idle]`, `print=[preparing 40%]` while the pages of a print are made, `print=[panel]` while the job is in the print panel), the PDF export (`export=[idle]`, `export=[preparing 40%]` while its pages are made, `export=[writing]` while the file is written), images (`images=N`: how many the document holds, and while the caret is on one `image=[block=3 width=50% natural=1600x1067@144 align=center ready]`: its block counted from 0, its width as a share of the text column, its pixel size and the density its file declares, its alignment, and `ready`, `loading`, `missing` or `broken` for its picture, then `alt="..."` when it has a description), spelling (on or off, the language and whose it is, marked words, blocks still to check), the zoom of the view (`zoom=[page 177% fit-width life=177%]`: the view, the percentage it is drawn at, `fit-width`, `fit-page` or `fit-width-up-to-N` when it follows the window, `sideways=<offset>/<most>` while a sheet is wider than its room, life size on this display), the keyboard shortcuts (how many commands have other keys than their defaults and, while the list is open, what it shows: its mode, the selected row with its keys, the open question with its choices), the open page (`web=[id=12 state=loaded zoom=100% overlay=none\|waiting\|snapshot\|holes:N focus=page\|find\|elsewhere responder=web\|gpui\|none find="q":found missing=0]`, or `web=[none]`), the pages being added (`adding=[2/3 "Orbitarium" fetching]` with `fetching`, `checking` or `storing`, or `adding=[idle]`), agents that write while the app is open (`live=[channel=open\|closed switch=on\|off waiting=N changes=N last="..." run=N offers=Undo\|Open\|nothing cost=[save .. ms, change .. ms, window .. ms]]`: whether the channel is open, the owner's switch, requests that wait, how many changed something, what the note about the last of them says, how many it counts, what its button offers, and what the last change cost on the main thread: saving the open document first, the change in the library, bringing the window up to date), status bar |
 //! | `dump`                | prints the start of the text in the editor                   |
 //! | `dump:<path>`         | writes the whole text in the editor to a file, its blocks one to a line as the document model joins them: what the writer has on screen, to hold against what the library has |
 //! | `book:<blocks>`       | creates a generated document of that many blocks and opens it |
@@ -81,6 +82,12 @@
 //! panel; `action:workspace::CancelPrint` right after it, on a book, stops
 //! the pages being made (`state` then has `print=[idle]` and nothing was
 //! written).
+//!
+//! A PDF export (`keys:cmd-shift-s; type:pdf; keys:enter`, or
+//! `action:workspace::ExportPdf`) writes "<title>.pdf" into
+//! `THE_WRITER_EXPORT_DIR` without the save panel; its pages are made in
+//! slices as a print's are (`export=[preparing 40%]`), so `export:wait`
+//! waits for the file. `action:workspace::CancelPdfExport` stops it.
 //!
 //! While the window is completely covered by other windows macOS stops
 //! GPUI's display link and nothing is drawn. The script therefore draws a
@@ -194,6 +201,9 @@ pub enum Step {
     /// Lay a text out on a page and say what the page holds.
     PageFit(crate::workspace::PageFit),
     Print(PrintStep),
+    /// Wait until the PDF export under way (or the one that ended last) is
+    /// over, at most this long, and say what came of it (`export:wait`).
+    ExportWait(Duration),
     Image(ImageStep),
     Page(PageStep),
     Quit,
@@ -224,6 +234,9 @@ pub enum PageStep {
 
 /// How long `page:wait` waits unless the step says otherwise.
 pub const PAGE_WAIT: Duration = Duration::from_secs(10);
+
+/// How long `export:wait` waits unless the step says otherwise: a book.
+pub const EXPORT_WAIT: Duration = Duration::from_secs(60);
 
 /// What an `image:` step does.
 #[derive(Clone, Debug, PartialEq)]
@@ -559,6 +572,17 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
                 "job" => Step::Print(PrintStep::Job(PathBuf::from(path))),
                 other => bail!("unknown print step {other:?}: expected pdf:<path> or job:<path>"),
             }
+        }
+        "export" => {
+            let (what, rest) = arg.split_once(':').unwrap_or((arg, ""));
+            if what.trim() != "wait" {
+                bail!("unknown export step {what:?}: expected wait[:<ms>]");
+            }
+            Step::ExportWait(if rest.trim().is_empty() {
+                EXPORT_WAIT
+            } else {
+                Duration::from_millis(rest.trim().parse().context("expected milliseconds")?)
+            })
         }
         "image" => {
             if let Some(number) = arg.strip_prefix("select:") {
@@ -955,6 +979,32 @@ async fn execute(
                     .timer(Duration::from_millis(20))
                     .await;
             }
+        }
+        Step::ExportWait(patience) => {
+            let started = Instant::now();
+            let outcome = loop {
+                let outcome = workspace_handle(window, cx)?
+                    .update(cx, |workspace, _, _| workspace.take_pdf_export_report())?;
+                if let Some(outcome) = outcome {
+                    break outcome;
+                }
+                if started.elapsed() >= patience {
+                    let doing = workspace_handle(window, cx)?
+                        .update(cx, |workspace, _, _| workspace.describe_pdf_export())?;
+                    bail!(
+                        "export: no PDF export ended within {} ms (export=[{doing}])",
+                        patience.as_millis()
+                    );
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(20))
+                    .await;
+            };
+            match outcome {
+                Ok(line) => eprintln!("[automation] export: {line}"),
+                Err(why) => bail!("export: nothing was written: {why}"),
+            }
+            frame_pause(window, view, cx).await;
         }
         Step::AgentsSwitch(on) => {
             workspace_handle(window, cx)?.update(cx, |workspace, _, cx| {
@@ -1892,12 +1942,14 @@ pub fn describe_state(
     };
     let zoom = workspace.describe_zoom(cx);
     let print = workspace.describe_printing();
+    let export = workspace.describe_pdf_export();
     let images = workspace.describe_images(cx);
     let web = workspace.describe_page(window, cx);
     let adding = workspace.describe_adding();
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
-         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] {images} \
+         modal={} menu=[{menu}] sidebar={} page_view={} zoom=[{zoom}] print=[{print}] \
+         export=[{export}] {images} \
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \

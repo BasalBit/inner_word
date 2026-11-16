@@ -67,12 +67,7 @@ impl PrintJob {
     /// The name of the file a scripted run writes the job to: the title as
     /// an export names its file, with `.pdf`.
     pub fn file_name(&self) -> String {
-        let named =
-            writer_export::suggested_file_name(&self.title, writer_export::ExportFormat::PlainText);
-        PathBuf::from(named)
-            .with_extension("pdf")
-            .to_string_lossy()
-            .into_owned()
+        crate::export::pdf_file_name(&self.title)
     }
 }
 

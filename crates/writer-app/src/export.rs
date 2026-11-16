@@ -1,10 +1,15 @@
 //! The export flow (`cmd-shift-s`).
 //!
-//! A picker offers the current document as a Markdown file, a Word document
-//! or a plain text file, copying it as Markdown or plain text, and the
-//! document's whole folder as one file. File exports then go through the
-//! native save panel with a suggested name; the result (or the error) is
-//! reported in a toast.
+//! A picker offers the current document as a Markdown file, a Word document,
+//! a plain text file or a PDF file, copying it as Markdown or plain text,
+//! and the document's whole folder as one file. File exports then go
+//! through the native save panel with a suggested name; the result (or the
+//! error) is reported in a toast.
+//!
+//! A PDF is not `writer-export`'s: it is made of the pages Print makes
+//! ([`FileFormat::Pdf`], [`crate::pdf_export`]), in slices as a print
+//! job's pages are. Every other format is written by `writer-export` at
+//! once.
 //!
 //! # Images
 //!
@@ -24,6 +29,10 @@
 //! have is exported as its description.
 //!
 //! This module is the only place that exports with `writer-export`.
+//! What an export holds (the open document as it is in the editor, the
+//! others as the library has them, the documents of a folder with the
+//! pages left out) is gathered in one place for every format
+//! ([`Workspace::gather_export`]).
 
 use std::path::{Path, PathBuf};
 
@@ -78,82 +87,140 @@ pub enum ExportDestination {
     Clipboard,
 }
 
+/// The format of an export as the picker offers it: one that
+/// `writer-export` writes, or a PDF, which is made of the pages "Print…"
+/// makes (`writer-export` cannot make one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileFormat {
+    /// Markdown, a Word document or plain text.
+    Export(ExportFormat),
+    /// A PDF: the pages of the print pass ([`crate::pdf_export`]).
+    Pdf,
+}
+
+impl From<ExportFormat> for FileFormat {
+    fn from(format: ExportFormat) -> Self {
+        FileFormat::Export(format)
+    }
+}
+
+impl PartialEq<ExportFormat> for FileFormat {
+    fn eq(&self, other: &ExportFormat) -> bool {
+        *self == FileFormat::Export(*other)
+    }
+}
+
+impl FileFormat {
+    /// The file extension, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            FileFormat::Export(format) => format.extension(),
+            FileFormat::Pdf => "pdf",
+        }
+    }
+
+    /// The format a file extension names (case does not matter).
+    pub fn from_extension(extension: &str) -> Option<FileFormat> {
+        if extension.eq_ignore_ascii_case("pdf") {
+            return Some(FileFormat::Pdf);
+        }
+        ExportFormat::from_extension(extension).map(FileFormat::Export)
+    }
+
+    /// The format `writer-export` writes, `None` for a PDF.
+    pub fn exporter(self) -> Option<ExportFormat> {
+        match self {
+            FileFormat::Export(format) => Some(format),
+            FileFormat::Pdf => None,
+        }
+    }
+}
+
 /// One row of the export picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExportChoice {
     /// What is exported.
     pub scope: ExportScope,
     /// In which format.
-    pub format: ExportFormat,
+    pub format: FileFormat,
     /// Where it goes.
     pub destination: ExportDestination,
 }
 
 impl ExportChoice {
     /// The choices offered, in menu order.
-    pub const ALL: [ExportChoice; 8] = [
-        ExportChoice::new(
+    pub const ALL: [ExportChoice; 10] = [
+        ExportChoice::file(
             ExportScope::Document,
-            ExportFormat::Markdown,
-            ExportDestination::File,
+            FileFormat::Export(ExportFormat::Markdown),
         ),
-        ExportChoice::new(
+        ExportChoice::file(
             ExportScope::Document,
-            ExportFormat::Docx,
-            ExportDestination::File,
+            FileFormat::Export(ExportFormat::Docx),
         ),
-        ExportChoice::new(
+        ExportChoice::file(
             ExportScope::Document,
-            ExportFormat::PlainText,
-            ExportDestination::File,
+            FileFormat::Export(ExportFormat::PlainText),
         ),
-        ExportChoice::new(
-            ExportScope::Document,
-            ExportFormat::Markdown,
-            ExportDestination::Clipboard,
-        ),
-        ExportChoice::new(
-            ExportScope::Document,
-            ExportFormat::PlainText,
-            ExportDestination::Clipboard,
-        ),
-        ExportChoice::new(
+        ExportChoice::file(ExportScope::Document, FileFormat::Pdf),
+        ExportChoice {
+            scope: ExportScope::Document,
+            format: FileFormat::Export(ExportFormat::Markdown),
+            destination: ExportDestination::Clipboard,
+        },
+        ExportChoice {
+            scope: ExportScope::Document,
+            format: FileFormat::Export(ExportFormat::PlainText),
+            destination: ExportDestination::Clipboard,
+        },
+        ExportChoice::file(
             ExportScope::Folder,
-            ExportFormat::Markdown,
-            ExportDestination::File,
+            FileFormat::Export(ExportFormat::Markdown),
         ),
-        ExportChoice::new(
+        ExportChoice::file(ExportScope::Folder, FileFormat::Export(ExportFormat::Docx)),
+        ExportChoice::file(
             ExportScope::Folder,
-            ExportFormat::Docx,
-            ExportDestination::File,
+            FileFormat::Export(ExportFormat::PlainText),
         ),
-        ExportChoice::new(
-            ExportScope::Folder,
-            ExportFormat::PlainText,
-            ExportDestination::File,
-        ),
+        ExportChoice::file(ExportScope::Folder, FileFormat::Pdf),
     ];
 
     /// A choice.
-    pub const fn new(
+    pub fn new(
         scope: ExportScope,
-        format: ExportFormat,
+        format: impl Into<FileFormat>,
         destination: ExportDestination,
     ) -> Self {
         Self {
             scope,
-            format,
+            format: format.into(),
             destination,
+        }
+    }
+
+    /// A choice that goes into a file.
+    const fn file(scope: ExportScope, format: FileFormat) -> Self {
+        Self {
+            scope,
+            format,
+            destination: ExportDestination::File,
         }
     }
 
     /// The row's text.
     pub fn label(&self) -> &'static str {
         match (self.destination, self.format) {
-            (ExportDestination::File, ExportFormat::Markdown) => "Markdown file",
-            (ExportDestination::File, ExportFormat::Docx) => "Word document",
-            (ExportDestination::File, ExportFormat::PlainText) => "Plain text file",
-            (ExportDestination::Clipboard, ExportFormat::Markdown) => "Copy as Markdown",
+            (ExportDestination::File, FileFormat::Export(ExportFormat::Markdown)) => {
+                "Markdown file"
+            }
+            (ExportDestination::File, FileFormat::Export(ExportFormat::Docx)) => "Word document",
+            (ExportDestination::File, FileFormat::Export(ExportFormat::PlainText)) => {
+                "Plain text file"
+            }
+            (ExportDestination::File, FileFormat::Pdf) => "PDF file",
+            (ExportDestination::Clipboard, FileFormat::Export(ExportFormat::Markdown)) => {
+                "Copy as Markdown"
+            }
             (ExportDestination::Clipboard, _) => "Copy as plain text",
         }
     }
@@ -161,9 +228,10 @@ impl ExportChoice {
     fn detail(&self) -> &'static str {
         match self.destination {
             ExportDestination::File => match self.format {
-                ExportFormat::Markdown => ".md",
-                ExportFormat::Docx => ".docx",
-                ExportFormat::PlainText => ".txt",
+                FileFormat::Export(ExportFormat::Markdown) => ".md",
+                FileFormat::Export(ExportFormat::Docx) => ".docx",
+                FileFormat::Export(ExportFormat::PlainText) => ".txt",
+                FileFormat::Pdf => ".pdf",
             },
             ExportDestination::Clipboard => "Clipboard",
         }
@@ -190,6 +258,25 @@ pub struct PreparedExport {
     pub documents: usize,
     /// How many pages of the folder were left out (a page is exported on
     /// its own, as a folder).
+    pub pages_left_out: usize,
+}
+
+/// What an export holds, taken as it is when the export is chosen
+/// ([`Workspace::gather_export`]): the same for every format.
+#[derive(Clone, Debug)]
+pub(crate) struct Gathered {
+    /// The title of the whole: the document's, or the folder's name.
+    pub title: String,
+    /// The documents with their titles, in order: one, or the documents
+    /// of a folder.
+    pub parts: Vec<(String, Document)>,
+    /// Whether these are the documents of a folder, written as one file.
+    pub collection: bool,
+    /// When the first of them was made.
+    pub created: i64,
+    /// When the last of them was changed.
+    pub modified: i64,
+    /// How many pages of the folder were left out.
     pub pages_left_out: usize,
 }
 
@@ -572,6 +659,49 @@ impl Workspace {
         destination: ExportDestination,
         cx: &mut Context<Self>,
     ) -> Result<PreparedExport, String> {
+        let gathered = self.gather_export(target, scope, cx)?;
+        let library = self.library.read(cx);
+        let images = StoreImages::new(library.store());
+        let source = if gathered.collection {
+            ExportSource::collection(
+                gathered.title.clone(),
+                gathered
+                    .parts
+                    .iter()
+                    .map(|(title, document)| (title.as_str(), document)),
+            )
+        } else {
+            let (title, document) = &gathered.parts[0];
+            ExportSource::single(title.clone(), document)
+        }
+        .with_images(&images);
+        let file_name = suggested_file_name(source.title(), format);
+        let options = export_options(gathered.created, gathered.modified, &file_name, destination);
+        let exported = export_package(&source, format, &options);
+        pictures_were_read(&images)?;
+        Ok(PreparedExport {
+            file_name,
+            title: gathered.title,
+            format,
+            bytes: exported.bytes,
+            assets: exported.assets,
+            documents: gathered.parts.len(),
+            pages_left_out: gathered.pages_left_out,
+        })
+    }
+
+    /// What an export of `target` holds, as it is now, in every format:
+    /// the document it names (`scope` [`ExportScope::Document`]) or the
+    /// documents of the folder it names or its document is in (`scope`
+    /// [`ExportScope::Folder`], subfolders included, pages left out). The
+    /// open document is saved first and taken as it is in the editor;
+    /// every other document is read from the library.
+    pub(crate) fn gather_export(
+        &mut self,
+        target: ExportTarget,
+        scope: ExportScope,
+        cx: &mut Context<Self>,
+    ) -> Result<Gathered, String> {
         let open = self.open_document_id();
         let subject = match target {
             ExportTarget::Open => Some(open.ok_or_else(|| "No document is open".to_string())?),
@@ -580,7 +710,6 @@ impl Workspace {
         };
         self.flush(cx);
         let library = self.library.read(cx);
-        let images = StoreImages::new(library.store());
         let meta = subject
             .map(|id| library.document_meta(id).map_err(|error| error.to_string()))
             .transpose()?;
@@ -598,21 +727,13 @@ impl Workspace {
         match (scope, meta) {
             (ExportScope::Document, None) => Err("A folder is exported as a whole".to_string()),
             (ExportScope::Document, Some(meta)) => {
-                let document = text_of(meta.id)?;
                 let title = session_title(&meta.title);
-                let source = ExportSource::single(title.clone(), &document).with_images(&images);
-                let file_name = suggested_file_name(source.title(), format);
-                let options =
-                    export_options(meta.created_at, meta.updated_at, &file_name, destination);
-                let exported = export_package(&source, format, &options);
-                pictures_were_read(&images)?;
-                Ok(PreparedExport {
-                    file_name,
+                Ok(Gathered {
+                    parts: vec![(title.clone(), text_of(meta.id)?)],
                     title,
-                    format,
-                    bytes: exported.bytes,
-                    assets: exported.assets,
-                    documents: 1,
+                    collection: false,
+                    created: meta.created_at,
+                    modified: meta.updated_at,
                     pages_left_out: 0,
                 })
             }
@@ -650,26 +771,12 @@ impl Workspace {
                 if parts.is_empty() {
                     return Err("The folder has no documents".to_string());
                 }
-                let created = metas.iter().map(|m| m.created_at).min().unwrap_or(0);
-                let modified = metas.iter().map(|m| m.updated_at).max().unwrap_or(0);
-                let source = ExportSource::collection(
-                    name.clone(),
-                    parts
-                        .iter()
-                        .map(|(title, document)| (title.as_str(), document)),
-                )
-                .with_images(&images);
-                let file_name = suggested_file_name(source.title(), format);
-                let options = export_options(created, modified, &file_name, destination);
-                let exported = export_package(&source, format, &options);
-                pictures_were_read(&images)?;
-                Ok(PreparedExport {
-                    file_name,
+                Ok(Gathered {
                     title: name,
-                    format,
-                    bytes: exported.bytes,
-                    assets: exported.assets,
-                    documents: parts.len(),
+                    parts,
+                    collection: true,
+                    created: metas.iter().map(|m| m.created_at).min().unwrap_or(0),
+                    modified: metas.iter().map(|m| m.updated_at).max().unwrap_or(0),
                     pages_left_out,
                 })
             }
@@ -691,19 +798,22 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_modal(window, cx);
-        let prepared = match self.prepare_export_for(
-            target,
-            choice.scope,
-            choice.format,
-            choice.destination,
-            cx,
-        ) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.toast_error(format!("Could not export: {error}"), cx);
+        let format = match choice.format {
+            FileFormat::Export(format) => format,
+            // The pages Print makes, in slices (`pdf_export.rs`).
+            FileFormat::Pdf => {
+                self.export_pdf(target, choice.scope, window, cx);
                 return;
             }
         };
+        let prepared =
+            match self.prepare_export_for(target, choice.scope, format, choice.destination, cx) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.toast_error(format!("Could not export: {error}"), cx);
+                    return;
+                }
+            };
 
         match choice.destination {
             ExportDestination::Clipboard => match String::from_utf8(prepared.bytes) {
@@ -713,7 +823,7 @@ impl Workspace {
                         Toast::new(format!(
                             "Copied “{}” as {}",
                             short_title(&prepared.title),
-                            match choice.format {
+                            match format {
                                 ExportFormat::Markdown => "Markdown",
                                 _ => "plain text",
                             }
@@ -832,8 +942,17 @@ impl Workspace {
     }
 }
 
+/// The name a PDF of `title` is suggested under: the title as an export
+/// names its file, with `.pdf` (what "Print…" writes in a scripted run
+/// too).
+pub fn pdf_file_name(title: &str) -> String {
+    let named = suggested_file_name(title, ExportFormat::PlainText);
+    let stem = named.strip_suffix(".txt").unwrap_or(&named);
+    format!("{stem}.{}", FileFormat::Pdf.extension())
+}
+
 /// A title cut to fit a one-line notice.
-fn short_title(title: &str) -> String {
+pub(crate) fn short_title(title: &str) -> String {
     const MAX_CHARS: usize = 40;
     if title.chars().count() <= MAX_CHARS {
         return title.to_string();
@@ -844,11 +963,12 @@ fn short_title(title: &str) -> String {
 
 /// Makes sure the chosen path ends with the format's extension (the save
 /// panel lets the user type any name).
-pub fn with_extension(path: PathBuf, format: ExportFormat) -> PathBuf {
+pub fn with_extension(path: PathBuf, format: impl Into<FileFormat>) -> PathBuf {
+    let format = format.into();
     let matches = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .and_then(ExportFormat::from_extension)
+        .and_then(FileFormat::from_extension)
         == Some(format);
     if matches {
         path

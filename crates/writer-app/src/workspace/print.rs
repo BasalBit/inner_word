@@ -50,6 +50,20 @@
 //! While a job is preparing or in the panel a second "Print…" does
 //! nothing.
 //!
+//! # A job of pages, for paper or for a file
+//!
+//! "Export as PDF…" (`crate::pdf_export`) makes its pages by the same
+//! steps: the same pass (several passes for a folder, one per document,
+//! numbered on), the same pictures read beforehand, the same slices, the
+//! same writer, and a note "Preparing the PDF of …" whose Cancel is the
+//! command "Cancel PDF export". Only the last step differs: the PDF is
+//! written into the file chosen beforehand, off the main thread, instead
+//! of being handed to the print target. So an exported PDF and the PDF of
+//! "Print…" have the same pages. The workspace has one slot for such a
+//! job ([`Purpose`]): while one is under way, a print does nothing more
+//! (or says that a PDF is being made) and an export says what is under
+//! way.
+//!
 //! # When the commands are there
 //!
 //! "Print" has a handler while a document is open **and** the app was
@@ -78,7 +92,7 @@ use writer_ui::{
 
 use super::Workspace;
 use crate::{
-    actions::{CancelPrint, Print},
+    actions::{CancelPdfExport, CancelPrint, Print},
     export::short_path,
     printing::{self, PrintJob, PrintTarget},
 };
@@ -119,12 +133,57 @@ pub enum Printing {
     Panel,
 }
 
-/// What the workspace keeps about printing.
+/// Where a PDF export is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PdfExporting {
+    /// Its pages are being made.
+    Preparing,
+    /// The PDF is made and is being written into its file.
+    Writing,
+}
+
+/// What a job of pages makes its PDF for.
+pub(crate) enum Purpose {
+    /// "Print…": the PDF goes to whoever takes print jobs.
+    Print(PrintTarget),
+    /// "Export as PDF…": the PDF goes into a file chosen beforehand.
+    Export(crate::pdf_export::Destination),
+}
+
+impl Purpose {
+    fn kind(&self) -> Kind {
+        match self {
+            Purpose::Print(_) => Kind::Print,
+            Purpose::Export(_) => Kind::Export,
+        }
+    }
+}
+
+/// Which of the two a job is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Print,
+    Export,
+}
+
+/// Where a job of pages is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// Its pages are being made.
+    Preparing,
+    /// A print job in the print panel.
+    Panel,
+    /// An export's PDF being written into its file.
+    Writing,
+}
+
+/// What the workspace keeps about the job of pages: a print or a PDF
+/// export, one at a time.
 #[derive(Default)]
 pub(crate) struct PrintState {
-    /// Where the job is; `None` when there is none.
-    stage: Option<Printing>,
-    /// How far the pages are.
+    /// What the job is and where it is; `None` when there is none.
+    stage: Option<(Kind, Stage)>,
+    /// How far the pages are, over all of the job's passes.
     progress: Option<PrintProgress>,
     /// The pages that are laid out and not drawn into the PDF yet.
     waiting: usize,
@@ -137,6 +196,9 @@ pub(crate) struct PrintState {
     note: Option<ToastId>,
     /// The title the note names: the document's when the job began.
     title: String,
+    /// What came of the last PDF export, for the scripted step
+    /// `export:wait`: what was written, or why nothing was.
+    pub(crate) last_export: Option<Result<String, String>>,
 }
 
 /// The words of the note for a document called `title`.
@@ -144,12 +206,42 @@ pub fn preparing_note(title: &str) -> String {
     format!("Preparing to print “{title}”…")
 }
 
+/// The words of the note of a PDF export of `title` (a document or a
+/// folder).
+pub fn pdf_note(title: &str) -> String {
+    format!("Preparing the PDF of “{title}”…")
+}
+
 impl Workspace {
     // ----- what is going on -----------------------------------------------------------
 
     /// Where the print job is, if there is one.
     pub fn printing(&self) -> Option<Printing> {
-        self.print.stage
+        match self.print.stage {
+            Some((Kind::Print, Stage::Preparing)) => Some(Printing::Preparing),
+            Some((Kind::Print, Stage::Panel)) => Some(Printing::Panel),
+            _ => None,
+        }
+    }
+
+    /// Where the PDF export is, if there is one.
+    pub fn pdf_exporting(&self) -> Option<PdfExporting> {
+        match self.print.stage {
+            Some((Kind::Export, Stage::Preparing)) => Some(PdfExporting::Preparing),
+            Some((Kind::Export, Stage::Writing)) => Some(PdfExporting::Writing),
+            _ => None,
+        }
+    }
+
+    /// What the workspace is doing with pages, in words, while it is doing
+    /// something: what a second job is told.
+    pub(crate) fn pages_under_way(&self) -> Option<String> {
+        let title = &self.print.title;
+        match self.print.stage? {
+            (Kind::Print, Stage::Panel) => Some(format!("“{title}” is in the print panel.")),
+            (Kind::Print, _) => Some(format!("“{title}” is still being prepared to print.")),
+            (Kind::Export, _) => Some(format!("The PDF of “{title}” is still being made.")),
+        }
     }
 
     /// Whether "Print" is there: a document is open and the app was given
@@ -159,7 +251,8 @@ impl Workspace {
         (self.session.is_some() || page_shown) && printing::target(cx).is_some()
     }
 
-    /// The note about the job that is preparing, while it is up.
+    /// The note about the job of pages that is preparing (a print or a
+    /// PDF export), while it is up.
     pub fn print_note(&self) -> Option<ToastId> {
         self.print.note
     }
@@ -168,23 +261,33 @@ impl Workspace {
     /// `idle`, `preparing 40%` (the share of the blocks that are on their
     /// pages, less what of those pages is not drawn yet) or `panel`.
     pub fn describe_printing(&self) -> String {
-        match self.print.stage {
+        match self.printing() {
             None => "idle".to_string(),
             Some(Printing::Panel) => "panel".to_string(),
-            Some(Printing::Preparing) => {
-                let percent = self.print.progress.map_or(0, |progress| {
-                    let laid = (progress.blocks_done * 100)
-                        .checked_div(progress.blocks)
-                        .unwrap_or(100);
-                    // Of the pages handed out so far, those that are in
-                    // the PDF.
-                    let made = progress.pages_done;
-                    let drawn = made.saturating_sub(self.print.waiting);
-                    (laid * drawn).checked_div(made).unwrap_or(laid)
-                });
-                format!("preparing {percent}%")
-            }
+            Some(Printing::Preparing) => format!("preparing {}%", self.pages_percent()),
         }
+    }
+
+    /// The same for a PDF export: `idle`, `preparing 40%` or `writing`.
+    pub fn describe_pdf_export(&self) -> String {
+        match self.pdf_exporting() {
+            None => "idle".to_string(),
+            Some(PdfExporting::Writing) => "writing".to_string(),
+            Some(PdfExporting::Preparing) => format!("preparing {}%", self.pages_percent()),
+        }
+    }
+
+    /// How far the pages of the job are, in percent.
+    fn pages_percent(&self) -> usize {
+        self.print.progress.map_or(0, |progress| {
+            let laid = (progress.blocks_done * 100)
+                .checked_div(progress.blocks)
+                .unwrap_or(100);
+            // Of the pages handed out so far, those that are in the PDF.
+            let made = progress.pages_done;
+            let drawn = made.saturating_sub(self.print.waiting);
+            (laid * drawn).checked_div(made).unwrap_or(laid)
+        })
     }
 
     // ----- the commands ---------------------------------------------------------------
@@ -203,7 +306,7 @@ impl Workspace {
                 this.print(window, cx);
             }));
         }
-        if self.print.stage == Some(Printing::Preparing) {
+        if self.printing() == Some(Printing::Preparing) {
             root = root.on_action(cx.listener(|this, _: &CancelPrint, _, cx| {
                 this.cancel_print(cx);
             }));
@@ -216,24 +319,59 @@ impl Workspace {
     /// document, without a target, and while a job is preparing or in the
     /// print panel.
     pub fn print(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page.is_some() && self.print.stage.is_none() {
+        // One job of pages at a time; a PDF that is being made says so.
+        if let Some((kind, _)) = self.print.stage {
+            if kind == Kind::Export
+                && let Some(sentence) = self.pages_under_way()
+            {
+                self.show_toast(Toast::new(sentence), cx);
+            }
+            return;
+        }
+        if self.page.is_some() {
             self.print_page(window, cx);
             return;
         }
-        if self.session.is_none() || self.print.stage.is_some() {
+        if self.session.is_none() {
             return;
         }
         let Some(target) = printing::target(cx) else {
             return;
         };
-        let mut pass = self.editor.read(cx).print_pass(window, cx);
-        // The pictures are read in the background, before the first page
-        // is made.
-        let pictures = self.images.bytes_of_all(pass.images(), cx);
+        let pass = self.editor.read(cx).print_pass(window, cx);
         let title = self.display_title();
+        self.make_pages(vec![pass], title, Purpose::Print(target), window, cx);
+    }
+
+    /// Starts a job of pages: the passes, one after the other and numbered
+    /// on, made into one PDF in slices (the [module docs](self), 2 to 4),
+    /// which then goes where `purpose` says. `title` names the job in its
+    /// note and in the PDF. Does nothing without a pass or while a job is
+    /// under way.
+    pub(crate) fn make_pages(
+        &mut self,
+        mut passes: Vec<PrintPass>,
+        title: String,
+        purpose: Purpose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if passes.is_empty() || self.print.stage.is_some() {
+            return;
+        }
+        // The pictures of every pass, each once, read in the background
+        // before the first page is made.
+        let mut seen = std::collections::HashSet::new();
+        let images: Vec<_> = passes
+            .iter()
+            .flat_map(PrintPass::images)
+            .filter(|image| seen.insert(*image))
+            .collect();
+        let pictures = self.images.bytes_of_all(images, cx);
         let slice = printing::slice(cx);
-        self.print.stage = Some(Printing::Preparing);
-        self.print.progress = Some(pass.progress());
+        let kind = purpose.kind();
+        self.print.stage = Some((kind, Stage::Preparing));
+        self.print.progress = Some(progress_of(&passes, NOTHING_DONE));
         self.print.waiting = 0;
         self.print.note = None;
         self.print.title = title.clone();
@@ -251,13 +389,21 @@ impl Workspace {
         self.print.task = Some(cx.spawn_in(window, async move |this, cx| {
             // The job is "preparing" while they come, and Cancel drops
             // this task with them.
-            let pictures = pictures.await;
-            pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
-            let Some(job) = prepare(pass, title, slice, &this, cx).await else {
+            let pictures = Rc::new(pictures.await);
+            for pass in &mut passes {
+                let pictures = pictures.clone();
+                pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
+            }
+            let Some(job) = prepare(passes, title, slice, &this, cx).await else {
                 // The workspace is gone.
                 return;
             };
-            hand_over(job, target, &this, cx).await;
+            match purpose {
+                Purpose::Print(target) => hand_over(job, target, &this, cx).await,
+                Purpose::Export(destination) => {
+                    crate::pdf_export::write(job, destination, &this, cx).await
+                }
+            }
         }));
         cx.notify();
     }
@@ -276,7 +422,7 @@ impl Workspace {
             return;
         };
         let title = self.display_title();
-        self.print.stage = Some(Printing::Preparing);
+        self.print.stage = Some((Kind::Print, Stage::Preparing));
         self.print.progress = None;
         self.print.waiting = 0;
         self.print.note = None;
@@ -391,13 +537,31 @@ async fn hand_over(
 
 impl Workspace {
     /// "Cancel printing": stops preparing the pages. Nothing is handed to
-    /// the target. Does nothing unless a job is preparing (a job in the
+    /// the target. Does nothing unless a print is preparing (a job in the
     /// print panel is cancelled there).
     pub fn cancel_print(&mut self, cx: &mut Context<Self>) {
-        if self.print.stage != Some(Printing::Preparing) {
+        if self.printing() == Some(Printing::Preparing) {
+            self.cancel_pages(cx);
+        }
+    }
+
+    /// "Cancel PDF export": stops preparing the pages of a PDF export.
+    /// Nothing is written. Does nothing unless a PDF export is preparing.
+    pub fn cancel_pdf_export(&mut self, cx: &mut Context<Self>) {
+        if self.pdf_exporting() == Some(PdfExporting::Preparing) {
+            self.cancel_pages(cx);
+        }
+    }
+
+    /// Stops the job whose pages are being prepared, whichever it is.
+    fn cancel_pages(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.print.stage, Some((_, Stage::Preparing))) {
             return;
         }
-        // The task holds the pass and the PDF that was begun.
+        if self.print.stage.map(|(kind, _)| kind) == Some(Kind::Export) {
+            self.print.last_export = Some(Err("cancelled".to_string()));
+        }
+        // The task holds the passes and the PDF that was begun.
         self.print.task = None;
         self.print_ended(cx);
     }
@@ -408,47 +572,72 @@ impl Workspace {
     /// holds the main thread for as long as the pages take.
     pub fn print_job(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<PrintJob> {
         self.session.as_ref()?;
-        let mut pass = self.editor.read(cx).print_pass(window, cx);
-        // The pictures, read at once.
-        let pictures: std::collections::HashMap<_, _> = pass
-            .images()
-            .into_iter()
-            .filter_map(|image| Some((image, self.images.bytes_now(image, cx)?)))
-            .collect();
-        pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
-        let title = self.display_title();
-        let paper = pass.paper();
+        let pass = self.editor.read(cx).print_pass(window, cx);
+        Some(self.pages_now(vec![pass], self.display_title(), cx))
+    }
+
+    /// The job of `passes` made at once, its pictures read at once: what a
+    /// job of pages makes in slices. It holds the main thread for as long
+    /// as the pages take.
+    pub(crate) fn pages_now(
+        &self,
+        mut passes: Vec<PrintPass>,
+        title: String,
+        cx: &gpui::App,
+    ) -> PrintJob {
+        let pictures: Rc<std::collections::HashMap<_, _>> = Rc::new(
+            passes
+                .iter()
+                .flat_map(PrintPass::images)
+                .filter_map(|image| Some((image, self.images.bytes_now(image, cx)?)))
+                .collect(),
+        );
+        for pass in &mut passes {
+            let pictures = pictures.clone();
+            pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
+        }
+        let paper = passes.first().map_or((0., 0.), PrintPass::paper);
         let mut writer = PdfWriter::new(&printing::job_info(&title));
         // Page by page into the PDF, so that a book is not held as pages
         // and as a PDF at once.
         let mut pages = Vec::new();
-        loop {
-            let done = pass.advance(Duration::from_millis(50), &mut pages);
-            for page in pages.drain(..) {
-                writer.add_page(&page);
+        let mut numbered = 0;
+        for mut pass in passes {
+            pass.number_pages_from(numbered + 1);
+            loop {
+                let done = pass.advance(Duration::from_millis(50), &mut pages);
+                for page in pages.drain(..) {
+                    writer.add_page(&page);
+                }
+                if done {
+                    break;
+                }
             }
-            if done {
-                break;
-            }
+            numbered += pass.progress().pages_done;
         }
-        Some(PrintJob {
+        PrintJob {
             title,
             paper,
             pdf: writer.finish(),
-        })
+        }
     }
 
     // ----- the stages -----------------------------------------------------------------
 
-    /// The note "Preparing to print …" with its Cancel, if the job is
-    /// still preparing.
+    /// The note "Preparing to print …" (or "Preparing the PDF of …") with
+    /// its Cancel, if the job is still preparing.
     fn show_print_note(&mut self, title: &str, cx: &mut Context<Self>) {
-        if self.print.stage != Some(Printing::Preparing) || self.print.note.is_some() {
+        let Some((kind, Stage::Preparing)) = self.print.stage else {
+            return;
+        };
+        if self.print.note.is_some() {
             return;
         }
-        let note = Toast::new(preparing_note(title))
-            .duration(NOTE_STAYS)
-            .action("Cancel", CancelPrint);
+        let note = match kind {
+            Kind::Print => Toast::new(preparing_note(title)).action("Cancel", CancelPrint),
+            Kind::Export => Toast::new(pdf_note(title)).action("Cancel", CancelPdfExport),
+        }
+        .duration(NOTE_STAYS);
         let id = self
             .toast_layer
             .update(cx, |layer, cx| layer.push(note, cx));
@@ -467,16 +656,24 @@ impl Workspace {
     /// The pages are done and the job is in the print panel.
     fn print_is_in_the_panel(&mut self, cx: &mut Context<Self>) {
         self.take_print_note(cx);
-        self.print.stage = Some(Printing::Panel);
+        self.print.stage = Some((Kind::Print, Stage::Panel));
         self.print.progress = None;
         cx.notify();
     }
 
-    /// The job is over: handed over, cancelled, or its panel has ended.
-    /// Called from the job's own task too, which this must not drop from
-    /// under itself: the task has nothing left to do and is let go by the
-    /// next job.
-    fn print_ended(&mut self, cx: &mut Context<Self>) {
+    /// The pages of a PDF export are done and the PDF is being written.
+    pub(crate) fn pdf_is_being_written(&mut self, cx: &mut Context<Self>) {
+        self.take_print_note(cx);
+        self.print.stage = Some((Kind::Export, Stage::Writing));
+        self.print.progress = None;
+        cx.notify();
+    }
+
+    /// The job is over: handed over, written, cancelled, or its panel has
+    /// ended. Called from the job's own task too, which this must not drop
+    /// from under itself: the task has nothing left to do and is let go by
+    /// the next job.
+    pub(crate) fn print_ended(&mut self, cx: &mut Context<Self>) {
         self.take_print_note(cx);
         self.print.stage = None;
         self.print.progress = None;
@@ -489,7 +686,7 @@ impl Workspace {
     pub(crate) fn notifications_dismissed(&mut self, cx: &mut Context<Self>) {
         // The layer is empty already.
         self.print.note = None;
-        self.cancel_print(cx);
+        self.cancel_pages(cx);
     }
 
     /// The notes changed. The note of the job may have gone by a way the
@@ -514,33 +711,57 @@ impl Workspace {
             return;
         }
         self.print.note = None;
-        if self.print.stage != Some(Printing::Preparing) {
+        if !matches!(self.print.stage, Some((_, Stage::Preparing))) {
             return;
         }
         if ids.len() >= MAX_VISIBLE {
             let title = self.print.title.clone();
             self.show_print_note(&title, cx);
         } else {
-            self.cancel_print(cx);
+            self.cancel_pages(cx);
         }
     }
 }
 
-/// Makes the pages of `pass` in slices and draws them into a PDF: the job.
-/// `None` when the workspace went away meanwhile.
+/// The progress of a job before it began.
+const NOTHING_DONE: PrintProgress = PrintProgress {
+    blocks_done: 0,
+    blocks: 0,
+    pages_done: 0,
+};
+
+/// How far `passes` are, after the passes before them have come as far as
+/// `before` (which counts all of their blocks as done and their pages).
+fn progress_of(passes: &[PrintPass], before: PrintProgress) -> PrintProgress {
+    passes.iter().fold(before, |sum, pass| {
+        let progress = pass.progress();
+        PrintProgress {
+            blocks_done: sum.blocks_done + progress.blocks_done,
+            blocks: sum.blocks + progress.blocks,
+            pages_done: sum.pages_done + progress.pages_done,
+        }
+    })
+}
+
+/// Makes the pages of `passes` in slices, one pass after the other with
+/// its pages numbered on from the pass before, and draws them into a PDF:
+/// the job. `None` when the workspace went away meanwhile.
 async fn prepare(
-    mut pass: PrintPass,
+    passes: Vec<PrintPass>,
     title: String,
     slice: Duration,
     this: &gpui::WeakEntity<Workspace>,
     cx: &mut gpui::AsyncWindowContext,
 ) -> Option<PrintJob> {
-    let paper = pass.paper();
+    let paper = passes.first().map_or((0., 0.), PrintPass::paper);
+    let mut passes: VecDeque<PrintPass> = passes.into();
+    // What the passes that are done came to: all of their blocks, and
+    // their pages.
+    let mut before = NOTHING_DONE;
     let mut writer = PdfWriter::new(&printing::job_info(&title));
     let mut pages = Vec::new();
     // The pages that are laid out and wait to be drawn.
     let mut waiting: VecDeque<writer_print::Page> = VecDeque::new();
-    let mut laid_out = false;
     let mut last_frame = Instant::now();
     // A slice is the whole turn: laying blocks out and drawing pages.
     // What share of it the layout gets follows from what the two have
@@ -549,9 +770,21 @@ async fn prepare(
     loop {
         let started = Instant::now();
         // No more is laid out while pages wait: they are drawn first.
-        if !laid_out && waiting.len() < PAGES_AHEAD {
-            laid_out = pass.advance(layout_share(slice, laying, drawing), &mut pages);
+        if waiting.len() < PAGES_AHEAD
+            && let Some(pass) = passes.front_mut()
+        {
+            let done = pass.advance(layout_share(slice, laying, drawing), &mut pages);
             waiting.extend(pages.drain(..));
+            if done && let Some(finished) = passes.pop_front() {
+                let progress = finished.progress();
+                before.blocks_done += progress.blocks;
+                before.blocks += progress.blocks;
+                before.pages_done += progress.pages_done;
+                // The next document goes on counting.
+                if let Some(next) = passes.front_mut() {
+                    next.number_pages_from(before.pages_done + 1);
+                }
+            }
         }
         let laid = started.elapsed();
         // At least one page a slice, and more while the slice lasts: a
@@ -564,10 +797,10 @@ async fn prepare(
         }
         laying += laid;
         drawing += started.elapsed() - laid;
-        if laid_out && waiting.is_empty() {
+        if passes.is_empty() && waiting.is_empty() {
             break;
         }
-        let progress = pass.progress();
+        let progress = progress_of(passes.make_contiguous(), before);
         let left = waiting.len();
         let frame = last_frame.elapsed() >= FRAME_EVERY;
         if frame {

@@ -33,6 +33,7 @@
 //! | [`agents`], [`agents_view`] | the `writer` command line tool beside the app, the skill and the MCP server for the agents on this Mac; the Agents panel |
 //! | [`live`] | agents that write while the app is open: the channel on which the `writer` tool hands the app a change, the thread that listens, the queue to the main thread (what the workspace does with a request is `workspace/live.rs`) |
 //! | [`export`] | the export picker and flow (the only user of `writer-export`) |
+//! | [`pdf_export`] | "Export as PDF…" and the picker's PDF rows: a document, or a folder as one file, made of the pages "Print…" makes (the same pass, slices and writer, `workspace/print.rs`), written into the file chosen first |
 //! | [`printing`] | where a print job goes: the macOS print panel, a recorder in a test, a directory in a scripted run (the command "Print…" itself is `workspace/print.rs`; the pages are the editor's print pass, the PDF and the print operation `writer-print`'s) |
 //! | [`images`], [`pasteboard`] | images: the provider the editor of the document gets (the bytes of a picture, a file, a paste or a drop made into stored bytes, off the main thread), the pictures for the exporters, the collector of bytes nothing names any more; the app's own look at the system pasteboard for pictures GPUI's clipboard does not show |
 //! | [`document_io`] | stored form of a document, lenient loading |
@@ -70,6 +71,7 @@ pub mod page_report;
 pub mod pages;
 pub mod palette;
 pub mod pasteboard;
+pub mod pdf_export;
 pub mod pinch;
 pub mod press_and_hold;
 pub mod printing;

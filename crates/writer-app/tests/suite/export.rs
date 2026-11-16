@@ -220,8 +220,8 @@ fn export_of_a_top_level_document_names_the_library(cx: &mut TestAppContext) {
     assert_eq!(single.documents, 1);
     assert!(single.file_name.ends_with(".docx"));
 
-    // The keyboard path to "Copy as Markdown": fourth row of the picker.
-    vcx.simulate_keystrokes("cmd-shift-s down down down enter");
+    // The keyboard path to "Copy as Markdown": fifth row of the picker.
+    vcx.simulate_keystrokes("cmd-shift-s down down down down enter");
     vcx.run_until_parked();
     let clipboard = vcx
         .read_from_clipboard()

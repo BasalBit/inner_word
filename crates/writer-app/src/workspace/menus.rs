@@ -160,6 +160,7 @@ impl Workspace {
                 let mut items = vec![
                     ContextMenuItem::action("Rename…", RenameDocument),
                     ContextMenuItem::action("Export…", Export),
+                    ContextMenuItem::action("Export as PDF…", ExportPdf),
                 ];
                 // Only where print jobs have somewhere to go: without
                 // that the command has no handler.
@@ -269,8 +270,12 @@ impl Workspace {
                 if self.can_print(cx) {
                     items.push(ContextMenuItem::action("Print…", Print));
                 }
+                items.push(ContextMenuItem::action("Export…", Export));
+                // WebKit's print into a file: only where pages are shown.
+                if self.can_export_pdf(cx) {
+                    items.push(ContextMenuItem::action("Export as PDF…", ExportPdf));
+                }
                 items.extend([
-                    ContextMenuItem::action("Export…", Export),
                     ContextMenuItem::action("Version History…", ShowVersionHistory),
                     ContextMenuItem::separator(),
                     ContextMenuItem::action("Reveal in Library", RevealInLibrary),

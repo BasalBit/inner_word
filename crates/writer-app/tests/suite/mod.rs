@@ -15,6 +15,7 @@ mod launch;
 mod live;
 mod mouse;
 mod pages;
+mod pdf_export;
 mod print;
 mod saving;
 mod session;

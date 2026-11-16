@@ -985,6 +985,9 @@ impl Render for Workspace {
         // "Print" while there is a document and somewhere for the job to
         // go, "Cancel printing" while pages are being prepared.
         root = self.print_actions(root, cx);
+        // "Export as PDF…" while there is a document (or a page shown),
+        // "Cancel PDF export" while its pages are being prepared.
+        root = self.pdf_export_actions(root, cx);
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))

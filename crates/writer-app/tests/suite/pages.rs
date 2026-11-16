@@ -1327,9 +1327,9 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
     let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
     vcx.update(|_, cx| {
         let rows = writer_app::shortcuts::collect_shortcuts(cx);
-        // Without the assistant (no engine in this test): 353 rows, eleven
-        // of them about pages; the file has every one of its 408 entries.
-        assert_eq!(rows.len(), 353);
+        // Without the assistant (no engine in this test): 355 rows, eleven
+        // of them about pages; the file has every one of its 410 entries.
+        assert_eq!(rows.len(), 355);
         let on_a_page: Vec<String> = rows
             .iter()
             .filter(|row| row.place == writer_app::shortcuts::Place::Page)
@@ -1349,7 +1349,7 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
             writer_app::workspace::shortcuts_file_catalogue(cx)
                 .entries()
                 .len(),
-            408
+            410
         );
     });
 }

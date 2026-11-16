@@ -405,6 +405,18 @@ mod export {
             f("/tmp/v1.2 notes", ExportFormat::PlainText),
             "/tmp/v1.2 notes.txt"
         );
+        // A PDF, which is not writer-export's.
+        let pdf = |name: &str| {
+            with_extension(PathBuf::from(name), FileFormat::Pdf)
+                .to_string_lossy()
+                .to_string()
+        };
+        assert_eq!(pdf("/tmp/a.pdf"), "/tmp/a.pdf");
+        assert_eq!(pdf("/tmp/a.PDF"), "/tmp/a.PDF");
+        assert_eq!(pdf("/tmp/a"), "/tmp/a.pdf");
+        assert_eq!(pdf("/tmp/a.md"), "/tmp/a.md.pdf");
+        assert_eq!(pdf_file_name("v1.2 notes"), "v1.2 notes.pdf");
+        assert_eq!(pdf_file_name("Chapter 2: Fog"), "Chapter 2 - Fog.pdf");
     }
 
     #[test]
@@ -420,16 +432,31 @@ mod export {
                 "Markdown file",
                 "Word document",
                 "Plain text file",
+                "PDF file",
                 "Copy as Markdown",
                 "Copy as plain text"
             ]
         );
+        let folder: Vec<&str> = ExportChoice::ALL
+            .iter()
+            .filter(|choice| choice.scope == ExportScope::Folder)
+            .map(ExportChoice::label)
+            .collect();
         assert_eq!(
+            folder,
+            [
+                "Markdown file",
+                "Word document",
+                "Plain text file",
+                "PDF file"
+            ]
+        );
+        // A PDF goes into a file, never to the clipboard.
+        assert!(
             ExportChoice::ALL
                 .iter()
-                .filter(|choice| choice.scope == ExportScope::Folder)
-                .count(),
-            3
+                .filter(|choice| choice.format == FileFormat::Pdf)
+                .all(|choice| choice.destination == ExportDestination::File)
         );
     }
 }

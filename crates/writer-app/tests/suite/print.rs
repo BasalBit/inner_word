@@ -553,7 +553,7 @@ fn print_is_in_the_menu_bar_the_title_menu_the_palette_and_vim(cx: &mut TestAppC
     let document = in_courier(manuscript(3), PageSetup::default());
     let (jobs, workspace, cx) = open_recording(&document, cx);
 
-    // File > Print… and Cancel Printing, after Export….
+    // File > Print… and Cancel Printing, after Export… and the PDF export.
     let file: Vec<(String, Box<dyn gpui::Action>)> = menus::app_menus()
         .into_iter()
         .filter(|menu| menu.name.as_ref() == "File")
@@ -562,8 +562,14 @@ fn print_is_in_the_menu_bar_the_title_menu_the_palette_and_vim(cx: &mut TestAppC
     let names: Vec<&str> = file.iter().map(|(name, _)| name.as_str()).collect();
     let export = names.iter().position(|name| *name == "Export…").unwrap();
     assert_eq!(
-        names[export..export + 3],
-        ["Export…", "Print…", "Cancel Printing"]
+        names[export..export + 5],
+        [
+            "Export…",
+            "Export as PDF…",
+            "Cancel PDF Export",
+            "Print…",
+            "Cancel Printing"
+        ]
     );
     // Neither has a key beside it.
     cx.update(|_, cx| {
@@ -576,7 +582,7 @@ fn print_is_in_the_menu_bar_the_title_menu_the_palette_and_vim(cx: &mut TestAppC
     // being prepared.
     assert!(available(&Print, cx));
     assert!(!available(&CancelPrint, cx));
-    let item = file[export + 1].1.boxed_clone();
+    let item = file[export + 3].1.boxed_clone();
     cx.update(|window, cx| window.dispatch_action(item, cx));
     let_it_prepare(&workspace, cx);
     assert_eq!(jobs.borrow().len(), 1);
@@ -588,6 +594,7 @@ fn print_is_in_the_menu_bar_the_title_menu_the_palette_and_vim(cx: &mut TestAppC
         [
             "Rename…",
             "Export…",
+            "Export as PDF…",
             "Print…",
             "Version History…",
             "Document Settings…",

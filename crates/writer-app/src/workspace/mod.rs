@@ -144,9 +144,11 @@ pub use page_import::{
     PagesReport, SUMMARY_STAYS as PAGES_SUMMARY_STAYS,
 };
 pub use page_probe::{PageFit, characters_per_row};
+pub(crate) use print::Purpose as PagesPurpose;
 pub use print::{
-    NOTE_DELAY as PRINT_NOTE_DELAY, PANEL_COULD_NOT_OPEN, Printing, SCRIPTED_RUN_HAS_NO_PANEL,
-    SLICE_PAUSE as PRINT_SLICE_PAUSE, layout_share as print_layout_share, preparing_note,
+    NOTE_DELAY as PRINT_NOTE_DELAY, PANEL_COULD_NOT_OPEN, PdfExporting, Printing,
+    SCRIPTED_RUN_HAS_NO_PANEL, SLICE_PAUSE as PRINT_SLICE_PAUSE,
+    layout_share as print_layout_share, pdf_note, preparing_note,
 };
 pub use render::{
     MIN_EDITOR_WIDTH, MIN_RIGHT_PANEL_WIDTH, PanelLayout, STATUS_BAR_HEIGHT, SidePanel, StatusLine,

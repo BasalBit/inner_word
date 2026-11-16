@@ -67,6 +67,11 @@ actions!(
         SearchLibrary,
         /// Export the current document or its folder.
         Export,
+        /// Export the open document (or the open page) as a PDF: the pages
+        /// "Print…" makes, into a file.
+        ExportPdf,
+        /// Stop preparing the pages of a PDF export.
+        CancelPdfExport,
         /// Print the open document.
         Print,
         /// Stop preparing the pages of a print.
@@ -230,6 +235,17 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "save as",
             "copy",
         ]),
+        // No key by default either, like Print: the list of keyboard
+        // shortcuts gives it one.
+        CommandDescriptor::new("Export as PDF…", CATEGORY_FILE, ExportPdf).keywords([
+            "pdf",
+            "save as pdf",
+            "paper",
+            "pages",
+            "print to file",
+        ]),
+        CommandDescriptor::new("Cancel PDF export", CATEGORY_FILE, CancelPdfExport)
+            .keywords(["stop", "pdf", "export", "abort"]),
         // Neither has a key by default: `cmd-p` opens a document here. The
         // list of keyboard shortcuts gives them one.
         CommandDescriptor::new("Print", CATEGORY_FILE, Print).keywords([

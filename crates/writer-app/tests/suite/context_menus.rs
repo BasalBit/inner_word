@@ -508,6 +508,7 @@ fn a_right_click_on_every_object_opens_its_menu(cx: &mut TestAppContext) {
         [
             "Rename…",
             "Export…",
+            "Export as PDF…",
             "Version History…",
             "Document Settings…",
             "-",

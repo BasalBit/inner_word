@@ -172,6 +172,8 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
                 "Save Now",
                 "Rename…",
                 "Export…",
+                "Export as PDF…",
+                "Cancel PDF Export",
                 "Print…",
                 "Cancel Printing",
                 "Version History…",
@@ -426,6 +428,7 @@ fn the_title_has_a_menu_and_a_chevron(cx: &mut TestAppContext) {
         [
             "Rename…",
             "Export…",
+            "Export as PDF…",
             "Version History…",
             "Document Settings…",
             "-",

@@ -30,7 +30,9 @@ use gpui::{Action, TestAppContext};
 use writer_app::{
     SaveState,
     automation::{ImageStep, Script, Step, describe_state},
-    export::{ExportChoice, ExportDestination, ExportScope, pictures_sentence, short_path},
+    export::{
+        ExportChoice, ExportDestination, ExportScope, ExportTarget, pictures_sentence, short_path,
+    },
     images::{self, COLLECT_DELAY, LOOK_EVERY, REFUSALS_NAMED, copy_not_updated, more_refused},
     menus, pasteboard, printing,
     settings::keys,
@@ -1729,7 +1731,10 @@ fn the_exports_carry_the_pictures(cx: &mut TestAppContext) {
 /// it fails, says why, and writes nothing, as `writer export` does. What
 /// reads no picture (plain text, Markdown for the clipboard) still works.
 /// (Found in review: the source took every error of the store for a
-/// picture the library does not have, and the success toast came.)
+/// picture the library does not have, and the success toast came.) A PDF
+/// export too, once its file is chosen and before its first page (found in
+/// review of the PDF export: it wrote a PDF with the picture's box), while
+/// "Print…" still draws the box.
 #[gpui::test]
 fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing(cx: &mut TestAppContext) {
     init(cx);
@@ -1796,6 +1801,52 @@ fn an_export_whose_pictures_cannot_be_read_fails_and_writes_nothing(cx: &mut Tes
         said[0].starts_with("Could not export: its pictures could not be read from the library"),
         "{said:?}"
     );
+
+    // A PDF: the pictures are read once the file is chosen, and the
+    // export ends there.
+    clear_toasts(&workspace, vcx);
+    let out = tempfile::tempdir().unwrap();
+    let chosen = out.path().join("Harbour.pdf");
+    workspace.update_in(vcx, |w, window, cx| {
+        w.export_pdf(ExportTarget::Open, ExportScope::Document, window, cx)
+    });
+    vcx.run_until_parked();
+    assert!(vcx.did_prompt_for_new_path(), "the file is chosen first");
+    vcx.simulate_new_path_selection({
+        let chosen = chosen.clone();
+        move |_| Some(chosen)
+    });
+    for _ in 0..2000 {
+        vcx.run_until_parked();
+        if workspace.read_with(vcx, |w, _| w.pdf_exporting()).is_none() {
+            break;
+        }
+        vcx.executor().advance_clock(Duration::from_millis(1));
+    }
+    assert_eq!(workspace.read_with(vcx, |w, _| w.pdf_exporting()), None);
+    assert!(!chosen.exists(), "nothing is written");
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+    let said = toasts(&workspace, vcx);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with("Could not export: its pictures could not be read from the library ("),
+        "{said:?}"
+    );
+    let report = workspace
+        .update(vcx, |w, _| w.take_pdf_export_report())
+        .expect("the export ended");
+    let error = report.expect_err("the export failed");
+    assert!(
+        error.starts_with("its pictures could not be read from the library (")
+            && error.ends_with("), so nothing was written"),
+        "{error}"
+    );
+    // Paper is no export: "Print…" draws the picture's box.
+    let printed = workspace
+        .update_in(vcx, |w, window, cx| w.print_job(window, cx))
+        .expect("a document is open");
+    assert_eq!(printed.pdf.report.pages, 1);
+    assert_eq!(printed.pdf.report.images, 0);
 }
 
 // ----- print ------------------------------------------------------------------------------------

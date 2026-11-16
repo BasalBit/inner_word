@@ -22,7 +22,9 @@
 //!    picture is read on the main thread inside a slice. They stay in
 //!    memory, as the files they are stored as, until the PDF is finished
 //!    (it holds each picture once). A picture the library does not have
-//!    is printed as its box with its description.
+//!    is printed as its box with its description, and so is one whose
+//!    read met an error of the store (`images.db` of a newer version, busy
+//!    past its timeout); a PDF export fails then and writes nothing.
 //! 3. A task of the main thread makes the pages in slices
 //!    ([`crate::printing::slice`], 8 ms: laying blocks out and drawing
 //!    pages into the PDF, both within the slice); between two slices it
@@ -389,7 +391,21 @@ impl Workspace {
         self.print.task = Some(cx.spawn_in(window, async move |this, cx| {
             // The job is "preparing" while they come, and Cancel drops
             // this task with them.
-            let pictures = Rc::new(pictures.await);
+            let pictures = pictures.await;
+            // A picture the library has and that could not be read: a
+            // print draws its box, an export writes nothing, as every
+            // export of the app does (`export::pictures_not_read`).
+            if let (Purpose::Export(_), Some(error)) = (&purpose, &pictures.failure) {
+                let sentence = crate::export::pictures_not_read(error);
+                this.update(cx, |this, cx| {
+                    this.print.last_export = Some(Err(sentence.clone()));
+                    this.toast_error(format!("Could not export: {sentence}"), cx);
+                    this.print_ended(cx);
+                })
+                .ok();
+                return;
+            }
+            let pictures = Rc::new(pictures.found);
             for pass in &mut passes {
                 let pictures = pictures.clone();
                 pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));

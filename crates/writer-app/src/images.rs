@@ -351,32 +351,22 @@ impl LibraryImages {
     }
 
     /// The stored bytes of every image of `images` the library has, read
-    /// in the background one after the other (a print reads the pictures
-    /// of its document before it makes the first page).
-    pub fn bytes_of_all(
-        &self,
-        images: Vec<ImageId>,
-        cx: &mut App,
-    ) -> Task<HashMap<ImageId, Arc<[u8]>>> {
+    /// in the background one after the other (a job of pages reads the
+    /// pictures of its documents before it makes the first page), with the
+    /// first error of the store a read met ([`ReadPictures::failure`]): a
+    /// print draws such a picture as its box, a PDF export fails with it.
+    pub fn bytes_of_all(&self, images: Vec<ImageId>, cx: &mut App) -> Task<ReadPictures> {
         match &self.file {
             Some(file) => {
                 let file = file.clone();
                 cx.background_spawn(async move {
-                    images
-                        .into_iter()
-                        .filter_map(|image| {
-                            let bytes = read(&file, &stored_id(image))?;
-                            Some((image, Arc::from(bytes)))
-                        })
-                        .collect()
+                    ReadPictures::of(images, |name| read_or_fail(&file, name))
                 })
             }
-            None => Task::ready(
-                images
-                    .into_iter()
-                    .filter_map(|image| Some((image, self.bytes_now(image, cx)?)))
-                    .collect(),
-            ),
+            None => {
+                let store = self.library.read(cx).store();
+                Task::ready(ReadPictures::of(images, |name| store.image_bytes(name)))
+            }
         }
     }
 
@@ -416,8 +406,48 @@ impl LibraryImages {
 
 /// Reads the bytes of an image through the provider's own connection.
 fn read(file: &Mutex<ImageFile>, name: &StoredImageId) -> Option<Vec<u8>> {
+    read_or_fail(file, name).ok().flatten()
+}
+
+/// Reads the bytes of an image through the provider's own connection, an
+/// error of the store kept apart from an image the library does not have.
+fn read_or_fail(file: &Mutex<ImageFile>, name: &StoredImageId) -> store::Result<Option<Vec<u8>>> {
     let file = file.lock().unwrap_or_else(PoisonError::into_inner);
-    file.bytes(name).ok().flatten()
+    file.bytes(name)
+}
+
+/// The pictures of a job of pages, read beforehand
+/// ([`LibraryImages::bytes_of_all`]).
+#[derive(Default)]
+pub struct ReadPictures {
+    /// The bytes of every image the library has.
+    pub found: HashMap<ImageId, Arc<[u8]>>,
+    /// The first error of the store a read met (`images.db` of a newer
+    /// version, busy past its timeout), in words: the job has pictures
+    /// missing that the library has. `None` when every read was answered,
+    /// a picture the library does not have included.
+    pub failure: Option<String>,
+}
+
+impl ReadPictures {
+    fn of(
+        images: Vec<ImageId>,
+        mut read: impl FnMut(&StoredImageId) -> store::Result<Option<Vec<u8>>>,
+    ) -> Self {
+        let mut pictures = Self::default();
+        for image in images {
+            match read(&stored_id(image)) {
+                Ok(Some(bytes)) => {
+                    pictures.found.insert(image, Arc::from(bytes));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    pictures.failure.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+        pictures
+    }
 }
 
 /// Makes `source` into what the library stores.

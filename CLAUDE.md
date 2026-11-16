@@ -946,7 +946,7 @@ Global (work anywhere in the window):
 | `cmd-opt-s` | Show or hide the library sidebar |
 | `cmd-opt-right` / `cmd-opt-left` | Widen / narrow the library sidebar |
 | `cmd-shift-f` | Search the whole library |
-| `cmd-shift-s` | Export (Markdown, DOCX) |
+| `cmd-shift-s` | Export: the picker (Markdown, DOCX, plain text or PDF file, of the document or its folder; or copy as Markdown or plain text) |
 | `cmd-s` | Save now (the text is saved as it is written anyway) |
 | `ctrl-enter` or `shift-f10` | Context menu of what has the keyboard: the text, a library row, a comment thread, a text field |
 | `cmd-,` | Settings |
@@ -1497,7 +1497,9 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   editor, another document from the library, laid out by `PrintPass::new`); **the save
   panel comes first**, so a cancelled panel makes no page; the note says "Preparing the PDF
   of “…”…" after 0.4 s and its Cancel is the command "Cancel PDF export" (palette, File; no
-  key; a click that takes the note away and "Dismiss notifications" cancel too); the bytes
+  key; a click that takes the note away and "Dismiss notifications" cancel too); a picture
+  whose read meets an error of the store ends the export with nothing written, as every
+  export does ("Images", "Exports"), where a print draws its box; the bytes
   are copied out of the PDF on the main thread (it is not `Send`) and written by a
   background thread; a toast says where. **One job of pages at a time**: while a PDF is
   being made "Print…" says so in a toast and does nothing, while a print is preparing or
@@ -1776,9 +1778,13 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   was suggested and keeps that name when the file is renamed in the save panel: the links
   are relative; the toast says where the pictures are); Markdown for the clipboard, for
   agents and for the assistant names each image `![description](image:<id>)`; plain text
-  has the description on a line of its own. An export whose pictures cannot be read from
-  the library fails and writes nothing ("Could not export: its pictures could not be read
-  from the library (...), so nothing was written"; `export::pictures_not_read`). Counts,
+  has the description on a line of its own; a PDF has the pictures as Print puts them on
+  paper. An export whose pictures cannot be read from the library fails and writes
+  nothing ("Could not export: its pictures could not be read from the library (...), so
+  nothing was written"; `export::pictures_not_read`), a PDF too: its pictures are read
+  once the file is chosen (`LibraryImages::bytes_of_all`, which keeps the first error of
+  the store in `ReadPictures::failure`) and the export ends there, before its first page,
+  where Print draws such a picture as its box. Counts,
   the character limit, find, spelling
   and the library search see an image as an empty block.
 - **The version history** shows an image as its description, or "Image", in the muted

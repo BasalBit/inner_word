@@ -53,6 +53,11 @@
 //!    export" (also in File and the palette, and a click that takes the
 //!    note away cancels too). One job of pages at a time: while a print or
 //!    another PDF is under way, an export says so and does nothing.
+//!    A picture the library has and that cannot be read (`images.db` of a
+//!    newer version, busy past its timeout) ends the export before its
+//!    first page, with nothing written ([`crate::export::pictures_not_read`],
+//!    as for every format); a picture the library does not have is its box
+//!    with its description, as on paper.
 //! 4. The PDF's bytes are taken out of it on the main thread and written by
 //!    a background thread ([`write`]); a toast says where the file is.
 

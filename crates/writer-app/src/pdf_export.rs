@@ -163,12 +163,14 @@ impl Workspace {
             return;
         }
         if let Some(sentence) = self.pages_under_way() {
+            self.print.last_export = Some(Err(sentence.clone()));
             self.show_toast(Toast::new(sentence), cx);
             return;
         }
         let planned = match self.gather_export(target, scope, cx) {
             Ok(gathered) => plan(gathered),
             Err(error) => {
+                self.print.last_export = Some(Err(error.clone()));
                 self.toast_error(format!("Could not export: {error}"), cx);
                 return;
             }

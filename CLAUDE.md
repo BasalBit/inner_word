@@ -16,7 +16,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
 | `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
 | `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s), images (`src/images.rs`: the picture of an image block decoded in the background at the size it is drawn, the outline and handles of the selected one, resize and move with the pointer, insert, paste, copy and drop; the bytes come through the `ImageProvider` an editor is given, `FakeImages` in tests), and the seams the crates below plug into. No crate draws a GPUI path (`paint_path` makes the window hold a texture its own size and a 4x MSAA copy until the next resize, about 400 MB on a large Retina window): the tick of a to-do is a sprite (`src/tick.rs`). A caret, the editor's or a text field's, blinks only in the active window (`docs/gpui-notes.md`). |
+| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s; `PrintPass::new` is the same pass over a document no editor shows, `PrintPass::number_pages_from` numbers on from the documents before it in one PDF), images (`src/images.rs`: the picture of an image block decoded in the background at the size it is drawn, the outline and handles of the selected one, resize and move with the pointer, insert, paste, copy and drop; the bytes come through the `ImageProvider` an editor is given, `FakeImages` in tests), and the seams the crates below plug into. No crate draws a GPUI path (`paint_path` makes the window hold a texture its own size and a 4x MSAA copy until the next resize, about 400 MB on a large Retina window): the tick of a to-do is a sprite (`src/tick.rs`). A caret, the editor's or a text field's, blinks only in the active window (`docs/gpui-notes.md`). |
 | `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text and of an image, the popover for an image's description, the floating format bar over a mouse selection. |
 | `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
@@ -24,7 +24,7 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 | `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages) and the library sidebar panel (a page's row has a globe; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them). |
 | `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow, the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
+| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
 | `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
 | `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
@@ -110,7 +110,11 @@ written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`
 `print:pdf:<path>` (writes the exact PDF "Print…" would hand to the print panel and says what
 was made: pages, paper, rows, `rows off`, images, fonts, the time) and `print:job:<path>` (the
 same PDF through the real macOS print operation as a save job, without a panel; see
-"Printing"), `image:<path>` (inserts the image file at the caret as Insert > Image… does once
+"Printing"), `export:wait[:<ms>]` (waits until the PDF export that was chosen, the
+picker's "PDF file" or `action:workspace::ExportPdf`, has written its file into
+`THE_WRITER_EXPORT_DIR`, and says what was made: `export: “Part one” written to <path>: 2
+pages, 595.28 x 841.89 pt, 18 rows, 0 rows off, 0 images, fonts: …, made in 0.01 s`, or
+fails with why nothing was written; 60 s unless given), `image:<path>` (inserts the image file at the caret as Insert > Image… does once
 the file is chosen, waits until it is stored and in the text and says `image: inserted <id>
 1600x1067 at block 3`, or the sentence for a file that cannot be used) and `image:select:<n>`
 (puts the caret on the n-th image, from 1; see "Images"), `page:make:<folder>[|<entry>]`
@@ -122,7 +126,8 @@ sentence>`), `page:wait[:<ms>]` (until the open page has loaded), `page:text`,
 `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=[idle]`,
-`print=[preparing 40%]`, `print=[panel]`), images (`images=3`, and with the caret on one
+`print=[preparing 40%]`, `print=[panel]`), the PDF export (`export=[idle]`,
+`export=[preparing 40%]`, `export=[writing]`), images (`images=3`, and with the caret on one
 `image=[block=2 width=50% natural=1600x1067@144 align=center ready alt="..."]`: the block
 from 0, the width as a share of the text column, pixels and pixels per inch, and `ready`,
 `loading`, `missing` or `broken` for its picture), the open page (`web=[id=12 state=loaded
@@ -148,7 +153,8 @@ spell checker's slices) and `stall:<ms>` (watches the main thread without pressi
 anything). Useful
 lines: open a document `keys:cmd-p; type:chap 2; keys:enter`; a palette command
 `keys:cmd-shift-p; type:version history; keys:enter`; the settings of the open document
-`keys:cmd-shift-p; type:document settings; keys:enter`; a context menu `keys:ctrl-enter`
+`keys:cmd-shift-p; type:document settings; keys:enter`; a PDF of the open document `keys:cmd-shift-s; type:pdf; keys:enter; export:wait` (of its
+folder: `keys:cmd-shift-s; type:pdf; keys:down; keys:enter; export:wait`); a context menu `keys:ctrl-enter`
 (in the text, the library, the comment list or a text field), then `choose:Add Comment`;
 the format bar `keys:shift-right shift-right; bar; bar:bold`; a picture `image:/some/tmp/a.png;
 keys:cmd-shift-,` (smaller), `keys:ctrl-enter; choose:Description…; type:The harbour; keys:enter`.
@@ -269,6 +275,11 @@ chat, the comments and Vim's caret at 75 %, 100 % and 150 % in both views;
 `tests/suite/print.rs` holds printing in the assembled app, every job recorded and none in a
 panel: the pages and their text against page view, what of the window is not on paper,
 where Print is reached from and when it is there, the note and Cancel, the keys;
+`tests/suite/pdf_export.rs` holds the PDF export in the assembled app, every file chosen in
+the test platform's save panel: an exported PDF against `Workspace::print_job`'s for the
+same document (pages, sizes, the text and the pixels of every page), a document that is
+not open, a folder as one PDF, the title rule against the Markdown export, the note,
+Cancel and one job of pages at a time, where it is reached from, the scripted step;
 `tests/suite/images.rs` holds images in the assembled app, with the app's own provider over
 a library in memory or on disk and picture files made when the test runs: every way in, the
 bytes stored before a block names them, undo and relaunch, cut and paste between documents,
@@ -876,6 +887,8 @@ size, orientation, margins, font, text size, line spacing, paragraph spacing; le
 typed, `20mm`, `0.75in`), "Rename document", "Reveal in library", "Welcome document"
 (opens it; written again when it is gone), "Print" and "Cancel printing" (see
 "Printing"; `cmd-p` is Quick open here, so Print has no key until the user gives it one),
+"Export as PDF…" and "Cancel PDF export" (File in the menu bar too; the PDF of the open
+document, or of the open page as WebKit prints it; see "Printing"),
 and the seven commands of an image (see "Images"): "Image" (Insert > Image…, the open panel),
 "Image width 25 %", "50 %", "75 %" and "100 %", "Image original size" and "Image
 description". The four widths, the original size and the description need a selected image
@@ -1130,17 +1143,19 @@ document"). Three crates: `writer-keymap` knows what a change is,
   one row** (`tests/suite/keybindings.rs`,
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
-  list has 383 rows (382 commands in places and the `/` of the insert menu, which is no
-  binding) and the shortcuts file 408 entries, one for each key context: 13 rows stand for
-  several key contexts, 26 more than there are rows. Without the assistant: 353 rows, and
-  the same 408 entries. (Counted in a scripted run for 0.8.0: `keys:cmd-/; state` has
+  list has 385 rows (384 commands in places and the `/` of the insert menu, which is no
+  binding) and the shortcuts file 410 entries, one for each key context: 13 rows stand for
+  several key contexts, 26 more than there are rows. Without the assistant: 355 rows, and
+  the same 410 entries. (Counted in a scripted run when the PDF export was added, and before
+  that for 0.8.0: `keys:cmd-/; state` has
   `rows=N`, and "Export…" writes the file; the sixteen zoom commands are among them, since
   0.6.0 nine more without a key: Print and Cancel printing, "Anywhere", and the seven
   commands of an image, "In the text"; and since 0.8.0 the eleven of pages: Import page…,
   Cancel adding pages, Show the report of the pages added last, Reload page, Copy page
   address and Open page address in browser "Anywhere", without a key; Show the page's
   context menu, Find, Find and replace, Find next and Find previous "On a page", with the
-  keys of the text's.)
+  keys of the text's; and with the PDF export two more, Export as PDF… and Cancel PDF
+  export, "Anywhere", without a key.)
 - **A place name is a promise.** Two rows under one place name ("In the library") are in
   the same place to whoever reads the list: a key of the one given to the other is "taken"
   and never "used in another place", in the question about a key and in the plan of an
@@ -1469,6 +1484,37 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   palette, `:print` in Vim. **No default key** (`cmd-p` is Quick open, `cmd-shift-p` the
   palette, `cmd-opt-p` page view); the user gives it one in "Keyboard shortcuts", where it
   and "Cancel printing" are rows "Anywhere". Only while a document is open.
+- **Export as PDF shares the pass** (`crates/writer-app/src/pdf_export.rs`): the export
+  picker's "PDF file" (for the document and for its folder), the command "Export as PDF…"
+  (palette, File > Export as PDF…, the menu of the title; no key; on an open page it is
+  the page's WebKit PDF of `page_export.rs`, and with nothing open it has no handler) make
+  a PDF of the pages Print makes: one job of pages in `workspace/print.rs` (its `Purpose`
+  is a print or a file), the same pass, the same pictures read in the background first,
+  the same slices of 8 ms, the same `PdfWriter`; only the end differs. So the PDF of an
+  export and the PDF "Print…" hands over are the same paper (`tests/suite/pdf_export.rs`
+  holds pages, sizes, text and pixels equal). What is exported is taken when it is chosen
+  (`Workspace::gather_export`, which every format uses: the open document as it is in the
+  editor, another document from the library, laid out by `PrintPass::new`); **the save
+  panel comes first**, so a cancelled panel makes no page; the note says "Preparing the PDF
+  of “…”…" after 0.4 s and its Cancel is the command "Cancel PDF export" (palette, File; no
+  key; a click that takes the note away and "Dismiss notifications" cancel too); the bytes
+  are copied out of the PDF on the main thread (it is not `Send`) and written by a
+  background thread; a toast says where. **One job of pages at a time**: while a PDF is
+  being made "Print…" says so in a toast and does nothing, while a print is preparing or
+  in the panel an export says so and asks nothing. **A folder is one PDF with each
+  document on its own paper**: a pass per document with its own page setup and
+  typography (a Word export gives each a section of its own, and a PDF holds pages of
+  different sizes, so nothing is chosen for the whole), each starting on a new page, the
+  page numbers going on through the file (Word does not start again either), its title
+  set above it as a heading 1 unless one of its headings or its first line starts with
+  it (`pdf_export::shows_title`, the rule of `writer_export::PartTitles::WhenMissing`,
+  copied because `writer-export` keeps its own to itself; a test holds the two equal
+  through the Markdown export), page breaks at the start of every document but the first
+  and at the end of every one but the last left out, as the Word export leaves them out;
+  pages of the folder are left out and the toast says so. Measured in the debug build: a
+  generated book of 3,000 blocks, 861 pages, 0 rows off, made in 2.2 s in slices
+  (`export=[preparing 35%]` after 0.7 s). `writer-export` has no PDF: the picker's format
+  is the app's own (`export::FileFormat`, `Export(ExportFormat)` or `Pdf`).
 - **The seam** (`printing::PrintTarget`, an app global like the spell service):
   `SystemPanel` (the print panel as a sheet on the window; `main` installs it in a launch
   that is not scripted), `Recorder` (tests: `printing::record(cx)` before the workspace
@@ -1531,7 +1577,12 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   as a save job (`writer_print::run_save_job`): everything of "Print…" but the panel.
   `action:workspace::Print` is the command itself (it writes into the export directory),
   `action:workspace::CancelPrint` right after it on a book stops it; `state` has
-  `print=[idle]`, `print=[preparing 40%]`, `print=[panel]`.
+  `print=[idle]`, `print=[preparing 40%]`, `print=[panel]`. A PDF export is
+  `keys:cmd-shift-s; type:pdf; keys:enter` (or `action:workspace::ExportPdf`), which writes
+  "<title>.pdf" into `THE_WRITER_EXPORT_DIR`, then `export:wait`, which says what was made
+  (the same report as `print:pdf:`); `state` has `export=[idle]`,
+  `export=[preparing 40%]`, `export=[writing]`, and `action:workspace::CancelPdfExport`
+  stops it.
 
   ```bash
   THE_WRITER_DATA_DIR=/some/tmp THE_WRITER_SEED_DEMO=1 \
@@ -1663,9 +1714,10 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   there (up to 16 MB with a sync), and only then does the block appear. A library in
   memory (tests) has one connection and does the same at once. A print reads its pictures
   the same way before its first slice. **What still runs on the main thread**: an agent's
-  picture (it is part of the request; the cost is in "Build and test") and an export, which
-  reads every picture of what it exports through the library's store, as it reads the
-  documents. The editor asks again for images it found missing after anything that can
+  picture (it is part of the request; the cost is in "Build and test") and an export to
+  Markdown or DOCX, which reads every picture of what it exports through the library's
+  store, as it reads the documents (a PDF export reads them in the background, as a print
+  does). The editor asks again for images it found missing after anything that can
   have brought their bytes: an agent's change, a restored version, a picture stored
   through the provider (`Editor::images_changed`; `LibraryImages::on_stored`).
 - **A file that cannot be used** says so in a toast, in the words of
@@ -1950,8 +2002,8 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
 - **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: The Writer (with
-  the keyboard shortcuts: the list, import, export, reset all), File, Edit (with
-  Spelling), Format (with Turn Into, Align and Image), Insert (with Image…), View (with
+  the keyboard shortcuts: the list, import, export, reset all), File (Export…, Export as
+  PDF… and Cancel PDF Export, Print… and Cancel Printing), Edit (with Spelling), Format (with Turn Into, Align and Image), Insert (with Image…), View (with
   Theme), Help. While the
   assistant is shown it has its items too (Edit > Ask the Assistant…; View > Show or Hide
   Assistant, Go to Assistant, New Chat, Clear Chat), and none of them otherwise. Every item

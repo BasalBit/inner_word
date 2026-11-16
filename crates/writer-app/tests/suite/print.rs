@@ -1203,7 +1203,7 @@ fn the_welcome_document_says_where_print_is() {
     assert!(
         text.contains(
             "Print… in the File menu, or Print in the command palette, puts it on paper as \
-             page view shows it; the print panel can save it as a PDF too."
+             page view shows it; Export as PDF… in the File menu makes a PDF of the same pages."
         ),
         "{text}"
     );

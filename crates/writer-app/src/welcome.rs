@@ -237,9 +237,10 @@ pub fn welcome_document() -> Document {
         heading(2, "Take your words elsewhere"),
         paragraph(
             "{k:⇧⌘S} exports this document, or its whole folder as one file: Markdown, a Word \
-             document or plain text. It can also copy the text to the clipboard. \
+             document, plain text or a PDF. It can also copy the text to the clipboard. \
              {b:Print…} in the File menu, or {b:Print} in the command palette, puts it on \
-             paper as page view shows it; the print panel can save it as a PDF too.",
+             paper as page view shows it; {b:Export as PDF…} in the File menu makes a PDF of \
+             the same pages.",
         ),
         rich(
             BlockKind::Quote,

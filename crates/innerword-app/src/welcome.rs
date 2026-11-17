@@ -82,6 +82,18 @@ fn todo(checked: bool, markup: &str) -> Block {
 /// The title of the welcome document (its first heading).
 pub const WELCOME_TITLE: &str = "Welcome to Inner Word";
 
+/// The title the welcome document had while the app was called The Writer
+/// (0.9.0 and before). A library of then holds a welcome document of this
+/// title, and "Welcome document" opens that one (as the user may have
+/// written in it) rather than writing a second one beside it.
+pub const OLD_WELCOME_TITLE: &str = "Welcome to The Writer";
+
+/// Whether `title` is the title of a welcome document, of this name or of
+/// the old one ([`OLD_WELCOME_TITLE`]).
+pub fn is_welcome_title(title: &str) -> bool {
+    title == WELCOME_TITLE || title == OLD_WELCOME_TITLE
+}
+
 /// The document a new library starts with. It teaches the essentials: the
 /// mouse (right-click menus, the menu bar), the palette, the format and
 /// insert menus, Markdown shortcuts, spelling, page view, comments, Vim

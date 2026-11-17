@@ -724,3 +724,59 @@ Below."
     assert_eq!(images_in(&workspace, vcx).len(), 1);
     assert!(editor_focused(&workspace, vcx));
 }
+
+/// The app's code asks for the default data directory only at a real launch
+/// (`main`, `pages::use_webkit`, and the message window of a library that
+/// cannot be opened, which `main` shows). Asked from a test, the default is
+/// the user's own library, and since the rename the first look moves its
+/// folder from "The Writer" to "Inner Word": 0.9.0's tests of pages asked
+/// it through `pages::rules_dir_of` for every library in memory.
+#[test]
+fn only_a_real_launch_asks_for_the_default_data_directory() {
+    assert_eq!(innerword_app::pages::rules_dir_of(None), None);
+    assert_eq!(
+        innerword_app::pages::rules_dir_of(Some(std::path::Path::new("/a/b/library.db"))),
+        Some(std::path::PathBuf::from("/a/b/WebKit"))
+    );
+
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![src];
+    let mut found = Vec::new();
+    while let Some(path) = files.pop() {
+        if path.is_dir() {
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
+            if ["data_dir()", "database_path()", "open_default()", "default_location()"]
+                .iter()
+                .any(|call| code.contains(call))
+            {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                found.push(format!("{name}:{}: {}", n + 1, code));
+            }
+        }
+    }
+    let allowed = ["main.rs", "pages.rs", "window.rs"];
+    let elsewhere: Vec<&String> = found
+        .iter()
+        .filter(|line| !allowed.iter().any(|name| line.starts_with(&format!("{name}:"))))
+        .collect();
+    assert!(
+        elsewhere.is_empty(),
+        "the default data directory is asked for outside a real launch: {elsewhere:#?}"
+    );
+    // In those three files, only where a launch asks.
+    let in_pages: Vec<&String> = found.iter().filter(|l| l.starts_with("pages.rs:")).collect();
+    assert_eq!(in_pages.len(), 1, "pages.rs asks only in use_webkit: {in_pages:#?}");
+    let in_window: Vec<&String> = found.iter().filter(|l| l.starts_with("window.rs:")).collect();
+    assert_eq!(in_window.len(), 1, "window.rs asks only in library_error_text: {in_window:#?}");
+}

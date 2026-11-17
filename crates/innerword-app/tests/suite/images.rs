@@ -2343,6 +2343,31 @@ fn a_damaged_pictures_file_that_was_set_aside_is_told_of_once(cx: &mut TestAppCo
     assert_eq!(notes(&workspace, vcx), []);
 }
 
+/// A file told of while the data directory had the old name, "The
+/// Writer", is the same file in "Inner Word" after the move, and is not told
+/// of again.
+#[test]
+fn a_file_told_of_under_the_old_folder_name_is_the_same_file_after_the_move() {
+    let support = Path::new("/Users/me/Library/Application Support");
+    let database = support.join("Inner Word/library.db");
+    for rest in ["images.db.damaged-1", "backups/images.db.damaged-2"] {
+        assert_eq!(
+            images::as_in_this_folder(&support.join("The Writer").join(rest), &database),
+            support.join("Inner Word").join(rest)
+        );
+        assert_eq!(
+            images::as_in_this_folder(&support.join("Inner Word").join(rest), &database),
+            support.join("Inner Word").join(rest)
+        );
+    }
+    // A library elsewhere (INNER_WORD_DATA_DIR) maps nothing.
+    let elsewhere = Path::new("/tmp/lib/library.db");
+    assert_eq!(
+        images::as_in_this_folder(Path::new("/tmp/The Writer/images.db.damaged-1"), elsewhere),
+        Path::new("/tmp/The Writer/images.db.damaged-1")
+    );
+}
+
 /// A library in memory has no file to collect in.
 #[gpui::test]
 fn a_library_in_memory_has_no_collector(cx: &mut TestAppContext) {

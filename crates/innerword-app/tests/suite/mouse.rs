@@ -1020,6 +1020,38 @@ fn library_rows_offer_export_and_version_history(cx: &mut TestAppContext) {
     }));
 }
 
+/// A library of the time the app was called The Writer has a welcome
+/// document of that name: "Welcome document" opens it and writes no second
+/// one beside it.
+#[gpui::test]
+fn the_welcome_document_of_the_old_name_is_the_welcome_document(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let old = add_document(
+        &library,
+        None,
+        &simple_document(welcome::OLD_WELCOME_TITLE, "Words of the writer's own."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |w, window, cx| w.new_document(window, cx));
+    vcx.run_until_parked();
+    assert_ne!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(old));
+
+    vcx.dispatch_action(OpenWelcomeDocument);
+    vcx.run_until_parked();
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(old));
+    let titles: Vec<String> = library.read_with(vcx, |library, _| {
+        library.tree().documents.iter().map(|meta| meta.title.clone()).collect()
+    });
+    assert!(
+        !titles.iter().any(|title| title == welcome::WELCOME_TITLE),
+        "no second welcome document was written: {titles:?}"
+    );
+    assert!(welcome::is_welcome_title(welcome::WELCOME_TITLE));
+    assert!(!welcome::is_welcome_title("Welcome"));
+}
+
 #[gpui::test]
 fn the_welcome_document_and_the_overlay_speak_of_the_mouse(cx: &mut TestAppContext) {
     init(cx);

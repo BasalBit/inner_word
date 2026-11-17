@@ -591,8 +591,9 @@ impl Workspace {
         });
     }
 
-    /// Opens the welcome document. When it is no longer in the library
-    /// (renamed, rewritten or trashed) a fresh one is written.
+    /// Opens the welcome document (of this name, or of the old name The
+    /// Writer: `welcome::OLD_WELCOME_TITLE`). When it is no longer in the
+    /// library (renamed, rewritten or trashed) a fresh one is written.
     pub fn open_welcome_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let existing = {
             let library = self.library.read(cx);
@@ -604,10 +605,15 @@ impl Workspace {
                 documents.extend(folder.documents.iter());
                 folders.extend(folder.folders.iter());
             }
+            // The welcome document of this name first, else the one a
+            // library of the old name has ("Welcome to The Writer").
             for meta in documents {
                 if meta.title == welcome::WELCOME_TITLE {
                     found = Some(meta.id);
                     break;
+                }
+                if found.is_none() && welcome::is_welcome_title(&meta.title) {
+                    found = Some(meta.id);
                 }
             }
             found

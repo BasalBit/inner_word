@@ -813,6 +813,24 @@ impl Said {
     }
 }
 
+/// A path the writer was told of (`keys::IMAGES_MOVED_ASIDE_TOLD`, absolute)
+/// as it is now: one told of while the data directory had the old name,
+/// "The Writer" (0.9.0 and before), is in the folder of the new name since
+/// the move (`innerword_store::data_dir`), so it is read as the same file
+/// there and not told of again.
+pub fn as_in_this_folder(told: &Path, database: &Path) -> PathBuf {
+    let Some(data_dir) = database.parent() else {
+        return told.to_path_buf();
+    };
+    let old_name = data_dir.with_file_name(store::OLD_DATA_DIR_NAME);
+    if data_dir.file_name() == Some(std::ffi::OsStr::new(store::DATA_DIR_NAME))
+        && let Ok(rest) = told.strip_prefix(&old_name)
+    {
+        return data_dir.join(rest);
+    }
+    told.to_path_buf()
+}
+
 /// How long a note of the collector stays.
 const SAID_FOR: Duration = Duration::from_secs(12);
 
@@ -835,11 +853,13 @@ fn tell_of_files_moved_aside(
         .iter()
         .map(|path| path.display().to_string())
         .collect();
+    let told: Vec<PathBuf> = told
+        .iter()
+        .map(|name| as_in_this_folder(Path::new(name), database))
+        .collect();
     let new: Vec<&PathBuf> = found
         .iter()
-        .zip(&named)
-        .filter(|(_, name)| !told.contains(name))
-        .map(|(path, _)| path)
+        .filter(|path| !told.contains(path))
         .collect();
     if new.is_empty() && told.len() == named.len() {
         return;

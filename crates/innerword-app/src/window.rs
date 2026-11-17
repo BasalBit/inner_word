@@ -441,11 +441,19 @@ pub fn open_already_running_window(
     )
 }
 
-/// What the message window says when the library cannot be opened.
-pub fn library_error_text(error: &innerword_library::StoreError) -> (String, String, String) {
-    let path = innerword_library::database_path()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "the library file".to_string());
+/// What the message window says when the library cannot be opened, the
+/// library being in `data_dir` (`None`: where the data directory is by
+/// default, looked for again).
+pub fn library_error_text(
+    error: &innerword_library::StoreError,
+    data_dir: Option<&std::path::Path>,
+) -> (String, String, String) {
+    let path = match data_dir {
+        Some(dir) => Ok(dir.join(innerword_library::store::DATABASE_FILE_NAME)),
+        None => innerword_library::database_path(),
+    }
+    .map(|path| path.display().to_string())
+    .unwrap_or_else(|_| "the library file".to_string());
     (
         "The library could not be opened".to_string(),
         "Inner Word keeps every document in one library file. It could not open that file, so \

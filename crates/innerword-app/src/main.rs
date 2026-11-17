@@ -157,7 +157,15 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
             ),
         }
     }
-    let library = match Library::open_default() {
+    // The library in the folder whose lock this process holds: the data
+    // directory is looked for once, so the library opened is the one the
+    // lock keeps (a second look could answer otherwise while the folder of
+    // the old name is being moved).
+    let opened = match &locked {
+        Some(data_dir) => Library::open(data_dir.join(innerword_library::store::DATABASE_FILE_NAME)),
+        None => Library::open_default(),
+    };
+    let library = match opened {
         Ok(library) => library,
         Err(error) => {
             eprintln!("Inner Word: cannot open the library: {error}");
@@ -166,7 +174,7 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
             if let Some(data_dir) = &locked {
                 innerword_app::live::open_without_library(data_dir, cx).ok();
             }
-            let (title, message, detail) = window::library_error_text(&error);
+            let (title, message, detail) = window::library_error_text(&error, locked.as_deref());
             return match window::open_error_window(title, message, detail, cx) {
                 Ok(handle) => Some(handle.into()),
                 Err(err) => {

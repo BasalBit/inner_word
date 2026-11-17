@@ -344,3 +344,23 @@ Inner Word keeps your library in
 Removing the app does not remove your documents. Back up that folder to keep
 a copy of them: "library.db" is your documents, "images.db" the pictures in
 them.
+
+
+It used to be called The Writer
+-------------------------------
+
+Until version 0.9.0 Inner Word was called The Writer. Nothing of yours is
+lost in the change of name:
+
+- The first launch of Inner Word moves your library from
+  ~/Library/Application Support/The Writer to the folder above, and leaves a
+  link under the old name that leads to it. Quit The Writer before you open
+  Inner Word for the first time: while The Writer is open, Inner Word says
+  that another copy has the library open and moves nothing.
+- "Inner Word" in Applications is a new app beside "The Writer", not a
+  replacement of it. Once Inner Word has opened your library, drag "The
+  Writer" from the Applications folder to the Trash.
+- Agents that you set up with The Writer still have its skill and its MCP
+  server, "the-writer". Inner Word > Agents... offers to update the skill
+  (the old one is removed with it) and says, under each agent, how to remove
+  the old MCP server; then add Inner Word's as the panel shows.

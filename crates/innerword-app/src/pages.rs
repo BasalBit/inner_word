@@ -90,8 +90,12 @@ pub fn use_webkit(cx: &mut App) -> Result<(), String> {
         return Err(why);
     }
     cx.set_global(Installed(PageEngine::WebKit));
-    if let Some(dir) = rules_dir_of(None) {
-        innerword_web::compile_rules(&dir);
+    // The data directory by name: only a real launch gets here (`main`),
+    // and the library of the old name was brought over already or is
+    // brought over now, as the window's launch does. A test never calls
+    // this, so no test reaches the user's data directory through it.
+    if let Ok(dir) = innerword_library::data_dir() {
+        innerword_web::compile_rules(&dir.join(RULES_DIR_NAME));
     }
     Ok(())
 }
@@ -202,15 +206,18 @@ pub fn page_host(id: DocumentId, created_at: i64) -> String {
     format!("page-{}-{created_at}", id.0)
 }
 
+/// The folder of the data directory where the rule list is kept.
+const RULES_DIR_NAME: &str = "WebKit";
+
 /// Where the rule list of the views is compiled and kept: `WebKit/` in the
 /// data directory of the library (`library_db`'s folder), so a test or a
-/// scripted run with `INNER_WORD_DATA_DIR` writes only there.
+/// scripted run with `INNER_WORD_DATA_DIR` writes only there. `None` for a
+/// library without a file (a library in memory, in tests): the callers
+/// take a folder in the temporary directory then. It never asks for the
+/// default data directory: that would be the user's own library in a test,
+/// which the first look moves from its old name ("The Writer").
 pub fn rules_dir_of(library_db: Option<&Path>) -> Option<PathBuf> {
-    let data_dir = match library_db.and_then(Path::parent) {
-        Some(dir) => dir.to_path_buf(),
-        None => innerword_library::data_dir().ok()?,
-    };
-    Some(data_dir.join("WebKit"))
+    Some(library_db?.parent()?.join(RULES_DIR_NAME))
 }
 
 // ----- what the view tells the workspace --------------------------------------------

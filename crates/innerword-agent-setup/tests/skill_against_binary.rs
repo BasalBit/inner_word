@@ -47,7 +47,11 @@ fn writer() -> &'static Path {
             String::from_utf8_lossy(&output.stderr)
         );
         let binary = profile_dir.join("innerword");
-        assert!(binary.is_file(), "no innerword binary at {}", binary.display());
+        assert!(
+            binary.is_file(),
+            "no innerword binary at {}",
+            binary.display()
+        );
         binary
     })
 }
@@ -344,7 +348,15 @@ fn shell_words_are_split_as_the_shell_splits_them() {
     assert_eq!(
         shell_words("innerword comment add doc:12 --quote \"a b\" --body 'c d' --author Claude"),
         vec![
-            "innerword", "comment", "add", "doc:12", "--quote", "a b", "--body", "c d", "--author",
+            "innerword",
+            "comment",
+            "add",
+            "doc:12",
+            "--quote",
+            "a b",
+            "--body",
+            "c d",
+            "--author",
             "Claude"
         ]
     );

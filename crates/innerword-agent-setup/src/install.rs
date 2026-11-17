@@ -14,6 +14,13 @@
 //!   in it. Anything a person added to the folder stays, with the folder, and is reported.
 //!   The skills directory itself is never removed.
 //!
+//! - The skill as the app installed it when it was called The Writer (a folder
+//!   [`LEGACY_SKILL_NAME`] with a `SKILL.md` of generator [`LEGACY_GENERATOR`]) is ours
+//!   too: its state is "needs update" ([`StaleReason::OldName`]), installing writes the
+//!   skill under its name and then removes the old folder (by the same rules as removing),
+//!   and removing removes both. A folder of the old name without that marker is somebody
+//!   else's and is never looked into again.
+//!
 //! Every function reports exactly what it wrote, created and removed ([`Report`]).
 
 use std::fs;
@@ -23,7 +30,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::SetupError;
-use crate::skill::{SKILL_FILE, SKILL_NAME, SkillMarker, SkillSpec, read_marker};
+#[cfg(doc)]
+use crate::legacy::LEGACY_GENERATOR;
+use crate::legacy::{LEGACY_APP_NAME, LEGACY_SKILL_NAME};
+use crate::skill::{
+    SKILL_FILE, SKILL_NAME, SkillMarker, SkillSpec, read_legacy_marker, read_marker,
+};
 
 /// The state of the skill in one skills directory, measured against what would be installed
 /// now.
@@ -73,6 +85,10 @@ impl StaleSkill {
     /// One sentence for the interface.
     pub fn explanation(&self) -> String {
         match self.reason {
+            StaleReason::OldName => format!(
+                "It is installed under the old name {LEGACY_APP_NAME}. Updating installs it \
+                 under the new name and removes the old folder."
+            ),
             StaleReason::BinaryMissing => {
                 format!(
                     "It points at {}, which is no longer there.",
@@ -93,6 +109,9 @@ impl StaleSkill {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StaleReason {
+    /// A copy the app installed when it was called The Writer is there, in the folder
+    /// [`LEGACY_SKILL_NAME`] (with or without a copy under the new name beside it).
+    OldName,
     /// The binary it names does not exist any more (the app was moved or deleted). An agent
     /// following the skill would fail.
     BinaryMissing,
@@ -151,8 +170,8 @@ pub struct Report {
     pub created_dirs: Vec<PathBuf>,
     /// Files and directories removed, in order.
     pub removed: Vec<PathBuf>,
-    /// What was found in the skill's folder that Inner Word did not write and so left in
-    /// place when removing (the folder then stays too).
+    /// What was found in the skill's folder (or in the folder of the old name) that Inner
+    /// Word did not write and so left in place when removing (the folder then stays too).
     pub left_in_place: Vec<PathBuf>,
 }
 
@@ -214,6 +233,11 @@ pub fn skill_file(skills_dir: &Path) -> PathBuf {
     skill_dir(skills_dir).join(SKILL_FILE)
 }
 
+/// The folder the skill had in a skills directory when the app was called The Writer.
+pub fn legacy_skill_dir(skills_dir: &Path) -> PathBuf {
+    skills_dir.join(LEGACY_SKILL_NAME)
+}
+
 /// What is in the skill's folder, as far as this crate cares.
 enum Found {
     Nothing,
@@ -225,7 +249,22 @@ enum Found {
 }
 
 fn look(skills_dir: &Path) -> Found {
-    let folder = skill_dir(skills_dir);
+    look_at(&skill_dir(skills_dir), read_marker)
+}
+
+/// What the skill the app installed as The Writer says about itself, when one is in
+/// `skills_dir`: a folder [`LEGACY_SKILL_NAME`] with a `SKILL.md` that carries the old
+/// generator. Anything else of that name is somebody else's, and this is `None`.
+pub fn legacy_marker(skills_dir: &Path) -> Option<SkillMarker> {
+    match look_at(&legacy_skill_dir(skills_dir), read_legacy_marker) {
+        Found::Ours(marker, _) => Some(marker),
+        _ => None,
+    }
+}
+
+/// What is in `folder`, a `SKILL.md` being ours when `marker` reads one from it.
+fn look_at(folder: &Path, marker: fn(&str) -> Option<SkillMarker>) -> Found {
+    let folder = folder.to_path_buf();
     // `metadata` follows a link: a folder that is linked in from elsewhere counts as what it
     // points at. A link that points nowhere is something this crate did not make.
     let Ok(metadata) = fs::metadata(&folder) else {
@@ -239,7 +278,7 @@ fn look(skills_dir: &Path) -> Found {
         return Found::Foreign;
     }
     match fs::read_to_string(folder.join(SKILL_FILE)) {
-        Ok(text) => match read_marker(&text) {
+        Ok(text) => match marker(&text) {
             Some(marker) => Found::Ours(marker, text),
             None => Found::Foreign,
         },
@@ -291,14 +330,30 @@ pub fn installed_marker(skills_dir: &Path) -> Option<SkillMarker> {
 }
 
 /// The state of the skill in `skills_dir`. Reads only.
+///
+/// A copy under the old name ([`legacy_marker`]) makes it [`StaleReason::OldName`], whatever
+/// is under the new name, unless a folder somebody else made is in the way there: then
+/// nothing can be installed and the state is [`SkillState::Foreign`].
 pub fn skill_state(skills_dir: &Path, spec: &SkillSpec) -> SkillState {
-    match look(skills_dir) {
+    let state = match look(skills_dir) {
         Found::Nothing | Found::EmptyFolder => SkillState::NotInstalled,
-        Found::Foreign => SkillState::Foreign,
+        Found::Foreign => return SkillState::Foreign,
         Found::Ours(marker, text) => match staleness(marker, &text, spec) {
             None => SkillState::Current,
             Some(stale) => SkillState::Stale(stale),
         },
+    };
+    match legacy_marker(skills_dir) {
+        Some(old) => SkillState::Stale(under_the_old_name(old)),
+        None => state,
+    }
+}
+
+fn under_the_old_name(marker: SkillMarker) -> StaleSkill {
+    StaleSkill {
+        version: marker.version,
+        binary: marker.binary,
+        reason: StaleReason::OldName,
     }
 }
 
@@ -306,16 +361,23 @@ pub fn skill_state(skills_dir: &Path, spec: &SkillSpec) -> SkillState {
 ///
 /// Creates `skills_dir` when it does not exist. Refuses with [`SetupError::Foreign`] when a
 /// folder of the skill's name is there that Inner Word did not write.
+///
+/// A copy under the old name ([`legacy_marker`]) is removed once the skill is written
+/// under its own: the change is then [`Change::Updated`], `replaced` says
+/// [`StaleReason::OldName`] and the report lists what was removed (and what a person had
+/// added to the old folder, which stays with it).
 pub fn install_skill(skills_dir: &Path, spec: &SkillSpec) -> Result<Report, SetupError> {
     let text = spec.render();
     let folder = skill_dir(skills_dir);
     let file = folder.join(SKILL_FILE);
     let mut report = Report::new(skills_dir, Change::Installed);
+    let old = legacy_marker(skills_dir);
+    let mut write = true;
     match look(skills_dir) {
         Found::Foreign => return Err(SetupError::Foreign(folder)),
         Found::Ours(_, installed) if installed == text => {
             report.change = Change::Unchanged;
-            return Ok(report);
+            write = false;
         }
         Found::Ours(marker, installed) => {
             report.change = Change::Updated;
@@ -324,28 +386,48 @@ pub fn install_skill(skills_dir: &Path, spec: &SkillSpec) -> Result<Report, Setu
         Found::EmptyFolder => {}
         Found::Nothing => create_dirs(&folder, &mut report.created_dirs)?,
     }
-    write_in_place(&file, &text)?;
-    report.written.push(file);
+    if write {
+        write_in_place(&file, &text)?;
+        report.written.push(file);
+    }
+    if let Some(old) = old {
+        report.change = Change::Updated;
+        report.replaced = Some(under_the_old_name(old));
+        remove_ours_in(&legacy_skill_dir(skills_dir), &mut report)?;
+    }
     Ok(report)
 }
 
 /// Removes the skill from `skills_dir`.
 ///
 /// Deletes the `SKILL.md` Inner Word wrote and the skill's folder when nothing else is in
-/// it. Refuses with [`SetupError::Foreign`] when the folder of that name is not Inner
-/// Word's. When nothing is installed, nothing happens ([`Change::NothingToRemove`]).
+/// it, and the same of a copy under the old name ([`legacy_marker`]). Refuses with
+/// [`SetupError::Foreign`], touching nothing, when the folder of the skill's name is not
+/// Inner Word's. When nothing is installed, nothing happens ([`Change::NothingToRemove`]).
 pub fn remove_skill(skills_dir: &Path) -> Result<Report, SetupError> {
     let folder = skill_dir(skills_dir);
-    let file = folder.join(SKILL_FILE);
     let mut report = Report::new(skills_dir, Change::Removed);
+    let old = legacy_marker(skills_dir).is_some();
     match look(skills_dir) {
-        Found::Nothing | Found::EmptyFolder => {
+        Found::Nothing | Found::EmptyFolder if !old => {
             report.change = Change::NothingToRemove;
             return Ok(report);
         }
+        Found::Nothing | Found::EmptyFolder => {}
         Found::Foreign => return Err(SetupError::Foreign(folder)),
-        Found::Ours(..) => {}
+        Found::Ours(..) => remove_ours_in(&folder, &mut report)?,
     }
+    if old {
+        remove_ours_in(&legacy_skill_dir(skills_dir), &mut report)?;
+    }
+    Ok(report)
+}
+
+/// Removes the `SKILL.md` of a folder of ours, and the folder when nothing else is in it
+/// and it is not a link, recording each path in `report`.
+fn remove_ours_in(folder: &Path, report: &mut Report) -> Result<(), SetupError> {
+    let folder = folder.to_path_buf();
+    let file = folder.join(SKILL_FILE);
     fs::remove_file(&file).map_err(|error| SetupError::io("could not remove", &file, error))?;
     report.removed.push(file);
 
@@ -355,8 +437,8 @@ pub fn remove_skill(skills_dir: &Path) -> Result<Report, SetupError> {
         .collect();
     rest.sort();
     if !rest.is_empty() {
-        report.left_in_place = rest;
-        return Ok(report);
+        report.left_in_place.extend(rest);
+        return Ok(());
     }
     let is_link = fs::symlink_metadata(&folder)
         .map(|metadata| metadata.file_type().is_symlink())
@@ -365,11 +447,11 @@ pub fn remove_skill(skills_dir: &Path) -> Result<Report, SetupError> {
         // The folder is linked in from elsewhere: the link is somebody's arrangement and
         // stays; the now empty folder it points at stays with it.
         report.left_in_place.push(folder);
-        return Ok(report);
+        return Ok(());
     }
     fs::remove_dir(&folder).map_err(|error| SetupError::io("could not remove", &folder, error))?;
     report.removed.push(folder);
-    Ok(report)
+    Ok(())
 }
 
 /// Creates `folder` and the folders above it that are missing, recording each one made.
@@ -837,6 +919,225 @@ mod tests {
         let error = install_skill(&blocked.join("skills"), &fixture.spec()).unwrap_err();
         assert!(matches!(error, SetupError::Io { .. }), "{error}");
         assert!(error.to_string().contains("blocked"), "{error}");
+    }
+
+    // ----- the skill as The Writer installed it -----
+
+    /// Writes the skill as The Writer installed it into `skills`, naming `binary`.
+    fn plant_old_skill(skills: &Path, binary: &Path) -> PathBuf {
+        let folder = skills.join("the-writer");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("SKILL.md"),
+            crate::legacy::old_skill_text(binary, "0.8.0"),
+        )
+        .unwrap();
+        folder
+    }
+
+    fn the_writer_binary() -> PathBuf {
+        PathBuf::from("/Applications/The Writer.app/Contents/MacOS/writer")
+    }
+
+    #[test]
+    fn an_old_install_needs_updating_and_install_replaces_it() {
+        let fixture = Fixture::new();
+        let skills = fixture.skills();
+        let old = plant_old_skill(&skills, &the_writer_binary());
+        fs::create_dir_all(skills.join("somebody-elses-skill")).unwrap();
+        let mut before = fixture.everything();
+
+        assert_eq!(
+            legacy_marker(&skills).map(|marker| marker.version),
+            Some("0.8.0".to_string())
+        );
+        assert_eq!(
+            installed_marker(&skills),
+            None,
+            "nothing under the new name"
+        );
+        let SkillState::Stale(stale) = skill_state(&skills, &fixture.spec()) else {
+            panic!("not stale: {:?}", skill_state(&skills, &fixture.spec()))
+        };
+        assert_eq!(stale.reason, StaleReason::OldName);
+        assert_eq!(stale.version, "0.8.0");
+        assert_eq!(stale.binary, the_writer_binary());
+        assert!(
+            stale
+                .explanation()
+                .contains("installed under the old name The Writer"),
+            "{}",
+            stale.explanation()
+        );
+        assert!(SkillState::Stale(stale.clone()).is_installed());
+        assert_eq!(SkillState::Stale(stale.clone()).label(), "needs update");
+
+        let report = install_skill(&skills, &fixture.spec()).unwrap();
+        assert_eq!(report.change, Change::Updated);
+        assert_eq!(report.replaced, Some(stale));
+        assert_eq!(report.created_dirs, vec![skills.join("inner-word")]);
+        assert_eq!(report.written, vec![skills.join("inner-word/SKILL.md")]);
+        assert_eq!(report.removed, vec![old.join("SKILL.md"), old.clone()]);
+        assert!(report.left_in_place.is_empty());
+        assert_eq!(
+            report.lines(),
+            vec![
+                format!("created folder {}", skills.join("inner-word").display()),
+                format!("wrote {}", skills.join("inner-word/SKILL.md").display()),
+                format!("removed {}", old.join("SKILL.md").display()),
+                format!("removed {}", old.display()),
+            ]
+        );
+        assert_eq!(skill_state(&skills, &fixture.spec()), SkillState::Current);
+        assert_eq!(legacy_marker(&skills), None);
+
+        // Exactly the old folder went and the new one came; nothing else was touched.
+        before.retain(|path| !path.starts_with(&old));
+        before.extend([
+            skills.join("inner-word"),
+            skills.join("inner-word/SKILL.md"),
+        ]);
+        before.sort();
+        assert_eq!(fixture.everything(), before);
+    }
+
+    #[test]
+    fn an_old_install_beside_a_current_one_is_removed_and_nothing_is_rewritten() {
+        let fixture = Fixture::new();
+        let skills = fixture.skills();
+        install_skill(&skills, &fixture.spec()).unwrap();
+        let old = plant_old_skill(&skills, &the_writer_binary());
+        let file = skill_file(&skills);
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+
+        let SkillState::Stale(stale) = skill_state(&skills, &fixture.spec()) else {
+            panic!("not stale")
+        };
+        assert_eq!(stale.reason, StaleReason::OldName);
+
+        let report = install_skill(&skills, &fixture.spec()).unwrap();
+        assert_eq!(report.change, Change::Updated);
+        assert!(report.written.is_empty() && report.created_dirs.is_empty());
+        assert_eq!(report.removed, vec![old.join("SKILL.md"), old.clone()]);
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), modified);
+        assert_eq!(skill_state(&skills, &fixture.spec()), SkillState::Current);
+        assert_eq!(
+            install_skill(&skills, &fixture.spec()).unwrap().change,
+            Change::Unchanged
+        );
+    }
+
+    #[test]
+    fn removing_takes_away_the_old_install_too() {
+        let fixture = Fixture::new();
+        let skills = fixture.skills();
+        let before = fixture.everything();
+
+        // Only the old one.
+        let old = plant_old_skill(&skills, &the_writer_binary());
+        let report = remove_skill(&skills).unwrap();
+        assert_eq!(report.change, Change::Removed);
+        assert_eq!(report.removed, vec![old.join("SKILL.md"), old.clone()]);
+        assert_eq!(
+            skill_state(&skills, &fixture.spec()),
+            SkillState::NotInstalled
+        );
+
+        // Both, the old one with a file a person added.
+        install_skill(&skills, &fixture.spec()).unwrap();
+        plant_old_skill(&skills, &the_writer_binary());
+        fs::write(old.join("notes.md"), "mine").unwrap();
+        let report = remove_skill(&skills).unwrap();
+        assert_eq!(report.change, Change::Removed);
+        assert_eq!(
+            report.removed,
+            vec![
+                skills.join("inner-word/SKILL.md"),
+                skills.join("inner-word"),
+                old.join("SKILL.md"),
+            ]
+        );
+        assert_eq!(report.left_in_place, vec![old.join("notes.md")]);
+        assert_eq!(fs::read_to_string(old.join("notes.md")).unwrap(), "mine");
+        // What is left of the old folder is no longer Inner Word's, and not in the way.
+        assert_eq!(legacy_marker(&skills), None);
+        assert_eq!(
+            skill_state(&skills, &fixture.spec()),
+            SkillState::NotInstalled
+        );
+
+        fs::remove_dir_all(&old).unwrap();
+        fs::remove_dir_all(fixture.home.path().join(".agents")).unwrap();
+        assert_eq!(fixture.everything(), before);
+    }
+
+    #[test]
+    fn a_folder_of_the_old_name_somebody_else_made_is_never_touched() {
+        let fixture = Fixture::new();
+        let skills = fixture.skills();
+        let folder = skills.join("the-writer");
+        fs::create_dir_all(&folder).unwrap();
+        for text in [
+            // A skill of that name of the user's own.
+            "---\nname: the-writer\ndescription: How I write.\n---\nMine.\n".to_string(),
+            // One with a marker, but not The Writer's.
+            "---\nname: the-writer\nmetadata:\n  generator: somebody-else\n---\n".to_string(),
+            // Today's generator in the old folder is not an old install either.
+            fixture.spec().render(),
+        ] {
+            fs::write(folder.join("SKILL.md"), &text).unwrap();
+            assert_eq!(legacy_marker(&skills), None);
+            assert_eq!(
+                skill_state(&skills, &fixture.spec()),
+                SkillState::NotInstalled
+            );
+            assert_eq!(
+                remove_skill(&skills).unwrap().change,
+                Change::NothingToRemove
+            );
+            let report = install_skill(&skills, &fixture.spec()).unwrap();
+            assert_eq!(report.change, Change::Installed);
+            assert!(report.removed.is_empty(), "{:?}", report.removed);
+            let report = remove_skill(&skills).unwrap();
+            assert_eq!(
+                report.removed.len(),
+                2,
+                "only the new folder: {:?}",
+                report.removed
+            );
+            assert_eq!(fs::read_to_string(folder.join("SKILL.md")).unwrap(), text);
+        }
+        // A file of that name, and a link that points nowhere.
+        fs::remove_dir_all(&folder).unwrap();
+        fs::write(&folder, "a file").unwrap();
+        assert_eq!(legacy_marker(&skills), None);
+        install_skill(&skills, &fixture.spec()).unwrap();
+        remove_skill(&skills).unwrap();
+        assert_eq!(fs::read_to_string(&folder).unwrap(), "a file");
+        fs::remove_file(&folder).unwrap();
+        std::os::unix::fs::symlink(fixture.home.path().join("gone"), &folder).unwrap();
+        assert_eq!(legacy_marker(&skills), None);
+        install_skill(&skills, &fixture.spec()).unwrap();
+        assert!(fs::symlink_metadata(&folder).is_ok());
+    }
+
+    #[test]
+    fn an_old_install_behind_a_folder_somebody_else_made_stays_and_nothing_is_touched() {
+        let fixture = Fixture::new();
+        let skills = fixture.skills();
+        let old = plant_old_skill(&skills, &the_writer_binary());
+        fs::create_dir_all(skills.join("inner-word")).unwrap();
+        fs::write(skills.join("inner-word/draft.md"), "notes").unwrap();
+        let before = fixture.everything();
+
+        assert_eq!(skill_state(&skills, &fixture.spec()), SkillState::Foreign);
+        assert!(matches!(
+            install_skill(&skills, &fixture.spec()),
+            Err(SetupError::Foreign(_))
+        ));
+        assert!(matches!(remove_skill(&skills), Err(SetupError::Foreign(_))));
+        assert_eq!(fixture.everything(), before);
+        assert!(old.join("SKILL.md").is_file());
     }
 
     #[test]

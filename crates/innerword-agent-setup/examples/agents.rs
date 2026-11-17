@@ -12,7 +12,9 @@
 
 use std::path::PathBuf;
 
-use innerword_agent_setup::{DEFAULT_BINARY_PATH, Machine, SkillSpec, all_mcp_instructions, survey};
+use innerword_agent_setup::{
+    DEFAULT_BINARY_PATH, Machine, SkillSpec, all_mcp_instructions, survey,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);

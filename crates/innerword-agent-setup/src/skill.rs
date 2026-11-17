@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::SetupError;
+use crate::legacy::LEGACY_GENERATOR;
 use crate::shell;
 
 /// The name of the skill and of its folder. Lowercase letters and hyphens, as the
@@ -151,6 +152,17 @@ pub struct SkillMarker {
 /// The marker of a `SKILL.md`, or `None` when the text was not written by this crate (no
 /// front matter, or no `metadata.generator` with this crate's value).
 pub fn read_marker(skill_md: &str) -> Option<SkillMarker> {
+    marker_of(skill_md, GENERATOR)
+}
+
+/// The marker of a `SKILL.md` that the app wrote when it was called The Writer (generator
+/// [`LEGACY_GENERATOR`]), or `None` when the text is anybody else's.
+pub fn read_legacy_marker(skill_md: &str) -> Option<SkillMarker> {
+    marker_of(skill_md, LEGACY_GENERATOR)
+}
+
+/// The marker of a `SKILL.md` whose `metadata.generator` is `generator`.
+fn marker_of(skill_md: &str, generator_wanted: &str) -> Option<SkillMarker> {
     let front_matter = front_matter(skill_md)?;
     let mut in_metadata = false;
     let (mut generator, mut version, mut binary) = (None, None, None);
@@ -173,7 +185,7 @@ pub fn read_marker(skill_md: &str) -> Option<SkillMarker> {
             _ => {}
         }
     }
-    if generator.as_deref() != Some(GENERATOR) {
+    if generator.as_deref() != Some(generator_wanted) {
         return None;
     }
     Some(SkillMarker {

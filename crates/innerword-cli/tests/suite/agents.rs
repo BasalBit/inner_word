@@ -175,6 +175,117 @@ fn a_folder_somebody_else_made_is_left_alone() {
     );
 }
 
+/// The skill as The Writer installed it, in a skills folder of the sandbox's home.
+fn plant_old_skill(sandbox: &Sandbox, skills: &str) -> std::path::PathBuf {
+    let folder = sandbox.home().join(skills).join("the-writer");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("SKILL.md"),
+        innerword_agent_setup::legacy::old_skill_text(
+            std::path::Path::new("/Applications/The Writer.app/Contents/MacOS/writer"),
+            "0.8.0",
+        ),
+    )
+    .unwrap();
+    folder
+}
+
+#[test]
+fn a_skill_the_writer_installed_is_offered_for_update_replaced_and_removed() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.home().join(".claude")).unwrap();
+    let old = plant_old_skill(&sandbox, ".claude/skills");
+    let new = sandbox.home().join(".claude/skills/inner-word");
+
+    let listing = sandbox.json(&["agents"]);
+    let state = &agent(&listing, "claude-code")["skill"]["state"];
+    assert_eq!(state["state"], "stale", "{state}");
+    assert_eq!(state["reason"], "old-name", "{state}");
+    assert_eq!(state["version"], "0.8.0", "{state}");
+    let text = sandbox.ok(&["agents"]);
+    assert!(
+        text.contains(
+            "Claude Code: skill needs update in ~/.claude/skills (It is installed under the old \
+             name The Writer."
+        ),
+        "{text}"
+    );
+
+    let dry = sandbox.ok(&["agents", "install", "claude-code", "--dry-run"]);
+    assert!(dry.contains("~/.claude/skills: update"), "{dry}");
+    assert!(old.join("SKILL.md").is_file() && !new.exists());
+
+    let installed = sandbox.ok(&["agents", "install", "claude-code"]);
+    assert!(
+        installed.contains("~/.claude/skills: updated"),
+        "{installed}"
+    );
+    for line in [
+        format!("  wrote {}", new.join("SKILL.md").display()),
+        format!("  removed {}", old.join("SKILL.md").display()),
+        format!("  removed {}", old.display()),
+    ] {
+        assert!(installed.contains(&line), "{line} in {installed}");
+    }
+    assert!(!old.exists(), "the old folder is gone");
+    assert!(new.join("SKILL.md").is_file());
+    let listing = sandbox.json(&["agents"]);
+    assert_eq!(
+        agent(&listing, "claude-code")["skill"]["state"]["state"],
+        "current"
+    );
+
+    // Removing takes both names away; a copy only under the old name is found too.
+    plant_old_skill(&sandbox, ".claude/skills");
+    let removed = sandbox.json(&["agents", "remove", "claude-code"]);
+    let paths: Vec<String> = removed["outcomes"][0]["report"]["removed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap().to_string())
+        .collect();
+    assert!(paths.contains(&old.display().to_string()), "{paths:?}");
+    assert!(paths.contains(&new.display().to_string()), "{paths:?}");
+    assert!(!old.exists() && !new.exists());
+
+    plant_old_skill(&sandbox, ".claude/skills");
+    let removed = sandbox.ok(&["agents", "remove", "--all"]);
+    assert!(
+        removed.contains(&format!("  removed {}", old.display())),
+        "{removed}"
+    );
+    assert!(!old.exists());
+}
+
+#[test]
+fn a_the_writer_folder_somebody_else_made_is_left_alone() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.home().join(".claude")).unwrap();
+    let theirs = sandbox.home().join(".claude/skills/the-writer");
+    std::fs::create_dir_all(&theirs).unwrap();
+    let mine = "---\nname: the-writer\ndescription: My notes.\n---\nMine.\n";
+    std::fs::write(theirs.join("SKILL.md"), mine).unwrap();
+
+    let listing = sandbox.json(&["agents"]);
+    assert_eq!(
+        agent(&listing, "claude-code")["skill"]["state"]["state"],
+        "not-installed"
+    );
+    let installed = sandbox.ok(&["agents", "install", "claude-code"]);
+    assert!(
+        installed.contains("~/.claude/skills: installed"),
+        "{installed}"
+    );
+    assert!(!installed.contains("the-writer"), "{installed}");
+    let removed = sandbox.ok(&["agents", "remove", "--all"]);
+    assert!(!removed.contains("the-writer"), "{removed}");
+    assert_eq!(
+        std::fs::read_to_string(theirs.join("SKILL.md")).unwrap(),
+        mine
+    );
+    assert_eq!(std::fs::read_dir(&theirs).unwrap().count(), 1);
+}
+
 #[test]
 fn installing_for_all_agents_writes_only_inside_the_home() {
     let sandbox = Sandbox::new();
@@ -254,6 +365,31 @@ fn the_mcp_instructions_name_this_binary_for_every_agent() {
         text.contains("Add to ") || text.contains("Or add to "),
         "{text}"
     );
+    // The entry of the old name: the agent's own command, or the entry and its file.
+    assert_eq!(all["old_server_name"], "the-writer");
+    assert!(
+        text.contains(
+            "  Old name: If you added the server when the app was called The Writer, remove \
+             that entry: claude mcp remove the-writer\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("delete its \"the-writer\" entry from ~/.cursor/mcp.json."),
+        "{text}"
+    );
+    assert_eq!(
+        claude["agents"][0]["old_entry"]["command"],
+        "claude mcp remove the-writer"
+    );
+    for one in agents {
+        assert!(
+            one["old_entry"]["line"]
+                .as_str()
+                .is_some_and(|line| line.contains("the-writer")),
+            "{one}"
+        );
+    }
     // Printing instructions changes nothing in the home.
     assert_eq!(std::fs::read_dir(sandbox.home()).unwrap().count(), 0);
 }

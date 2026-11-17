@@ -969,7 +969,9 @@ skills live, and whether the skill for Inner Word is installed there and current
         summary: "Install the skill that tells an agent about this tool",
         about: "Writes the skill (one file, inner-word/SKILL.md) into the skills directory of one agent, \
 or with --all of every agent found on this Mac. A skill that is already there is brought up to \
-date. A folder of that name that this tool did not write is left alone.",
+date. A copy installed when the app was called The Writer (the folder the-writer) is replaced: \
+the skill is written under its new name and the old folder removed. A folder of either name that \
+this tool did not write is left alone.",
         positionals: &[optional("agent", AGENT)],
         options: &[switch("all", "Every agent found on this Mac")],
         dry_run: true,
@@ -983,7 +985,8 @@ date. A folder of that name that this tool did not write is left alone.",
         synopsis: "<agent> | --all",
         summary: "Bring an installed skill up to date",
         about: "Rewrites the skill where it is installed, for one agent or with --all everywhere this \
-tool installed it. Nothing is installed where the skill is not.",
+tool installed it, a copy under the old name the-writer included (it is replaced by inner-word). \
+Nothing is installed where the skill is not.",
         positionals: &[optional("agent", AGENT)],
         options: &[switch("all", "Everywhere the skill is installed")],
         dry_run: true,
@@ -994,8 +997,9 @@ tool installed it. Nothing is installed where the skill is not.",
         synopsis: "<agent> | --all",
         summary: "Remove the skill from an agent",
         about: "Deletes the skill from the skills directories one agent reads, or with --all from every \
-directory this tool installed it in. Nothing else in those directories is touched. Agents that \
-share a directory lose the skill together; the output names them.",
+directory this tool installed it in, a copy under the old name the-writer included. Nothing else \
+in those directories is touched. Agents that share a directory lose the skill together; the \
+output names them.",
         positionals: &[optional("agent", AGENT)],
         options: &[switch("all", "Everywhere the skill is installed")],
         dry_run: true,
@@ -1013,7 +1017,9 @@ share a directory lose the skill together; the output names them.",
         summary: "How to add the MCP server to each agent",
         about: "Prints, for one agent or for all of them, the command or the piece of configuration that \
 adds Inner Word's MCP server (\"innerword mcp\") to it, with the path of this binary filled in. \
-Nothing is changed: run the command or paste the configuration yourself.",
+Nothing is changed: run the command or paste the configuration yourself. For each agent it also \
+says how to remove the entry \"the-writer\" it may still have from when the app was called The \
+Writer.",
         positionals: &[optional("agent", AGENT)],
         examples: &["innerword agents mcp", "innerword agents mcp claude-code --json"],
         ..reading("agents mcp", Group::Agents)

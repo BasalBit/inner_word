@@ -55,12 +55,16 @@
 //! A skills directory belongs to the user and to other tools. This crate writes exactly one
 //! file in it, `inner-word/SKILL.md`, never overwrites or removes a folder of that name it
 //! did not write ([`SetupError::Foreign`]), and reports every path it created, wrote or
-//! removed ([`Report`]). Tests hand it a temporary home ([`Machine::isolated`]).
+//! removed ([`Report`]). The one other folder it touches is its own old install,
+//! `the-writer` with the old generator in its `SKILL.md` ([`legacy`]), which installing and
+//! removing take away; a `the-writer` folder without that marker is left alone. Tests hand
+//! it a temporary home ([`Machine::isolated`]).
 
 pub mod agents;
 pub mod detect;
 pub mod error;
 pub mod install;
+pub mod legacy;
 pub mod mcp;
 pub mod shell;
 pub mod skill;
@@ -79,12 +83,14 @@ pub use detect::{
 pub use error::SetupError;
 pub use install::{
     Change, Report, SkillState, StaleReason, StaleSkill, install_skill, installed_marker,
-    remove_skill, skill_dir, skill_file, skill_state,
+    legacy_marker, legacy_skill_dir, remove_skill, skill_dir, skill_file, skill_state,
 };
+pub use legacy::{LEGACY_APP_NAME, LEGACY_GENERATOR, LEGACY_MCP_SERVER_NAME, LEGACY_SKILL_NAME};
 pub use mcp::{
-    McpCommandLines, McpConfigEntry, McpInstructions, all_mcp_instructions, mcp_instructions,
+    McpCommandLines, McpConfigEntry, McpInstructions, McpOldEntry, all_mcp_instructions,
+    mcp_instructions,
 };
 pub use skill::{
     APP_VERSION, DEFAULT_BINARY_PATH, DESCRIPTION, GENERATOR, SKILL_FILE, SKILL_NAME, SkillMarker,
-    SkillSpec, binary_beside, example_lines, mentioned_commands, read_marker,
+    SkillSpec, binary_beside, example_lines, mentioned_commands, read_legacy_marker, read_marker,
 };

@@ -8,7 +8,6 @@
 
 use std::path::PathBuf;
 
-use serde_json::{Value, json};
 use innerword_agent_setup::{
     AgentId, AgentStatus, Batch, Machine, McpInstructions, SkillSpec, SkillState, agent_status,
     all_mcp_instructions, install_for_agent, install_for_detected, mcp_instructions,
@@ -16,6 +15,7 @@ use innerword_agent_setup::{
     update_installed,
 };
 use innerword_mcp::{ErrorKind, Failure, Reply};
+use serde_json::{Value, json};
 
 use crate::parse::{Globals, Parsed};
 use crate::spec::Spec;
@@ -239,6 +239,7 @@ fn mcp(skill: &SkillSpec, instructions: &[McpInstructions]) -> Reply {
         if let Some(note) = one.note {
             text.push_str(&format!("  Note:    {note}\n"));
         }
+        text.push_str(&format!("  Old name: {}\n", one.old_entry.line));
         if let Some(url) = one.docs_url() {
             text.push_str(&format!("  Docs:    {url}\n"));
         }
@@ -249,6 +250,7 @@ fn mcp(skill: &SkillSpec, instructions: &[McpInstructions]) -> Reply {
     let data = json!({
         "binary": skill.binary(),
         "server_name": innerword_agent_setup::MCP_SERVER_NAME,
+        "old_server_name": innerword_agent_setup::LEGACY_MCP_SERVER_NAME,
         "agents": instructions,
     });
     Reply { text, data }

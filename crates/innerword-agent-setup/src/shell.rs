@@ -41,7 +41,10 @@ mod tests {
 
     #[test]
     fn plain_words_stay_as_they_are() {
-        assert_eq!(quote("/usr/local/bin/innerword"), "/usr/local/bin/innerword");
+        assert_eq!(
+            quote("/usr/local/bin/innerword"),
+            "/usr/local/bin/innerword"
+        );
         assert_eq!(quote("inner-word"), "inner-word");
     }
 

@@ -30,7 +30,8 @@ use serde::ser::SerializeStruct;
 use crate::agents::{AGENTS, Agent, AgentId, DetectRule, DirStanding};
 use crate::error::SetupError;
 use crate::install::{
-    Report, SkillState, install_skill, installed_marker, remove_skill, skill_dir, skill_state,
+    Report, SkillState, install_skill, installed_marker, legacy_marker, remove_skill, skill_dir,
+    skill_state,
 };
 use crate::skill::SkillSpec;
 
@@ -370,9 +371,10 @@ fn dirs_of(machine: &Machine, agent: AgentId) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether a skill Inner Word wrote is in `dir`, current or not.
+/// Whether a skill Inner Word wrote is in `dir`, current or not, under its name or under
+/// the old one (`the-writer`, [`crate::legacy`]).
 fn has_ours(dir: &Path) -> bool {
-    installed_marker(dir).is_some()
+    installed_marker(dir).is_some() || legacy_marker(dir).is_some()
 }
 
 /// What was done in one skills directory.
@@ -1061,6 +1063,119 @@ mod tests {
         // An agent without the skill is left alone by an update.
         assert!(update_for_agent(&machine, AgentId::Codex, &home.spec()).is_empty());
         assert!(!home.path(".agents").exists());
+    }
+
+    /// Writes the skill as The Writer installed it into a skills directory of the home.
+    fn plant_old_skill(home: &Home, skills: &str) -> PathBuf {
+        let folder = home.path(skills).join("the-writer");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("SKILL.md"),
+            crate::legacy::old_skill_text(
+                Path::new("/Applications/The Writer.app/Contents/MacOS/writer"),
+                "0.8.0",
+            ),
+        )
+        .unwrap();
+        folder
+    }
+
+    #[test]
+    fn an_old_install_is_found_for_its_agents_replaced_and_removed() {
+        let home = Home::new();
+        home.mkdir(".claude");
+        home.command(".local/bin/codex");
+        let machine = home.machine();
+        let claude_old = plant_old_skill(&home, ".claude/skills");
+        let shared_old = plant_old_skill(&home, ".agents/skills");
+
+        // Each agent has the old copy where it reads, and is offered an update there.
+        for (agent, dir) in [
+            (AgentId::ClaudeCode, "~/.claude/skills"),
+            (AgentId::Codex, "~/.agents/skills"),
+        ] {
+            let skill = agent_status(&machine, agent, &home.spec()).skill.unwrap();
+            assert_eq!(skill.dir_display, dir);
+            let SkillState::Stale(stale) = &skill.state else {
+                panic!("{agent}: not stale: {:?}", skill.state)
+            };
+            assert_eq!(stale.reason, StaleReason::OldName);
+        }
+        let locations = skill_locations(&machine, &home.spec());
+        assert!(
+            locations
+                .iter()
+                .all(|location| matches!(&location.state, SkillState::Stale(_))),
+            "{locations:?}"
+        );
+
+        // Install for one agent replaces the old copy where it is.
+        let batch = install_for_agent(&machine, AgentId::ClaudeCode, &home.spec()).unwrap();
+        assert_eq!(batch.outcomes.len(), 1);
+        let report = batch.outcomes[0].result.as_ref().unwrap();
+        assert_eq!(report.change, Change::Updated);
+        assert_eq!(
+            batch.changed_paths(),
+            vec![
+                home.path(".claude/skills/inner-word"),
+                home.path(".claude/skills/inner-word/SKILL.md"),
+                claude_old.join("SKILL.md"),
+                claude_old.clone(),
+            ]
+        );
+        assert_eq!(home.state(".claude/skills"), SkillState::Current);
+
+        // An update of everything finds the other old copy, though nothing new is installed.
+        let batch = update_installed(&machine, &home.spec());
+        let changed: Vec<_> = batch
+            .reports()
+            .filter(|report| report.touched_the_disk())
+            .map(|report| report.skills_dir.clone())
+            .collect();
+        assert_eq!(changed, vec![home.path(".agents/skills")]);
+        assert!(!shared_old.exists());
+        assert_eq!(home.state(".agents/skills"), SkillState::Current);
+
+        // Removing everywhere finds a copy that is only under the old name.
+        let again = plant_old_skill(&home, ".claude/skills");
+        let batch = remove_everywhere(&machine);
+        assert!(batch.is_ok());
+        let removed = batch.changed_paths();
+        assert!(removed.contains(&again), "{removed:?}");
+        assert!(removed.contains(&home.path(".agents/skills/inner-word")));
+        for dir in [".claude/skills", ".agents/skills"] {
+            assert_eq!(home.state(dir), SkillState::NotInstalled);
+            assert!(!home.path(dir).join("the-writer").exists());
+            assert!(!home.path(dir).join("inner-word").exists());
+        }
+    }
+
+    #[test]
+    fn a_folder_of_the_old_name_that_is_not_ours_is_left_alone_by_every_batch() {
+        let home = Home::new();
+        home.mkdir(".claude");
+        let machine = home.machine();
+        let folder = home.path(".claude/skills/the-writer");
+        fs::create_dir_all(&folder).unwrap();
+        let mine = "---\nname: the-writer\ndescription: My notes on the app.\n---\nMine.\n";
+        fs::write(folder.join("SKILL.md"), mine).unwrap();
+
+        let skill = agent_status(&machine, AgentId::ClaudeCode, &home.spec())
+            .skill
+            .unwrap();
+        assert_eq!(skill.state, SkillState::NotInstalled);
+        assert!(remove_everywhere(&machine).is_empty());
+        assert!(update_installed(&machine, &home.spec()).is_empty());
+        let batch = install_for_agent(&machine, AgentId::ClaudeCode, &home.spec()).unwrap();
+        assert!(
+            !batch
+                .changed_paths()
+                .iter()
+                .any(|path| path.starts_with(&folder))
+        );
+        remove_everywhere(&machine);
+        assert_eq!(fs::read_to_string(folder.join("SKILL.md")).unwrap(), mine);
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
     }
 
     #[test]

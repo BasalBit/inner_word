@@ -4,6 +4,12 @@
 //! Nothing here edits an agent's configuration or runs an agent's command. The user copies
 //! the command and runs it, or pastes the entry into the file that is named.
 //!
+//! The server was registered as [`LEGACY_MCP_SERVER_NAME`] when the app was called The
+//! Writer. Beside the instructions that add it, [`McpInstructions::old_entry`] says in one
+//! line how that entry is taken away: the agent's own remove command with the old name
+//! where the table has one, or which entry to delete from which file. Nothing is checked
+//! for it, since that would mean reading the agent's configuration.
+//!
 //! The templates of [`crate::agents`] take one thing, the absolute path of the `innerword`
 //! binary. It contains a space (`Inner Word.app`), so in a command it is quoted for the
 //! shell ([`crate::shell::quote`]) and in a configuration entry it is a string literal of
@@ -15,6 +21,7 @@ use serde::Serialize;
 
 use crate::agents::{AGENTS, Agent, AgentId, ConfigFormat, MCP_SERVER_NAME, Source};
 use crate::error::SetupError;
+use crate::legacy::{LEGACY_APP_NAME, LEGACY_MCP_SERVER_NAME};
 use crate::shell;
 
 /// The placeholder of the templates.
@@ -48,6 +55,19 @@ pub struct McpConfigEntry {
     pub placement: &'static str,
 }
 
+/// How the entry the app had people add when it was called The Writer is removed from one
+/// agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct McpOldEntry {
+    /// The name of that entry ([`LEGACY_MCP_SERVER_NAME`]).
+    pub server_name: &'static str,
+    /// The agent's own command that removes it, when the agent has a remove command: the
+    /// table's, with the old name in place of the new one.
+    pub command: Option<String>,
+    /// One plain line for a person: the command, or the entry to delete and the file.
+    pub line: String,
+}
+
 /// How Inner Word's MCP server is added to one agent, with the real path of the binary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpInstructions {
@@ -63,6 +83,8 @@ pub struct McpInstructions {
     pub config: Option<McpConfigEntry>,
     /// One line a person needs beside it: a restart, a scope, a caveat.
     pub note: Option<&'static str>,
+    /// How to remove the entry of the app's old name, which this agent may still have.
+    pub old_entry: McpOldEntry,
     /// The documentation this was taken from; the first one is the page to link to.
     pub sources: Vec<Source>,
 }
@@ -144,6 +166,7 @@ fn render(agent: &'static Agent, binary: &Path, home: Option<&Path>) -> Option<M
             placement: config.placement,
         }
     });
+    let old_entry = old_entry(agent, config.as_ref());
     Some(McpInstructions {
         agent: agent.id,
         name: agent.name,
@@ -151,8 +174,53 @@ fn render(agent: &'static Agent, binary: &Path, home: Option<&Path>) -> Option<M
         command,
         config,
         note: agent.mcp.note,
+        old_entry,
         sources,
     })
+}
+
+/// A command of the table with the old name of the server in place of the new one, word for
+/// word.
+fn with_old_name(command: &str) -> String {
+    command
+        .split(' ')
+        .map(|word| {
+            if word == MCP_SERVER_NAME {
+                LEGACY_MCP_SERVER_NAME
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn old_entry(agent: &Agent, config: Option<&McpConfigEntry>) -> McpOldEntry {
+    let lead = format!("If you added the server when the app was called {LEGACY_APP_NAME}");
+    let command = agent
+        .mcp
+        .command
+        .and_then(|command| command.remove)
+        .map(with_old_name);
+    let line = match (&command, config) {
+        (Some(command), _) => format!("{lead}, remove that entry: {command}"),
+        (None, Some(config)) => {
+            let place = match (&config.file_display, config.open_with) {
+                (Some(file), _) => file.clone(),
+                (None, Some(open_with)) => format!("the file opened by: {open_with}"),
+                (None, None) => "its configuration file".to_string(),
+            };
+            format!("{lead}, delete its \"{LEGACY_MCP_SERVER_NAME}\" entry from {place}.")
+        }
+        (None, None) => format!(
+            "{lead}, remove its \"{LEGACY_MCP_SERVER_NAME}\" entry from the agent's settings."
+        ),
+    };
+    McpOldEntry {
+        server_name: LEGACY_MCP_SERVER_NAME,
+        command,
+        line,
+    }
 }
 
 #[cfg(test)]
@@ -361,6 +429,85 @@ mod tests {
         assert_eq!(config.file, None);
         assert!(config.open_with.is_some());
         assert!(config.snippet.contains("context_servers"));
+    }
+
+    /// Every agent that may have the old entry gets one line that says how to remove it: the
+    /// agent's own remove command with the old name, or the entry and the file.
+    #[test]
+    fn the_old_entry_is_removed_with_the_agents_own_command_or_by_hand() {
+        let of = |id: AgentId| {
+            mcp_instructions(id, Path::new(BINARY), None)
+                .unwrap()
+                .unwrap()
+                .old_entry
+        };
+        let claude = of(AgentId::ClaudeCode);
+        assert_eq!(claude.server_name, "the-writer");
+        assert_eq!(
+            claude.command.as_deref(),
+            Some("claude mcp remove the-writer")
+        );
+        assert_eq!(
+            claude.line,
+            "If you added the server when the app was called The Writer, remove that entry: \
+             claude mcp remove the-writer"
+        );
+        assert_eq!(
+            of(AgentId::GeminiCli).command.as_deref(),
+            Some("gemini mcp remove --scope user the-writer")
+        );
+        assert_eq!(
+            of(AgentId::Codex).command.as_deref(),
+            Some("codex mcp remove the-writer")
+        );
+
+        // No remove command in the table: the entry is named, and the file.
+        let cursor = of(AgentId::Cursor);
+        assert_eq!(cursor.command, None);
+        assert_eq!(
+            cursor.line,
+            "If you added the server when the app was called The Writer, delete its \
+             \"the-writer\" entry from ~/.cursor/mcp.json."
+        );
+        let opencode = of(AgentId::OpenCode);
+        assert_eq!(opencode.command, None, "OpenCode has no remove command");
+        assert!(
+            opencode.line.contains("~/.config/opencode/opencode.json"),
+            "{}",
+            opencode.line
+        );
+        let zed = of(AgentId::Zed);
+        assert!(
+            zed.line
+                .contains("the file opened by: zed: open settings file"),
+            "{}",
+            zed.line
+        );
+
+        for instructions in all_mcp_instructions(Path::new(BINARY), None).unwrap() {
+            let old = &instructions.old_entry;
+            assert!(old.line.contains("\"the-writer\"") || old.line.ends_with(" the-writer"));
+            assert!(!old.line.contains(MCP_SERVER_NAME), "{}", old.line);
+            // Every remove command of the table names the server as one word, so that the
+            // old name takes its place.
+            if let Some(remove) = instructions
+                .command
+                .as_ref()
+                .and_then(|c| c.remove.as_ref())
+            {
+                assert_eq!(
+                    remove
+                        .split(' ')
+                        .filter(|word| *word == MCP_SERVER_NAME)
+                        .count(),
+                    1,
+                    "{remove}"
+                );
+                assert_eq!(old.command.as_deref(), Some(with_old_name(remove).as_str()));
+            }
+            let json = serde_json::to_value(&instructions).unwrap();
+            assert_eq!(json["old_entry"]["server_name"], "the-writer");
+        }
     }
 
     #[test]

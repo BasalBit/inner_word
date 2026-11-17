@@ -1,0 +1,42 @@
+Inner Word is made of its own code (MIT License, see LICENSE) and of the third-party
+crates listed below, which are compiled into the app (Contents/MacOS/inner-word) and the
+command line tool (Contents/MacOS/innerword). Each license text is given once, in full,
+with every crate that is used under it.
+
+Also compiled in, and not a crate:
+
+- SQLite, through libsqlite3-sys with its "bundled" feature. SQLite is in the public
+  domain (https://www.sqlite.org/copyright.html).
+
+Where to find a source:
+
+- option-ext 0.2.0 is used under the Mozilla Public License 2.0, unmodified. Its source
+  is at https://crates.io/crates/option-ext/0.2.0 (repository:
+  https://github.com/soc/option-ext).
+
+Summary of licenses:
+{{#each overview}}
+- {{{name}}} ({{count}})
+{{/each}}
+
+{{#each licenses}}
+================================================================================
+{{{name}}}
+================================================================================
+
+Used by:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+{{#unless source_path}}
+
+These crates ship no license file of their own. The standard text of the license
+follows; the copyright is their authors', as their manifests name them:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}}: {{#each crate.authors}}{{#if @index}}, {{/if}}{{{this}}}{{/each}}{{#unless crate.authors}}the authors of {{{crate.name}}}{{/unless}}
+{{/each}}
+{{/unless}}
+
+{{{text}}}
+
+{{/each}}

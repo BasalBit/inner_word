@@ -1,0 +1,53 @@
+# cargo-deny: a guard against a dependency whose license, source or advisory the project
+# should not ship with. Run `cargo deny check` (cargo binstall cargo-deny). The list of
+# allowed licenses is the one about.toml accepts for THIRD-PARTY-LICENSES.txt.
+
+[graph]
+# The app runs on macOS only; crates for Windows, Linux or UEFI are never compiled in.
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+# Test-only crates are not in what ships.
+exclude-dev = true
+
+[advisories]
+version = 2
+# The default rules. With the Cargo.lock of 0.10.0 `cargo deny check advisories` reports
+# no vulnerability and seven crates as unmaintained (paste, async-std, pin-utils,
+# rustls-pemfile, proc-macro-error2, ttf-parser, rustybuzz), none of them a dependency of
+# ours: gpui and the crates under it pull them in. To be told only of the crates this
+# workspace depends on itself, uncomment:
+# unmaintained = "workspace"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MIT-0",
+    "0BSD",
+    "Unlicense",
+    "BSL-1.0",
+    # option-ext (in the app, used unmodified, its source named in the notices) and
+    # cbindgen (a build tool of gpui, not in the binaries).
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+# Our own crates (publish = false) are under the project's LICENSE.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+# Everything comes from crates.io today: no git dependencies, no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"

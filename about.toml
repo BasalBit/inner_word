@@ -1,0 +1,93 @@
+# cargo-about: the licenses of the third-party crates that are compiled into what ships,
+# the app (innerword-app) and the tool (innerword-cli). THIRD-PARTY-LICENSES.txt is made
+# from this file and about.hbs by `scripts/bundle.sh --third-party-licenses`, and
+# scripts/bundle.sh refuses to bundle when that file was made from another Cargo.lock.
+# deny.toml carries the same list of accepted licenses for cargo-deny.
+
+# Every license a shipped crate may be used under. A crate offered under several
+# (MIT OR Apache-2.0) is listed under the first of them that is accepted here.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MIT-0",
+    "0BSD",
+    "Unlicense",
+    "BSL-1.0",
+    # option-ext only (zed-font-kit -> dirs -> dirs-sys -> option-ext), used unmodified;
+    # the notices say where its source is (MPL-2.0, section 3.2).
+    "MPL-2.0",
+]
+
+# The app runs on macOS only; crates for Windows, Linux or UEFI are never compiled in.
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+
+# Build scripts, proc macros' build tools and test-only crates are not in the binaries.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Our own crates (publish = false) are the project, not third parties: LICENSE covers them.
+private = { ignore = true }
+
+# ring carries BoringSSL's and other texts beside its own (LICENSE, LICENSE-BoringSSL,
+# LICENSE-other-bits); the workaround puts all of them in.
+workarounds = ["ring"]
+
+# Crates whose license file cargo-about does not recognise by itself, or which ship a file
+# for one of the licenses they offer only. The checksum is the sha256 of the file as the
+# crate ships it: a new version with another file makes `--fail` stop here until the
+# entry is checked again. (Crates that ship no license file at all get the standard
+# text of their license, with the authors their manifest names; see about.hbs.)
+
+# Offered under CC0-1.0 OR MIT-0 OR Apache-2.0; it ships the CC0 text, which is taken.
+[dunce.clarify]
+license = "CC0-1.0"
+[[dunce.clarify.files]]
+path = "LICENSE"
+license = "CC0-1.0"
+checksum = "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+
+# The Apache text is read as "Pixar" (a modified Apache license) at the default threshold.
+[ryu.clarify]
+license = "Apache-2.0 OR BSL-1.0"
+[[ryu.clarify.files]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+
+[sync_wrapper.clarify]
+license = "Apache-2.0"
+[[sync_wrapper.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+
+# Two BSD-3-Clause texts in one Markdown file (OpenEXR's and the exrs project's).
+[exr.clarify]
+license = "BSD-3-Clause"
+[[exr.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "97e4d3aa7a9e8ac31979c16ca8bb2b628a9cb72c3362185ad2bf4ad77f43551f"
+
+# BSD-3-Clause for the crate, and MIT for src/simd.rs, in one file.
+[sha1_smol.clarify]
+license = "BSD-3-Clause"
+[[sha1_smol.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+checksum = "282a21b0710441c364025461a447362daf18f5798a7b72ae2f801a2aa536da51"
+
+# MIT for the crate, with the texts of the code it took from musl and others.
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"

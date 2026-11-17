@@ -55,7 +55,10 @@ Requirements
 
 macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on a Mac with Apple
 silicon. The name of the disk image says which kind of Mac it is for:
-"arm64" is Apple silicon, "x86_64" is Intel, "universal" runs on both.
+"universal" runs on both, "arm64" on Apple silicon only. On an Intel Mac use
+the universal one. (A copy you build yourself with scripts/bundle.sh is
+named after the Mac it was built on, "arm64" or "x86_64", unless it was
+built with --universal.)
 
 
 Finding your way
@@ -246,9 +249,9 @@ with your library (for example an older copy that was not quit). Switch to
 that copy, or quit it and open Inner Word again. Two copies never work on one
 library at the same time, so that neither overwrites what the other wrote.
 
-If you are replacing an earlier preview build: quit the old copy before you
-open this one. The preview does not take part in that check, so the two
-could otherwise have your library open together.
+If you are replacing a version before 0.2.0: quit the old copy before you
+open this one. A version that old does not take part in that check, so the
+two could otherwise have your library open together.
 
 
 The assistant
@@ -346,8 +349,28 @@ a copy of them: "library.db" is your documents, "images.db" the pictures in
 them.
 
 
-It used to be called The Writer
--------------------------------
+Privacy and network
+-------------------
+
+Inner Word has no account. It sends no usage data, does not check for
+updates and sends no crash reports. It reaches the network only here:
+
+- Adding a page (File > Import Page..., a drop, or an agent's "innerword
+  page add") downloads the pieces on the web that the page names, once,
+  with curl. After that the page needs nothing from the network.
+- The assistant sends something only when you send a message, through your
+  own Claude Code sign-in (see "The assistant"). To find out whether Claude
+  Code is there, Inner Word runs "claude --version" and "claude auth status"
+  at launch and when the settings open.
+- A link opens in your browser only when you click it, or choose a command
+  that opens it.
+- A page shown in Inner Word has the network blocked: it shows what was
+  stored when it was added, and nothing else.
+- Spelling is your Mac's own spell checker, on your Mac.
+
+
+If you used The Writer (before 0.10.0)
+--------------------------------------
 
 Until version 0.9.0 Inner Word was called The Writer. Nothing of yours is
 lost in the change of name:
@@ -364,3 +387,35 @@ lost in the change of name:
   server, "the-writer". Inner Word > Agents... offers to update the skill
   (the old one is removed with it) and says, under each agent, how to remove
   the old MCP server; then add Inner Word's as the panel shows.
+
+
+Source code and license
+-----------------------
+
+Inner Word is open source, under the MIT License. Its source code is at
+
+    https://github.com/BasalBit/inner_word
+
+The file LICENSE beside this one is the license. THIRD-PARTY-LICENSES.txt
+lists the code of others that is built into the app and the tool, each with
+its license. Both are inside the app too, in Contents/Resources.
+
+
+Report a problem
+----------------
+
+Report a bug, or ask for something, in GitHub Issues:
+
+    https://github.com/BasalBit/inner_word/issues
+
+Say which version you have (Inner Word > About Inner Word) and which macOS.
+
+Do not report a security problem in an issue. Report it privately with the
+form under Security > Report a vulnerability in the same repository:
+
+    https://github.com/BasalBit/inner_word/security/advisories/new
+
+
+Inner Word is an independent project, not affiliated with or endorsed by
+Apple, Anthropic, OpenAI, Google, GitHub or the makers of the other agents
+named here. Their names are trademarks of their owners.

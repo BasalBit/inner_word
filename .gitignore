@@ -3,3 +3,11 @@
 /dist/
 .DS_Store
 *.swp
+.claude/settings.local.json
+CLAUDE.local.md
+.idea/
+.vscode/
+*.profraw
+*.orig
+*.dmg
+.env*

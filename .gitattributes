@@ -1,0 +1,15 @@
+# Text files are stored and checked out with LF line endings.
+* text=auto eol=lf
+
+# Pictures and the app icon are binary: never diffed or converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+
+# The landing page and the notes are documentation, not the app's languages on GitHub.
+site/** linguist-documentation
+docs/** linguist-documentation

@@ -4,6 +4,9 @@ description = "The `innerword` command line tool: Inner Word's library for agent
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "innerword"

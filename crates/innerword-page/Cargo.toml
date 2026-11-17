@@ -4,6 +4,9 @@ description = "Pages for Inner Word: an HTML file or folder made into the files 
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 # No GPUI and no WebKit: a pure crate (`CARGO_TARGET_DIR=target-pure`), used by the
 # command layer for agents and by the app. It depends on nothing of ours.

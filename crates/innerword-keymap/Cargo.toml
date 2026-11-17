@@ -4,6 +4,9 @@ description = "The keyboard shortcuts of Inner Word as data: keystroke text, the
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 serde.workspace = true

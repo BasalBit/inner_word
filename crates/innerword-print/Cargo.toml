@@ -4,6 +4,9 @@ description = "Printing for Inner Word: what a printed page is as data, the PDF 
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 # No GPUI in this crate, and yet it builds and tests in the default `target/`
 # (not in `target-pure`): everything below is compiled there for gpui already,

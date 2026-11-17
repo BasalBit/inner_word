@@ -4,6 +4,9 @@ description = "Image files for Inner Word: bytes as they come (a file, the clipb
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 # No GPUI: a pure crate (`CARGO_TARGET_DIR=target-pure`), used by the app and
 # by the command layer for agents alike.

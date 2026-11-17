@@ -4,6 +4,9 @@ description = "Markdown, plain-text and DOCX exporters and Markdown and plain-te
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 innerword-core.workspace = true

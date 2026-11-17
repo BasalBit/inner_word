@@ -6,6 +6,9 @@ members = ["crates/*"]
 version = "0.10.0"
 edition = "2024"
 publish = false
+license = "MIT"
+repository = "https://github.com/BasalBit/inner_word"
+homepage = "https://basalbit.github.io/inner_word/"
 
 [workspace.dependencies]
 # Internal crates
@@ -49,8 +52,9 @@ innerword-web = { path = "crates/innerword-web" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.
-# runtime_shaders: this machine has no offline Metal toolchain (xcrun metal fails with
-# "missing Metal Toolchain"), so shaders are compiled at runtime by Metal.framework.
+# runtime_shaders: the offline Metal compiler is an optional download in recent Xcode
+# (xcodebuild -downloadComponent MetalToolchain); with runtime_shaders Metal.framework
+# compiles the shaders when the app starts, so neither contributors nor CI need it.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -70,7 +74,7 @@ core-graphics = "0.24"
 # Throwaway libraries on disk in tests.
 tempfile = "3"
 
-# Disk on the build machine is tight: keep debug info minimal.
+# Keep debug info minimal, which keeps target/ small.
 [profile.dev]
 debug = "line-tables-only"
 

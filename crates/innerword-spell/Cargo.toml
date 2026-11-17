@@ -4,6 +4,9 @@ description = "Spell checking for Inner Word: the spell service (the macOS syste
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 # tests/main.rs is the only test target; its modules are in tests/suite/.
 autotests = false
 autoexamples = false

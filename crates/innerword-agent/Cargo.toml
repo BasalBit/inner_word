@@ -4,6 +4,9 @@ description = "The headless command layer of Inner Word: every operation an agen
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 innerword-core.workspace = true

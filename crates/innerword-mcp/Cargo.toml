@@ -4,6 +4,9 @@ description = "The Model Context Protocol server of Inner Word: the library's op
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 innerword-agent.workspace = true

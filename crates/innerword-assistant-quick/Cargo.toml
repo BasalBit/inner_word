@@ -4,6 +4,9 @@ description = "The quick chat of Inner Word's assistant: a small popover at the 
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 # tests/main.rs is the one test binary; the other files in tests/ are its modules.
 autotests = false
 

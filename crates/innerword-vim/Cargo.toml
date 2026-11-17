@@ -4,6 +4,9 @@ description = "Vim emulation engine for Inner Word."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 # One integration-test binary: tests/main.rs with one module per area.
 autotests = false
 

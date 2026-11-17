@@ -1,0 +1,93 @@
+name: Release
+
+# A tag v<version> builds both disk images and makes a draft release with them.
+# The draft is published by hand, after a look at it.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and draft the release
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Add the Intel target for the universal build
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Check that the tag names the version of the app
+        id: version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          crate_version="$(cargo pkgid -p innerword-app | sed -E 's/.*[#@]//')"
+          if [ "$tag_version" != "$crate_version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME says $tag_version, but innerword-app is $crate_version."
+            exit 1
+          fi
+          echo "version=$crate_version" >> "$GITHUB_OUTPUT"
+
+      - name: Take the release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v heading="## [$VERSION]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section \"## [$VERSION]\"."
+            exit 1
+          fi
+
+      # bundle.sh launches the bundled app in its smoke test (the app, the tool while the
+      # app is open, the MCP server, the fake assistant, a changed key). If the runners ever
+      # cannot run it, add --no-smoke-test to both lines below.
+      - name: Build the Apple silicon disk image
+        run: scripts/bundle.sh
+
+      - name: Build the universal disk image
+        run: scripts/bundle.sh --universal
+
+      - name: Write SHA256SUMS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        working-directory: dist
+        run: |
+          shasum -a 256 "Inner-Word-$VERSION-arm64.dmg" "Inner-Word-$VERSION-universal.dmg" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --verify-tag \
+            --title "Inner Word $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "dist/Inner-Word-$VERSION-universal.dmg" \
+            "dist/Inner-Word-$VERSION-arm64.dmg" \
+            dist/SHA256SUMS \
+            THIRD-PARTY-LICENSES.txt

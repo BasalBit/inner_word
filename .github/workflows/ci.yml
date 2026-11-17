@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+# Every job runs on macOS: the crates use AppKit, WebKit, ImageIO, CoreText and PDFKit.
+# The toolchain, its components and its targets come from rust-toolchain.toml.
+# `--lib --tests` (and `--bins --tests` for innerword-cli, which has no library) keeps
+# cargo from building the examples, each of which links GPUI and is about 150 MB.
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - run: cargo fmt --all --check
+
+  pure:
+    name: Pure crates (target-pure)
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: target-pure
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pure
+          workspaces: ". -> target-pure"
+      # A guard: anything that forgets its own temporary library lands here, never in a
+      # real library. (The runner context is not available in a job's env, hence a step.)
+      - name: Point INNER_WORD_DATA_DIR at a temporary folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/library"
+          echo "INNER_WORD_DATA_DIR=$RUNNER_TEMP/library" >> "$GITHUB_ENV"
+      - name: Test the pure crates
+        run: >
+          cargo test --lib --tests
+          -p innerword-core
+          -p innerword-store
+          -p innerword-image
+          -p innerword-export
+          -p innerword-vim
+          -p innerword-keymap
+          -p innerword-page
+          -p innerword-mcp
+          -p innerword-agent-setup
+          -p innerword-assistant
+      - name: Test innerword-agent (its suite runs twice, the second time through a stand-in app)
+        run: cargo test --lib --tests -p innerword-agent
+      - name: Test innerword-cli (runs the built tool, with the real WebKit check)
+        run: cargo test --bins --tests -p innerword-cli
+      - name: Test innerword-web (WebKit offscreen, a program of its own)
+        run: cargo test --lib --tests -p innerword-web
+
+  gpui:
+    name: GPUI crates (target)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gpui
+          workspaces: ". -> target"
+      - name: Point INNER_WORD_DATA_DIR at a temporary folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/library"
+          echo "INNER_WORD_DATA_DIR=$RUNNER_TEMP/library" >> "$GITHUB_ENV"
+      - name: Test the GPUI crates and innerword-print
+        run: >
+          cargo test --lib --tests
+          -p innerword-print
+          -p innerword-ui
+          -p innerword-editor
+          -p innerword-editor-tools
+          -p innerword-vim-mode
+          -p innerword-comments
+          -p innerword-spell
+          -p innerword-library
+          -p innerword-keymap-ui
+          -p innerword-assistant-ui
+          -p innerword-assistant-quick
+          -p innerword-app
+      - name: Build the app
+        run: cargo build -p innerword-app
+
+  licenses:
+    name: Licenses (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses

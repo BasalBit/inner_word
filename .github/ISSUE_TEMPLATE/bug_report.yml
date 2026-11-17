@@ -1,0 +1,90 @@
+name: Bug report
+description: Something in Inner Word does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug.
+
+        **Do not attach `library.db`, `images.db` or private documents.** They hold your writing. If the bug needs a document to show, make a small one with text you do not mind sharing.
+
+        A security problem does not belong here: report it privately as [SECURITY.md](https://github.com/BasalBit/inner_word/blob/main/SECURITY.md) says.
+  - type: input
+    id: app-version
+    attributes:
+      label: Inner Word version
+      description: Inner Word > About Inner Word. If you built it yourself, the commit.
+      placeholder: "0.10.0"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Apple menu > About This Mac.
+      placeholder: "15.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Mac
+      description: In About This Mac, "Chip" means Apple silicon and "Processor" means Intel.
+      options:
+        - Apple silicon
+        - Intel
+    validations:
+      required: true
+  - type: dropdown
+    id: download
+    attributes:
+      label: Which build
+      options:
+        - Universal disk image
+        - Apple silicon (arm64) disk image
+        - Built from source
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, one step per line, from opening the app. Say whether you used the keyboard or the mouse.
+      placeholder: |
+        1. Open a document
+        2. Select a word with the mouse
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Screenshots help. Crop out text you do not want to share.
+    validations:
+      required: true
+  - type: dropdown
+    id: library
+    attributes:
+      label: Was your library affected?
+      description: Did text, a document, a picture or a page go missing or change?
+      options:
+        - "No"
+        - "Yes: something was lost or changed"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Settings that matter (Vim mode, page view, the assistant, an agent that was working), and messages from the app or from `innerword`.
+    validations:
+      required: false

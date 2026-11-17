@@ -22,38 +22,12 @@ on a secure origin.
 
 Any static host serves the folder as it is.
 
-- **GitHub Pages, from a folder.** GitHub Pages can publish only the repository root or a
-  folder named `/docs` from a branch. Either rename `site/` to `docs/` and choose
-  *Settings > Pages > Deploy from a branch > main > /docs*, or use the workflow below.
-- **GitHub Pages, with Actions** (keeps the folder named `site/`): choose
-  *Settings > Pages > Source: GitHub Actions* and add `.github/workflows/pages.yml`:
-
-  ```yaml
-  name: Pages
-  on:
-    push:
-      branches: [main]
-      paths: [site/**]
-    workflow_dispatch:
-  permissions:
-    contents: read
-    pages: write
-    id-token: write
-  concurrency: { group: pages, cancel-in-progress: true }
-  jobs:
-    deploy:
-      runs-on: ubuntu-latest
-      environment: { name: github-pages, url: "${{ steps.deployment.outputs.page_url }}" }
-      steps:
-        - uses: actions/checkout@v4
-        - uses: actions/configure-pages@v5
-        - uses: actions/upload-pages-artifact@v3
-          with: { path: site }
-        - id: deployment
-          uses: actions/deploy-pages@v4
-  ```
-
-  The page is then at `https://basalbit.github.io/inner_word/`.
+- **GitHub Pages, with Actions** (the way this repository is set up): the workflow
+  `.github/workflows/pages.yml` publishes this folder on every push to `main` that changes
+  `site/`, and on demand from the Actions tab (*Run workflow*). One setting is needed once:
+  *Settings > Pages > Build and deployment > Source: GitHub Actions*. The page is then at
+  `https://basalbit.github.io/inner_word/`. GitHub Pages can publish a folder from a branch
+  only when it is the repository root or `/docs`, which is why the workflow is used.
 - **Netlify**: a new site from the repository, base directory `site`, no build command,
   publish directory `site`. Or drag the `site` folder onto Netlify Drop.
 - **Cloudflare Pages**: connect the repository, framework preset *None*, no build
@@ -82,11 +56,13 @@ release:
 
 1. Change `data-version` (and the two sizes, if they changed).
 2. Publish a GitHub release with the tag **`v<version>`** (for example `v0.11.0`) and
-   upload the two disk images under exactly these names:
+   the two disk images under exactly these names:
    - `Inner-Word-<version>-universal.dmg`
    - `Inner-Word-<version>-arm64.dmg`
 
-   The links are
+   Pushing the tag runs `.github/workflows/release.yml`, which builds both images with
+   `scripts/bundle.sh` under those names and makes a draft release with them; check the
+   draft and publish it. The links are
    `https://github.com/BasalBit/inner_word/releases/download/v<version>/Inner-Word-<version>-universal.dmg`
    and the same with `-arm64`. A link to a tag or a file name that does not exist is a
    404, so check both after publishing.

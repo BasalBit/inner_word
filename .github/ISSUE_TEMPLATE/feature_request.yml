@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest something Inner Word should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the idea. Inner Word keeps a few rules: everything works from the keyboard and with the mouse alone, there is no permanent toolbar, and the library stays on your Mac. A suggestion that fits them is easier to take up.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The writing task, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you suggest
+      description: How it could work, from the keyboard and with the mouse.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead now
+      description: Workarounds, or how other apps do it.
+    validations:
+      required: false

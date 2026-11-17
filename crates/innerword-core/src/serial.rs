@@ -83,7 +83,9 @@ use crate::settings::{
     DocumentSettings, Margins, Orientation, PageSetup, PaperSize, SpellingLanguage, Typography,
 };
 
-/// The `"format"` tag of serialised documents.
+/// The `"format"` tag of serialised documents. It and [`FRAGMENT_FORMAT`] keep the
+/// app's old name on purpose: every stored document carries them, so a rename would
+/// make existing libraries unreadable.
 pub const DOCUMENT_FORMAT: &str = "the-writer-document";
 /// The `"format"` tag of serialised fragments.
 pub const FRAGMENT_FORMAT: &str = "the-writer-fragment";

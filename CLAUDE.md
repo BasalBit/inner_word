@@ -471,7 +471,7 @@ works while the app is running: then the app makes the tool's changes ("While th
 open" below).
 
 - **Where it is.** In the bundle at `Inner Word.app/Contents/MacOS/innerword`, beside the
-  app's executable, built from the same commit by `scripts/bundle.sh` and signed with the
+  app's executable (`inner-word`: the app has a hyphen in its name, the tool has none), built from the same commit by `scripts/bundle.sh` and signed with the
   bundle. Agents call it by its absolute path; nothing is added to `PATH`. A debug app
   looks for it at `target/debug/innerword` (`cargo build -p innerword-cli`). The script's smoke
   test runs the bundled tool on a temporary library: create, read back, the app shows the
@@ -520,7 +520,7 @@ open" below).
     goes when the writer edits, because then it would take out their words), or what one
     request moved to the trash. For a document that is not the open one the button is
     **Open**. The same two are commands without a key ("Undo the last change by an agent",
-    "Go to the last change by an agent": the palette, Inner Word menu).
+    "Go to the last change by an agent": the palette, the Inner Word menu).
   - **Vim mode keeps what the writer is in the middle of.** The editor reports a change
     it took over as any edit, and Vim mode takes an edit it did not make for the writer's
     own doing elsewhere in the app, which cancels a half-typed command and closes the
@@ -790,6 +790,12 @@ open" below).
   change, make the smallest additive change only if its owner is not currently working on it;
   otherwise report it. Compile errors in a crate you do not own are usually another change in
   flight: wait a minute and retry rather than "fixing" it.
+- **Saved names keep their old spelling.** The project was called "The Writer" up to 0.9.0.
+  Three names written into files people keep are still spelled that way on purpose:
+  `"the-writer-document"` and `"the-writer-fragment"` (the document JSON in the library, its
+  versions and the clipboard; `innerword-core/src/serial.rs`) and `"the-writer-shortcuts"`
+  (the shortcuts file; `innerword-keymap/src/file.rs`). Changing them makes existing
+  libraries and exported files unreadable: never "fix" them in a rename.
 - **Dependencies** go in your crate's own `Cargo.toml`. The root `Cargo.toml` changes only
   for dependencies shared by several crates.
 - **Commits are incremental.** Commit each working milestone, limited to the paths you own:

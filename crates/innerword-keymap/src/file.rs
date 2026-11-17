@@ -92,7 +92,8 @@ use crate::effective::apply;
 use crate::keystroke::{KeySequence, KeystrokeError};
 use crate::verdict::{Absent, Collision, Listed, Refusal, collisions_in, guard};
 
-/// The `format` of a shortcuts file.
+/// The `format` of a shortcuts file. It keeps the app's old name on purpose: files
+/// people exported carry it, and a rename would make them unreadable.
 pub const FILE_FORMAT: &str = "the-writer-shortcuts";
 
 /// The `version` of the format this crate writes, and the latest it

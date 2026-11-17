@@ -47,7 +47,7 @@ The version is named in one place: the attributes on the `<html>` element at the
 `index.html`.
 
 ```html
-<html lang="en" data-version="0.10.0" data-repo="https://github.com/BasalBit/inner_word"
+<html lang="en" data-version="0.10.1" data-repo="https://github.com/BasalBit/inner_word"
       data-size-universal="25 MB" data-size-arm64="12 MB">
 ```
 

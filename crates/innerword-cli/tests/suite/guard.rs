@@ -21,7 +21,7 @@ fn a_process_started_by_the_harness_sees_only_the_sandbox() {
     // exported, not a PATH with the user's tools.
     assert_eq!(
         names,
-        vec!["HOME", "PATH", "INNER_WORD_DATA_DIR"],
+        vec!["HOME", "INNER_WORD_DATA_DIR", "PATH"],
         "{printed}"
     );
     let root = sandbox.root();

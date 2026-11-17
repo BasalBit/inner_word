@@ -11,7 +11,7 @@ no account and no subscription. It is written in Rust on
   <img src="site/assets/hero.webp" width="1200" alt="The Inner Word window. On the left a library of folders with a novel in two parts, blog drafts, notes and a social post. On the right a chapter set in a serif column with a block quote and a to-do list.">
 </picture>
 
-Website: <https://basalbit.github.io/inner_word/>
+Website: <https://innerword.io/>
 
 ## Download
 
@@ -193,7 +193,7 @@ it.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [CHANGELOG.md](CHANGELOG.md)
-- Website: <https://basalbit.github.io/inner_word/>
+- Website: <https://innerword.io/>
 
 ## License
 

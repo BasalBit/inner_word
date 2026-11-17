@@ -1,0 +1,82 @@
+name: Site
+
+# Publishes site/ to https://innerword.io/ on Hostinger: rsync over SSH into the domain's
+# public_html. Secrets: SSH_PRIVATE_KEY (a deploy key for this repository only),
+# REMOTE_USER, REMOTE_HOST. The server's host key is pinned below (see site/README.md).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+env:
+  SSH_PORT: "65002"
+  # The host key belongs to this server; the job refuses any other REMOTE_HOST.
+  PINNED_HOST: "46.202.156.138"
+  KNOWN_HOST: "[46.202.156.138]:65002 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICpbxziYLdcu7xQs/2p3UblxyIUDcGn8OS+gNwT1+Iy8"
+  SITE_URL: "https://innerword.io/"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish site/ over SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_USER: ${{ secrets.REMOTE_USER }}
+          REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REMOTE_USER}" ] || [ -z "${SSH_PRIVATE_KEY}" ]; then
+            echo "::error::The secrets SSH_PRIVATE_KEY and REMOTE_USER must be set."
+            exit 1
+          fi
+          if [ "${REMOTE_HOST}" != "${PINNED_HOST}" ]; then
+            echo "::error::REMOTE_HOST is not ${PINNED_HOST}, the server whose host key this workflow pins. If Hostinger moved the site, update PINNED_HOST and KNOWN_HOST (site/README.md says how)."
+            exit 1
+          fi
+          dir="${RUNNER_TEMP}/ssh"
+          mkdir -m 700 -p "$dir"
+          trap 'rm -rf "$dir"' EXIT
+          ( umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > "$dir/key" )
+          chmod 600 "$dir/key"
+          printf '%s\n' "$KNOWN_HOST" > "$dir/known_hosts"
+          ssh_cmd="ssh -p ${SSH_PORT} -i $dir/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$dir/known_hosts"
+          rsync -rlptz --delete --chmod=D755,F644 \
+            --exclude=README.md \
+            --filter='P .well-known/' \
+            -e "$ssh_cmd" \
+            site/ "${REMOTE_USER}@${PINNED_HOST}:/home/${REMOTE_USER}/domains/innerword.io/public_html/"
+
+      - name: Check the live page
+        run: |
+          set -uo pipefail
+          want=$(sed -n 's/.*data-version="\([^"]*\)".*/\1/p' site/index.html | head -n 1)
+          echo "Expecting data-version=\"${want}\" at ${SITE_URL}"
+          for attempt in 1 2 3 4 5 6; do
+            if page=$(curl -fsSL --max-time 20 -H 'Cache-Control: no-cache' "${SITE_URL}?deploy=${GITHUB_RUN_ID}-${attempt}"); then
+              if grep -q "data-version=\"${want}\"" <<<"$page"; then
+                echo "The live page serves version ${want}."
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          insecure=$(curl -fsSL --max-time 20 -k "${SITE_URL}" || true)
+          if grep -q "data-version=\"${want}\"" <<<"$insecure"; then
+            echo "::warning::The page serves version ${want}, but only without checking TLS: the certificate for innerword.io may not be issued yet."
+          else
+            echo "::warning::${SITE_URL} did not serve data-version=\"${want}\" after six tries (TLS may not be ready yet for a new domain, or the CDN still has the old page). Check it by hand."
+          fi

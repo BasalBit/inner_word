@@ -1,10 +1,10 @@
 # Inner Word: the landing page
 
-A static page: `index.html`, `styles.css`, `script.js` and `assets/`. No build step, no
-framework, no web fonts, no analytics. The page makes no request to any other site; the
-only addresses it names are links to GitHub. Every path is relative, so it works at a
-domain root (`https://innerword.app/`) and under a subpath
-(`https://basalbit.github.io/inner_word/`) alike.
+A static page at <https://innerword.io/>: `index.html`, `styles.css`, `script.js`,
+`assets/` and `.htaccess` (the server's settings). No build step, no framework, no web
+fonts, no analytics. The page makes no request to any other site; the only addresses it
+names are links to GitHub. Every path is relative, so it works at a domain root and under
+a subpath alike.
 
 ## Preview locally
 
@@ -16,30 +16,75 @@ python3 -m http.server 8000
 
 Opening `index.html` straight from the disk works too. Only the "Copy" button of the
 Terminal command needs `http://localhost`, because browsers allow clipboard access only
-on a secure origin.
+on a secure origin. `python3 -m http.server` does not read `.htaccess`, so the
+redirects, headers and Content-Security-Policy apply only on the server.
 
-## Host it
+## Where it is served from
 
-Any static host serves the folder as it is.
+The page is at **<https://innerword.io/>**, on the owner's Hostinger shared hosting
+(LiteSpeed), in `/home/<REMOTE_USER>/domains/innerword.io/public_html`. DNS for
+`innerword.io` and `www.innerword.io` points at Hostinger's CDN, and Hostinger issues the
+TLS certificate itself. GitHub Pages is no longer used (the old address,
+`basalbit.github.io/inner_word/`, is not kept up to date).
 
-- **GitHub Pages, with Actions** (the way this repository is set up): the workflow
-  `.github/workflows/pages.yml` publishes this folder on every push to `main` that changes
-  `site/`, and on demand from the Actions tab (*Run workflow*). One setting is needed once:
-  *Settings > Pages > Build and deployment > Source: GitHub Actions*. The page is then at
-  `https://basalbit.github.io/inner_word/`. GitHub Pages can publish a folder from a branch
-  only when it is the repository root or `/docs`, which is why the workflow is used.
-- **Netlify**: a new site from the repository, base directory `site`, no build command,
-  publish directory `site`. Or drag the `site` folder onto Netlify Drop.
-- **Cloudflare Pages**: connect the repository, framework preset *None*, no build
-  command, build output directory `site`. Or upload the folder directly
-  (`npx wrangler pages deploy site`).
+### The workflow
+
+`.github/workflows/site.yml` ("Site") publishes this folder on every push to `main` that
+changes `site/` or the workflow, and on demand from the Actions tab (*Run workflow*). It
+copies `site/` with `rsync -rlptz --delete --chmod=D755,F644` over SSH (port 65002) into
+`public_html`: what is no longer in `site/` is removed there, `README.md` (these notes)
+is never published, and `.well-known/` on the server is never deleted (Hostinger may use
+it for certificate checks). Then it fetches `https://innerword.io/` a few times and checks
+that the page serves the `data-version` of `index.html`; while the certificate of a new
+domain is not issued yet, that is a warning and not a failure.
+
+`.htaccess` sends `http://` and `www.innerword.io` to `https://innerword.io/` (301, the path
+kept), hides dotfiles (except `.well-known`), sets the caching (pictures 7 days,
+`styles.css` and `script.js` an hour, the page itself `no-cache`) and the security
+headers, among them a Content-Security-Policy that allows only the page's own script,
+style sheet and pictures. A new inline `<script>`, `style="..."` attribute, `data:` image,
+font or request to another site has to be added to that policy, or the browser blocks it.
+
+### The secrets
+
+Three repository secrets (*Settings > Secrets and variables > Actions*):
+
+- `SSH_PRIVATE_KEY`: the private half of the deploy key.
+- `REMOTE_USER`: the SSH user of the hosting account (hPanel > *SSH Access*).
+- `REMOTE_HOST`: the server's IP address (hPanel > *SSH Access*). The workflow refuses
+  any other address than the one whose host key it pins.
+
+**The deploy key** is an ed25519 key made for this repository only; its public half is in
+hPanel > *SSH Access* > *SSH keys* under the name "innerword.io GitHub Actions". To rotate
+it:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "innerword.io GitHub Actions" -f innerword-deploy
+# hPanel > SSH Access: add innerword-deploy.pub, then delete the old key there
+gh secret set SSH_PRIVATE_KEY -R BasalBit/inner_word < innerword-deploy
+rm innerword-deploy innerword-deploy.pub   # run the workflow once to check
+```
+
+**The server's host key is pinned** in the workflow (`PINNED_HOST` and `KNOWN_HOST`), and
+SSH checks it strictly, so a server that is not Hostinger's is refused. If Hostinger moves
+the account to another server (the IP in hPanel > *SSH Access* changes, or the job fails
+with "Host key verification failed"), read the new key and compare it with the
+fingerprint hPanel shows before trusting it:
+
+```bash
+ssh-keyscan -p 65002 -t ed25519 <new ip> > hostkey
+ssh-keygen -lf hostkey          # must equal the SHA256 fingerprint in hPanel
+```
+
+Then put the line from `hostkey` into `KNOWN_HOST`, the IP into `PINNED_HOST`, and the
+IP into the secret `REMOTE_HOST`.
 
 ### The address of the page
 
-The social preview and the canonical address assume GitHub Pages at
-`https://basalbit.github.io/inner_word/`: `<link rel="canonical">`, `og:url`, `og:image`
-and `twitter:image` in `index.html` name it (social sites need an absolute image
-address). If the page is hosted anywhere else, change those four addresses.
+`<link rel="canonical">`, `og:url`, `og:image` and `twitter:image` in `index.html` name
+`https://innerword.io/` (social sites need an absolute image address). If the page ever
+moves, change those four addresses, `homepage` in the root `Cargo.toml` and the links in
+the repository's `README.md`.
 
 ## A new release
 

@@ -1,0 +1,44 @@
+# innerword.io on Hostinger (LiteSpeed reads this as Apache would). See README.md.
+
+AddDefaultCharset UTF-8
+Options -Indexes
+
+# One address: https://innerword.io/ (301, the path kept). Behind Hostinger's CDN
+# %{HTTPS} is off on every request, so the scheme the visitor used is read from
+# X-Forwarded-Proto; a request is sent to https only when neither says https.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTP_HOST} ^www\.innerword\.io$ [NC]
+  RewriteRule ^ https://innerword.io%{REQUEST_URI} [L,R=301]
+  RewriteCond %{HTTPS} off
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+  # No dotfiles (.htaccess, .git...), except .well-known for certificate checks.
+  RewriteRule (^|/)\.(?!well-known(/|$)) - [F]
+</IfModule>
+
+# Caching. Pictures change rarely; styles.css and script.js have no hash in their
+# names, so they are asked again after an hour; the page itself every time.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType image/webp "access plus 7 days"
+  ExpiresByType image/png "access plus 7 days"
+  ExpiresByType image/jpeg "access plus 7 days"
+</IfModule>
+<IfModule mod_headers.c>
+  <FilesMatch "\.(webp|png|jpe?g)$">
+    Header set Cache-Control "public, max-age=604800"
+  </FilesMatch>
+  <FilesMatch "\.(css|js)$">
+    Header set Cache-Control "public, max-age=3600, must-revalidate"
+  </FilesMatch>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+
+  # Security. The page loads only its own files: one script, one style sheet,
+  # pictures; no inline script or style, no data: addresses, no fonts, no requests.
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+</IfModule>

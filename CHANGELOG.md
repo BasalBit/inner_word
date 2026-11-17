@@ -7,6 +7,10 @@ The Writer.
 
 ## [Unreleased]
 
+### Changed
+
+- The landing page lives at <https://innerword.io/>, on its own domain instead of GitHub Pages.
+
 ## [0.10.1] - 2026-11-17
 
 The first public release of Inner Word.

@@ -8,7 +8,7 @@ edition = "2024"
 publish = false
 license = "MIT"
 repository = "https://github.com/BasalBit/inner_word"
-homepage = "https://basalbit.github.io/inner_word/"
+homepage = "https://innerword.io/"
 
 [workspace.dependencies]
 # Internal crates

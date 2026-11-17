@@ -347,11 +347,15 @@ fn a_row_of_other_advances_than_the_layout_measured_is_counted() {
     assert_eq!((pdf.report.rows, pdf.report.rows_off), (5, 2));
     // The rows with text are whole all the same. PDFKit reads the doubled one
     // as letters with gaps between them, and where it puts those among the
-    // other rows differs between versions of macOS (macOS 15 reads half of it
-    // into the line of the row below), so the letters are compared as letters:
-    // every one of the three rows, no more and no fewer.
+    // other rows differs between versions of macOS (macOS 15 starts the page
+    // with them and reads the rest into the lines of the other two rows), so
+    // nothing here depends on the order of the lines: the two rows at
+    // CoreText's own advances each read as the text in one run, wherever
+    // PDFKit puts them (the doubled one does too on macOS 27, and on macOS 15
+    // as letters with spaces between them), and the letters are compared as
+    // letters: every one of the three rows, no more and no fewer.
     let page_text = file.page_text(0);
-    assert_eq!(page_text.trim().lines().next(), Some(text), "{page_text}");
+    assert!(page_text.matches(text).count() >= 2, "{page_text}");
     let letters = |text: &str| {
         let mut letters: Vec<char> = squeezed(text).chars().collect();
         letters.sort_unstable();

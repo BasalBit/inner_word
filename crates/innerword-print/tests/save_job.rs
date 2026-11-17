@@ -22,7 +22,11 @@ use innerword_print::{
     Anchor, Color, FontSpec, GlyphStart, Item, JobInfo, Label, Page, PdfFile, PdfWriter,
     PrintError, PrintRequest, RectItem, RowRun, TextRow, check_selectors, run_save_job, run_sheet,
 };
-use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+use objc::{
+    class, msg_send,
+    runtime::{Object, YES},
+    sel, sel_impl,
+};
 
 const A4: (f32, f32) = (595.276, 841.89);
 const INK: Color = Color {
@@ -93,6 +97,79 @@ fn page(number: usize, rows: &[&str]) -> Page {
         width: A4.0,
         height: A4.1,
         items,
+    }
+}
+
+/// `NSSize`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct Size {
+    width: f64,
+    height: f64,
+}
+
+// SAFETY: the Objective-C type encoding of `NSSize` on 64-bit macOS.
+unsafe impl objc::Encode for Size {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CGSize=dd}") }
+    }
+}
+
+/// `NSRect`, its origin at the bottom left.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// The printer a job on `paper` goes to, the paper it has and the part of it
+/// the printer prints on (`imageablePageBounds`), from print settings made the
+/// way `innerword_print`'s `print_info` makes them: the user's, with that paper,
+/// no margins and centring on.
+fn printable_area(paper: (f32, f32)) -> (String, Size, Rect) {
+    // SAFETY: on the main thread; AppKit's own selectors with the types its
+    // headers declare; the copy is released here. `imageablePageBounds`
+    // returns an NSRect, which `msg_send!` returns the way the platform
+    // returns a struct of four doubles.
+    unsafe {
+        let shared: *mut Object = msg_send![class!(NSPrintInfo), sharedPrintInfo];
+        let info: *mut Object = msg_send![shared, copy];
+        let size = Size {
+            width: f64::from(paper.0),
+            height: f64::from(paper.1),
+        };
+        let _: () = msg_send![info, setPaperSize: size];
+        let _: () = msg_send![info, setTopMargin: 0f64];
+        let _: () = msg_send![info, setBottomMargin: 0f64];
+        let _: () = msg_send![info, setLeftMargin: 0f64];
+        let _: () = msg_send![info, setRightMargin: 0f64];
+        let _: () = msg_send![info, setHorizontallyCentered: YES];
+        let _: () = msg_send![info, setVerticallyCentered: YES];
+        let paper: Size = msg_send![info, paperSize];
+        let area: Rect = msg_send![info, imageablePageBounds];
+        let printer: *mut Object = msg_send![info, printer];
+        let name: *mut Object = if printer.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg_send![printer, name]
+        };
+        let name = if name.is_null() {
+            String::new()
+        } else {
+            let utf8: *const std::ffi::c_char = msg_send![name, UTF8String];
+            if utf8.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(utf8)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
+        let _: () = msg_send![info, release];
+        (name, paper, area)
     }
 }
 
@@ -225,25 +302,74 @@ fn main() -> ExitCode {
                     &format!("the text of page 2 ({:?})", text_of(1)),
                     &mut failures,
                 );
-                // The page is on the paper at its real size, where it was: the
-                // first word of the source stands at x 72 with its baseline
-                // at 100 (Courier New's descent at 12 points is 3.6).
+                // The page is on the paper at its real size: the first word
+                // of the source (at x 72, its baseline at 100) is exactly as
+                // wide and as high in the saved job.
                 let source = PdfFile::open(pdf.bytes()).expect("the writer's PDF");
                 let before = source.find(0, "The");
                 let after = file.find(0, "The");
-                let same = match (before, after) {
-                    (Some(before), Some(after)) => {
-                        (before.0 - after.0).abs() < 0.1
-                            && (before.1 - after.1).abs() < 0.1
-                            && (after.0 - 72.).abs() < 0.1
-                    }
-                    _ => false,
-                };
                 check(
-                    same,
+                    match (before, after) {
+                        (Some(before), Some(after)) => {
+                            (before.0 - 72.).abs() < 0.1
+                                && (before.2 - after.2).abs() < 0.01
+                                && (before.3 - after.3).abs() < 0.01
+                        }
+                        _ => false,
+                    },
                     &format!(
-                        "the first word is where it was, at real size (in the PDF {before:?}, \
-                         in the saved job {after:?})"
+                        "the first word is at real size (in the PDF {before:?}, in the saved \
+                         job {after:?})"
+                    ),
+                    &mut failures,
+                );
+                // Where it is on the paper is the printer's: PDFKit centres
+                // the page in the area the printer can print on, so the page
+                // is exactly on the paper only where that area is centred on
+                // it (every printer of the author's Mac). macOS's generic
+                // printer, which a Mac without printers has (GitHub's
+                // runners), prints A4 in (18, 41, 559, 783) of a 595 x 842
+                // sheet, 41 points from the bottom and 18 from the top, and
+                // the page lands 11.6 points up and 0.14 to the left. So the
+                // move is computed from the print settings the job used and
+                // must be that, no more.
+                let (printer, paper, area) = printable_area(A4);
+                let sheet = file.page_size(0);
+                // From the top left corner, as `find` measures.
+                let expected = (
+                    area.x + area.width / 2. - f64::from(A4.0) / 2.,
+                    f64::from(sheet.1) - (area.y + area.height / 2.) - f64::from(A4.1) / 2.,
+                );
+                println!(
+                    "save_job: printer {printer:?}, paper {:.2} x {:.2}, printable area x {:.2} \
+                     to {:.2} and y {:.2} to {:.2} from the bottom: the page is to move \
+                     {:.3} right and {:.3} down",
+                    paper.width,
+                    paper.height,
+                    area.x,
+                    area.x + area.width,
+                    area.y,
+                    area.y + area.height,
+                    expected.0,
+                    expected.1,
+                );
+                let moved = before
+                    .zip(after)
+                    .map(|(before, after)| (after.0 - before.0, after.1 - before.1));
+                if let Some(moved) = moved {
+                    println!(
+                        "save_job: the first word moved {:.3} right and {:.3} down",
+                        moved.0, moved.1
+                    );
+                }
+                check(
+                    moved.is_some_and(|moved| {
+                        (f64::from(moved.0) - expected.0).abs() < 0.05
+                            && (f64::from(moved.1) - expected.1).abs() < 0.05
+                    }),
+                    &format!(
+                        "the page moved only as the printer's printable area centres it \
+                         (expected {expected:?}, moved {moved:?})"
                     ),
                     &mut failures,
                 );

@@ -16,6 +16,12 @@ use crate::instance_lock::{self, Acquired, HolderKind, RunningCopy};
 /// Environment variable that overrides the data directory (used by tests and manual QA).
 pub const DATA_DIR_ENV: &str = "INNER_WORD_DATA_DIR";
 
+/// The variable of the old name, from the time the app was called The Writer (0.9.0 and
+/// before). Every script, test and QA command line of then named a temporary library with
+/// it, so it is still honoured when [`DATA_DIR_ENV`] is not set (with a line on stderr):
+/// a run meant for a temporary library never reaches the user's own, nor moves it.
+pub const OLD_DATA_DIR_ENV: &str = "THE_WRITER_DATA_DIR";
+
 /// The name of the data directory in `~/Library/Application Support`.
 pub const DATA_DIR_NAME: &str = "Inner Word";
 
@@ -23,6 +29,10 @@ pub const DATA_DIR_NAME: &str = "Inner Word";
 /// before). A folder of that name is moved to [`DATA_DIR_NAME`] by [`data_dir`], and a
 /// link of that name to the new folder is left in its place.
 pub const OLD_DATA_DIR_NAME: &str = "The Writer";
+
+/// The name, beside the two, the folder of the old name has for a moment while it is
+/// moved (and the link has before it takes the old name): see [`data_dir`].
+const MOVING_NAME: &str = ".The Writer, being moved to Inner Word";
 
 /// File name of the library database inside the data directory.
 pub const DATABASE_FILE_NAME: &str = "library.db";
@@ -49,10 +59,11 @@ const APP_GRACE: Duration = Duration::from_millis(250);
 /// How long the move sleeps between two looks at a held lock.
 const RETRY_INTERVAL: Duration = Duration::from_millis(20);
 
-/// The data directory: `$INNER_WORD_DATA_DIR` when set and non-empty, otherwise
+/// The data directory: `$INNER_WORD_DATA_DIR` when set and non-empty (else
+/// `$THE_WRITER_DATA_DIR`, the variable of the old name, [`OLD_DATA_DIR_ENV`]), otherwise
 /// `~/Library/Application Support/Inner Word`. The directory is not created.
 ///
-/// Without the variable the library of the old name is brought over first, once:
+/// Without a variable the library of the old name is brought over first, once:
 ///
 /// - When `Inner Word` exists (whatever it is), it is the answer and nothing else is done.
 /// - Else, when `The Writer` is a real folder (not a link), its lock
@@ -60,24 +71,52 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(20);
 ///   for a write is waited for, three seconds at most. Held by an app (the version of the
 ///   old name is still running), or by a tool past that: the old folder is the answer for
 ///   this run and nothing is moved, so this launch finds that copy and a tool talks to
-///   it. Free: the folder is renamed to `Inner Word` (the same volume,
-///   one step), a relative link `The Writer` -> `Inner Word` is made in its place, so that
-///   an older app and the `writer` tool of the old name that agents may still be set up
-///   with find the same library and the same lock file, and the lock is let go.
-/// - A link `The Writer` that leads to a folder is one the user made (the one left by the
-///   move leads nowhere until `Inner Word` exists): it is the answer, and nothing is moved.
+///   it. Free: the folder is moved to `Inner Word` and a relative link `The Writer` ->
+///   `Inner Word` takes its place, so that an older app and the `writer` tool of the old
+///   name that agents may still be set up with find the same library and the same lock
+///   file, and the lock is let go. **The old name is never missing meanwhile**, or an
+///   older app or tool that makes its folder (`create_dir_all`) at that moment would make
+///   an empty library there: the link is made under a name of its own beside them
+///   ([`MOVING_NAME`]), swapped with the folder in one step (`renamex_np`, `RENAME_SWAP`),
+///   and only then is the folder, now under that name, renamed `Inner Word`. Between the
+///   two steps the old name is a link that leads nowhere, on which no folder can be made.
+/// - A link `The Writer` -> `Inner Word` (exactly that, relative) is the one a move left:
+///   `Inner Word` is the answer. When the folder is under [`MOVING_NAME`] (a move between
+///   its two steps, or one that stopped there) its lock is taken and the move finished.
+/// - Any other link `The Writer` is one the user made, to a library elsewhere: it is the
+///   answer whether it leads anywhere now or not (a drive not mounted: the library cannot
+///   be opened, as before, and nothing is made in its place), and nothing is moved.
 /// - Else `Inner Word` is the answer (and is not created here).
 ///
-/// A rename that fails leaves the folder where it is, which is then the answer, and says
-/// why on stderr; a link that cannot be made is said on stderr, the new folder being the
-/// answer. Two processes of this version that look at the same moment both end with the
-/// moved folder: the lock lets one move, and the other finds `Inner Word` afterwards.
+/// A move that fails, or a link that cannot be made, leaves the folder where it is, which
+/// is then the answer, and says why on stderr. Two processes of this version that look at
+/// the same moment both end with the moved folder: the lock lets one move, and the other
+/// finds `Inner Word` afterwards. When both names are real folders that hold a library,
+/// `Inner Word` is the answer and stderr says that the other one is there.
 pub fn data_dir() -> Result<PathBuf> {
     locate_data_dir(
-        std::env::var_os(DATA_DIR_ENV),
+        chosen_by_env(
+            std::env::var_os(DATA_DIR_ENV),
+            std::env::var_os(OLD_DATA_DIR_ENV),
+        ),
         std::env::var_os("HOME"),
         MOVE_PATIENCE,
     )
+}
+
+/// The data directory the environment names: [`DATA_DIR_ENV`], else the variable of the
+/// old name ([`OLD_DATA_DIR_ENV`], said on stderr). Empty is unset.
+fn chosen_by_env(new: Option<OsString>, old: Option<OsString>) -> Option<OsString> {
+    if let Some(dir) = new.filter(|dir| !dir.is_empty()) {
+        return Some(dir);
+    }
+    let dir = old.filter(|dir| !dir.is_empty())?;
+    eprintln!(
+        "Inner Word: {OLD_DATA_DIR_ENV} is the variable of the old name; using the library it \
+         names, {}. Name it with {DATA_DIR_ENV} from now on.",
+        Path::new(&dir).display()
+    );
+    Some(dir)
 }
 
 /// The library database path: `data_dir()/library.db`.
@@ -189,77 +228,170 @@ enum Look {
 }
 
 fn one_look(old: &Path, new: &Path) -> Look {
+    let moving = old.with_file_name(MOVING_NAME);
     if !surely_absent(new) {
+        if is_library(old) && is_library(new) {
+            eprintln!(
+                "Inner Word: the library in {} is used; another library is in {}, the folder \
+                 of the name the app had before, and is left as it is.",
+                new.display(),
+                old.display()
+            );
+        }
         return Look::Use(new.to_path_buf());
     }
     match std::fs::symlink_metadata(old) {
         Ok(meta) if meta.is_dir() => {}
-        // A link the user made to a library elsewhere (the one the move leaves leads
-        // nowhere while the new folder is missing): keep reading through it.
-        Ok(meta) if meta.file_type().is_symlink() && old.is_dir() => {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if std::fs::read_link(old).is_ok_and(|to| to == Path::new(DATA_DIR_NAME)) {
+                // The link a move leaves. The folder is under the name of the move when a
+                // move is between its two steps, or stopped there: it is finished.
+                if is_real_dir(&moving) {
+                    return finish_the_move(&moving, new);
+                }
+                return Look::Use(new.to_path_buf());
+            }
+            // A link the user made to a library elsewhere: read through it, whether it
+            // leads anywhere now or not.
             return Look::Use(old.to_path_buf());
         }
         _ => return Look::Use(new.to_path_buf()),
     }
     // The lock line says "tool": a short holder, which a copy of the old app that starts
     // meanwhile waits for (and then finds the library through the link).
-    let lock = match instance_lock::acquire_in_place(old, HolderKind::Tool) {
-        Ok(Acquired::Lock(lock)) => lock,
-        Ok(Acquired::Taken(copy)) => {
-            // This process holds the old library already (the app took its lock after
-            // an earlier answer of `old`): no waiting, no moving.
-            if copy.kind == HolderKind::App && copy.pid == Some(std::process::id()) {
-                return Look::Use(old.to_path_buf());
-            }
-            return Look::Held(copy);
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Look::Again,
-        Err(error) => {
-            eprintln!(
-                "Inner Word: the library in {} is not moved to {}: whether another copy \
-                 has it open cannot be checked ({error}). It is used where it is.",
-                old.display(),
-                new.display()
-            );
-            return Look::Use(old.to_path_buf());
-        }
+    let lock = match take_the_lock(old) {
+        Ok(lock) => lock,
+        Err(look) => return look,
     };
     // Whoever moves holds this lock, so what is seen now stays so until it is let go.
     if !surely_absent(new) {
         return Look::Use(new.to_path_buf());
     }
-    if !std::fs::symlink_metadata(old).is_ok_and(|meta| meta.is_dir()) {
+    if !is_real_dir(old) {
         return Look::Again;
     }
-    if let Err(error) = std::fs::rename(old, new) {
-        if exists(new) {
-            return Look::Use(new.to_path_buf());
-        }
+    // A link of the name of the move that a move left before its swap (it stopped there).
+    if std::fs::symlink_metadata(&moving).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        std::fs::remove_file(&moving).ok();
+    }
+    let not_moved = |why: String| {
         eprintln!(
-            "Inner Word: the library in {} could not be moved to {} ({error}). It is used \
+            "Inner Word: the library in {} could not be moved to {} ({why}). It is used \
              where it is.",
             old.display(),
             new.display()
         );
-        return Look::Use(old.to_path_buf());
+        Look::Use(old.to_path_buf())
+    };
+    // 1. The link, under the name of the move.
+    if let Err(error) = std::os::unix::fs::symlink(DATA_DIR_NAME, &moving) {
+        return not_moved(format!("no link to it could be made: {error}"));
     }
-    match std::os::unix::fs::symlink(DATA_DIR_NAME, old) {
-        Ok(()) => eprintln!(
-            "Inner Word: moved the library from {} to {}, and left a link to it under the \
-             old name.",
+    // 2. The link takes the old name and the folder the name of the move, in one step.
+    if let Err(error) = swap(old, &moving) {
+        std::fs::remove_file(&moving).ok();
+        return not_moved(error.to_string());
+    }
+    // 3. The folder takes the new name.
+    if let Err(error) = std::fs::rename(&moving, new) {
+        // Back as it was: the folder under the old name, the link gone.
+        if swap(&moving, old).is_ok() {
+            std::fs::remove_file(&moving).ok();
+            return not_moved(error.to_string());
+        }
+        eprintln!(
+            "Inner Word: the library in {} could not be moved to {} ({error}), nor put back. \
+             It is used in {}.",
             old.display(),
+            new.display(),
+            moving.display()
+        );
+        return Look::Use(moving);
+    }
+    eprintln!(
+        "Inner Word: moved the library from {} to {}, and left a link to it under the old \
+         name.",
+        old.display(),
+        new.display()
+    );
+    drop(lock);
+    Look::Use(new.to_path_buf())
+}
+
+/// The last step of a move that is between its two steps (in another process: its lock is
+/// held, and is waited for) or that stopped there: the folder under the name of the move
+/// takes the new name.
+fn finish_the_move(moving: &Path, new: &Path) -> Look {
+    let lock = match take_the_lock(moving) {
+        Ok(lock) => lock,
+        Err(look) => return look,
+    };
+    if !surely_absent(new) {
+        return Look::Use(new.to_path_buf());
+    }
+    if !is_real_dir(moving) {
+        return Look::Again;
+    }
+    if let Err(error) = std::fs::rename(moving, new) {
+        eprintln!(
+            "Inner Word: the library in {} could not be moved to {} ({error}). It is used \
+             where it is.",
+            moving.display(),
             new.display()
-        ),
-        Err(error) => eprintln!(
-            "Inner Word: moved the library from {} to {}, but no link to it could be left \
-             under the old name ({error}): a version of the app or of the `writer` tool \
-             from before the new name will not find it.",
-            old.display(),
-            new.display()
-        ),
+        );
+        return Look::Use(moving.to_path_buf());
     }
     drop(lock);
     Look::Use(new.to_path_buf())
+}
+
+/// The lock of the folder `dir`, taken as a tool's for the moment of a move; or what the
+/// look decides when it cannot be had.
+fn take_the_lock(dir: &Path) -> std::result::Result<instance_lock::InstanceLock, Look> {
+    match instance_lock::acquire_in_place(dir, HolderKind::Tool) {
+        Ok(Acquired::Lock(lock)) => Ok(lock),
+        Ok(Acquired::Taken(copy)) => {
+            // This process holds the old library already (the app took its lock after
+            // an earlier answer of `old`): no waiting, no moving.
+            if copy.kind == HolderKind::App && copy.pid == Some(std::process::id()) {
+                return Err(Look::Use(dir.to_path_buf()));
+            }
+            Err(Look::Held(copy))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(Look::Again),
+        Err(error) => {
+            eprintln!(
+                "Inner Word: the library in {} is not moved: whether another copy has it \
+                 open cannot be checked ({error}). It is used where it is.",
+                dir.display(),
+            );
+            Err(Look::Use(dir.to_path_buf()))
+        }
+    }
+}
+
+/// Swaps what is at `a` and at `b`, in one step: neither name is ever missing.
+fn swap(a: &Path, b: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let a = std::ffi::CString::new(a.as_os_str().as_bytes())?;
+    let b = std::ffi::CString::new(b.as_os_str().as_bytes())?;
+    // SAFETY: two NUL-terminated paths that live across the call.
+    let answer = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) };
+    if answer == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Whether `path` is a real folder (not a link).
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+}
+
+/// Whether `path` is a real folder that holds a library database.
+fn is_library(path: &Path) -> bool {
+    is_real_dir(path) && path.join(DATABASE_FILE_NAME).is_file()
 }
 
 /// Whether nothing at all is at `path`, not even a link that leads nowhere. An error other
@@ -362,10 +494,6 @@ mod tests {
         .unwrap();
         std::fs::write(old.join(instance_lock::LOCK_FILE_NAME), "4711\n").unwrap();
         old
-    }
-
-    fn is_real_dir(path: &Path) -> bool {
-        std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
     }
 
     fn names_in(dir: &Path) -> Vec<String> {
@@ -572,6 +700,23 @@ mod tests {
             vec![DATABASE_FILE_NAME.to_string()]
         );
 
+        // A link the user made that leads nowhere now (a drive that is not mounted): it
+        // is still the answer, so the library cannot be opened as before, and nothing is
+        // made under the new name, which would split the library from then on.
+        let (home, support) = a_home();
+        let old = support.join(OLD_DATA_DIR_NAME);
+        let unmounted = Path::new("/Volumes/A drive that is not there/The Writer");
+        std::os::unix::fs::symlink(unmounted, &old).unwrap();
+        assert_eq!(locate(&home, Duration::from_secs(2)), old);
+        assert!(!support.join(DATA_DIR_NAME).exists());
+        assert!(std::fs::symlink_metadata(support.join(DATA_DIR_NAME)).is_err());
+        assert_eq!(std::fs::read_link(&old).unwrap(), unmounted);
+        // A relative link to another name is the user's too.
+        std::fs::remove_file(&old).unwrap();
+        std::os::unix::fs::symlink("Elsewhere", &old).unwrap();
+        assert_eq!(locate(&home, Duration::from_secs(2)), old);
+        assert_eq!(names_in(&support), vec![OLD_DATA_DIR_NAME.to_string()]);
+
         // The link a move left, after the new folder went: it leads nowhere, and the
         // new name is the answer. Nothing is made.
         let (home, support) = a_home();
@@ -594,6 +739,95 @@ mod tests {
             support.join(DATA_DIR_NAME)
         );
         assert_eq!(names_in(&support), vec![OLD_DATA_DIR_NAME.to_string()]);
+    }
+
+    #[test]
+    fn the_old_name_is_never_missing_while_the_folder_is_moved() {
+        // The move stopped between its two steps (the process ended): the old name is
+        // the link, which leads nowhere, and the folder is under the name of the move. A
+        // folder cannot be made under the old name meanwhile.
+        let (home, support) = a_home();
+        let old = old_library(&support);
+        let new = support.join(DATA_DIR_NAME);
+        let moving = support.join(MOVING_NAME);
+        std::fs::rename(&old, &moving).unwrap();
+        std::os::unix::fs::symlink(DATA_DIR_NAME, &old).unwrap();
+        assert!(
+            std::fs::create_dir_all(&old).is_err(),
+            "no folder can be made under the old name while it is a link"
+        );
+        assert!(!new.exists());
+
+        // While the mover holds the lock of the folder, a look waits for it.
+        let lock = instance_lock::acquire_as(&moving, HolderKind::Tool)
+            .unwrap()
+            .lock()
+            .expect("free");
+        assert_eq!(locate(&home, Duration::from_millis(100)), old);
+        assert!(is_real_dir(&moving), "nothing was done under its lock");
+        drop(lock);
+
+        // Then the move is finished.
+        assert_eq!(locate(&home, Duration::from_secs(2)), new);
+        assert!(is_real_dir(&new));
+        assert_eq!(
+            std::fs::read_to_string(new.join(DATABASE_FILE_NAME)).unwrap(),
+            "the library"
+        );
+        assert_eq!(
+            std::fs::read_link(&old).unwrap(),
+            PathBuf::from(DATA_DIR_NAME)
+        );
+        assert_eq!(
+            names_in(&support),
+            vec![DATA_DIR_NAME.to_string(), OLD_DATA_DIR_NAME.to_string()]
+        );
+
+        // A move that stopped before its swap left only a link under the name of the
+        // move: it is taken away, and the folder is moved.
+        let (home, support) = a_home();
+        old_library(&support);
+        std::os::unix::fs::symlink(DATA_DIR_NAME, support.join(MOVING_NAME)).unwrap();
+        assert_eq!(
+            locate(&home, Duration::from_secs(2)),
+            support.join(DATA_DIR_NAME)
+        );
+        assert_eq!(
+            names_in(&support),
+            vec![DATA_DIR_NAME.to_string(), OLD_DATA_DIR_NAME.to_string()]
+        );
+    }
+
+    #[test]
+    fn the_variable_of_the_old_name_is_honoured() {
+        assert_eq!(
+            chosen_by_env(Some("/tmp/new".into()), Some("/tmp/old".into())),
+            Some("/tmp/new".into())
+        );
+        assert_eq!(
+            chosen_by_env(None, Some("/tmp/old".into())),
+            Some("/tmp/old".into())
+        );
+        assert_eq!(
+            chosen_by_env(Some("".into()), Some("/tmp/old".into())),
+            Some("/tmp/old".into())
+        );
+        assert_eq!(chosen_by_env(None, Some("".into())), None);
+        assert_eq!(chosen_by_env(None, None), None);
+
+        // A run with only the old variable uses the library it names and moves nothing.
+        let (home, support) = a_home();
+        let old = old_library(&support);
+        let elsewhere = TempDir::new().unwrap();
+        let dir = locate_data_dir(
+            chosen_by_env(None, Some(elsewhere.path().into())),
+            Some(home.path().into()),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(dir, elsewhere.path());
+        assert!(is_real_dir(&old));
+        assert!(!support.join(DATA_DIR_NAME).exists());
     }
 
     #[test]

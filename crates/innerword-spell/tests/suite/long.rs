@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 use gpui::TestAppContext;
 use innerword_core::{Block, Document, Position};
 use innerword_spell::{
-    EDIT_PAUSE, FAKE_LANGUAGE, IDLE_PAUSE, SLICE_BUDGET, SLICE_PAUSE, SpellEvent, SpellLanguage,
-    TYPING_PAUSE,
+    EDIT_PAUSE, FAKE_LANGUAGE, IDLE_PAUSE, SLICE_BUDGET, SpellEvent, SpellLanguage, TYPING_PAUSE,
 };
 
 use crate::suite::support::*;
@@ -39,15 +38,19 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
     let (checker, editor, cx) = open(book(10_000), &service, cx);
     let opened = started.elapsed();
 
-    // The first turn of the worker has run: what is on screen is marked,
-    // the rest is not checked yet.
+    // The first turn of the worker has run. What is on screen comes
+    // first: the first slice gets through it here (16 paragraphs at
+    // 150 µs), a busy machine may need another slice or two, and the
+    // background pass takes nothing before it is done. A slice checks
+    // what is on screen before anything of the rest, so whatever was
+    // checked besides came in the last of those slices.
     let visible = editor
         .read_with(cx, |editor, _| editor.visible_range())
         .map(|range| range.start.block..range.end.block + 1)
         .expect("a layout");
+    assert!(visible.len() > 3 && visible.len() < 200, "{visible:?}");
+    let pauses = wait_until_checked(&editor, visible.clone(), cx);
     editor.read_with(cx, |editor, _| {
-        assert!(visible.len() > 3 && visible.len() < 200, "{visible:?}");
-        assert_eq!(editor.first_unchecked_spelling_block(visible.clone()), None);
         let text = editor.document().blocks()[0].text();
         let wrod = text.find("wrod").unwrap();
         assert_eq!(editor.spelling_marks(0), [wrod..wrod + 4]);
@@ -55,12 +58,12 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
     let first = service.check_count();
     assert!(
         first >= visible.len() && first < 2_000,
-        "{first} checks in the first slice"
+        "{first} checks until what is on screen was checked"
     );
     assert!(!checker.read_with(cx, |checker, cx| checker.is_settled(cx)));
-    let (_, first_slice) = checker.read_with(cx, |checker, _| checker.slice_stats());
+    let (slices, first_slice) = checker.read_with(cx, |checker, _| checker.slice_stats());
     println!(
-        "long: 10,000 blocks opened and the first slice run in {opened:?}; the first slice took {first_slice:?} and checked {first} blocks ({} on screen)",
+        "long: 10,000 blocks opened and the first slice run in {opened:?}; what is on screen ({} blocks) was checked in {slices} slice(s) ({pauses} pauses), the longest {first_slice:?}, with {first} checks",
         visible.len()
     );
 
@@ -74,18 +77,37 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
         )
     });
     cx.run_until_parked();
-    wait(SLICE_PAUSE, cx);
-    wait(SLICE_PAUSE, cx);
-    let there = editor
-        .read_with(cx, |editor, _| editor.visible_range())
-        .map(|range| range.start.block..range.end.block + 1)
-        .unwrap();
+    let on_screen = |cx: &mut gpui::VisualTestContext| {
+        editor
+            .read_with(cx, |editor, _| editor.visible_range())
+            .map(|range| range.start.block..range.end.block + 1)
+            .unwrap()
+    };
+    // As many slices as the machine needs (see `wait_for_slices`); what
+    // the checker promises is that the view is checked before the
+    // background pass gets there.
+    wait_for_slices("the view at block 7,000 checked", cx, |cx| {
+        let there = on_screen(cx);
+        there.contains(&7_000)
+            && editor.read_with(cx, |editor, _| {
+                editor.first_unchecked_spelling_block(there).is_none()
+            })
+    });
+    let there = on_screen(cx);
     assert!(there.contains(&7_000), "{there:?}");
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.first_unchecked_spelling_block(there.clone()), None);
         assert_eq!(editor.spelling_marks(7_000).len(), 1);
         assert!(!editor.spelling_checked(5_000), "the pass is not there yet");
     });
+    // The pass goes through the book in order: it stands far before the
+    // view, so the view was checked because it came into view.
+    let pass = pass_position(&editor, there.start, cx);
+    assert!(
+        pass.is_some(),
+        "the pass is not there yet, but every block before {} is checked",
+        there.start
+    );
 
     // Typing while the pass runs: the keystroke itself asks nothing, the
     // paragraph is checked after the pause, and the pass waits until the
@@ -124,6 +146,11 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
     assert!(
         !editor.read_with(cx, |editor, _| editor.spelling_checked(5_000)),
         "the pass waited"
+    );
+    assert_eq!(
+        pass_position(&editor, there.start, cx),
+        pass,
+        "the pass waited where it stood"
     );
 
     // The typing stops: the pass goes on and comes to an end.
@@ -224,8 +251,18 @@ fn zooming_out_checks_what_comes_into_view_first(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    wait(SLICE_PAUSE, cx);
-    wait(SLICE_PAUSE, cx);
+    // A slice ends on the real clock and the test moves the test clock:
+    // how many slices a screen takes depends on the machine (two were
+    // not enough on a CI runner), so the test lets as many run as it
+    // takes, and asserts what the checker promises: what is in view is
+    // checked before the background pass gets there.
+    wait_for_slices("the view at block 6,000 checked", cx, |cx| {
+        let near = on_screen(cx);
+        near.contains(&6_000)
+            && editor.read_with(cx, |editor, _| {
+                editor.first_unchecked_spelling_block(near).is_none()
+            })
+    });
     let near = on_screen(cx);
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.first_unchecked_spelling_block(near.clone()), None);
@@ -238,8 +275,13 @@ fn zooming_out_checks_what_comes_into_view_first(cx: &mut TestAppContext) {
         editor.set_zoom(innerword_editor::Zoom::Percent(50), cx)
     });
     cx.run_until_parked();
-    wait(SLICE_PAUSE, cx);
-    wait(SLICE_PAUSE, cx);
+    let pauses = wait_for_slices("the view zoomed out to 50 % checked", cx, |cx| {
+        let far = on_screen(cx);
+        far.len() > near.len() * 3
+            && editor.read_with(cx, |editor, _| {
+                editor.first_unchecked_spelling_block(far).is_none()
+            })
+    });
     let far = on_screen(cx);
     assert!(far.len() > near.len() * 3, "{near:?} then {far:?}");
     editor.read_with(cx, |editor, _| {
@@ -249,6 +291,20 @@ fn zooming_out_checks_what_comes_into_view_first(cx: &mut TestAppContext) {
             "the pass is not there yet"
         );
     });
+    // However long that took, the background pass, which goes through
+    // the book in order, is still before the view: the view's blocks
+    // were checked because they came into view, not because the pass
+    // reached them.
+    let start = near.start.min(far.start);
+    let pass = pass_position(&editor, start, cx);
+    assert!(
+        pass.is_some(),
+        "the pass is not there yet, but every block before {start} is checked"
+    );
+    println!(
+        "long: zoomed out from {near:?} to {far:?}: checked after {pauses} pause(s), the background pass at block {}",
+        pass.unwrap()
+    );
 }
 
 #[gpui::test]

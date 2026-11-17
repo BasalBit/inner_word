@@ -168,6 +168,68 @@ pub fn wait(duration: Duration, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// The most pauses [`wait_for_slices`] lets pass: 800 ms of the test
+/// clock, hundreds of times what the slowest machine needs for a screen.
+pub const MAX_PAUSES: usize = 200;
+
+/// Lets the worker run slice after slice, a [`SLICE_PAUSE`] of the test
+/// clock between two, until `done` holds; fails after [`MAX_PAUSES`].
+/// Returns how many pauses it took (0: it held already).
+///
+/// A slice ends on the real clock ([`innerword_spell::SLICE_BUDGET`]:
+/// it bounds the main thread's real time) while a test moves the test
+/// clock, so how many blocks a slice gets through depends on how fast
+/// the machine is and how busy. "Checked after two pauses" is a
+/// statement about the machine; "checked before the background pass got
+/// there" is one about the checker, and is what a test asserts after
+/// this.
+pub fn wait_for_slices(
+    what: &str,
+    cx: &mut VisualTestContext,
+    mut done: impl FnMut(&mut VisualTestContext) -> bool,
+) -> usize {
+    for pauses in 0..=MAX_PAUSES {
+        if done(cx) {
+            return pauses;
+        }
+        if pauses < MAX_PAUSES {
+            wait(SLICE_PAUSE, cx);
+        }
+    }
+    panic!("{what}: still not so after {MAX_PAUSES} pauses between slices");
+}
+
+/// Waits (see [`wait_for_slices`]) until every block of `blocks` has a
+/// result for its current text.
+pub fn wait_until_checked(
+    editor: &Entity<Editor>,
+    blocks: std::ops::Range<usize>,
+    cx: &mut VisualTestContext,
+) -> usize {
+    let what = format!("blocks {blocks:?} checked");
+    wait_for_slices(&what, cx, |cx| {
+        editor.read_with(cx, |editor, _| {
+            editor
+                .first_unchecked_spelling_block(blocks.clone())
+                .is_none()
+        })
+    })
+}
+
+/// Where the background pass is: the first block before `before` that
+/// has no result. The pass goes through the document in order (only
+/// what is on screen or was edited is checked out of turn), so while
+/// this is `Some`, no block from there on was checked by the pass.
+pub fn pass_position(
+    editor: &Entity<Editor>,
+    before: usize,
+    cx: &mut VisualTestContext,
+) -> Option<usize> {
+    editor.read_with(cx, |editor, _| {
+        editor.first_unchecked_spelling_block(0..before)
+    })
+}
+
 /// Runs slices until every block is checked. Returns how many rounds it
 /// took.
 pub fn settle(checker: &Entity<SpellChecker>, cx: &mut VisualTestContext) -> usize {

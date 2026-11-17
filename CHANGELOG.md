@@ -121,7 +121,7 @@ The Writer.
 - Spell checking with the macOS spell checker, with suggestions, Learn Spelling and Ignore
   Spelling, and a spelling language per document.
 
-## [0.1.0] - 2026-11-11
+## 0.1.0 - 2026-11-11
 
 ### Added
 
@@ -130,3 +130,14 @@ The Writer.
   comments, Vim mode, find and replace, the command palette, export to Markdown, DOCX and
   plain text, and an ad-hoc signed disk image.
 
+[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/BasalBit/inner_word/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/BasalBit/inner_word/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/BasalBit/inner_word/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/BasalBit/inner_word/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/BasalBit/inner_word/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/BasalBit/inner_word/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/BasalBit/inner_word/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/BasalBit/inner_word/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/BasalBit/inner_word/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/BasalBit/inner_word/tree/v0.2.0

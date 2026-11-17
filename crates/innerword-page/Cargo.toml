@@ -22,7 +22,8 @@ serde_json.workspace = true
 # A blob is named by the first 16 bytes of its SHA-256 (the rule of innerword_store's ids);
 # the fingerprint of an input is a SHA-256 too.
 sha2 = "0.10"
-# The query of an address in the name of its stored copy (the scheme of archive.py).
+# The name of a piece's stored copy: the first hex digits of the SHA-1 of its address's
+# query, or of the whole address when two pieces would get one name.
 sha1_smol = "1.0"
 # The bytes of a prepared page as they travel in JSON.
 base64 = "0.22"

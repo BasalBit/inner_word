@@ -147,6 +147,15 @@ pub fn acquire(data_dir: &Path) -> io::Result<Acquired> {
 /// does not exist yet. See [`acquire`] for the results.
 pub fn acquire_as(data_dir: &Path, kind: HolderKind) -> io::Result<Acquired> {
     std::fs::create_dir_all(data_dir)?;
+    acquire_in_place(data_dir, kind)
+}
+
+/// [`acquire_as`] for a data directory that must be there already: the directory is never
+/// created (the lock file in it is, when it is missing), and a directory that is not there
+/// is an error of kind `NotFound`. The move of the library to its new name
+/// ([`crate::data_dir`]) takes the lock of the old folder so, because creating it again
+/// while another process moves it away would leave an empty library under the old name.
+pub(crate) fn acquire_in_place(data_dir: &Path, kind: HolderKind) -> io::Result<Acquired> {
     let path = data_dir.join(LOCK_FILE_NAME);
     let mut file = OpenOptions::new()
         .read(true)

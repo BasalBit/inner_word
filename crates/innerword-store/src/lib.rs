@@ -133,8 +133,8 @@ pub use crate::images::{
     back_up_images, collect_unused_images, images_moved_aside, mark_unused_images,
 };
 pub use crate::paths::{
-    BACKUPS_DIR_NAME, DATA_DIR_ENV, DATABASE_FILE_NAME, IMAGES_FILE_NAME, backups_dir, data_dir,
-    database_path, images_backup_path, images_path,
+    BACKUPS_DIR_NAME, DATA_DIR_ENV, DATA_DIR_NAME, DATABASE_FILE_NAME, IMAGES_FILE_NAME,
+    OLD_DATA_DIR_NAME, backups_dir, data_dir, database_path, images_backup_path, images_path,
 };
 pub use crate::schema::SCHEMA_VERSION;
 pub use crate::search::{MATCH_END, MATCH_START, SearchHit, SnippetPart};

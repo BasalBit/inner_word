@@ -3,10 +3,10 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::*;
-use serde::{Deserialize, Serialize};
 use innerword_store::{
     Clock, OpenOptions, SCHEMA_VERSION, Store, StoreError, backups_dir, list_backups,
 };
+use serde::{Deserialize, Serialize};
 
 fn opts(clock: &Clock) -> OpenOptions {
     OpenOptions {

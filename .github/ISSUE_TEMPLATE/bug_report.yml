@@ -15,7 +15,7 @@ body:
     attributes:
       label: Inner Word version
       description: Inner Word > About Inner Word. If you built it yourself, the commit.
-      placeholder: "0.10.0"
+      placeholder: "0.10.1"
     validations:
       required: true
   - type: input

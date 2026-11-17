@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-agent"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "base64",
  "innerword-core",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-agent-setup"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-app"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "block",
@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-assistant"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "innerword-agent-setup",
  "innerword-mcp",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-assistant-quick"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "gpui",
  "innerword-assistant",
@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-assistant-ui"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-cli"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "innerword-agent",
  "innerword-agent-setup",
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-comments"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "gpui",
  "innerword-core",
@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2953,7 +2953,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-editor"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -2970,7 +2970,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-editor-tools"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "gpui",
  "innerword-core",
@@ -2981,7 +2981,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-export"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "innerword-core",
  "miniz_oxide 0.8.9",
@@ -2995,7 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-image"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-keymap"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-keymap-ui"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3024,7 +3024,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-library"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3038,7 +3038,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-mcp"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "innerword-agent",
  "innerword-page",
@@ -3050,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-page"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "base64",
  "percent-encoding",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-print"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-spell"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-store"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "libc",
  "rusqlite",
@@ -3102,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-ui"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3113,14 +3113,14 @@ dependencies = [
 
 [[package]]
 name = "innerword-vim"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "innerword-core",
 ]
 
 [[package]]
 name = "innerword-vim-mode"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "gpui",
  "innerword-core",
@@ -3131,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "innerword-web"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "block",
  "dispatch",

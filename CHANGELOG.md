@@ -7,21 +7,38 @@ The Writer.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-17
+
+The first public release of Inner Word.
+
 ### Added
 
-- A landing page for Inner Word in `site/`: static, no requests to other sites, real
-  screenshots of 0.10.0 in Paper and Night, download links built from one version number.
-- What the repository needs to be open source: the MIT license, a README, contributing
-  notes, a security policy, a code of conduct, this changelog, AGENTS.md for agents that do
-  not read CLAUDE.md, issue and pull request templates, and GitHub workflows for CI, releases
-  and the landing page.
-- The Rust toolchain pinned in `rust-toolchain.toml`.
-- The licenses of the third-party crates in `THIRD-PARTY-LICENSES.txt`, copied into the app
-  and onto the disk image.
+- The license of Inner Word (`LICENSE`, MIT, Copyright (c) 2026 BasalBit) and the licenses
+  of the third-party code built into the app and the tool (`THIRD-PARTY-LICENSES.txt`), in
+  the app's `Contents/Resources` and on the disk image beside the app.
+- The copyright line in the About box ("Copyright © 2026 BasalBit. MIT License.").
+- New sections in "Read Me First.txt": where the source code is and under which license,
+  how to report a problem (and a security problem privately), what the app sends over the
+  network and when (no account, no usage data, no update check, no crash reports), and
+  which disk image to choose (universal or arm64).
 
 ### Changed
 
-- The code is formatted with `cargo fmt`.
+- The skill installed for agents and the help of the `innerword` tool use invented example
+  ids and names in their examples.
+
+### Repository
+
+- The source is open under the MIT license, with a README, contributing notes, a security
+  policy, a code of conduct, this changelog, AGENTS.md for agents that do not read
+  CLAUDE.md, issue and pull request templates, and GitHub workflows for CI, releases and
+  the landing page.
+- A landing page in `site/`: static, no requests to other sites, real screenshots in Paper
+  and Night, download links built from one version number.
+- The third-party licenses are generated with cargo-about (`scripts/bundle.sh
+  --third-party-licenses`), and `deny.toml` configures cargo-deny.
+- The Rust toolchain is pinned in `rust-toolchain.toml` (Rust 1.97.1).
+- The code is formatted with `cargo fmt`; `.git-blame-ignore-revs` names that commit.
 
 ## [0.10.0] - 2026-11-17
 
@@ -130,7 +147,8 @@ The Writer.
   comments, Vim mode, find and replace, the command palette, export to Markdown, DOCX and
   plain text, and an ad-hoc signed disk image.
 
-[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/BasalBit/inner_word/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/BasalBit/inner_word/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/BasalBit/inner_word/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/BasalBit/inner_word/compare/v0.8.0...v0.8.1

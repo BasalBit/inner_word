@@ -280,6 +280,11 @@ pub struct McpAgent {
     pub config: Option<McpSnippet>,
     /// Something to know about this agent and MCP.
     pub note: Option<String>,
+    /// One line on removing the entry the agent may still have from when the
+    /// app was called The Writer (`the-writer`): the agent's own command, or
+    /// the entry and the file. The app reads no agent's configuration, so it
+    /// is shown for every agent.
+    pub old_entry: String,
 }
 
 /// Everything the Agents panel lists.
@@ -457,6 +462,7 @@ pub fn load(environment: &Environment) -> Model {
                 command: instructions.command.map(|command| command.add),
                 config,
                 note: instructions.note.map(str::to_string),
+                old_entry: instructions.old_entry.line,
             }
         })
         .collect();

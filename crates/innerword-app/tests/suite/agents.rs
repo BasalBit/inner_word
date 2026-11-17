@@ -733,7 +733,9 @@ fn removing_names_only_the_agents_that_lose_the_skill(cx: &mut TestAppContext) {
 fn a_skill_from_another_copy_of_the_app_needs_updating(cx: &mut TestAppContext) {
     let home = Home::with_agents();
     // Installed by a copy of the app that lives somewhere else.
-    let other_tool = home.path().join("Old/Inner Word.app/Contents/MacOS/innerword");
+    let other_tool = home
+        .path()
+        .join("Old/Inner Word.app/Contents/MacOS/innerword");
     std::fs::create_dir_all(other_tool.parent().unwrap()).unwrap();
     std::fs::write(&other_tool, "#!/bin/sh\n").unwrap();
     let report = agents::install_skill_for_all(&Environment::isolated(home.path(), &other_tool));
@@ -787,6 +789,137 @@ fn a_skill_from_another_copy_of_the_app_needs_updating(cx: &mut TestAppContext) 
     assert_eq!(
         skill_state(&view, AgentId::ClaudeCode, vcx),
         SkillState::Current
+    );
+    assert_stays_in(&home, &view, vcx);
+}
+
+/// The skill as The Writer installed it, in a skills folder of `home`.
+fn plant_old_skill(home: &Home, skills_dir: &str) -> PathBuf {
+    let folder = home.path().join(skills_dir).join("the-writer");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("SKILL.md"),
+        innerword_agent_setup::legacy::old_skill_text(
+            Path::new("/Applications/The Writer.app/Contents/MacOS/writer"),
+            "0.8.0",
+        ),
+    )
+    .unwrap();
+    folder
+}
+
+#[gpui::test]
+fn a_skill_the_writer_installed_needs_updating_and_is_replaced(cx: &mut TestAppContext) {
+    let home = Home::with_agents();
+    let old = plant_old_skill(&home, ".claude/skills");
+
+    let (workspace, vcx) = workspace_with(&home, cx);
+    let view = open_panel(&workspace, vcx);
+    let SkillState::Stale(stale) = skill_state(&view, AgentId::ClaudeCode, vcx) else {
+        panic!("not stale")
+    };
+    assert_eq!(stale.reason, innerword_agent_setup::StaleReason::OldName);
+    let row = skill_row(&view, AgentId::ClaudeCode, vcx);
+    let Row::Skill(ix) = view.read_with(vcx, |view, _| view.rows()[row]) else {
+        unreachable!()
+    };
+    let skill = view.read_with(vcx, |view, _| view.model().skills[ix].clone());
+    assert_eq!(agents::skill_state_label(&skill.state), "Needs updating");
+    assert_eq!(skill.directory_display, "~/.claude/skills/inner-word");
+    assert!(
+        skill
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("installed under the old name The Writer")),
+        "{:?}",
+        skill.detail
+    );
+    assert_eq!(
+        view.read_with(vcx, |view, cx| view.button_labels(Row::Skill(ix), cx)),
+        ["Update", "Remove"]
+    );
+
+    // Enter updates: the skill is written under its name and the old
+    // folder is gone, and the report says every path.
+    select(&view, row, vcx);
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
+    assert!(report.ok, "{report:?}");
+    assert_eq!(report.headline, "Updated the skill for Claude Code.");
+    assert_eq!(
+        report.lines,
+        [
+            "Created the folder ~/.claude/skills/inner-word",
+            "Wrote ~/.claude/skills/inner-word/SKILL.md",
+            "Removed ~/.claude/skills/the-writer/SKILL.md",
+            "Removed ~/.claude/skills/the-writer",
+        ]
+    );
+    assert!(!old.exists());
+    assert!(home.skill_file(".claude/skills").is_file());
+    assert_eq!(
+        skill_state(&view, AgentId::ClaudeCode, vcx),
+        SkillState::Current
+    );
+
+    // Backspace removes the skill under both names.
+    plant_old_skill(&home, ".claude/skills");
+    let row = skill_row(&view, AgentId::ClaudeCode, vcx);
+    select(&view, row, vcx);
+    vcx.simulate_keystrokes("backspace");
+    vcx.run_until_parked();
+    let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
+    assert!(report.ok, "{report:?}");
+    assert!(
+        report
+            .lines
+            .contains(&"Removed ~/.claude/skills/the-writer".to_string()),
+        "{:?}",
+        report.lines
+    );
+    assert!(!old.exists());
+    assert!(!home.skill_file(".claude/skills").exists());
+    assert_eq!(
+        skill_state(&view, AgentId::ClaudeCode, vcx),
+        SkillState::NotInstalled
+    );
+    assert_stays_in(&home, &view, vcx);
+}
+
+#[gpui::test]
+fn a_the_writer_folder_somebody_else_made_is_left_alone(cx: &mut TestAppContext) {
+    let home = Home::with_agents();
+    let theirs = home.path().join(".claude/skills/the-writer/SKILL.md");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    let mine = "---\nname: the-writer\ndescription: My notes.\n---\nMine.\n";
+    std::fs::write(&theirs, mine).unwrap();
+
+    let (workspace, vcx) = workspace_with(&home, cx);
+    let view = open_panel(&workspace, vcx);
+    assert_eq!(
+        skill_state(&view, AgentId::ClaudeCode, vcx),
+        SkillState::NotInstalled
+    );
+    let row = skill_row(&view, AgentId::ClaudeCode, vcx);
+    select(&view, row, vcx);
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let report = view.read_with(vcx, |view, _| view.report().cloned().unwrap());
+    assert!(report.ok, "{report:?}");
+    assert!(
+        report.lines.iter().all(|line| !line.contains("the-writer")),
+        "{:?}",
+        report.lines
+    );
+    let row = skill_row(&view, AgentId::ClaudeCode, vcx);
+    select(&view, row, vcx);
+    vcx.simulate_keystrokes("backspace");
+    vcx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), mine);
+    assert!(
+        home.files()
+            .contains(&".claude/skills/the-writer/SKILL.md".to_string())
     );
     assert_stays_in(&home, &view, vcx);
 }
@@ -933,6 +1066,19 @@ fn the_mcp_commands_carry_the_real_path_and_are_copied(cx: &mut TestAppContext) 
         claude.command.as_deref(),
         Some(format!("claude mcp add --scope user inner-word -- {quoted} mcp").as_str())
     );
+    // Each agent has one line on the entry of the old name: its own remove
+    // command where it has one, else the entry and its file. It is drawn
+    // under the agent's name.
+    assert_eq!(
+        claude.old_entry,
+        "If you added the server when the app was called The Writer, remove that entry: \
+         claude mcp remove the-writer"
+    );
+    for agent in &model.mcp {
+        assert!(agent.old_entry.contains("the-writer"), "{}", agent.name);
+    }
+    assert!(vcx.debug_bounds("agents-old-entry-0").is_some());
+
     // The file an entry belongs in is named, below the home that was given.
     let cursor = model
         .mcp
@@ -942,6 +1088,13 @@ fn the_mcp_commands_carry_the_real_path_and_are_copied(cx: &mut TestAppContext) 
     let config = cursor.config.as_ref().unwrap();
     assert_eq!(config.file, Some(home.path().join(".cursor/mcp.json")));
     assert_eq!(config.place, "In ~/.cursor/mcp.json");
+    assert!(
+        cursor
+            .old_entry
+            .ends_with("delete its \"the-writer\" entry from ~/.cursor/mcp.json."),
+        "{}",
+        cursor.old_entry
+    );
 
     // Keyboard: enter on a command row copies the command.
     let row = mcp_row(&view, AgentId::ClaudeCode, McpForm::Command, vcx);

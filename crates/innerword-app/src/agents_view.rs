@@ -966,7 +966,7 @@ impl Render for AgentsView {
             }
             if row == Row::Switch {
                 above.push(
-                    heading("WHILE THE WRITER IS OPEN", WHILE_OPEN.into(), row_ix == 0)
+                    heading("WHILE INNER WORD IS OPEN", WHILE_OPEN.into(), row_ix == 0)
                         .into_any_element(),
                 );
             }
@@ -1015,16 +1015,21 @@ impl Render for AgentsView {
                         })
                         .into_any_element(),
                 );
-                above.extend(agent.note.clone().map(|note| {
+                let line = |text: String| {
                     div()
                         .px(SPACE_3)
                         .pb(px(2.))
                         .text_size(UI_TEXT_SM)
                         .line_height(px(16.))
                         .text_color(colors.muted)
-                        .child(note)
-                        .into_any_element()
-                }));
+                        .child(text)
+                };
+                above.extend(agent.note.clone().map(|note| line(note).into_any_element()));
+                above.push(
+                    line(agent.old_entry.clone())
+                        .debug_selector(move || format!("agents-old-entry-{ix}"))
+                        .into_any_element(),
+                );
             }
             let below = if Some(row_ix) == last_skill_row {
                 after_skills(self, cx)

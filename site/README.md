@@ -34,8 +34,14 @@ changes `site/` or the workflow, and on demand from the Actions tab (*Run workfl
 copies `site/` with `rsync -rlptz --delete --chmod=D755,F644` over SSH (port 65002) into
 `public_html`: what is no longer in `site/` is removed there, `README.md` (these notes)
 is never published, and `.well-known/` on the server is never deleted (Hostinger may use
-it for certificate checks). Then it fetches `https://innerword.io/` a few times and checks
-that the page serves the `data-version` of `index.html`; while the certificate of a new
+it for certificate checks). It publishes a staged copy in which `index.html` names
+`styles.css?v=<commit>` and `script.js?v=<commit>` (the first 12 characters of the commit),
+because Hostinger's CDN and browsers keep the style sheet and the script up to an hour and
+a fix would otherwise reach some readers late; `site/index.html` itself keeps the plain
+names, so the local preview works, and pictures get a new file name when they change. If
+anything else ever looks stale on the live site, hPanel > *Performance* > *CDN* > *Flush
+cache* empties the CDN by hand. Then it fetches `https://innerword.io/` a few times and checks
+that the page serves the `data-version` of `index.html` and names the versioned `styles.css`; while the certificate of a new
 domain is not issued yet, that is a warning and not a failure.
 
 `.htaccess` sends `http://` and `www.innerword.io` to `https://innerword.io/` (301, the path

@@ -32,6 +32,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The CDN and browsers keep styles.css and script.js up to an hour (.htaccess), so a
+      # fix would reach some readers late: the published index.html names them with
+      # ?v=<commit>, a new address every deploy. The source site/index.html is left alone,
+      # so a local preview keeps working. Pictures are not versioned: a picture that
+      # changes gets a new file name.
+      - name: Stage site/ with versioned styles and script
+        run: |
+          set -euo pipefail
+          stage="${RUNNER_TEMP}/site"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cp -R site/. "$stage/"
+          v="${GITHUB_SHA:0:12}"
+          page="$stage/index.html"
+          for file in styles.css script.js; do
+            if ! grep -q "=\"${file}\"" "$page"; then
+              echo "::error::index.html no longer names ${file} as =\"${file}\", so its address could not be versioned. Update the staging step in .github/workflows/site.yml."
+              exit 1
+            fi
+            sed -e "s|=\"${file}\"|=\"${file}?v=${v}\"|g" "$page" > "$page.tmp"
+            mv "$page.tmp" "$page"
+          done
+          echo "Staged ${stage} with styles.css?v=${v} and script.js?v=${v}:"
+          grep -n -E "(styles\.css|script\.js)\?v=" "$page"
+
       - name: Publish site/ over SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -58,25 +83,26 @@ jobs:
             --exclude=README.md \
             --filter='P .well-known/' \
             -e "$ssh_cmd" \
-            site/ "${REMOTE_USER}@${PINNED_HOST}:/home/${REMOTE_USER}/domains/innerword.io/public_html/"
+            "${RUNNER_TEMP}/site/" "${REMOTE_USER}@${PINNED_HOST}:/home/${REMOTE_USER}/domains/innerword.io/public_html/"
 
       - name: Check the live page
         run: |
           set -uo pipefail
           want=$(sed -n 's/.*data-version="\([^"]*\)".*/\1/p' site/index.html | head -n 1)
-          echo "Expecting data-version=\"${want}\" at ${SITE_URL}"
+          css="styles.css?v=${GITHUB_SHA:0:12}"
+          echo "Expecting data-version=\"${want}\" and ${css} at ${SITE_URL}"
           for attempt in 1 2 3 4 5 6; do
             if page=$(curl -fsSL --max-time 20 -H 'Cache-Control: no-cache' "${SITE_URL}?deploy=${GITHUB_RUN_ID}-${attempt}"); then
-              if grep -q "data-version=\"${want}\"" <<<"$page"; then
-                echo "The live page serves version ${want}."
+              if grep -q "data-version=\"${want}\"" <<<"$page" && grep -qF "\"${css}\"" <<<"$page"; then
+                echo "The live page serves version ${want} and names ${css}."
                 exit 0
               fi
             fi
             sleep 10
           done
           insecure=$(curl -fsSL --max-time 20 -k "${SITE_URL}" || true)
-          if grep -q "data-version=\"${want}\"" <<<"$insecure"; then
+          if grep -q "data-version=\"${want}\"" <<<"$insecure" && grep -qF "\"${css}\"" <<<"$insecure"; then
             echo "::warning::The page serves version ${want}, but only without checking TLS: the certificate for innerword.io may not be issued yet."
           else
-            echo "::warning::${SITE_URL} did not serve data-version=\"${want}\" after six tries (TLS may not be ready yet for a new domain, or the CDN still has the old page). Check it by hand."
+            echo "::warning::${SITE_URL} did not serve data-version=\"${want}\" with ${css} after six tries (TLS may not be ready yet for a new domain, or the CDN still has the old page). Check it by hand."
           fi

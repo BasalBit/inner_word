@@ -1,9 +1,19 @@
 name: CI
 
+# Changes that cannot affect the build or the tests start no run: the landing page,
+# documentation and notes (every Markdown file, CLAUDE.md among them).
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "site/**"
+      - "docs/**"
+      - "**.md"
   pull_request:
+    paths-ignore:
+      - "site/**"
+      - "docs/**"
+      - "**.md"
 
 permissions:
   contents: read
@@ -20,6 +30,8 @@ env:
 # The toolchain, its components and its targets come from rust-toolchain.toml.
 # `--lib --tests` (and `--bins --tests` for innerword-cli, which has no library) keeps
 # cargo from building the examples, each of which links GPUI and is about 150 MB.
+# `--no-fail-fast` runs every test binary of a step, so one failing crate does not
+# hide the results of the others.
 
 jobs:
   fmt:
@@ -60,7 +72,7 @@ jobs:
           echo "INNER_WORD_DATA_DIR=$RUNNER_TEMP/library" >> "$GITHUB_ENV"
       - name: Test the pure crates
         run: >
-          cargo test --lib --tests
+          cargo test --no-fail-fast --lib --tests
           -p innerword-core
           -p innerword-store
           -p innerword-image
@@ -72,11 +84,11 @@ jobs:
           -p innerword-agent-setup
           -p innerword-assistant
       - name: Test innerword-agent (its suite runs twice, the second time through a stand-in app)
-        run: cargo test --lib --tests -p innerword-agent
+        run: cargo test --no-fail-fast --lib --tests -p innerword-agent
       - name: Test innerword-cli (runs the built tool, with the real WebKit check)
-        run: cargo test --bins --tests -p innerword-cli
+        run: cargo test --no-fail-fast --bins --tests -p innerword-cli
       - name: Test innerword-web (WebKit offscreen, a program of its own)
-        run: cargo test --lib --tests -p innerword-web
+        run: cargo test --no-fail-fast --lib --tests -p innerword-web
 
   gpui:
     name: GPUI crates (target)
@@ -99,7 +111,7 @@ jobs:
           echo "INNER_WORD_DATA_DIR=$RUNNER_TEMP/library" >> "$GITHUB_ENV"
       - name: Test the GPUI crates and innerword-print
         run: >
-          cargo test --lib --tests
+          cargo test --no-fail-fast --lib --tests
           -p innerword-print
           -p innerword-ui
           -p innerword-editor

@@ -302,13 +302,19 @@ fn a_row_of_other_advances_than_the_layout_measured_is_counted() {
         glyph.x = index as f32 * advance;
     }
     row.width = text.len() as f32 * advance;
-    // The layout measured every glyph twice as wide.
+    // The layout measured every glyph twice as wide. The row starts further
+    // left so that every glyph of it is on the page: a glyph past the edge of
+    // the sheet is in the page text of some versions of PDFKit and not of
+    // others (macOS 15 leaves it out).
     let mut doubled = row.clone();
+    doubled.x = 20.;
     doubled.baseline = 130.;
     doubled.width *= 2.;
     for glyph in &mut doubled.glyphs {
         glyph.x *= 2.;
     }
+    let last = doubled.glyphs.last().expect("glyphs").x;
+    assert!(doubled.x + last + advance < A4.0, "{last}");
     // Only the width differs, with every glyph inside the row where CoreText
     // has it: what the row's ends do in its line (a tab's stop, a contextual
     // form) and not another face.
@@ -339,16 +345,19 @@ fn a_row_of_other_advances_than_the_layout_measured_is_counted() {
         ],
     )]);
     assert_eq!((pdf.report.rows, pdf.report.rows_off), (5, 2));
-    // The rows with text are whole all the same (PDFKit reads the doubled one
-    // as letters with gaps between them).
+    // The rows with text are whole all the same. PDFKit reads the doubled one
+    // as letters with gaps between them, and where it puts those among the
+    // other rows differs between versions of macOS (macOS 15 reads half of it
+    // into the line of the row below), so the letters are compared as letters:
+    // every one of the three rows, no more and no fewer.
     let page_text = file.page_text(0);
-    let mut lines = page_text.trim().lines();
-    assert_eq!(lines.next(), Some(text));
-    assert!(
-        squeezed(&page_text).starts_with(&format!("{}placedatthefont", squeezed(text))),
-        "{page_text}"
-    );
-    assert!(page_text.trim_end().ends_with(text), "{page_text}");
+    assert_eq!(page_text.trim().lines().next(), Some(text), "{page_text}");
+    let letters = |text: &str| {
+        let mut letters: Vec<char> = squeezed(text).chars().collect();
+        letters.sort_unstable();
+        letters
+    };
+    assert_eq!(letters(&page_text), letters(&text.repeat(3)), "{page_text}");
 
     // A row too short to have clusters inside it is judged by its width,
     // unless it holds a tab, whose width depends on where the row stands.

@@ -83,7 +83,18 @@ body {
   line-height: 1.6;
   font-kerning: normal;
   -webkit-font-smoothing: antialiased;
+  /* A guard only: nothing on the page is wider than a phone's screen (checked with the
+     guard off, in phone emulation). Where the browser knows clip, html and body
+     clip sideways: clip makes no scroll container, so the sticky header still sticks, and
+     a phone does not widen its layout viewport for what is clipped. Elsewhere hidden on
+     body alone, which the viewport takes over (on html too it would make body a scroller
+     and the header would stop sticking). Positioned, so that an absolutely positioned
+     element with no other positioned ancestor is inside what body clips. */
+  position: relative;
   overflow-x: hidden;
+}
+@supports (overflow-x: clip) {
+  html, body { overflow-x: clip; }
 }
 img { max-width: 100%; height: auto; display: block; }
 a { color: inherit; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 0.18em; }
@@ -308,7 +319,14 @@ kbd {
 }
 @media (min-width: 640px) { .sheet { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 639px) {
+  /* The strip is positioned, so that it is the containing block of everything absolutely
+     positioned in it and clips it: a scroller does not clip an absolute element whose
+     containing block is outside it. The spoken names of the keys in the captions (.sr)
+     of the second and third screens stood 400 to 750 px right of a phone's screen and
+     made the page about twice as wide as the screen (only once the strip had come in:
+     while .reveal moves it, its transform holds them). */
   .sheet {
+    position: relative;
     display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
     margin-left: calc(-1 * var(--gutter)); margin-right: calc(-1 * var(--gutter));
     padding: 4px var(--gutter) 20px; scroll-padding: 0 var(--gutter); scrollbar-width: thin;

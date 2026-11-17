@@ -93,6 +93,12 @@ release:
 3. If the release changes what the page says (requirements, features, the first-launch
    steps in `packaging/Read Me First.txt`), change the text too.
 
+With JavaScript, a click on a download button also scrolls to the first-launch steps
+(`#install`) and says that the download has started, and on a phone or a tablet
+(`(max-width: 600px), (pointer: coarse)`) the hero's button reads "Get it for your Mac"
+and leads to the download section instead, which asks the reader to open the page on a
+Mac and offers to copy its address.
+
 Without JavaScript the download buttons lead to the latest release
 (`https://github.com/BasalBit/inner_word/releases/latest`) and the version labels are left out,
 so the page is never wrong, only less direct.
@@ -106,12 +112,26 @@ publish the page after the repository and the first release are public.
 Night (`-dark`) and at two widths for `srcset`, the app icon (`logo.webp`,
 `favicon.png`, `apple-touch-icon.png`) and the social preview (`og-image.jpg`,
 1200 x 630). The hero and the saved web page are the whole window (2400 and 1200 pixels
-wide; the hero has a crop of the text column for phones, `hero-mobile`); the others are
-crops of the part they show: one sheet of page view, the palette, the format bar, the list
-of shortcuts, Vim's command line, the find bar, the library, the comments, the side chat,
-the note of an agent's change and the Agents panel. All of them were taken in one scripted
-run of the release app on one temporary library, so the library, its times and the text
-agree from shot to shot (the agent's edit is applied only in the shot of that edit).
+wide; the hero has a crop of the text column for phones, `hero-mobile`); in both the
+window's grey traffic lights were painted out, since the window was not the active one
+when it was taken. The others are crops of the part they show: the sheet of page view
+alone (no desk around it, so it sits on the page's own desk), the palette panel alone
+(its rounded corners transparent), the format bar, the list of shortcuts, Vim's command
+line, the find bar, the library, the comments, the side chat, the note of an agent's
+change and the Agents panel. Each crop ends between two paragraphs or two rows, never
+through a line of text; the shot of the agent's change has a band of the app's own
+canvas colour added under the note, where the window went on with a line cut by the
+status bar. All of them were taken in one scripted run of the release app on one
+temporary library, so the library, its times and the text agree from shot to shot (the
+agent's edit is applied only in the shot of that edit).
+
+Four screenshots have a second crop for phones (`-phone`, one size, at 2x), chosen by a
+`<source media="(max-width: 600px)">` as the hero's is, because the wide crop would
+shrink to unreadable type there: the palette (the query and two rows, fading out to the
+right and below), the format bar (the bar and the paragraph under it, cut after "leave,"
+with the rest of the line painted out in the canvas colour), the comments (the panel
+with both threads) and the Agents panel (the switch and the two installed agents: rows
+of the panel stacked as they are in it, with the descriptions between them left out).
 
 To make a new WebP from a PNG screenshot:
 
@@ -121,7 +141,7 @@ cwebp -q 80 -m 6 -resize 1200 0 shot.png -o assets/name-1200.webp
 ```
 
 Every screenshot is a `<picture>` whose first `<source>` is the Night version for a
-reader in dark mode. The hero also has a small Paper / Night switch: its Night sources
+reader in dark mode (after the phone sources, where a screenshot has them). The hero also has a small Paper / Night switch: its Night sources
 carry their media without the colour scheme in `data-media`, which `script.js` uses.
 
 The side chat is a crop below its header: it was taken with the app's test engine, whose

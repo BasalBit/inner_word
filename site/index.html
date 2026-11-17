@@ -41,9 +41,9 @@
     <nav class="nav" aria-label="Main">
       <ul>
         <li class="nav__wide"><a href="#features">Features</a></li>
-        <li class="nav__wide"><a href="#keys">Keys</a></li>
+        <li class="nav__wide"><a href="#agents">Agents</a></li>
         <li class="nav__wide"><a href="#private">Privacy</a></li>
-        <li><a href="#download">Download</a></li>
+        <li><a class="nav__dl" href="#download">Download</a></li>
         <li><a class="nav__gh" href="https://github.com/BasalBit/inner_word">
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
           <span>GitHub</span></a></li>
@@ -61,13 +61,14 @@
     <h1 id="hero-title" class="hero__title">Paper, ink, and <span class="anchor">your keyboard</span>.<span class="caret" aria-hidden="true"></span></h1>
     <p class="hero__lede">Inner Word is a rich-text writing app for books, blog posts and social posts. Everything can be done from the keyboard, everything can be done with the mouse, and your library stays on your Mac.</p>
     <div class="cta">
-      <a class="btn btn--primary" data-dmg="universal" href="https://github.com/BasalBit/inner_word/releases/latest">
+      <a class="btn btn--primary" data-dmg="universal" data-hero-get href="https://github.com/BasalBit/inner_word/releases/latest">
         <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Download for macOS
+        <span data-label>Download for macOS</span>
       </a>
       <a class="btn btn--quiet" href="https://github.com/BasalBit/inner_word">View on GitHub</a>
     </div>
-    <p class="fine">For Apple silicon and Intel Macs · <span class="nowrap">macOS 11 or later</span> <span class="nowrap">(10.15.7 on Intel)</span></p>
+    <p class="fine">No account, no subscription · For Apple silicon and Intel Macs · <span class="nowrap">macOS 11 or later</span> <span class="nowrap">(10.15.7 on Intel)</span></p>
+    <p class="fine fine--links"><a href="#install">First launch needs one approval</a> <span aria-hidden="true">·</span> <a href="#agents">Works with any AI agent, if you use one</a></p>
     <aside class="hero__note" aria-hidden="true">
       <p class="hero__quote">your keyboard</p>
       <p>Every key can be changed, and <kbd><span aria-hidden="true">⇧⌘P</span><span class="sr">Shift Command P</span></kbd> runs any command by name. The mouse can do it all too.</p>
@@ -105,10 +106,16 @@
 
 <!-- ============ What it is ============ -->
 <section class="opening" aria-labelledby="what-title">
-  <div class="wrap wrap--read">
-    <h2 id="what-title" class="sr">What Inner Word is</h2>
-    <p>Inner Word is for people who write long things. You get a single column of text in a serif made for reading, or real sheets of paper in page view, and very little else on screen. There is no ribbon and no toolbar. Formatting comes from shortcuts, Markdown-style typing, a small format bar over a mouse selection and right-click menus.</p>
-    <p>Your documents live in a library of folders on your own Mac, saved as you type, with versions you can go back to. It is written in Rust on GPUI, with a GPU-drawn interface.</p>
+  <div class="wrap opening__grid">
+    <div class="opening__text">
+      <h2 id="what-title" class="sr">What Inner Word is</h2>
+      <p>Inner Word is for people who write long things. You get a single column of text in a serif made for reading, or real sheets of paper in page view, and very little else on screen. There is no ribbon and no toolbar. Formatting comes from shortcuts, Markdown-style typing, a small format bar over a mouse selection and right-click menus.</p>
+      <p>Your documents live in a library of folders on your own Mac, saved as you type, with versions you can go back to.</p>
+    </div>
+    <aside class="opening__quote" aria-hidden="true">
+      <p>No ribbon. No toolbar.</p>
+      <p>Very little else on screen.</p>
+    </aside>
   </div>
 </section>
 
@@ -117,7 +124,7 @@
 <!-- I. The page -->
 <section class="chapter" aria-labelledby="c1">
   <div class="wrap chapter__head">
-    <p class="numeral" aria-hidden="true">I</p>
+    <p class="numeral" aria-hidden="true">one</p>
     <div>
       <h2 id="c1">A writing surface that gets out of the way</h2>
       <p class="chapter__lede">Write in a calm column, or switch to page view <kbd><span aria-hidden="true">⌥⌘P</span><span class="sr">Option Command P</span></kbd> and see your text on real paper: its size, margins and page numbers, laid out the way it will print.</p>
@@ -133,13 +140,13 @@
     <figure class="shot shot--sheet reveal">
       <picture>
         <source media="(prefers-color-scheme: dark)" type="image/webp"
-          srcset="assets/page-view-dark-680.webp 680w, assets/page-view-dark.webp 1360w"
-          sizes="(min-width: 560px) 520px, calc(100vw - 32px)">
+          srcset="assets/page-view-dark-555.webp 555w, assets/page-view-dark.webp 1110w"
+          sizes="(min-width: 500px) 460px, calc(100vw - 32px)">
         <img src="assets/page-view.webp"
-          srcset="assets/page-view-680.webp 680w, assets/page-view.webp 1360w"
-          sizes="(min-width: 560px) 520px, calc(100vw - 32px)"
-          width="1360" height="1660" loading="lazy" decoding="async"
-          alt="Page view: the first page of the chapter on an A4 sheet on the darker desk, zoomed to fit the page, with page number 1 in its footer.">
+          srcset="assets/page-view-555.webp 555w, assets/page-view.webp 1110w"
+          sizes="(min-width: 500px) 460px, calc(100vw - 32px)"
+          width="1110" height="1570" loading="lazy" decoding="async"
+          alt="Page view: the first page of the chapter on an A4 sheet, zoomed to fit the page, with page number 1 in its footer.">
       </picture>
       <figcaption class="shot__cap">Page view, fit to one sheet. What you see is what prints.</figcaption>
     </figure>
@@ -149,7 +156,7 @@
 <!-- II. The keys -->
 <section class="chapter" aria-labelledby="c2">
   <div class="wrap chapter__head">
-    <p class="numeral" aria-hidden="true">II</p>
+    <p class="numeral" aria-hidden="true">two</p>
     <div>
       <h2 id="c2">Keyboard first. Mouse welcome.</h2>
       <p class="chapter__lede">Every feature can be reached and finished from the keyboard. Every feature can also be reached with the mouse alone: right-click anything, or use the native menu bar, which has every command.</p>
@@ -163,13 +170,17 @@
   <div class="desk">
     <figure class="shot shot--palette reveal">
       <picture>
+        <source media="(max-width: 600px) and (prefers-color-scheme: dark)" type="image/webp"
+          srcset="assets/palette-phone-dark.webp 800w" sizes="calc(100vw - 32px)" width="800" height="254">
+        <source media="(max-width: 600px)" type="image/webp"
+          srcset="assets/palette-phone.webp 800w" sizes="calc(100vw - 32px)" width="800" height="254">
         <source media="(prefers-color-scheme: dark)" type="image/webp"
-          srcset="assets/palette-dark-612.webp 612w, assets/palette-dark.webp 1224w"
-          sizes="(min-width: 660px) 612px, calc(100vw - 32px)">
+          srcset="assets/palette-dark-600.webp 600w, assets/palette-dark.webp 1200w"
+          sizes="600px">
         <img src="assets/palette.webp"
-          srcset="assets/palette-612.webp 612w, assets/palette.webp 1224w"
-          sizes="(min-width: 660px) 612px, calc(100vw - 32px)"
-          width="1224" height="412" loading="lazy" decoding="async"
+          srcset="assets/palette-600.webp 600w, assets/palette.webp 1200w"
+          sizes="600px"
+          width="1200" height="374" loading="lazy" decoding="async"
           alt="The command palette with the query export. It lists Export with its key Shift Command S, Export as PDF, Export keyboard shortcuts and Cancel PDF export, each with its category.">
       </picture>
       <figcaption class="shot__cap">The command palette, searching for “export”.</figcaption>
@@ -177,6 +188,10 @@
 
     <figure class="detail detail--bar reveal">
       <picture>
+        <source media="(max-width: 600px) and (prefers-color-scheme: dark)" type="image/webp"
+          srcset="assets/format-bar-phone-dark.webp 974w" sizes="calc(100vw - 32px)" width="974" height="230">
+        <source media="(max-width: 600px)" type="image/webp"
+          srcset="assets/format-bar-phone.webp 974w" sizes="calc(100vw - 32px)" width="974" height="230">
         <source media="(prefers-color-scheme: dark)" type="image/webp"
           srcset="assets/format-bar-dark-768.webp 768w, assets/format-bar-dark.webp 1536w"
           sizes="(min-width: 860px) 768px, calc(100vw - 32px)">
@@ -189,26 +204,26 @@
       <figcaption>Select with the mouse and a small format bar comes up. Select with the keyboard and it stays away.</figcaption>
     </figure>
 
-    <div class="sheet reveal">
+    <div class="sheet reveal" role="group" aria-label="More screenshots: keyboard shortcuts, Vim mode, find and replace" tabindex="0">
       <figure class="thumb">
-        <a href="assets/shortcuts.webp"><picture>
-          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/shortcuts-dark-620.webp 620w, assets/shortcuts-dark.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)">
-          <img src="assets/shortcuts-620.webp" srcset="assets/shortcuts-620.webp 620w, assets/shortcuts.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)" width="1240" height="930" loading="lazy" decoding="async"
-          alt="The Keyboard shortcuts list: a search field, Changed Only, Import, Export and Reset All, and commands such as New document, New folder, Export and Print, each with its key or No key."></picture></a>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/shortcuts-dark-620.webp 620w, assets/shortcuts-dark.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw">
+          <img src="assets/shortcuts-620.webp" srcset="assets/shortcuts-620.webp 620w, assets/shortcuts.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw" width="1240" height="930" loading="lazy" decoding="async"
+          alt="The Keyboard shortcuts list: a search field, Changed Only, Import, Export and Reset All, and commands such as New document, New folder, Export and Print, each with its key or No key."></picture>
         <figcaption>Keyboard shortcuts <kbd><span aria-hidden="true">⌘/</span><span class="sr">Command Slash</span></kbd></figcaption>
       </figure>
       <figure class="thumb">
-        <a href="assets/vim.webp"><picture>
-          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/vim-dark-620.webp 620w, assets/vim-dark.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)">
-          <img src="assets/vim-620.webp" srcset="assets/vim-620.webp 620w, assets/vim.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)" width="1240" height="930" loading="lazy" decoding="async"
-          alt="Vim mode: a search for fog typed in the command line at the bottom of the window, and the COMMAND chip in the status bar."></picture></a>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/vim-dark-620.webp 620w, assets/vim-dark.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw">
+          <img src="assets/vim-620.webp" srcset="assets/vim-620.webp 620w, assets/vim.webp 1240w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw" width="1240" height="930" loading="lazy" decoding="async"
+          alt="Vim mode: a search for fog typed in the command line at the bottom of the window, and the COMMAND chip in the status bar."></picture>
         <figcaption>Vim mode <kbd><span aria-hidden="true">⌥⌘V</span><span class="sr">Option Command V</span></kbd></figcaption>
       </figure>
       <figure class="thumb">
-        <a href="assets/find-replace.webp"><picture>
-          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/find-replace-dark-740.webp 740w, assets/find-replace-dark.webp 1480w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)">
-          <img src="assets/find-replace-740.webp" srcset="assets/find-replace-740.webp 740w, assets/find-replace.webp 1480w" sizes="(min-width: 960px) 397px, (min-width: 640px) 45vw, calc(100vw - 32px)" width="1480" height="1110" loading="lazy" decoding="async"
-          alt="Find and replace: lamp found 1 of 4 with the matches marked in the text, lantern in the replace field, and buttons for case, whole word, Replace and Replace all."></picture></a>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/find-replace-dark-740.webp 740w, assets/find-replace-dark.webp 1480w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw">
+          <img src="assets/find-replace-740.webp" srcset="assets/find-replace-740.webp 740w, assets/find-replace.webp 1480w" sizes="(min-width: 960px) 397px, (min-width: 640px) 30vw, 86vw" width="1480" height="1110" loading="lazy" decoding="async"
+          alt="Find and replace: lamp found 1 of 4 with the matches marked in the text, lantern in the replace field, and buttons for case, whole word, Replace and Replace all."></picture>
         <figcaption>Find and replace <kbd><span aria-hidden="true">⌥⌘F</span><span class="sr">Option Command F</span></kbd></figcaption>
       </figure>
     </div>
@@ -219,7 +234,7 @@
 <section class="chapter chapter--side" aria-labelledby="c3">
   <div class="wrap side side--lib">
     <div class="side__text">
-      <p class="numeral" aria-hidden="true">III</p>
+      <p class="numeral" aria-hidden="true">three</p>
       <h2 id="c3">A library, not a pile of files</h2>
       <p class="chapter__lede">Folders and documents in a sidebar, all in one place, all searchable.</p>
       <ul class="gloss gloss--flow">
@@ -251,7 +266,7 @@
 <!-- IV. The manuscript -->
 <section class="chapter" aria-labelledby="c4">
   <div class="wrap chapter__head">
-    <p class="numeral" aria-hidden="true">IV</p>
+    <p class="numeral" aria-hidden="true">four</p>
     <div>
       <h2 id="c4">The tools of a manuscript, without the clutter</h2>
       <p class="chapter__lede">Comments for the edit, pictures in the text, your Mac’s own spelling, and export when it is ready.</p>
@@ -265,13 +280,17 @@
   <div class="desk">
     <figure class="shot shot--comments reveal">
       <picture>
+        <source media="(max-width: 600px) and (prefers-color-scheme: dark)" type="image/webp"
+          srcset="assets/comments-phone-dark.webp 638w" sizes="calc(100vw - 32px)" width="638" height="636">
+        <source media="(max-width: 600px)" type="image/webp"
+          srcset="assets/comments-phone.webp 638w" sizes="calc(100vw - 32px)" width="638" height="636">
         <source media="(prefers-color-scheme: dark)" type="image/webp"
           srcset="assets/comments-dark-1140.webp 1140w, assets/comments-dark.webp 2280w"
           sizes="(min-width: 1204px) 1140px, calc(100vw - 32px)">
         <img src="assets/comments.webp"
         srcset="assets/comments-1140.webp 1140w, assets/comments.webp 2280w"
         sizes="(min-width: 1204px) 1140px, calc(100vw - 32px)"
-        width="2280" height="1180" loading="lazy" decoding="async"
+        width="2280" height="1274" loading="lazy" decoding="async"
         alt="The comments panel at the right with two open threads from an editor, Helen, one with a reply from the author, Sam. The phrases they are about, like a ship taking on weight and hundred and twelve steps, are tinted in the text.">
       </picture>
       <figcaption class="shot__cap">Two threads from an editor, anchored to the words they are about.</figcaption>
@@ -293,39 +312,13 @@
   </div>
 </section>
 
-<!-- V. The assistant -->
-<section class="chapter chapter--side" aria-labelledby="c5">
-  <div class="wrap side side--flip">
-    <div class="side__text">
-      <p class="numeral" aria-hidden="true">V</p>
-      <h2 id="c5">An assistant, if you want one</h2>
-      <p class="chapter__lede">If Claude Code is installed on your Mac and you are signed in, Inner Word has a writing assistant that runs on it. If not, nothing of it is shown.</p>
-      <ul class="gloss gloss--flow">
-        <li><strong>Quick chat</strong> <kbd><span aria-hidden="true">⌘J</span><span class="sr">Command J</span></kbd>: ask about the selected text in a small popover at the selection. Another word, a tighter sentence, another tone.</li>
-        <li><strong>Side chat</strong> <kbd><span aria-hidden="true">⌘3</span><span class="sr">Command 3</span></kbd>: a longer conversation beside the text that knows the whole document, and other documents and folders you add.</li>
-        <li>It advises, you apply. Every answer has buttons to replace the selection, insert it or copy it, and <kbd><span aria-hidden="true">⌘Z</span><span class="sr">Command Z</span></kbd> takes it back. It never changes a document by itself.</li>
-      </ul>
-      <p class="note">Nothing is sent until you send a message. Messages go to Anthropic through your own Claude Code sign-in and count against your own plan.</p>
-    </div>
-    <figure class="side__img detail reveal">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/assistant-panel-dark-411.webp 411w, assets/assistant-panel-dark.webp 822w" sizes="(min-width: 860px) 411px, calc(100vw - 32px)">
-        <img src="assets/assistant-panel.webp" srcset="assets/assistant-panel-411.webp 411w, assets/assistant-panel.webp 822w" sizes="(min-width: 860px) 411px, calc(100vw - 32px)"
-        width="822" height="1050" loading="lazy" decoding="async"
-        alt="The side chat. The question: How can I make the ending of this chapter land harder? The answer, formatted with bold words, a numbered list of three suggestions and a quoted line, ends with the buttons Insert, Replace and Copy.">
-      </picture>
-      <figcaption>The side chat, with the chapter as its context.</figcaption>
-    </figure>
-  </div>
-</section>
-
-<!-- VI. Agents -->
-<section class="chapter" aria-labelledby="c6">
+<!-- V. Agents -->
+<section class="chapter" id="agents" aria-labelledby="c5">
   <div class="wrap chapter__head">
-    <p class="numeral" aria-hidden="true">VI</p>
+    <p class="numeral" aria-hidden="true">five</p>
     <div>
-      <h2 id="c6">Built for the agents on your Mac</h2>
-      <p class="chapter__lede">Claude Code, Codex, Gemini CLI and the others can read and edit your library through <code>innerword</code>, a command line tool and MCP server that ships inside the app.</p>
+      <h2 id="c5">Works with any AI agent, if you use one</h2>
+      <p class="chapter__lede">Inner Word works fully without any agent. If you use one, any agent that can run a command or speak MCP can read and edit your library, not only Claude. It goes through <code>innerword</code>, a command line tool and MCP server that ships inside the app.</p>
     </div>
     <ul class="gloss">
       <li>A version is kept before every change an agent makes to a document’s text. What an agent deletes goes to the trash.</li>
@@ -342,7 +335,7 @@
         <img src="assets/agent-change.webp"
         srcset="assets/agent-change-770.webp 770w, assets/agent-change.webp 1540w"
         sizes="(min-width: 834px) 770px, calc(100vw - 32px)"
-        width="1540" height="1190" loading="lazy" decoding="async"
+        width="1540" height="1189" loading="lazy" decoding="async"
         alt="The chapter open in the app just after an agent edited it from outside: the sentence now reads, the fog came in and sat down against the windows like a patient animal. A note at the bottom says Claude changed Chapter 2: Salt and Lamp Oil, with an Undo button.">
       </picture>
       <figcaption class="shot__cap">An edit made from the terminal while the chapter was open. One step of Undo takes it back.</figcaption>
@@ -355,26 +348,56 @@
     --old "the fog came in and did not leave" \
     --new "the fog came in and sat down against the windows like a patient animal" \
     --author Claude</code></pre>
-        <figcaption>The command behind the screenshot above.</figcaption>
+        <figcaption>The command behind the screenshot above. Any agent can send it, with its own name.</figcaption>
       </figure>
       <figure class="detail">
         <picture>
-          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/agents-panel-dark-720.webp 720w, assets/agents-panel-dark.webp 1440w" sizes="(min-width: 1000px) 600px, calc(100vw - 32px)">
-          <img src="assets/agents-panel.webp" srcset="assets/agents-panel-720.webp 720w, assets/agents-panel.webp 1440w" sizes="(min-width: 1000px) 600px, calc(100vw - 32px)"
-          width="1440" height="690" loading="lazy" decoding="async"
-          alt="Part of the Agents panel: the switch Agents can make changes while Inner Word is open, set to On, and the skill installed for Claude Code and Codex, each with a Remove button.">
+          <source media="(max-width: 600px) and (prefers-color-scheme: dark)" type="image/webp"
+            srcset="assets/agents-phone-dark.webp 778w" sizes="calc(100vw - 32px)" width="778" height="412">
+          <source media="(max-width: 600px)" type="image/webp"
+            srcset="assets/agents-phone.webp 778w" sizes="calc(100vw - 32px)" width="778" height="412">
+          <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/agents-panel-dark-717.webp 717w, assets/agents-panel-dark.webp 1434w" sizes="(min-width: 1000px) 600px, calc(100vw - 32px)">
+          <img src="assets/agents-panel.webp" srcset="assets/agents-panel-717.webp 717w, assets/agents-panel.webp 1434w" sizes="(min-width: 1000px) 600px, calc(100vw - 32px)"
+          width="1434" height="786" loading="lazy" decoding="async"
+          alt="Part of the Agents panel: the switch Agents can make changes while Inner Word is open, set to On; the skill installed for Claude Code and Codex, each with a Remove button; and the other agents it supports that are not on this Mac.">
         </picture>
         <figcaption>The Agents panel. You choose what is installed, and where.</figcaption>
       </figure>
     </div>
-    <p class="wrap agentlist"><span>Works with</span> Claude Code · the Claude desktop app · Codex · Cursor · VS Code with GitHub Copilot · GitHub Copilot CLI · Gemini CLI · Antigravity · OpenCode · Devin Desktop · Zed · Pi</p>
+    <p class="wrap agentlist"><span>Works with</span> any agent that can run a command or speak MCP · Antigravity · Claude Code · the Claude desktop app · Codex · Cursor · Devin Desktop · Gemini CLI · GitHub Copilot CLI · OpenCode · Pi · VS Code with GitHub Copilot · Zed</p>
+  </div>
+</section>
+
+<!-- VI. The assistant -->
+<section class="chapter chapter--side" id="assistant" aria-labelledby="c6">
+  <div class="wrap side side--flip">
+    <div class="side__text">
+      <p class="numeral" aria-hidden="true">six</p>
+      <h2 id="c6">An assistant in the app, if you want one</h2>
+      <p class="chapter__lede">Separate from the agents above: an optional writing assistant inside Inner Word, in two chats. It runs on an AI agent you have installed and signed in to. Today that agent is Claude Code; support for other agents is planned. Without one, nothing of the assistant is shown.</p>
+      <ul class="gloss gloss--flow">
+        <li><strong>Quick chat</strong> <kbd><span aria-hidden="true">⌘J</span><span class="sr">Command J</span></kbd>: ask about the selected text in a small popover at the selection. Another word, a tighter sentence, another tone.</li>
+        <li><strong>Side chat</strong> <kbd><span aria-hidden="true">⌘3</span><span class="sr">Command 3</span></kbd>: a longer conversation beside the text that knows the whole document, and other documents and folders you add.</li>
+        <li>It advises, you apply. Every answer has buttons to replace the selection, insert it or copy it, and <kbd><span aria-hidden="true">⌘Z</span><span class="sr">Command Z</span></kbd> takes it back. It never changes a document by itself.</li>
+      </ul>
+      <p class="note">Nothing is sent until you send a message. Messages go through your own sign-in to the agent (with Claude Code, to Anthropic) and count against your own plan.</p>
+    </div>
+    <figure class="side__img detail reveal">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" type="image/webp" srcset="assets/assistant-panel-dark-411.webp 411w, assets/assistant-panel-dark.webp 822w" sizes="(min-width: 860px) 411px, calc(100vw - 32px)">
+        <img src="assets/assistant-panel.webp" srcset="assets/assistant-panel-411.webp 411w, assets/assistant-panel.webp 822w" sizes="(min-width: 860px) 411px, calc(100vw - 32px)"
+        width="822" height="1050" loading="lazy" decoding="async"
+        alt="The side chat. The question: How can I make the ending of this chapter land harder? The answer, formatted with bold words, a numbered list of three suggestions and a quoted line, ends with the buttons Insert, Replace and Copy.">
+      </picture>
+      <figcaption>The side chat, with the chapter as its context.</figcaption>
+    </figure>
   </div>
 </section>
 
 <!-- VII. Pages -->
 <section class="chapter" aria-labelledby="c7">
   <div class="wrap chapter__head">
-    <p class="numeral" aria-hidden="true">VII</p>
+    <p class="numeral" aria-hidden="true">seven</p>
     <div>
       <h2 id="c7">Web pages, kept offline for good</h2>
       <p class="chapter__lede">Keep a web page in your library beside your documents: an HTML file, a folder, or a Claude artifact you saved. Everything it needs is downloaded once, when you add it. Showing it never touches the network.</p>
@@ -404,26 +427,22 @@
 </section>
 </div>
 
-<!-- ============ Keys ============ -->
+<!-- ============ Index of keys ============ -->
 <section class="keys" id="keys" aria-labelledby="keys-title">
   <div class="wrap">
+    <p class="kicker" aria-hidden="true">Index</p>
     <h2 id="keys-title">The keys you will use every day</h2>
     <p class="section-lede">These are the defaults. Every one of them can be changed.</p>
     <dl class="keygrid">
-      <div><dt><kbd><span aria-hidden="true">⇧⌘P</span><span class="sr">Shift Command P</span></kbd></dt><dd>Command palette</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘P</span><span class="sr">Command P</span></kbd></dt><dd>Open a document by name</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⇧⌘F</span><span class="sr">Shift Command F</span></kbd></dt><dd>Search the whole library</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘N</span><span class="sr">Command N</span></kbd></dt><dd>New document</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘.</span><span class="sr">Command Period</span></kbd></dt><dd>Format menu</dd></div>
-      <div><dt><kbd><span aria-hidden="true">/</span><span class="sr">Slash</span></kbd></dt><dd>Insert menu, at the start of a line</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌥⌘P</span><span class="sr">Option Command P</span></kbd></dt><dd>Page view on or off</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘+</span><span class="sr">Command Plus</span></kbd> <kbd><span aria-hidden="true">⌘−</span><span class="sr">Command Minus</span></kbd></dt><dd>Zoom in, zoom out</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌥⌘M</span><span class="sr">Option Command M</span></kbd></dt><dd>Comment on the selection</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⇧⌘S</span><span class="sr">Shift Command S</span></kbd></dt><dd>Export</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘J</span><span class="sr">Command J</span></kbd></dt><dd>Ask the assistant, when Claude Code is installed</dd></div>
-      <div><dt><kbd><span aria-hidden="true">⌘/</span><span class="sr">Command Slash</span></kbd></dt><dd>Every shortcut, to look up and change</dd></div>
+      <div><dt>Command palette</dt><dd><kbd><span aria-hidden="true">⇧⌘P</span><span class="sr">Shift Command P</span></kbd></dd></div>
+      <div><dt>Open a document by name</dt><dd><kbd><span aria-hidden="true">⌘P</span><span class="sr">Command P</span></kbd></dd></div>
+      <div><dt>New document</dt><dd><kbd><span aria-hidden="true">⌘N</span><span class="sr">Command N</span></kbd></dd></div>
+      <div><dt>Format menu</dt><dd><kbd><span aria-hidden="true">⌘.</span><span class="sr">Command Period</span></kbd></dd></div>
+      <div><dt>Insert menu, at the start of a line</dt><dd><kbd><span aria-hidden="true">/</span><span class="sr">Slash</span></kbd></dd></div>
+      <div><dt>Zoom in, zoom out</dt><dd><kbd><span aria-hidden="true">⌘+</span><span class="sr">Command Plus</span></kbd> <kbd><span aria-hidden="true">⌘−</span><span class="sr">Command Minus</span></kbd></dd></div>
+      <div><dt>Context menu of what has the keyboard</dt><dd><kbd><span aria-hidden="true">⌃↩</span><span class="sr">Control Return</span></kbd> <kbd><span aria-hidden="true">⇧F10</span><span class="sr">Shift F10</span></kbd></dd></div>
+      <div><dt>Every shortcut, to look up and change</dt><dd><kbd><span aria-hidden="true">⌘/</span><span class="sr">Command Slash</span></kbd></dd></div>
     </dl>
-    <p class="fine">Context menus from the keyboard: <kbd><span aria-hidden="true">⌃↩</span><span class="sr">Control Return</span></kbd> or <kbd><span aria-hidden="true">⇧F10</span><span class="sr">Shift F10</span></kbd>.</p>
   </div>
 </section>
 
@@ -432,15 +451,14 @@
   <div class="wrap private__grid">
     <div>
       <h2 id="private-title">Your writing stays on your Mac</h2>
-      <p class="section-lede">No account. No sign-up. Your library is a folder on your Mac.</p>
+      <p class="section-lede">No account. No sign-up. Your library is a folder on your Mac, and nothing leaves it unless you choose.</p>
       <p class="path"><code>~/Library/<wbr>Application&nbsp;Support/<wbr>Inner&nbsp;Word</code></p>
       <p class="muted">Documents are in <code>library.db</code>, pictures in <code>images.db</code>, both SQLite. Removing the app does not remove your documents. Back up that folder and you have a copy of everything.</p>
     </div>
     <ul class="ticks">
-      <li>The assistant is optional: nothing is sent before you send a message, and then only through your own Claude Code sign-in.</li>
-      <li>Saved web pages never touch the network once they are kept.</li>
-      <li>The GPS position is taken out of every picture you add. Camera and date details stay in the file.</li>
-      <li>Agents work with your library through the <code>innerword</code> tool that ships in the app, and a version is kept before they change a document’s text.</li>
+      <li>Nothing is sent before you send a message to the assistant, and then only through your own sign-in to the agent it runs on.</li>
+      <li>The GPS position is taken out of every picture you add.</li>
+      <li>The <a href="#assistant">assistant</a> and <a href="#agents">agents</a> are optional. Inner Word works fully without either.</li>
     </ul>
   </div>
 </section>
@@ -450,6 +468,7 @@
   <div class="wrap">
     <h2 id="dl-title">Download Inner Word<span class="needs-js"> <span data-v></span></span></h2>
     <p class="section-lede">For macOS. Two disk images; choose Universal if you are not sure.</p>
+    <p class="dl__phone">On your phone? Open this page on your Mac to download. <button type="button" class="chip needs-js" data-copy-url>Copy link</button></p>
 
     <div class="dl">
       <a class="dl__card dl__card--primary" data-dmg="universal" href="https://github.com/BasalBit/inner_word/releases/latest">
@@ -465,9 +484,11 @@
         <span class="dl__go" aria-hidden="true">Download</span>
       </a>
     </div>
+    <p class="fine dl__req">Not sure which Mac you have? Apple menu &gt; About This Mac: “Chip” means Apple silicon, “Processor” means Intel.</p>
     <p class="fine dl__req">macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on Apple silicon. Pages (saved web pages) need macOS 12.3. · <a href="https://github.com/BasalBit/inner_word/releases">All releases on GitHub</a></p>
 
-    <div class="install">
+    <div class="install" id="install" tabindex="-1">
+      <p class="dl__status" role="status" aria-live="polite"></p>
       <div class="install__steps">
         <h3>Install</h3>
         <ol>
@@ -478,83 +499,115 @@
       </div>
 
       <aside class="margin-note" aria-labelledby="gk-title">
-        <h3 id="gk-title">The first launch is blocked. That is expected.</h3>
-        <p>This build is not signed with an Apple developer certificate and is not notarised by Apple, so macOS refuses to open it the first time. You approve it once; after that it opens like any other app.</p>
+        <h3 id="gk-title">First launch: approve it once</h3>
+        <p>The first launch is blocked, and that is expected. This build is not signed with an Apple developer certificate and is not notarised by Apple, so macOS refuses to open it the first time. You approve it once; after that it opens like any other app.</p>
 
-        <h4>Option A: System Settings</h4>
-        <ol>
-          <li>Open Inner Word from Applications. macOS says it could not verify that “Inner Word” is free of malware. Click <b>Done</b>, not Move to Trash.</li>
-          <li>Open System Settings, then <b>Privacy &amp; Security</b>.</li>
-          <li>In the Security section it says “Inner Word” was blocked. Click <b>Open Anyway</b>. The button stays for about an hour; if it is gone, repeat step 1.</li>
-          <li>Confirm with Open Anyway, then enter your password or use Touch ID.</li>
-        </ol>
-        <p class="muted">On macOS 14 and earlier you can instead Control-click the app in Applications, choose Open, and click Open. On macOS 15 and later that no longer works.</p>
-
-        <h4>Option B: Terminal</h4>
+        <h4>One command in Terminal</h4>
         <div class="cmd">
+          <div class="cmd__bar"><span>Terminal</span><button type="button" class="cmd__copy needs-js" data-copy="xattr">Copy</button></div>
           <pre tabindex="0"><code id="xattr">xattr -dr com.apple.quarantine "/Applications/Inner Word.app"</code></pre>
-          <button type="button" class="cmd__copy needs-js" data-copy="xattr">Copy</button>
         </div>
-        <p class="muted">This removes the “downloaded from the internet” mark, and the app opens with no warning. If macOS says the app “is damaged and can’t be opened”, it is the same block: use Option B. It also covers the <code>innerword</code> tool inside the app, for agents.</p>
+        <p class="muted">This removes the “downloaded from the internet” mark, and the app opens with no warning. If macOS says the app “is damaged and can’t be opened”, it is the same block: this command clears it. It also covers the <code>innerword</code> tool inside the app, for agents.</p>
+
+        <details class="fold">
+          <summary>Or approve it in System Settings</summary>
+          <ol>
+            <li>Open Inner Word from Applications. macOS says it could not verify that “Inner Word” is free of malware. Click <b>“Done”</b>, not Move to Trash.</li>
+            <li>Open System Settings, then <b>“Privacy &amp; Security”</b>.</li>
+            <li>In the Security section it says “Inner Word” was blocked. Click <b>“Open Anyway”</b>. The button stays for about an hour; if it is gone, repeat step 1.</li>
+            <li>Confirm with <b>“Open Anyway”</b>, then enter your password or use Touch ID.</li>
+          </ol>
+          <p class="muted">On macOS 14 and earlier you can instead Control-click the app in Applications, choose Open, and click Open. On macOS 15 and later that no longer works.</p>
+        </details>
       </aside>
     </div>
   </div>
 </section>
 
-<!-- ============ Open source ============ -->
+<!-- ============ Open source (colophon) ============ -->
 <section class="source" id="source" aria-labelledby="src-title">
-  <div class="wrap source__grid">
-    <div>
-      <h2 id="src-title">Open source, on GitHub</h2>
-      <p class="section-lede">Inner Word is written in Rust, on GPUI, the UI framework made by the Zed team, with SQLite for the library. Read the code, build it yourself, report a bug or send a change.</p>
-      <div class="cta">
-        <a class="btn btn--primary" href="https://github.com/BasalBit/inner_word">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          View on GitHub
-        </a>
-        <a class="btn btn--quiet" href="https://github.com/BasalBit/inner_word/issues">Report an issue</a>
-      </div>
-    </div>
+  <div class="wrap source__inner">
+    <p class="kicker" aria-hidden="true">Colophon</p>
+    <h2 id="src-title">Open source, on GitHub</h2>
+    <p class="section-lede">Inner Word is written in Rust, on GPUI, the UI framework made by the Zed team, with SQLite for the library. Read the code, build it yourself, report a bug or send a change.</p>
     <ul class="stack" aria-label="Built with">
       <li><span>Rust</span><small>the whole app and its tools</small></li>
       <li><span>GPUI</span><small>native, GPU-drawn interface</small></li>
       <li><span>SQLite</span><small>your library, two files</small></li>
+    </ul>
+    <div class="cta">
+      <a class="btn btn--quiet" href="https://github.com/BasalBit/inner_word">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+      <a class="btn btn--quiet" href="https://github.com/BasalBit/inner_word/issues">Report an issue</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ What may come next ============ -->
+<section class="later" id="later" aria-labelledby="later-title">
+  <div class="wrap">
+    <h2 id="later-title">What may come next</h2>
+    <p class="section-lede">Plans, not promises. None of these has a date.</p>
+    <ul class="later__list">
+      <li>
+        <h3>Windows and Linux</h3>
+        <p>Inner Word is a Mac app today. Versions for Windows and Linux may follow.</p>
+      </li>
+      <li>
+        <h3>Optional cloud sync and sharing</h3>
+        <p>Off unless you turn it on. For people who want their library on several devices, or want to share documents with other people. A library on your Mac with no account would stay the default.</p>
+      </li>
+      <li>
+        <h3>More agents for the assistant</h3>
+        <p>The assistant runs on Claude Code today. It is built so that other agents can run it too.</p>
+      </li>
     </ul>
   </div>
 </section>
 
 <!-- ============ FAQ ============ -->
 <section class="faq" id="faq" aria-labelledby="faq-title">
-  <div class="wrap wrap--read">
+  <div class="wrap faq__grid">
     <h2 id="faq-title">Questions</h2>
-    <details>
-      <summary>Is there an account or a subscription?</summary>
-      <p>No. Inner Word has no account and no subscription. The optional assistant runs on your own Claude Code plan, which Anthropic charges for.</p>
-    </details>
-    <details>
-      <summary>Is there a version for Windows or Linux?</summary>
-      <p>No. Inner Word is a Mac app, for macOS 10.15.7 or later on Intel and macOS 11 or later on Apple silicon.</p>
-    </details>
-    <details>
-      <summary>Does it sync through iCloud?</summary>
-      <p>No. Your library is a folder on your Mac, and Inner Word has no sync of its own. Back that folder up the way you back up the rest of your Mac.</p>
-    </details>
-    <details>
-      <summary>Do I need Claude to use it?</summary>
-      <p>No. The assistant appears only if Claude Code is installed and signed in, and it can be switched off in the settings. Everything else works without it.</p>
-    </details>
-    <details>
-      <summary>Where are my documents stored?</summary>
-      <p>In <code>~/Library/Application Support/Inner Word</code> on your Mac: <code>library.db</code> for your documents and <code>images.db</code> for the pictures in them. Removing the app leaves them where they are.</p>
-    </details>
-    <details>
-      <summary>It used to be called The Writer?</summary>
-      <p>Yes, until version 0.9.0. The first launch of Inner Word moves your library from the old folder to the new one and leaves a link under the old name. Quit The Writer before you open Inner Word for the first time, then move The Writer to the Trash. The Agents panel updates the skill your agents had from The Writer.</p>
-    </details>
-    <details>
-      <summary>Why does macOS block it the first time?</summary>
-      <p>The app is not notarised by Apple. Approve it once in System Settings &gt; Privacy &amp; Security, or run the one Terminal command in <a href="#download">Download</a>.</p>
-    </details>
+    <div class="faq__list">
+      <details>
+        <summary>Is there an account or a subscription?</summary>
+        <p>No. Inner Word has no account and no subscription. The optional assistant runs on your own plan with the agent it uses: today that is Claude Code, which Anthropic charges for.</p>
+      </details>
+      <details>
+        <summary>Do I need Claude, or any AI agent, to use it?</summary>
+        <p>No. Inner Word works fully without any agent. Agents are optional: any agent that can run a command or speak MCP can work with your library, and Claude Code is one of many. The assistant inside the app runs on Claude Code today and appears only when it is installed and signed in; support for other agents is planned. It can be switched off in the settings.</p>
+      </details>
+      <details>
+        <summary>Is there a version for Windows or Linux?</summary>
+        <p>Not today: Inner Word is a Mac app. Versions for Windows and Linux may come later; see <a href="#later">What may come next</a>.</p>
+      </details>
+      <details>
+        <summary>Does it sync, through iCloud or otherwise?</summary>
+        <p>Not today: your library is a folder on your Mac, so back it up as you back up the rest of your Mac. Optional cloud sync and sharing, off unless you turn it on, may come later; see <a href="#later">What may come next</a>.</p>
+      </details>
+      <details>
+        <summary>It used to be called The Writer?</summary>
+        <p>Yes, until version 0.9.0. The first launch of Inner Word moves your library from the old folder to the new one and leaves a link under the old name. Quit The Writer before you open Inner Word for the first time, then move The Writer to the Trash. The Agents panel updates the skill your agents had from The Writer.</p>
+      </details>
+      <details>
+        <summary>Why does macOS block it the first time?</summary>
+        <p>The app is not notarised by Apple. You approve it once; <a href="#install">here is how</a>.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Closing ============ -->
+<section class="closing" aria-labelledby="closing-title">
+  <div class="wrap closing__inner">
+    <h2 id="closing-title">Ready when you are.</h2>
+    <a class="btn btn--primary" href="#download">
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Download Inner Word for macOS
+    </a>
   </div>
 </section>
 
@@ -565,6 +618,7 @@
     <p class="foot__brand"><img src="assets/logo.webp" width="24" height="24" alt=""> Paper and ink, on your Mac.</p>
     <p class="foot__meta">Inner Word<span class="needs-js"> <span data-v></span></span> · A writing app for macOS · Made with Rust and GPUI</p>
     <ul class="foot__links">
+      <li><a href="#download">Download</a></li>
       <li><a href="https://github.com/BasalBit/inner_word">GitHub</a></li>
       <li><a href="https://github.com/BasalBit/inner_word/releases">Releases</a></li>
       <li><a href="https://github.com/BasalBit/inner_word/issues">Issues</a></li>

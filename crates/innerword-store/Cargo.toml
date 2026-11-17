@@ -1,0 +1,20 @@
+[package]
+name = "innerword-store"
+description = "SQLite-backed library storage for Inner Word."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# flock on the lock file of the data directory (instance_lock).
+libc.workspace = true
+rusqlite = { version = "0.42", features = ["bundled"] }
+# The name of stored image bytes is made from their SHA-256.
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite = { version = "0.42", features = ["bundled"] }

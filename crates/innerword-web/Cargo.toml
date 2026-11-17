@@ -1,0 +1,29 @@
+[package]
+name = "innerword-web"
+description = "WebKit for Inner Word's pages: the view in the window, the offline check of a page, a page printed to a PDF."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No GPUI: builds and tests in `target-pure` (`CARGO_TARGET_DIR=target-pure cargo
+# test -p innerword-web`), like `innerword-image`, which also calls system frameworks.
+# It compiles again in `target/` when the app links it; everything below is small
+# and already in `Cargo.lock`.
+[dependencies]
+# WKWebView, its configuration and delegates, AppKit's windows, menus and print
+# operation: Objective-C through the binding the other crates use.
+objc.workspace = true
+# The completion handlers WebKit takes and the decision handlers it hands over.
+block = "0.1"
+# The bytes of a page are read on a background queue and answered on the main one.
+dispatch = "0.2"
+# The messages of the check's probe and its text, written as JSON by the page's side.
+serde_json.workspace = true
+
+# WebKit wants the main thread of the process (a WKWebView, its run loop, a print
+# operation), which a test of the default harness never has: this target is a program
+# of its own (`cargo test -p innerword-web` runs it with the unit tests).
+[[test]]
+name = "webkit"
+path = "tests/webkit.rs"
+harness = false

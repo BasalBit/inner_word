@@ -1,12 +1,12 @@
 #!/bin/bash
-# Regenerates the app icon: packaging/icon/TheWriter.iconset and packaging/TheWriter.icns.
+# Regenerates the app icon: packaging/icon/InnerWord.iconset and packaging/InnerWord.icns.
 # Needs the Xcode command line tools (swift, iconutil). The results are checked in,
 # so this only has to run when scripts/make-icon.swift changes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ICONSET="$ROOT/packaging/icon/TheWriter.iconset"
-ICNS="$ROOT/packaging/TheWriter.icns"
+ICONSET="$ROOT/packaging/icon/InnerWord.iconset"
+ICNS="$ROOT/packaging/InnerWord.icns"
 
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"

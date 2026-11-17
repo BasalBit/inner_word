@@ -1,0 +1,27 @@
+[package]
+name = "innerword-library"
+description = "The Library model (single owner of the store) and the library sidebar panel."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+serde.workspace = true
+innerword-store.workspace = true
+innerword-ui.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+anyhow.workspace = true
+# The library_demo example captures its own window for visual QA (same approach as
+# innerword-app's screenshot module): the NSWindow number behind a GPUI window.
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc = "0.2"
+
+[[example]]
+name = "library_demo"
+path = "examples/library_demo/main.rs"

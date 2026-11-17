@@ -9,43 +9,43 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
-writer-core = { path = "crates/writer-core" }
-writer-store = { path = "crates/writer-store" }
-writer-export = { path = "crates/writer-export" }
-writer-vim = { path = "crates/writer-vim" }
-writer-ui = { path = "crates/writer-ui" }
-writer-editor = { path = "crates/writer-editor" }
-writer-editor-tools = { path = "crates/writer-editor-tools" }
-writer-vim-mode = { path = "crates/writer-vim-mode" }
-writer-comments = { path = "crates/writer-comments" }
-writer-library = { path = "crates/writer-library" }
-writer-spell = { path = "crates/writer-spell" }
+innerword-core = { path = "crates/innerword-core" }
+innerword-store = { path = "crates/innerword-store" }
+innerword-export = { path = "crates/innerword-export" }
+innerword-vim = { path = "crates/innerword-vim" }
+innerword-ui = { path = "crates/innerword-ui" }
+innerword-editor = { path = "crates/innerword-editor" }
+innerword-editor-tools = { path = "crates/innerword-editor-tools" }
+innerword-vim-mode = { path = "crates/innerword-vim-mode" }
+innerword-comments = { path = "crates/innerword-comments" }
+innerword-library = { path = "crates/innerword-library" }
+innerword-spell = { path = "crates/innerword-spell" }
 # Agents: the command layer, the MCP protocol layer, and what is known about
 # the agents on a Mac (none of them depends on GPUI). The command line tool
-# `writer` is the binary of crates/writer-cli; it ships inside the app bundle.
-writer-agent = { path = "crates/writer-agent" }
-writer-mcp = { path = "crates/writer-mcp" }
-writer-agent-setup = { path = "crates/writer-agent-setup" }
+# `innerword` is the binary of crates/innerword-cli; it ships inside the app bundle.
+innerword-agent = { path = "crates/innerword-agent" }
+innerword-mcp = { path = "crates/innerword-mcp" }
+innerword-agent-setup = { path = "crates/innerword-agent-setup" }
 # The assistant inside the app: the engine behind one interface (Claude Code is
 # its first backend; no GPUI), the shared chat components with the side chat
 # panel, and the quick chat popover.
-writer-assistant = { path = "crates/writer-assistant" }
-writer-assistant-ui = { path = "crates/writer-assistant-ui" }
-writer-assistant-quick = { path = "crates/writer-assistant-quick" }
-writer-keymap = { path = "crates/writer-keymap" }
-writer-keymap-ui = { path = "crates/writer-keymap-ui" }
+innerword-assistant = { path = "crates/innerword-assistant" }
+innerword-assistant-ui = { path = "crates/innerword-assistant-ui" }
+innerword-assistant-quick = { path = "crates/innerword-assistant-quick" }
+innerword-keymap = { path = "crates/innerword-keymap" }
+innerword-keymap-ui = { path = "crates/innerword-keymap-ui" }
 # Printing: what a printed page is as data, the PDF made of it, the macOS print
 # operation (no GPUI, and still built in `target/`: see its manifest).
-writer-print = { path = "crates/writer-print" }
+innerword-print = { path = "crates/innerword-print" }
 # Image files: bytes as they come to bytes as the library stores them (no GPUI;
 # the app and the command layer for agents make the same thing of the same file).
-writer-image = { path = "crates/writer-image" }
+innerword-image = { path = "crates/innerword-image" }
 # Pages: an HTML page (with its CSS, scripts, fonts, pictures, sounds) made into the
 # files the library keeps, every piece from the web fetched once (no GPUI, no WebKit).
-writer-page = { path = "crates/writer-page" }
+innerword-page = { path = "crates/innerword-page" }
 # Pages in WebKit: the view in the window, the offline check of a page, a page printed
 # to a PDF (no GPUI; Objective-C through `objc`).
-writer-web = { path = "crates/writer-web" }
+innerword-web = { path = "crates/innerword-web" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

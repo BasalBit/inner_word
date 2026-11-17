@@ -5,7 +5,7 @@ Verified reference for this repo's exact gpui version. Source of truth:
 examples in `$G/examples/`. Do not write GPUI code from memory: other versions differ
 (older `cx.spawn(|this, mut cx| ..)`, `ViewContext`, `WindowContext` do **not** exist here).
 
-Markers: **(tested)** = asserted in `crates/writer-ui/tests/gpui_harness.rs` or
+Markers: **(tested)** = asserted in `crates/innerword-ui/tests/gpui_harness.rs` or
 `gpui_snippets.rs`; **(probe)** = observed with the real macOS text system in a probe
 example that has since been removed (the numbers stand); **(app)** = seen in the running app;
 **(source)** = read in the gpui source, not exercised; **UNVERIFIED** = not checked.
@@ -86,7 +86,7 @@ WindowOptions (all fields, `$G/src/platform.rs:1086`): `window_bounds: Option<Wi
 WindowOptions {
     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1200.), px(800.)), cx))),
     titlebar: Some(TitlebarOptions {
-        title: Some("The Writer".into()),     // still used by Mission Control / Window menu
+        title: Some("Inner Word".into()),     // still used by Mission Control / Window menu
         appears_transparent: true,            // full-size content view AND hides the title text
         traffic_light_position: Some(point(px(14.), px(13.))),
     }),
@@ -96,7 +96,7 @@ WindowOptions {
 ```
 
 - `appears_transparent: true` → content draws under the titlebar; reserve ~38px at the
-  top and ~78px at the left for the traffic lights (`writer_ui::theme::TITLEBAR_HEIGHT`,
+  top and ~78px at the left for the traffic lights (`innerword_ui::theme::TITLEBAR_HEIGHT`,
   `TRAFFIC_LIGHT_RESERVED_WIDTH`). `titlebar: None` behaves like transparent (source).
   Window dragging over the transparent titlebar band: native AppKit behaviour, UNVERIFIED
   here; `window.titlebar_double_click()` performs the system zoom/minimize action.
@@ -114,7 +114,7 @@ WindowOptions {
     `App::shutdown`). Keep the subscription alive (store it or `.detach()`).
   - `window.on_window_should_close(cx, |window, cx| -> bool)`: return `false` to veto.
   - `cx.on_window_closed(|cx| ..)`: after a window is gone. macOS apps do not quit when
-    the last window closes unless you do it here (`writer_app::init` does).
+    the last window closes unless you do it here (`innerword_app::init` does).
   - There is no default cmd-q: bind `KeyBinding::new("cmd-q", Quit, None)` and
     `cx.on_action(|_: &Quit, cx| cx.quit())`.
   - `Context::on_release(|this, cx| ..)` runs when the entity is dropped.
@@ -199,7 +199,7 @@ tested compile/render). `hoverable_tooltip` keeps it open while hovered.
 that wraps, or has several lines, inside a `flex_col()` container that is itself the
 `flex_1()` child of a flex row is measured at no width, and the row comes out thousands of
 pixels tall. Make the growing child a plain block `div()` and space its children with
-margins (`crates/writer-app/src/agents_view.rs`, `render_row`).
+margins (`crates/innerword-app/src/agents_view.rs`, `render_row`).
 
 **A block in a block that is a `flex_none()` item of a flex column is as wide as its
 content** (seen in the assistant's side chat, tested in the assembled app): the composer (a
@@ -208,7 +208,7 @@ that were items of the panel's column. They came out at their content's width (t
 at the 240 px a compact editor falls back to when it is offered none, a notice as wide as
 its text) while the item beside them was a plain `div().size_full()`, and at the full width
 once that item held a `list`. `w_full()` on the wrapper changed nothing. Making the wrapper
-a flex column (`.flex().flex_col()`) stretches what is in it (`writer-assistant-ui`,
+a flex column (`.flex().flex_col()`) stretches what is in it (`innerword-assistant-ui`,
 `panel/render.rs`; the test `the_composer_and_the_notices_fill_the_side_chat_from_the_first_moment`).
 The same one level down: the row inside the composer's box (the text and the Send
 control) stayed as wide as its content after the box itself filled the panel, so the
@@ -294,7 +294,7 @@ Painting (paint phase only):
   committed when the first path is drawn and held until the next resize. One path on screen
   cost 100 MB of graphics memory at 1400x900 pt and about 400 MB on a large Retina window
   (measured for 0.8.1: the tick of a checked to-do was the only path). So our crates draw no
-  paths: the tick is a sprite the editor draws itself (`writer-editor/src/tick.rs`,
+  paths: the tick is a sprite the editor draws itself (`innerword-editor/src/tick.rs`,
   `paint_image`, its unused sprites handed to `drop_image`), and a test of the editor fails on
   `paint_path` or `PathBuilder` in its sources. The PDF of a print draws its own strokes.
 - Order: later paint calls are on top. `window.paint_layer(bounds, |window| ..)` only batches
@@ -487,7 +487,7 @@ Dispatch rules (tested in `dispatch_precedence_and_chords`):
   won. Fix: bind at the focused element's level (`"FindBar > TextField"`, same depth as a
   context-free binding) and add it later. To see what a key will run where the keyboard is:
   `cx.key_bindings().borrow().bindings_for_input(&[keystroke], &window.context_stack())`,
-  first entry (used by `crates/writer-app/tests/suite/keymap.rs`).
+  first entry (used by `crates/innerword-app/tests/suite/keymap.rs`).
 - **Real keyboards report shift plus a non-letter as the shifted character without the shift
   flag** (`parse_keystroke` in `$G/src/platform/mac/events.rs`): `cmd-shift-7` arrives as
   `cmd-&`, `cmd-shift-.` as `cmd->`, `cmd-shift-'` as `cmd-"` on a US layout. A binding
@@ -531,19 +531,19 @@ cx.build_action("editor::Bold", None) // by name; fails for no_json actions with
 ```
 
 `Window::bindings_for_action` and `Window::highest_precedence_binding_for_action` (and so
-`Window::keystroke_text_for` and writer-ui's `KeyHint::for_action_focused`) answer from
+`Window::keystroke_text_for` and innerword-ui's `KeyHint::for_action_focused`) answer from
 `dispatch_tree.context_stack`, which outside a draw is the build stack left over from the
 last frame: the key contexts of the element that was painted last, not of the focused one,
 and often empty (then only bindings without a key context are found). To ask for a place,
-use `bindings_for_action_in(&action, &focus_handle)` (writer-ui: `KeyHint::for_action_at`,
+use `bindings_for_action_in(&action, &focus_handle)` (innerword-ui: `KeyHint::for_action_at`,
 `for_action_here`). Held by `a_hint_is_asked_in_the_place_it_applies` in
-`crates/writer-ui/tests/widgets/rebinding.rs`. `Window::context_stack()` debug-asserts that
+`crates/innerword-ui/tests/widgets/rebinding.rs`. `Window::context_stack()` debug-asserts that
 a frame was drawn when nothing in the last frame is focused: not from `render`, and not on
 the first frame of a window.
 
 Taking the keymap apart and putting it back (the user's own shortcuts; tested in
-`crates/writer-app/tests/suite/keybindings.rs`, and every suite of the app runs on a keymap
-that was rebuilt this way, because `writer_app::init` ends with it):
+`crates/innerword-app/tests/suite/keybindings.rs`, and every suite of the app runs on a keymap
+that was rebuilt this way, because `innerword_app::init` ends with it):
 - `KeyBinding` is `Clone`, and it can be read completely from outside: `keystrokes()`
   (`&[KeybindingKeystroke]`, each with `unparse()` and `inner()`), `action()` (`boxed_clone()`
   copies it, fields included), `predicate()` (`Option<Rc<KeyBindingContextPredicate>>`, shared,
@@ -576,7 +576,7 @@ that was rebuilt this way, because `writer_app::init` ends with it):
   until the menu bar is built again.
 - What does not come along: anything that compared against a key written in the code (an
   interceptor, an `on_key_down`) and anything that kept a `KeyHint` it made earlier. Ask the
-  keymap when the key arrives or when the hint is drawn (`writer_ui::keymap`,
+  keymap when the key arrives or when the hint is drawn (`innerword_ui::keymap`,
   `KeyHint::for_action`).
 
 Raw keys (Vim mode):
@@ -666,7 +666,7 @@ Wheel, pinch and drawing at a scale (from the zoom of the text, 0.6.0):
   only goes up and down should go sideways with shift, the element does it (macOS turns
   the wheel of most mice itself and then `delta.x` is set). Two fingers never move
   straight, so an element that scrolls both ways gets a little of the other direction
-  with every event: drop the small part (`writer-editor`, `mouse.rs`, `sideways_intent`).
+  with every event: drop the small part (`innerword-editor`, `mouse.rs`, `sideways_intent`).
   `cmd` with the wheel is `event.modifiers.platform` (source + tested with
   `simulate_event`).
 - **There is no magnify (pinch) event in gpui 0.2.2**, and none for rotate or smart
@@ -674,7 +674,7 @@ Wheel, pinch and drawing at a scale (from the zoom of the text, 0.6.0):
   (source). AppKit hands an app every event it is about to dispatch through
   `+[NSEvent addLocalMonitorForEventsMatchingMask:handler:]`; a monitor for
   `NSEventMaskMagnify` (`1 << 30`) that returns the event sees pinches and nothing else
-  (`writer-app`, `pinch.rs`: the block is made with the `block` crate, the version gpui
+  (`innerword-app`, `pinch.rs`: the block is made with the `block` crate, the version gpui
   itself depends on; it only reads `magnification`, `locationInWindow` and the window
   number into a channel, because GPUI must not be entered from inside AppKit's dispatch).
   Installing it works in a scripted run (app); **what a real pinch does was not seen**
@@ -683,13 +683,13 @@ Wheel, pinch and drawing at a scale (from the zoom of the text, 0.6.0):
   `window.paint_glyph(origin, font_id, glyph_id, font_size, color)` (and `paint_emoji`)
   take any size, so a row shaped at 17 px is drawn at 150 % by painting each glyph of
   `ShapedRun::glyphs` at its `position` times 1.5 with `font_size` times 1.5
-  (`writer-editor`, `paint.rs`). Nothing is shaped again and the line breaks cannot move;
+  (`innerword-editor`, `paint.rs`). Nothing is shaped again and the line breaks cannot move;
   seen in the app at 50 % to 400 % (app). `ShapedLine::paint` itself has no scale.
 - **How large a display is**: `window.display(cx)` gives the `PlatformDisplay` (`id()`,
   `bounds()` in logical pixels); `u32::from(display.id())` is the `CGDirectDisplayID`, and
   `CGDisplayScreenSize(id)` (CoreGraphics, a plain C call) gives the glass in millimetres,
   zero when the display does not say. Pixels to the inch over 72 is the scale at which a
-  point is a real point (`writer-app`, `zoom.rs`: 127.5 and 177 % on this Mac's built-in
+  point is a real point (`innerword-app`, `zoom.rs`: 127.5 and 177 % on this Mac's built-in
   display at its default scaling, 151 and 210 % at "More Space"). The test platform's
   display has no size.
 
@@ -791,7 +791,7 @@ Source: `$G/src/app.rs`, `$G/src/platform.rs`, `$G/src/platform/app_menu.rs`,
 ## Printing
 
 What GPUI has and has not for laying a document out off screen and putting it on paper.
-The code: `crates/writer-editor/src/print.rs` (the print pass), `crates/writer-print` (the
+The code: `crates/innerword-editor/src/print.rs` (the print pass), `crates/innerword-print` (the
 PDF writer, the PDF reader, the print operation). Everything here was run on this Mac
 unless it says "read".
 
@@ -817,7 +817,7 @@ unless it says "read".
   tests every id is 1 or 2. What the pass takes from a shaped glyph is its byte offset and
   its x; the PDF writer makes one `CTLine` of the row's text and draws each of its glyphs
   where the cluster starts in the layout.
-- **The face of a `gpui::Font`, step by step** (mirrored in `writer-print/src/fonts.rs`):
+- **The face of a `gpui::Font`, step by step** (mirrored in `innerword-print/src/fonts.rs`):
   the family by name through font-kit (`SystemSource::select_family_by_name`;
   `.SystemUIFont` is asked for as `.AppleSystemUIFont`), every face loaded and given the
   cascade list of `Font::fallbacks` (one descriptor per family, `open_type.rs:30-69`; the
@@ -852,16 +852,16 @@ unless it says "read".
   window's delegate while a sheet comes up, and those calls re-enter GPUI: started inside
   an `update` that is "already borrowed". GPUI does the same with its own sheets
   (`beginSheetModalForWindow:` in `$G/src/platform/mac/window.rs:1197-1206`, the save
-  panel in `platform.rs:768-771`; read). `writer_print::run_sheet` is to be called that
+  panel in `platform.rs:768-771`; read). `innerword_print::run_sheet` is to be called that
   way: make the PDF inside the update, then `cx.spawn(..)` and call it from the task. Its
   callback runs inside AppKit and may only send on a channel. (The sheet itself has not
   been opened by anything but the design's Swift probes: no test and no script opens a
   print panel.)
-- **The print operation runs from Rust without a panel.** `writer_print::run_save_job`
+- **The print operation runs from Rust without a panel.** `innerword_print::run_save_job`
   (PDFKit's `printOperationForPrintInfo:scalingMode:autoRotate:`, the job disposition
   "save", both panels off, `runOperation`) wrote a two-page PDF with both pages at the
   paper's size, their text, and the first word where it was within a thousandth of a
-  point (`cargo test -p writer-print --test save_job`). It wants the main thread of the
+  point (`cargo test -p innerword-print --test save_job`). It wants the main thread of the
   process and an `NSApplication` (`[NSApplication sharedApplication]` is enough; no run
   loop has to turn), which is why that test is a program of its own (`harness = false`).
   Leave `NSPrintInfo`'s centering on and the scaling off: only then is the page on the
@@ -875,7 +875,7 @@ unless it says "read".
   stretch of the file's bytes is found in the PDF, once however often the picture is
   drawn). `CGColorCreateGenericRGB` (what `core_graphics::color::CGColor::rgb` calls) is
   not sRGB; `CGColorCreateSRGB` is.
-- **Reading a PDF's text back** (`writer_print::PdfFile`, PDFKit's `PDFPage.string`). The
+- **Reading a PDF's text back** (`innerword_print::PdfFile`, PDFKit's `PDFPage.string`). The
   text of such a PDF is what CoreGraphics maps the drawn glyphs back to. A ligature comes
   back as its own character (U+FB03 for "ffi"), 日 from a CJK fallback font as the Kangxi
   radical of the same shape (U+2F47): compare after NFKC, or avoid them in a test.
@@ -900,9 +900,9 @@ unless it says "read".
 
 ## Images
 
-From images in the editor (`writer-editor`, `src/images.rs`, `src/images/cache.rs`,
+From images in the editor (`innerword-editor`, `src/images.rs`, `src/images/cache.rs`,
 `src/element.rs`). "tested" is the editor's headless tests on the test atlas, "seen" is the
-editor's demo in a real window (`cargo run -p writer-editor --example demo`).
+editor's demo in a real window (`cargo run -p innerword-editor --example demo`).
 
 - **Painting.** `window.paint_image(bounds, corner_radii, Arc<RenderImage>, frame_index,
   grayscale) -> Result<()>` (`$G/src/window.rs:3129-3175`), paint phase only. It puts the
@@ -981,7 +981,7 @@ editor's demo in a real window (`cargo run -p writer-editor --example demo`).
   listeners call; **the listeners themselves were compiled and not run** (nothing can
   drag from Finder but a hand).
 - **A picture GPUI's clipboard does not show is read from `NSPasteboard` directly**
-  (`crates/writer-app/src/pasteboard.rs`; `objc` 0.2, no struct crosses the boundary, so
+  (`crates/innerword-app/src/pasteboard.rs`; `objc` 0.2, no struct crosses the boundary, so
   it is the same on Intel). `[NSPasteboard generalPasteboard]`, `types` (an `NSArray` of
   `NSString`: `count`, `objectAtIndex:`, `UTF8String`), `stringForType:` for
   `public.utf8-plain-text` and `public.file-url`, `dataForType:` (`bytes`, `length`) for
@@ -1021,10 +1021,10 @@ editor's demo in a real window (`cargo run -p writer-editor --example demo`).
 ## A native view in the window
 
 What it takes to put an AppKit view (WebKit's `WKWebView`, for a page) into a GPUI window
-and keep the two in step. The code: `crates/writer-web` (the view, its subclass, no GPUI),
-`crates/writer-app/src/workspace/page.rs` (the element, focus, overlays) and `pages.rs`
+and keep the two in step. The code: `crates/innerword-web` (the view, its subclass, no GPUI),
+`crates/innerword-app/src/workspace/page.rs` (the element, focus, overlays) and `pages.rs`
 (the inbox, the keys). Everything here was run on this Mac in scripted runs and in
-`writer-web`'s own test program unless it says "read"; **what a person does in an active
+`innerword-web`'s own test program unless it says "read"; **what a person does in an active
 key window (keys, the first responder, the cursor) was not checked by a person yet**
 (`docs/pages-design.md`, section 13, checks 1 and 2).
 
@@ -1038,7 +1038,7 @@ key window (keys, the first responder, the cursor) was not checked by a person y
 - **Its frame follows an element.** The page element is a `canvas`; in its prepaint it
   hands its bounds to the view: GPUI's window coordinates (logical pixels from the top
   left) made into the superview's (from the bottom left unless the superview is flipped,
-  `writer_web::frame`). Same bounds, nothing sent. The view is made in the first prepaint
+  `innerword_web::frame`). Same bounds, nothing sent. The view is made in the first prepaint
   (it needs the window's native view) and the element borrows it with `try_borrow_mut`:
   AppKit may draw the window while the view is lent to WebKit's print operation.
 - **AppKit's callbacks never enter GPUI.** `render` runs inside an update, and
@@ -1118,8 +1118,8 @@ key window (keys, the first responder, the cursor) was not checked by a person y
   clicks, before the policy can cancel it. The data stores are made from
   `_WKWebsiteDataStoreConfiguration` (`initNonPersistentConfiguration`,
   `setAllowsServerPreconnect:` NO) with `-[WKWebsiteDataStore _initWithConfiguration:]`
-  (`writer-web/src/config.rs`); the three are private and among what
-  `writer_web::available` requires (`selectors.rs`), so a macOS without them has no pages
+  (`innerword-web/src/config.rs`); the three are private and among what
+  `innerword_web::available` requires (`selectors.rs`), so a macOS without them has no pages
   rather than leaky ones.
 - **One data store, an origin per page.** Every view of a run shares one non-persistent
   data store (`config.rs`, `VIEW_STORE`), and local storage, IndexedDB and cookies are kept
@@ -1137,9 +1137,9 @@ key window (keys, the first responder, the cursor) was not checked by a person y
 ## Testing
 
 Source: `$G/src/app/test_context.rs`, `$G/src/platform/test/`, `$G/../gpui-macros-0.2.2/src/test.rs`.
-Examples in this repo: `crates/writer-ui/tests/gpui_harness.rs` (text box with
+Examples in this repo: `crates/innerword-ui/tests/gpui_harness.rs` (text box with
 EntityInputHandler, dispatch rules, chords, intercept, focus, clipboard, timers, theme) and
-`crates/writer-ui/tests/gpui_snippets.rs` (lists, overlays, custom element hitbox, prompts, menus).
+`crates/innerword-ui/tests/gpui_snippets.rs` (lists, overlays, custom element hitbox, prompts, menus).
 
 ```rust
 #[gpui::test]                                   // sync or async fn; params: &mut TestAppContext (any number),
@@ -1175,10 +1175,10 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   `window.activate_window()`), appearance Light, size = the test display.
 - `simulate_input` also sends empty `""` keystrokes around the text (it splits on "");
   `on_key_down` sees them (tested).
-- Tests run on normal test threads; no main thread or GUI session needed. `cargo test -p writer-ui`
+- Tests run on normal test threads; no main thread or GUI session needed. `cargo test -p innerword-ui`
   takes ~0.01s per test.
 - **A real thread can wake a task of the test's main thread** (tested,
-  `crates/writer-app/tests/suite/live.rs`): the waker of a foreground task may be called from
+  `crates/innerword-app/tests/suite/live.rs`): the waker of a foreground task may be called from
   any thread (the test dispatcher's queue is behind a mutex), but the task only runs when the
   test lets it: `run_until_parked()`. A test that waits for work another thread started (a
   socket client that blocks until the app answers) therefore loops: `run_until_parked()`,
@@ -1192,7 +1192,7 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   itself again is therefore run once for each of its periods: with the keyboard in an
   editor the caret blinks every half second, so a day of the test clock is 172,800 turns
   with a frame each, and a test that advances forty days never ends (tested the hard way,
-  `crates/writer-app/tests/suite/images.rs`: the collector's daily look). Before a long
+  `crates/innerword-app/tests/suite/images.rs`: the collector's daily look). Before a long
   advance put the keyboard where nothing blinks (the library: `cmd-0`), and come back
   afterwards. Short advances (the 20 s of a delay) cost a few dozen turns and are fine.
 - **A test must never reach `cx.prompt_for_paths`**: it is `unimplemented!()` on the test
@@ -1214,7 +1214,7 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
   the test, and one of them drops the `VisualTestContext` that `add_window_view` leaked
   for the test (`into_mut`); then it calls `shutdown` through `self`. Called as `vcx.quit()`
   (by deref), `self` is that freed context: the process dies of `SIGSEGV`, with no Rust
-  message (tested the hard way, `crates/writer-app/tests/suite/images.rs`). End the
+  message (tested the hard way, `crates/innerword-app/tests/suite/images.rs`). End the
   borrow of the `&mut VisualTestContext` and call `cx.quit()`: the hooks of quitting
   (`on_app_quit`) run, with the windows still there, and the windows are gone afterwards.
   `vcx.simulate_close()` calls the window's `on_window_should_close` handler and leaves
@@ -1228,13 +1228,13 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
 
 ## Visual QA
 
-Works on this machine (verified): the app runs a script from `THE_WRITER_AUTOMATION`
-(`crates/writer-app/src/automation.rs`) and captures **only its own window** with
+Works on this machine (verified): the app runs a script from `INNER_WORD_AUTOMATION`
+(`crates/innerword-app/src/automation.rs`) and captures **only its own window** with
 `screencapture -x -o -l <CGWindowID>` (the window number comes from the NSView behind the
 GPUI window). The terminal already has the Screen Recording permission, so captures contain
 the real window content. GPUI 0.2.2 cannot render a window to an image itself.
 
-Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATION=@file` reads a file):
+Script steps (`;` or newline separated, `#` comment lines; `INNER_WORD_AUTOMATION=@file` reads a file):
 
 | step | effect |
 |---|---|
@@ -1252,7 +1252,7 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 | `bar[:<button>]` | shows the format bar over the selection, as a mouse selection does; `bar:bold`, `bar:extra-0`, `bar:more` press a button of it |
 | `shortcut:<action>[@<place>]=<keys>` | gives a command its keys without the list of keyboard shortcuts: `shortcut:editor::ToggleBold=cmd-alt-b`; several keys with a bar between them, `none`, `default`; `@In the find bar` for a command that is listed in several places |
 | `shortcuts:import:<path>`, `shortcuts:press:<label>`, `shortcuts:reset`, `shortcuts:undo` | the keyboard shortcuts: read a shortcuts file and show the preview in the list (the open panel cannot be driven), press a control of the open list or a choice of its question by its label, put every key back without asking, undo the last import or reset |
-| `fake:hold`, `fake:advance:<n>`, `fake:release` | the fake engine of the assistant (`THE_WRITER_ASSISTANT_FAKE`): hold its events back, let the next `n` through (an answer half written, with its Stop control), let everything through again |
+| `fake:hold`, `fake:advance:<n>`, `fake:release` | the fake engine of the assistant (`INNER_WORD_ASSISTANT_FAKE`): hold its events back, let the next `n` through (an answer half written, with its Stop control), let everything through again |
 | `state` | one line about the workspace: document, save state, focus (editor, library, comments, modal, tool), the open context menu, Vim mode and command line, open tool and find count, the format bar, comment threads, spelling (`on language=<id\|auto> (app\|document) [detected=<id>] marks=N pending=N`), status bar |
 | `book:<blocks>` | creates and opens a generated document; prints what opening cost and how long it took until the text on screen was checked for spelling |
 | `savecost[:<rounds>]`, `limitcost[:<rounds>]` | time a synchronous save part by part, and the character-limit count |
@@ -1266,29 +1266,29 @@ Script steps (`;` or newline separated, `#` comment lines; `THE_WRITER_AUTOMATIO
 
 No mouse steps: `Window::dispatch_event` cannot be called from outside gpui (see Actions).
 
-Environment: `THE_WRITER_DATA_DIR` (always a temp dir), `THE_WRITER_SEED_DEMO=1` (demo
+Environment: `INNER_WORD_DATA_DIR` (always a temp dir), `INNER_WORD_SEED_DEMO=1` (demo
 folders and documents in an empty library; without it a fresh library gets the welcome
-document), `THE_WRITER_EXPORT_DIR=<dir>` (file exports are written there under the suggested
-name; the native save panel cannot be driven), `THE_WRITER_AUTOMATION_FOREGROUND=1`
+document), `INNER_WORD_EXPORT_DIR=<dir>` (file exports are written there under the suggested
+name; the native save panel cannot be driven), `INNER_WORD_AUTOMATION_FOREGROUND=1`
 (activate the app; **do not use it while someone is at the machine**, their typing lands in
-the window), `THE_WRITER_AGENT_HOME=<dir>` (the Agents panel of a scripted run sees that
+the window), `INNER_WORD_AGENT_HOME=<dir>` (the Agents panel of a scripted run sees that
 directory as the whole machine: agents are found by what is in it, the skill is installed
-into it; without the variable the panel lists nothing), `THE_WRITER_AGENTS_HINT=1` (the
+into it; without the variable the panel lists nothing), `INNER_WORD_AGENTS_HINT=1` (the
 one-time toast about agents, which a scripted run otherwise leaves out). While the Agents
 panel is open the `state` line ends with `agents=[tool=... found=... skills=[...] mcp=N
 rows=N selected=... report=[...]]`.
 
-The assistant in a scripted run: none, unless `THE_WRITER_ASSISTANT_FAKE=ready` (or
+The assistant in a scripted run: none, unless `INNER_WORD_ASSISTANT_FAKE=ready` (or
 `signed-out`, `missing`) gives it the fake engine, which starts no program and answers from
-`THE_WRITER_ASSISTANT_FAKE_REPLIES=<file>` (answers separated by a line of `====`, leading
-lines `!tool <name> <words>` and `!error <kind>`; `crates/writer-app/src/assistant/fake.rs`).
+`INNER_WORD_ASSISTANT_FAKE_REPLIES=<file>` (answers separated by a line of `====`, leading
+lines `!tool <name> <words>` and `!error <kind>`; `crates/innerword-app/src/assistant/fake.rs`).
 With an engine the `state` line has `assistant=[shown=... engine=[...] tools=[<the command of
 the library's MCP server>] quick=[open side=... selection="..." messages=N answering=...
 model=... effort=... replace=... notices=[...] draft="..." last="..."] side=[document="..."
 messages=N answering=... last=done|streaming|stopped|failed model=... effort=... attached=N
 notices=[...] focus=composer|...]] right_panel=...`. The picker of a chat is a context menu:
 `keys:cmd-shift-m`, then `state` lists its items under `menu=[...]` and `choose:<label>`
-takes one. `THE_WRITER_ASSISTANT_REAL=1` gives the run the real Claude Code: a script that
+takes one. `INNER_WORD_ASSISTANT_REAL=1` gives the run the real Claude Code: a script that
 only looks sends nothing, **every message it sends spends the user's allowance**. How the
 few real messages of 0.4.0 were watched: a small pass-through named `claude`, first on the
 `PATH` of the run (the engine looks through the `PATH` before the installers' folders),
@@ -1314,8 +1314,8 @@ item's `keyEquivalent` and `keyEquivalentModifierMask` from it: after
 `shortcut:editor::ToggleBold=cmd-alt-b` the item "Bold" has `cmd-alt-b`, after `=none` it
 has none, after `shortcut:editor::InsertPageBreak=f6` "Page Break" (which shows no key by
 default, its key has return in it) has `f6` (seen in a run of the debug build).
-`action:workspace::ExportShortcuts` writes "The Writer Shortcuts.json" into
-`THE_WRITER_EXPORT_DIR`. What neither a script nor a test can drive: the open panel
+`action:workspace::ExportShortcuts` writes "Inner Word Shortcuts.json" into
+`INNER_WORD_EXPORT_DIR`. What neither a script nor a test can drive: the open panel
 (`cx.prompt_for_paths` is `unimplemented!()` on the test platform, so a test that reaches
 it panics; the app names the file beforehand, `workspace::choose_import_file_beforehand`),
 and the system dialog of "Reset All Keyboard Shortcuts…" in a scripted run (a test answers
@@ -1353,7 +1353,7 @@ export of the shortcuts). `line_clamp(1)` is exact. For more lines, wrap with GP
 `wrap_boundaries()`, and when there are too many cut the text at the start of the last
 line that may be drawn (`unwrapped_layout.runs[b.run_ix].glyphs[b.glyph_ix].index` is its
 byte index), shorten that line with an ellipsis until what is shaped fits, and paint the
-`WrappedLine`: `writer_ui::toast` does this in a small element of its own (`Message`,
+`WrappedLine`: `innerword_ui::toast` does this in a small element of its own (`Message`,
 measured with `window.request_measured_layout`, which is handed the width the text really
 gets). A measure function is asked several times, also without a width ("how wide would
 you like to be"): once a layout for a width exists, answer that question with it, as
@@ -1367,19 +1367,19 @@ leaves room for one toast under itself and the app shows one toast about the sho
 time. `WindowHandle<V>::update` leases the root view, so `window.dispatch_keystroke` inside
 it panics when the key's action updates that view: dispatch through the `AnyWindowHandle`.
 
-A library the `writer` tool made is a library like any other: build one with the tool
-(`THE_WRITER_DATA_DIR=$QA/data target/debug/writer create ...`), then start the app on the
+A library the `innerword` tool made is a library like any other: build one with the tool
+(`INNER_WORD_DATA_DIR=$QA/data target/debug/innerword create ...`), then start the app on the
 same directory to look at it. Not both at once: while the app runs it has the lock and the
 tool only reads.
 
 Ready-to-run (from the repo root; `timeout` is not installed, so wait in a loop):
 
 ```bash
-cargo build -p writer-app
+cargo build -p innerword-app
 QA=$(mktemp -d)
-THE_WRITER_DATA_DIR=$QA/data \
-THE_WRITER_AUTOMATION="wait:1200; info; theme:light; screenshot:$QA/paper.png; theme:dark; screenshot:$QA/night.png; quit" \
-./target/debug/the-writer & PID=$!
+INNER_WORD_DATA_DIR=$QA/data \
+INNER_WORD_AUTOMATION="wait:1200; info; theme:light; screenshot:$QA/paper.png; theme:dark; screenshot:$QA/night.png; quit" \
+./target/debug/inner-word & PID=$!
 for i in $(seq 1 30); do sleep 1; kill -0 $PID 2>/dev/null || break; done; kill $PID 2>/dev/null
 sips -Z 1400 $QA/paper.png --out $QA/paper_small.png     # downscale before opening with Read
 sips --cropOffset 100 200 -c 400 1600 $QA/paper.png --out $QA/crop.png  # crop: y x then h w, in pixels;
@@ -1394,15 +1394,15 @@ a command line `type:\:w; keys:enter`; the library `keys:cmd-0 n; type:Name; key
 
 Notes:
 - stderr lines start with `[automation]`; a failing step is reported and the script continues.
-- `cargo test -p writer-app` rebuilds `target/debug/the-writer` with gpui's test features.
-  Run `cargo build -p writer-app` before a scripted run, or copy the binary first.
+- `cargo test -p innerword-app` rebuilds `target/debug/inner-word` with gpui's test features.
+  Run `cargo build -p innerword-app` before a scripted run, or copy the binary first.
 - A scripted run stays in the background (no `cx.activate`). **A window that is completely
   covered by other windows gets no frames**: macOS reports it occluded and GPUI stops its
   display link (`window_did_change_occlusion_state` in `$G/src/platform/mac/window.rs`). The
   app keeps handling keys, but nothing is drawn: captures are stale, and everything a frame
   settles lags (the registered input handler, focus events, layout). The automation
   therefore draws a frame itself after every key and before every capture by sending the
-  view `displayLayer:` (`writer_app::screenshot::force_frame`; it is the path AppKit uses for
+  view `displayLayer:` (`innerword_app::screenshot::force_frame`; it is the path AppKit uses for
   a synchronous frame, and it must be called outside any GPUI update). With that, a covered
   window behaves and captures like a visible one (app).
 - **Look at every capture.** In one run of 0.4.0 two captures in a row came back as the
@@ -1429,13 +1429,13 @@ Notes:
   error, the Screen Recording permission was revoked for the launching terminal. Do not try to
   change system settings; fall back to headless tests and ask the user.
 
-## Theme API (writer-ui)
+## Theme API (innerword-ui)
 
-`crates/writer-ui/src/theme/{mod.rs,palette.rs,tokens.rs}`.
+`crates/innerword-ui/src/theme/{mod.rs,palette.rs,tokens.rs}`.
 
 ```rust
-use writer_ui::theme::{self, ActiveTheme, ThemeMode, HighlightColor};
-theme::init(ThemeMode::System, cx);                 // once (writer_app::init does it); resolves font stacks
+use innerword_ui::theme::{self, ActiveTheme, ThemeMode, HighlightColor};
+theme::init(ThemeMode::System, cx);                 // once (innerword_app::init does it); resolves font stacks
 theme::observe_system_appearance(window, cx).detach();  // per window, so System follows macOS
 theme::set_theme_mode(ThemeMode::Dark, cx);         // applies + cx.refresh_windows()
 theme::theme_mode(cx) -> ThemeMode;  cx.observe_global::<theme::GlobalTheme>(..)

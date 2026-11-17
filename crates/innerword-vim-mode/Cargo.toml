@@ -1,0 +1,29 @@
+[package]
+name = "innerword-vim-mode"
+description = "Vim mode for Inner Word: attaches the innerword-vim engine to an Editor."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+# tests/main.rs is the only test target; its modules are in tests/suite/.
+autotests = false
+
+[lib]
+# Every test binary that links GPUI costs about 150 MB. All tests of this
+# crate live in tests/main.rs, so the lib builds no test binary of its own.
+test = false
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+innerword-core.workspace = true
+innerword-editor.workspace = true
+innerword-ui.workspace = true
+innerword-vim.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+gpui = { workspace = true, features = ["test-support"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

@@ -11,7 +11,7 @@ fonts, pictures, sounds) kept in the library as an item beside the documents. It
 for good**: everything it needs is downloaded once, when it is added, and stored in the
 library; showing it never touches the network. A page that cannot be stored whole is not
 stored at all, and the reason names what is missing. Agents add pages with
-`writer page add` and the MCP tool `add_page`, several at once; each page remembers the
+`innerword page add` and the MCP tool `add_page`, several at once; each page remembers the
 address it came from, so a later "copy everything" adds only the new and the changed
 ones. The text the page shows (after its scripts ran) feeds library search, agents'
 reads and the assistant. The writer adds pages with File > Import Page… and by dropping
@@ -33,8 +33,8 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
 | manifest | The JSON a page row holds in `documents.content`: paths, file ids, media types, externals, source address, the rendered text. |
 | the check | A headless WebKit load of the served files with the network blocked, at add time. It decides "whole or not" and reads the rendered text. |
 | the view | The live `WKWebView` in the app window that shows the open page. |
-| bundler | The new pure crate `writer-page`: input to served files. |
-| WebKit crate | The new crate `writer-web`: everything that talks to WebKit (no GPUI). |
+| bundler | The new pure crate `innerword-page`: input to served files. |
+| WebKit crate | The new crate `innerword-web`: everything that talks to WebKit (no GPUI). |
 
 ## Decisions at a glance
 
@@ -59,7 +59,7 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
    blocks the same again. WebRTC, which neither of the two sees, is switched off
    (`_setPeerConnectionEnabled:` NO; a critic's probe found STUN and TURN packets leave
    without it).
-6. The check runs in a child process of the tool (`writer __page-check <dir>`, standard
+6. The check runs in a child process of the tool (`innerword __page-check <dir>`, standard
    input closed), so WebKit never runs in the MCP server's process. In the app it runs
    in-process on the main thread (WebKit does the work in its own processes).
 7. While the app is open the tool still does all the preparing (reading, fetching, the
@@ -84,7 +84,7 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
     page and 14 (`page_incomplete`) for a page that could not be kept whole.
 11. Print goes through WebKit's print operation into a PDF, then through the existing
     `printing::PrintTarget`. Export writes the served files as a folder, or a PDF as
-    printed (WebKit, also for agents: `writer export <page> file.pdf`). No single-file
+    printed (WebKit, also for agents: `innerword export <page> file.pdf`). No single-file
     HTML export in v1.
 12. Tests never reach the internet (a server on 127.0.0.1) and the default runs of GPUI
     crates never open WebKit: the app has a page engine seam like `printing::PrintTarget`.
@@ -111,22 +111,22 @@ What a page row holds:
 | `kind` | `'page'` |
 | `title` | The page's title (rule below). Renamed like a document. |
 | `folder_id`, `position` | As for a document: pages sit among the documents of a folder, in one order. |
-| `content` | The manifest JSON (section 2). Never parsed as a `writer_core::Document`. |
+| `content` | The manifest JSON (section 2). Never parsed as a `innerword_core::Document`. |
 | `plain_text` | The rendered text: what the page showed after its scripts ran. Indexed by `documents_fts` through the existing triggers. |
-| `word_count`, `char_count` | Counted from the rendered text by the rule of a text: `writer_core::Fragment::from_plain_text(text).to_document().stats()`. |
+| `word_count`, `char_count` | Counted from the rendered text by the rule of a text: `innerword_core::Fragment::from_plain_text(text).to_document().stats()`. |
 | `source_url` | The address, when one was given (`--source-url`), in its normal form (below); `NULL` otherwise. |
 | `view_state` | Unused (`NULL`). |
 | `created_at`, `updated_at`, `trashed_at`, `trashed_with` | As for a document. `updated_at` moves when a re-add changed the page. |
 
-Why a row of `documents` and not a table of its own: the tree (`writer_store::LibraryTree`),
+Why a row of `documents` and not a table of its own: the tree (`innerword_store::LibraryTree`),
 ordering among siblings (`folders::Siblings::Documents`), the trash with
 `trashed_with`, version snapshots (`snapshots.document_id`), full-text search, the
-sidebar, quick open, the library search, `writer list`, `recent` and every result type of
-`writer-agent` already work on document rows. A second table would have to be joined
+sidebar, quick open, the library search, `innerword list`, `recent` and every result type of
+`innerword-agent` already work on document rows. A second table would have to be joined
 into every one of them.
 
 What keeps a page from being read as a text: two choke points parse stored content,
-`writer_app::document_io::load_document` and `writer_agent::content::parse`. Both are
+`innerword_app::document_io::load_document` and `innerword_agent::content::parse`. Both are
 only reached through code that now checks `DocumentMeta::kind` first, and as the last
 line of defence **the store refuses to save text over a page and a page over a text**:
 `Store::save_document` on a page row and `Store::save_page` on a text row fail with
@@ -135,7 +135,7 @@ overwrite a page with the plain-text recovery of its manifest.
 
 ### Schema 4 of `library.db`
 
-Appended to `MIGRATIONS` in `crates/writer-store/src/schema.rs`:
+Appended to `MIGRATIONS` in `crates/innerword-store/src/schema.rs`:
 
 ```sql
 -- Version 4: library items may be pages (kind 'page'; their files are in images.db).
@@ -158,7 +158,7 @@ CREATE INDEX documents_by_source_url ON documents(source_url)
 - Snapshots get no column: a document never changes kind, and a snapshot's kind is its
   document's.
 
-**What an older version does.** 0.7.0 (schema 3) and its `writer` tool refuse a library
+**What an older version does.** 0.7.0 (schema 3) and its `innerword` tool refuse a library
 of schema 4 with `StoreError::SchemaTooNew`, exactly as 0.6.0 refused schema 3 (the note
 on `V3` in `schema.rs`). That is wanted: a version that does not know pages would show a
 page's manifest as plain text (`load_document`'s recovery) and save that over it. The
@@ -193,7 +193,7 @@ use); a re-add then keeps the chosen title and otherwise takes the new page's ti
 
 - `source_url` is a column (for the lookup of a re-add) and is written into the manifest
   too (so a version says where it came from).
-- **Its normal form** (`writer_page::normal_source_url`, applied by `writer-agent` before
+- **Its normal form** (`innerword_page::normal_source_url`, applied by `innerword-agent` before
   it stores or looks up an address): scheme and host lowercased, the default port, the
   `#fragment` and a trailing `/` of the path dropped, the query kept. An address that is
   not `http(s)` is refused ("the source address must be an http or https address").
@@ -202,7 +202,7 @@ use); a re-add then keeps the chosen title and otherwise takes the new page's ti
   `claude.ai/artifact/<id>` form the Artifact tool's list gives.
 - The original files are kept beside the served files: the manifest lists both
   (`original` and `files`). Blobs are shared, so the original costs only the bytes of the
-  files the bundler rewrote (the HTML, CSS and JS that named externals). `writer export
+  files the bundler rewrote (the HTML, CSS and JS that named externals). `innerword export
   --original` writes them; the app has no row for them in v1 (they stay stored).
 
 ---
@@ -220,12 +220,12 @@ making it (`file.rs`, `open`, `make`), WAL with `synchronous=FULL`, the backgrou
 connection (`ImageFile`), damage detection and moving aside (`is_damage`,
 `replace_damaged`, `salvage`), noticing a replaced file (`FileId`/`file_id` of the path),
 the copy in the backups directory (`copy.rs`), the collector with its two halves
-(`collect.rs`), the app's timers and notes (`writer_app::images::collect_in_background`).
+(`collect.rs`), the app's timers and notes (`innerword_app::images::collect_in_background`).
 A third file would need all of it twice, and the app would have twice the notes. The
 name stays `images.db` (renaming a file of a library is a migration of its own; the docs
 say "pictures and the files of pages").
 
-`images.db` schema 2 (`crates/writer-store/src/images/file.rs`):
+`images.db` schema 2 (`crates/innerword-store/src/images/file.rs`):
 
 ```sql
 CREATE TABLE files (
@@ -302,13 +302,13 @@ row. The original and the served copy of an MP3 are one row.
   re-add with another `--entry` is an update, not "unchanged"; 6d788a4). The same input
   gives the same fingerprint; a re-add compares it before fetching anything (section 3).
 - `added_at` is when this content was taken: the add, or the update that brought it. It
-  is what `writer pages --json` shows as `content_at`, and what the skill compares with an
+  is what `innerword pages --json` shows as `content_at`, and what the skill compares with an
   artifact's last update (a rename or a move changes `updated_at` of the row, not this).
 - `checked.warnings` are the bundler's and the check's warnings (section 3), kept so that
-  `writer pages` and the version history can say them again.
+  `innerword pages` and the version history can say them again.
 - `text` is the same text as `plain_text`. It is here so that a version (a snapshot holds
   only `content`) can be shown and searched in `history show`.
-- The type of this JSON is `writer_page::Manifest` (section 12, WP2). Only `writer-page`
+- The type of this JSON is `innerword_page::Manifest` (section 12, WP2). Only `innerword-page`
   writes it; everyone else reads it through that type.
 
 ### What the store reads in a manifest
@@ -316,8 +316,8 @@ row. The original and the served copy of an MP3 are one row.
 `Store::referenced_files()` collects every `"file"`, optional white space, `:`, optional
 white space, `"`, 32 hex digits, `"`, from `documents.content` (live and trashed) and
 `snapshots.content`, with the `instr(content, '"file"') > 0` filter that
-`scan::referenced` uses for images. No document of `writer-core` writes a `"file"` key
-(read: `grep '"file"' crates/writer-core/src` finds nothing); a false hit only keeps a
+`scan::referenced` uses for images. No document of `innerword-core` writes a `"file"` key
+(read: `grep '"file"' crates/innerword-core/src` finds nothing); a false hit only keeps a
 blob alive.
 
 **The store names no file it does not have** (the last line of defence of "whole or
@@ -372,17 +372,17 @@ pictures.
 | Files per page | 2,000 | bundler | The archive's largest has 180 (Landing Variants). |
 | Externals per page | 500 | bundler | The archive has at most 133. |
 | One request on the channel | one page; `live::MAX_PAGE_BYTES` = 64 MB before base64 | tool and app | Base64 makes 86 MB, under the 256 MB a line may have (`live` module docs). |
-| One MCP call of `add_page` | one page | `writer-mcp` | A call is bounded by one page's fetch and check (seconds for the archive's pages); many pages go through the command line's `--list`. |
+| One MCP call of `add_page` | one page | `innerword-mcp` | A call is bounded by one page's fetch and check (seconds for the archive's pages); many pages go through the command line's `--list`. |
 | HTML files per page | 101: the entry and `ALSO_LOADS` = 100 others; more is refused | bundler | Every HTML file is loaded by the check, or the page is not checked whole. The archive's largest has 13 (BasalBit). |
-| Rendered text | 2,000,000 characters (`writer_page::MAX_TEXT_CHARS`) | bundler (`prepare`) | Reading Orbitarium has 56,326 with its hidden chapters (23,331 of them shown). The rest is cut, with a warning. |
+| Rendered text | 2,000,000 characters (`innerword_page::MAX_TEXT_CHARS`) | bundler (`prepare`) | Reading Orbitarium has 56,326 with its hidden chapters (23,331 of them shown). The rest is cut, with a warning. |
 | Fetch | 30 s per address, 180 s per page, 6 at a time, 5 redirects | `CurlFetcher` | Google Fonts answers in well under a second. |
-| The check | 120 s in all (`CHECK_LIMIT`); the tool kills the child at 135 s | `writer-web`, `ProcessChecker` | The archive's checker settled every page in 3 s; 100 other HTML files at up to 1 s each fit. Running out is a refusal ("could not be checked in time"). |
+| The check | 120 s in all (`CHECK_LIMIT`); the tool kills the child at 135 s | `innerword-web`, `ProcessChecker` | The archive's checker settled every page in 3 s; 100 other HTML files at up to 1 s each fit. Running out is a refusal ("could not be checked in time"). |
 
 `images.db` itself has no limit, as for pictures.
 
 ---
 
-## 3. Ingestion: the bundler (`writer-page`)
+## 3. Ingestion: the bundler (`innerword-page`)
 
 ### Inputs
 
@@ -416,7 +416,7 @@ pictures.
   Artifact tool reads each asset by id, and the agent passes the map (section 9).
 - **Several inputs**: each is a page of its own, prepared and stored on its own (one
   operation, one version, one outcome each). One failing does not stop the others.
-- **No address as input in v1.** `writer page add https://…` is refused: "a page is added
+- **No address as input in v1.** `innerword page add https://…` is refused: "a page is added
   from a file or a folder on this Mac; fetching a live site is not supported. Save the
   page first (the skill says how)". Rendering a live site whole (logins, single-page apps,
   endless scripts) is another feature; the claude.ai artifacts arrive as files through
@@ -474,7 +474,7 @@ dot, which the walk of a folder never takes either) and names it in a warning of
 
 ### Fetching each external once
 
-- `writer_page::Fetcher` (trait), `CurlFetcher` the default: `/usr/bin/curl -q --silent
+- `innerword_page::Fetcher` (trait), `CurlFetcher` the default: `/usr/bin/curl -q --silent
   --show-error --proto =http,https --connect-timeout 10 --max-time 30 --max-filesize
   33554432 --user-agent <Safari 17.5 on macOS> --resolve <host>:<port>:<address>
   --dump-header <file> --output <file> --write-out '%{http_code}\t%{content_type}' <url>`.
@@ -505,10 +505,10 @@ dot, which the walk of a folder never takes either) and names it in a warning of
   address); what the piece is stored as is decided by the bundler, from its bytes first
   and the header last ("What the build changed": a server calls fonts HTML).
 - `CurlFetcher::allowing_local()` drops the address check. Only tests use it (their
-  server is on 127.0.0.1); nothing outside a test names it, and a test of `writer-page`
+  server is on 127.0.0.1); nothing outside a test names it, and a test of `innerword-page`
   holds that the default refuses 127.0.0.1.
 - Each address (without its `#fragment`) is fetched once per command: `CachingFetcher`
-  wraps the fetcher for all pages of one `writer page add` and one import.
+  wraps the fetcher for all pages of one `innerword page add` and one import.
 - Six at a time, a budget of 180 s per page, at most 500 externals, depth 8 for nested
   `@import` and module graphs.
 - `MapFetcher` (address to bytes, in memory) is the fetcher of every test of every crate
@@ -530,7 +530,7 @@ folder. A reference to a local file is left as it is.
 After rewriting, the served files are loaded in WebKit with the network blocked (section 4
 says where WebKit runs, section 5 how the network is blocked). The check:
 
-1. loads the entry at `writer-page://check/<entry>`, waits for `load`, then until no
+1. loads the entry at `innerword-page://check/<entry>`, waits for `load`, then until no
    request was answered or blocked for 500 ms, at least 1 s and at most 3 s after `load`;
 2. reads `document.title` and the text (below) of the main frame;
 3. loads every other HTML file of the served files the same way (all of them: a page
@@ -664,14 +664,14 @@ Without a source address every add is a new page. The app's import gives none (q
 | Who | What | Where WebKit runs |
 |---|---|---|
 | The app | the view of the open page | the app's main thread, a `WKWebView` in the window |
-| The app | the check of File > Import Page… and of a drop | the app's main thread, an offscreen `WKWebView` (`writer_web::check`) |
-| `writer page add` | the check | a child process: `writer __page-check <dir>` |
-| `writer mcp` (`add_page`) | the check | the same child process |
+| The app | the check of File > Import Page… and of a drop | the app's main thread, an offscreen `WKWebView` (`innerword_web::check`) |
+| `innerword page add` | the check | a child process: `innerword __page-check <dir>` |
+| `innerword mcp` (`add_page`) | the check | the same child process |
 | Tests of GPUI crates | nothing | the fake page engine (section 6, "The test seam") |
 
 ### The child process
 
-`writer_agent::ProcessChecker` (WP5) runs `<program> __page-check <dir>`, where
+`innerword_agent::ProcessChecker` (WP5) runs `<program> __page-check <dir>`, where
 `program` is `std::env::current_exe()`: the tool runs itself. The MCP server is the same
 binary, so it does the same; its main thread waits for the child and goes on reading
 stdin afterwards. The MCP tool call is synchronous anyway, and holds one page (the
@@ -680,43 +680,43 @@ call is bounded by one page's fetch and check). The child's standard input is
 `Stdio::null()`, so it never reads the server's JSON-RPC stream; its standard output is
 a pipe the parent reads; its standard error is kept for the message.
 
-**No checker by default.** `writer_agent::Library` has no page checker until one is
+**No checker by default.** `innerword_agent::Library` has no page checker until one is
 installed: `add_page` then fails with `failed`, "pages cannot be checked here". The
-`writer` binary installs `ProcessChecker::current_exe()` in `main`; a test installs
+`innerword` binary installs `ProcessChecker::current_exe()` in `main`; a test installs
 `StaticChecker` or a `ProcessChecker::with_program` of the built tool. So a library made
 in a test harness never runs `<test binary> __page-check`, which libtest would read as a
 filter.
 
-The directory (made by `writer_page::write_check_dir`, mode 0700, under
-`$TMPDIR/the-writer-<uid>/check-<pid>-<n>/`, removed afterwards):
+The directory (made by `innerword_page::write_check_dir`, mode 0700, under
+`$TMPDIR/inner-word-<uid>/check-<pid>-<n>/`, removed afterwards):
 
 ```
-request.json      writer_page::CheckRequest
+request.json      innerword_page::CheckRequest
 files/<path>      every served file, at its path
 ```
 
-The child (`crates/writer-cli/src/page_check.rs`, WP8) reads it, builds a
-`writer_web::MemorySource`, calls `writer_web::check_blocking` (which makes
+The child (`crates/innerword-cli/src/page_check.rs`, WP8) reads it, builds a
+`innerword_web::MemorySource`, calls `innerword_web::check_blocking` (which makes
 `NSApplication` with the activation policy "prohibited", so no Dock icon and no menu,
-runs the check and returns), maps `writer_web::CheckOutcome` to `writer_page::CheckReport`,
+runs the check and returns), maps `innerword_web::CheckOutcome` to `innerword_page::CheckReport`,
 prints it as one line of JSON on stdout and exits 0. Exit code not 0 or no JSON: the
 checker failed ("the page could not be checked: <last line of its standard error>",
 exit 1). The parent kills the child at `CHECK_KILL_MS` (135 s).
 
-`writer __page-check` is not in the command table (`spec.rs`) and not in the help: it is
+`innerword __page-check` is not in the command table (`spec.rs`) and not in the help: it is
 handled in `main.rs` before parsing, like a program of its own.
 
-`THE_WRITER_PAGE_CHECK=fake` in the environment makes `ProcessChecker` answer in the
-process itself with `writer_page::static_check` (the text of the entry with its tags
+`INNER_WORD_PAGE_CHECK=fake` in the environment makes `ProcessChecker` answer in the
+process itself with `innerword_page::static_check` (the text of the entry with its tags
 and the contents of `script`, `style`, `template` and `noscript` taken out, its
-`<title>`, nothing blocked): for the tests of `writer-cli` and `writer-mcp`, which run
+`<title>`, nothing blocked): for the tests of `innerword-cli` and `innerword-mcp`, which run
 the built binary and must not open WebKit for every case. It is honoured only in a
 debug build (`cfg(debug_assertions)`): the released tool always runs the real check, so
 nobody can switch "whole or nothing" off with a variable.
 
-`writer __page-pdf <dir> <out.pdf>` is the second child (the same `main.rs` branch): it
+`innerword __page-pdf <dir> <out.pdf>` is the second child (the same `main.rs` branch): it
 loads the served files of `<dir>` as the check does and writes WebKit's print of the
-entry into `<out.pdf>` (`writer_web::print_blocking`), for `writer export <page>
+entry into `<out.pdf>` (`innerword_web::print_blocking`), for `innerword export <page>
 file.pdf`.
 
 ### While the app is open
@@ -751,22 +751,22 @@ file.pdf`.
   `serde_json::from_str`, instead of building a `serde_json::Value` of the whole line
   first (which held the page a further time in memory). A WP5 test sends a 64 MB page
   through the stand-in in a debug build and holds that it arrives.
-- **Main-thread cost:** the app's listener thread (`crates/writer-app/src/live.rs`,
+- **Main-thread cost:** the app's listener thread (`crates/innerword-app/src/live.rs`,
   the loop at `listener.accept()`) stores the blobs of an `add_page` that is not a dry run
   through an `ImageFile` of its own **before** it queues the request
-  (`writer_agent::live::store_page_files`). Each blob is put once, its `data` is emptied
+  (`innerword_agent::live::store_page_files`). Each blob is put once, its `data` is emptied
   and it is marked `stored`. On the main thread `pages::add_page` then writes the row;
   `Store::create_page` / `save_page` check that every file is there (section 2). This is
   the path CLAUDE.md names for images ("the channel's listener … stores what a request
   brings through an `ImageFile` of its own before the request is queued"); for pages it
   is built, because a page is larger than a picture.
-- **The switch is known to the listener.** "Agents can make changes while The Writer is
+- **The switch is known to the listener.** "Agents can make changes while Inner Word is
   open" is checked on the main thread today (`Workspace::carry_out`,
-  `crates/writer-app/src/workspace/live.rs`: `if !self.agents_may_change(cx)`), after the
+  `crates/innerword-app/src/workspace/live.rs`: `if !self.agents_may_change(cx)`), after the
   listener has queued the request. So that "off" stores nothing, the listener holds an
   `Arc<AtomicBool>` that the main thread sets whenever the setting is read or changed
   (`set_agents_may_change`, the launch): with it off, a request that carries page files
-  (`writer_agent::live::carries_page_files`) is refused by the listener at once
+  (`innerword_agent::live::carries_page_files`) is refused by the listener at once
   (`Refusal::SwitchedOff`, the same answer the main thread gives) and nothing is stored.
   A blob stored by a request that is then refused for another reason (a composition that
   lasted, the tool gone) is unnamed and goes with the collector, as do its copies in the
@@ -789,9 +789,9 @@ The view gives it no way to the network, to the user's files or to the app.
 
 ### How a page is served
 
-- Scheme `writer-page`, host `page-<document id>` in the view (`check` in the check):
+- Scheme `innerword-page`, host `page-<document id>` in the view (`check` in the check):
   each page is its own origin, so pages do not share storage.
-- `WKURLSchemeHandler` (`writer_web`): `webView:startURLSchemeTask:` is called on the main
+- `WKURLSchemeHandler` (`innerword_web`): `webView:startURLSchemeTask:` is called on the main
   thread; the path is percent-decoded, looked up in the manifest, the bytes are read on a
   background queue (`PageSource::file`) and the answer is given back on the main queue.
   A task that `webView:stopURLSchemeTask:` stopped meanwhile is not answered (answering a
@@ -805,7 +805,7 @@ The view gives it no way to the network, to the user's files or to the app.
 - **Every answer** of the scheme handler, whatever its type (HTML, JavaScript, SVG,
   XML, a font, a picture, media, a 404), carries
   `Content-Security-Policy: default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'self'`
-  (`writer_web::CONTENT_SECURITY_POLICY`) and `X-DNS-Prefetch-Control: off`. On
+  (`innerword_web::CONTENT_SECURITY_POLICY`) and `X-DNS-Prefetch-Control: off`. On
   JavaScript so that a worker has it; on SVG and XML because such a document in a frame
   runs script (a critic's probe: an iframed SVG served without the header had its fetch
   blocked by the rule list and reported nowhere, so the check would have passed a page
@@ -815,7 +815,7 @@ The view gives it no way to the network, to the user's files or to the app.
 
 | Way | Policy | By |
 |---|---|---|
-| Subresources (scripts, style sheets, fonts, pictures, media, `@import`) from `http(s)`, `ws(s)`, `ftp`, `file` | blocked | CSP, and a `WKContentRuleList` that blocks `^https?:`, `^wss?:`, `^ftp:`, `^file:` (`writer_web::BLOCK_RULES`) |
+| Subresources (scripts, style sheets, fonts, pictures, media, `@import`) from `http(s)`, `ws(s)`, `ftp`, `file` | blocked | CSP, and a `WKContentRuleList` that blocks `^https?:`, `^wss?:`, `^ftp:`, `^file:` (`innerword_web::BLOCK_RULES`) |
 | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `navigator.sendBeacon` | blocked | CSP `connect-src` (default), rule list |
 | `<iframe src>` to another site | blocked | CSP `frame-src`, and the navigation policy |
 | Navigation of the page itself (`location = …`, `<meta refresh>`) | cancelled; allowed only to the page's own files, `about:blank`, `about:srcdoc` | `WKNavigationDelegate decidePolicyForNavigationAction` |
@@ -842,14 +842,14 @@ The view gives it no way to the network, to the user's files or to the app.
 | Web Inspector | off | `inspectable = NO` where the view answers it (macOS 13.3); its default before |
 | Keyboard focus | `tab` moves through links as well as fields, so a link can be reached and opened (`enter`) without a mouse | `preferences.tabFocusesLinks = YES` (it is NO by default) |
 | A bridge to the app | **none** | the view adds no `WKScriptMessageHandler` and no `WKUserScript` (the check has both, and only the check, in its own content world) |
-| Storage (`localStorage`, `IndexedDB`, cookies) | kept while the app runs, per page, gone at quit (question 2); never written to disk | one non-persistent data store per app run, shared by every view; each page its own host, **its id and the moment its row was made** (`page-12-1731600000000`, `writer_app::pages::page_host`): SQLite gives the id of a page erased for good to the next row (`INTEGER PRIMARY KEY` without `AUTOINCREMENT`), and with the id alone the new page read what the erased one left (review of the build, ISO-1). An update keeps the row and so its storage |
+| Storage (`localStorage`, `IndexedDB`, cookies) | kept while the app runs, per page, gone at quit (question 2); never written to disk | one non-persistent data store per app run, shared by every view; each page its own host, **its id and the moment its row was made** (`page-12-1731600000000`, `innerword_app::pages::page_host`): SQLite gives the id of a page erased for good to the next row (`INTEGER PRIMARY KEY` without `AUTOINCREMENT`), and with the id alone the new page read what the erased one left (review of the build, ISO-1). An update keeps the row and so its storage |
 | `window.claude` (claude.ai capabilities) | not there; pages that need it say so or fail quietly | nothing to do |
 
 The rule list is compiled into a `WKContentRuleListStore storeWithURL:` at
 `<data directory>/WebKit/` for the app (so a test or a scripted run with
-`THE_WRITER_DATA_DIR` writes only there) and at `$TMPDIR/the-writer-<uid>/WebKit/` for the
-tool's child, under the **fixed** identifier `writer-page-block-v1`
-(`writer_web::RULE_LIST_ID`; a change of `BLOCK_RULES` changes the number): it is looked
+`INNER_WORD_DATA_DIR` writes only there) and at `$TMPDIR/inner-word-<uid>/WebKit/` for the
+tool's child, under the **fixed** identifier `innerword-page-block-v1`
+(`innerword_web::RULE_LIST_ID`; a change of `BLOCK_RULES` changes the number): it is looked
 up first and compiled only when it is missing, so the store holds one list whatever the
 number of runs. `WKContentRuleListStore.defaultStore` is never used (the archive's
 checker compiled a list per process id into it, and they piled up in the real
@@ -895,14 +895,14 @@ the download response policy 11.3; `underPageBackgroundColor` and
 `requestMediaCapturePermissionForOrigin…` 12.0; `elementFullscreenEnabled` 12.3), while
 the app's floor is 10.15.7 (`packaging/Info.plist`, `LSMinimumSystemVersion`, which
 `scripts/bundle.sh` makes the deployment target). On a macOS that lacks a message, sending
-it raises an exception and ends the app. So `writer_web::available() -> Result<(),
+it raises an exception and ends the app. So `innerword_web::available() -> Result<(),
 String>` is asked before anything of WebKit is made: macOS 12.3 or later
 (`NSProcessInfo isOperatingSystemAtLeastVersion:`) **and** `check_selectors()`, which asks
 the runtime for every class and selector the crate sends, the two private switches of
 WebRTC and the data store's preconnect switch included. Its error is the sentence the app and the tool show: "Pages need macOS
 12.3 or later." / "This macOS does not have what pages need to stay offline
 (_setPeerConnectionEnabled:)". When it fails the app installs no page engine (a page
-shows its text, Import Page… is not there) and `writer page add` fails with `failed` and
+shows its text, Import Page… is not there) and `innerword page add` fails with `failed` and
 the sentence. `inspectable` (13.3) is set only where it answers. A later macOS that
 removes a private switch makes pages unavailable with that sentence rather than leaky;
 section 14, risk 13.
@@ -913,7 +913,7 @@ section 14, risk 13.
 
 ### What in the workspace assumes an open editor
 
-Read in `crates/writer-app/src/workspace/`:
+Read in `crates/innerword-app/src/workspace/`:
 
 | Part | What it assumes | For a page |
 |---|---|---|
@@ -961,9 +961,9 @@ pub struct Workspace {
 - `restore_session` opens a page like a document (the last open item may be one).
 - A page that goes to the trash or is deleted closes as a document does
   (`open_document_left`).
-- `crates/writer-app/src/workspace/page.rs` holds everything else of the view: the
+- `crates/innerword-app/src/workspace/page.rs` holds everything else of the view: the
   session, the element, focus, overlays, the title and status items, the page's
-  commands. `crates/writer-app/src/pages.rs` holds the engine seam, the page source and
+  commands. `crates/innerword-app/src/pages.rs` holds the engine seam, the page source and
   (WP9) the import.
 
 ```rust
@@ -971,7 +971,7 @@ pub(crate) struct PageSession {
     pub id: DocumentId,
     pub title: String,
     pub source_url: Option<String>,
-    pub manifest: writer_page::Manifest,     // read once when the page opens
+    pub manifest: innerword_page::Manifest,     // read once when the page opens
     pub words: u64,
     pub view: Option<pages::PageViewHandle>, // made at the first prepaint
     pub state: PageState,                    // Loading | Loaded | Failed(String) | Crashed { at: Instant, again: bool }
@@ -1058,9 +1058,9 @@ pub(crate) struct PageSession {
   command can take a letter from the page.
 - **The find keys are bound in `PageView` too.** `cmd-f`, `cmd-opt-f`, `cmd-g` and
   `cmd-shift-g` are bound today in the `EditorTools` context
-  (`crates/writer-editor-tools/src/actions.rs`, `key_bindings`, `tools`), which is not on
+  (`crates/innerword-editor-tools/src/actions.rs`, `key_bindings`, `tools`), which is not on
   the path `Workspace > PageView`; with a page focused GPUI would find no binding, and
-  WebKit does not hand unhandled command keys on (spike finding d). So `writer-app`'s
+  WebKit does not hand unhandled command keys on (spike finding d). So `innerword-app`'s
   `init` binds `editor_tools::Find`, `FindAndReplace`, `FindNext` and `FindPrevious` once
   more in `PageView`, with the same defaults: four rows "On a page" in the list of
   shortcuts (section 10). The zoom keys, `cmd-0`, `cmd-1`, `cmd-shift-s` and the palette
@@ -1084,7 +1084,7 @@ GPUI draws everything in one layer; the web view lies above it, so whatever GPUI
 over the page's bounds is hidden (spike finding c). One approach for each case:
 
 - **A modal or a context menu over the page** (`modal_layer.has_modal()`,
-  `writer_ui::ContextMenu::is_open(window, cx)` (over `ContextMenu::current`), a picker):
+  `innerword_ui::ContextMenu::is_open(window, cx)` (over `ContextMenu::current`), a picker):
   the view takes a snapshot
   (`takeSnapshotWithConfiguration:`, 55 to 90 ms in the spike), and when it arrives the
   page element draws it and the web view is hidden. Until then the web view stays (the
@@ -1096,15 +1096,15 @@ over the page's bounds is hidden (spike finding c). One approach for each case:
   and what waits to be dropped to the window as it ends (`Workspace::discard_page`, the
   one way a page session ends). Found in the review of the build (PAGE-APP-1): 24 switches
   through quick open left 280 MB of textures in the atlas.
-- **Memory.** The snapshot comes back as BGRA pixels (`writer_web::Bitmap`, decoded from
-  the `NSImage`'s `CGImage` in `writer-web`, no PNG on the way) and becomes a
+- **Memory.** The snapshot comes back as BGRA pixels (`innerword_web::Bitmap`, decoded from
+  the `NSImage`'s `CGImage` in `innerword-web`, no PNG on the way) and becomes a
   `gpui::RenderImage` that the element paints itself (`window.paint_image`), never through
   `img(Arc<Image>)`: GPUI's asset cache keeps every decoded image of `img()` forever (the
   spike's leak, 388 MB to 1162 MB; `docs/gpui-notes.md`, "Images"). A test counts the
   textures dropped against the snapshots made.
 - **Toasts** (agent notes, print notes, the note of adding pages, the page's alerts):
   the page stays live and a hole is cut in the web view for each toast, at the bounds
-  the toast layer drew them (`ToastLayer::toast_bounds`, new in `writer-ui`, WP4; it
+  the toast layer drew them (`ToastLayer::toast_bounds`, new in `innerword-ui`, WP4; it
   lists toasts only, never the open context menu, which the same layer draws and which
   gets a snapshot). A hole is two things: a `CAShapeLayer` mask with the even-odd rule
   (spike `set_toast_hole`), which only changes what is drawn, and **`hitTest:`** of the
@@ -1122,7 +1122,7 @@ over the page's bounds is hidden (spike finding c). One approach for each case:
 - Scrolling is WebKit's (trackpad, wheel, keys while focused).
 - The app's zoom commands work on a page: `zoom::ZoomIn`, `ZoomOut`, `ActualSize` and
   `ZoomTo50` … `ZoomTo400` set the view's `pageZoom` on the steps of
-  `writer_editor::ZOOM_STEPS`, from 50 to 300 %. `FitWidth`, `FitPage`, `LifeSize`,
+  `innerword_editor::ZOOM_STEPS`, from 50 to 300 %. `FitWidth`, `FitPage`, `LifeSize`,
   `Automatic` say "A page is drawn at its own size: it has no fit." The zoom is not
   stored in v1; a page opens at 100 %. The pinch and `cmd` with the wheel do nothing on
   a page in v1 (`Workspace::pinch` ignores them; the view has `allowsMagnification = NO`).
@@ -1170,10 +1170,10 @@ over the page's bounds is hidden (spike finding c). One approach for each case:
 
 ### Find in page
 
-`writer-editor-tools`' `Find`, `FindAndReplace`, `FindNext`, `FindPrevious` get root
+`innerword-editor-tools`' `Find`, `FindAndReplace`, `FindNext`, `FindPrevious` get root
 handlers while a page is open, and their keys a second binding in `PageView` (above).
 Their menu items stay what they are (the keymap's one source). `Find` opens a strip at
-the top of the page area: a `writer_ui::TextField` and "Not found" when nothing matches.
+the top of the page area: a `innerword_ui::TextField` and "Not found" when nothing matches.
 Typing searches as one types; `enter` (the field's Submit) and `FindNext` go to the next
 match, `FindPrevious` to the one before (`findString:withConfiguration:completionHandler:`,
 wrapping, case insensitive unless "case sensitive" is on). The field's `Cancel`
@@ -1193,7 +1193,7 @@ element, which holds the strip too: GPUI runs a parent's mouse-down listener aft
 child's, so a press into the strip's field ended with the page focused (PAGE-APP-3).
 
 **Its keys are the find bar's.** The strip's element has the key context of the find bar,
-`writer_editor_tools::FIND_BAR_CONTEXT` (`FindBar`), and is a child of the page element
+`innerword_editor_tools::FIND_BAR_CONTEXT` (`FindBar`), and is a child of the page element
 (`PageView`); its field is a `TextField`, so the bindings of `FindBar` and `FindBar >
 TextField` apply in it as they are: `shift-enter` is `FindPrevious` (bound in `FindBar`,
 `actions.rs`), `cmd-opt-c` "case sensitive". No key is compared by hand. The strip
@@ -1212,7 +1212,7 @@ strip's rows are the existing rows "In the find bar" and no row or entry is adde
   `…Reload`, `…InspectElement`, `…ToggleFullScreen`, `…ToggleEnhancedFullScreen`,
   `…ShareMenu`, and any item whose action selector is one of the matching ones
   (`openLinkInNewWindow:`, `downloadLinkToDisk:`, `reload:`, `inspectElement:`, ...: the
-  list is in `writer_web::menu::REMOVED`). **These strings are not public API on macOS**
+  list is in `innerword_web::menu::REMOVED`). **These strings are not public API on macOS**
   (the SDK's WebKit headers declare none of them; they are WebKit's own values, read in
   its sources): a later WebKit may rename one, and the item stays in the menu. It still
   does nothing harmful, because the real block is the navigation and download policy
@@ -1230,7 +1230,7 @@ strip's rows are the existing rows "In the find bar" and no row or entry is adde
   `cancelTrackingWithoutAnimation`) and holds that the removed items are gone; when the
   menu cannot be driven that way on this macOS, person check 8 is what holds it.
 - **`ctrl-enter` and `shift-f10`** (`page::OpenContextMenu`, bound in `PageView`) open the
-  same app items as a `writer_ui::ContextMenu` at the top left of the page, with Copy and
+  same app items as a `innerword_ui::ContextMenu` at the top left of the page, with Copy and
   Select All first, and "Open Link in Browser" first of all when the page's focused
   element is a link to another site (asked with `evaluate` of
   `document.activeElement.closest('a[href]')?.href` before the menu opens; `tab` reaches
@@ -1248,23 +1248,23 @@ and the web view is hidden until then.
 
 ### The test seam: the page engine
 
-`crates/writer-app/src/pages.rs`, an app global like `printing::PrintTarget` and the spell
+`crates/innerword-app/src/pages.rs`, an app global like `printing::PrintTarget` and the spell
 service:
 
 ```rust
 pub enum PageEngine {
-    /// The real view and check (`writer-web`). `main` installs it in every run of the
-    /// real binary, scripted or not, unless `THE_WRITER_PAGES=off` or
-    /// `writer_web::available()` fails (`use_webkit` asks it and installs nothing then).
+    /// The real view and check (`innerword-web`). `main` installs it in every run of the
+    /// real binary, scripted or not, unless `INNER_WORD_PAGES=off` or
+    /// `innerword_web::available()` fails (`use_webkit` asks it and installs nothing then).
     WebKit,
     /// Tests: a GPUI element that draws the page's text, and a check that answers
-    /// from the HTML (`writer_page::static_check`). Records what was asked.
+    /// from the HTML (`innerword_page::static_check`). Records what was asked.
     Fake(Rc<FakePages>),
 }
-pub fn use_webkit(cx: &mut App) -> Result<(), String>;   // Err: writer_web::available's sentence, nothing installed
+pub fn use_webkit(cx: &mut App) -> Result<(), String>;   // Err: innerword_web::available's sentence, nothing installed
 pub fn use_fake(cx: &mut App) -> Rc<FakePages>;     // a test, before it opens a workspace
 pub fn engine(cx: &App) -> Option<PageEngine>;      // none: a page shows its text in a quiet column and says why
-                                                    // ("Pages are not shown in this run." / writer_web::available's sentence);
+                                                    // ("Pages are not shown in this run." / innerword_web::available's sentence);
                                                     // and there is no import: ImportPage has no handler (greyed out, not in
                                                     // the palette), drops of .html files are left out with a toast that says
                                                     // why. static_check is never a fallback of a run without WebKit.
@@ -1280,13 +1280,13 @@ impl FakePages {
     pub fn snapshots_dropped(&self) -> usize;
     pub fn first_responder_is_page(&self) -> bool;
     pub fn edits(&self) -> Vec<&'static str>;             // "copy", "select_all", ...
-    pub fn set_check(&self, report: writer_page::CheckReport); // the next check's answer
+    pub fn set_check(&self, report: innerword_page::CheckReport); // the next check's answer
     pub fn press(&self, key: &str);                       // a key the view would hand on (takes_key)
 }
 ```
 
-Default test runs never make a `WKWebView`. Real WebKit is tested in `writer-web`'s own
-program (WP3) and in two end-to-end cases of `writer-cli` (WP8).
+Default test runs never make a `WKWebView`. Real WebKit is tested in `innerword-web`'s own
+program (WP3) and in two end-to-end cases of `innerword-cli` (WP8).
 
 ### Scripted runs
 
@@ -1319,11 +1319,11 @@ waits until its gesture is done and logs one line per page (and the summary).
   `runOperationModalForWindow:…`, which the spike found is the call that draws), on the
   paper of the user's default print info (`NSPrintInfo.sharedPrintInfo`, A4 on this Mac),
   in print colours (the spike: A4 pages). The bytes become a
-  `writer_print::Pdf::from_bytes(bytes, pages)` (new, WP4), the job a
+  `innerword_print::Pdf::from_bytes(bytes, pages)` (new, WP4), the job a
   `printing::PrintJob { title, paper, pdf }`, and it goes to the installed
   `PrintTarget` as a text's job does: the print panel as a sheet (`SystemPanel`), the
   test's `Recorder`, a scripted run's `Directory` (`<title>.pdf` in
-  `THE_WRITER_EXPORT_DIR`). So a page prints through the same panel, with the same
+  `INNER_WORD_EXPORT_DIR`). So a page prints through the same panel, with the same
   "Save as PDF", and tests record its job. It prints the page as the view shows it now
   (a tab the reader opened stays open).
 - **Where it is started.** `runOperationModalForWindow:…` brings up nothing on screen
@@ -1343,20 +1343,20 @@ waits until its gesture is done and logs one line per page (and the summary).
 
 - `Export…` (`cmd-shift-s`, the palette, the menus, the row) on a page opens the export
   modal with two rows instead of Markdown, DOCX and text: "Web page folder (opens
-  offline)" and "PDF (as printed)". (A row for the original files is deferred; `writer
+  offline)" and "PDF (as printed)". (A row for the original files is deferred; `innerword
   export --original` writes them.)
 - **Web page folder:** the save panel suggests a folder named after the title. The folder
   gets the served files at their paths. A folder that exists gets the files written into
   it (same names replaced). The toast names the folder (`export::short_path`) and counts
   the files.
 - **PDF (as printed):** the save panel suggests "<title>.pdf". The page is loaded fresh,
-  as it was made, in an offscreen view (`writer_web::print_offscreen`, the check's
+  as it was made, in an offscreen view (`innerword_web::print_offscreen`, the check's
   configuration, on the main thread, its `done` posted to the export's task) and WebKit's
-  print operation writes the PDF on the user's default paper. The same as `writer export
+  print operation writes the PDF on the user's default paper. The same as `innerword export
   <page> file.pdf` (section 9), so an agent asked for "this page as a PDF" can make one
   without the print panel. With the fake engine the fixed one-page PDF is written.
-- Writing a folder from a manifest is `writer_page::write_folder` (WP2), used by the app
-  and by `writer export`: no store in it, the caller hands a function that gives the
+- Writing a folder from a manifest is `innerword_page::write_folder` (WP2), used by the app
+  and by `innerword export`: no store in it, the caller hands a function that gives the
   bytes of a file id.
 - An exported folder opens in a browser from the Finder for most pages. ES modules and a
   page's `fetch` of its own files do not work from `file://` in Safari (the archive's
@@ -1366,7 +1366,7 @@ waits until its gesture is done and logs one line per page (and the summary).
   breaks module graphs and makes files of hundreds of megabytes).
 - A folder export of the library (Markdown, DOCX, text) leaves pages out and says so:
   "2 pages were left out: a page is exported on its own, as a folder." (the app's
-  `export.rs` and `writer-agent`'s `export.rs`).
+  `export.rs` and `innerword-agent`'s `export.rs`).
 - The version history of a page: each version shows its date, the label, "N files" and
   its text (the manifest's `text`) in the preview, muted. Restore keeps the current page
   as a version first, then makes that manifest current, and the view reloads.
@@ -1381,18 +1381,18 @@ waits until its gesture is done and logs one line per page (and the summary).
   found by `Store::search` like documents. `SearchHit` gains `kind`. The library search
   shows a page's hits with the page's icon; opening one opens the page with the find
   strip on the query. Quick open lists pages, marked "Page".
-- **`writer get <page>`**: the text as the page showed it (formats `markdown` and `text`
+- **`innerword get <page>`**: the text as the page showed it (formats `markdown` and `text`
   give the same text; a page has no Markdown). `--format json` gives the manifest without
   the text. The result (`DocumentText`) says `kind: "page"` and has `page:
   Some(PageSummary)` (source, entry, files, bytes, externals, added and checked).
-- **MCP reads:** `read_document` on a page answers as `writer get`; `list_library`,
+- **MCP reads:** `read_document` on a page answers as `innerword get`; `list_library`,
   `search_library`, `recent_documents`, `document_info` carry `kind` and `source_url`;
   `find_in_document` finds in the text; `list_versions` and `read_version` work (a
   version's text is the manifest's `text`). `list_comments` of a page is empty.
 - **The side chat**, with a page open: the open item is sent as it is for a text, with
   its text in place of the Markdown and one sentence before it in the system prompt:
   "The open item is a page: a web page saved in the library, shown as it was made. It
-  cannot be changed. Its text, as the page showed it:". `writer_assistant::OpenDocument`
+  cannot be changed. Its text, as the page showed it:". `innerword_assistant::OpenDocument`
   gains `kind: OpenKind` (`Text`, `Page { source_url }`; WP4). The answer buttons that
   change the text (Insert at Caret, Replace Selection) are off, as without a caret
   (`follow_the_text` says there is no caret and no selection); Copy works. The
@@ -1411,15 +1411,15 @@ waits until its gesture is done and logs one line per page (and the summary).
 ### Command line
 
 ```
-writer page add <file|folder>... [--entry <path>] [--title <title>] [--source-url <address>]
+innerword page add <file|folder>... [--entry <path>] [--title <title>] [--source-url <address>]
                 [--folder <folder>] [--create-folders] [--include-trashed] [--author <name>] [--dry-run] [--json]
-writer page add --list <file.json|->  [--folder …] [--create-folders] [--include-trashed] [--author …] [--dry-run] [--json]
-writer pages [<folder>] [--json]
-writer get <page> [--format text|json]
-writer export <page> <directory> [--original] [--overwrite]
-writer export <page> <file.pdf> [--overwrite]
-writer __page-check <dir>            (not in the help; the child of the check)
-writer __page-pdf <dir> <out.pdf>    (not in the help; the child of a PDF export)
+innerword page add --list <file.json|->  [--folder …] [--create-folders] [--include-trashed] [--author …] [--dry-run] [--json]
+innerword pages [<folder>] [--json]
+innerword get <page> [--format text|json]
+innerword export <page> <directory> [--original] [--overwrite]
+innerword export <page> <file.pdf> [--overwrite]
+innerword __page-check <dir>            (not in the help; the child of the check)
+innerword __page-pdf <dir> <out.pdf>    (not in the help; the child of a PDF export)
 ```
 
 - `--entry`, `--title` and `--source-url` need exactly one input; with several the command
@@ -1450,12 +1450,12 @@ not added “Nimbus Planning Doc”: it could not be kept whole. The page asks f
   refused with exit code 5, as every change is.
 - A page's reference is `page:<id>` in every output. `doc:<id>` and `page:<id>` are both
   accepted wherever a document is (`Target::parse` reads `page:` as `DocumentId`).
-- `writer pages`: `page:41  Claude Pages/Reading Orbitarium  https://claude.ai/artifact/ExampleArtifactId00001  taken 2026-11-13 21:04  30 files, 11.4 MB`.
+- `innerword pages`: `page:41  Claude Pages/Reading Orbitarium  https://claude.ai/artifact/ExampleArtifactId00001  taken 2026-11-13 21:04  30 files, 11.4 MB`.
   "taken" is the manifest's `added_at`, the time this content was added or last updated
   (`content_at` in `--json`, beside `updated_at` and `trashed`; `--json` lists trashed
   pages too, marked). The skill uses it to see what is in already.
-- `writer export <page> <dir>`: the served files as a folder (`--original`: the input as
-  added). `writer export <page> <name>.pdf`: the page as WebKit prints it, on the
+- `innerword export <page> <dir>`: the served files as a folder (`--original`: the input as
+  added). `innerword export <page> <name>.pdf`: the page as WebKit prints it, on the
   default paper (`__page-pdf`, a child, as the check is). A text format for a page
   (`.md`, `.docx`) is refused (exit 15) and `.txt` writes its text.
 - Other commands on a page: `info`, `history list|show|restore`, `find`, `rename`, `move`,
@@ -1465,21 +1465,21 @@ not added “Nimbus Planning Doc”: it could not be kept whole. The page asks f
 
 ### Error codes and wording
 
-Two new kinds in `writer_agent::ErrorKind` (in the order of their codes):
+Two new kinds in `innerword_agent::ErrorKind` (in the order of their codes):
 
-| Code | Exit | When | Message (written by `writer-agent` for both front ends) |
+| Code | Exit | When | Message (written by `innerword-agent` for both front ends) |
 |---|---|---|---|
 | `page_incomplete` | 14 | the page cannot be kept whole (any reason of section 3) | "“Reading Orbitarium” was not added: it could not be kept whole. <up to five reasons>; and 3 more. Nothing was saved." |
 | `wrong_kind` | 15 | a text operation on a page, an export of a page as Markdown or DOCX, or a page operation on a text (`--original` included) | "“Orbitarium” is a page: it is kept as it was saved, and its text cannot be changed. To bring a newer copy, add it again with its source address." / "“Orbitarium” is a page, and a page is not exported as Markdown or DOCX: it is written as a folder of its files (the format html), as a PDF (pdf) or as its text (text)." (d2ff3e8) / "“Chapter 2” is a document, not a page." |
 
 Who adds what (CLAUDE.md, "Who says what"): the command line adds the option to type
 next (`--entry` for a folder with several pages, `--list` for several pages with their own
-addresses, `writer page add <folder> --source-url <address>` after `wrong_kind`); the MCP
+addresses, `innerword page add <folder> --source-url <address>` after `wrong_kind`); the MCP
 server names the tool (`add_page` with its `source_url`). A failure to fetch says the
 address and the reason curl gave. The checker failing (no window server, WebKit gone) is
 `failed` (1): "the page could not be checked: <reason>".
 
-`writer-agent-setup/tests/skill_against_binary.rs` fails until the skill explains 14 and
+`innerword-agent-setup/tests/skill_against_binary.rs` fails until the skill explains 14 and
 15 (CLAUDE.md, "The skill's list of exit codes is tested against the help").
 
 ### MCP
@@ -1506,20 +1506,20 @@ address and the reason curl gave. The checker failing (no window server, WebKit 
   why and what to do for many: each page is fetched and checked in WebKit, which takes
   seconds and can take minutes, more than some clients wait for one call (Codex has a
   per-server `tool_timeout_sec`); call once per page, or use the command line's
-  `writer page add --list`, which takes any number. Paths must be absolute (the server
+  `innerword page add --list`, which takes any number. Paths must be absolute (the server
   has no folder of its own). Arguments that name `prepared` are refused. The answer is
   the page's outcome with its warnings.
 - `export` takes a page with `format: "html"` (a folder), `original: true|false`, and
   `format: "pdf"` (a file).
 - Hidden for the command line: `list_pages` (a `hidden_read`, like `list_images`), behind
-  `writer pages`. `list_library` already gives kinds and addresses to a model.
+  `innerword pages`. `list_library` already gives kinds and addresses to a model.
 - Counts: **37 tools, 12 of them read-only** (36 and 12 today; CLAUDE.md's row of
-  `writer-mcp` and the server's tests change). The assistant's set of read-only tools is
+  `innerword-mcp` and the server's tests change). The assistant's set of read-only tools is
   unchanged (it reads pages through `read_document`).
 
 ### The operations table and the channel
 
-- One row in `crates/writer-agent/src/operations.rs`:
+- One row in `crates/innerword-agent/src/operations.rs`:
   `add_page / AddPage(AddPageRequest) -> PageAdded = pages::add_page;`. The macro's
   `Prepare::prepared` call is where the input is read, fetched and checked
   (`impl Prepare for AddPageRequest` in `pages.rs`, beside `attach.rs`'s images), so the
@@ -1528,7 +1528,7 @@ address and the reason curl gave. The checker failing (no window server, WebKit 
   that knows the readers gets it).
 - `pages::add_page(session, request)`: refuses a request without `prepared` ("the page was
   not prepared"); re-checks the limits; stores the blobs (or checks the stored ones);
-  builds the manifest (`writer_page::Prepared::manifest`); finds the page by
+  builds the manifest (`innerword_page::Prepared::manifest`); finds the page by
   `source_url`; adds, updates (version first) or confirms unchanged; notes
   `Change::DocumentCreated` or `Change::DocumentText` (+ `DocumentRenamed` when the
   title changed). The dry run writes nothing (the connection is `query_only`, as for
@@ -1536,35 +1536,35 @@ address and the reason curl gave. The checker failing (no window server, WebKit 
 - The note in the app: "Claude added “Orbitarium”", "Claude updated “Orbitarium”"
   (`workspace::sentence` gets the words of `add_page`). Its button is Open for a page
   that is not open; an open page that was updated reloads and the note has no button.
-- `writer-agent`'s suite runs a second time through a stand-in app
-  (`WRITER_AGENT_TESTS_THROUGH_THE_APP`): `add_page` is run both ways and the two
-  libraries are compared row by row, `images.db` included. `writer-cli` runs `page add`
+- `innerword-agent`'s suite runs a second time through a stand-in app
+  (`INNERWORD_AGENT_TESTS_THROUGH_THE_APP`): `add_page` is run both ways and the two
+  libraries are compared row by row, `images.db` included. `innerword-cli` runs `page add`
   against a stand-in (`LiveApp`), as it runs every command that changes the library.
 
-### The skill (`crates/writer-agent-setup/src/skill_body.md`)
+### The skill (`crates/innerword-agent-setup/src/skill_body.md`)
 
 A paragraph "Pages" after "Images", and the recipe. The text, to be held by its test:
 
 > Pages. A page is a web page kept in the library as it was made, with its styles,
 > scripts, fonts, pictures and sounds, so that it shows the same offline and for good.
-> Add one from a file or a folder on this Mac: `writer page add ~/Downloads/explainer
+> Add one from a file or a folder on this Mac: `innerword page add ~/Downloads/explainer
 > --source-url https://claude.ai/artifact/… --folder "Claude Pages" --create-folders`.
 > A folder is taken whole and opens with its `index.html` (`--entry` names another file).
 > Everything the page loads from the web (fonts, libraries) is downloaded now and stored;
 > a page that needs something that cannot be stored (data from a service, an embedded
 > site) is not added, exit code 14 says why, and nothing is saved. With `--source-url`,
 > adding the same address again changes nothing when the page is the same and updates it
-> (keeping the old one as a version) when it changed. `writer pages` lists the pages with
-> their addresses. `writer get page:12` gives the text the page shows. `writer export
+> (keeping the old one as a version) when it changed. `innerword pages` lists the pages with
+> their addresses. `innerword get page:12` gives the text the page shows. `innerword export
 > page:12 ~/Desktop/page.pdf` makes a PDF of it. A page cannot be edited (exit code 15).
 > A page in the trash is not added again (the line says "trashed"; `--include-trashed`
 > adds it anyway). Warnings under a page's line (a piece it names that was not kept, data
 > it kept on claude.ai) are for the user: pass them on.
 >
-> To copy the user's claude.ai artifacts into The Writer (Claude Code), use the
+> To copy the user's claude.ai artifacts into Inner Word (Claude Code), use the
 > Artifact tool and change nothing on claude.ai: never republish, edit or delete an
 > artifact while you copy it, whatever an error suggests. List the artifacts (`action:
-> "list"`, `scope: "mine"`, `limit: 200`). Run `writer pages --json`, and skip an
+> "list"`, `scope: "mine"`, `limit: 200`). Run `innerword pages --json`, and skip an
 > artifact whose address is there only when the day of its `content_at` is two days or
 > more after the day the list says it was updated (the list gives a day, without a
 > time or a zone); copy any other one again, which answers `unchanged` when nothing
@@ -1591,15 +1591,15 @@ A paragraph "Pages" after "Images", and the recipe. The text, to be held by its 
 > that capability it has no assets (listing them fails with `capability_disabled`: go
 > on). Write a list `[{"path": "<folder>", "source_url": "<url as the list gave it>",
 > "title": "<title>", "externals": {"<asset url>": "<saved file>"}}, …]` and run
-> `writer page add --list <file> --folder "Claude Pages" --create-folders --author
+> `innerword page add --list <file> --folder "Claude Pages" --create-folders --author
 > Claude`. Report what was added, updated, unchanged, trashed and not added, with the
 > reasons and the warnings. A page that uses claude.ai's own storage (`window.claude`,
 > the `db` capability) is added, and its saved data stays on claude.ai: read its rows
 > with the ArtifactData tool and keep them as a document beside the page, titled
-> "<page title> (saved data)", with `writer create`.
+> "<page title> (saved data)", with `innerword create`.
 >
 > (The recipe as the review of the build left it, ef9b0da: the skill's own text,
-> `crates/writer-agent-setup/src/skill_body.md`, is the authority.)
+> `crates/innerword-agent-setup/src/skill_body.md`, is the authority.)
 
 ---
 
@@ -1640,7 +1640,7 @@ dialog: no new key context) listing every page with its outcome and its whole se
 wrapped, scrollable with the keys, `escape` and a click outside close it, and a "Copy"
 button that copies all of it (scripted runs do not press it). A refusal's sentence (a
 title, up to five reasons with whole addresses, "Nothing was saved.") never fits the
-three lines of a toast (`writer_ui::toast::MESSAGE_LINES`, 520 px wide), and several drops
+three lines of a toast (`innerword_ui::toast::MESSAGE_LINES`, 520 px wide), and several drops
 would be more than the four toasts the layer shows.
 
 Copying the address puts text on the clipboard: scripted runs must not run it (the rule
@@ -1698,7 +1698,7 @@ with ours), the library row's menu, File > Import Page…, and drops:
   rewriting, limits, the whole-or-nothing check, the text, re-adding by address.
 - WebKit: the check (in the tool's child process and in the app), the view (one at a
   time), the isolation of section 5.
-- Agents: `writer page add` (with `--list` and its `externals`), `writer pages`, `get`,
+- Agents: `innerword page add` (with `--list` and its `externals`), `innerword pages`, `get`,
   `export` (folder, original, PDF), `info`, versions and the item commands on pages; MCP
   `add_page` (one page a call) and the reads; the operations table; protocol 3 with the
   blobs stored off the main thread; exit codes 14 and 15; the skill and its recipe.
@@ -1725,7 +1725,7 @@ with ours), the library row's menu, File > Import Page…, and drops:
 - Finding across every HTML file of a page with several (find works in the one shown).
 - Requests made inside workers reported by the check (they are blocked; section 3).
 - An item of the status bar with the source's host; a row "Original files" in the app's
-  export (the original stays stored; `writer export --original` writes it).
+  export (the original stays stored; `innerword export --original` writes it).
 - Answering MCP pings and cancellations while a page is being checked (the server reads
   stdin on one thread, as now; one page per call bounds the wait).
 - Sending the blobs on the channel as binary after a JSON header instead of base64 (v1
@@ -1743,19 +1743,19 @@ against each other's commits. One owner per crate per wave.
 
 | Id | Title | Crates | Wave | Depends on | Effort |
 |---|---|---|---|---|---|
-| WP1 | Store: pages and their files | writer-store | 1 | none | xhigh |
-| WP2 | Bundler | writer-page (new) | 1 | none | xhigh |
-| WP3 | WebKit | writer-web (new) | 1 | none | xhigh |
-| WP4 | Small additive changes | writer-ui, writer-print, writer-library (one enum variant), writer-app (one match arm) | 1 | none | medium |
-| WP5 | Agents' command layer | writer-agent | 2 | WP1, WP2 | xhigh |
-| WP6 | Library model and sidebar | writer-library | 2 | WP1, WP4 | medium |
-| WP7 | The page view in the app | writer-app | 2 | WP1, WP2, WP3, WP4 (not WP6: it writes pages through `Library::change_outside`) | xhigh |
-| WP8 | Tool, MCP server, skill | writer-cli, writer-mcp, writer-agent-setup | 3 | WP2, WP3, WP5 | high |
-| WP9 | Import, agents and the assistant in the app; docs | writer-app, writer-assistant, writer-assistant-ui (two struct literals), CLAUDE.md, docs/gpui-notes.md, scripts/bundle.sh | 3 | WP5, WP6, WP7 | xhigh |
+| WP1 | Store: pages and their files | innerword-store | 1 | none | xhigh |
+| WP2 | Bundler | innerword-page (new) | 1 | none | xhigh |
+| WP3 | WebKit | innerword-web (new) | 1 | none | xhigh |
+| WP4 | Small additive changes | innerword-ui, innerword-print, innerword-library (one enum variant), innerword-app (one match arm) | 1 | none | medium |
+| WP5 | Agents' command layer | innerword-agent | 2 | WP1, WP2 | xhigh |
+| WP6 | Library model and sidebar | innerword-library | 2 | WP1, WP4 | medium |
+| WP7 | The page view in the app | innerword-app | 2 | WP1, WP2, WP3, WP4 (not WP6: it writes pages through `Library::change_outside`) | xhigh |
+| WP8 | Tool, MCP server, skill | innerword-cli, innerword-mcp, innerword-agent-setup | 3 | WP2, WP3, WP5 | high |
+| WP9 | Import, agents and the assistant in the app; docs | innerword-app, innerword-assistant, innerword-assistant-ui (two struct literals), CLAUDE.md, docs/gpui-notes.md, scripts/bundle.sh | 3 | WP5, WP6, WP7 | xhigh |
 
 Why WP4 touches two crates it does not own in other waves: `LibraryPanelEvent` is matched
-without a wildcard in `crates/writer-app/src/workspace/mod.rs` (`Workspace::on_panel_event`),
-so a new variant committed by WP6 in wave 2 would break the build of `writer-app`, which
+without a wildcard in `crates/innerword-app/src/workspace/mod.rs` (`Workspace::on_panel_event`),
+so a new variant committed by WP6 in wave 2 would break the build of `innerword-app`, which
 WP7 owns in the same wave. In wave 1 nobody owns either crate: WP4 adds the variant
 `LibraryPanelEvent::DropPaths { paths, folder }` (nothing emits it yet) and the arm
 `LibraryPanelEvent::DropPaths { .. } => {}` in `on_panel_event`, in one commit. WP6 then
@@ -1763,14 +1763,14 @@ emits it, and WP9 fills the arm in.
 
 ### Rules for every package
 
-- The root `Cargo.toml`: WP2 adds `writer-page = { path = "crates/writer-page" }` and WP3
-  `writer-web = { path = "crates/writer-web" }` to `[workspace.dependencies]`, each in its
+- The root `Cargo.toml`: WP2 adds `innerword-page = { path = "crates/innerword-page" }` and WP3
+  `innerword-web = { path = "crates/innerword-web" }` to `[workspace.dependencies]`, each in its
   first commit. A `git commit -- Cargo.toml` that takes the other line too is fine: both
   are wanted. `Cargo.lock` is committed by whoever's build changed it (one checkout: it
   holds everyone's additions).
-- Target directories: `writer-page` and `writer-web` build and test in `target-pure`
-  (like `writer-image`, which also calls system frameworks): `CARGO_TARGET_DIR=target-pure
-  cargo test -p writer-page`, `… -p writer-web`. They compile again in `target/` when the
+- Target directories: `innerword-page` and `innerword-web` build and test in `target-pure`
+  (like `innerword-image`, which also calls system frameworks): `CARGO_TARGET_DIR=target-pure
+  cargo test -p innerword-page`, `… -p innerword-web`. They compile again in `target/` when the
   app links them: both are small (no new third-party crate that is not in `Cargo.lock`
   already: `objc` 0.2, `block` 0.1, `dispatch` 0.2, `core-foundation` 0.10, `sha2` 0.10,
   `sha1_smol` 1.0, `base64` 0.22, `url` 2.5, `percent-encoding` 2.3, `regex` 1, `serde`,
@@ -1778,20 +1778,20 @@ emits it, and WP9 fills the arm in.
 - Objective-C: every `BOOL` of a `ClassDecl` method and of a `msg_send!` result is
   `objc::runtime::BOOL` (an `i8` on x86_64, a `bool` on arm64), never a Rust `bool`.
   CLAUDE.md's working rules list both among the crates that use `target-pure`.
-- Test binaries: `writer-page` one integration binary (`tests/main.rs`); `writer-web` one
+- Test binaries: `innerword-page` one integration binary (`tests/main.rs`); `innerword-web` one
   program with `harness = false` (`tests/webkit.rs`: WebKit wants the main thread, as
-  `writer-print`'s `tests/save_job.rs` does) plus unit tests; the app adds
+  `innerword-print`'s `tests/save_job.rs` does) plus unit tests; the app adds
   `tests/suite/pages.rs` to its one binary. No new example.
 - No test reaches the internet. A test that fetches runs a server on 127.0.0.1 in a
-  thread (`std::net::TcpListener`); every other test uses `writer_page::MapFetcher`.
+  thread (`std::net::TcpListener`); every other test uses `innerword_page::MapFetcher`.
 - No test of a GPUI crate makes a `WKWebView`. The app's tests install the fake engine.
 - The archive at `<page archive>/` is read only. A test that reads
   it is `#[ignore]` and copies nothing there.
 - Commit only your paths; the two lines of attribution end every message.
 
-### WP1. Store: pages and their files (writer-store)
+### WP1. Store: pages and their files (innerword-store)
 
-Owns `crates/writer-store`. Interface (everything else of the crate stays as it is):
+Owns `crates/innerword-store`. Interface (everything else of the crate stays as it is):
 
 ```rust
 // lib.rs re-exports, beside the existing ones
@@ -1823,7 +1823,7 @@ pub struct DocumentMeta {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PageContent<'a> {
-    pub manifest: &'a str,        // writer_page::Manifest as JSON, stored in `content`
+    pub manifest: &'a str,        // innerword_page::Manifest as JSON, stored in `content`
     pub title: &'a str,
     pub plain_text: &'a str,      // the rendered text
     pub word_count: u64,
@@ -1902,14 +1902,14 @@ their id are taken from the copy; a version-1 `images.db` is migrated by a write
 read as empty by a reader, without an error); schema tests named in section 1; the
 covering index test.
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p writer-store` passes;
-`cargo build -p writer-app` and `CARGO_TARGET_DIR=target-pure cargo build -p writer-cli`
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-store` passes;
+`cargo build -p innerword-app` and `CARGO_TARGET_DIR=target-pure cargo build -p innerword-cli`
 still compile (a new variant of `StoreError` and new fields are additive; an exhaustive
 `match` elsewhere gets the smallest fix).
 
-### WP2. Bundler (writer-page, new)
+### WP2. Bundler (innerword-page, new)
 
-Owns `crates/writer-page`. Pure Rust, no Objective-C. Interface:
+Owns `crates/innerword-page`. Pure Rust, no Objective-C. Interface:
 
 ```rust
 pub mod limits {
@@ -1931,7 +1931,7 @@ pub mod limits {
 pub const EXTERNAL_DIR: &str = "_external";
 pub const MANIFEST_VERSION: u32 = 1;
 
-/// First 16 bytes of the SHA-256, 32 lowercase hex digits: writer_store::FileId::of(bytes).to_hex().
+/// First 16 bytes of the SHA-256, 32 lowercase hex digits: innerword_store::FileId::of(bytes).to_hex().
 pub fn file_id_hex(bytes: &[u8]) -> String;
 /// The media type served for a path, by its ending ("text/html", "font/woff2", "audio/mpeg", ...).
 pub fn media_type(path: &str) -> &'static str;
@@ -1991,7 +1991,7 @@ pub struct External { pub url: String, pub path: String }
 pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError>;
 impl Bundle { pub fn html_paths(&self) -> Vec<String>; pub fn distinct_bytes(&self) -> u64; }
 
-// ----- the check as data (the JSON of `writer __page-check`, and what the app maps to)
+// ----- the check as data (the JSON of `innerword __page-check`, and what the app maps to)
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CheckRequest {
     pub entry: String,
@@ -2022,7 +2022,7 @@ pub fn write_served_dir(
     bytes_of: &mut dyn FnMut(&str) -> io::Result<Option<Vec<u8>>>,
 ) -> Result<(), PageError>;
 pub fn read_check_dir(dir: &Path) -> io::Result<(CheckRequest, BTreeMap<String, (String, Vec<u8>)>)>;
-/// The fake check (tests, and THE_WRITER_PAGE_CHECK=fake in a debug build only): the
+/// The fake check (tests, and INNER_WORD_PAGE_CHECK=fake in a debug build only): the
 /// entry's text with its tags and the contents of script, style, template and noscript
 /// taken out, its <title>, nothing blocked. Never a fallback for a run without WebKit.
 pub fn static_check(bundle: &Bundle) -> CheckReport;
@@ -2119,7 +2119,7 @@ impl PageError { pub fn sentence(&self) -> String; }   // the words of sections 
 ```
 
 Over the limits is `Incomplete` with a problem that says which limit. The sentences are
-the ones of sections 3 and 9; `writer-agent` wraps them, it does not reword them.
+the ones of sections 3 and 9; `innerword-agent` wraps them, it does not reword them.
 
 Tests (`tests/main.rs`, submodules): the tokenizer on every construct of the table in
 section 3, written as text in the test; rewriting with relative paths from nested files;
@@ -2147,15 +2147,15 @@ whole, Quiz Marking Desk too, whose grades live on claude.ai and which says so
 offline, with the warning about `window.claude`; the Docs document is refused, its
 viewer asks claude.ai.)
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p writer-page` passes.
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-page` passes.
 
-### WP3. WebKit (writer-web, new)
+### WP3. WebKit (innerword-web, new)
 
-Owns `crates/writer-web`. No GPUI: `objc` 0.2, `block` 0.1, `dispatch` 0.2,
+Owns `crates/innerword-web`. No GPUI: `objc` 0.2, `block` 0.1, `dispatch` 0.2,
 `core-foundation`. Everything on the main thread except `PageSource::file`. Interface:
 
 ```rust
-pub const SCHEME: &str = "writer-page";
+pub const SCHEME: &str = "innerword-page";
 pub const CONTENT_SECURITY_POLICY: &str =
     "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'self'";
 pub const BLOCK_RULES: &str = r#"[
@@ -2165,7 +2165,7 @@ pub const BLOCK_RULES: &str = r#"[
  {"trigger":{"url-filter":"^file:"},"action":{"type":"block"}}
 ]"#;
 /// The one identifier the rule list is compiled under; a change of BLOCK_RULES changes it.
-pub const RULE_LIST_ID: &str = "writer-page-block-v1";
+pub const RULE_LIST_ID: &str = "innerword-page-block-v1";
 
 /// macOS 12.3 or later and every class and selector the crate sends (the private
 /// `_setPeerConnectionEnabled:` and `_setMediaDevicesEnabled:` of WKPreferences
@@ -2214,7 +2214,7 @@ pub fn check(input: CheckInput, done: impl FnOnce(CheckOutcome) + 'static);
 /// runs `check`, returns when it is done.
 pub fn check_blocking(input: CheckInput) -> CheckOutcome;
 
-// ----- a PDF of a page as it was made (export, `writer __page-pdf`)
+// ----- a PDF of a page as it was made (export, `innerword __page-pdf`)
 pub struct PdfInput {
     pub source: Arc<dyn PageSource>, pub entry: String,
     pub settle_max: Duration, pub limit: Duration, pub rules_dir: PathBuf,
@@ -2222,7 +2222,7 @@ pub struct PdfInput {
 /// Offscreen, as `check` loads (the same configuration), then WebKit's print operation
 /// as a save job on the default paper. Main thread; `done` as for `check`.
 pub fn print_offscreen(input: PdfInput, done: impl FnOnce(Result<PrintedPdf, String>) + 'static);
-/// For a program (the child `writer __page-pdf`).
+/// For a program (the child `innerword __page-pdf`).
 pub fn print_blocking(input: PdfInput) -> Result<PrintedPdf, String>;
 
 // ----- the view
@@ -2307,7 +2307,7 @@ impl Drop for WebPage;
 pub mod menu { pub const REMOVED: &[&str]; pub const REMOVED_ACTIONS: &[&str]; }
 
 /// Asks the runtime for every class and selector this crate sends (a wrong one is an
-/// exception, not a compile error), as writer_print::check_selectors does: the required
+/// exception, not a compile error), as innerword_print::check_selectors does: the required
 /// ones, the private WebRTC switches among them. The optional ones
 /// (`_setWindowOcclusionDetectionEnabled:`, `_isUserInitiated`, `_setPageMuted:`,
 /// `inspectable`) are asked with respondsToSelector: where they are sent, not here.
@@ -2352,32 +2352,32 @@ the menu can be driven, section 6); the rule list compiled twice leaves one list
 store; `check_selectors` and `available` pass. Unit tests: the menu filter over
 identifiers and actions, range parsing, the frame conversion, the 1 s gate.
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p writer-web` passes on this Mac, and
-`CARGO_TARGET_DIR=target-pure cargo check -p writer-web --target x86_64-apple-darwin`
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-web` passes on this Mac, and
+`CARGO_TARGET_DIR=target-pure cargo check -p innerword-web --target x86_64-apple-darwin`
 passes where that target's standard library is installed (`rustup target list
 --installed`; it is not installed for this stage if the disk does not allow it, and
 then the report says so).
 
-### WP4. Small additive changes (writer-ui, writer-print, writer-library, writer-app)
+### WP4. Small additive changes (innerword-ui, innerword-print, innerword-library, innerword-app)
 
-- `writer-ui`: `IconName::Globe` (`assets/icons/globe.svg`, drawn like the set) in
+- `innerword-ui`: `IconName::Globe` (`assets/icons/globe.svg`, drawn like the set) in
   `IconName::ALL`; `ToastLayer::toast_bounds(&self) -> Vec<Bounds<Pixels>>`: where each
   visible toast was drawn in the last frame, in window coordinates (empty without
   toasts). **Toasts only**: the open context menu, which the same layer draws, is never
   among them. A test of each (one with a context menu open).
-- `writer-print`: `impl Pdf { pub fn from_bytes(bytes: Vec<u8>, pages: usize) -> Pdf }`
+- `innerword-print`: `impl Pdf { pub fn from_bytes(bytes: Vec<u8>, pages: usize) -> Pdf }`
   (the report has `pages`; the other counts are 0). A test that `bytes()` gives them back.
-- `writer-library`: the variant `LibraryPanelEvent::DropPaths { paths: Vec<PathBuf>,
+- `innerword-library`: the variant `LibraryPanelEvent::DropPaths { paths: Vec<PathBuf>,
   folder: Option<FolderId> }` with its doc comment (WP6's interface); nothing emits it.
-- `writer-app`: the arm `LibraryPanelEvent::DropPaths { .. } => {}` in
+- `innerword-app`: the arm `LibraryPanelEvent::DropPaths { .. } => {}` in
   `Workspace::on_panel_event` (`workspace/mod.rs`), committed with the variant.
 
-Done: `cargo test -p writer-ui`, `cargo test -p writer-print`, `cargo test -p
-writer-library` pass; `cargo build -p writer-app` compiles.
+Done: `cargo test -p innerword-ui`, `cargo test -p innerword-print`, `cargo test -p
+innerword-library` pass; `cargo build -p innerword-app` compiles.
 
-### WP5. Agents' command layer (writer-agent)
+### WP5. Agents' command layer (innerword-agent)
 
-Owns `crates/writer-agent`. Adds dependencies `writer-page`. Interface:
+Owns `crates/innerword-agent`. Adds dependencies `innerword-page`. Interface:
 
 ```rust
 // types.rs
@@ -2410,7 +2410,7 @@ pub struct AddPageRequest {
 pub enum PreparedPage {
     Unchanged { page: DocumentId, fingerprint: String },
     Trashed { page: DocumentId },
-    Page(writer_page::Prepared),                 // a dry run's travels with every Blob::data empty
+    Page(innerword_page::Prepared),                 // a dry run's travels with every Blob::data empty
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2442,7 +2442,7 @@ pub struct PagesList { pub pages: Vec<PageListed> }
 pub struct PageListed { pub page: DocumentSummary, pub summary: PageSummary, pub trashed: bool }
 
 // additions to existing types
-pub struct DocumentSummary { /* ... */ #[serde(default)] pub kind: writer_store::DocumentKind, #[serde(default, skip_serializing_if = "Option::is_none")] pub source_url: Option<String> }
+pub struct DocumentSummary { /* ... */ #[serde(default)] pub kind: innerword_store::DocumentKind, #[serde(default, skip_serializing_if = "Option::is_none")] pub source_url: Option<String> }
 pub struct DocumentText { /* ... */ #[serde(default, skip_serializing_if = "Option::is_none")] pub page: Option<PageSummary> }
 pub struct DocumentInfo { /* ... */ #[serde(default, skip_serializing_if = "Option::is_none")] pub page: Option<PageSummary> }
 pub struct ExportRequest { /* ... */ pub original: bool }      // and the formats "html" (a folder) and "pdf" (a file)
@@ -2451,29 +2451,29 @@ pub struct ExportRequest { /* ... */ pub original: bool }      // and the format
 // error.rs
 pub enum ErrorKind { /* ... */ PageIncomplete /* 14, "page_incomplete" */, WrongKind /* 15, "wrong_kind" */ }
 pub enum Error { /* ... */
-    PageIncomplete { name: String, problems: Vec<writer_page::Problem> },
+    PageIncomplete { name: String, problems: Vec<innerword_page::Problem> },
     WrongKind { id: i64, name: String, is_page: bool },
 }
 
 // library.rs
 pub trait PageChecker: Send + Sync {
-    fn check(&self, bundle: &writer_page::Bundle) -> Result<writer_page::CheckReport>;
-    /// A PDF of a page as WebKit prints it (`writer export <page> x.pdf`): `dir` was
-    /// written by writer_page::write_served_dir.
+    fn check(&self, bundle: &innerword_page::Bundle) -> Result<innerword_page::CheckReport>;
+    /// A PDF of a page as WebKit prints it (`innerword export <page> x.pdf`): `dir` was
+    /// written by innerword_page::write_served_dir.
     fn print(&self, dir: &Path, out: &Path) -> Result<()>;
 }
 /// Runs `<program> __page-check <dir>` (and `__page-pdf <dir> <out>`) with stdin null,
 /// stdout piped, stderr kept; kills the child at CHECK_KILL_MS. program:
-/// std::env::current_exe(). With THE_WRITER_PAGE_CHECK=fake, in a debug build only, it
-/// answers with writer_page::static_check itself (and a fixed one-page PDF).
+/// std::env::current_exe(). With INNER_WORD_PAGE_CHECK=fake, in a debug build only, it
+/// answers with innerword_page::static_check itself (and a fixed one-page PDF).
 pub struct ProcessChecker { /* program */ }
 impl ProcessChecker { pub fn current_exe() -> ProcessChecker; pub fn with_program(program: PathBuf) -> ProcessChecker; }
-pub struct StaticChecker;               // writer_page::static_check, for tests
+pub struct StaticChecker;               // innerword_page::static_check, for tests
 impl Library {
     /// None by default: add_page and a PDF export fail with `failed`, "pages cannot be
-    /// checked here". The `writer` binary installs ProcessChecker::current_exe().
+    /// checked here". The `innerword` binary installs ProcessChecker::current_exe().
     pub fn with_page_checker(self, checker: Arc<dyn PageChecker>) -> Library;
-    pub fn with_fetcher(self, fetcher: Arc<dyn writer_page::Fetcher>) -> Library;   // default: CachingFetcher over CurlFetcher::new()
+    pub fn with_fetcher(self, fetcher: Arc<dyn innerword_page::Fetcher>) -> Library;   // default: CachingFetcher over CurlFetcher::new()
     pub fn pages(&self, request: &PagesRequest) -> Result<PagesList>;                 // a reader
     // add_page comes from the table (operations.rs)
 }
@@ -2492,7 +2492,7 @@ pub fn carries_page_files(request: &Request) -> bool;
 /// switch is on): stores the blobs of an add_page that is not a dry run through
 /// `files`, each after checking that `FileId::of(data)` is its `file`, empties their
 /// data, marks them stored. Any other request is left as it is.
-pub fn store_page_files(request: &mut Request, files: &mut writer_store::ImageFile) -> std::result::Result<(), Error>;
+pub fn store_page_files(request: &mut Request, files: &mut innerword_store::ImageFile) -> std::result::Result<(), Error>;
 // client::change serialises the request line before it connects; parse_request reads
 // the version with a small struct, then the request with one from_str (no Value).
 ```
@@ -2506,9 +2506,9 @@ and `export` have a page branch; folder exports leave pages out with a warning. 
 in `operations.rs` gets the row of section 9; the test of the table knows `pages` as a
 reader. `Change::DocumentCreated` / `DocumentText` / `DocumentRenamed` as in section 9.
 
-Also: `source_url` goes through `writer_page::normal_source_url` before it is stored or
+Also: `source_url` goes through `innerword_page::normal_source_url` before it is stored or
 looked up; the trashed outcome and `include_trashed`; `externals` read through
-`writer_page::KnownPieces`; `pages::add_page` stores a blob that is not `stored` only
+`innerword_page::KnownPieces`; `pages::add_page` stores a blob that is not `stored` only
 after checking `FileId::of(data)` against its `file` (an empty `data` of a dry run is
 never stored), and `Store::create_page` / `save_page` refuse with `FilesMissing` when a
 blob is not there; the bundler's and the check's warnings go into the result and the
@@ -2533,14 +2533,14 @@ libraries compared row by row with `images.db`; a page of 64 MB sent through the
 stand-in in this (debug) build arrives; a request of protocol 3 against a stand-in that
 answers as version 2 is refused whole.
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p writer-agent` passes (both runs).
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-agent` passes (both runs).
 
-### WP6. Library model and sidebar (writer-library)
+### WP6. Library model and sidebar (innerword-library)
 
-Owns `crates/writer-library`. Interface:
+Owns `crates/innerword-library`. Interface:
 
 ```rust
-pub use writer_store::{DocumentKind, FileId, FileInfo, PageContent};
+pub use innerword_store::{DocumentKind, FileId, FileInfo, PageContent};
 pub struct DocumentEntry { /* ... */ pub kind: DocumentKind }
 impl Library {
     /// As create_document, for a page: the same events.
@@ -2555,7 +2555,7 @@ pub enum LibraryPanelEvent { /* ... */
 }
 ```
 
-WP6 changes nothing in `writer-app`: its `create_page` and `save_page` are for WP9 (the
+WP6 changes nothing in `innerword-app`: its `create_page` and `save_page` are for WP9 (the
 import); WP7 writes pages through `Library::change_outside` (below).
 
 The row of a page draws `IconName::Globe` (rows, the drag ghost); everything else of a row
@@ -2567,15 +2567,15 @@ else changes in the menus.
 Tests (`tests/panel/`): a page row has the globe; a drop emits `DropPaths` with the folder
 under it; `create_page` emits the events of a new document.
 
-Done: `cargo test -p writer-library` passes; `cargo build -p writer-app` compiles.
+Done: `cargo test -p innerword-library` passes; `cargo build -p innerword-app` compiles.
 
-### WP7. The page view in the app (writer-app, wave 2)
+### WP7. The page view in the app (innerword-app, wave 2)
 
-Owns `crates/writer-app` in wave 2. Adds dependencies `writer-page`, `writer-web`.
+Owns `crates/innerword-app` in wave 2. Adds dependencies `innerword-page`, `innerword-web`.
 
 **First milestone (commit it, then ask for the person check):** the scripted step
 `page:make:<folder>[|<entry>]` (scripted runs only: reads the folder with
-`writer_page::read_input`, refuses a page with externals, `writer_page::static_check`,
+`innerword_page::read_input`, refuses a page with externals, `innerword_page::static_check`,
 `prepare`, then `library.update(cx, |library, cx| library.change_outside(|store| …, cx))`
 around `store.put_file` for each blob and `store.create_page`, answering
 `OutsideChange::DocumentCreated(id)`, so the sidebar shows the page and nothing of WP6 is
@@ -2613,7 +2613,7 @@ in `PageView` and the strip in `FindBar`; `PageView` as a place where text is ty
 `PageEvents` callback posts to and the task that drains it; Print through the job's task
 (`print_to_pdf` between two awaits); Export's PDF row (`print_offscreen`).
 
-`LibraryPageSource` (`pages.rs`): a `writer_web::PageSource` over the manifest's served
+`LibraryPageSource` (`pages.rs`): a `innerword_web::PageSource` over the manifest's served
 files and **a read-only `ImageFile` of its own** (`ImageFile::read_only(<images.db>)`,
 made when the page opens, behind its own mutex): WAL lets it read while the import or an
 agent's listener writes 64 MB with a sync through the other connection, so a page's file
@@ -2621,7 +2621,7 @@ requests (media range requests among them) never queue behind a writer. It keeps
 files it read in memory up to 64 MB for the life of the view. A library in memory (tests;
 `Library::path()` is `None`, as `LibraryImages::new` finds) has no file to open: the page's
 files are read once, when it opens, through `Library::store()` on the main thread into a
-`writer_web::MemorySource`; the fake engine never asks for bytes anyway.
+`innerword_web::MemorySource`; the fake engine never asks for bytes anyway.
 
 Tests (`tests/suite/pages.rs`, fake engine): opening a page from the sidebar, quick open
 and a launch; the session is `None` and the editor read-only meanwhile; text commands not
@@ -2638,52 +2638,52 @@ with the pointer (`mouse.rs`) and `ctrl-enter` (`context_menus.rs`); the keymap 
 with the new context; the counts of the list of shortcuts; a run without an engine (a
 page shows its text and the sentence).
 
-Done: `cargo test -p writer-app` passes; the person checks 1, 2, 7, 8, 9, 10 of section 13
+Done: `cargo test -p innerword-app` passes; the person checks 1, 2, 7, 8, 9, 10 of section 13
 are done on the real binary.
 
-### WP8. Tool, MCP server, skill (writer-cli, writer-mcp, writer-agent-setup)
+### WP8. Tool, MCP server, skill (innerword-cli, innerword-mcp, innerword-agent-setup)
 
-Owns the three crates. `writer-cli` adds `writer-page`, `writer-web`.
+Owns the three crates. `innerword-cli` adds `innerword-page`, `innerword-web`.
 
-- `writer-cli`: the commands of section 9 in `spec.rs` (group "Documents": `page add`
+- `innerword-cli`: the commands of section 9 in `spec.rs` (group "Documents": `page add`
   with `--list`, its `externals` and `--include-trashed`, `pages`), their parsing and
   output (`run.rs`: the outcome lines with their warnings, "trashed"), the hints
-  (`main.rs`, `hint_in`), `writer __page-check <dir>` and `writer __page-pdf <dir> <out>`
-  in `page_check.rs` (handled before parsing; the first maps `writer_web::CheckOutcome` to
-  `writer_page::CheckReport`, the second calls `writer_web::print_blocking`; both ask
-  `writer_web::available()` first and fail with its sentence), `main` installs
+  (`main.rs`, `hint_in`), `innerword __page-check <dir>` and `innerword __page-pdf <dir> <out>`
+  in `page_check.rs` (handled before parsing; the first maps `innerword_web::CheckOutcome` to
+  `innerword_page::CheckReport`, the second calls `innerword_web::print_blocking`; both ask
+  `innerword_web::available()` first and fail with its sentence), `main` installs
   `ProcessChecker::current_exe()` on the library, `get`, `export` (a folder, `--original`,
   a `.pdf`), `info` outputs for pages, exit codes 14 and 15 in the help. A `--list` entry
   that names `prepared` is refused.
-- `writer-mcp`: `add_page` (section 9: one page per call, its description saying why and
-  pointing to `writer page add --list`; arguments that name `prepared` refused), `export`
+- `innerword-mcp`: `add_page` (section 9: one page per call, its description saying why and
+  pointing to `innerword page add --list`; arguments that name `prepared` refused), `export`
   with `html`, `original` and `pdf`, `list_pages` hidden, the outputs of reads for pages
   (`render.rs`), `tool_text` for the new messages; the count test (37, 12).
-- `writer-agent-setup`: the paragraph and the recipe of section 9 in `skill_body.md`,
+- `innerword-agent-setup`: the paragraph and the recipe of section 9 in `skill_body.md`,
   exit codes 14 and 15 in its list; its tests (the text held, the examples run against
-  the built tool with `THE_WRITER_PAGE_CHECK=fake` and a temporary library).
+  the built tool with `INNER_WORD_PAGE_CHECK=fake` and a temporary library).
 
-Tests: `writer-cli`'s suite with `THE_WRITER_PAGE_CHECK=fake` (every new command, the
+Tests: `innerword-cli`'s suite with `INNER_WORD_PAGE_CHECK=fake` (every new command, the
 stand-in app for `page add`, `--list` with `externals`, a trashed page, the exit codes,
 warnings printed); two cases with the real check (WebKit in the child, a page with a
 font from a 127.0.0.1 server is added and its text is right; a page that fetches at run
 time is refused with 14 and the address) and one real PDF export, all three with the
 tool's fetcher allowed to reach 127.0.0.1 through a test-only variable that a release
-build does not read (`THE_WRITER_FETCH_LOCAL=1`, `cfg(debug_assertions)`, as the fake
+build does not read (`INNER_WORD_FETCH_LOCAL=1`, `cfg(debug_assertions)`, as the fake
 check); the MCP tool through the server's stdio, and an `add_page` call with `prepared`
 in its arguments refused. The child's standard input is closed (a test: a child that
 reads stdin gets end of file at once).
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p writer-cli -p writer-mcp -p
-writer-agent-setup` passes.
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-cli -p innerword-mcp -p
+innerword-agent-setup` passes.
 
-### WP9. Import, agents and the assistant in the app; docs (writer-app, writer-assistant, wave 3)
+### WP9. Import, agents and the assistant in the app; docs (innerword-app, innerword-assistant, wave 3)
 
-Owns `crates/writer-app` in wave 3, `crates/writer-assistant`, `CLAUDE.md`,
-`docs/gpui-notes.md`, `scripts/bundle.sh`; and in `crates/writer-assistant-ui`, which
+Owns `crates/innerword-app` in wave 3, `crates/innerword-assistant`, `CLAUDE.md`,
+`docs/gpui-notes.md`, `scripts/bundle.sh`; and in `crates/innerword-assistant-ui`, which
 nobody owns in wave 3, only the smallest change: `kind: OpenKind::Text` in the two
 struct literals of `OpenDocument` (`tests/suite/support.rs` and
-`examples/assistant/main.rs`, which `cargo test -p writer-assistant-ui` builds) and in the
+`examples/assistant/main.rs`, which `cargo test -p innerword-assistant-ui` builds) and in the
 example of its crate docs (`src/lib.rs`).
 
 - File > Import Page… (`workspace::ImportPage`, only with a page engine; the open panel
@@ -2692,8 +2692,8 @@ example of its crate docs (`src/lib.rs`).
   the text area through a hook on `images::LibraryImages`), and the flow: read and
   bundle on a background thread (`CachingFetcher` over `CurlFetcher::new()`, or the
   fetcher a test installs: `pages::set_fetcher`), the check through the engine
-  (`writer_web::check` for WebKit, the fake's answer in tests; never `static_check` in a
-  real run), `writer_page::prepare`, the blobs stored in the background through
+  (`innerword_web::check` for WebKit, the fake's answer in tests; never `static_check` in a
+  real run), `innerword_page::prepare`, the blobs stored in the background through
   `LibraryImages`' `ImageFile`, then on the main thread `Library::create_page` (WP6;
   `FilesMissing` is a refusal of that page, "its files could not be stored"), the sidebar
   showing it, the first page opened. The note while it works, "Cancel adding pages",
@@ -2702,10 +2702,10 @@ example of its crate docs (`src/lib.rs`).
 - The listener thread knows the owner's switch (an `Arc<AtomicBool>` set by the main
   thread at launch and in `set_agents_may_change`), refuses a request that
   `carries_page_files` while it is off, and otherwise stores the blobs before queuing
-  (`writer_agent::live::store_page_files` in `crates/writer-app/src/live.rs`); the main
+  (`innerword_agent::live::store_page_files` in `crates/innerword-app/src/live.rs`); the main
   thread's cost is measured (`live=[… cost=[…]]`).
 - The agents' note words for `add_page` (`workspace::sentence`), Open as its button.
-- The assistant: `writer_assistant::OpenDocument` gains `kind: OpenKind` (`#[derive(Default)]
+- The assistant: `innerword_assistant::OpenDocument` gains `kind: OpenKind` (`#[derive(Default)]
   enum OpenKind { #[default] Text, Page { source_url: Option<String> } }`;
   `reference()` keeps `doc:<id>`) and the sentence of section 8 in the prompt; the app
   sends a page's text (`assistant.rs`: `open_document`, `assistant_document_changed`,
@@ -2713,8 +2713,8 @@ example of its crate docs (`src/lib.rs`).
   `open_item_id()`, the quick chat's toast.
 - The library's menus get "Import Page…" (library and folder targets) and the page items
   on page rows (`extend_the_menus_of_other_crates`).
-- `CLAUDE.md`: the crate table (two new crates; `writer-store`'s pages and `files`;
-  `writer-agent`, `writer-mcp` 37 tools, `writer-cli`, `writer-app`), the dependency
+- `CLAUDE.md`: the crate table (two new crates; `innerword-store`'s pages and `files`;
+  `innerword-agent`, `innerword-mcp` 37 tools, `innerword-cli`, `innerword-app`), the dependency
   direction (`app → {page, web}`, `agent → page`, `cli → {page, web}`, `web` depends on
   nothing of ours, `page` on nothing of ours), the working rules (target-pure for both),
   a section "Pages" in the style of "Images" (macOS 12.3 for pages, the private switches,
@@ -2731,39 +2731,39 @@ Import Page… in a run without an engine; `tests/suite/live.rs` an agent's `add
 while a page is open (reload, note) and while a text is open (nothing in the editor
 changes), and with the switch off (refused by the listener, `file_count` unchanged);
 `tests/suite/assistant.rs` the side chat with a page open (fake engine; `cmd-3` opens
-it); `writer-assistant`'s own tests for the prompt.
+it); `innerword-assistant`'s own tests for the prompt.
 
-Done: `cargo test -p writer-app`, `cargo test -p writer-assistant-ui` and
-`CARGO_TARGET_DIR=target-pure cargo test -p writer-assistant` pass; the person checks 3
+Done: `cargo test -p innerword-app`, `cargo test -p innerword-assistant-ui` and
+`CARGO_TARGET_DIR=target-pure cargo test -p innerword-assistant` pass; the person checks 3
 to 6 of section 13 are done; the 14 pages of the archive go into a throwaway library
-with `writer page add --list` (13 are added, Quiz Marking Desk with its warning about
+with `innerword page add --list` (13 are added, Quiz Marking Desk with its warning about
 `window.claude`; the Docs document is refused with its reason) and show in the app with
 Wi-Fi off.
 
 ### Which existing tests and counts change
 
-- `writer-store`: `schema.rs` tests (`SCHEMA_VERSION` is 4), the covering index test,
+- `innerword-store`: `schema.rs` tests (`SCHEMA_VERSION` is 4), the covering index test,
   `tests/images.rs` literals of `ImagesCollected` and `ImagesBackedUp` (new fields).
-- `writer-agent`: the test of the operations table; the error kinds' list and their exit
+- `innerword-agent`: the test of the operations table; the error kinds' list and their exit
   codes; `PROTOCOL_VERSION` 3 in the live tests.
-- `writer-mcp`: the tool count (37, of them 12 read-only).
-- `writer-cli`: the help tests, the stand-in coverage of commands that change the
+- `innerword-mcp`: the tool count (37, of them 12 read-only).
+- `innerword-cli`: the help tests, the stand-in coverage of commands that change the
   library, the exit codes.
-- `writer-agent-setup`: `skill_against_binary.rs` (exit codes 14 and 15), the skill text
+- `innerword-agent-setup`: `skill_against_binary.rs` (exit codes 14 and 15), the skill text
   test.
-- `writer-app`: `tests/suite/keymap.rs` and `keybindings.rs` (the new context, rows 382 /
+- `innerword-app`: `tests/suite/keymap.rs` and `keybindings.rs` (the new context, rows 382 /
   352, entries 407), `menus` (new items), `context_menus.rs` (a page's menus), `mouse.rs`
   (a page's title and status items).
-- `writer-library`: whatever matches `LibraryPanelEvent` in its own tests (WP4's variant).
-- `writer-assistant-ui`: the two `OpenDocument` literals (WP9).
+- `innerword-library`: whatever matches `LibraryPanelEvent` in its own tests (WP4's variant).
+- `innerword-assistant-ui`: the two `OpenDocument` literals (WP9).
 
 ---
 
 ## 13. Checks only a person can do
 
-Each in under a minute, on the real binary (`cargo build -p writer-app`, `cargo build
--p writer-cli`), with `THE_WRITER_DATA_DIR` set to a temporary library that holds the
-archive's pages: added with `writer --library <dir> page add --list …` once WP8 is in, and
+Each in under a minute, on the real binary (`cargo build -p innerword-app`, `cargo build
+-p innerword-cli`), with `INNER_WORD_DATA_DIR` set to a temporary library that holds the
+archive's pages: added with `innerword --library <dir> page add --list …` once WP8 is in, and
 before that (WP7's milestone) with a scripted run of `page:make:<artifact folder>|offline/index.html`
 for each, followed by `quit`, then a normal launch on the same directory.
 
@@ -2776,7 +2776,7 @@ for each, followed by `quit`, then a normal launch on the same directory.
    `tab` until a link is marked, `enter`: the browser opens it.
 2. **Overlays.** With a page open: quick open (`cmd-p`), the settings (`cmd-,`), the list
    of shortcuts (`cmd-/`), a context menu: each is visible over the page and the page
-   comes back after. Run `writer append` on another document from a terminal: the note at
+   comes back after. Run `innerword append` on another document from a terminal: the note at
    the bottom shows while the page goes on animating; click its Open: the click reaches
    the note, not the page; the wheel over the note does not scroll the page. Open and close the palette 20
    times with Activity Monitor open: the app's memory comes back.
@@ -2829,7 +2829,7 @@ for each, followed by `quit`, then a normal launch on the same directory.
 8. **The schema bump** makes 0.7.0 refuse the library after 0.8.0 opened it. Accepted, as
    for 0.7.0 (question 9).
 9. **WebKit in a command line program inside the app bundle** (NSApplication in a child
-   of `writer`, the bundle id it picks up). WP8's real-check cases run the built binary;
+   of `innerword`, the bundle id it picks up). WP8's real-check cases run the built binary;
    WP9's smoke test runs the bundled one.
 10. **An MCP client's time limit** for a call that checks a page. One page per call (a
     few seconds for the archive's pages; at worst 180 s of fetching and 135 s of check);
@@ -2865,7 +2865,7 @@ Each has a default the design uses until the user says otherwise.
    section.
 4. A click on a link to another site opens the default browser at once. Ask first
    instead? Default: open at once.
-5. Should a page be added from an address directly (`writer page add https://…`)?
+5. Should a page be added from an address directly (`innerword page add https://…`)?
    Default: not in v1.
 6. Should a page imported in the app from a file remember the file, so that importing it
    again updates it? Default: no; each import is a new page.
@@ -2896,7 +2896,7 @@ Each has a default the design uses until the user says otherwise.
 ## Appendix A. The CSP probe of 2026-11-13
 
 `scratchpad/pages-design/csp/probe.swift` (this session's scratchpad), macOS 27.0.1,
-arm64: an offscreen `WKWebView`, a `WKURLSchemeHandler` on `writer-page://check/`, a
+arm64: an offscreen `WKWebView`, a `WKURLSchemeHandler` on `innerword-page://check/`, a
 `securitypolicyviolation` listener injected at document start in every frame, a
 navigation delegate that cancels `http(s)` frames, and a Python server on 127.0.0.1 that
 logs every request. The page asks for a style sheet, a picture, a CSS background, a font
@@ -2955,14 +2955,14 @@ the code or the critic's own experiment (in this session's scratchpad,
 | requirements-R7 | accepted | `rename_document` moves `updated_at` (`documents.rs`). The skill compares `content_at` (the manifest's `added_at`); a page in the trash gives the outcome "trashed" unless `--include-trashed` (question 12). |
 | requirements-R8 | accepted | A refusal does not fit three lines of a 520 px toast (`toast.rs`). Adding pages in the app gets a note with "Cancel adding pages", one summary toast per gesture and a Show Why modal with every sentence whole. |
 | requirements-R9 | accepted | Pages have fields of their own; `PageView` is declared `.typing(...)` in `keymap::places`, so no page command can take a letter. |
-| requirements-R10 | accepted | `shift-enter` is `FindPrevious` only in `FindBar` (`writer-editor-tools/src/actions.rs`). The strip has the key context `FindBar`, lies inside `PageView` in `places`, and adds no rows. |
+| requirements-R10 | accepted | `shift-enter` is `FindPrevious` only in `FindBar` (`innerword-editor-tools/src/actions.rs`). The strip has the key context `FindBar`, lies inside `PageView` in `places`, and adds no rows. |
 | requirements-R11 | accepted | `tabFocusesLinks` is false by default. It is set YES; the `ctrl-enter` menu has "Open Link in Browser" for a focused link. |
 | requirements-R12 | accepted | `focus_assistant`, `bring_the_side_chat_for_its_command` (`assistant.rs`), `assistant_panel_there` (`right_panel.rs`) and the sparkle (`render.rs`) require a session. In the table, with the package that changes each (WP7: render, right panel; WP9: assistant.rs). |
 | requirements-R13 | accepted, with T19 | The switch is checked on the main thread after the listener queued (`workspace/live.rs`, `carry_out`). The listener holds an `Arc<AtomicBool>` and refuses a request with page files at once while it is off. |
 | requirements-R14 | accepted | `Store::create_page` and `save_page` check every file id of the manifest against `files` and refuse with `FilesMissing`. |
 | requirements-R15 | accepted | Warnings for absolute addresses that were not kept and for `window.claude`, in the outcome line, the summary and the manifest; the skill passes them on and keeps a db artifact's rows as a document (question 14). |
 | requirements-R16 | accepted, with T13 | WP7's milestone writes through `Library::change_outside` (`library.rs`) around `Store::create_page` and reads the kind with `document_meta`; WP7 does not depend on WP6. |
-| requirements-R17 | accepted | "Print / export through WebKit" was asked. Export gets "PDF (as printed)" in the app and `writer export <page> file.pdf` (MCP `format: "pdf"`) through a child `writer __page-pdf`. |
+| requirements-R17 | accepted | "Print / export through WebKit" was asked. Export gets "PDF (as printed)" in the app and `innerword export <page> file.pdf` (MCP `format: "pdf"`) through a child `innerword __page-pdf`. |
 | requirements-R18 | accepted | The check is configured as the view, plus muted media; a WP3 test holds that an autoplaying `<audio>` stays paused in the check. |
 | requirements-R19 | accepted | Source addresses are stored and looked up in a normal form (`normal_source_url`); the skill passes the list's `claude.ai/artifact/<id>` form. |
 | requirements-R20 | accepted | A single-file input is hashed as `index.html`. |
@@ -2970,30 +2970,30 @@ the code or the critic's own experiment (in this session's scratchpad,
 | requirements-R22 | accepted | The probe and its handler are in a named `WKContentWorld`; available from macOS 11, under the 12.3 floor of pages. |
 | requirements-R23 | accepted | Without a page engine there is no import (no handler, greyed out); `static_check` is for tests only and drops the bodies of script, style, template and noscript. |
 | requirements-R24 | partly accepted | Deferred: the status bar's host item and the app's "Original files" row. Kept: Copy and Open page address (small, and the address is what the user wanted kept), the GPUI find strip (WebKit's find panel is private API; R10 is solved by reusing `FindBar`). The gate now stops only the native tuning of WP7; the rest of WP7 and all of WP8 go on; the time at the Mac is question 13. |
-| technical-T1 | accepted | `LSMinimumSystemVersion` is 10.15.7 (`packaging/Info.plist`, read by `scripts/bundle.sh`). Pages need macOS 12.3 and are off below it (`writer_web::available`); raising the floor instead is question 11. |
+| technical-T1 | accepted | `LSMinimumSystemVersion` is 10.15.7 (`packaging/Info.plist`, read by `scripts/bundle.sh`). Pages need macOS 12.3 and are off below it (`innerword_web::available`); raising the floor instead is question 11. |
 | technical-T2 | accepted | A layer mask does not change hit-testing. The subclass's `hitTest:` answers nil inside a hole, so clicks, the wheel and the cursor over a toast reach GPUI; a WP3 test and person check 2. |
 | technical-T3 | accepted | `Workspace::on_panel_event` (`workspace/mod.rs`) matches `LibraryPanelEvent` without a wildcard. WP4 adds the variant and the empty arm in wave 1, when nobody owns either crate; WP6 emits it, WP9 fills the arm. |
 | technical-T4 | accepted | `cmd-f`, `cmd-opt-f`, `cmd-g`, `cmd-shift-g` are bound in `EditorTools` only. They are bound once more in `PageView`: four rows "On a page"; the counts are now 382 / 352 rows and 407 entries. |
 | technical-T5 | accepted | The same as R2. |
 | technical-T6 | accepted | `AsyncApp::update` borrows the app; `pinch.rs` already states the rule. The contract (a focus flag, every callback posts to a channel, `takes_key` and `menu_items` from a `PageKeys` snapshot) is in section 6 and WP3. |
 | technical-T7 | accepted | `printing::show_panel` documents the same precondition. `print_to_pdf` is called from the job's task between two awaits. |
-| technical-T8 | accepted | `request` in `writer-mcp/src/tools.rs` deserialises arguments straight into request types, and `attach.rs` trusts attached images. For pages `Prepare` always prepares again, the MCP and `--list` front ends refuse `prepared`, and `Blob::stored` is `#[serde(skip)]`. (The same holds for `AddImageRequest::images` today; not in this feature's scope, reported here.) |
+| technical-T8 | accepted | `request` in `innerword-mcp/src/tools.rs` deserialises arguments straight into request types, and `attach.rs` trusts attached images. For pages `Prepare` always prepares again, the MCP and `--list` front ends refuse `prepared`, and `Blob::stored` is `#[serde(skip)]`. (The same holds for `AddImageRequest::images` today; not in this feature's scope, reported here.) |
 | technical-T9 | accepted, with R5 | The single-file rule never walks the folder; it `stat`s the literal candidates only, to warn. A folder walk skips packages and stops at the limits. |
 | technical-T10 | accepted | `CurlFetcher` resolves each host itself, refuses loopback, private, link-local, shared and `.local` addresses, pins curl with `--resolve`, and follows redirects itself so each hop is checked; `allowing_local()` for tests. |
 | technical-T11 | partly accepted | `add_page` over MCP takes one page per call and the child's stdin is null. Not taken: a second thread for stdin to answer pings and cancellations during a call (the server is single-threaded for every tool; deferred, risk 10). |
-| technical-T12 | accepted | `OpenDocument` is built as a literal in `writer-assistant-ui` (`tests/suite/support.rs`, `examples/assistant/main.rs`). WP9 gets that two-line change; `reference()` keeps `doc:<id>`. |
+| technical-T12 | accepted | `OpenDocument` is built as a literal in `innerword-assistant-ui` (`tests/suite/support.rs`, `examples/assistant/main.rs`). WP9 gets that two-line change; `reference()` keeps `doc:<id>`. |
 | technical-T13 | accepted | The same as R16. |
 | technical-T14 | accepted | `WebPage::new` retains GPUI's view; `Drop` asks `[webView window]` and gives the first responder back only when there is a window and the web view has it; a WP3 test. |
 | technical-T15 | accepted | The `WKMenuItemIdentifier…` names are not in the SDK's headers. The filter matches identifier strings and action selectors, says they are undocumented, and relies on the policies as the real block; a WP3 test of the real menu where it can be driven, else person check 8. |
 | technical-T16 | accepted | `client::change` connects before it serialises (`live/client.rs`) and the listener gives up after 1 s without a byte (`REQUEST_IDLE`). The line is serialised first; `parse_request` no longer builds a `Value`; a 64 MB debug-build test. Binary framing deferred. |
-| technical-T17 | accepted | No checker by default ("pages cannot be checked here"); the `writer` binary installs `ProcessChecker`; `THE_WRITER_PAGE_CHECK=fake` only in a debug build. |
+| technical-T17 | accepted | No checker by default ("pages cannot be checked here"); the `innerword` binary installs `ProcessChecker`; `INNER_WORD_PAGE_CHECK=fake` only in a debug build. |
 | technical-T18 | accepted | `is_made` accepts version 1 for a reader; a connection below version 2 answers "not there" for `files` without a query. The private `FileId` of `file.rs` becomes `FileIdentity`. |
 | technical-T19 | accepted, with R13 | The listener refuses with the switch off; a dry run travels without bytes. Running a dry run in the tool alone was not taken: the app's answer says whether it would take the change. |
-| technical-T20 | accepted | The rule list has one fixed identifier, `writer-page-block-v1`, looked up before it is compiled; the default store is never used. |
+| technical-T20 | accepted | The rule list has one fixed identifier, `innerword-page-block-v1`, looked up before it is compiled; the default store is never used. |
 | technical-T21 | partly accepted | `ContextMenu::is_open(window, cx)` does exist (`context_menu.rs`, beside `current`); the name is kept and made exact. Accepted: `toast_bounds` lists toasts only, never the context menu the same layer draws. |
 | technical-T22 | accepted | `LibraryImages` holds one `Arc<Mutex<ImageFile>>` (`images.rs`). `LibraryPageSource` opens a read-only `ImageFile` of its own. |
 | technical-T23 | accepted | `-q` first; the output file removed on any failure or status other than 200. |
-| technical-T24 | accepted | `sha1_smol` 1.0.1 (in `Cargo.lock`) is in WP2's list; `objc::runtime::BOOL` everywhere; an x86_64 `cargo check` of `writer-web` where the target is installed. |
+| technical-T24 | accepted | `sha1_smol` 1.0.1 (in `Cargo.lock`) is in WP2's list; `objc::runtime::BOOL` everywhere; an x86_64 `cargo check` of `innerword-web` where the target is installed. |
 | technical-T25 | accepted | The occlusion call is optional (`respondsToSelector:`); a WP3 test reads text written from `requestAnimationFrame`. |
 
 ## What the build changed
@@ -3004,32 +3004,32 @@ sections above say the same where they are about it.
 
 | What | Where | Why |
 |---|---|---|
-| The data stores of the view and the check are made with `_WKWebsiteDataStoreConfiguration` `setAllowsServerPreconnect:` NO and `_initWithConfiguration:`, private and required by `available()` | writer-web, 28149d1, b01a25f (section 5) | WebKit preconnects (DNS, TCP, TLS) to the host of a main-frame link while it asks the policy, also for a link a script clicks: a page could make the Mac look up any name, a channel out of an offline page. Found by WP3's tests |
-| AppKit ends `runOperationModalForWindow:` on a thread of its own; `printOperationDidRun:success:contextInfo:` is carried to the main thread before anything else is done | writer-web, 28149d1 (`print.rs`) | The end arrived off the main thread, where nothing of AppKit or GPUI may be touched |
-| The CSP reports a request of a cross-origin frame by the frame's origin only, so the check names the frame and not its path | writer-web, 28149d1 | WebKit's report, as found |
-| Closed `<details>` and hidden chapters: the shown text by `checkVisibility`, then a walk of what is closed | writer-web, 28149d1 (section 3, R3) | `innerText` alone left them out |
-| The link of WebKit's menu is found with `elementFromPoint` (in the client's content world) on `rightMouseDown:` and a `ctrl` mouse-down | writer-web, 28149d1 | The private hover callback the plan named never came |
-| The web view takes no drops (`unregisterDraggedTypes`, `pages::take_no_drops`), so files dropped on a page reach GPUI's view and are added | writer-app, 5ec0624 | The plan said the view takes no drops; WebKit took a dropped file itself, and its navigation to the file was cancelled: nothing happened |
-| A seventh page command, "Show the report of the pages added last" (`ShowPageReport`), with the summary's Show Why; the list has 11 new rows: 383 rows (353 without the assistant) and 408 entries | writer-app, 18331a2, d50c7f6 (section 10) | The report of a gesture had to be reachable after its toast |
-| The hidden text of two elements in one block is two words ("Closed 2 days ago Closed 7 days ago", not "agoClosed") | writer-web, 32f3352 | Found in the archive's pages |
-| A page's text keeps apart what layout shows apart (a tag after a word, a chip, the gutter of a listing, the labels of an axis: "membersRECOMMENDED", "18import", "050100"); each junction is measured and marked before `innerText` is read | writer-web, b9ccacd (review of the build) | Search and agents read glued words |
-| A page that is refused is named by the title it was given | writer-agent, 174e38f | The archive's Docs artifact was refused as "Claude Docs" |
-| A page opened from the library search is searched for the query once it has loaded | writer-app, 49ef86c (section 6, find) | The view did not exist yet when the strip was given the query |
-| A page's origin is its id and the moment its row was made (`page-12-1731600000000`) | writer-app, e978fbd (review ISO-1; section 5) | SQLite gives the id of a page erased for good to the next row, and the views share one store of website data per origin: a new page read the storage of the erased one. A test of writer-web holds that a page's storage is its own origin's and never reaches the disk (b9ccacd) |
-| The snapshot under a modal is dropped when the page goes under it (`Workspace::discard_page`) | writer-app, e978fbd (review PAGE-APP-1; section 6, overlays) | 24 switches through quick open left 280 MB of textures in GPUI's atlas |
-| The find strip has Aa, previous, next and close for the pointer, and a press into its field keeps the keyboard there | writer-app, e978fbd (PAGE-APP-2, PAGE-APP-3; section 6, find) | Product rule 1; the page element's mouse-down ran after the field's and took the keyboard |
-| Over a page the palette leaves out the commands that only say what a page is, and names "Rename page" and "Go to page" | writer-app, e978fbd (PAGE-APP-4; section 6) | About 25 commands answered with a toast or did nothing |
-| "Take title from text" on a page: "A page keeps the title it was given: rename it to change it." | writer-app, e978fbd (PAGE-APP-5) | It said that a page has no document settings |
-| File > Show Report of Pages Added Last… | writer-app, e978fbd (PAGE-APP-6; section 10) | The report was reachable with the pointer only for the 10 s of the summary |
-| The app's half of a page's link and alert events is tested (open in the browser, "The page says", nothing from a page that is no longer open) | writer-app, e978fbd (DOC-5) | No test of the assembled app posted them |
-| A single file never takes a hidden file nor a document it only links to; a folder opened with another entry is another input; a page is written as a folder whole or not at all; an event handler is read as a script | writer-page, 6d788a4 (review of the build) | A page beside `.ssh/` named its key and the check made the key its text; a re-add with `--entry` was "unchanged"; a failed write left half a folder; a sound an `onclick` plays was not said |
-| An export of a page as Markdown or DOCX is answered with the formats a page has; a folder with `artifact-type/` that cannot be kept whole is refused as an artifact made from a type; `add_page` says `openWorldHint` true; `--list` says when a relative path was taken from the folder of the list | writer-agent, writer-mcp, writer-cli, d2ff3e8 (review of the build) | The answers named the wrong thing or nothing |
-| The skill's recipe reads every artifact as files, lists assets only where the assets capability is declared, changes nothing on claude.ai, skips an artifact only when its `content_at` is two days or more after its update, and exports a Docs document instead of reading its type's files | writer-agent-setup, ef9b0da (review of the build; section 9, the skill) | The recipe's calls are held against what the Artifact tool does |
-| An attribute whose name begins with a character of several bytes is read without a panic | writer-page, b7a827f (last verification) | The test for an event handler sliced the name by bytes; `page add --list` of the archive's originals ended with exit 101 |
-| A duplicate of a page is listed without an address; a page is `page:<id>` in the lines of rename, move and the history errors; `export --original` of a text is `wrong_kind`; `get --format json` of a page leaves `text` out | writer-agent, writer-mcp, writer-cli, 377ea81 (review DATA-4, DOC-7, DOC-9, A13) | A copy looked like the page at its address; agents were told a page is a document |
-| Over a page the comments' switches and "Zoom to 400 %" say what a page is; the find strip's escape is handled; `zoom:` steps work on a page; a restored version brings back its title unless the page was renamed; a page the bundler refused is named by its title in the summary | writer-app, d132d74 (review PAGE-APP-7, 8, 10, 11, DATA-5, DOC-11) | They changed the texts' settings, gave 300 % without a word, or did otherwise than an agent's restore |
-| A test pins the rule list's identifier to a fingerprint of `BLOCK_RULES` | writer-web, c51f7ec (review DOC-13) | Rules changed under the old identifier would leave every library on the compiled old ones |
-| A link opens outside only when the navigation goes to the link the reader acted on: the one under the pointer at the real `mouseDown:` or the focused one at a real `enter`, asked in the client's content world, once per act (section 5) | writer-web, 45811e2 (review ISO-4) | Any key or click opened the gate for a second, so a page's listener could `a.click()` a link of its choosing and send the reader's browser to any address |
-| The check's probe makes pictures and frames under `loading="lazy"` eager; the bundler names a lazy one that is not among the page's files, for a folder and a single file alike (section 3) | writer-web, 45811e2; writer-page, 331e502 (review ISO-3) | The check never scrolls: a missing file far down the page was never asked for, and the page was added as whole |
-| The online test of the archive compares the font files of Google Fonts by what matters (there are some where the archive has some, no style sheet still names one on the web), every other address as it is | writer-page, d05847e | Google's style sheets name other font files as time goes on (a new `/s/<family>/v22/`, other `/l/font?kit=` addresses, a family moved between the two): the test failed on addresses while the pages were whole. Run on purpose on 2026-11-14: every original bundled, nothing missed |
-| The media type of a stored piece is decided by its bytes (a signature: fonts, pictures, sound, film), then by where the page names it (a `url()` of `@font-face` and a preload as a font are fonts, never text) and its ending, and the server's Content-Type only where those say nothing against it; bytes that are no text are never HTML (also a file of the page, and as writer-web serves a stored one); a piece from the web is never a document of the page, which the check loads and reads for text (`Bundle::html_paths`, `write_served_dir`) | writer-page, writer-web, 36c8053 (QA of the bundled 0.8.0) | Google Fonts answers some `/l/font?kit=` addresses with `text/html; charset=utf-8` for WOFF2 bytes: an add of Nimbus Brand Sheet stored 7 of its 9 kits as HTML files of the page, the check read their bytes, and the page's text grew from 4,982 to 370,903 characters (850 words to 79,760) in the search, the word counts, what agents read and the assistant's context; the kits also counted toward the 101 HTML files |
+| The data stores of the view and the check are made with `_WKWebsiteDataStoreConfiguration` `setAllowsServerPreconnect:` NO and `_initWithConfiguration:`, private and required by `available()` | innerword-web, 28149d1, b01a25f (section 5) | WebKit preconnects (DNS, TCP, TLS) to the host of a main-frame link while it asks the policy, also for a link a script clicks: a page could make the Mac look up any name, a channel out of an offline page. Found by WP3's tests |
+| AppKit ends `runOperationModalForWindow:` on a thread of its own; `printOperationDidRun:success:contextInfo:` is carried to the main thread before anything else is done | innerword-web, 28149d1 (`print.rs`) | The end arrived off the main thread, where nothing of AppKit or GPUI may be touched |
+| The CSP reports a request of a cross-origin frame by the frame's origin only, so the check names the frame and not its path | innerword-web, 28149d1 | WebKit's report, as found |
+| Closed `<details>` and hidden chapters: the shown text by `checkVisibility`, then a walk of what is closed | innerword-web, 28149d1 (section 3, R3) | `innerText` alone left them out |
+| The link of WebKit's menu is found with `elementFromPoint` (in the client's content world) on `rightMouseDown:` and a `ctrl` mouse-down | innerword-web, 28149d1 | The private hover callback the plan named never came |
+| The web view takes no drops (`unregisterDraggedTypes`, `pages::take_no_drops`), so files dropped on a page reach GPUI's view and are added | innerword-app, 5ec0624 | The plan said the view takes no drops; WebKit took a dropped file itself, and its navigation to the file was cancelled: nothing happened |
+| A seventh page command, "Show the report of the pages added last" (`ShowPageReport`), with the summary's Show Why; the list has 11 new rows: 383 rows (353 without the assistant) and 408 entries | innerword-app, 18331a2, d50c7f6 (section 10) | The report of a gesture had to be reachable after its toast |
+| The hidden text of two elements in one block is two words ("Closed 2 days ago Closed 7 days ago", not "agoClosed") | innerword-web, 32f3352 | Found in the archive's pages |
+| A page's text keeps apart what layout shows apart (a tag after a word, a chip, the gutter of a listing, the labels of an axis: "membersRECOMMENDED", "18import", "050100"); each junction is measured and marked before `innerText` is read | innerword-web, b9ccacd (review of the build) | Search and agents read glued words |
+| A page that is refused is named by the title it was given | innerword-agent, 174e38f | The archive's Docs artifact was refused as "Claude Docs" |
+| A page opened from the library search is searched for the query once it has loaded | innerword-app, 49ef86c (section 6, find) | The view did not exist yet when the strip was given the query |
+| A page's origin is its id and the moment its row was made (`page-12-1731600000000`) | innerword-app, e978fbd (review ISO-1; section 5) | SQLite gives the id of a page erased for good to the next row, and the views share one store of website data per origin: a new page read the storage of the erased one. A test of innerword-web holds that a page's storage is its own origin's and never reaches the disk (b9ccacd) |
+| The snapshot under a modal is dropped when the page goes under it (`Workspace::discard_page`) | innerword-app, e978fbd (review PAGE-APP-1; section 6, overlays) | 24 switches through quick open left 280 MB of textures in GPUI's atlas |
+| The find strip has Aa, previous, next and close for the pointer, and a press into its field keeps the keyboard there | innerword-app, e978fbd (PAGE-APP-2, PAGE-APP-3; section 6, find) | Product rule 1; the page element's mouse-down ran after the field's and took the keyboard |
+| Over a page the palette leaves out the commands that only say what a page is, and names "Rename page" and "Go to page" | innerword-app, e978fbd (PAGE-APP-4; section 6) | About 25 commands answered with a toast or did nothing |
+| "Take title from text" on a page: "A page keeps the title it was given: rename it to change it." | innerword-app, e978fbd (PAGE-APP-5) | It said that a page has no document settings |
+| File > Show Report of Pages Added Last… | innerword-app, e978fbd (PAGE-APP-6; section 10) | The report was reachable with the pointer only for the 10 s of the summary |
+| The app's half of a page's link and alert events is tested (open in the browser, "The page says", nothing from a page that is no longer open) | innerword-app, e978fbd (DOC-5) | No test of the assembled app posted them |
+| A single file never takes a hidden file nor a document it only links to; a folder opened with another entry is another input; a page is written as a folder whole or not at all; an event handler is read as a script | innerword-page, 6d788a4 (review of the build) | A page beside `.ssh/` named its key and the check made the key its text; a re-add with `--entry` was "unchanged"; a failed write left half a folder; a sound an `onclick` plays was not said |
+| An export of a page as Markdown or DOCX is answered with the formats a page has; a folder with `artifact-type/` that cannot be kept whole is refused as an artifact made from a type; `add_page` says `openWorldHint` true; `--list` says when a relative path was taken from the folder of the list | innerword-agent, innerword-mcp, innerword-cli, d2ff3e8 (review of the build) | The answers named the wrong thing or nothing |
+| The skill's recipe reads every artifact as files, lists assets only where the assets capability is declared, changes nothing on claude.ai, skips an artifact only when its `content_at` is two days or more after its update, and exports a Docs document instead of reading its type's files | innerword-agent-setup, ef9b0da (review of the build; section 9, the skill) | The recipe's calls are held against what the Artifact tool does |
+| An attribute whose name begins with a character of several bytes is read without a panic | innerword-page, b7a827f (last verification) | The test for an event handler sliced the name by bytes; `page add --list` of the archive's originals ended with exit 101 |
+| A duplicate of a page is listed without an address; a page is `page:<id>` in the lines of rename, move and the history errors; `export --original` of a text is `wrong_kind`; `get --format json` of a page leaves `text` out | innerword-agent, innerword-mcp, innerword-cli, 377ea81 (review DATA-4, DOC-7, DOC-9, A13) | A copy looked like the page at its address; agents were told a page is a document |
+| Over a page the comments' switches and "Zoom to 400 %" say what a page is; the find strip's escape is handled; `zoom:` steps work on a page; a restored version brings back its title unless the page was renamed; a page the bundler refused is named by its title in the summary | innerword-app, d132d74 (review PAGE-APP-7, 8, 10, 11, DATA-5, DOC-11) | They changed the texts' settings, gave 300 % without a word, or did otherwise than an agent's restore |
+| A test pins the rule list's identifier to a fingerprint of `BLOCK_RULES` | innerword-web, c51f7ec (review DOC-13) | Rules changed under the old identifier would leave every library on the compiled old ones |
+| A link opens outside only when the navigation goes to the link the reader acted on: the one under the pointer at the real `mouseDown:` or the focused one at a real `enter`, asked in the client's content world, once per act (section 5) | innerword-web, 45811e2 (review ISO-4) | Any key or click opened the gate for a second, so a page's listener could `a.click()` a link of its choosing and send the reader's browser to any address |
+| The check's probe makes pictures and frames under `loading="lazy"` eager; the bundler names a lazy one that is not among the page's files, for a folder and a single file alike (section 3) | innerword-web, 45811e2; innerword-page, 331e502 (review ISO-3) | The check never scrolls: a missing file far down the page was never asked for, and the page was added as whole |
+| The online test of the archive compares the font files of Google Fonts by what matters (there are some where the archive has some, no style sheet still names one on the web), every other address as it is | innerword-page, d05847e | Google's style sheets name other font files as time goes on (a new `/s/<family>/v22/`, other `/l/font?kit=` addresses, a family moved between the two): the test failed on addresses while the pages were whole. Run on purpose on 2026-11-14: every original bundled, nothing missed |
+| The media type of a stored piece is decided by its bytes (a signature: fonts, pictures, sound, film), then by where the page names it (a `url()` of `@font-face` and a preload as a font are fonts, never text) and its ending, and the server's Content-Type only where those say nothing against it; bytes that are no text are never HTML (also a file of the page, and as innerword-web serves a stored one); a piece from the web is never a document of the page, which the check loads and reads for text (`Bundle::html_paths`, `write_served_dir`) | innerword-page, innerword-web, 36c8053 (QA of the bundled 0.8.0) | Google Fonts answers some `/l/font?kit=` addresses with `text/html; charset=utf-8` for WOFF2 bytes: an add of Nimbus Brand Sheet stored 7 of its 9 kits as HTML files of the page, the check read their bytes, and the page's text grew from 4,982 to 370,903 characters (850 words to 79,760) in the search, the word counts, what agents read and the assistant's context; the kits also counted toward the 101 HTML files |

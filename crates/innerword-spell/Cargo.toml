@@ -1,0 +1,45 @@
+[package]
+name = "innerword-spell"
+description = "Spell checking for Inner Word: the spell service (the macOS system checker, and a fake for tests) and the checker that keeps an Editor's spelling marks current."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+# tests/main.rs is the only test target; its modules are in tests/suite/.
+autotests = false
+autoexamples = false
+
+[lib]
+# Every test binary that links GPUI costs about 150 MB. All tests of this
+# crate live in tests/main.rs, so the lib builds no test binary of its own.
+test = false
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+innerword-core.workspace = true
+innerword-editor.workspace = true
+innerword-ui.workspace = true
+
+# NSSpellChecker, through the same Objective-C binding the app uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+gpui = { workspace = true, features = ["test-support"] }
+# The demo example: the real text menu around the editor (the way the app
+# mounts the two), and its own window captured for visual QA (the NSWindow
+# number behind a GPUI window), as the other demos do.
+innerword-editor-tools.workspace = true
+raw-window-handle.workspace = true
+anyhow.workspace = true
+
+# `cargo test -p innerword-spell` also links this example (about 150 MB); use
+# `cargo test -p innerword-spell --test main` for the test loop.
+[[example]]
+name = "spell_demo"
+path = "examples/spell_demo/main.rs"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

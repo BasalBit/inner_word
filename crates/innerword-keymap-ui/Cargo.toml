@@ -1,0 +1,29 @@
+[package]
+name = "innerword-keymap-ui"
+description = "The \"Keyboard shortcuts\" view of Inner Word: the list of every key, changing one, conflicts, the import preview."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+innerword-keymap.workspace = true
+innerword-ui.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+gpui = { workspace = true, features = ["test-support"] }
+anyhow.workspace = true
+# The shortcuts example captures its own window for visual QA (same approach
+# as innerword-app's screenshot module): the NSWindow number behind a GPUI window.
+raw-window-handle.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc.workspace = true
+
+[[test]]
+name = "main"
+
+[[example]]
+name = "shortcuts"
+path = "examples/shortcuts/main.rs"

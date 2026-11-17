@@ -1,4 +1,4 @@
-# The Writer
+# Inner Word
 
 A keyboard-first rich-text writing app for macOS (books, blog posts, social posts).
 Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQLite.
@@ -7,31 +7,31 @@ Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQ
 
 | Crate | Kind | Responsibility |
 |---|---|---|
-| `crates/writer-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
-| `crates/writer-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `writer-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`writer_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
-| `crates/writer-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
-| `crates/writer-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
-| `crates/writer-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `writer-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`). |
-| `crates/writer-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
-| `crates/writer-export` | pure Rust | Markdown, DOCX and plain-text exporters over `writer-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
-| `crates/writer-vim` | pure Rust | Vim emulation engine over `writer-core`'s editing engine plus a small visual-layout trait. |
-| `crates/writer-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
-| `crates/writer-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `writer_print::Page`s; `PrintPass::new` is the same pass over a document no editor shows, `PrintPass::number_pages_from` numbers on from the documents before it in one PDF), images (`src/images.rs`: the picture of an image block decoded in the background at the size it is drawn, the outline and handles of the selected one, resize and move with the pointer, insert, paste, copy and drop; the bytes come through the `ImageProvider` an editor is given, `FakeImages` in tests), and the seams the crates below plug into. No crate draws a GPUI path (`paint_path` makes the window hold a texture its own size and a 4x MSAA copy until the next resize, about 400 MB on a large Retina window): the tick of a to-do is a sprite (`src/tick.rs`). A caret, the editor's or a text field's, blinks only in the active window (`docs/gpui-notes.md`). |
-| `crates/writer-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text and of an image, the popover for an image's description, the floating format bar over a mouse selection. |
-| `crates/writer-vim-mode` | GPUI | Glue that attaches the `writer-vim` engine to an `Editor` (key interception, caret style, command line, status). |
-| `crates/writer-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
-| `crates/writer-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/writer-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages) and the library sidebar panel (a page's row has a globe; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them). |
-| `crates/writer-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
-| `crates/writer-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/writer-app` | GPUI bin `the-writer` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `writer-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
-| `crates/writer-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
-| `crates/writer-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
-| `crates/writer-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
-| `crates/writer-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `writer-store`, `writer-core`, `writer-export` and `writer-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. Pages too: `add_page` is prepared (read, fetched, checked by a `PageChecker`) by whoever asks, and added, updated by its address (a version kept first), confirmed unchanged or left in the trash; `pages`, and a page's branch of every read, of the versions and of export (a folder, the original, text, a PDF); exit codes 14 (`page_incomplete`) and 15 (`wrong_kind`). |
-| `crates/writer-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (37 tools, 12 of them read-only; `add_image` and `add_page`, one page a call, are among those that change the library, `list_pages` is hidden behind `writer pages`, and no tool returns a picture). |
-| `crates/writer-cli` | pure Rust bin `writer` | The command line tool for agents and scripts (`writer image add`, `writer images`, `writer page add` with `--list`, `writer pages` among its commands), and `writer mcp`, the MCP server. WebKit never runs in its process: `writer __page-check <dir>` and `writer __page-pdf <dir> <out>` are its children (`src/page_check.rs`, not in the help). Ships inside the app bundle at `Contents/MacOS/writer`. |
-| `crates/writer-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`writer agents ...`) and by the app (the Agents panel). |
+| `crates/innerword-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
+| `crates/innerword-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `innerword-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`innerword_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
+| `crates/innerword-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
+| `crates/innerword-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
+| `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`). |
+| `crates/innerword-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
+| `crates/innerword-export` | pure Rust | Markdown, DOCX and plain-text exporters over `innerword-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
+| `crates/innerword-vim` | pure Rust | Vim emulation engine over `innerword-core`'s editing engine plus a small visual-layout trait. |
+| `crates/innerword-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
+| `crates/innerword-editor` | GPUI | The rich text editor: `Editor` entity, custom element, layout (flow + page view), the zoom of the view, input, the print pass (`Editor::print_pass`, `src/print.rs`: the document as page view lays it out, whatever the window shows, handed out in slices as `innerword_print::Page`s; `PrintPass::new` is the same pass over a document no editor shows, `PrintPass::number_pages_from` numbers on from the documents before it in one PDF), images (`src/images.rs`: the picture of an image block decoded in the background at the size it is drawn, the outline and handles of the selected one, resize and move with the pointer, insert, paste, copy and drop; the bytes come through the `ImageProvider` an editor is given, `FakeImages` in tests), and the seams the crates below plug into. No crate draws a GPUI path (`paint_path` makes the window hold a texture its own size and a 4x MSAA copy until the next resize, about 400 MB on a large Retina window): the tick of a to-do is a sprite (`src/tick.rs`). A caret, the editor's or a text field's, blinks only in the active window (`docs/gpui-notes.md`). |
+| `crates/innerword-editor-tools` | GPUI | Contextual editor overlays: format menu, insert menu, link popover, font picker, find and replace, the context menu of the text and of an image, the popover for an image's description, the floating format bar over a mouse selection. |
+| `crates/innerword-vim-mode` | GPUI | Glue that attaches the `innerword-vim` engine to an `Editor` (key interception, caret style, command line, status). |
+| `crates/innerword-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
+| `crates/innerword-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
+| `crates/innerword-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages) and the library sidebar panel (a page's row has a globe; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them). |
+| `crates/innerword-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
+| `crates/innerword-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
+| `crates/innerword-app` | GPUI bin `inner-word` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `innerword-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
+| `crates/innerword-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
+| `crates/innerword-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
+| `crates/innerword-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
+| `crates/innerword-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `innerword-store`, `innerword-core`, `innerword-export` and `innerword-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. Pages too: `add_page` is prepared (read, fetched, checked by a `PageChecker`) by whoever asks, and added, updated by its address (a version kept first), confirmed unchanged or left in the trash; `pages`, and a page's branch of every read, of the versions and of export (a folder, the original, text, a PDF); exit codes 14 (`page_incomplete`) and 15 (`wrong_kind`). |
+| `crates/innerword-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (37 tools, 12 of them read-only; `add_image` and `add_page`, one page a call, are among those that change the library, `list_pages` is hidden behind `innerword pages`, and no tool returns a picture). |
+| `crates/innerword-cli` | pure Rust bin `innerword` | The command line tool for agents and scripts (`innerword image add`, `innerword images`, `innerword page add` with `--list`, `innerword pages` among its commands), and `innerword mcp`, the MCP server. WebKit never runs in its process: `innerword __page-check <dir>` and `innerword __page-pdf <dir> <out>` are its children (`src/page_check.rs`, not in the help). Ships inside the app bundle at `Contents/MacOS/innerword`. |
+| `crates/innerword-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`innerword agents ...`) and by the app (the Agents panel). |
 | `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
@@ -47,12 +47,12 @@ the list of its read-only tools and for the folders installers put a program in;
 `{app, agent} → image`, `app → print` (`print` depends on nothing of ours: the editor's print pass
 fills its pages, the app has a PDF made of them and hands it to the system),
 `{app, agent, mcp, cli} → page`, `{app, cli} → web` (`page` and `web` depend on nothing of ours; the
-app and the tool's children map WebKit's check to the bundler's report). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `writer-cli`
-(the tool is a separate program beside it). It depends on `writer-agent` for one thing, the
-live channel (`writer_agent::live`: the listener, and `execute`, which carries a request of
-the tool out on the library's own store; `crates/writer-app/src/live.rs` and
+app and the tool's children map WebKit's check to the bundler's report). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `innerword-cli`
+(the tool is a separate program beside it). It depends on `innerword-agent` for one thing, the
+live channel (`innerword_agent::live`: the listener, and `execute`, which carries a request of
+the tool out on the library's own store; `crates/innerword-app/src/live.rs` and
 `workspace/live.rs` are the only callers; `pages.rs` also reads the name of one variable,
-`writer_agent::FETCH_LOCAL_ENV`), and the assistant has that crate in its build
+`innerword_agent::FETCH_LOCAL_ENV`), and the assistant has that crate in its build
 through `assistant → mcp`, which reads the table of the server's tools. Every internal
 crate has an
 entry in the root `[workspace.dependencies]`; depend on one with `writer-x.workspace = true`.
@@ -60,38 +60,38 @@ entry in the root `[workspace.dependencies]`; depend on one with `writer-x.works
 ## Build and test
 
 ```bash
-cargo build -p writer-app            # debug build
-cargo run -p writer-app              # run the app
+cargo build -p innerword-app            # debug build
+cargo run -p innerword-app              # run the app
 cargo test -p <crate>                # per-crate tests (GPUI crates)
-CARGO_TARGET_DIR=target-pure cargo test -p writer-core   # pure crates use target-pure
-CARGO_TARGET_DIR=target-pure cargo test -p writer-page   # the bundler (no network: MapFetcher, a server on 127.0.0.1)
-CARGO_TARGET_DIR=target-pure cargo test -p writer-web    # WebKit, offscreen, in a program of its own
-THE_WRITER_DATA_DIR=/some/tmp cargo run -p writer-app   # run against a throwaway library
-CARGO_TARGET_DIR=target-pure cargo build -p writer-cli   # the `writer` tool (target-pure/debug/writer)
-cargo build -p writer-cli            # the same beside a debug app (target/debug/writer), where the Agents panel looks for it
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-core   # pure crates use target-pure
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-page   # the bundler (no network: MapFetcher, a server on 127.0.0.1)
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-web    # WebKit, offscreen, in a program of its own
+INNER_WORD_DATA_DIR=/some/tmp cargo run -p innerword-app   # run against a throwaway library
+CARGO_TARGET_DIR=target-pure cargo build -p innerword-cli   # the `innerword` tool (target-pure/debug/innerword)
+cargo build -p innerword-cli            # the same beside a debug app (target/debug/innerword), where the Agents panel looks for it
 scripts/bundle.sh                    # release .app (the app and the tool) + .dmg in dist/
-THE_WRITER_DIST_DIR=/some/tmp scripts/bundle.sh   # a trial build that leaves the released images in dist/ alone
+INNER_WORD_DIST_DIR=/some/tmp scripts/bundle.sh   # a trial build that leaves the released images in dist/ alone
 ```
 
-The real library lives in `~/Library/Application Support/The Writer/`. Tests and manual
-QA must set `THE_WRITER_DATA_DIR` to a temp directory and never touch the real one.
+The real library lives in `~/Library/Application Support/Inner Word/`. Tests and manual
+QA must set `INNER_WORD_DATA_DIR` to a temp directory and never touch the real one.
 
-Scripted runs of the real app (visual QA; grammar in `crates/writer-app/src/automation.rs`,
+Scripted runs of the real app (visual QA; grammar in `crates/innerword-app/src/automation.rs`,
 recipe in `docs/gpui-notes.md`):
 
 ```bash
-# THE_WRITER_SEED_DEMO=1: a few folders and documents in an empty library (optional)
-# THE_WRITER_EXPORT_DIR:  file exports are written there, without the save panel (optional)
-# THE_WRITER_ASSISTANT_FAKE=ready: the assistant on the fake engine (optional, see "The assistant")
-# THE_WRITER_FETCH_LOCAL=1: a debug build (app and tool) fetches a page's pieces from 127.0.0.1
+# INNER_WORD_SEED_DEMO=1: a few folders and documents in an empty library (optional)
+# INNER_WORD_EXPORT_DIR:  file exports are written there, without the save panel (optional)
+# INNER_WORD_ASSISTANT_FAKE=ready: the assistant on the fake engine (optional, see "The assistant")
+# INNER_WORD_FETCH_LOCAL=1: a debug build (app and tool) fetches a page's pieces from 127.0.0.1
 #   and localhost too, for a test's own server (optional; a release build does not read it)
-# THE_WRITER_PAGE_CHECK=fake: a debug `writer` checks a page with the static check in its own
+# INNER_WORD_PAGE_CHECK=fake: a debug `innerword` checks a page with the static check in its own
 #   process, without WebKit (optional; a release tool always runs the real check)
-THE_WRITER_DATA_DIR=/some/tmp \
-THE_WRITER_SEED_DEMO=1 \
-THE_WRITER_EXPORT_DIR=/some/tmp/out \
-THE_WRITER_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/some/tmp/a.png; quit" \
-./target/debug/the-writer
+INNER_WORD_DATA_DIR=/some/tmp \
+INNER_WORD_SEED_DEMO=1 \
+INNER_WORD_EXPORT_DIR=/some/tmp/out \
+INNER_WORD_AUTOMATION="wait:1200; keys:cmd-n; type:Hello; state; screenshot:/some/tmp/a.png; quit" \
+./target/debug/inner-word
 ```
 
 Steps: `wait:<ms>`, `keys:<keystrokes>` (the key `;` is written `\;`: `keys:cmd-\;`), `type:<text>`, `action:<name>`, `menu:<name>` (opens
@@ -103,8 +103,8 @@ AppKit's own menu: `menukey:Bold`),
 `bar:bold`, `bar:highlight`, `bar:turn-into`, `bar:extra-0`, `bar:more` press that button of
 it), `shortcut:<action>=<keys>` and `shortcuts:<what>` (the keyboard shortcuts, see "Changing
 keys"), `agents:<n>[:<ms>]` (waits until agents have made `n` changes through this app,
-the `writer` tool being run from outside meanwhile; fails after `ms`, 10 s unless given) and
-`agents:on` / `agents:off` (the switch "Agents can make changes while The Writer is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
+the `innerword` tool being run from outside meanwhile; fails after `ms`, 10 s unless given) and
+`agents:on` / `agents:off` (the switch "Agents can make changes while Inner Word is open"), `fake:hold` / `fake:advance:<events>` / `fake:release` (the fake engine of the
 assistant: hold its events back and let them through, for a capture of an answer half
 written), `zoom:<what>` (the zoom of the text, see "Zoom": `zoom:125`, `zoom:in`, `zoom:fit`, `zoom:auto`),
 `print:pdf:<path>` (writes the exact PDF "Print…" would hand to the print panel and says what
@@ -112,7 +112,7 @@ was made: pages, paper, rows, `rows off`, images, fonts, the time) and `print:jo
 same PDF through the real macOS print operation as a save job, without a panel; see
 "Printing"), `export:wait[:<ms>]` (waits until the PDF export that was chosen, the
 picker's "PDF file" or `action:workspace::ExportPdf`, has written its file into
-`THE_WRITER_EXPORT_DIR`, and says what was made: `export: “Part one” written to <path>: 2
+`INNER_WORD_EXPORT_DIR`, and says what was made: `export: “Part one” written to <path>: 2
 pages, 595.28 x 841.89 pt, 18 rows, 0 rows off, 0 images, fonts: …, made in 0.01 s`, or
 fails with why nothing was written; 60 s unless given), `image:<path>` (inserts the image file at the caret as Insert > Image… does once
 the file is chosen, waits until it is stored and in the text and says `image: inserted <id>
@@ -163,28 +163,28 @@ behaviour is tested headlessly with the test context's `simulate_*` calls.
 
 **One running copy per data directory.** A launch takes an exclusive lock on
 `instance.lock` in its data directory and keeps it until the process ends
-(`crates/writer-app/src/single_instance.rs`, over `writer_store::instance_lock`, the one
-implementation the app and the `writer` tool share). A second launch on the same directory
+(`crates/innerword-app/src/single_instance.rs`, over `innerword_store::instance_lock`, the one
+implementation the app and the `innerword` tool share). A second launch on the same directory
 does not open the library: it shows a window that says another copy has it (and prints the
 same to stderr), with a button that brings the other copy to the front. So two scripted runs
-must not share a `THE_WRITER_DATA_DIR`; the second one's `state` step fails with "the window
+must not share a `INNER_WORD_DATA_DIR`; the second one's `state` step fails with "the window
 does not show a workspace". A build from before the guard takes no lock and is not seen.
-The `writer` tool takes the same lock for the moment of each write (its line in the lock
+The `innerword` tool takes the same lock for the moment of each write (its line in the lock
 file ends in ` tool`): a launch that finds the lock held by a tool waits up to three
 seconds for it (`single_instance::TOOL_PATIENCE`) before it says the library is in use.
 
 A scripted run stays in the background and draws its own frames, so it works while the
 window is covered. Do not script anything that writes the system clipboard (copy, cut,
 "Copy as Markdown"): it is the user's clipboard. A scripted run does not write user defaults
-either (the accent-menu default below) unless `THE_WRITER_USER_DEFAULTS=1` is set. The window
+either (the accent-menu default below) unless `INNER_WORD_USER_DEFAULTS=1` is set. The window
 manager on this machine sometimes tiles the window and then ignores `resize:`; check with
 `info`.
 
-Measure in a release build (`cargo build --release -p writer-app`, then
-`./target/release/the-writer` with the same variables). What an autosave of a book costs:
+Measure in a release build (`cargo build --release -p innerword-app`, then
+`./target/release/inner-word` with the same variables). What an autosave of a book costs:
 
 ```bash
-THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; savecost:7; type:a; wait:1600; state; quit"
+INNER_WORD_AUTOMATION="wait:1500; book:10000; wait:3000; savecost:7; type:a; wait:1600; state; quit"
 # savecost: the synchronous save, part by part (about 70 ms, the library write is 60 of them)
 # state:    last_save=[main 0.7 ms, background 90 ms, ...] for the autosave after "a"
 ```
@@ -195,7 +195,7 @@ launch takes the same 250 ms with no change, five changes and 136 changed comman
 stored):
 
 ```bash
-THE_WRITER_AUTOMATION="wait:5000; keyscost:15; keys:cmd-/; wait:1000; keyscost:15; quit"
+INNER_WORD_AUTOMATION="wait:5000; keyscost:15; keys:cmd-/; wait:1000; keyscost:15; quit"
 # keyscost: a change of a key, 30 times: 9.10 ms (worst 12.57)
 # keyscost: installing 452 bindings: what to bind 1.00 ms, building them 1.29 ms, clear and bind 0.09 ms, the menu bar 4.82 ms
 ```
@@ -209,7 +209,7 @@ document with its search index 80, counting its words 28, the version kept befor
 reading it 10), bringing the window up to date 14 ms. The tool takes 20 to 30 ms on top
 to start and to ask. It grows with the document: a chapter of 5,000 words 4 to 6 ms, a
 novel of 100,000 words in one document about 40 ms. In the debug build the append to the
-book is 2.5 s. **A picture an agent adds** (`writer image add`) is stored on the main thread
+book is 2.5 s. **A picture an agent adds** (`innerword image add`) is stored on the main thread
 too, as part of the change: its bytes come with the request, are hashed and written with a
 sync. Measured when images were added, five pictures of each size that the library stores
 as they come, with a short document open: 1 MB 4 ms (3.4 to 6.9), 4 MB 15 ms (10.9 to
@@ -221,7 +221,7 @@ window: the 16 MB picture holds the main thread for 206 ms, 60 more than the sma
 The way to take the write off the main thread, should that ever be too long, is for the
 channel's listener to store what a request brings through an `ImageFile` of its own before
 the request is queued; it is built for pages, not for pictures). **A page an agent adds**
-(`writer page add`) is stored that way: the thread that accepts the request writes its
+(`innerword page add`) is stored that way: the thread that accepts the request writes its
 files into `images.db` through a connection of its own before the request is queued, so the
 main thread writes the page's row only. Measured when pages were added, in the debug build
 with the debug tool and the real check, a page with 16 MB of files: "change" 1.8 ms with a
@@ -230,14 +230,14 @@ is the book's flush), "window" 0.1 ms; the tool 5 s from start to answer, most o
 check in WebKit:
 
 ```bash
-THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
+INNER_WORD_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
 # when the log says "book ready", from a second terminal, with the same temporary library:
-#   writer --library <dir> recent                # the id of the book
-#   time writer --library <dir> append doc:<id> --content "One more paragraph." --author Claude
+#   innerword --library <dir> recent                # the id of the book
+#   time innerword --library <dir> append doc:<id> --content "One more paragraph." --author Claude
 # state: live=[... cost=[save 6.2 ms, change 153.3 ms, window 14.4 ms]]   (release)
-#   time writer --library <dir> image add doc:<id> /some/tmp/16mb.png --author Claude
+#   time innerword --library <dir> image add doc:<id> /some/tmp/16mb.png --author Claude
 # state: live=[... cost=[save 2.6 ms, change 189.3 ms, window 13.2 ms]]   (release, the book open)
-#   time writer --library <dir> page add /some/tmp/heavy-page --author Claude   # index.html and 16 MB beside it
+#   time innerword --library <dir> page add /some/tmp/heavy-page --author Claude   # index.html and 16 MB beside it
 # state: live=[... cost=[save 21.2 ms, change 0.9 ms, window 0.1 ms]]      (debug, the book open)
 ```
 
@@ -246,12 +246,12 @@ about 20 ms after the first frame, the whole book in about 20 s of idle time in 
 4 to 6 ms, a key reaches the screen in 6 to 8 ms while the pass waits for the writer):
 
 ```bash
-THE_WRITER_AUTOMATION="wait:1500; book:10000; stall:3000; typecost:Teh quick brown fox.; keycost:pageup pageup pageup; stall:20000; state; quit"
+INNER_WORD_AUTOMATION="wait:1500; book:10000; stall:3000; typecost:Teh quick brown fox.; keycost:pageup pageup pageup; stall:20000; state; quit"
 # run it a second time with "keys:cmd-shift-p; type:check spelling while typing; keys:enter" first:
 # single waits of 20 to 40 ms turn up with the checker off too (docs/gpui-notes.md, Visual QA)
 ```
 
-The story test (`crates/writer-app/tests/suite/story.rs`) walks through the whole product
+The story test (`crates/innerword-app/tests/suite/story.rs`) walks through the whole product
 headlessly; `tests/suite/keymap.rs` checks every key of the tables below against the
 assembled keymap; `tests/suite/saving.rs` holds the rules of saving in the background;
 `tests/suite/mouse.rs` does everything with simulated pointer events (the menu bar, the
@@ -264,7 +264,7 @@ bar and `shift-f10`; `tests/suite/findings.rs` keeps what the testers found from
 `tests/suite/agents.rs` holds the Agents panel against a temporary home directory;
 `tests/suite/launch.rs` launches twice with a change made in between, as an agent makes it;
 `tests/suite/live.rs` holds agents that write while the app is open: the assembled workspace
-with the real listener, and the real client of `writer-agent` asking from a second thread;
+with the real listener, and the real client of `innerword-agent` asking from a second thread;
 `tests/suite/assistant.rs` holds the assistant in the assembled app, with the fake engine;
 `tests/suite/keybindings.rs` holds the keys the user changes: the keymap taken apart and put
 back, every kind of change, the list, the guard rails, storage, the shortcuts file;
@@ -298,15 +298,15 @@ page in `assistant.rs`, the library's menus in `context_menus.rs`.
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
 the app was given a spell service: `main` installs the system one
-(`writer_app::spelling::use_system_service`), a test installs
-`writer_spell::FakeSpellService` with `writer_app::spelling::set_service` before it opens a
+(`innerword_app::spelling::use_system_service`), a test installs
+`innerword_spell::FakeSpellService` with `innerword_app::spelling::set_service` before it opens a
 workspace, and without one there is no checker at all. A scripted run of the real binary
 does use the system checker: do not choose "Learn Spelling" there except on an invented
 word that is unlearned again in the same run.
 
 **Tests never open the open panel and never read or write the system pasteboard.**
 "Insert > Image…" asks for files in the macOS open panel only in a run that was told to
-(`writer_app::images::use_open_panel`, called by `main` when the run is not scripted); a
+(`innerword_app::images::use_open_panel`, called by `main` when the run is not scripted); a
 test names the files (`images::choose_files_beforehand`), a scripted run uses `image:<path>`,
 and without either the panel was "cancelled". A paste looks at the system pasteboard for a
 picture only where `main` said so (`pasteboard::use_system`); a test says what is "on" it
@@ -314,25 +314,25 @@ picture only where `main` said so (`pasteboard::use_system`); a test says what i
 either: it puts the picture on the user's clipboard.
 
 **Tests never make a `WKWebView` and never reach the network.** A workspace shows pages only
-when the app was given a page engine: `main` installs WebKit (`writer_app::pages::use_webkit`)
-in every run of the real binary, scripted ones too, unless `THE_WRITER_PAGES=off` or this
+when the app was given a page engine: `main` installs WebKit (`innerword_app::pages::use_webkit`)
+in every run of the real binary, scripted ones too, unless `INNER_WORD_PAGES=off` or this
 macOS cannot keep a page offline; a test installs the fake (`pages::use_fake`, which draws a
-page's text in a GPUI element and answers the check with `writer_page::static_check` or what
+page's text in a GPUI element and answers the check with `innerword_page::static_check` or what
 the test set), and without one a page shows its text and nothing can be added. The import
 asks the open panel only where `main` said so (`pages::use_open_panel`); a test names the
 paths (`pages::choose_beforehand`). It fetches with `curl` for public addresses, except
-where a test installed a fetcher (`pages::set_fetcher`, a `writer_page::MapFetcher` or one of
+where a test installed a fetcher (`pages::set_fetcher`, a `innerword_page::MapFetcher` or one of
 its own); on the fake engine without one nothing is fetched at all. Real WebKit is tested in
-`writer-web`'s own program and in the cases of `writer-cli` that run the built tool.
+`innerword-web`'s own program and in the cases of `innerword-cli` that run the built tool.
 
 **Tests never call the real Claude Code** (every message spends the user's own allowance,
 and its answers are not the same twice). A workspace has an assistant only when the app
-was given an engine: `main` installs Claude Code (`writer_app::assistant::use_claude_code`),
-a test installs `writer_assistant::FakeBackend` with `writer_app::assistant::set_backend`
+was given an engine: `main` installs Claude Code (`innerword_app::assistant::use_claude_code`),
+a test installs `innerword_assistant::FakeBackend` with `innerword_app::assistant::set_backend`
 before it opens a workspace, and without one there is no assistant at all. The engine
 crate's own tests of the Claude Code backend run a stand-in program that replays recorded
 output, never `claude`. A scripted run of the real binary never gets Claude Code either:
-it gets the fake engine when `THE_WRITER_ASSISTANT_FAKE` asks for it, and no assistant
+it gets the fake engine when `INNER_WORD_ASSISTANT_FAKE` asks for it, and no assistant
 otherwise. A real call is made only where a task says so in so many words: a one-line
 prompt, the cheapest model at low effort, session persistence off, never in a loop and
 never from a test that runs by default.
@@ -341,11 +341,11 @@ never from a test that runs by default.
 
 An optional writing assistant inside the app, in two chats, running on a terminal agent
 the user has installed and signed in to. Claude Code is the first (and for now the only)
-engine; others will follow, so nothing outside `writer_assistant::claude` may assume it.
+engine; others will follow, so nothing outside `innerword_assistant::claude` may assume it.
 The assistant advises and the user applies: an answer changes a document only when one of
 its buttons is pressed. Every message spends the user's own plan in the engine.
 
-- **Whether it is there** (`crates/writer-app/src/assistant/host.rs`,
+- **Whether it is there** (`crates/innerword-app/src/assistant/host.rs`,
   `workspace/assistant.rs`). The engine is looked for in the background, at launch and
   each time the settings are opened; the app never waits for it. Until the look of a
   launch has answered, the answer of the last launch stands (`assistant.engine_seen`), so
@@ -358,18 +358,18 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   the menu bar is rebuilt by `menus::set_assistant_shown`.
 - **The quick chat** (`cmd-j`, "Ask the assistant" in the palette, "Ask the Assistant" in
   the text menu and on the format bar, Edit in the menu bar;
-  `writer_assistant_quick::QuickChat`): a popover at the selection, or at the caret. It
+  `innerword_assistant_quick::QuickChat`): a popover at the selection, or at the caret. It
   sends the selected text and the question, and with nothing selected the question alone:
   never the document, its title or the library, and it has no tools. Each answer has
   Replace Selection, Insert Below and Copy. `escape` closes it and ends its conversation.
 - **The side chat** (`cmd-3`, "Go to assistant" and "Show or hide assistant" in the
   palette, View in the menu bar, and for the pointer the small sparkle at the end of the
   status bar and "Assistant" in the menu of the title;
-  `writer_assistant_ui::AssistantPanel`): a panel at the right. With every message it sends the open document as it is in the editor at that
+  `innerword_assistant_ui::AssistantPanel`): a panel at the right. With every message it sends the open document as it is in the editor at that
   moment (not as it was last saved), its title and its path in the library, and names the
   documents and folders the user added with "Add" (chips; `cmd-shift-a`). It reads them,
   and the rest of the library, through the library's own MCP server with only the
-  read-only tools allowed (`workspace::library_tool_server`: the bundled `writer` beside
+  read-only tools allowed (`workspace::library_tool_server`: the bundled `innerword` beside
   the app's executable, `--library <data directory> mcp`; reading works while the app has
   the library open). Each answer has Insert at Caret, Replace Selection and Copy; the
   workspace applies them as one undo step, the answer's Markdown becoming formatted text
@@ -380,9 +380,9 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
 - **Images.** The assistant never sees a picture. In the document the side chat is sent, an
   image is one line, `![description](image:<id>)` (the Markdown export's `References`), and
   its system prompt says what the line is and that it is to be kept unchanged and never
-  invented (`writer_assistant::prompts`). The quick chat is sent the selected text, in which
+  invented (`innerword_assistant::prompts`). The quick chat is sent the selected text, in which
   an image is an empty line. An answer that is applied is read with the images of the open
-  document (`writer_export::KnownImages`): a line that names one of them is that image
+  document (`innerword_export::KnownImages`): a line that names one of them is that image
   again, with its width, alignment and description, so an answer that moves the line moves
   the image. The side chat also takes the id of an image of another document (the assistant
   read it there with its tools): it comes in at its own size and counts as used from then
@@ -393,7 +393,7 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   of a button. (Agents, which have the file system anyway, do read local paths: "Agents".)
 - **Pages.** With a page open the side chat is sent the text the page showed (the
   manifest's `text`, what is not shown included) in place of the Markdown, after one
-  sentence (`writer_assistant::PAGE_PREFACE`: "The open item is a page: a web page saved in
+  sentence (`innerword_assistant::PAGE_PREFACE`: "The open item is a page: a web page saved in
   the library, shown as it was made. It cannot be changed. Its text, as the page showed
   it:"), with `kind="page"` and its address in the tag (`OpenDocument::kind`, `OpenKind`),
   and its system prompt says what such an item is. A page too long to send whole goes as
@@ -449,15 +449,15 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   the engine suggests for that chat), and what the app remembers by itself:
   `assistant.panel_open`, `assistant.panel_width`, `comments.panel_width`,
   `right_panel.choice`, `assistant.notice_accepted`, `assistant.engine_seen`.
-- **Scripted runs and screenshots**: `THE_WRITER_ASSISTANT_FAKE=ready` (or `signed-out`,
+- **Scripted runs and screenshots**: `INNER_WORD_ASSISTANT_FAKE=ready` (or `signed-out`,
   `missing`) gives a scripted run the fake engine, which starts no program;
-  `THE_WRITER_ASSISTANT_FAKE_REPLIES=<file>` scripts its answers (answers separated by a
+  `INNER_WORD_ASSISTANT_FAKE_REPLIES=<file>` scripts its answers (answers separated by a
   line of `====`; leading lines `!tool <name> <words>` and `!error <kind>`; grammar in
-  `crates/writer-app/src/assistant/fake.rs`). `keys:cmd-j; type:Another word?; keys:enter`
+  `crates/innerword-app/src/assistant/fake.rs`). `keys:cmd-j; type:Another word?; keys:enter`
   asks in the quick chat, `keys:cmd-3` goes to the side chat, `keys:cmd-shift-a; type:Part
   one; keys:enter` adds a folder there. Do not script "Copy" (it is the user's clipboard;
   the side chat's Copy leaves it alone in a scripted run, the quick chat's does not).
-  `THE_WRITER_ASSISTANT_REAL=1` gives a scripted run the real Claude Code instead, for the
+  `INNER_WORD_ASSISTANT_REAL=1` gives a scripted run the real Claude Code instead, for the
   few checks that are meant to reach it without bringing the window to the front: a
   script that only looks (the settings, `state`) sends nothing, and **every message such
   a script sends spends the user's allowance** (see the rule above).
@@ -465,15 +465,15 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
 ## Agents
 
 The AI agents on the user's Mac (Claude Code, Codex, Gemini CLI, Cursor and the others in
-`writer_agent_setup::AGENTS`) work with the library through `writer`, a command line tool
+`innerword_agent_setup::AGENTS`) work with the library through `innerword`, a command line tool
 built only from the crates without GPUI. It does not need the app to be running, and it
 works while the app is running: then the app makes the tool's changes ("While the app is
 open" below).
 
-- **Where it is.** In the bundle at `The Writer.app/Contents/MacOS/writer`, beside the
+- **Where it is.** In the bundle at `Inner Word.app/Contents/MacOS/innerword`, beside the
   app's executable, built from the same commit by `scripts/bundle.sh` and signed with the
   bundle. Agents call it by its absolute path; nothing is added to `PATH`. A debug app
-  looks for it at `target/debug/writer` (`cargo build -p writer-cli`). The script's smoke
+  looks for it at `target/debug/innerword` (`cargo build -p innerword-cli`). The script's smoke
   test runs the bundled tool on a temporary library: create, read back, the app shows the
   document, a write while the bundled app is open arrives in the window and in the
   library, and with the owner's switch off it is refused with exit code 5.
@@ -482,13 +482,13 @@ open" below).
   of the data directory for the moment of each write. While the app is open it is the app:
   it holds the lock, text that is not saved yet and its own picture of the library, so the
   tool does not write underneath it but hands it the operation, and the app carries it
-  out. There is no merging. `crates/writer-agent` enforces it (`Library::write` is the one
+  out. There is no merging. `crates/innerword-agent` enforces it (`Library::write` is the one
   way to a library that can be written to). Where the app does not take the change, the
   tool says so with exit code 5 (`app_is_open`) and words that say what to do: the owner
   switched changes off, the app is a version before 0.6.0 (its lock file names no
   channel), it did not answer in ten seconds, a text was being composed.
-- **While the app is open** (`writer_agent::live` is the channel, the protocol, the client
-  and `execute`; `crates/writer-app/src/live.rs` and `workspace/live.rs` are the app's
+- **While the app is open** (`innerword_agent::live` is the channel, the protocol, the client
+  and `execute`; `crates/innerword-app/src/live.rs` and `workspace/live.rs` are the app's
   half). The app opens a Unix socket once it has the lock (`live::open_at_launch`, `main`)
   and its path stands in the lock file; a thread accepts requests and queues them for the
   main thread; every way of quitting closes it (`live::close` in a quit hook: a request
@@ -520,7 +520,7 @@ open" below).
     goes when the writer edits, because then it would take out their words), or what one
     request moved to the trash. For a document that is not the open one the button is
     **Open**. The same two are commands without a key ("Undo the last change by an agent",
-    "Go to the last change by an agent": the palette, The Writer menu).
+    "Go to the last change by an agent": the palette, Inner Word menu).
   - **Vim mode keeps what the writer is in the middle of.** The editor reports a change
     it took over as any edit, and Vim mode takes an edit it did not make for the writer's
     own doing elsewhere in the app, which cancels a half-typed command and closes the
@@ -537,17 +537,17 @@ open" below).
   - **A request is whole or not at all**: carrying out and answering are one turn of the
     main thread, quitting is another. A tool that stopped waiting was told that nothing
     was changed, and then nothing is (`Incoming::begin`).
-  - **The switch** "Agents can make changes while The Writer is open" is the setting
+  - **The switch** "Agents can make changes while Inner Word is open" is the setting
     `agents.changes_while_open` of the library (on unless switched off), in the Agents
     panel. Off is the rule of before 0.6.0: agents read (a `flush` is still answered) and
     are told to ask for the switch to be put on, or for the app to be quit (the tool's
-    refusal and the panel's sentence `live::SWITCH_OFF` say the same, in that order). `THE_WRITER_AGENT_CHANNEL=off` keeps a run from
+    refusal and the panel's sentence `live::SWITCH_OFF` say the same, in that order). `INNER_WORD_AGENT_CHANNEL=off` keeps a run from
     opening the channel at all, which is what a version before 0.6.0 looks like to a tool.
   - **Tests** (`tests/suite/live.rs`): `live::open` on a temporary data directory whose
     lock the test holds, the real client on a second thread, and the test's main thread
     letting the app work until the answer is there (`ask`). The app's timers run on the
     test clock: a wait for a composition needs `advance_clock`.
-  - **The tool's half** (`crates/writer-agent/src/live/`, no GPUI). One table,
+  - **The tool's half** (`crates/innerword-agent/src/live/`, no GPUI). One table,
     `src/operations.rs`, gives every operation that writes its method on `Library`, its
     name on the channel and the function that carries it out in a `Session`; `Library::write`
     is called from nowhere else, so **a new operation that writes goes into that table and
@@ -569,11 +569,11 @@ open" below).
     that answers as 0.7.0 does). The tool writes the whole line before it connects (a
     page is up to 86 MB of base64, and the listener gives a connection up after a second
     without a byte), and the app reads the version before it reads the request.
-  - **Where the socket is.** `the-writer-<uid>/<pid>-<n>.sock` in the user's temporary
+  - **Where the socket is.** `inner-word-<uid>/<pid>-<n>.sock` in the user's temporary
     directory (mode 0700, the socket 0600, the peer's user checked): a socket path holds
     about a hundred bytes and a data directory can be longer. The lock file of the data
     directory names it in a second line (`channel <path>`,
-    `writer_store::instance_lock::announce_channel` / `app_channel`), which older versions
+    `innerword_store::instance_lock::announce_channel` / `app_channel`), which older versions
     read past. The lock says whether an app runs, so a socket or a line left by a crash
     misleads nobody.
   - **What bites there.** macOS refuses `setsockopt` on a socket whose other end is closed
@@ -588,15 +588,15 @@ open" below).
     `Sandbox::open_an_app_that_takes_no_changes`). A `Target::Path("1984")` is written
     `{"path":"1984"}` in JSON, or it would arrive as the id 1984.
   - **Its tests** need no app: a thread holds the lock, binds the real listener and calls
-    `execute` (`StandIn` in `crates/writer-agent/tests/suite/live.rs`, `LiveApp` in
-    `crates/writer-cli/tests/suite/harness.rs`). Every operation is run both ways and the
-    two libraries are compared row by row; the whole suite of `writer-agent` runs a second
+    `execute` (`StandIn` in `crates/innerword-agent/tests/suite/live.rs`, `LiveApp` in
+    `crates/innerword-cli/tests/suite/harness.rs`). Every operation is run both ways and the
+    two libraries are compared row by row; the whole suite of `innerword-agent` runs a second
     time with an app on every library (a child run with
-    `WRITER_AGENT_TESTS_THROUGH_THE_APP`, where `fixture()` opens a stand-in and
-    `closed_fixture()` is for the tests about a closed app); `writer-cli` runs every
+    `INNERWORD_AGENT_TESTS_THROUGH_THE_APP`, where `fixture()` opens a stand-in and
+    `closed_fixture()` is for the tests about a closed app); `innerword-cli` runs every
     command whose help says that it changes the library, and every tool the server lists
     as changing something, against a stand-in, and fails when a new one is not run there.
-- **The safety net** is in `writer-agent` too: a version snapshot before an agent changes
+- **The safety net** is in `innerword-agent` too: a version snapshot before an agent changes
   the text of a document or deletes a comment (labelled "Before an edit by Claude" with the
   `--author` given; the app's version history shows the label in the row, read through
   `Store::snapshot_labels`), deletion means the trash, `--dry-run` says what would change
@@ -607,14 +607,14 @@ open" below).
   text of the document (then as Markdown), and compares the old and the new text word by
   word: the words they share are not replaced, so words an agent quotes around its change
   keep the formatting, the link and the comment each has; only the words that differ take
-  the formatting of what they replace (`writer-agent/src/rewrite.rs`,
+  the formatting of what they replace (`innerword-agent/src/rewrite.rs`,
   `formatting_to_take`).
 - **Images.** To an agent an image of a document is one line of Markdown,
-  `![description](image:<id>)` (`read`, `writer get`). The result of `read` lists the
+  `![description](image:<id>)` (`read`, `innerword get`). The result of `read` lists the
   images with what the line does not say (width in percent, alignment, pixel size,
-  whether the library has the bytes: `ImageSummary`), and `writer images <document>`
+  whether the library has the bytes: `ImageSummary`), and `innerword images <document>`
   prints that list. No tool returns a picture: an agent looks at one by exporting.
-  - **Adding one**: `writer image add <document> <file> [--alt] [--width] [--align] [--at]
+  - **Adding one**: `innerword image add <document> <file> [--alt] [--width] [--align] [--at]
     [--heading] [--heading-occurrence]`, the MCP tool `add_image` (a row of the table,
     `write_text::add_image`), or a local path in the Markdown of any operation that takes
     text (`![what it shows](/path.png)`, `file:`, `~/`; a relative path is taken from the
@@ -624,8 +624,8 @@ open" below).
     stored wider than the column or taller than a page (`Image::max_width`), and the
     result says the width that was stored.
   - **The file is read in the process that was asked and travels with the request**
-    (`writer-agent/src/attach.rs`: `Prepare::prepared`, which the table calls before
-    `Library::write`). `writer_image::prepare_file` makes of it what the library stores,
+    (`innerword-agent/src/attach.rs`: `Prepare::prepared`, which the table calls before
+    `Library::write`). `innerword_image::prepare_file` makes of it what the library stores,
     the request carries the bytes (`AttachedImage`, base64 on the channel), and the
     function that carries the operation out stores what the request brought
     (`markdown_in::Images`) and **opens no path**: in the app it runs on the main thread,
@@ -647,7 +647,7 @@ open" below).
     for nothing) and a warning says that the version kept before the change has it.
   - **An image that is named again is answered from the document as it was before the
     change**, and only then from the library (`markdown_in::Images::know`,
-    `writer_export::KnownImages`): the blocks the operation replaces first, then the rest
+    `innerword_export::KnownImages`): the blocks the operation replaces first, then the rest
     of the document, the n-th line that names an id being the n-th image with that id. So
     an image line that moved, one a section got from another section, an `insert` that
     repeats an image and one picture used at two sizes all keep width, alignment and
@@ -657,7 +657,7 @@ open" below).
     beside it, `<name> images/image-<8 hex>.<ext>` (`Exported::assets`; named by content
     and written over, `--overwrite` is about the text); a DOCX holds them; plain text has
     their descriptions. **An export whose pictures cannot be read fails and writes
-    nothing** (`writer_agent::Error::Pictures`, kind `failed`: `images.db` of a newer
+    nothing** (`innerword_agent::Error::Pictures`, kind `failed`: `images.db` of a newer
     version, busy past its timeout); a picture the library does not have is its
     description. The app's export does the same (`images::StoreImages::failure`).
   - **The plain text an agent reads is the text that is matched**: `get --format text`,
@@ -665,10 +665,10 @@ open" below).
     image is an empty line there, as in `edit`), while the plain-text export still writes
     them. `find` marks an occurrence that runs across an image
     (`Occurrence::across_image`), which `edit` would refuse.
-  - **The skill** has a paragraph "Images" (`writer-agent-setup/src/skill_body.md`; a
+  - **The skill** has a paragraph "Images" (`innerword-agent-setup/src/skill_body.md`; a
     test holds what it has to say, and its examples are run against the built tool).
 - **Pages** (the whole feature is in "Pages" below; `docs/pages-design.md` is its design).
-  `writer page add <file|folder>... [--entry] [--title] [--source-url] [--folder]
+  `innerword page add <file|folder>... [--entry] [--title] [--source-url] [--folder]
   [--create-folders] [--include-trashed] [--author] [--dry-run] [--json]`, or `--list
   <file.json|->` for many pages with their own addresses and the pieces the agent has
   already (`externals`: address to a saved file; the recipe of the skill passes claude.ai's
@@ -679,51 +679,51 @@ open" below).
   `--include-trashed`), or `not added` with the sentence. **A page is read, fetched and
   checked in the process that was asked** (`impl Prepare for AddPageRequest` always
   prepares again, and a request that names `prepared` is refused by both front ends): the
-  check runs in a child of the tool (`writer __page-check <dir>`, standard input closed,
+  check runs in a child of the tool (`innerword __page-check <dir>`, standard input closed,
   killed at 135 s), never in the MCP server's process and never in the app for an agent.
   Exit code 14 (`page_incomplete`): the page cannot be kept whole, the reasons named,
   nothing saved; 15 (`wrong_kind`): a text operation on a page (`edit`, `append`, `image
-  add`, comments) or a page operation on a text. `writer pages [--json]` lists them with
-  their addresses and `content_at` (when this content was taken), `writer get page:12` gives
-  the text a page showed, `writer export page:12 <dir>` the served files as a folder
-  (`--original`: the input as it was added), `writer export page:12 x.pdf` WebKit's print
-  (`writer __page-pdf`). `page:<id>` is the reference of a page in every output; `doc:` and
+  add`, comments) or a page operation on a text. `innerword pages [--json]` lists them with
+  their addresses and `content_at` (when this content was taken), `innerword get page:12` gives
+  the text a page showed, `innerword export page:12 <dir>` the served files as a folder
+  (`--original`: the input as it was added), `innerword export page:12 x.pdf` WebKit's print
+  (`innerword __page-pdf`). `page:<id>` is the reference of a page in every output; `doc:` and
   `page:` are read alike. While the app is open the tool still prepares the page and the
   app's listener stores its files before the request is queued ("While the app is open",
   "Pages"); the note says "Claude added “Orbitarium”" (Open) or "Claude updated
   “Orbitarium”" (an open page reloads, and the note has no button).
-- **Who says what.** `writer-agent` words its errors for both front ends and names fields
+- **Who says what.** `innerword-agent` words its errors for both front ends and names fields
   ("occurrence", "permanently"). The command line adds the option to type next, worded
-  for the command that failed (`writer-cli/src/main.rs`, `hint_in`: `--occurrence`,
-  `--heading-occurrence`, `--all`, `--overwrite`, `--permanently`, `writer find`, and
-  `--at` / `--heading` for `writer image add`), the MCP server names the tool
-  (`writer-mcp/src/tools.rs`,
-  `tool_text`: `restore_version` where the shared text says `writer history restore`).
+  for the command that failed (`innerword-cli/src/main.rs`, `hint_in`: `--occurrence`,
+  `--heading-occurrence`, `--all`, `--overwrite`, `--permanently`, `innerword find`, and
+  `--at` / `--heading` for `innerword image add`), the MCP server names the tool
+  (`innerword-mcp/src/tools.rs`,
+  `tool_text`: `restore_version` where the shared text says `innerword history restore`).
   Exit code 5 (`app_is_open`) has one sentence per reason (`Refusal`, worded in
-  `writer-agent/src/error.rs`, `app_is_open_message`): it says "nothing was changed"
+  `innerword-agent/src/error.rs`, `app_is_open_message`): it says "nothing was changed"
   exactly when that is certain (not when the app took the change up and its answer did
   not arrive) and ends with what to do; as data the reason is `error.refusal.why` with
   `error.nothing_changed` beside it. The command line adds what goes on working (reading,
-  `--dry-run`, `writer status`), the server the tools that do (`WHILE_OPEN`). The switch
-  has one name everywhere, "Agents can make changes while The Writer is open": the tool's
-  message, the skill and the panel (a test of `writer-cli` holds the first two together).
-  The skill carries the version of the app (`writer_agent_setup::APP_VERSION`), so a skill
+  `--dry-run`, `innerword status`), the server the tools that do (`WHILE_OPEN`). The switch
+  has one name everywhere, "Agents can make changes while Inner Word is open": the tool's
+  message, the skill and the panel (a test of `innerword-cli` holds the first two together).
+  The skill carries the version of the app (`innerword_agent_setup::APP_VERSION`), so a skill
   an older version installed is offered for update without anything else being done. The
   skill's list of exit codes is tested against the help of the built tool
-  (`writer-agent-setup/tests/skill_against_binary.rs`): a new exit code fails that test
+  (`innerword-agent-setup/tests/skill_against_binary.rs`): a new exit code fails that test
   until the skill explains it.
-- **Which library.** The user's real one by default (`writer_store::data_dir`), another
-  with `--library <dir>` or `THE_WRITER_DATA_DIR`. **Every test and every command you run
+- **Which library.** The user's real one by default (`innerword_store::data_dir`), another
+  with `--library <dir>` or `INNER_WORD_DATA_DIR`. **Every test and every command you run
   must name a temporary library**; the tool pointed at nothing is pointed at the user's
   documents.
-- **`writer mcp`** is the same binary as an MCP server over stdio (`crates/writer-mcp` is
-  the protocol, `crates/writer-cli` the tools).
-- **The skill and the MCP commands** are `crates/writer-agent-setup`: the table of agents
+- **`innerword mcp`** is the same binary as an MCP server over stdio (`crates/innerword-mcp` is
+  the protocol, `crates/innerword-cli` the tools).
+- **The skill and the MCP commands** are `crates/innerword-agent-setup`: the table of agents
   (how each is detected, where it reads skills, how an MCP server is added, every fact with
   its source and the day it was read), the text of the skill, installing and removing it.
-  The tool has it as `writer agents ...`, the app as the Agents panel.
-- **The Agents panel** (`cmd-opt-a`, "Agents" in the palette, The Writer > Agents… in the
-  menu bar; `crates/writer-app/src/agents.rs` and `agents_view.rs`): the path of the tool
+  The tool has it as `innerword agents ...`, the app as the Agents panel.
+- **The Agents panel** (`cmd-opt-a`, "Agents" in the palette, Inner Word > Agents… in the
+  menu bar; `crates/innerword-app/src/agents.rs` and `agents_view.rs`): the path of the tool
   with a copy button; every agent found that reads skills with the folder and the state of
   the skill, install / update / remove per agent and install for all, with a report of
   every path written; the command or configuration entry that adds the MCP server to each
@@ -736,10 +736,10 @@ open" below).
   (remove the skill), `cmd-c` (copy what the row shows), `o` (documentation), `escape`.
 - **Which Mac the panel sees** is `agents::Environment`, an app global. `main` sets it to
   this Mac. A scripted run has none (the panel lists nothing) unless
-  `THE_WRITER_AGENT_HOME=<dir>` names a home directory: then that directory is the whole
+  `INNER_WORD_AGENT_HOME=<dir>` names a home directory: then that directory is the whole
   machine (`Machine::isolated`), and copy buttons still leave the clipboard alone. Tests
   call `agents::set_environment(Environment::isolated(temp_home, tool))`. **Never run the
-  panel's install buttons, `writer agents install`, or an agent's own `mcp add` against the
+  panel's install buttons, `innerword agents install`, or an agent's own `mcp add` against the
   real home directory** (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.agents`, ...): looking
   at which of them exist is fine, writing there is the user's decision. **Setting `HOME`
   to a temporary directory does not make an agent's own command safe**: Claude Code and
@@ -749,16 +749,16 @@ open" below).
   command with its `--help` and nothing else. (What that accident showed: OpenCode 1.19.5
   writes a server directly under `"mcp"`, where the documentation of OpenCode 2 and the
   panel's entry have `"mcp": {"servers": ...}`; the panel says so and leads with the
-  command, which writes the form the installed version reads.) The `writer` tool itself does follow `HOME`
-  (`writer agents install` with a temporary `HOME` writes only there; the tests of
-  `writer-cli` guard it).
+  command, which writes the form the installed version reads.) The `innerword` tool itself does follow `HOME`
+  (`innerword agents install` with a temporary `HOME` writes only there; the tests of
+  `innerword-cli` guard it).
 - **The hint.** Once per library the app shows a toast that agents can work with the
   library, with a button that opens the panel (`agents.hint_shown` in the settings). Only
-  the real app shows it; a scripted run does with `THE_WRITER_AGENTS_HINT=1`.
+  the real app shows it; a scripted run does with `INNER_WORD_AGENTS_HINT=1`.
 - **A launch shows the library as it is.** Agents change the library while the app is
   closed too, so nothing remembered across launches is trusted without a check: the caret
   and scroll position carry a stamp of the text they were taken on
-  (`crates/writer-app/src/view_memory.rs`), and a document that was rewritten opens at its
+  (`crates/innerword-app/src/view_memory.rs`), and a document that was rewritten opens at its
   start and says so (the same holds for a document an agent changed while another one was
   open in the window); the last open document, the selection and the open folders of the
   sidebar are dropped when what they name was trashed or deleted
@@ -767,14 +767,14 @@ open" below).
 ## Working rules
 
 - **Two target directories, no more.** Disk on this machine is nearly full. Everything that
-  depends on GPUI builds in the default `target/`. The pure crates (`writer-core`,
-  `writer-store`, `writer-image`, `writer-export`, `writer-vim`, `writer-agent`, `writer-mcp`, `writer-cli`,
-  `writer-agent-setup`, `writer-assistant`, `writer-keymap`, `writer-page`, `writer-web`) build and test with
-  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds (`writer-page` and
-  `writer-web` compile again in `target/` when the app links them; both are small).
-  `writer-web`'s `tests/webkit.rs` is a program of its own (`harness = false`): WebKit wants
-  the main thread of the process. `writer-print` has no
-  GPUI in it and builds and tests in `target/` all the same (`cargo test -p writer-print`):
+  depends on GPUI builds in the default `target/`. The pure crates (`innerword-core`,
+  `innerword-store`, `innerword-image`, `innerword-export`, `innerword-vim`, `innerword-agent`, `innerword-mcp`, `innerword-cli`,
+  `innerword-agent-setup`, `innerword-assistant`, `innerword-keymap`, `innerword-page`, `innerword-web`) build and test with
+  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds (`innerword-page` and
+  `innerword-web` compile again in `target/` when the app links them; both are small).
+  `innerword-web`'s `tests/webkit.rs` is a program of its own (`harness = false`): WebKit wants
+  the main thread of the process. `innerword-print` has no
+  GPUI in it and builds and tests in `target/` all the same (`cargo test -p innerword-print`):
   CoreText, CoreGraphics and font-kit are compiled there for gpui already, the crate is only
   ever linked into GPUI crates, and a second copy of that stack in `target-pure` would cost
   disk. Its test binaries are small (no GPUI is linked); `tests/save_job.rs` is a program of
@@ -797,7 +797,7 @@ open" below).
   never amend, rebase, reset, stash or check out files you do not own. If `index.lock` is
   busy, wait a few seconds and retry. Only commit code that compiles.
 - **Done means verified.** No `todo!()` / `unimplemented!()` / placeholder behaviour left
-  behind. `cargo test -p <crate>` passes and `cargo build -p writer-app` still compiles
+  behind. `cargo test -p <crate>` passes and `cargo build -p innerword-app` still compiles
   before you finish.
 - UI text is plain and specific. No emoji in the UI.
 
@@ -828,12 +828,12 @@ open" below).
 4. **Never lose text.** Documents autosave (debounced) and on close/quit. No save button;
    "Save Now" (`cmd-s`, the save state in the status bar, the File menu) saves at once for
    whoever wants to be sure. `SIGTERM`, `SIGHUP` and `ctrl-c` in the terminal quit the way
-   `cmd-q` does, saving first (`crates/writer-app/src/signals.rs`). Two copies of the app
+   `cmd-q` does, saving first (`crates/innerword-app/src/signals.rs`). Two copies of the app
    never have one library open (the single-instance guard, see "Build and test").
    The autosave of a library on disk is written by a background thread through a second
    connection, so a book does not stutter when it is saved; the flush on switching
    documents, closing and quitting is synchronous and waits for a save in flight, and an
-   older copy is never written after a newer one (`crates/writer-app/src/workspace/saver.rs`).
+   older copy is never written after a newer one (`crates/innerword-app/src/workspace/saver.rs`).
    The library keeps version snapshots; "Version history" in the palette brings one back.
    The title above the text is the title of the text as it is now (it follows every edit,
    undo included, `Workspace::mark_dirty`); the library's row follows with the save.
@@ -856,7 +856,7 @@ to text through span attributes so they move with edits.
 
 A divider, a page break and an image are *void* blocks: no text, one caret position. An
 image block (`BlockKind::Image`, an `Image`) holds the id of its stored bytes (`ImageId`:
-the first 16 bytes of their SHA-256, 32 hex digits; `writer-core` never sees the bytes), their
+the first 16 bytes of their SHA-256, 32 hex digits; `innerword-core` never sees the bytes), their
 pixel size and density, its width as a share of the text column in thousandths
 (`ImageWidth`, 5 % to 100 %, never stored wider than a page of the document allows) and a
 one-line description. It stands left, centred or right (never justified) and has no indent
@@ -868,7 +868,7 @@ and `enter` start a paragraph below it and `shift-enter` one above it; `backspac
 second press (a divider goes at the first). In the document's JSON an image is
 `{"type":"image","image":"<id>","px":[w,h],"ppi":144,"width":500,"alt":"..."}`; a document
 that holds one is written as format version 2, any other as version 1 as before
-(`writer_core::serial`).
+(`innerword_core::serial`).
 
 ## Default keymap
 
@@ -905,7 +905,7 @@ and the two spelling rows, the "Status bar" section chooses the character limit 
 counts are shown.
 The two font rows of the settings ("Font" under "New documents" and under "This document")
 offer every font family that can be chosen in a document: the list the font picker of the
-text has (`writer_editor_tools::FontList` is the one source of both: the installed writing
+text has (`innerword_editor_tools::FontList` is the one source of both: the installed writing
 fonts, the recently used families, every family by name, without the hidden system
 families). `left` / `right` step through the families by name; `enter`, `space` or a click
 on the row opens the searchable list (`font_choice::FontChoicePicker`, each family with a
@@ -929,7 +929,7 @@ settings: follow the app setting, Automatic, or a language), which overrides the
 becomes the proofing language of a DOCX export. `left` / `right` step through the
 languages; `enter` or `space` on either row, or the palette command "Spelling language"
 (for the open document), opens a searchable list. The list is the Mac's
-(`writer_spell::language_choices`): the user's own language first, the others by name; a
+(`innerword_spell::language_choices`): the user's own language first, the others by name; a
 Mac left on "Automatic by Language" reports nearly every language as preferred, which is
 then not taken as a choice. The checker's plain `en` is American English and is named so.
 Compact editors (the comment composer) and read-only ones are not checked.
@@ -1002,7 +1002,7 @@ Plus the standard macOS text-navigation keys (arrows, `alt`/`cmd` + arrows, `shi
 extend, `alt-backspace`, `cmd-backspace`, and the `ctrl-a/e/f/b/n/p/k/d/h` Emacs set).
 `pageup` / `pagedown` move by the height of the window less one line of body text, so a
 picture or a heading is as far as it is high (`Editor::rows_in_a_page` in
-`writer-editor/src/movement.rs`); Vim's `ctrl-f` / `ctrl-d` (`Editor::rows_per_page`,
+`innerword-editor/src/movement.rs`); Vim's `ctrl-f` / `ctrl-d` (`Editor::rows_per_page`,
 `scroll_by_pages`) still count lines of body text.
 
 Keymap facts that bite (details in `docs/gpui-notes.md`):
@@ -1020,11 +1020,11 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   format bar before the find bar.
 - **Shift plus a digit or punctuation** reaches GPUI as the shifted character without the
   shift flag (`cmd-shift-7` is `cmd-&` on a US keyboard). Bind both spellings, the readable
-  one last so key hints show it (see `crates/writer-editor/src/actions.rs`).
+  one last so key hints show it (see `crates/innerword-editor/src/actions.rs`).
 - **The plus key is the one exception, and it is shown as "⌘+" everywhere.** Shift with `=`
   is the key of "Zoom in", which a Mac writes "⌘+" in every menu. Its normal form is
   `cmd-shift-=` like every other pair, but its glyphs are the character without the shift
-  (`writer_keymap::Keystroke::glyphs` and `writer_ui::key_hint::format_keystroke`, the two
+  (`innerword_keymap::Keystroke::glyphs` and `innerword_ui::key_hint::format_keystroke`, the two
   writers of a key, both; never "⇧⌘="), and of its two spellings the character is bound
   last (`Keystroke::spellings`: `cmd-shift-=`, then `cmd-+`), because the last one is what
   the menu bar is given and AppKit draws the character as "⌘+". So the list of shortcuts,
@@ -1033,7 +1033,7 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   search finds a key by the shifted character too ("⌘+", `cmd-&`).
 - **A binding without a context ranks like the deepest context**, not like the shallowest:
   it beats every binding of an outer context on the same key, and among bindings at the
-  focused element's own level the one added later wins. `writer_app::init` therefore adds
+  focused element's own level the one added later wins. `innerword_app::init` therefore adds
   the app's bindings first, and a crate that needs a window-wide key inside one of its
   views binds it at the level of the focused element (the find bar does, for `cmd-opt-c`).
 - **Who takes a key in the text**: an open insert menu, then Vim mode (it lets every `cmd`
@@ -1046,7 +1046,7 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   (`Workspace::connect_vim_spelling`).
 - **Held keys with Vim mode on** repeat instead of opening the macOS accent menu: the app
   stores `ApplePressAndHoldEnabled = false` in its own user defaults while Vim mode is on
-  and removes it when it is off (`crates/writer-app/src/press_and_hold.rs`). macOS reads
+  and removes it when it is off (`crates/innerword-app/src/press_and_hold.rs`). macOS reads
   that default once per launch, so a change made while the app runs acts from the next
   launch; the settings say so. In Normal mode a held key should repeat either way, because
   Vim takes the key before the text input system sees it (read from GPUI's key path, not
@@ -1075,13 +1075,13 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   whose command has only such keys shows none (a placeholder of two keys says so to GPUI).
   The key beside an item is live: AppKit runs an enabled item on its key where GPUI has no
   binding for it, so the menu bar is built again after every change of a key.
-- **The keymap GPUI has is one the app built** (`crates/writer-app/src/keymap.rs`). Every
-  crate binds its keys in its `init`; at the end of `writer_app::init` they are taken as
+- **The keymap GPUI has is one the app built** (`crates/innerword-app/src/keymap.rs`). Every
+  crate binds its keys in its `init`; at the end of `innerword_app::init` they are taken as
   the defaults, and from then on every change clears the keymap and binds it again in the
   same order (a changed key where its default stood). So: bind keys in `init` and nowhere
   else (a binding added later is lost at the next change), and never compare against a key
   or keep a `KeyHint`: ask the keymap when the key arrives or the hint is drawn
-  (`writer_ui::keymap`, `KeyHint::for_action`, `writer_app::keymap::hint_in`).
+  (`innerword_ui::keymap`, `KeyHint::for_action`, `innerword_app::keymap::hint_in`).
 - **A hint for a command bound in several places is asked in its own place.**
   `KeyHint::for_action` and `CommandDescriptor::key_hint` answer keymap-wide (the binding
   added last), which is another place's key once the user changed one of them. A control
@@ -1111,18 +1111,18 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
 A layout fact that bites: text that wraps (or has several lines) inside a `flex_col`
 container that is itself the growing child (`flex_1`) of a flex row is measured at no
 width, and the row comes out thousands of pixels tall. Make the growing child a plain block
-`div()` and space its children with margins (`crates/writer-app/src/agents_view.rs`,
+`div()` and space its children with margins (`crates/innerword-app/src/agents_view.rs`,
 `render_row`; the test `no_row_is_taller_than_its_text`).
 
 ## Changing keys
 
 Every key that is a GPUI binding can be changed by the user, in one place: "Keyboard
-shortcuts" (`cmd-/`, the palette, The Writer > Keyboard Shortcuts… and Help in the menu bar,
+shortcuts" (`cmd-/`, the palette, Inner Word > Keyboard Shortcuts… and Help in the menu bar,
 the row "Keyboard shortcuts" of the settings, in their section "Keyboard" above "This
-document"). Three crates: `writer-keymap` knows what a change is,
-`writer-keymap-ui` is the list, `writer-app` has the keymap and does what the list asks.
+document"). Three crates: `innerword-keymap` knows what a change is,
+`innerword-keymap-ui` is the list, `innerword-app` has the keymap and does what the list asks.
 
-- **What a change is.** For a command in a key context (`writer_keymap::Target`:
+- **What a change is.** For a command in a key context (`innerword_keymap::Target`:
   `editor::ToggleBold` in `Editor`) the user has the keys they want: a key replaced, a
   second key added, a key removed (the command may be left without one), a key given to a
   command that has none ("Version history"; it applies anywhere for a command of the
@@ -1164,7 +1164,7 @@ document"). Three crates: `writer-keymap` knows what a change is,
   overlap, and by the contexts the arrow's command would "keep the key in the rest of its
   place", which is the filter field). So the keymap is told the rows and their place names
   with every change (`keymap::refresh_listed`, `shortcuts::listed_rows`,
-  `writer_keymap::Row`), and judges by them: under one name, the command that loses where
+  `innerword_keymap::Row`), and judges by them: under one name, the command that loses where
   both apply has lost its key. Key contexts that never have the keyboard together have
   place names of their own, also inside one panel ("Confirming in the comment list", "In
   a question of keyboard shortcuts", "In a chat's conversation", "In the header of the
@@ -1180,7 +1180,7 @@ document"). Three crates: `writer-keymap` knows what a change is,
   `keymap::places` and a place name in `shortcuts::Place::of_predicate` that keeps it.
 - **A part of the app that is not shown.** While the assistant is not shown its commands
   are no rows, and their keys count for nothing in what the list says: the keymap is told
-  which commands are not there (`writer_keymap::Absent`, set by `keymap::refresh_listed`
+  which commands are not there (`innerword_keymap::Absent`, set by `keymap::refresh_listed`
   from `commands::set_category_hidden`), so their keys are free for every other command,
   no row is warned about them and an import counts no collision with them. Nothing of
   theirs is changed: the bindings stay in the keymap (they do nothing, and a key of the
@@ -1199,7 +1199,7 @@ document"). Three crates: `writer-keymap` knows what a change is,
     the marked row of that menu (the other keys of the open menu are the list's:
     `picker::SelectPrev`, `SelectNext`, `Confirm`, `Dismiss`, so `ctrl-p` / `ctrl-n` move in
     it too);
-  - everything inside an open context menu (`writer_ui::context_menu`, `handle_keystroke`:
+  - everything inside an open context menu (`innerword_ui::context_menu`, `handle_keystroke`:
     arrows, `ctrl-p` / `ctrl-n`, `home` / `end` / the page keys, `enter` and `space`, `left`
     / `right` for a submenu, `escape`, letters for type-ahead): the menu never has the
     keyboard, so no binding can apply in it, and its way out must not depend on the keymap.
@@ -1237,13 +1237,13 @@ document"). Three crates: `writer-keymap` knows what a change is,
   `changed=N`. `keymap::changed_count` counts key contexts and is for tests.
 - **One toast about the shortcuts at a time** (`Workspace::say_about_shortcuts`): the list
   stays open under the toast that offers Undo, the list leaves room for one toast under
-  itself (`ROOM_BELOW` in `writer-keymap-ui/src/render.rs`), and a second one would lie
+  itself (`ROOM_BELOW` in `innerword-keymap-ui/src/render.rs`), and a second one would lie
   over the choices of a question. A toast that names a file names it with
   `export::short_path` (the home directory as `~`, a long path shortened in the middle,
   the file name whole), and no toast draws its message past its edge: at most three lines,
-  then an ellipsis (`writer_ui::toast`, `MESSAGE_LINES`; `docs/gpui-notes.md` says why
+  then an ellipsis (`innerword_ui::toast`, `MESSAGE_LINES`; `docs/gpui-notes.md` says why
   GPUI's own line clamp does not do that).
-- **Guard rails** (`writer_keymap::check`, asked by the list before anything changes): a
+- **Guard rails** (`innerword_keymap::check`, asked by the list before anything changes): a
   bare character or shift with one is refused where text is typed; a key macOS keeps
   (`cmd-tab`, `cmd-alt-escape`, ...) is refused, one it uses unless switched off
   (`cmd-space`, the screenshots) is warned about. A key another command has in the same
@@ -1255,7 +1255,7 @@ document"). Three crates: `writer-keymap` knows what a change is,
   into both. The one spot where `keymap::places` is not exact is written there ("What is
   not exact": the library's keys "wherever the keyboard is in it" against a key of the
   window, in the filter field).
-- **What the list says about a key** (`writer-keymap-ui/src/words.rs`, `verdict_words`):
+- **What the list says about a key** (`innerword-keymap-ui/src/words.rs`, `verdict_words`):
   the question has a heading that says the most important thing about the key, with a mark
   for how it is to be read (`mark=` in the state line), in this order: it cannot be used;
   it is taken; macOS uses it; Vim mode sees it first; it would not work everywhere
@@ -1275,10 +1275,10 @@ document"). Three crates: `writer-keymap` knows what a change is,
   arrive by themselves. Read first of all in `Workspace::new`, before a key hint is drawn;
   removed again when every key is the default. An entry for a command this version does
   not have, fields it does not know and entries it cannot read are kept and written back.
-  `writer_app::keymap::set_changes` installs (and builds the menu bar again);
+  `innerword_app::keymap::set_changes` installs (and builds the menu bar again);
   `Workspace::set_key_changes` installs and stores. Tests use the same two.
 - **The file.** Export (the list's "Export…", the palette, the menu bar; the save panel
-  suggests "The Writer Shortcuts.json") writes every command in every place with its
+  suggests "Inner Word Shortcuts.json") writes every command in every place with its
   title, where it applies, its default keys and its keys: a list of all keys a person can
   read and edit. **The file holds every command, the assistant's too while the assistant
   is not shown**, with the same entries in the same order whatever is shown
@@ -1314,7 +1314,7 @@ document"). Three crates: `writer-keymap` knows what a change is,
   control of the list: `Import…`, `Export…`, `Reset All…`, `Changed Only`),
   `shortcuts:reset` and `shortcuts:undo` do what they say. `menukey:Bold` prints the key
   the real menu bar shows for an item, before and after a change. An export goes to
-  `THE_WRITER_EXPORT_DIR`. A test names the file an "Import…" takes with
+  `INNER_WORD_EXPORT_DIR`. A test names the file an "Import…" takes with
   `workspace::choose_import_file_beforehand`.
 
 ## Zoom
@@ -1323,12 +1323,12 @@ The view of the text is drawn larger or smaller, in flow view and in page view: 
 spacing, indents, the sheets with their margins, shadows and page numbers, all together.
 Nothing of the document changes: text sizes stay what they are in points, nothing is marked
 as edited, undo knows nothing of it, an export is the same. The interface around the text
-does not zoom. Where it lives: `crates/writer-editor/src/zoom.rs` (what a zoom is, setting
-it, keeping the place), `crates/writer-app/src/zoom.rs` (the commands and their keys, the
+does not zoom. Where it lives: `crates/innerword-editor/src/zoom.rs` (what a zoom is, setting
+it, keeping the place), `crates/innerword-app/src/zoom.rs` (the commands and their keys, the
 stored form, how large the display is), `workspace/zoom.rs` (the handlers, the status bar
 item and its menu, storing), `pinch.rs` (the trackpad).
 
-- **What a zoom is** (`writer_editor::Zoom`): a percentage from 50 to 400, "fit width" (the
+- **What a zoom is** (`innerword_editor::Zoom`): a percentage from 50 to 400, "fit width" (the
   sheet, or in flow view the column, as wide as its room), "fit page" (one whole sheet), and
   "fit width up to N %". The three fits follow the window. Zoom in and out step through 50,
   67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400 (`ZOOM_STEPS`), from whatever
@@ -1409,7 +1409,7 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   installs a local monitor for magnify events (and no others: scroll events never reach
   it), which hands each event on untouched after reading how much and where, through a
   channel, to `Workspace::pinch`. The monitor is installed in every run of the real
-  binary; `THE_WRITER_PINCH=off` in the environment keeps it from being installed. **No
+  binary; `INNER_WORD_PINCH=off` in the environment keeps it from being installed. **No
   script can pinch, so no real magnify event has been read by anything but fingers.** What
   stands in for that: a test compares the return types of the seven methods the monitor
   calls (`type`, `window`, `magnification`, `locationInWindow` of `NSEvent`, `windowNumber`
@@ -1448,9 +1448,9 @@ item and its menu, storing), `pinch.rs` (the trackpad).
 ## Printing
 
 "Print…" puts the open document on paper as page view shows it, through the macOS print
-panel. Where it lives: `crates/writer-editor/src/print.rs` (the print pass: the pages as
-data), `crates/writer-print` (the PDF writer, the PDF reader for tests, the print
-operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
+panel. Where it lives: `crates/innerword-editor/src/print.rs` (the print pass: the pages as
+data), `crates/innerword-print` (the PDF writer, the PDF reader for tests, the print
+operation), `crates/innerword-app/src/printing.rs` (the job and where it goes),
 `workspace/print.rs` (the command, the slices, the note, Cancel).
 
 - **What is printed**: the document as it is in the editor at that moment, unsaved text
@@ -1469,7 +1469,7 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
 - **A right-to-left paragraph that wraps** is not laid out right in page view: its rows
   are cut by logical bytes and each paints a stretch of the visual line, so a row can run
   past the edge of the sheet. Paper has the same rows as page view, not other ones
-  (`crates/writer-editor/src/print.rs`, the module docs). Text that runs one way is not
+  (`crates/innerword-editor/src/print.rs`, the module docs). Text that runs one way is not
   affected.
 - **The layout never comes from the window's view.** `Editor::print_pass` takes a copy of
   the document and lays it out with a layout of its own, as page view's branch does, at
@@ -1484,7 +1484,7 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   palette, `:print` in Vim. **No default key** (`cmd-p` is Quick open, `cmd-shift-p` the
   palette, `cmd-opt-p` page view); the user gives it one in "Keyboard shortcuts", where it
   and "Cancel printing" are rows "Anywhere". Only while a document is open.
-- **Export as PDF shares the pass** (`crates/writer-app/src/pdf_export.rs`): the export
+- **Export as PDF shares the pass** (`crates/innerword-app/src/pdf_export.rs`): the export
   picker's "PDF file" (for the document and for its folder), the command "Export as PDF…"
   (palette, File > Export as PDF…, the menu of the title; no key; on an open page it is
   the page's WebKit PDF of `page_export.rs`, and with nothing open it has no handler) make
@@ -1509,19 +1509,19 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   different sizes, so nothing is chosen for the whole), each starting on a new page, the
   page numbers going on through the file (Word does not start again either), its title
   set above it as a heading 1 unless one of its headings or its first line starts with
-  it (`pdf_export::shows_title`, the rule of `writer_export::PartTitles::WhenMissing`,
-  copied because `writer-export` keeps its own to itself; a test holds the two equal
+  it (`pdf_export::shows_title`, the rule of `innerword_export::PartTitles::WhenMissing`,
+  copied because `innerword-export` keeps its own to itself; a test holds the two equal
   through the Markdown export), page breaks at the start of every document but the first
   and at the end of every one but the last left out, as the Word export leaves them out;
   pages of the folder are left out and the toast says so. Measured in the debug build: a
   generated book of 3,000 blocks, 861 pages, 0 rows off, made in 2.2 s in slices
-  (`export=[preparing 35%]` after 0.7 s). `writer-export` has no PDF: the picker's format
+  (`export=[preparing 35%]` after 0.7 s). `innerword-export` has no PDF: the picker's format
   is the app's own (`export::FileFormat`, `Export(ExportFormat)` or `Pdf`).
 - **The seam** (`printing::PrintTarget`, an app global like the spell service):
   `SystemPanel` (the print panel as a sheet on the window; `main` installs it in a launch
   that is not scripted), `Recorder` (tests: `printing::record(cx)` before the workspace
   opens, every job is kept), `Directory` (a scripted run: "<title>.pdf" into
-  `THE_WRITER_EXPORT_DIR`, or a toast that a scripted run has no panel). **Without a
+  `INNER_WORD_EXPORT_DIR`, or a toast that a scripted run has no panel). **Without a
   target a workspace has no Print**: no handler, the menu bar's items greyed out, no item
   in the title's menu. **No test and no scripted run opens the print panel**, and nothing
   but `printing::show_panel` can: only a person can answer it.
@@ -1538,7 +1538,7 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   only while pages are prepared), because a toast's button has no way in from the
   keyboard. **The note does not go while the pages are made**, or the panel would come up
   unannounced: "Dismiss notifications" and a click on the note (which takes any note away)
-  cancel too, and a note pushed out by four newer ones (`writer_ui::toast::MAX_VISIBLE`)
+  cancel too, and a note pushed out by four newer ones (`innerword_ui::toast::MAX_VISIBLE`)
   is shown again as the newest (`Workspace::print_note_went`, which watches the layer: a
   note pushed out leaves it full, one clicked away leaves room).
   While a job is preparing or in the panel a second "Print…" does nothing. A test holds a
@@ -1548,9 +1548,9 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
 - **The sheet is started outside an update**, from the job's task between two awaits
   (`printing::show_panel`): AppKit calls the window's delegate while a sheet comes up, and
   that re-enters GPUI. Its end arrives inside AppKit and only notes the answer and wakes
-  the task (`printing::panel_end`). `show_panel` asks `writer_print::check_selectors`
+  the task (`printing::panel_end`). `show_panel` asks `innerword_print::check_selectors`
   first: a message this macOS does not understand would end the app.
-- **What bites in the print operation** (`writer-print/src/system.rs`; details in
+- **What bites in the print operation** (`innerword-print/src/system.rs`; details in
   `docs/gpui-notes.md`, "Printing"): the selector is
   `printOperationForPrintInfo:scalingMode:autoRotate:` (`scalingMode:`, not `scaleMode:`);
   the scaling is "none" and `NSPrintInfo`'s centering must stay on, only then is the page
@@ -1576,22 +1576,22 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   on a wrapped row (its stop is counted from the start of the line) and a script face's
   contextual forms at the row's ends come out at another width in the right face; those,
   spaces (justification) and the edges of inline code are left out of the comparison. `print:job:<path>` runs the same PDF through the real print operation
-  as a save job (`writer_print::run_save_job`): everything of "Print…" but the panel.
+  as a save job (`innerword_print::run_save_job`): everything of "Print…" but the panel.
   `action:workspace::Print` is the command itself (it writes into the export directory),
   `action:workspace::CancelPrint` right after it on a book stops it; `state` has
   `print=[idle]`, `print=[preparing 40%]`, `print=[panel]`. A PDF export is
   `keys:cmd-shift-s; type:pdf; keys:enter` (or `action:workspace::ExportPdf`), which writes
-  "<title>.pdf" into `THE_WRITER_EXPORT_DIR`, then `export:wait`, which says what was made
+  "<title>.pdf" into `INNER_WORD_EXPORT_DIR`, then `export:wait`, which says what was made
   (the same report as `print:pdf:`); `state` has `export=[idle]`,
   `export=[preparing 40%]`, `export=[writing]`, and `action:workspace::CancelPdfExport`
   stops it.
 
   ```bash
-  THE_WRITER_DATA_DIR=/some/tmp THE_WRITER_SEED_DEMO=1 \
-  THE_WRITER_AUTOMATION="wait:1200; keys:cmd-p; type:chap 2; keys:enter; wait:400; zoom:200; theme:dark; print:pdf:/some/tmp/a.pdf; print:job:/some/tmp/b.pdf; state; quit" \
-  ./target/debug/the-writer
+  INNER_WORD_DATA_DIR=/some/tmp INNER_WORD_SEED_DEMO=1 \
+  INNER_WORD_AUTOMATION="wait:1200; keys:cmd-p; type:chap 2; keys:enter; wait:400; zoom:200; theme:dark; print:pdf:/some/tmp/a.pdf; print:job:/some/tmp/b.pdf; state; quit" \
+  ./target/debug/inner-word
   # a book, in the release build:
-  THE_WRITER_AUTOMATION="wait:1500; book:10000; wait:3000; print:pdf:/some/tmp/book.pdf; action:workspace::Print; stall:1500; state; quit"
+  INNER_WORD_AUTOMATION="wait:1500; book:10000; wait:3000; print:pdf:/some/tmp/book.pdf; action:workspace::Print; stall:1500; state; quit"
   ```
 - **What it costs** (release build, the generated book of 10,000 blocks and 660,000 words,
   measured when printing was added): 2,856 pages and 67,103 rows, 0 rows off, a PDF of
@@ -1613,18 +1613,18 @@ operation), `crates/writer-app/src/printing.rs` (the job and where it goes),
   text, Save as PDF from its PDF menu, a real printer, quitting with the sheet up).
   `run_sheet` was never called by a test or a script; what stands in for it:
   `check_selectors` in a test of the app's own build, the delegate called the way AppKit
-  calls it (`writer-print`), and the same operation run as a save job from a test and
+  calls it (`innerword-print`), and the same operation run as a save job from a test and
   from `print:job:`.
 
 ## Images
 
-A document can hold pictures. Where it lives: `writer-core` (the block),
-`writer-store/src/images` (the bytes, the collector, the copy among the backups),
-`writer-image` (a file made into what is stored), `crates/writer-editor/src/images.rs`
-and `mouse.rs` (drawing, the pointer, the ways in), `writer-editor-tools/src/text_menu.rs`
+A document can hold pictures. Where it lives: `innerword-core` (the block),
+`innerword-store/src/images` (the bytes, the collector, the copy among the backups),
+`innerword-image` (a file made into what is stored), `crates/innerword-editor/src/images.rs`
+and `mouse.rs` (drawing, the pointer, the ways in), `innerword-editor-tools/src/text_menu.rs`
 (the image's menu), `src/image_description.rs` (the description's popover) and
 `src/format_menu.rs` (the image's rows of the format menu),
-`crates/writer-app/src/images.rs` (the provider over the library, the exporters'
+`crates/innerword-app/src/images.rs` (the provider over the library, the exporters'
 pictures, the collector's timers and what it says), `pasteboard.rs`,
 `workspace/images.rs`; for agents "Agents", for the assistant "The assistant", on paper
 "Printing".
@@ -1654,7 +1654,7 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
 - **Where the bytes are.** A document names stored bytes by the first 16 bytes of their
   SHA-256 (`ImageId`, 32 hex digits) and holds what layout needs without them (pixel size,
   density, width): about 130 bytes of JSON per image. The bytes are stored once in
-  `images.db` beside `library.db` (the row of `writer-store` above says why a second file
+  `images.db` beside `library.db` (the row of `innerword-store` above says why a second file
   and what a backup holds). The store never parses a document; it scans stored content for
   one token, `"image":"<32 hex>"` (`Store::referenced_images`): **do not rename that JSON
   key**. `library.db` is at schema 3, so a version that does not know images refuses the
@@ -1663,8 +1663,8 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   names them: the provider's `import` answers with the image only when the write is back,
   an agent's request stores what it brought before it changes the document.
 - **Nothing ever deletes the bytes of an image but the collector**
-  (`writer_store::collect_unused_images`): not an undo, not a purge, not emptying the
-  trash, not the pruning of versions, not the `writer` tool. It runs in the app only
+  (`innerword_store::collect_unused_images`): not an undo, not a purge, not emptying the
+  trash, not the pruning of versions, not the `innerword` tool. It runs in the app only
   (`images::collect_in_background`, started by `main`), in the background, in two halves:
   - **Once per launch at most it deletes**: 20 s after the launch (`images::COLLECT_DELAY`),
     when the last run is a day old (`images.collected_at` in the library's settings). It
@@ -1680,7 +1680,7 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
     named again without the store being asked: an undo brings back an image that was cut
     and saved away, and nothing tells the store.
   - Who else can hold an id and why each is safe is the table at the top of
-    `writer-store/src/images/collect.rs` (the clipboard and an old answer of the assistant
+    `innerword-store/src/images/collect.rs` (the clipboard and an old answer of the assistant
     come in through `touch_image`, which clears the stamp; a backup is safe by the second
     condition). The timers are the app's (`cx.background_executor().timer`): a test drives
     them with its clock.
@@ -1689,7 +1689,7 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   - **After each run the writer is told** what the store reported, in a note that stays
     twelve seconds: a copy of the pictures among the backups that could not be brought up
     to date (once a launch; stderr every time), and each damaged file of pictures the store
-    set aside (`writer_store::images_moved_aside`; once for each file, by its path, with
+    set aside (`innerword_store::images_moved_aside`; once for each file, by its path, with
     "Show in Finder"; the setting `images.moved_aside_told` keeps the ones told of that are
     still there). One set aside by a read in between is told of at the next run.
 - **A missing picture.** A document can name an image the library does not have. The block
@@ -1698,21 +1698,21 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   writes the block as it was, exports write the description, a print its box, agents read
   the line. A picture that is only in `backups/images.db` is found there and written back
   (`ImageFile`): a library whose `images.db` was lost shows its pictures again.
-- **The provider seam** (`writer_editor::ImageProvider`, set per editor;
+- **The provider seam** (`innerword_editor::ImageProvider`, set per editor;
   `Editor::has_image_provider`). The editor does not know the library. Its provider hands
   out the stored bytes of an image (`bytes`), stores what the user chose, pasted or
   dropped (`import`), asks for files (`choose`), looks at the pasteboard (`pasteboard`) and
   is told when ids came in from outside, with a pasted fragment (`touch`). Without one
   every image is a placeholder and nothing can be inserted: compact editors (a comment
   being written) and the editors of the assistant's answers have none.
-  `writer_editor::FakeImages` is the provider for the tests of every crate that shows an
+  `innerword_editor::FakeImages` is the provider for the tests of every crate that shows an
   editor (pictures in memory, `hold` / `release` for one that is on its way, the "panel"
   and the "pasteboard" answered beforehand). The app's is `images::LibraryImages`, and
   the app's own tests use it, not the fake.
 - **Nothing large on the main thread** (`images::LibraryImages`). For a library on disk the
-  provider has a connection of its own to `images.db` (`writer_store::ImageFile`, behind a
+  provider has a connection of its own to `images.db` (`innerword_store::ImageFile`, behind a
   mutex that only background tasks lock): the bytes of a picture are read there, and a new
-  picture is read from its file, converted (`writer_image::prepare`), hashed and written
+  picture is read from its file, converted (`innerword_image::prepare`), hashed and written
   there (up to 16 MB with a sync), and only then does the block appear. A library in
   memory (tests) has one connection and does the same at once. A print reads its pictures
   the same way before its first slice. **What still runs on the main thread**: an agent's
@@ -1723,11 +1723,11 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
   have brought their bytes: an agent's change, a restored version, a picture stored
   through the provider (`Editor::images_changed`; `LibraryImages::on_stored`).
 - **A file that cannot be used** says so in a toast, in the words of
-  `writer_image::PrepareError::sentence` about the file's name, or about "The picture on
+  `innerword_image::PrepareError::sentence` about the file's name, or about "The picture on
   the clipboard": three files of one gesture by name, the rest counted ("2 more files
   could not be used."). A gesture is told from the next by the app's clock
   (`cx.background_executor().now()`, so a test decides).
-- **Formats and limits** are `writer_image::prepare`'s: a PNG, a JPEG or a GIF that is
+- **Formats and limits** are `innerword_image::prepare`'s: a PNG, a JPEG or a GIF that is
   upright, at most 4096 pixels on its long edge and 16 MB and carries no GPS position is
   stored as it came, byte for byte, so the same file twice is stored once. HEIC, TIFF,
   BMP, WebP and AVIF are converted (JPEG, or PNG when transparent), a larger picture is
@@ -1792,9 +1792,9 @@ pictures, the collector's timers and what it says), `pasteboard.rs`,
 - **Scripted runs**: `image:<path>` inserts a file (the open panel is never opened),
   `image:select:<n>` selects, `state` says `images=N` and what the selected image is; the
   rest is keys (`keys:cmd-shift-.`, `keys:alt-up`, `keys:backspace`,
-  `keys:ctrl-enter; choose:Description…`), an export into `THE_WRITER_EXPORT_DIR` and
+  `keys:ctrl-enter; choose:Description…`), an export into `INNER_WORD_EXPORT_DIR` and
   `print:pdf:`. There are no pointer steps in the app (the editor's demo has them:
-  `cargo run -p writer-editor --example demo`).
+  `cargo run -p innerword-editor --example demo`).
 - **Not in this version**: captions, cropping, text that wraps around a picture, a change
   of an image's size by an agent, removing a description through an agent's Markdown (an
   empty alt text keeps the old one). A selection of text and pictures pasted into another
@@ -1816,15 +1816,15 @@ in a WebKit view in the window and working **offline for good**: everything it n
 downloaded once, when it is added, and stored; showing it never touches the network. A page
 that cannot be kept whole is not kept at all, and the reason names what is missing. The
 design, with its reasons and its review, is `docs/pages-design.md`. Where it lives:
-`writer-store` (the row and the files), `writer-page` (the bundler), `writer-web` (WebKit),
-`writer-agent` / `writer-cli` / `writer-mcp` (agents, "Agents"), `crates/writer-app/src/pages.rs`
+`innerword-store` (the row and the files), `innerword-page` (the bundler), `innerword-web` (WebKit),
+`innerword-agent` / `innerword-cli` / `innerword-mcp` (agents, "Agents"), `crates/innerword-app/src/pages.rs`
 (the page engine, the page source, the seams of the import), `workspace/page.rs` (the open
 page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app),
 `page_export.rs` (its export).
 
 - **In the library**: a row of `documents` with `kind = 'page'` (schema 4), in the tree among
   the documents with a globe on its row, in the trash, the versions, the search (its text)
-  and quick open like a document. Its content is the manifest (`writer_page::Manifest`: the
+  and quick open like a document. Its content is the manifest (`innerword_page::Manifest`: the
   served files and the original ones by path, file id and media type, the pieces fetched
   from the web, the source address, a fingerprint of the input, when it was taken, what the
   check found, and the text the page showed). Its files are in `images.db`, table `files`,
@@ -1835,7 +1835,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   kinds never save over each other (`WrongKind`). The title is the page's `document.title`
   after its scripts ran, else its first `<h1>`, else the name of the file or folder; a
   rename sets the flag of a chosen title, which an update keeps.
-- **Whole or nothing** (`writer_page::bundle`, then the check, then `prepare`): every
+- **Whole or nothing** (`innerword_page::bundle`, then the check, then `prepare`): every
   reference of the HTML, SVG, CSS and JS is found and every piece on the web is fetched once
   (`curl`, public addresses only, redirects followed and checked hop by hop, 30 s an
   address, 180 s a page) and stored under `_external/<host>/…`, the references rewritten to
@@ -1853,11 +1853,11 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   answers some `/l/font?kit=…` addresses with `text/html` for WOFF2 bytes, and 0.8.0 stored
   those fonts as HTML files of the page, whose bytes the check read as text):
   `bundle.rs`, `what_a_piece_is`, takes the type from the bytes' signature first
-  (`writer_page::sniffed_type`: fonts, pictures, sound, film), then from where the page names
+  (`innerword_page::sniffed_type`: fonts, pictures, sound, film), then from where the page names
   the piece (a `url()` of `@font-face` and a preload as a font are never text; a script, a
   style sheet) and its ending, and the header only where those say nothing against it; bytes
   that are no text are never HTML, also for a file of the page (`served_type`) and when
-  writer-web serves a stored one. **A piece from the web is never a document of the page**:
+  innerword-web serves a stored one. **A piece from the web is never a document of the page**:
   only the entry and the page's own HTML files are loaded by the check and read for text
   (`Bundle::html_paths`, `write_served_dir`). What is not fetched and is no reason (an
   address in a string, `window.claude`) is a warning. Limits: 32 MB a file, 64 MB a page,
@@ -1867,7 +1867,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   tag after a word, a chip, the gutter of a listing, the labels of an axis: each junction
   is measured and marked before `innerText` is read, only white space is added). The text
   is that of every HTML file of the page the check loads (the entry first, the others under
-  their titles; never a piece from the web), so the words a page counts (status bar, `writer list`) can be many more than
+  their titles; never a piece from the web), so the words a page counts (status bar, `innerword list`) can be many more than
   the entry shows (Nimbus Landing Variants: 54,000 words, of which 6,900 in its
   `index.html`), and a search can find a page by a word only another of its HTML files
   has. `page:make` stores the static check's text (tags stripped, every file), whose
@@ -1898,7 +1898,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   opens a dialog of the modal layer with every page and its whole sentence, and Copy (`tab`
   goes from page to page, `escape` closes). The app's import gives no source address:
   importing a file again is a new page.
-- **Isolation** (`writer-web`, docs/pages-design.md section 5): the scheme `writer-page`,
+- **Isolation** (`innerword-web`, docs/pages-design.md section 5): the scheme `innerword-page`,
   each page its own host, **its id and the moment its row was made**
   (`page-12-1731600000000`, `pages::page_host`): the views of a run share one store of
   website data, kept per origin, and SQLite gives the id of a page erased for good to the
@@ -1911,7 +1911,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   `WKWebsiteDataStore _initWithConfiguration:`; without it WebKit looks up and connects to
   the host of a link a script clicks, DNS, TCP and TLS, before the policy refuses the
   navigation: a channel out of an offline page). All of these are private and required: a
-  macOS without them has no pages (`writer_web::check_selectors`, `selectors.rs`; trimming
+  macOS without them has no pages (`innerword_web::check_selectors`, `selectors.rs`; trimming
   that list drops the guard). Navigation away, forms, downloads, new windows,
   autoplay, AirPlay, camera, microphone, link previews and the inspector are off; storage
   lasts while the app runs (one non-persistent data store); no bridge to the app. **A link
@@ -1922,12 +1922,12 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   page's own origin, shadow trees and SVG links), within a second of the reader's click or
   key, once per act; or "Open Link in Browser" of its menu. A script's click opens nothing,
   also not one in a listener of the reader's click or key that clicks another link
-  (`writer_web::policy::reader_opened`; before the review's fix, ISO-4, any click or key
+  (`innerword_web::policy::reader_opened`; before the review's fix, ISO-4, any click or key
   opened the gate for a second for whatever link a script clicked). An `<area>` of an image map is not found that way (the
   point is the picture's) and does not open. `alert` is a toast "The page says: …". The rule list is compiled into
-  `<data directory>/WebKit/` (the tool's children: `$TMPDIR/the-writer-<uid>/WebKit/`) under
+  `<data directory>/WebKit/` (the tool's children: `$TMPDIR/inner-word-<uid>/WebKit/`) under
   one fixed identifier, never into WebKit's default store.
-- **macOS 12.3 for pages.** `writer_web::available()` asks the version and every selector it
+- **macOS 12.3 for pages.** `innerword_web::available()` asks the version and every selector it
   sends; when it fails there is no page engine: a page shows its text with the sentence, and
   nothing can be added (the app keeps its floor of 10.15.7 for documents).
 - **The open page** (`workspace/page.rs`): `Workspace::session` is `None` and
@@ -1961,17 +1961,17 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   (`Workspace::page_title_of`, the old title kept among the keywords). Print is WebKit's print
   of the view through the same print target; Export writes the served files as a folder
   that opens offline, or a PDF; the version history shows a version's text and restores it.
-- **Agents' pages** (`writer page add`, `add_page`, "Agents"): prepared and checked by the
+- **Agents' pages** (`innerword page add`, `add_page`, "Agents"): prepared and checked by the
   tool, never by the app. While the app is open the request carries the files as base64
   (protocol 3, one page a request, 64 MB at most) and **the thread that accepts it stores
-  them before the request is queued** (`writer_agent::live::store_page_files`, through an
+  them before the request is queued** (`innerword_agent::live::store_page_files`, through an
   `ImageFile` of its own), so the main thread writes only the row (about a millisecond for
   16 MB, "Build and test"). That thread knows the owner's switch (`live::set_switch`, from
   the setting whenever it is read or changed): with it off a request with page files is
   refused there at once and nothing is stored. The note: "Claude added “X”" (Open), "Claude
   updated “X”" (the open page reloads; no button).
 - **The page engine** (`pages::PageEngine`, an app global like the print target):
-  `WebKit` in every run of the real binary unless `THE_WRITER_PAGES=off` or
+  `WebKit` in every run of the real binary unless `INNER_WORD_PAGES=off` or
   `available()` fails; `Fake` in tests (`pages::use_fake`: a GPUI element draws the page's
   text, the check answers with `static_check` or what `FakePages::set_check` left, and the
   fake records what the view was asked: opened, finds, zoom, snapshots made and dropped,
@@ -1996,7 +1996,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   `loading="lazy"` far down a page printed offscreen (`__page-pdf`): the probe that makes
   it eager is the check's only.
 - **The tests that reach the internet** are ignored and run on purpose only:
-  `CARGO_TARGET_DIR=target-pure cargo test -p writer-page -- --ignored archive` bundles
+  `CARGO_TARGET_DIR=target-pure cargo test -p innerword-page -- --ignored archive` bundles
   every original of the archive with the real fetcher and finds every piece the archive
   has (read only). The font files of Google Fonts are not compared by address (its style
   sheets name other files as time goes on, even moving a family between `/s/<family>/`
@@ -2007,7 +2007,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
-- **The menu bar** (`crates/writer-app/src/menus.rs`) is the complete map: The Writer (with
+- **The menu bar** (`crates/innerword-app/src/menus.rs`) is the complete map: Inner Word (with
   the keyboard shortcuts: the list, import, export, reset all), File (Export…, Export as
   PDF… and Cancel PDF Export, Print… and Cancel Printing), Edit (with Spelling), Format (with Turn Into, Align and Image), Insert (with Image…), View (with
   Theme), Help. While the
@@ -2016,12 +2016,12 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   is an existing action; it is enabled when the action has a handler on the way from the
   keyboard. GPUI's menu items carry no state, so the check mark of "Check Spelling While
   Typing" is set on the native item (`menus::set_check_mark`, only in the real app).
-- **Context menus** are `writer_ui::ContextMenu`: one widget, drawn by the toast layer, which
+- **Context menus** are `innerword_ui::ContextMenu`: one widget, drawn by the toast layer, which
   never takes the keyboard. A right-click, `ctrl-enter` or a small "more" control opens one.
-  A menu is composed where its object lives: the text menu in `writer-editor-tools` (the
-  editor only emits `EditorEvent::ContextMenuRequested`), library rows in `writer-library`,
-  comment threads in `writer-comments`, the Vim chip in `writer-vim-mode`, text fields in
-  `writer-ui`. Each offers a hook through which the app adds its items
+  A menu is composed where its object lives: the text menu in `innerword-editor-tools` (the
+  editor only emits `EditorEvent::ContextMenuRequested`), library rows in `innerword-library`,
+  comment threads in `innerword-comments`, the Vim chip in `innerword-vim-mode`, text fields in
+  `innerword-ui`. Each offers a hook through which the app adds its items
   (`Workspace::extend_the_menus_of_other_crates`: Add Comment and Go to Comment in the text
   menu, and Ask the Assistant while the assistant is shown; Export and Version History on
   library rows, Copy Page Address and Open Page Address in Browser on the row of a page with
@@ -2052,7 +2052,7 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   Browser" on a link); the title's chevron and the status bar's zoom have the page's menus;
   `.html` files and folders dropped on the sidebar, a page or the text are added
   ("Pages"); File > Import Page… opens the open panel.
-- **The format bar** (`crates/writer-editor-tools/src/format_bar.rs`) comes up 150 ms after
+- **The format bar** (`crates/innerword-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),
   the app's "Add Comment" and, while the assistant is shown, "Ask the Assistant"
@@ -2060,7 +2060,7 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   (the format menu). Each button runs what its key runs and keeps
   the selection and the bar. `editor.format_bar` (the "Format bar" switch in the settings)
   turns it off through `EditorTools::set_format_bar_enabled`. It is not a `ToolKind`.
-- **The app's own menus** (`crates/writer-app/src/workspace/menus.rs`): the title above the
+- **The app's own menus** (`crates/innerword-app/src/workspace/menus.rs`): the title above the
   text (right-click, or the chevron beside it) and the items of the status bar (the save
   state, the counts, the page indicator, the character limit, the zoom; a click or a
   right-click).

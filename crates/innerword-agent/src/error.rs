@@ -1,0 +1,978 @@
+//! The one error type of the command layer.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+/// What kind of thing a request referred to.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    /// A document.
+    Document,
+    /// A folder.
+    Folder,
+    /// A version (snapshot) of a document.
+    Version,
+    /// A comment thread.
+    Comment,
+    /// A reply in a comment thread.
+    Reply,
+    /// A heading inside a document.
+    Heading,
+}
+
+impl ItemKind {
+    /// The word for it in a message: `"document"`, `"folder"`, `"version"`, `"comment"`,
+    /// `"reply"`, `"heading"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ItemKind::Document => "document",
+            ItemKind::Folder => "folder",
+            ItemKind::Version => "version",
+            ItemKind::Comment => "comment",
+            ItemKind::Reply => "reply",
+            ItemKind::Heading => "heading",
+        }
+    }
+}
+
+impl std::fmt::Display for ItemKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// One of several things a name could mean, in an [`Error::Ambiguous`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Candidate {
+    /// What it is.
+    pub kind: ItemKind,
+    /// Its id (for a heading: its number among the headings that matched, from 1).
+    pub id: i64,
+    /// Where it is: the library path of a document or folder, the headings above a
+    /// heading.
+    pub path: String,
+    /// Whether it is in the trash.
+    #[serde(default)]
+    pub trashed: bool,
+}
+
+/// One place where a piece of text was found, in an [`Error::NotUnique`] and in
+/// [`FindResults`](crate::FindResults).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Occurrence {
+    /// Its number among the occurrences in the document, from 1. Pass it as `occurrence`
+    /// to choose this one.
+    pub occurrence: usize,
+    /// The index of the block it starts in, from 0.
+    pub block: usize,
+    /// The nearest heading above it, when there is one.
+    pub heading: Option<String>,
+    /// The line it is on, shortened around the match.
+    pub context: String,
+    /// Whether it runs across an image without naming it (the text before the image and
+    /// the text after it, with the empty line of the image between them). A comment can
+    /// be anchored there; an edit refuses to replace it, because the image would go with
+    /// the text. Naming the image as it reads in Markdown makes it part of the match.
+    #[serde(default)]
+    pub across_image: bool,
+}
+
+/// The kinds of failure, without their details: what an exit code or a `code` field tells
+/// apart. See [`Error::kind`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+    /// Something else went wrong: the database, the file system.
+    Failed,
+    /// The request itself is wrong: an empty name, a field that is missing, two that
+    /// exclude each other.
+    Invalid,
+    /// Nothing has that id or name.
+    NotFound,
+    /// A name fits several items.
+    Ambiguous,
+    /// The app has the library open and did not make the change (it is a version that
+    /// takes none, changes by agents are switched off, it did not answer).
+    AppIsOpen,
+    /// The text to replace or to comment on does not occur in the document.
+    NoMatch,
+    /// The text to replace or to comment on occurs several times.
+    NotUnique,
+    /// A permanent deletion was asked for without the field that confirms it.
+    ConfirmationRequired,
+    /// The item is in the trash, or is not, and the operation needs the opposite.
+    WrongState,
+    /// There is no library at that place.
+    LibraryNotFound,
+    /// Another tool is writing to the library and did not finish in time.
+    Busy,
+    /// The file an export would write exists already.
+    FileExists,
+    /// The stored content of the document cannot be read as a document.
+    Unreadable,
+    /// A page cannot be kept whole: something it needs could not be fetched, or it asks
+    /// for something that cannot be kept (data from a service, an embedded site). Nothing
+    /// was saved.
+    PageIncomplete,
+    /// A text operation on a page (a page cannot be edited), or a page operation on a
+    /// text.
+    WrongKind,
+}
+
+impl ErrorKind {
+    /// Every kind, in the order of their exit codes.
+    pub const ALL: [ErrorKind; 15] = [
+        ErrorKind::Failed,
+        ErrorKind::Invalid,
+        ErrorKind::NotFound,
+        ErrorKind::Ambiguous,
+        ErrorKind::AppIsOpen,
+        ErrorKind::NoMatch,
+        ErrorKind::NotUnique,
+        ErrorKind::ConfirmationRequired,
+        ErrorKind::WrongState,
+        ErrorKind::LibraryNotFound,
+        ErrorKind::Busy,
+        ErrorKind::FileExists,
+        ErrorKind::Unreadable,
+        ErrorKind::PageIncomplete,
+        ErrorKind::WrongKind,
+    ];
+
+    /// A short stable name for machine-readable output: `"failed"`, `"invalid"`,
+    /// `"not_found"`, `"ambiguous"`, `"app_is_open"`, `"no_match"`, `"not_unique"`,
+    /// `"confirmation_required"`, `"wrong_state"`, `"library_not_found"`, `"busy"`,
+    /// `"file_exists"`, `"unreadable"`, `"page_incomplete"`, `"wrong_kind"`.
+    pub fn code(self) -> &'static str {
+        match self {
+            ErrorKind::Failed => "failed",
+            ErrorKind::Invalid => "invalid",
+            ErrorKind::NotFound => "not_found",
+            ErrorKind::Ambiguous => "ambiguous",
+            ErrorKind::AppIsOpen => "app_is_open",
+            ErrorKind::NoMatch => "no_match",
+            ErrorKind::NotUnique => "not_unique",
+            ErrorKind::ConfirmationRequired => "confirmation_required",
+            ErrorKind::WrongState => "wrong_state",
+            ErrorKind::LibraryNotFound => "library_not_found",
+            ErrorKind::Busy => "busy",
+            ErrorKind::FileExists => "file_exists",
+            ErrorKind::Unreadable => "unreadable",
+            ErrorKind::PageIncomplete => "page_incomplete",
+            ErrorKind::WrongKind => "wrong_kind",
+        }
+    }
+
+    /// The exit code a command line front end gives for this kind of failure: 1
+    /// [`Failed`](ErrorKind::Failed), 2 [`Invalid`](ErrorKind::Invalid), 3
+    /// [`NotFound`](ErrorKind::NotFound), 4 [`Ambiguous`](ErrorKind::Ambiguous), 5
+    /// [`AppIsOpen`](ErrorKind::AppIsOpen), 6 [`NoMatch`](ErrorKind::NoMatch), 7
+    /// [`NotUnique`](ErrorKind::NotUnique), 8
+    /// [`ConfirmationRequired`](ErrorKind::ConfirmationRequired), 9
+    /// [`WrongState`](ErrorKind::WrongState), 10
+    /// [`LibraryNotFound`](ErrorKind::LibraryNotFound), 11 [`Busy`](ErrorKind::Busy), 12
+    /// [`FileExists`](ErrorKind::FileExists), 13 [`Unreadable`](ErrorKind::Unreadable), 14
+    /// [`PageIncomplete`](ErrorKind::PageIncomplete), 15
+    /// [`WrongKind`](ErrorKind::WrongKind). Never 0.
+    pub fn exit_code(self) -> u8 {
+        match self {
+            ErrorKind::Failed => 1,
+            ErrorKind::Invalid => 2,
+            ErrorKind::NotFound => 3,
+            ErrorKind::Ambiguous => 4,
+            ErrorKind::AppIsOpen => 5,
+            ErrorKind::NoMatch => 6,
+            ErrorKind::NotUnique => 7,
+            ErrorKind::ConfirmationRequired => 8,
+            ErrorKind::WrongState => 9,
+            ErrorKind::LibraryNotFound => 10,
+            ErrorKind::Busy => 11,
+            ErrorKind::FileExists => 12,
+            ErrorKind::Unreadable => 13,
+            ErrorKind::PageIncomplete => 14,
+            ErrorKind::WrongKind => 15,
+        }
+    }
+}
+
+/// Everything that can go wrong in the command layer. The message of each variant
+/// ([`std::fmt::Display`]) is written for whoever asked: it says what happened and, where
+/// there is one, what to do next.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The request itself is wrong.
+    #[error("{message}")]
+    Invalid {
+        /// What is wrong with it.
+        message: String,
+    },
+    /// Nothing has that id or name.
+    #[error("{}", not_found_message(*.kind, .reference, .hint.as_deref()))]
+    NotFound {
+        /// What was looked for.
+        kind: ItemKind,
+        /// The id or name that was given.
+        reference: String,
+        /// Something that helps to find the right one (the headings a document does have,
+        /// for example).
+        hint: Option<String>,
+    },
+    /// A name fits several items. The candidates carry the ids to choose with.
+    #[error("{}", ambiguous_message(*.kind, .reference, .candidates))]
+    Ambiguous {
+        /// What was looked for.
+        kind: ItemKind,
+        /// The name that was given.
+        reference: String,
+        /// Everything it fits.
+        candidates: Vec<Candidate>,
+    },
+    /// The app has the library open and did not make the change. While the app is open a
+    /// change is carried out by the app ([`crate::live`]); `why` says what stood in the way
+    /// this time, and the message says what to do about it. Reading works while the app is
+    /// open.
+    #[error("{}", app_is_open_message(*.pid, .why))]
+    AppIsOpen {
+        /// The app's process id, when the lock file names it.
+        pid: Option<u32>,
+        /// The data directory it has open.
+        data_dir: PathBuf,
+        /// Why the change was not made.
+        why: Refusal,
+    },
+    /// A failure the app reported for an operation it carried out, which does not
+    /// travel as the error it was: its database, a file, a kind of failure from a newer
+    /// version.
+    #[error("{message}")]
+    InApp {
+        /// The kind of failure the app named.
+        kind: ErrorKind,
+        /// What the app said.
+        message: String,
+    },
+    /// Another tool is writing to the library and did not finish in time.
+    #[error(
+        "another tool is writing to this library{} and did not finish in time; try again",
+        .pid.map(|pid| format!(" (process {pid})")).unwrap_or_default()
+    )]
+    Busy {
+        /// Its process id, when the lock file names it.
+        pid: Option<u32>,
+    },
+    /// The text to replace or to comment on does not occur in the document.
+    #[error("{}", no_match_message(.text, .hint.as_deref()))]
+    NoMatch {
+        /// The text that was looked for.
+        text: String,
+        /// What might have gone wrong.
+        hint: Option<String>,
+    },
+    /// The text to replace or to comment on occurs several times, and the request did not
+    /// say which one (`occurrence`) or all of them (`all`).
+    #[error("{}", not_unique_message(.text, *.count, .occurrences))]
+    NotUnique {
+        /// The text that was looked for.
+        text: String,
+        /// How many times it occurs.
+        count: usize,
+        /// The first occurrences, each with its number and the line it is on.
+        occurrences: Vec<Occurrence>,
+    },
+    /// A permanent deletion was asked for without the field that confirms it. Nothing was
+    /// deleted.
+    #[error(
+        "{what} would be deleted for good, with every version of it. Nothing was deleted: \
+         confirm with the explicit \"permanently\" option, or move it to the trash instead."
+    )]
+    ConfirmationRequired {
+        /// What would have been deleted.
+        what: String,
+    },
+    /// The item is in the trash and the operation needs a live one.
+    #[error("the {kind} {name} (id {id}) is in the trash; restore it first")]
+    InTrash {
+        /// What it is.
+        kind: ItemKind,
+        /// Its id.
+        id: i64,
+        /// Its title or name, quoted.
+        name: String,
+    },
+    /// The item is not an entry of the trash: it is not trashed, or it went to the trash
+    /// together with its folder and comes back with that folder.
+    #[error("{}", not_in_trash_message(*.kind, *.id, .name, .inside.as_deref()))]
+    NotInTrash {
+        /// What it is.
+        kind: ItemKind,
+        /// Its id.
+        id: i64,
+        /// Its title or name, quoted.
+        name: String,
+        /// The trashed folder it is part of, when that is why.
+        inside: Option<String>,
+    },
+    /// There is no library at that place (reading never creates one).
+    #[error(
+        "there is no library at {}. Inner Word creates it the first time it runs; a library \
+         in another place is named with the data directory option or INNER_WORD_DATA_DIR.",
+        .path.display()
+    )]
+    LibraryNotFound {
+        /// The database file that was looked for.
+        path: PathBuf,
+    },
+    /// The stored content of a document cannot be read as a document (it is damaged, or
+    /// written by a newer version). It was left alone.
+    #[error("the document {name} (id {id}) cannot be read: {reason}. It was left as it is.")]
+    Unreadable {
+        /// The document's id.
+        id: i64,
+        /// Its title, quoted.
+        name: String,
+        /// Why.
+        reason: String,
+    },
+    /// The file an export would write exists already.
+    #[error("{} exists already; choose another path or ask for it to be overwritten", .path.display())]
+    FileExists {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The library was last written by an older version of the app, and the app has it
+    /// open, so it could not be brought up to date for reading.
+    #[error(
+        "the library at {} was written by an older version of Inner Word (schema {found}, \
+         this tool reads {supported}) and is in use. Quit Inner Word and run this again.",
+        .path.display()
+    )]
+    OutdatedLibrary {
+        /// The database file.
+        path: PathBuf,
+        /// The schema version found in it.
+        found: i64,
+        /// The schema version this build reads.
+        supported: i64,
+    },
+    /// A file could not be read or written.
+    #[error("{}: {source}", .path.display())]
+    Io {
+        /// The file or directory.
+        path: PathBuf,
+        /// What the system said.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The library reported an error.
+    #[error(transparent)]
+    Store(innerword_store::StoreError),
+    /// The pictures an export needs could not be read from the library (`images.db` is
+    /// damaged, busy past its timeout, or of a newer version). Nothing was written: a file
+    /// without its pictures is not exported as if it were whole.
+    #[error(
+        "the pictures of this export could not be read from the library ({source}), so \
+         nothing was written; try again in a moment"
+    )]
+    Pictures {
+        /// What the library said.
+        source: innerword_store::StoreError,
+    },
+    /// A page cannot be kept whole: each problem names a piece and why (something it
+    /// needs could not be fetched, it asks for something that cannot be kept, it is over
+    /// a limit). Nothing was saved.
+    #[error("{}", page_incomplete_message(.name, .problems))]
+    PageIncomplete {
+        /// The page's name as it would have been shown (its title, else the name of its
+        /// file or folder), without quotation marks.
+        name: String,
+        /// Why, one problem per piece, in the order they were found.
+        problems: Vec<innerword_page::Problem>,
+    },
+    /// A text operation on a page (a page is kept as it was saved, and its text cannot
+    /// be changed), an export of a page in a format of a text, or a page operation on a
+    /// text.
+    #[error("{}", wrong_kind_message(.name, *.is_page, *.export))]
+    WrongKind {
+        /// The item's id.
+        id: i64,
+        /// Its title, quoted.
+        name: String,
+        /// Whether the item is a page (and the operation was one for a text).
+        is_page: bool,
+        /// Whether the operation was an export (of a page as Markdown or DOCX), which
+        /// changes nothing and is answered with the formats a page has.
+        export: bool,
+    },
+    /// Something else went wrong, said in words: pages cannot be checked here, the page
+    /// could not be checked (no window server, WebKit gone), a PDF could not be made.
+    #[error("{message}")]
+    Failed {
+        /// What happened.
+        message: String,
+    },
+}
+
+impl Error {
+    /// Which kind of failure this is.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Error::Invalid { .. } => ErrorKind::Invalid,
+            Error::NotFound { .. } => ErrorKind::NotFound,
+            Error::Ambiguous { .. } => ErrorKind::Ambiguous,
+            Error::AppIsOpen { .. } => ErrorKind::AppIsOpen,
+            Error::Busy { .. } => ErrorKind::Busy,
+            Error::NoMatch { .. } => ErrorKind::NoMatch,
+            Error::NotUnique { .. } => ErrorKind::NotUnique,
+            Error::ConfirmationRequired { .. } => ErrorKind::ConfirmationRequired,
+            Error::InTrash { .. } | Error::NotInTrash { .. } => ErrorKind::WrongState,
+            Error::LibraryNotFound { .. } => ErrorKind::LibraryNotFound,
+            Error::Unreadable { .. } => ErrorKind::Unreadable,
+            Error::FileExists { .. } => ErrorKind::FileExists,
+            Error::OutdatedLibrary { .. } => ErrorKind::AppIsOpen,
+            Error::InApp { kind, .. } => *kind,
+            Error::Io { .. } | Error::Store(_) | Error::Pictures { .. } | Error::Failed { .. } => {
+                ErrorKind::Failed
+            }
+            Error::PageIncomplete { .. } => ErrorKind::PageIncomplete,
+            Error::WrongKind { .. } => ErrorKind::WrongKind,
+        }
+    }
+
+    /// The short stable name of the kind of failure ([`ErrorKind::code`]).
+    pub fn code(&self) -> &'static str {
+        self.kind().code()
+    }
+
+    /// The exit code for a command line front end ([`ErrorKind::exit_code`]).
+    pub fn exit_code(&self) -> u8 {
+        self.kind().exit_code()
+    }
+
+    /// The failure as data, for a front end that answers in JSON.
+    pub fn report(&self) -> ErrorReport {
+        let (candidates, occurrences) = match self {
+            Error::Ambiguous { candidates, .. } => (candidates.clone(), Vec::new()),
+            Error::NotUnique { occurrences, .. } => (Vec::new(), occurrences.clone()),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let refusal = match self {
+            Error::AppIsOpen { why, .. } => Some(why.clone()),
+            _ => None,
+        };
+        ErrorReport {
+            code: self.code().to_string(),
+            message: self.to_string(),
+            candidates,
+            occurrences,
+            nothing_changed: refusal.as_ref().map(Refusal::nothing_changed),
+            refusal,
+        }
+    }
+
+    /// An [`Error::Invalid`] with this message.
+    pub fn invalid(message: impl Into<String>) -> Error {
+        Error::Invalid {
+            message: message.into(),
+        }
+    }
+
+    /// An [`Error::Failed`] with this message.
+    pub fn failed(message: impl Into<String>) -> Error {
+        Error::Failed {
+            message: message.into(),
+        }
+    }
+
+    /// The error of the command layer for a failure to make a page, in the words of
+    /// `innerword-page` (which this crate wraps and does not reword).
+    pub fn of_page(error: innerword_page::PageError) -> Error {
+        use innerword_page::PageError;
+        match error {
+            PageError::Input { message } => Error::Invalid { message },
+            PageError::Incomplete { name, problems } => Error::PageIncomplete { name, problems },
+            error @ (PageError::CheckFailed { .. } | PageError::Unreadable { .. }) => {
+                Error::failed(error.sentence())
+            }
+            PageError::Io { path, error } if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Error::FileExists { path }
+            }
+            // A file the request names that is not there: the request's mistake, said in
+            // the bundler's words.
+            PageError::Io { path, error } if error.kind() == std::io::ErrorKind::NotFound => {
+                Error::Invalid {
+                    message: PageError::Io { path, error }.sentence(),
+                }
+            }
+            PageError::Io { path, error } => Error::Io {
+                path,
+                source: error,
+            },
+        }
+    }
+}
+
+impl From<innerword_page::PageError> for Error {
+    fn from(error: innerword_page::PageError) -> Error {
+        Error::of_page(error)
+    }
+}
+
+impl From<innerword_store::StoreError> for Error {
+    fn from(error: innerword_store::StoreError) -> Error {
+        Error::Store(error)
+    }
+}
+
+/// Why the app that has the library open did not make a change: the `why` of an
+/// [`Error::AppIsOpen`].
+///
+/// The first group is what the app itself answers ([`crate::live::Answer::refused`]); the
+/// second is what the tool finds out on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "why", rename_all = "snake_case")]
+pub enum Refusal {
+    /// The owner switched "Agents can make changes while Inner Word is open" off.
+    SwitchedOff,
+    /// Text is being composed with an input method, and the composition did not end in
+    /// the few seconds the app waits for it. A composition is never broken.
+    Composing,
+    /// The open document could not be saved before the change.
+    CouldNotSave {
+        /// What went wrong.
+        message: String,
+    },
+    /// The app is quitting. The tool waits for it to be gone and writes directly then, so
+    /// this reaches an agent only when the app does not go away.
+    Quitting,
+    /// The app has no window that shows this library (it shows the window that says the
+    /// library cannot be opened).
+    NoLibrary,
+    /// The app got to the request only after the tool had stopped waiting for it, and
+    /// did not carry it out.
+    TooLate,
+
+    /// The app is a version from before the channel existed (before 0.6.0), or could not
+    /// open one: its lock file names none.
+    OldVersion,
+    /// Nobody listens where the app said it does.
+    NotListening,
+    /// The app did not take the request up within this many seconds. Nothing was changed.
+    NoAnswer {
+        /// How long the tool waited.
+        seconds: u64,
+    },
+    /// The app took the request up and no answer came within this many seconds: whether
+    /// the change was made is not known.
+    Unanswered {
+        /// How long the tool waited.
+        seconds: u64,
+    },
+    /// The connection ended before the answer was there, or the answer cannot be read:
+    /// whether the change was made is not known.
+    AnswerLost,
+    /// The app and the tool speak different versions of the channel.
+    Protocol {
+        /// The version of the channel the app speaks.
+        app: u32,
+        /// The version this tool speaks.
+        tool: u32,
+    },
+    /// A reason a newer app gave that this version of the tool does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+impl Refusal {
+    /// Whether it is certain that nothing was changed. False for
+    /// [`Refusal::Unanswered`] and [`Refusal::AnswerLost`].
+    pub fn nothing_changed(&self) -> bool {
+        !matches!(self, Refusal::Unanswered { .. } | Refusal::AnswerLost)
+    }
+}
+
+fn app_is_open_message(pid: Option<u32>, why: &Refusal) -> String {
+    let open = format!(
+        "Inner Word is open{}",
+        pid.map(|pid| format!(" (process {pid})"))
+            .unwrap_or_default()
+    );
+    let seconds = |seconds: &u64| {
+        if *seconds == 1 {
+            "1 second".to_string()
+        } else {
+            format!("{seconds} seconds")
+        }
+    };
+    // The words are for both front ends: they name no command and no tool. What is said
+    // last is what to do next.
+    const BUSY: &str = "it is busy: a dialog is open in it, or it is in the middle of \
+                        something long";
+    const LATER: &str = "Try again in a moment; if it stays like this, ask the user to look at \
+                         Inner Word or to quit it.";
+    const OTHER_TOOL: &str = "Use the innerword tool that is inside that app (Inner \
+                              Word.app/Contents/MacOS/innerword), or ask the user to quit Inner \
+                              Word; then try again.";
+    match why {
+        Refusal::SwitchedOff => format!(
+            "{open} and changes by agents while it is open are switched off there, so \
+             nothing was changed. Ask the user to switch on \u{201c}{}\u{201d} in the \
+             Agents panel of the app (Inner Word > Agents\u{2026}), or to quit Inner Word; \
+             then try again.",
+            crate::live::CHANGES_SWITCH
+        ),
+        Refusal::Composing => format!(
+            "{open} and the writer is in the middle of typing a character (text is being \
+             composed with an input method), so nothing was changed. Try again in a few \
+             seconds."
+        ),
+        Refusal::CouldNotSave { message } => format!(
+            "{open} and could not save the open document before the change ({message}), so \
+             nothing was changed. Tell the user that Inner Word has text it cannot save; \
+             try again when that is solved."
+        ),
+        Refusal::Quitting => {
+            format!("{open} and is quitting, so nothing was changed. Try again in a moment.")
+        }
+        Refusal::NoLibrary => format!(
+            "{open} but shows no window with this library, so nothing was changed. Ask the \
+             user to quit Inner Word; then try again."
+        ),
+        Refusal::TooLate | Refusal::NoAnswer { seconds: 0 } => format!(
+            "{open} and did not get to this change in time ({BUSY}), so nothing was \
+             changed. {LATER}"
+        ),
+        Refusal::NoAnswer { seconds: waited } => format!(
+            "{open} and did not get to this change within {} ({BUSY}), so nothing was \
+             changed. {LATER}",
+            seconds(waited)
+        ),
+        Refusal::Unanswered { seconds: waited } => format!(
+            "{open} and took this change up, but did not answer within {}. Whether the \
+             change was made is not known: read the document again before you repeat it.",
+            seconds(waited)
+        ),
+        Refusal::AnswerLost => format!(
+            "{open} and took this change up, but its answer did not arrive. Whether the \
+             change was made is not known: read the document again before you repeat it."
+        ),
+        Refusal::OldVersion => format!(
+            "{open} and does not take changes from agents while it runs (it is a version \
+             before 0.6.0, or it could not open its channel), so nothing was changed. Ask \
+             the user to quit Inner Word, or to update it; then try again."
+        ),
+        Refusal::NotListening => format!(
+            "{open} but does not answer where it listens for changes, so nothing was \
+             changed. Try again in a moment; if it stays like this, ask the user to quit \
+             Inner Word and to open it again."
+        ),
+        Refusal::Protocol { app, tool } => format!(
+            "{open} in a version this tool cannot hand a change to (the app speaks version \
+             {app} of their channel, this tool version {tool}), so nothing was changed. \
+             {OTHER_TOOL}"
+        ),
+        Refusal::Unknown => format!(
+            "{open} and did not make the change, for a reason this version of the tool \
+             does not know; nothing was changed. {OTHER_TOOL}"
+        ),
+    }
+}
+
+/// An [`Error`] as data: what a front end that answers in JSON writes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorReport {
+    /// The kind of failure ([`ErrorKind::code`]).
+    pub code: String,
+    /// The message, as [`Error`] displays it.
+    pub message: String,
+    /// For `"ambiguous"`: everything the name fits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<Candidate>,
+    /// For `"not_unique"`: the first places where the text occurs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub occurrences: Vec<Occurrence>,
+    /// For `"app_is_open"`: why the app did not make the change
+    /// (`{"why": "switched_off"}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+    /// For `"app_is_open"`: whether it is certain that nothing was changed. False when
+    /// the app took the change up and its answer did not arrive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nothing_changed: Option<bool>,
+}
+
+/// Shorthand for `Result<T, Error>`.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+fn not_found_message(kind: ItemKind, reference: &str, hint: Option<&str>) -> String {
+    let mut message = format!("there is no {kind} {reference}");
+    if let Some(hint) = hint {
+        message.push_str(". ");
+        message.push_str(hint);
+    }
+    message
+}
+
+fn ambiguous_message(kind: ItemKind, reference: &str, candidates: &[Candidate]) -> String {
+    // A heading has no id and no path: it is chosen by its number among the headings
+    // with that text.
+    let mut message = if kind == ItemKind::Heading {
+        format!(
+            "the document has {} headings {reference}; say which one by its number (the \
+             occurrence of the heading, from 1):",
+            candidates.len()
+        )
+    } else {
+        format!(
+            "{reference} fits {} {kind}s; name one by its id or by a longer path:",
+            candidates.len()
+        )
+    };
+    for candidate in candidates {
+        message.push_str(&format!("\n  {}  {}", candidate.id, candidate.path));
+        if candidate.trashed {
+            message.push_str("  (in the trash)");
+        }
+    }
+    message
+}
+
+fn page_incomplete_message(name: &str, problems: &[innerword_page::Problem]) -> String {
+    // The sentence of `innerword-page`, whole: the command layer does not reword it.
+    innerword_page::PageError::Incomplete {
+        name: name.to_string(),
+        problems: problems.to_vec(),
+    }
+    .sentence()
+}
+
+/// The words of an export of a page as Markdown or DOCX, which the front ends look for to
+/// add the formats in their own words (`--format`, the tool's `format`).
+pub const PAGE_IS_NOT_A_TEXT_FILE: &str = "a page is not exported as Markdown or DOCX";
+
+fn wrong_kind_message(name: &str, is_page: bool, export: bool) -> String {
+    if is_page && export {
+        format!(
+            "{name} is a page, and {PAGE_IS_NOT_A_TEXT_FILE}: it is written as a folder of its \
+             files (the format html), as a PDF (pdf) or as its text (text)."
+        )
+    } else if is_page {
+        format!(
+            "{name} is a page: it is kept as it was saved, and its text cannot be changed. To \
+             bring a newer copy, add it again with its source address."
+        )
+    } else {
+        format!("{name} is a document, not a page.")
+    }
+}
+
+fn no_match_message(text: &str, hint: Option<&str>) -> String {
+    let mut message = format!(
+        "the text was not found in the document: {}",
+        quoted_excerpt(text)
+    );
+    message.push_str(". ");
+    message.push_str(hint.unwrap_or(
+        "It has to be in the document exactly as given: the same words, punctuation, \
+         quotation marks and capitals",
+    ));
+    message
+}
+
+fn not_unique_message(text: &str, count: usize, occurrences: &[Occurrence]) -> String {
+    let mut message = format!(
+        "the text occurs {count} times in the document: {}. Give more of the text around \
+         it so that it is found once, choose one by its number (occurrence), or ask for \
+         all of them:",
+        quoted_excerpt(text)
+    );
+    for occurrence in occurrences {
+        message.push_str(&format!("\n  {}  ", occurrence.occurrence));
+        if let Some(heading) = &occurrence.heading {
+            message.push_str(&format!("[{heading}] "));
+        }
+        message.push_str(&occurrence.context);
+    }
+    if count > occurrences.len() {
+        message.push_str(&format!("\n  and {} more", count - occurrences.len()));
+    }
+    message
+}
+
+fn not_in_trash_message(kind: ItemKind, id: i64, name: &str, inside: Option<&str>) -> String {
+    match inside {
+        Some(folder) => format!(
+            "the {kind} {name} (id {id}) went to the trash together with the folder \
+             {folder}; restore or delete that folder"
+        ),
+        None => format!("the {kind} {name} (id {id}) is not in the trash"),
+    }
+}
+
+/// `text` in quotation marks, on one line, shortened in the middle when it is long.
+pub(crate) fn quoted_excerpt(text: &str) -> String {
+    const KEEP: usize = 60;
+    let line: String = text
+        .chars()
+        .map(|c| if c == '\n' { '\u{23ce}' } else { c })
+        .collect();
+    let count = line.chars().count();
+    if count <= 2 * KEEP + 5 {
+        return format!("\u{201c}{line}\u{201d}");
+    }
+    let head: String = line.chars().take(KEEP).collect();
+    let tail: String = line.chars().skip(count - KEEP).collect();
+    format!("\u{201c}{head} \u{2026} {tail}\u{201d}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_have_distinct_codes() {
+        let mut codes = std::collections::BTreeSet::new();
+        let mut names = std::collections::BTreeSet::new();
+        for kind in ErrorKind::ALL {
+            assert_ne!(kind.exit_code(), 0);
+            assert!(codes.insert(kind.exit_code()), "{kind:?}");
+            assert!(names.insert(kind.code()), "{kind:?}");
+            // The serialised name is the code.
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.code())
+            );
+        }
+        assert_eq!(codes.len(), ErrorKind::ALL.len());
+    }
+
+    #[test]
+    fn messages_say_what_to_do() {
+        let open = Error::AppIsOpen {
+            pid: Some(42),
+            data_dir: PathBuf::from("/tmp/x"),
+            why: Refusal::OldVersion,
+        };
+        assert_eq!(open.exit_code(), 5);
+        assert_eq!(open.code(), "app_is_open");
+        let message = open.to_string();
+        assert!(message.contains("quit Inner Word"), "{message}");
+        assert!(message.contains("process 42"), "{message}");
+
+        let ambiguous = Error::Ambiguous {
+            kind: ItemKind::Document,
+            reference: "\u{201c}Chapter 1\u{201d}".into(),
+            candidates: vec![
+                Candidate {
+                    kind: ItemKind::Document,
+                    id: 3,
+                    path: "Book/Chapter 1".into(),
+                    trashed: false,
+                },
+                Candidate {
+                    kind: ItemKind::Document,
+                    id: 9,
+                    path: "Drafts/Chapter 1".into(),
+                    trashed: false,
+                },
+            ],
+        };
+        let message = ambiguous.to_string();
+        assert!(message.contains("3  Book/Chapter 1"), "{message}");
+        assert!(message.contains("9  Drafts/Chapter 1"), "{message}");
+        let report = ambiguous.report();
+        assert_eq!(report.code, "ambiguous");
+        assert_eq!(report.candidates.len(), 2);
+        assert_eq!(report.message, message);
+    }
+
+    /// Every reason the app did not make a change is the same kind of failure, and its
+    /// message says whether anything was changed and what to do next.
+    #[test]
+    fn every_refusal_says_what_happened_and_what_to_do() {
+        let all = [
+            Refusal::SwitchedOff,
+            Refusal::Composing,
+            Refusal::CouldNotSave {
+                message: "the disk is full".into(),
+            },
+            Refusal::Quitting,
+            Refusal::NoLibrary,
+            Refusal::TooLate,
+            Refusal::OldVersion,
+            Refusal::NotListening,
+            Refusal::NoAnswer { seconds: 10 },
+            Refusal::Unanswered { seconds: 13 },
+            Refusal::AnswerLost,
+            Refusal::Protocol { app: 2, tool: 1 },
+            Refusal::Unknown,
+        ];
+        let mut messages = std::collections::BTreeSet::new();
+        for why in all {
+            let error = Error::AppIsOpen {
+                pid: Some(7),
+                data_dir: PathBuf::from("/tmp/x"),
+                why: why.clone(),
+            };
+            assert_eq!(error.kind(), ErrorKind::AppIsOpen, "{why:?}");
+            assert_eq!(error.exit_code(), 5, "{why:?}");
+            let message = error.to_string();
+            assert!(
+                message.starts_with("Inner Word is open (process 7)"),
+                "{message}"
+            );
+            assert_eq!(
+                message.contains("nothing was changed"),
+                why.nothing_changed(),
+                "{message}"
+            );
+            let next = ["Try again", "try again", "read the document again"];
+            assert!(next.iter().any(|word| message.contains(word)), "{message}");
+            // The words serve the command line and the MCP server: no command of the
+            // one, no tool of the other.
+            for word in ["Run this", "run this", "innerword get", "read_document", "--"] {
+                assert!(!message.contains(word), "{word} in: {message}");
+            }
+            // As data: the reason, and whether anything may have changed.
+            let report = error.report();
+            assert_eq!(report.refusal.as_ref(), Some(&why));
+            assert_eq!(report.nothing_changed, Some(why.nothing_changed()));
+            let json = serde_json::to_value(&report).unwrap();
+            assert_eq!(json["code"], "app_is_open");
+            assert!(json["refusal"]["why"].is_string(), "{json}");
+            // The reason travels as data, and comes back as it was.
+            let json = serde_json::to_string(&why).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Refusal>(&json).unwrap(),
+                why,
+                "{json}"
+            );
+            assert!(messages.insert(message.clone()), "said twice: {message}");
+        }
+        // A reason from a newer app is read as one this tool does not know.
+        assert_eq!(
+            serde_json::from_str::<Refusal>(r#"{"why": "moon_phase", "phase": 3}"#).unwrap(),
+            Refusal::Unknown
+        );
+        let message = Error::AppIsOpen {
+            pid: None,
+            data_dir: PathBuf::from("/tmp/x"),
+            why: Refusal::Unanswered { seconds: 1 },
+        }
+        .to_string();
+        assert!(message.contains("within 1 second."), "{message}");
+        assert!(
+            message.starts_with("Inner Word is open and took"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn long_text_is_shortened_in_messages() {
+        let text = "word ".repeat(200);
+        let quoted = quoted_excerpt(&text);
+        assert!(quoted.chars().count() < 140);
+        assert!(quoted.contains('\u{2026}'));
+        assert_eq!(quoted_excerpt("a\nb"), "\u{201c}a\u{23ce}b\u{201d}");
+    }
+}

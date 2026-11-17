@@ -1,0 +1,9 @@
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/inner-word-fixture/config/projects",
+  "configDirectory": "/tmp/inner-word-fixture/config",
+  "loginExpiresAt": null
+}

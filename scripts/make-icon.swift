@@ -1,4 +1,4 @@
-// Renders The Writer's app icon with CoreGraphics.
+// Renders Inner Word's app icon with CoreGraphics.
 //
 // Usage: swift scripts/make-icon.swift <output.iconset directory>
 // (scripts/make-icon.sh wraps this and runs iconutil.)

@@ -1,0 +1,694 @@
+//! The picker modals: command palette, quick open, library search and the
+//! shortcuts overlay.
+
+use gpui::TestAppContext;
+use innerword_app::{
+    library_search::LibrarySearch,
+    palette::CommandPalette,
+    quick_open::{QuickOpen, QuickOpenChoice},
+    shortcuts::collect_shortcuts,
+};
+use innerword_core::{Movement, Position, Selection};
+use innerword_library::LibraryItem;
+
+use super::*;
+
+/// The open modal of type `V`.
+macro_rules! modal {
+    ($workspace:expr, $cx:expr, $ty:ty) => {
+        $workspace.read_with($cx, |workspace, cx| {
+            workspace.modal_layer().read(cx).active::<$ty>()
+        })
+    };
+}
+
+fn has_modal(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace.modal_layer().read(cx).has_modal()
+    })
+}
+
+#[gpui::test]
+fn palette_runs_a_command_where_focus_was(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Title", "Make me bold."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let editor = workspace.read_with(vcx, |w, _| w.editor().clone());
+    // Select "bold" in the paragraph.
+    editor.update(vcx, |editor, cx| {
+        editor.edit(
+            |state| state.set_selection(Selection::new(Position::new(1, 8), Position::new(1, 12))),
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let palette = modal!(workspace, vcx, CommandPalette).expect("the palette is open");
+    assert!(!editor_focused(&workspace, vcx));
+    // Browsing: every category is there, with the editor's and the
+    // library's commands beside the app's own.
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    for expected in [
+        "New document",
+        "Bold",
+        "Settings",
+        "Expand folder",
+        "Heading 1",
+    ] {
+        assert!(
+            titles.iter().any(|title| title == expected),
+            "{expected} is listed in {titles:?}"
+        );
+    }
+
+    // One way of writing titles, whichever crate a command comes from.
+    for expected in [
+        "Code block",
+        "Paste as plain text",
+        "Add or edit link",
+        "Find next",
+    ] {
+        assert!(
+            titles.iter().any(|title| title == expected),
+            "{expected} is listed in {titles:?}"
+        );
+    }
+    assert!(!titles.iter().any(|title| title == "Code Block"));
+
+    // One "New document" and one "New folder": the app's, which work from
+    // anywhere. The library panel's own are its keys in the sidebar.
+    for once in ["New document", "New folder", "Turn Vim mode on or off"] {
+        assert_eq!(
+            titles.iter().filter(|title| *title == once).count(),
+            1,
+            "{once} is listed once"
+        );
+    }
+
+    // Under a category heading the row does not repeat the category.
+    let details = |palette: &Entity<CommandPalette>, cx: &mut VisualTestContext| {
+        palette.read_with(cx, |palette, cx| {
+            use innerword_ui::{PickerDelegate, PickerEntry};
+            (0..palette.delegate.entry_count())
+                .filter_map(|ix| match palette.delegate.entry(ix, cx) {
+                    PickerEntry::Item(item) => Some((
+                        item.label.to_string(),
+                        item.detail.map(|detail| detail.to_string()),
+                        item.key_hint.map(|hint| hint.text()),
+                    )),
+                    PickerEntry::Header(_) => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert!(
+        details(&palette, vcx)
+            .iter()
+            .all(|(_, detail, _)| detail.is_none())
+    );
+
+    vcx.simulate_input("bold");
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(titles.first().map(String::as_str), Some("Bold"));
+    // In search results the category and the real key are beside the title.
+    assert_eq!(
+        details(&palette, vcx)[0],
+        (
+            "Bold".to_string(),
+            Some("Format".to_string()),
+            Some("⌘B".to_string())
+        )
+    );
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+    let bold = editor.read_with(vcx, |editor, _| {
+        let block = &editor.document().blocks()[1];
+        block
+            .text_spans()
+            .filter(|(_, _, attrs)| attrs.bold)
+            .map(|(_, text, _)| text.to_string())
+            .collect::<String>()
+    });
+    assert_eq!(bold, "bold");
+
+    // Recently used comes first the next time.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let palette = modal!(workspace, vcx, CommandPalette).unwrap();
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(titles.first().map(String::as_str), Some("Bold"));
+    // The same key closes it, and focus is back in the editor.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+
+    // Keywords find commands whose title says something else; loose
+    // subsequences over keywords do not.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    let palette = modal!(workspace, vcx, CommandPalette).unwrap();
+    vcx.simulate_input("dark");
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(titles, ["Use Night theme", "Follow system appearance"]);
+    vcx.simulate_keystrokes("escape");
+
+    // An app-level command through the palette: hide the sidebar.
+    vcx.simulate_keystrokes("cmd-shift-p");
+    vcx.simulate_input("hide library");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(!workspace.read_with(vcx, |w, _| w.settings().sidebar_visible));
+    assert!(editor_focused(&workspace, vcx));
+}
+
+#[gpui::test]
+fn palette_shows_the_real_key_bindings(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let (_workspace, vcx) = open_workspace(&library, cx);
+    vcx.update(|_, cx| {
+        let all = innerword_app::commands::all(cx);
+        let hint = |title: &str| {
+            all.iter()
+                .find(|command| command.title.as_ref() == title)
+                .unwrap_or_else(|| panic!("no command titled {title}"))
+                .key_hint(cx)
+                .map(|hint| hint.text())
+        };
+        assert_eq!(hint("Command palette").as_deref(), Some("⇧⌘P"));
+        assert_eq!(hint("Show or hide library").as_deref(), Some("⌥⌘S"));
+        assert_eq!(hint("Bold").as_deref(), Some("⌘B"));
+        assert_eq!(hint("Settings").as_deref(), Some("⌘,"));
+        assert_eq!(hint("Quit Inner Word").as_deref(), Some("⌘Q"));
+        assert_eq!(hint("Close window").as_deref(), Some("⌘W"));
+        assert_eq!(hint("Use Night theme"), None);
+        // Registering again changes nothing.
+        let before = all.len();
+        innerword_app::commands::register(innerword_app::actions::commands(), cx);
+        assert_eq!(innerword_app::commands::all(cx).len(), before);
+    });
+}
+
+#[gpui::test]
+fn quick_open_finds_opens_and_creates(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        library.create_folder(None, "Novel", cx).unwrap().id
+    });
+    let harbour = add_document(
+        &library,
+        Some(folder),
+        &simple_document("The Harbour", "Boats."),
+        cx,
+    );
+    let arrival = add_document(&library, None, &simple_document("Arrival", "Late."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.open_document(arrival, true, window, cx);
+    });
+
+    vcx.simulate_keystrokes("cmd-p");
+    let picker = modal!(workspace, vcx, QuickOpen).expect("quick open is open");
+    let all = picker.read_with(vcx, |picker, _| picker.delegate.choices());
+    assert_eq!(all.len(), 2);
+
+    vcx.simulate_input("harb");
+    let choices = picker.read_with(vcx, |picker, _| picker.delegate.choices());
+    assert_eq!(choices, vec![QuickOpenChoice::Open(harbour)]);
+    // The folder path is the detail.
+    let detail = picker.read_with(vcx, |picker, cx| {
+        use innerword_ui::{PickerDelegate, PickerEntry};
+        match picker.delegate.entry(0, cx) {
+            PickerEntry::Item(item) => item.detail.map(|detail| detail.to_string()),
+            PickerEntry::Header(_) => None,
+        }
+    });
+    assert_eq!(detail.as_deref(), Some("Novel"));
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(!has_modal(&workspace, vcx));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(harbour)
+    );
+    assert!(editor_focused(&workspace, vcx));
+
+    // Nothing matches: offer to create it, in the folder of the open document.
+    vcx.simulate_keystrokes("cmd-p");
+    let picker = modal!(workspace, vcx, QuickOpen).unwrap();
+    vcx.simulate_input("Chapter Nine");
+    let choices = picker.read_with(vcx, |picker, _| picker.delegate.choices());
+    assert_eq!(
+        choices,
+        vec![QuickOpenChoice::Create("Chapter Nine".to_string())]
+    );
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let created = workspace
+        .read_with(vcx, |w, _| w.open_document_id())
+        .unwrap();
+    assert_ne!(created, harbour);
+    let meta = library.read_with(vcx, |library, _| library.document_meta(created).unwrap());
+    assert_eq!(meta.title, "Chapter Nine");
+    assert_eq!(meta.folder_id, Some(folder));
+    assert!(editor_focused(&workspace, vcx));
+    // The caret waits below the heading.
+    vcx.simulate_input("It began.");
+    assert_eq!(editor_text(&workspace, vcx), "Chapter Nine\nIt began.");
+
+    // Escape closes and returns focus.
+    vcx.simulate_keystrokes("cmd-p");
+    assert!(has_modal(&workspace, vcx));
+    vcx.simulate_keystrokes("escape");
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+}
+
+#[gpui::test]
+fn library_search_opens_the_hit_and_selects_the_match(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Bread", "She bought bread."),
+        cx,
+    );
+    let salt = add_document(
+        &library,
+        None,
+        &Document::from_blocks(vec![
+            Block::with_text(BlockKind::heading(1), "Salt"),
+            Block::paragraph("The pans stretched to the horizon."),
+            Block::paragraph("Pink and white, the salt works slept."),
+        ]),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+
+    vcx.simulate_keystrokes("cmd-shift-f");
+    let picker = modal!(workspace, vcx, LibrarySearch).expect("the search is open");
+    vcx.simulate_input("horizon");
+    let hits = picker.read_with(vcx, |picker, _| picker.delegate.hits().to_vec());
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].document_id, salt);
+    assert_eq!(hits[0].title, "Salt");
+    // The snippet is clean text and the match is marked.
+    assert!(hits[0].snippet.contains("horizon"));
+    assert!(!hits[0].snippet.contains('\u{E000}'));
+    let marked: String = hits[0]
+        .positions
+        .iter()
+        .filter_map(|offset| hits[0].snippet[*offset..].chars().next())
+        .collect();
+    assert_eq!(marked, "horizon");
+    // The row shows the title, so a snippet from the start of the text
+    // does not begin with it again; the marks are still on the match.
+    picker.update_in(vcx, |picker, window, cx| {
+        picker.set_query("pans", window, cx)
+    });
+    let hits = picker.read_with(vcx, |picker, _| picker.delegate.hits().to_vec());
+    assert!(
+        hits[0].snippet.starts_with("The pans"),
+        "{}",
+        hits[0].snippet
+    );
+    let marked: String = hits[0]
+        .positions
+        .iter()
+        .filter_map(|offset| hits[0].snippet[*offset..].chars().next())
+        .collect();
+    assert_eq!(marked, "pans");
+    picker.update_in(vcx, |picker, window, cx| {
+        picker.set_query("horizon", window, cx)
+    });
+    // A word of the query that is in the title is marked there.
+    assert_eq!(
+        innerword_app::library_search::word_positions("Salt works", "\"salt\" WORK"),
+        [0, 1, 2, 3, 5, 6, 7, 8]
+    );
+    assert!(innerword_app::library_search::word_positions("Bread", "horizon").is_empty());
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(!has_modal(&workspace, vcx));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(salt)
+    );
+    assert!(editor_focused(&workspace, vcx));
+    let selected = workspace.read_with(vcx, |w, cx| {
+        let editor = w.editor().read(cx);
+        (editor.state().selected_text(), editor.selection().start())
+    });
+    assert_eq!(selected.0, "horizon");
+    assert_eq!(selected.1.block, 1);
+
+    // No hit: a clear empty state, nothing to open.
+    vcx.simulate_keystrokes("cmd-shift-f");
+    let picker = modal!(workspace, vcx, LibrarySearch).unwrap();
+    vcx.simulate_input("zeppelin");
+    assert!(picker.read_with(vcx, |picker, _| picker.delegate.hits().is_empty()));
+    vcx.simulate_keystrokes("enter escape");
+    assert!(!has_modal(&workspace, vcx));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(salt)
+    );
+}
+
+#[gpui::test]
+fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Keys", "Text here."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+
+    vcx.simulate_keystrokes("cmd-/");
+    let list = workspace
+        .read_with(vcx, |workspace, cx| workspace.shortcuts_list(cx))
+        .expect("the list is open");
+    let listed: Vec<(String, String, String)> = vcx.update(|_, cx| {
+        collect_shortcuts(cx)
+            .iter()
+            .map(|shortcut| {
+                (
+                    shortcut.category.to_string(),
+                    shortcut.title.to_string(),
+                    shortcut.keys.clone(),
+                )
+            })
+            .collect()
+    });
+    let find = |title: &str| {
+        listed
+            .iter()
+            .find(|(_, listed_title, _)| listed_title == title)
+            .unwrap_or_else(|| panic!("{title} is not listed"))
+            .clone()
+    };
+    assert_eq!(find("Command palette").2, "⇧⌘P");
+    assert_eq!(find("Keyboard shortcuts").2, "⌘/");
+    assert_eq!(find("Bold"), ("Format".into(), "Bold".into(), "⌘B".into()));
+    // Keys without a command descriptor come from the keymap itself.
+    assert_eq!(
+        find("Move word left"),
+        (
+            "Moving and selecting".into(),
+            "Move word left".into(),
+            "⌥←".into()
+        )
+    );
+    // A command without a key is listed too, so that it can be given one.
+    assert_eq!(
+        find("Use Night theme"),
+        ("View".into(), "Use Night theme".into(), String::new())
+    );
+    assert_eq!(find("Version history").2, "");
+    // What the list shows is these rows: as many, in this order.
+    let shown: Vec<String> = list.read_with(vcx, |list, _| {
+        list.listed().into_iter().map(|(_, title)| title).collect()
+    });
+    let titles: Vec<String> = listed.iter().map(|(_, title, _)| title.clone()).collect();
+    assert_eq!(shown, titles);
+
+    // Every key is listed under where the keyboard has to be for it.
+    let placed: Vec<(String, innerword_app::shortcuts::Place, String, String)> =
+        vcx.update(|_, cx| {
+            collect_shortcuts(cx)
+                .iter()
+                .map(|shortcut| {
+                    (
+                        shortcut.title.to_string(),
+                        shortcut.place,
+                        shortcut.heading.to_string(),
+                        shortcut.keys.clone(),
+                    )
+                })
+                .collect()
+        });
+    let place = |title: &str, keys: &str| {
+        placed
+            .iter()
+            .find(|(listed, _, _, listed_keys)| listed == title && listed_keys == keys)
+            .map(|(_, place, heading, _)| (*place, heading.clone()))
+            .unwrap_or_else(|| panic!("{title} ({keys}) is not listed"))
+    };
+    use innerword_app::shortcuts::Place;
+    assert_eq!(
+        place("Command palette", "⇧⌘P"),
+        (Place::Anywhere, "Anywhere \u{b7} Go".into())
+    );
+    assert_eq!(
+        place("Bold", "⌘B"),
+        (Place::Text, "In the text \u{b7} Format".into())
+    );
+    assert_eq!(
+        place("Move word left", "⌥←"),
+        (
+            Place::Text,
+            "In the text \u{b7} Moving and selecting".into()
+        )
+    );
+    // The keys of the panels say that they are the panels' keys.
+    assert_eq!(
+        place("Rename", "R"),
+        (Place::Library, "In the library".into())
+    );
+    assert_eq!(
+        place("Move to trash", "⌘⌫"),
+        (Place::Library, "In the library".into())
+    );
+    // Creating a document has a key that works anywhere and the library's
+    // own; both are listed, each in its place.
+    assert_eq!(
+        place("New document", "⌘N"),
+        (Place::Anywhere, "Anywhere \u{b7} File".into())
+    );
+    assert_eq!(
+        place("New document", "N"),
+        (Place::Library, "In the library".into())
+    );
+    assert_eq!(place("Add comment", "⌥⌘M").0, Place::Anywhere);
+    // A command with keys in several places has a row in each of them,
+    // because each can be given another key: undo is the text's, it also
+    // works in the comment list, and a text field has one of its own.
+    assert_eq!(
+        place("Undo", "⌘Z"),
+        (Place::Text, "In the text \u{b7} Edit".into())
+    );
+    let undo: Vec<Place> = placed
+        .iter()
+        .filter(|(title, ..)| title == "Undo")
+        .map(|(_, place, ..)| *place)
+        .collect();
+    assert_eq!(undo, [Place::Text, Place::CommentList, Place::TextField]);
+    // The library moves with the arrows wherever the keyboard is in it and
+    // with letters while nothing is typed there: two rows, told apart.
+    let in_library: Vec<(&str, &str)> = placed
+        .iter()
+        .filter(|(title, place, ..)| *place == Place::Library && title.starts_with("Select next"))
+        .map(|(title, _, _, keys)| (title.as_str(), keys.as_str()))
+        .collect();
+    assert_eq!(
+        in_library,
+        [
+            ("Select next item", "↓"),
+            ("Select next item (outside a text field)", "J")
+        ]
+    );
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, heading, _)| *place == Place::CommentList
+                && heading == "In the comment list"),
+        "the comment list has keys of its own"
+    );
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, _, _)| *place == Place::FindBar)
+    );
+    assert!(
+        placed
+            .iter()
+            .any(|(_, place, heading, _)| *place == Place::VersionHistory
+                && heading == "In the version history")
+    );
+    // The list has keys of its own, and lists them.
+    assert_eq!(
+        place("Change key", "↩"),
+        (Place::Shortcuts, "In keyboard shortcuts".into())
+    );
+    // Nothing is listed twice in one place.
+    let mut titles: Vec<_> = placed.iter().map(|(t, _, h, _)| (h, t)).collect();
+    let total = titles.len();
+    titles.sort();
+    let all = titles.clone();
+    titles.dedup();
+    assert_eq!(titles.len(), total, "{:?}", {
+        let mut twice = all.clone();
+        twice.retain(|entry| all.iter().filter(|other| *other == entry).count() > 1);
+        twice
+    });
+    // The places come in a fixed order, "Anywhere" first, and each heading
+    // appears once.
+    let places: Vec<Place> = placed.iter().map(|(_, place, _, _)| *place).collect();
+    assert!(places.is_sorted(), "{places:?}");
+    assert_eq!(places.first(), Some(&Place::Anywhere));
+    let headers = list.read_with(vcx, |list, _| list.headings());
+    let mut unique = headers.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), headers.len(), "{headers:?}");
+    // The first line says that the menus offer the same, the next two what
+    // cannot be changed here; then the places.
+    assert_eq!(
+        headers.first().map(String::as_str),
+        Some(innerword_app::shortcuts::MENUS_NOTE)
+    );
+    assert_eq!(
+        headers.get(1).map(String::as_str),
+        Some(innerword_app::workspace::NOT_CHANGEABLE_NOTE)
+    );
+    assert_eq!(
+        headers.get(2).map(String::as_str),
+        Some(innerword_app::workspace::ALSO_FIXED_NOTE)
+    );
+    assert_eq!(
+        headers.get(3).map(String::as_str),
+        Some("Anywhere \u{b7} File")
+    );
+    // Nothing is left without a place.
+    assert!(!places.contains(&Place::Elsewhere), "{placed:?}");
+
+    // Searchable (also by place and by key), and the command of a row
+    // can be run from it.
+    let first = |cx: &mut VisualTestContext| {
+        list.read_with(cx, |list, _| {
+            list.listed().into_iter().next().map(|(_, title)| title)
+        })
+    };
+    vcx.simulate_input("library rename");
+    assert_eq!(first(vcx).as_deref(), Some("Rename"));
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("document end");
+    assert_eq!(first(vcx).as_deref(), Some("Move to document end"));
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("⌘B");
+    assert_eq!(first(vcx).as_deref(), Some("Bold"));
+    vcx.simulate_keystrokes("cmd-a");
+    vcx.simulate_input("select all");
+    assert_eq!(first(vcx).as_deref(), Some("Select all"));
+    vcx.simulate_keystrokes("cmd-r");
+    vcx.run_until_parked();
+    assert!(!has_modal(&workspace, vcx));
+    assert!(editor_focused(&workspace, vcx));
+    let (selection, end) = workspace.read_with(vcx, |w, cx| {
+        let editor = w.editor().read(cx);
+        (editor.selection(), editor.document().end())
+    });
+    assert!(!selection.is_collapsed());
+    assert_eq!(selection.head.max(selection.anchor), end);
+    let _ = (Movement::DocEnd, LibraryItem::Document);
+}
+
+#[gpui::test]
+fn quick_open_keeps_the_folder_in_view_beside_a_long_title(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        let novel = library.create_folder(None, "The Salt Road", cx).unwrap().id;
+        library
+            .create_folder(Some(novel), "Part one", cx)
+            .unwrap()
+            .id
+    });
+    // A long heading: the title is the heading, up to eighty characters
+    // of it.
+    let opening = "The ferry came in late, as it always did in October, and Mara was the only \
+                   passenger who stayed on deck to watch the harbour lights.";
+    let titled = Document::from_blocks(vec![Block::with_text(BlockKind::heading(1), opening)]);
+    let long = add_document(&library, Some(folder), &titled, cx);
+    let loose = add_document(&library, None, &titled, cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let stored_title =
+        library.read_with(vcx, |library, _| library.document_meta(long).unwrap().title);
+    assert!(stored_title.chars().count() > 60, "{stored_title}");
+
+    vcx.simulate_keystrokes("cmd-p");
+    let picker = modal!(workspace, vcx, QuickOpen).expect("quick open is open");
+    vcx.simulate_input("ferry mara");
+    let rows = picker.read_with(vcx, |picker, cx| {
+        use innerword_ui::{PickerDelegate, PickerEntry};
+        let choices = picker.delegate.choices();
+        (0..picker.delegate.entry_count())
+            .filter_map(|ix| match picker.delegate.entry(ix, cx) {
+                PickerEntry::Item(item) => Some((
+                    item.label.to_string(),
+                    item.label_positions.clone(),
+                    item.detail.map(|detail| detail.to_string()),
+                )),
+                PickerEntry::Header(_) => None,
+            })
+            .zip(choices)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(rows.len(), 2);
+    for ((label, positions, detail), choice) in rows {
+        if choice == QuickOpenChoice::Open(long) {
+            // In a folder: the title is cut short, the folder path is there,
+            // and the marked matches are within what is shown.
+            assert_eq!(detail.as_deref(), Some("The Salt Road / Part one"));
+            assert!(label.chars().count() <= 48, "{label}");
+            assert!(label.ends_with('\u{2026}'));
+            assert!(!positions.is_empty());
+            assert!(positions.iter().all(|position| *position < label.len()));
+        } else {
+            // At the top level there is nothing to make room for.
+            assert_eq!(choice, QuickOpenChoice::Open(loose));
+            assert_eq!(detail, None);
+            assert_eq!(label, stored_title);
+        }
+    }
+}
+
+/// Every title the palette and the list of shortcuts show is in sentence
+/// case: a capital at the start, and after that only for a name. The crates
+/// that write their titles Like This are brought to it (`lib.rs`,
+/// `commands::in_sentence_case`); the app's own are written so. (Found in
+/// review: "Cancel Printing" stood in title case among "Save now" and
+/// "Rename document"; the menu bar's item keeps title case.)
+#[gpui::test]
+fn every_command_title_is_in_sentence_case(cx: &mut TestAppContext) {
+    use innerword_app::commands::{all, sentence_case};
+    init(cx);
+    // The names a title may hold, beside those `sentence_case` keeps.
+    const NAMES: [&str; 3] = ["Inner Word", "Paper", "Night"];
+    let titles: Vec<String> = cx.update(|cx| {
+        all(cx)
+            .into_iter()
+            .map(|command| command.title.to_string())
+            .collect()
+    });
+    assert!(titles.len() > 100, "{}", titles.len());
+    let not: Vec<&String> = titles
+        .iter()
+        .filter(|title| {
+            let without_names = NAMES
+                .iter()
+                .fold(title.to_string(), |title, name| title.replace(name, "name"));
+            sentence_case(&without_names) != without_names
+        })
+        .collect();
+    assert!(not.is_empty(), "not in sentence case: {not:?}");
+}

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Info.plist for The Writer.app. scripts/bundle.sh copies this file into the bundle and
+  Info.plist for Inner Word.app. scripts/bundle.sh copies this file into the bundle and
   overwrites CFBundleShortVersionString and CFBundleVersion with the cargo workspace
   version. LSMinimumSystemVersion is the single source of truth for the minimum macOS
   version: bundle.sh reads it and builds with MACOSX_DEPLOYMENT_TARGET set to the same
@@ -14,15 +14,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleName</key>
-	<string>The Writer</string>
+	<string>Inner Word</string>
 	<key>CFBundleDisplayName</key>
-	<string>The Writer</string>
+	<string>Inner Word</string>
 	<key>CFBundleIdentifier</key>
-	<string>app.thewriter.TheWriter</string>
+	<string>app.innerword.InnerWord</string>
 	<key>CFBundleExecutable</key>
-	<string>the-writer</string>
+	<string>inner-word</string>
 	<key>CFBundleIconFile</key>
-	<string>TheWriter</string>
+	<string>InnerWord</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>

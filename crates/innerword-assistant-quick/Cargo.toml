@@ -1,0 +1,39 @@
+[package]
+name = "innerword-assistant-quick"
+description = "The quick chat of Inner Word's assistant: a small popover at the selection or the caret."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+# tests/main.rs is the one test binary; the other files in tests/ are its modules.
+autotests = false
+
+[lib]
+# All tests live in tests/main.rs, so the crate links one GPUI test binary.
+test = false
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+innerword-core.workspace = true
+innerword-editor.workspace = true
+# The Markdown importer: an answer is Markdown and goes into the text as
+# formatted text.
+innerword-export.workspace = true
+innerword-ui.workspace = true
+# The engine: the backend interface, ChatSession, the fake backend.
+innerword-assistant.workspace = true
+# The shared chat components: message list, composer, pickers, notices.
+innerword-assistant-ui.workspace = true
+
+[dev-dependencies]
+# Headless GPUI tests: #[gpui::test], TestAppContext, VisualTestContext.
+gpui = { workspace = true, features = ["test-support"] }
+# The Vim cases: a real VimMode attached to the editor under the popover.
+innerword-vim-mode.workspace = true
+innerword-vim.workspace = true
+# Opening the quick chat closes the format bar and the popup tools.
+innerword-editor-tools.workspace = true
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

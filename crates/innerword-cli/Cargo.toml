@@ -1,0 +1,29 @@
+[package]
+name = "innerword-cli"
+description = "The `innerword` command line tool: Inner Word's library for agents and scripts, without the app."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "innerword"
+path = "src/main.rs"
+
+[dependencies]
+innerword-mcp.workspace = true
+innerword-agent-setup.workspace = true
+serde_json.workspace = true
+# The checker of pages the tool installs on its library (`ProcessChecker`), which runs
+# this program again as its child.
+innerword-agent.workspace = true
+# The child of a check and of a PDF (`innerword __page-check`, `innerword __page-pdf`): the
+# check directory as data, and WebKit, which runs in that child and nowhere else in the
+# tool.
+innerword-page.workspace = true
+innerword-web.workspace = true
+# The user id, for the folder the rule list of WebKit is kept in.
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+innerword-store.workspace = true

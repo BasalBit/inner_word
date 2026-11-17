@@ -1,4 +1,4 @@
-The Writer
+Inner Word
 ==========
 
 A writing app for macOS. Everything in it can be done from the keyboard, and
@@ -8,7 +8,7 @@ everything can be done with the mouse.
 Install
 -------
 
-1. Drag "The Writer" onto the "Applications" folder in this window.
+1. Drag "Inner Word" onto the "Applications" folder in this window.
 2. Eject this disk image.
 
 
@@ -21,11 +21,11 @@ approve it once. After that it opens like any other app.
 
 Option A: System Settings
 
-1. Open The Writer from the Applications folder. macOS shows a message like
-   "Apple could not verify "The Writer" is free of malware that may harm your
+1. Open Inner Word from the Applications folder. macOS shows a message like
+   "Apple could not verify "Inner Word" is free of malware that may harm your
    Mac or compromise your privacy." Click Done. Do not click Move to Trash.
 2. Open System Settings, then Privacy & Security.
-3. Scroll down to the Security section. It says that "The Writer" was blocked
+3. Scroll down to the Security section. It says that "Inner Word" was blocked
    to protect your Mac. Click Open Anyway. (The button stays there for about
    an hour after the blocked launch. If it is gone, repeat step 1.)
 4. Confirm with Open Anyway, then enter your password or use Touch ID.
@@ -38,7 +38,7 @@ Option B: Terminal
 
 After dragging the app to Applications, open Terminal and run:
 
-    xattr -dr com.apple.quarantine "/Applications/The Writer.app"
+    xattr -dr com.apple.quarantine "/Applications/Inner Word.app"
 
 This removes the "downloaded from the internet" mark from the app. It then
 opens normally with no warning.
@@ -77,7 +77,7 @@ so does Shift-F10.
 Your own keys
 -------------
 
-Every keyboard shortcut can be changed. The Writer > Keyboard Shortcuts...
+Every keyboard shortcut can be changed. Inner Word > Keyboard Shortcuts...
 (Command-/) lists all of them, grouped by where they work; type a name or a
 key to find one. Press Return on a row (or click its key) and then the key
 you want: the list says whether it is free, whether another command has it,
@@ -88,7 +88,7 @@ menu bar show your keys at once.
 
 The rows you changed are marked and show what the default was; "Changed
 Only" lists just those. A single command goes back to its default from its
-row, everything with Reset All (also in The Writer menu, in case a change
+row, everything with Reset All (also in Inner Word menu, in case a change
 went wrong). Export writes all keys to a file you can read, edit, keep or
 take to another Mac (the keys of the assistant are in it too, also on a
 Mac that has no assistant); Import reads such a file and shows what it
@@ -108,7 +108,7 @@ right-click menu is open, a shortcut without Command does nothing.
 
 If you ever take away a key you needed, nothing is lost: every command is
 still in the menu bar and in the right-click menus, the list works with the
-mouse alone, and The Writer > Reset All Keyboard Shortcuts... puts every key
+mouse alone, and Inner Word > Reset All Keyboard Shortcuts... puts every key
 back.
 
 
@@ -162,7 +162,7 @@ screenshot, a picture copied in Preview, an image file copied in the Finder,
 "Copy Image" in a browser), and an image file dragged in from the Finder. PNG,
 JPEG and GIF are kept as they are; HEIC, TIFF, WebP and BMP are converted on
 the way in; a very large picture is made smaller. An SVG or a PDF is not a
-picture here, and The Writer says so. Pictures dragged straight out of a
+picture here, and Inner Word says so. Pictures dragged straight out of a
 browser or out of Photos do not arrive: save or export the file first, or
 copy and paste.
 
@@ -185,7 +185,7 @@ looks larger there than on paper.
 "Description..." is a line that says what the picture shows. It is what a
 screen reader reads out in an exported Word document, the alternative text
 in exported Markdown, and what agents and the assistant are told about the
-picture (they never see the picture itself). The Writer cannot read it out
+picture (they never see the picture itself). Inner Word cannot read it out
 with VoiceOver inside the app.
 
 Exports carry your pictures: a Word document holds them, and a Markdown file
@@ -198,13 +198,13 @@ What a picture file says about itself stays in it when the file is stored as
 it came: the camera and the date, an author and a copyright note, a place
 name somebody typed in. All of that travels with the picture into a Word
 document and into the picture folder of a Markdown export. The one thing
-The Writer always takes out is the GPS position. (A picture that had to be
+Inner Word always takes out is the GPS position. (A picture that had to be
 converted or made smaller carries nothing of the kind.)
 
 Pictures are stored once, in a file "images.db" beside your library, and a
 second copy of them is kept in the "backups" folder there, so they take
 their size on disk twice. Deleting a picture, or the document it is in, does
-not free the space at once: The Writer removes a picture's data only when
+not free the space at once: Inner Word removes a picture's data only when
 nothing has used it for thirty days, not a document, not the trash, not a
 kept version. If a picture's data is ever missing, its place in the text
 stays and says "Missing image"; nothing is dropped from the document.
@@ -226,8 +226,8 @@ pick a font with Command-T (by default) or Format > Font... .
 Spelling
 --------
 
-The Writer marks misspelled words with a wavy red line as you write, using
-the spell checker of your Mac (the same one Mail and Notes use; The Writer
+Inner Word marks misspelled words with a wavy red line as you write, using
+the spell checker of your Mac (the same one Mail and Notes use; Inner Word
 brings no dictionary of its own). Right-click a marked word for suggestions,
 or to teach your Mac the word (Learn Spelling: it is then known in your
 other apps too) or to let it pass in this document until you close it
@@ -241,9 +241,9 @@ document". The languages on offer are those of your Mac. A text in a
 language your Mac has no dictionary for gets many marks: switch "Check
 spelling while typing" off in the settings, or under Edit > Spelling.
 
-If The Writer says that it is already open, another copy of it is running
+If Inner Word says that it is already open, another copy of it is running
 with your library (for example an older copy that was not quit). Switch to
-that copy, or quit it and open The Writer again. Two copies never work on one
+that copy, or quit it and open Inner Word again. Two copies never work on one
 library at the same time, so that neither overwrites what the other wrote.
 
 If you are replacing an earlier preview build: quit the old copy before you
@@ -254,8 +254,8 @@ could otherwise have your library open together.
 The assistant
 -------------
 
-If Claude Code is installed on your Mac and you are signed in to it, The
-Writer has an assistant that runs on it. Without Claude Code there is no
+If Claude Code is installed on your Mac and you are signed in to it, Inner
+Word has an assistant that runs on it. Without Claude Code there is no
 assistant, and nothing of it is shown; the settings say so in one line.
 
 Command-J asks about the text you have selected, in a small chat right at
@@ -273,7 +273,7 @@ What you ask goes to Anthropic through your own Claude Code sign-in, and
 every message counts against your Claude Code plan. The small chat sends
 your question and the selected text. The longer chat sends your messages,
 the open document and what the assistant reads from your library. Nothing
-is sent before you send a message. The Writer does not use your coding
+is sent before you send a message. Inner Word does not use your coding
 setup in Claude Code (project instructions, hooks, skills, other tools) and
 leaves nothing in its history.
 
@@ -291,11 +291,11 @@ others) can work with your library: find and read documents, create and edit
 them, file them in folders, leave comments for you to go through, export.
 They do it through a command line tool that comes inside the app:
 
-    /Applications/The Writer.app/Contents/MacOS/writer
+    /Applications/Inner Word.app/Contents/MacOS/innerword
 
 Agents can read at any time, and they can change things at any time too.
-While The Writer is closed the tool writes to the library itself. While The
-Writer is open the tool hands each change to the app, and the app makes it:
+While Inner Word is closed the tool writes to the library itself. While Inner
+Word is open the tool hands each change to the app, and the app makes it:
 between two of your key presses, after saving whatever you have typed, so
 nothing of yours is lost and nothing of the agent's is. A change to the
 document you have open appears in the text where it belongs, and your caret
@@ -304,7 +304,7 @@ says who changed what (for example: Claude changed "Chapter 2"), with an
 Undo button. Undo in the Edit menu takes the agent's change out the same
 way: it is one step, on top of your own typing. For a change to a document
 that is not the open one the note has an Open button instead, and several
-changes in a row are one note that counts them. The Writer menu has "Undo
+changes in a row are one note that counts them. Inner Word menu has "Undo
 Last Change by an Agent" and "Go to Last Change by an Agent" for the
 keyboard; both are in the command palette too.
 
@@ -316,17 +316,17 @@ agent leaves show up in the comments of the document under the agent's name.
 An agent reads a picture as one line with its description, and never sees
 the picture itself unless it exports the document. When it edits a text the
 pictures in it stay where they are, as wide as they were. It can add a
-picture from a file on your Mac ("writer image add").
+picture from a file on your Mac ("innerword image add").
 
 If you would rather have agents wait until the app is closed, switch "Agents
-can make changes while The Writer is open" off in The Writer > Agents... .
+can make changes while Inner Word is open" off in Inner Word > Agents... .
 While the app is open they can then only read, and to change something they
 are told to ask you to switch it on again, or to quit the app.
 
-The Writer > Agents... (Option-Command-A) shows the tool, has that switch,
+Inner Word > Agents... (Option-Command-A) shows the tool, has that switch,
 installs the skill that tells your agents about the tool, and lists the
-command that adds The Writer's MCP server to each of them. Nothing is
-installed anywhere until you press a button there, and The Writer does not
+command that adds Inner Word's MCP server to each of them. Nothing is
+installed anywhere until you press a button there, and Inner Word does not
 edit the configuration of any agent.
 
 If an agent reports that macOS does not let it run the tool, the app still
@@ -337,9 +337,9 @@ notarised either). Run the command of Option B once; it covers the tool too.
 Your documents
 --------------
 
-The Writer keeps your library in
+Inner Word keeps your library in
 
-    ~/Library/Application Support/The Writer
+    ~/Library/Application Support/Inner Word
 
 Removing the app does not remove your documents. Back up that folder to keep
 a copy of them: "library.db" is your documents, "images.db" the pictures in

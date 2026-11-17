@@ -1,0 +1,91 @@
+[package]
+name = "innerword-app"
+description = "Inner Word: a keyboard-first writing app for macOS."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "innerword_app"
+path = "src/lib.rs"
+# All tests are in tests/main.rs (one GPUI test binary, see below).
+test = false
+doctest = false
+
+[[bin]]
+name = "inner-word"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-segmentation.workspace = true
+innerword-core.workspace = true
+innerword-ui.workspace = true
+innerword-editor.workspace = true
+innerword-editor-tools.workspace = true
+innerword-vim-mode.workspace = true
+innerword-comments.workspace = true
+innerword-library.workspace = true
+innerword-spell.workspace = true
+innerword-export.workspace = true
+# What is known about the agents on a Mac (no GPUI): the Agents panel.
+innerword-agent-setup.workspace = true
+# The assistant: its engine (no GPUI; Claude Code behind one interface, and
+# the fake backend every test uses).
+innerword-assistant.workspace = true
+# The shared chat components and the side chat panel.
+innerword-assistant-ui.workspace = true
+# The quick chat popover at the selection.
+innerword-assistant-quick.workspace = true
+# The command layer for agents (no GPUI): its live channel, on which the
+# `innerword` tool hands the running app the changes of agents, and the code
+# that carries one out on the library's own store.
+innerword-agent.workspace = true
+# The keyboard shortcuts as data (no GPUI): the user's changes over the
+# defaults, conflicts and guard rails, the shortcuts file.
+innerword-keymap.workspace = true
+# The "Keyboard shortcuts" view: the list, changing a key, the import
+# preview.
+innerword-keymap-ui.workspace = true
+# Printing (no GPUI): the PDF of the pages the editor lays out, and the
+# macOS print operation.
+innerword-print.workspace = true
+# Image files (no GPUI): a file, a paste or a drop made into what the
+# library stores.
+innerword-image.workspace = true
+# Pages (no GPUI): the manifest of a page, its files, the bundler.
+innerword-page.workspace = true
+# Pages (no GPUI): WebKit, the view of an open page above GPUI's view, the
+# check, the print to a PDF.
+innerword-web.workspace = true
+# A snapshot of a page (BGRA pixels) made into what GPUI paints, as the
+# editor's pictures are (`image::Frame`, `smallvec`).
+image = { version = "0.25", default-features = false }
+smallvec = "1"
+# localtime_r for the times in the version history.
+libc.workspace = true
+# Window capture for visual QA: the NSWindow number behind a GPUI window.
+raw-window-handle.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc.workspace = true
+# The block AppKit calls for a pinch on the trackpad (`pinch.rs`); the
+# version gpui itself depends on.
+block = "0.1"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+# A test makes images.db a file of a newer version (the store's own build of it).
+rusqlite = { version = "0.42", features = ["bundled"] }
+tempfile.workspace = true
+innerword-editor.workspace = true
+
+# One integration-test binary (tests/main.rs with submodules): each GPUI test
+# binary costs about 150 MB of disk.
+[[test]]
+name = "main"
+path = "tests/main.rs"

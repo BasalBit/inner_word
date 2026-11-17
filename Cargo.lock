@@ -2806,6 +2806,340 @@ dependencies = [
 ]
 
 [[package]]
+name = "innerword-agent"
+version = "0.9.0"
+dependencies = [
+ "base64",
+ "innerword-core",
+ "innerword-export",
+ "innerword-image",
+ "innerword-page",
+ "innerword-store",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "innerword-agent-setup"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "innerword-app"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "block",
+ "gpui",
+ "image",
+ "innerword-agent",
+ "innerword-agent-setup",
+ "innerword-assistant",
+ "innerword-assistant-quick",
+ "innerword-assistant-ui",
+ "innerword-comments",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-editor-tools",
+ "innerword-export",
+ "innerword-image",
+ "innerword-keymap",
+ "innerword-keymap-ui",
+ "innerword-library",
+ "innerword-page",
+ "innerword-print",
+ "innerword-spell",
+ "innerword-ui",
+ "innerword-vim-mode",
+ "innerword-web",
+ "libc",
+ "objc",
+ "raw-window-handle",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tempfile",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "innerword-assistant"
+version = "0.9.0"
+dependencies = [
+ "innerword-agent-setup",
+ "innerword-mcp",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "innerword-assistant-quick"
+version = "0.9.0"
+dependencies = [
+ "gpui",
+ "innerword-assistant",
+ "innerword-assistant-ui",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-editor-tools",
+ "innerword-export",
+ "innerword-ui",
+ "innerword-vim",
+ "innerword-vim-mode",
+]
+
+[[package]]
+name = "innerword-assistant-ui"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "innerword-assistant",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-export",
+ "innerword-ui",
+ "objc",
+ "raw-window-handle",
+]
+
+[[package]]
+name = "innerword-cli"
+version = "0.9.0"
+dependencies = [
+ "innerword-agent",
+ "innerword-agent-setup",
+ "innerword-mcp",
+ "innerword-page",
+ "innerword-store",
+ "innerword-web",
+ "libc",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "innerword-comments"
+version = "0.9.0"
+dependencies = [
+ "gpui",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-ui",
+]
+
+[[package]]
+name = "innerword-core"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "innerword-editor"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "image",
+ "innerword-core",
+ "innerword-print",
+ "innerword-ui",
+ "objc",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
+name = "innerword-editor-tools"
+version = "0.9.0"
+dependencies = [
+ "gpui",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-ui",
+ "libc",
+]
+
+[[package]]
+name = "innerword-export"
+version = "0.9.0"
+dependencies = [
+ "innerword-core",
+ "miniz_oxide 0.8.9",
+ "pulldown-cmark",
+ "roxmltree",
+ "unicode-properties",
+ "unicode-segmentation",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "innerword-image"
+version = "0.9.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "innerword-store",
+]
+
+[[package]]
+name = "innerword-keymap"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "innerword-keymap-ui"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "innerword-keymap",
+ "innerword-ui",
+ "objc",
+ "raw-window-handle",
+]
+
+[[package]]
+name = "innerword-library"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "innerword-store",
+ "innerword-ui",
+ "objc",
+ "raw-window-handle",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "innerword-mcp"
+version = "0.9.0"
+dependencies = [
+ "innerword-agent",
+ "innerword-page",
+ "innerword-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "innerword-page"
+version = "0.9.0"
+dependencies = [
+ "base64",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+]
+
+[[package]]
+name = "innerword-print"
+version = "0.9.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "core-text",
+ "objc",
+ "zed-font-kit",
+]
+
+[[package]]
+name = "innerword-spell"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-editor-tools",
+ "innerword-ui",
+ "objc",
+ "raw-window-handle",
+]
+
+[[package]]
+name = "innerword-store"
+version = "0.9.0"
+dependencies = [
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "innerword-ui"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "objc",
+ "raw-window-handle",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "innerword-vim"
+version = "0.9.0"
+dependencies = [
+ "innerword-core",
+]
+
+[[package]]
+name = "innerword-vim-mode"
+version = "0.9.0"
+dependencies = [
+ "gpui",
+ "innerword-core",
+ "innerword-editor",
+ "innerword-ui",
+ "innerword-vim",
+]
+
+[[package]]
+name = "innerword-web"
+version = "0.9.0"
+dependencies = [
+ "block",
+ "dispatch",
+ "objc",
+ "serde_json",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6858,340 +7192,6 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
-
-[[package]]
-name = "writer-agent"
-version = "0.9.0"
-dependencies = [
- "base64",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "unicode-segmentation",
- "writer-core",
- "writer-export",
- "writer-image",
- "writer-page",
- "writer-store",
-]
-
-[[package]]
-name = "writer-agent-setup"
-version = "0.9.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "writer-app"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "block",
- "gpui",
- "image",
- "libc",
- "objc",
- "raw-window-handle",
- "rusqlite",
- "serde",
- "serde_json",
- "smallvec",
- "tempfile",
- "unicode-segmentation",
- "writer-agent",
- "writer-agent-setup",
- "writer-assistant",
- "writer-assistant-quick",
- "writer-assistant-ui",
- "writer-comments",
- "writer-core",
- "writer-editor",
- "writer-editor-tools",
- "writer-export",
- "writer-image",
- "writer-keymap",
- "writer-keymap-ui",
- "writer-library",
- "writer-page",
- "writer-print",
- "writer-spell",
- "writer-ui",
- "writer-vim-mode",
- "writer-web",
-]
-
-[[package]]
-name = "writer-assistant"
-version = "0.9.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "writer-agent-setup",
- "writer-mcp",
-]
-
-[[package]]
-name = "writer-assistant-quick"
-version = "0.9.0"
-dependencies = [
- "gpui",
- "writer-assistant",
- "writer-assistant-ui",
- "writer-core",
- "writer-editor",
- "writer-editor-tools",
- "writer-export",
- "writer-ui",
- "writer-vim",
- "writer-vim-mode",
-]
-
-[[package]]
-name = "writer-assistant-ui"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "objc",
- "raw-window-handle",
- "writer-assistant",
- "writer-core",
- "writer-editor",
- "writer-export",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-cli"
-version = "0.9.0"
-dependencies = [
- "libc",
- "serde_json",
- "tempfile",
- "writer-agent",
- "writer-agent-setup",
- "writer-mcp",
- "writer-page",
- "writer-store",
- "writer-web",
-]
-
-[[package]]
-name = "writer-comments"
-version = "0.9.0"
-dependencies = [
- "gpui",
- "writer-core",
- "writer-editor",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-core"
-version = "0.9.0"
-dependencies = [
- "serde",
- "serde_json",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "writer-editor"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "image",
- "objc",
- "raw-window-handle",
- "serde",
- "serde_json",
- "smallvec",
- "writer-core",
- "writer-print",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-editor-tools"
-version = "0.9.0"
-dependencies = [
- "gpui",
- "libc",
- "writer-core",
- "writer-editor",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-export"
-version = "0.9.0"
-dependencies = [
- "miniz_oxide 0.8.9",
- "pulldown-cmark",
- "roxmltree",
- "unicode-properties",
- "unicode-segmentation",
- "url",
- "writer-core",
- "zip",
-]
-
-[[package]]
-name = "writer-image"
-version = "0.9.0"
-dependencies = [
- "core-foundation 0.10.0",
- "core-graphics 0.24.0",
- "writer-store",
-]
-
-[[package]]
-name = "writer-keymap"
-version = "0.9.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "writer-keymap-ui"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "objc",
- "raw-window-handle",
- "writer-keymap",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-library"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "objc",
- "raw-window-handle",
- "serde",
- "tempfile",
- "writer-store",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-mcp"
-version = "0.9.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "writer-agent",
- "writer-page",
- "writer-store",
-]
-
-[[package]]
-name = "writer-page"
-version = "0.9.0"
-dependencies = [
- "base64",
- "percent-encoding",
- "serde",
- "serde_json",
- "sha1_smol",
- "sha2 0.10.9",
- "tempfile",
- "url",
-]
-
-[[package]]
-name = "writer-print"
-version = "0.9.0"
-dependencies = [
- "core-foundation 0.10.0",
- "core-graphics 0.24.0",
- "core-text",
- "objc",
- "zed-font-kit",
-]
-
-[[package]]
-name = "writer-spell"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "objc",
- "raw-window-handle",
- "writer-core",
- "writer-editor",
- "writer-editor-tools",
- "writer-ui",
-]
-
-[[package]]
-name = "writer-store"
-version = "0.9.0"
-dependencies = [
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "writer-ui"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "gpui",
- "objc",
- "raw-window-handle",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "writer-vim"
-version = "0.9.0"
-dependencies = [
- "writer-core",
-]
-
-[[package]]
-name = "writer-vim-mode"
-version = "0.9.0"
-dependencies = [
- "gpui",
- "writer-core",
- "writer-editor",
- "writer-ui",
- "writer-vim",
-]
-
-[[package]]
-name = "writer-web"
-version = "0.9.0"
-dependencies = [
- "block",
- "dispatch",
- "objc",
- "serde_json",
-]
 
 [[package]]
 name = "x11"

@@ -1,0 +1,32 @@
+[package]
+name = "innerword-agent"
+description = "The headless command layer of Inner Word: every operation an agent can perform on a library, without the app."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+innerword-core.workspace = true
+innerword-store.workspace = true
+innerword-export.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The user id and whether a process exists, for the socket of the live channel.
+libc.workspace = true
+# Word boundaries, to change a paragraph word by word.
+unicode-segmentation.workspace = true
+# An image file an agent names, made into what the library stores (the same
+# code the app runs on a file the writer chooses).
+innerword-image.workspace = true
+# The bytes of an image as an agent is handed them.
+base64 = "0.22"
+# Pages: an HTML file or folder made into the files the library keeps, its check as
+# data, its manifest.
+innerword-page.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# To make a library as an older version of the app left it (the same build of SQLite
+# the store uses).
+rusqlite = { version = "0.42", features = ["bundled"] }

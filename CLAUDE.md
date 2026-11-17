@@ -3,12 +3,19 @@
 A keyboard-first rich-text writing app for macOS (books, blog posts, social posts).
 Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQLite.
 
+Until version 0.9.0 the app was called "The Writer" (crates `writer-*`, the tool `writer`,
+the library in `~/Library/Application Support/The Writer`). The old name still appears on
+purpose in four places: the library's old folder, which is moved and left as a link
+("Build and test"); the skill and the MCP entry of the old name, which are recognised and
+never written (`innerword_agent_setup::legacy`, "Agents"); and three saved format names
+("Working rules", "Saved names keep their old spelling").
+
 ## Workspace layout
 
 | Crate | Kind | Responsibility |
 |---|---|---|
 | `crates/innerword-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
-| `crates/innerword-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Does **not** depend on `innerword-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`innerword_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
+| `crates/innerword-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Where the library is (`paths.rs`, `data_dir`): `INNER_WORD_DATA_DIR`, else `~/Library/Application Support/Inner Word` (`DATA_DIR_NAME`), which the first use brings over from the old name `The Writer` (`OLD_DATA_DIR_NAME`): under the old folder's lock (`instance_lock::acquire_in_place`, which never creates the folder) it is renamed and a relative link left in its place; a rename that fails keeps the old folder and says why on stderr; a link `The Writer` that leads to a folder (one the user made) is read through. Does **not** depend on `innerword-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`innerword_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
 | `crates/innerword-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
 | `crates/innerword-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
 | `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`). |
@@ -73,8 +80,16 @@ scripts/bundle.sh                    # release .app (the app and the tool) + .dm
 INNER_WORD_DIST_DIR=/some/tmp scripts/bundle.sh   # a trial build that leaves the released images in dist/ alone
 ```
 
-The real library lives in `~/Library/Application Support/Inner Word/`. Tests and manual
-QA must set `INNER_WORD_DATA_DIR` to a temp directory and never touch the real one.
+The real library lives in `~/Library/Application Support/Inner Word/`. The first app
+launch or `innerword` command without `INNER_WORD_DATA_DIR` moves an existing `The Writer`
+folder there in one rename, under that folder's `instance.lock` (its line says "tool"
+meanwhile, so an old app that starts then waits), and leaves a relative link `The Writer`
+-> `Inner Word` in its place, so that an older app and the old `writer` tool agents may
+still be set up with reach the same library and the same lock; one line on stderr says so.
+While a copy of the app holds the old lock, that run uses the old folder and moves nothing;
+a tool that holds it is waited for up to 3 s. Tests and manual QA must set
+`INNER_WORD_DATA_DIR` (or `--library`, or a fake `HOME`) to a temp directory and never
+touch the real one: without it the first run moves the user's real folder.
 
 Scripted runs of the real app (visual QA; grammar in `crates/innerword-app/src/automation.rs`,
 recipe in `docs/gpui-notes.md`):
@@ -722,6 +737,28 @@ open" below).
   (how each is detected, where it reads skills, how an MCP server is added, every fact with
   its source and the day it was read), the text of the skill, installing and removing it.
   The tool has it as `innerword agents ...`, the app as the Agents panel.
+- **The old name.** What The Writer (until 0.9.0) installed for agents is still on people's
+  Macs. Its names are kept in one place, `innerword_agent_setup::legacy`
+  (`LEGACY_SKILL_NAME` "the-writer", `LEGACY_GENERATOR` "the-writer-app",
+  `LEGACY_MCP_SERVER_NAME` "the-writer", `LEGACY_APP_NAME`), and are read, never written.
+  - A folder `the-writer` in an agent's skills directory whose SKILL.md has
+    `metadata.generator: the-writer-app` is the app's own old install: "needs update"
+    (`StaleReason::OldName`, "It is installed under the old name The Writer. Updating
+    installs it under the new name and removes the old folder."). Install or update (the
+    panel, `innerword agents install/update`) writes `inner-word` and removes the old folder
+    in the same directory (files a person added there stay, and the folder with them);
+    remove removes both names; `update --all` and `remove --all` find a directory that has
+    only the old one. The report lists every path written, removed or left. A `the-writer`
+    folder without that marker is the user's own and is never touched; with a folder
+    somebody else made under `inner-word` the state is "foreign" and the old copy stays too.
+  - The app never edits an agent's configuration, so the old MCP entry is only named, for
+    every agent (whether it has the entry is not read): one line beside the instructions
+    (`McpInstructions::old_entry`; `Old name:` in `innerword agents mcp`, `old_server_name`
+    and `old_entry` in its JSON, a muted line under the agent in the panel) gives the
+    agent's own remove command with the old name where the table has one (`claude mcp
+    remove the-writer`; codex, `gemini mcp remove --scope user`, copilot, devin), and
+    otherwise says to delete the `"the-writer"` entry from the named file. Tests plant an
+    old install with `innerword_agent_setup::legacy::old_skill_text`.
 - **The Agents panel** (`cmd-opt-a`, "Agents" in the palette, Inner Word > Agents… in the
   menu bar; `crates/innerword-app/src/agents.rs` and `agents_view.rs`): the path of the tool
   with a copy button; every agent found that reads skills with the folder and the state of
@@ -790,7 +827,7 @@ open" below).
   change, make the smallest additive change only if its owner is not currently working on it;
   otherwise report it. Compile errors in a crate you do not own are usually another change in
   flight: wait a minute and retry rather than "fixing" it.
-- **Saved names keep their old spelling.** The project was called "The Writer" up to 0.9.0.
+- **Saved names keep their old spelling.** The project was called "The Writer" until 0.9.0.
   Three names written into files people keep are still spelled that way on purpose:
   `"the-writer-document"` and `"the-writer-fragment"` (the document JSON in the library, its
   versions and the clipboard; `innerword-core/src/serial.rs`) and `"the-writer-shortcuts"`

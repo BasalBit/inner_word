@@ -4,7 +4,7 @@
 //! An offscreen window (borderless, far off screen, out of the Windows menu and of
 //! window cycling, never key) holds a web view configured as the view of the window
 //! is, plus muted media, with a data store of its own. The check adds a probe and its
-//! message handler in a content world of its own (`writer-check`): a listener for
+//! message handler in a content world of its own (`innerword-check`): a listener for
 //! `securitypolicyviolation` in every frame, at document start, which the page's
 //! scripts cannot reach, remove or forge; the probe also makes every picture and frame
 //! under `loading="lazy"` eager, since the check never scrolls. Each HTML file is loaded at
@@ -45,7 +45,7 @@ use crate::{
 /// The host of the check's files.
 const HOST: &str = "check";
 /// The content world of the probe and of reading the text.
-const WORLD: &str = "writer-check";
+const WORLD: &str = "innerword-check";
 /// The name of the probe's message handler (in that world only).
 const HANDLER: &str = "writerCheck";
 /// How long nothing may have been answered or blocked for a load to have settled.

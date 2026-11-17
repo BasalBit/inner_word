@@ -551,7 +551,7 @@ check). An agent's batch of "copy everything" plays no sound through the user's 
 
 **The probe runs in a world of its own.** The user script (the `securitypolicyviolation`
 listener on `window`, capture phase, added at document start in every frame) and the
-message handler it posts to are added in a named `WKContentWorld` (`writer-check`), not
+message handler it posts to are added in a named `WKContentWorld` (`innerword-check`), not
 in the page's world: DOM events are seen there, and the page's scripts cannot reach the
 handler to post forged reports, nor remove the listener. The text is read with
 `evaluateJavaScript:inFrame:inContentWorld:completionHandler:` in the same world.
@@ -2207,7 +2207,7 @@ pub struct LoadOutcome {
 /// (borderless, far off screen, excluded from the Windows menu, occlusion detection off
 /// where `_setWindowOcclusionDetectionEnabled:` answers; optional) holds the view. The
 /// view's configuration (section 5) plus muted media; the probe and its message handler
-/// in the content world `writer-check`. `done` is called from the run loop, outside any
+/// in the content world `innerword-check`. `done` is called from the run loop, outside any
 /// caller's borrow: the app's `done` only posts to a channel.
 pub fn check(input: CheckInput, done: impl FnOnce(CheckOutcome) + 'static);
 /// For a program (the tool's child): NSApplication with activation policy "prohibited",

@@ -14,7 +14,7 @@ Contents: [Setup](#setup) · [Bootstrap](#bootstrap) · [Rendering](#rendering) 
 [Custom elements](#custom-elements) · [Text system](#text-system) · [Text input](#text-input) ·
 [Actions and keys](#actions-and-keys) · [Focus](#focus) · [Mouse](#mouse) ·
 [State and async](#state-and-async) · [Platform](#platform) · [Testing](#testing) ·
-[Visual QA](#visual-qa) · [Theme API](#theme-api-writer-ui)
+[Visual QA](#visual-qa) · [Theme API](#theme-api-innerword-ui)
 
 ---
 

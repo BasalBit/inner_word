@@ -502,6 +502,9 @@ pub fn real_places() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
         let home = PathBuf::from(home);
         places.push(home.join("Library/Application Support/Inner Word"));
+        // The folder of the library while the app was called The Writer (0.9.0 and
+        // before), which the first default look moves to "Inner Word".
+        places.push(home.join("Library/Application Support/The Writer"));
         for dir in [
             ".claude",
             ".codex",

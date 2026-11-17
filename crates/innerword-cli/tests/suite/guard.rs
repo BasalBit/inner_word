@@ -117,6 +117,12 @@ fn the_guard_knows_the_real_places_and_keeps_away_from_them() {
             .any(|place| place.ends_with("Library/Application Support/Inner Word")),
         "the guard does not know where the real library is: {places:?}"
     );
+    assert!(
+        places
+            .iter()
+            .any(|place| place.ends_with("Library/Application Support/The Writer")),
+        "the guard does not know where the library of the old name is: {places:?}"
+    );
     assert!(places.iter().any(|place| place.ends_with(".claude")));
     let sandbox = Sandbox::new();
     sandbox.assert_isolated();

@@ -348,7 +348,7 @@ impl Listener {
         // Without the thread the socket is as good as any file in a temporary directory:
         // good for three days.
         std::thread::Builder::new()
-            .name("writer-live-socket".into())
+            .name("innerword-live-socket".into())
             .spawn(move || kept.keep_fresh(KEEP_FRESH_EVERY))
             .ok();
         Ok(Listener { shared })
@@ -544,7 +544,7 @@ impl Incoming {
         // Tells the tool that it was not served in time, at the moment its patience ends,
         // so that it never waits for an answer that says nothing happened.
         let watch = std::thread::Builder::new()
-            .name("writer-live-deadline".into())
+            .name("innerword-live-deadline".into())
             .spawn(move || {
                 let mut state = locked(&watched.state);
                 while state.0 == Stage::Waiting {

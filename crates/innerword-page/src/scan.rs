@@ -193,7 +193,10 @@ fn attr_ref(tag: &Tag, name: &str, ctx: Ctx, expect: Expect, base: &Url) -> Opti
     let attr = tag.attr(name)?;
     let value = attr.value.as_ref()?;
     let mut reference = simple(value.span.clone(), value.decoded.clone(), ctx, expect, base);
-    reference.write = Write::Attr { before: String::new(), after: String::new() };
+    reference.write = Write::Attr {
+        before: String::new(),
+        after: String::new(),
+    };
     if ctx == Ctx::Fetch {
         if let Some(integrity) = tag.attr("integrity") {
             reference.with.push(integrity.span.clone());
@@ -205,7 +208,10 @@ fn attr_ref(tag: &Tag, name: &str, ctx: Ctx, expect: Expect, base: &Url) -> Opti
 /// A style sheet (a file, a `<style>`, a `style` attribute).
 pub(crate) fn scan_style(bytes: &[u8], base: &Url) -> Scan {
     let css = scan_css(bytes);
-    let mut scan = Scan { source_maps: css.source_maps, ..Scan::default() };
+    let mut scan = Scan {
+        source_maps: css.source_maps,
+        ..Scan::default()
+    };
     for item in css.items {
         match item.kind {
             CssKind::Plain => scan.literals.push(Literal {
@@ -214,11 +220,21 @@ pub(crate) fn scan_style(bytes: &[u8], base: &Url) -> Scan {
                 place: Place::Css,
                 substituted: false,
             }),
-            CssKind::Import => scan.refs.push(simple(item.span, item.value, Ctx::Fetch, Expect::Css, base)),
-            CssKind::Url | CssKind::ImageSet => {
-                scan.refs.push(simple(item.span, item.value, Ctx::Fetch, Expect::Any, base))
+            CssKind::Import => {
+                scan.refs
+                    .push(simple(item.span, item.value, Ctx::Fetch, Expect::Css, base))
             }
-            CssKind::Font => scan.refs.push(simple(item.span, item.value, Ctx::Fetch, Expect::Font, base)),
+            CssKind::Url | CssKind::ImageSet => {
+                scan.refs
+                    .push(simple(item.span, item.value, Ctx::Fetch, Expect::Any, base))
+            }
+            CssKind::Font => scan.refs.push(simple(
+                item.span,
+                item.value,
+                Ctx::Fetch,
+                Expect::Font,
+                base,
+            )),
         }
     }
     scan
@@ -228,7 +244,10 @@ pub(crate) fn scan_style(bytes: &[u8], base: &Url) -> Scan {
 /// document at `document` (both the same then). `file` says which.
 pub(crate) fn scan_script(bytes: &[u8], own: &Url, document: &Url, file: bool) -> Scan {
     let js = scan_js(bytes);
-    let mut scan = Scan { source_maps: js.source_maps.clone(), ..Scan::default() };
+    let mut scan = Scan {
+        source_maps: js.source_maps.clone(),
+        ..Scan::default()
+    };
     for reference in &js.refs {
         let string = &js.strings[reference.string];
         match reference.kind {
@@ -237,10 +256,22 @@ pub(crate) fn scan_script(bytes: &[u8], own: &Url, document: &Url, file: bool) -
                     scan.bare.push((string.value.clone(), own.clone()));
                     continue;
                 }
-                scan.refs.push(simple(string.span.clone(), string.value.clone(), Ctx::Specifier, Expect::Js, own));
+                scan.refs.push(simple(
+                    string.span.clone(),
+                    string.value.clone(),
+                    Ctx::Specifier,
+                    Expect::Js,
+                    own,
+                ));
             }
             JsKind::Plain => {
-                let mut r = simple(string.span.clone(), string.value.clone(), Ctx::ScriptString, Expect::Any, document);
+                let mut r = simple(
+                    string.span.clone(),
+                    string.value.clone(),
+                    Ctx::ScriptString,
+                    Expect::Any,
+                    document,
+                );
                 r.root_relative = file;
                 scan.refs.push(r);
             }
@@ -295,8 +326,15 @@ fn is_script_type(tag: &Tag) -> bool {
     let kind = kind.split(';').next().unwrap_or("").trim().to_string();
     matches!(
         kind.as_str(),
-        "" | "module" | "text/javascript" | "application/javascript" | "application/x-javascript"
-            | "text/ecmascript" | "application/ecmascript" | "text/babel" | "text/jsx" | "jsx"
+        "" | "module"
+            | "text/javascript"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+            | "text/babel"
+            | "text/jsx"
+            | "jsx"
     )
 }
 
@@ -317,7 +355,10 @@ pub(crate) fn scan_html(bytes: &[u8], file_base: &Url, xml: bool) -> Scan {
                 }
                 if let Some(href) = tag.value("href") {
                     if let Ok(url) = file_base.join(href.trim()) {
-                        if !matches!(resolve(href, file_base), Resolved::Outside | Resolved::Nothing) {
+                        if !matches!(
+                            resolve(href, file_base),
+                            Resolved::Outside | Resolved::Nothing
+                        ) {
                             base = url;
                             base_found = true;
                             scan.base_removed = true;
@@ -346,11 +387,20 @@ pub(crate) fn scan_html(bytes: &[u8], file_base: &Url, xml: bool) -> Scan {
                 match element.as_str() {
                     "script" => {
                         let tag = open_script.take();
-                        let kind = tag.as_ref().and_then(|t| t.value("type")).unwrap_or("").trim().to_ascii_lowercase();
+                        let kind = tag
+                            .as_ref()
+                            .and_then(|t| t.value("type"))
+                            .unwrap_or("")
+                            .trim()
+                            .to_ascii_lowercase();
                         if kind == "importmap" {
                             let map = scan_import_map(text);
                             for item in &map.items {
-                                let ctx = if item.kind == MapKind::ScopeKey { Ctx::MapScope } else { Ctx::MapValue };
+                                let ctx = if item.kind == MapKind::ScopeKey {
+                                    Ctx::MapScope
+                                } else {
+                                    Ctx::MapValue
+                                };
                                 scan.refs.push(simple(
                                     span.start + item.span.start..span.start + item.span.end,
                                     item.value.clone(),
@@ -407,7 +457,10 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
                 let as_ = tag.value("as").unwrap_or("").trim().to_ascii_lowercase();
                 let expect = if rels.iter().any(|r| r == "stylesheet") || as_ == "style" {
                     Expect::Css
-                } else if rels.iter().any(|r| r == "modulepreload") || as_ == "script" || as_ == "worker" {
+                } else if rels.iter().any(|r| r == "modulepreload")
+                    || as_ == "script"
+                    || as_ == "worker"
+                {
                     Expect::Js
                 } else if as_ == "font" {
                     Expect::Font
@@ -445,7 +498,10 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             }
         }
         "meta" => {
-            let refresh = tag.value("http-equiv").map(|v| v.trim().eq_ignore_ascii_case("refresh")).unwrap_or(false);
+            let refresh = tag
+                .value("http-equiv")
+                .map(|v| v.trim().eq_ignore_ascii_case("refresh"))
+                .unwrap_or(false);
             if refresh {
                 handled.push("content");
                 if let Some(r) = refresh_ref(tag, base) {
@@ -463,7 +519,17 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
         let Some(value) = &attr.value else { continue };
         match attr_name {
             "src" | "poster" | "background" => {
-                if let Some(mut r) = attr_ref(tag, attr_name, Ctx::Fetch, if name == "script" { Expect::Js } else { Expect::Any }, base) {
+                if let Some(mut r) = attr_ref(
+                    tag,
+                    attr_name,
+                    Ctx::Fetch,
+                    if name == "script" {
+                        Expect::Js
+                    } else {
+                        Expect::Any
+                    },
+                    base,
+                ) {
                     r.lazy = attr_name == "src" && name == "img" && is_lazy(tag);
                     scan.refs.push(r);
                 }
@@ -477,7 +543,17 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
                 // Outside `a`, `area` and `link` (handled above) an href names a resource:
                 // SVG's `use`, `image`, `feImage`, `script`, a gradient, a pattern.
                 if name != "base" && !(name == "link") {
-                    if let Some(r) = attr_ref(tag, attr_name, Ctx::Fetch, if name == "script" { Expect::Js } else { Expect::Any }, base) {
+                    if let Some(r) = attr_ref(
+                        tag,
+                        attr_name,
+                        Ctx::Fetch,
+                        if name == "script" {
+                            Expect::Js
+                        } else {
+                            Expect::Any
+                        },
+                        base,
+                    ) {
                         scan.refs.push(r);
                     }
                 }
@@ -492,17 +568,29 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             "srcset" | "imagesrcset" => {
                 let text = value.decoded.clone();
                 let inner = srcset(&text, base);
-                scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
+                scan.nested.push(Nested {
+                    span: value.span.clone(),
+                    text,
+                    scan: inner,
+                });
             }
             "style" => {
                 let text = value.decoded.clone();
                 let inner = scan_style(text.as_bytes(), base);
-                scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
+                scan.nested.push(Nested {
+                    span: value.span.clone(),
+                    text,
+                    scan: inner,
+                });
             }
             "srcdoc" if name == "iframe" => {
                 let text = value.decoded.clone();
                 let inner = scan_html(text.as_bytes(), base, false);
-                scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
+                scan.nested.push(Nested {
+                    span: value.span.clone(),
+                    text,
+                    scan: inner,
+                });
             }
             _ if xml && attr_name.starts_with("xmlns") => {}
             // An event handler (`onclick`) is a script: its strings are said as a
@@ -512,10 +600,18 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
             _ if is_event_handler(attr_name) => {
                 let text = value.decoded.clone();
                 let inner = scan_script(text.as_bytes(), base, base, false);
-                scan.nested.push(Nested { span: value.span.clone(), text, scan: inner });
+                scan.nested.push(Nested {
+                    span: value.span.clone(),
+                    text,
+                    scan: inner,
+                });
             }
             _ => {
-                let place = if attr_name.starts_with("data-") { Place::DataAttr } else { Place::Attr };
+                let place = if attr_name.starts_with("data-") {
+                    Place::DataAttr
+                } else {
+                    Place::Attr
+                };
                 scan.literals.push(Literal {
                     value: value.decoded.clone(),
                     base: base.clone(),
@@ -529,7 +625,8 @@ fn scan_tag(tag: &Tag, base: &Url, xml: bool, scan: &mut Scan) {
 
 /// `loading="lazy"` (in any case, with white space around it, as a browser reads it).
 fn is_lazy(tag: &Tag) -> bool {
-    tag.value("loading").is_some_and(|value| value.trim().eq_ignore_ascii_case("lazy"))
+    tag.value("loading")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("lazy"))
 }
 
 /// `onclick`, `onload`, `onpointerdown`: an attribute whose value is a script.
@@ -566,14 +663,20 @@ fn refresh_ref(tag: &Tag, base: &Url) -> Option<Ref> {
     if k < bytes.len() && (bytes[k] == b'"' || bytes[k] == b'\'') {
         let quote = bytes[k];
         start = k + 1;
-        end = content[start..].find(quote as char).map(|e| start + e).unwrap_or(bytes.len());
+        end = content[start..]
+            .find(quote as char)
+            .map(|e| start + e)
+            .unwrap_or(bytes.len());
     }
     let address = content[start..end].trim().to_string();
     if address.is_empty() {
         return None;
     }
     let mut r = simple(value.span.clone(), address, Ctx::Link, Expect::Any, base);
-    r.write = Write::Attr { before: content[..start].to_string(), after: content[end..].to_string() };
+    r.write = Write::Attr {
+        before: content[..start].to_string(),
+        after: content[end..].to_string(),
+    };
     r.warn_external = true;
     r.navigation = true;
     Some(r)
@@ -603,7 +706,13 @@ fn srcset(text: &str, base: &Url) -> Scan {
             ends_candidate = true;
         }
         if end > start {
-            scan.refs.push(simple(start..end, text[start..end].to_string(), Ctx::Fetch, Expect::Any, base));
+            scan.refs.push(simple(
+                start..end,
+                text[start..end].to_string(),
+                Ctx::Fetch,
+                Expect::Any,
+                base,
+            ));
         }
         if !ends_candidate {
             // The descriptors, up to the comma that ends the candidate (outside parentheses).

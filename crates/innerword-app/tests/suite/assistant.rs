@@ -942,7 +942,9 @@ fn the_quick_chat_opens_in_every_way_and_sends_only_the_selection(cx: &mut TestA
             .contains(&ASK_THE_ASSISTANT.to_string())
     );
     assert!(
-        vcx.update(|window, cx| { innerword_ui::ContextMenu::choose(ASK_THE_ASSISTANT, window, cx) })
+        vcx.update(|window, cx| {
+            innerword_ui::ContextMenu::choose(ASK_THE_ASSISTANT, window, cx)
+        })
     );
     vcx.run_until_parked();
     assert!(quick_open(&workspace, vcx));
@@ -1060,7 +1062,12 @@ fn the_side_chat_opens_closes_and_takes_the_keyboard(cx: &mut TestAppContext) {
 
     // Its own close control closes it too.
     side(&workspace, vcx).update_in(vcx, |side, window, cx| {
-        side.press_header(innerword_assistant_ui::HeaderControl::Close, false, window, cx)
+        side.press_header(
+            innerword_assistant_ui::HeaderControl::Close,
+            false,
+            window,
+            cx,
+        )
     });
     vcx.run_until_parked();
     assert_eq!(right_panel(&workspace, vcx), None);
@@ -2755,7 +2762,10 @@ fn the_side_chat_over_a_page_sends_its_text(cx: &mut TestAppContext) {
     });
     vcx.run_until_parked();
     let sent = fake.last_sent().expect("a message was sent");
-    assert!(sent.starts_with(innerword_assistant::PAGE_PREFACE), "{sent}");
+    assert!(
+        sent.starts_with(innerword_assistant::PAGE_PREFACE),
+        "{sent}"
+    );
     assert!(sent.contains("kind=\"page\""), "{sent}");
     assert!(
         sent.contains("The boats come by road every spring."),

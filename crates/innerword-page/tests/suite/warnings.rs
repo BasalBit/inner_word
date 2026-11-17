@@ -40,17 +40,32 @@ const user = `https://api.example.com/users/${id}`;
 
 #[test]
 fn many_addresses_are_counted_after_ten() {
-    let script: String = (0..14).map(|i| format!("fetch('https://api.example.com/{i}');\n")).collect();
-    let bundle = page(&[("index.html", &format!("<script>{script}</script>"))], &[]);
+    let script: String = (0..14)
+        .map(|i| format!("fetch('https://api.example.com/{i}');\n"))
+        .collect();
+    let bundle = page(
+        &[("index.html", &format!("<script>{script}</script>"))],
+        &[],
+    );
     assert_eq!(bundle.warnings.len(), 11);
-    assert_eq!(bundle.warnings[10], "it names 4 more addresses on the web that are not kept");
+    assert_eq!(
+        bundle.warnings[10],
+        "it names 4 more addresses on the web that are not kept"
+    );
 }
 
 #[test]
 fn an_address_that_was_fetched_is_not_said() {
     let bundle = page(
-        &[("index.html", r#"<script>const lib = "https://cdn.jsdelivr.net/npm/a@1/a.js";</script>"#)],
-        &[("https://cdn.jsdelivr.net/npm/a@1/a.js", "text/javascript", "1")],
+        &[(
+            "index.html",
+            r#"<script>const lib = "https://cdn.jsdelivr.net/npm/a@1/a.js";</script>"#,
+        )],
+        &[(
+            "https://cdn.jsdelivr.net/npm/a@1/a.js",
+            "text/javascript",
+            "1",
+        )],
     );
     assert!(bundle.warnings.is_empty(), "{:?}", bundle.warnings);
 }
@@ -58,10 +73,15 @@ fn an_address_that_was_fetched_is_not_said() {
 #[test]
 fn claude_storage_is_said() {
     for script in ["const db = window.claude.db;", "await claude.use('db')"] {
-        let bundle = page(&[("index.html", &format!("<script>{script}</script>"))], &[]);
+        let bundle = page(
+            &[("index.html", &format!("<script>{script}</script>"))],
+            &[],
+        );
         assert_eq!(
             bundle.warnings,
-            vec!["it uses claude.ai's storage (window.claude): what it saved there is not in this copy"],
+            vec![
+                "it uses claude.ai's storage (window.claude): what it saved there is not in this copy"
+            ],
             "{script}"
         );
     }
@@ -70,7 +90,10 @@ fn claude_storage_is_said() {
 #[test]
 fn the_republish_hook_of_claude_ai_keeps_nothing_and_is_not_said() {
     let bundle = page(
-        &[("index.html", "<script>const hot = window.claude && window.claude.hot; if (hot) hot.snapshot(() => 1);</script>")],
+        &[(
+            "index.html",
+            "<script>const hot = window.claude && window.claude.hot; if (hot) hot.snapshot(() => 1);</script>",
+        )],
         &[],
     );
     assert!(bundle.warnings.is_empty(), "{:?}", bundle.warnings);
@@ -83,9 +106,16 @@ fn known_pieces_are_taken_and_not_fetched() {
         r#"<img src="https://claude.ai/api/assets/abc123"><img src="https://cdn.test/other.png">"#,
     )]);
     let saved = temp();
-    write(saved.path(), "asset-abc123.png", "the picture the agent read");
+    write(
+        saved.path(),
+        "asset-abc123.png",
+        "the picture the agent read",
+    );
     let mut map = BTreeMap::new();
-    map.insert("https://claude.ai/api/assets/abc123".to_string(), saved.path().join("asset-abc123.png"));
+    map.insert(
+        "https://claude.ai/api/assets/abc123".to_string(),
+        saved.path().join("asset-abc123.png"),
+    );
     // The inner fetcher knows the other address only: asking it for the asset would be
     // a 404, and a refusal.
     let inner = Arc::new(web(&[("https://cdn.test/other.png", "image/png", "other")]));
@@ -94,30 +124,49 @@ fn known_pieces_are_taken_and_not_fetched() {
     let path = stored(&bundle, "https://claude.ai/api/assets/abc123");
     assert_eq!(served(&bundle, &path), "the picture the agent read");
     let file = bundle.served.iter().find(|f| f.path == path).unwrap();
-    assert_eq!(file.media_type, "image/png", "the type comes from the file's ending");
-    assert_eq!(served(&bundle, &stored(&bundle, "https://cdn.test/other.png")), "other");
+    assert_eq!(
+        file.media_type, "image/png",
+        "the type comes from the file's ending"
+    );
+    assert_eq!(
+        served(&bundle, &stored(&bundle, "https://cdn.test/other.png")),
+        "other"
+    );
 }
 
 #[test]
 fn a_known_piece_must_be_a_file() {
     let mut map = BTreeMap::new();
-    map.insert("https://claude.ai/api/assets/x".to_string(), std::path::PathBuf::from("/nonexistent/innerword-page/x.png"));
+    map.insert(
+        "https://claude.ai/api/assets/x".to_string(),
+        std::path::PathBuf::from("/nonexistent/innerword-page/x.png"),
+    );
     assert!(KnownPieces::read(&map, Arc::new(web(&[]))).is_err());
     let mut map = BTreeMap::new();
-    map.insert("ftp://example.com/x".to_string(), std::path::PathBuf::from("/tmp"));
+    map.insert(
+        "ftp://example.com/x".to_string(),
+        std::path::PathBuf::from("/tmp"),
+    );
     assert!(KnownPieces::read(&map, Arc::new(web(&[]))).is_err());
 }
 
 #[test]
 fn an_address_in_an_event_handler_that_is_not_kept_is_said() {
     let bundle = page(
-        &[("index.html", r#"<button onclick="fetch('https://api.example.com/x')">Ask</button><a href="x.html" onmouseover="this.title = 'plain words'">x</a>"#)],
+        &[(
+            "index.html",
+            r#"<button onclick="fetch('https://api.example.com/x')">Ask</button><a href="x.html" onmouseover="this.title = 'plain words'">x</a>"#,
+        )],
         &[],
     );
     assert_eq!(
         bundle.warnings,
-        vec!["it names https://api.example.com/x, which is not kept: if the page asks for it later (a button), that part will not work"]
+        vec![
+            "it names https://api.example.com/x, which is not kept: if the page asks for it later (a button), that part will not work"
+        ]
     );
     // The handler is written back as it was when nothing in it changes.
-    assert!(served(&bundle, "index.html").contains(r#"onclick="fetch('https://api.example.com/x')""#));
+    assert!(
+        served(&bundle, "index.html").contains(r#"onclick="fetch('https://api.example.com/x')""#)
+    );
 }

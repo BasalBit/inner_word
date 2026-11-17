@@ -453,7 +453,10 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
 
     // Everything that writes is refused, with the same error, and writes nothing.
     let results = every_write(&fx, &claude());
-    assert_eq!(results.len(), innerword_agent::live::Operation::CHANGES.len());
+    assert_eq!(
+        results.len(),
+        innerword_agent::live::Operation::CHANGES.len()
+    );
     assert_eq!(
         results.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         innerword_agent::live::Operation::CHANGES,

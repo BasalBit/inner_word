@@ -58,7 +58,11 @@ impl JsScan {
     /// The strings that are not references.
     pub fn other_strings(&self) -> impl Iterator<Item = &JsString> {
         let used: std::collections::HashSet<usize> = self.refs.iter().map(|r| r.string).collect();
-        self.strings.iter().enumerate().filter(move |(i, _)| !used.contains(i)).map(|(_, s)| s)
+        self.strings
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| !used.contains(i))
+            .map(|(_, s)| s)
     }
 }
 
@@ -88,8 +92,20 @@ fn is_ident(b: u8) -> bool {
 fn expression_follows(word: &str) -> bool {
     matches!(
         word,
-        "return" | "typeof" | "case" | "do" | "else" | "in" | "of" | "new" | "delete" | "void"
-            | "throw" | "instanceof" | "yield" | "await"
+        "return"
+            | "typeof"
+            | "case"
+            | "do"
+            | "else"
+            | "in"
+            | "of"
+            | "new"
+            | "delete"
+            | "void"
+            | "throw"
+            | "instanceof"
+            | "yield"
+            | "await"
     )
 }
 
@@ -113,7 +129,11 @@ fn lex(bytes: &[u8], scan: &mut JsScan) -> Vec<Tok> {
             continue;
         }
         if b == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
-            let end = bytes[i..].iter().position(|&c| c == b'\n').map(|e| i + e).unwrap_or(n);
+            let end = bytes[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map(|e| i + e)
+                .unwrap_or(n);
             let text = String::from_utf8_lossy(&bytes[i + 2..end]);
             if text.starts_with("# sourceMappingURL=") || text.starts_with("@ sourceMappingURL=") {
                 scan.source_maps.push(i..end);
@@ -122,7 +142,9 @@ fn lex(bytes: &[u8], scan: &mut JsScan) -> Vec<Tok> {
             continue;
         }
         if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
-            let end = crate::media::find(&bytes[i + 2..], b"*/").map(|e| i + 2 + e + 2).unwrap_or(n);
+            let end = crate::media::find(&bytes[i + 2..], b"*/")
+                .map(|e| i + 2 + e + 2)
+                .unwrap_or(n);
             i = end;
             continue;
         }
@@ -140,8 +162,16 @@ fn lex(bytes: &[u8], scan: &mut JsScan) -> Vec<Tok> {
         }
         if b == b'"' || b == b'\'' {
             let (end, value) = string(bytes, i);
-            let inner_end = if end > i + 1 && bytes[end - 1] == b { end - 1 } else { end };
-            scan.strings.push(JsString { span: i + 1..inner_end, value, substituted: false });
+            let inner_end = if end > i + 1 && bytes[end - 1] == b {
+                end - 1
+            } else {
+                end
+            };
+            scan.strings.push(JsString {
+                span: i + 1..inner_end,
+                value,
+                substituted: false,
+            });
             tokens.push(Tok::Str(scan.strings.len() - 1));
             regex_allowed = false;
             i = end;
@@ -151,13 +181,25 @@ fn lex(bytes: &[u8], scan: &mut JsScan) -> Vec<Tok> {
             let (end, value, opened) = template_chunk(bytes, i + 1);
             if opened {
                 // A `${` ended the chunk: the template goes on after the matching `}`.
-                scan.strings.push(JsString { span: i + 1..end - 2, value, substituted: true });
+                scan.strings.push(JsString {
+                    span: i + 1..end - 2,
+                    value,
+                    substituted: true,
+                });
                 tokens.push(Tok::Str(scan.strings.len() - 1));
                 braces.push(Brace::Template);
                 regex_allowed = true;
             } else {
-                let inner_end = if end > i + 1 && bytes[end - 1] == b'`' { end - 1 } else { end };
-                scan.strings.push(JsString { span: i + 1..inner_end, value, substituted: false });
+                let inner_end = if end > i + 1 && bytes[end - 1] == b'`' {
+                    end - 1
+                } else {
+                    end
+                };
+                scan.strings.push(JsString {
+                    span: i + 1..inner_end,
+                    value,
+                    substituted: false,
+                });
                 tokens.push(Tok::Str(scan.strings.len() - 1));
                 regex_allowed = false;
             }
@@ -210,7 +252,9 @@ fn lex(bytes: &[u8], scan: &mut JsScan) -> Vec<Tok> {
         }
         if b.is_ascii_digit() || (b == b'.' && i + 1 < n && bytes[i + 1].is_ascii_digit()) {
             let mut j = i + 1;
-            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'_') {
+            while j < n
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'_')
+            {
                 j += 1;
             }
             tokens.push(Tok::Other);
@@ -397,7 +441,10 @@ fn find_refs(_bytes: &[u8], tokens: &[Tok], scan: &mut JsScan) {
                     add(s, JsKind::Specifier, scan);
                 } else if tokens.get(i + 1) == Some(&Tok::Punct(b'(')) {
                     if let Some(s) = string_at(i + 2) {
-                        if matches!(tokens.get(i + 3), Some(Tok::Punct(b')')) | Some(Tok::Punct(b','))) {
+                        if matches!(
+                            tokens.get(i + 3),
+                            Some(Tok::Punct(b')')) | Some(Tok::Punct(b','))
+                        ) {
                             add(s, JsKind::Specifier, scan);
                         }
                     }
@@ -410,7 +457,9 @@ fn find_refs(_bytes: &[u8], tokens: &[Tok], scan: &mut JsScan) {
             }
             "new" => {
                 if let Some(Tok::Ident(class)) = tokens.get(i + 1) {
-                    if (class == "Worker" || class == "SharedWorker") && tokens.get(i + 2) == Some(&Tok::Punct(b'(')) {
+                    if (class == "Worker" || class == "SharedWorker")
+                        && tokens.get(i + 2) == Some(&Tok::Punct(b'('))
+                    {
                         if let Some(s) = string_at(i + 3) {
                             add(s, JsKind::Plain, scan);
                         }
@@ -439,7 +488,10 @@ fn find_refs(_bytes: &[u8], tokens: &[Tok], scan: &mut JsScan) {
         }
         if is_cdn_address(&string.value) {
             used[s] = true;
-            scan.refs.push(JsRef { string: s, kind: JsKind::Plain });
+            scan.refs.push(JsRef {
+                string: s,
+                kind: JsKind::Plain,
+            });
         }
     }
     scan.refs.sort_by_key(|r| scan.strings[r.string].span.start);

@@ -3,9 +3,9 @@
 
 mod automation {
     use gpui::Keystroke;
-    use std::time::Duration;
     use innerword_app::automation::*;
     use innerword_ui::ThemeMode;
+    use std::time::Duration;
 
     /// The step `shortcuts:import:<path>` logs what it did: 0.6.0 logged
     /// "shortcuts: read <path>" for a file that does not exist.
@@ -386,9 +386,9 @@ mod shortcuts {
 }
 
 mod export {
-    use std::path::PathBuf;
     use innerword_app::export::*;
     use innerword_export::ExportFormat;
+    use std::path::PathBuf;
 
     #[test]
     fn extension_is_enforced() {

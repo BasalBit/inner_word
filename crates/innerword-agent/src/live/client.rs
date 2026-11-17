@@ -5,8 +5,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
 use innerword_store::instance_lock;
+use serde_json::Value;
 
 use super::socket::{line_of, read_line, write_line, write_text};
 use super::{ANSWER_GRACE, Answer, AppState, Operation, PROTOCOL_VERSION, RequestLine};

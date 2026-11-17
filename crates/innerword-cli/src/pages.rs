@@ -10,8 +10,8 @@
 
 use std::io::Read;
 
-use serde_json::{Map, Value, json};
 use innerword_mcp::{ErrorKind, Failure, Reply, Toolbox};
+use serde_json::{Map, Value, json};
 
 use crate::parse::{Globals, Parsed};
 use crate::spec::Spec;

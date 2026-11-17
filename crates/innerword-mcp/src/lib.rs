@@ -35,11 +35,11 @@ pub mod tools;
 
 use std::io;
 
-pub use protocol::{Server, ServerInfo};
-pub use tools::{Failure, Reply, Toolbox};
 pub use innerword_agent::{
     ErrorKind, Item, Library, POSITION_NEEDS_A_HEADING, POSITION_TAKES_NO_HEADING,
 };
+pub use protocol::{Server, ServerInfo};
+pub use tools::{Failure, Reply, Toolbox};
 
 /// The name of the server in the protocol (`serverInfo.name`) and the name agents
 /// register it under.

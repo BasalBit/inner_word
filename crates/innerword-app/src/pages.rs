@@ -1067,7 +1067,10 @@ struct FakeState {
     /// Checks are answered only when the test lets them ([`FakePages::hold_checks`]).
     checks_held: bool,
     /// The checks that wait for that.
-    waiting_checks: Vec<(AnswerTx<innerword_page::CheckReport>, innerword_page::CheckReport)>,
+    waiting_checks: Vec<(
+        AnswerTx<innerword_page::CheckReport>,
+        innerword_page::CheckReport,
+    )>,
     /// How many checks were asked for.
     checks: usize,
 }

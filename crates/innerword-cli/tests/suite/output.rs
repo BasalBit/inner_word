@@ -116,7 +116,10 @@ fn the_overview_lists_every_command_and_each_has_help_with_an_example() {
 fn the_version_is_the_version_of_the_app() {
     let sandbox = Sandbox::new();
     let version = sandbox.ok(&["--version"]);
-    assert_eq!(version, format!("innerword {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        version,
+        format!("innerword {}\n", env!("CARGO_PKG_VERSION"))
+    );
     assert_eq!(sandbox.ok(&["-V"]), version);
     assert_eq!(
         sandbox.json(&["status"])["version"],

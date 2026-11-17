@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{Context, EventEmitter, SharedString};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use innerword_store::{
     Clock, Document, DocumentContent, DocumentId, DocumentKind, DocumentMeta, EmptiedTrash,
     FileInfo, Folder, FolderId, FolderNode, ImageId, ImageInfo, LibraryTree, NewImage, PageContent,
     Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, Store, TrashEntry,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// A change made through a [`Library`].
 ///

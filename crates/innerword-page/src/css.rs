@@ -56,10 +56,13 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
     while i < n {
         let b = bytes[i];
         if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
-            let end = crate::media::find(&bytes[i + 2..], b"*/").map(|e| i + 2 + e + 2).unwrap_or(n);
+            let end = crate::media::find(&bytes[i + 2..], b"*/")
+                .map(|e| i + 2 + e + 2)
+                .unwrap_or(n);
             let inner = String::from_utf8_lossy(&bytes[i + 2..end.saturating_sub(2).max(i + 2)]);
             let inner = inner.trim_start();
-            if inner.starts_with("# sourceMappingURL=") || inner.starts_with("@ sourceMappingURL=") {
+            if inner.starts_with("# sourceMappingURL=") || inner.starts_with("@ sourceMappingURL=")
+            {
                 scan.source_maps.push(i..end);
             }
             i = end;
@@ -79,7 +82,11 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
             } else {
                 end
             };
-            scan.items.push(CssItem { span: i + 1..inner_end, value, kind });
+            scan.items.push(CssItem {
+                span: i + 1..inner_end,
+                value,
+                kind,
+            });
             pending_import = false;
             i = end;
             continue;
@@ -111,7 +118,10 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
                 let name = String::from_utf8_lossy(&bytes[i..j]).to_ascii_lowercase();
                 if name == "url" {
                     let (mut item, end) = url_function(bytes, j + 1, pending_import);
-                    if let Some(item) = item.as_mut().filter(|item| item.kind == CssKind::Url && font_face.is_some()) {
+                    if let Some(item) = item
+                        .as_mut()
+                        .filter(|item| item.kind == CssKind::Url && font_face.is_some())
+                    {
                         item.kind = CssKind::Font;
                     }
                     if let Some(item) = item {
@@ -169,7 +179,11 @@ pub(crate) fn scan_css(bytes: &[u8]) -> CssScan {
 /// The inside of `url(` from `at`: the item, and where scanning goes on.
 fn url_function(bytes: &[u8], at: usize, import: bool) -> (Option<CssItem>, usize) {
     let n = bytes.len();
-    let kind = if import { CssKind::Import } else { CssKind::Url };
+    let kind = if import {
+        CssKind::Import
+    } else {
+        CssKind::Url
+    };
     let mut k = at;
     while k < n && is_space(bytes[k]) {
         k += 1;
@@ -177,7 +191,11 @@ fn url_function(bytes: &[u8], at: usize, import: bool) -> (Option<CssItem>, usiz
     if k < n && (bytes[k] == b'"' || bytes[k] == b'\'') {
         let quote = bytes[k];
         let (end, value) = string(bytes, k);
-        let inner_end = if end > k + 1 && bytes[end - 1] == quote { end - 1 } else { end };
+        let inner_end = if end > k + 1 && bytes[end - 1] == quote {
+            end - 1
+        } else {
+            end
+        };
         let mut after = end;
         while after < n && bytes[after] != b')' && bytes[after] != b';' && bytes[after] != b'}' {
             after += 1;
@@ -185,7 +203,14 @@ fn url_function(bytes: &[u8], at: usize, import: bool) -> (Option<CssItem>, usiz
         if after < n && bytes[after] == b')' {
             after += 1;
         }
-        return (Some(CssItem { span: k + 1..inner_end, value, kind }), after);
+        return (
+            Some(CssItem {
+                span: k + 1..inner_end,
+                value,
+                kind,
+            }),
+            after,
+        );
     }
     let start = k;
     let mut value = String::new();
@@ -211,7 +236,14 @@ fn url_function(bytes: &[u8], at: usize, import: bool) -> (Option<CssItem>, usiz
     if start == end {
         return (None, after);
     }
-    (Some(CssItem { span: start..end, value: value.trim().to_string(), kind }), after)
+    (
+        Some(CssItem {
+            span: start..end,
+            value: value.trim().to_string(),
+            kind,
+        }),
+        after,
+    )
 }
 
 /// A CSS string from its opening quote at `at`: where it ends (after the closing quote,
@@ -260,7 +292,8 @@ fn escape(bytes: &[u8], at: usize) -> (Option<char>, usize) {
         k += 1;
     }
     if k > at {
-        let code = u32::from_str_radix(std::str::from_utf8(&bytes[at..k]).unwrap_or("0"), 16).unwrap_or(0xFFFD);
+        let code = u32::from_str_radix(std::str::from_utf8(&bytes[at..k]).unwrap_or("0"), 16)
+            .unwrap_or(0xFFFD);
         if k < n && is_space(bytes[k]) {
             k += 1;
         }
@@ -268,7 +301,9 @@ fn escape(bytes: &[u8], at: usize) -> (Option<char>, usize) {
     }
     // One character, which may be several bytes of UTF-8.
     let len = utf8_len(bytes[at]).min(n - at);
-    let ch = std::str::from_utf8(&bytes[at..at + len]).ok().and_then(|s| s.chars().next());
+    let ch = std::str::from_utf8(&bytes[at..at + len])
+        .ok()
+        .and_then(|s| s.chars().next());
     (ch, len)
 }
 

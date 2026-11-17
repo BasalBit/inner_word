@@ -11,7 +11,9 @@
 
 use gpui::{App, Context, Entity, SharedString, WeakEntity, Window};
 use innerword_library::{DocumentEntry, DocumentId, Library};
-use innerword_ui::{IconName, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings};
+use innerword_ui::{
+    IconName, Picker, PickerDelegate, PickerEntry, PickerItem, fuzzy::match_strings,
+};
 
 use crate::{document_io::UNTITLED, workspace::Workspace};
 

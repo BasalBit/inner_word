@@ -222,7 +222,10 @@ struct PreviewBlock {
 
 /// The preview of a version of a page: "31 files", then its text, a
 /// paragraph a line, muted.
-fn page_preview(snapshot: innerword_library::SnapshotId, manifest: &innerword_page::Manifest) -> Preview {
+fn page_preview(
+    snapshot: innerword_library::SnapshotId,
+    manifest: &innerword_page::Manifest,
+) -> Preview {
     let plain = |text: String, muted: bool, heading: Option<u8>| PreviewBlock {
         text: SharedString::from(text),
         heading,

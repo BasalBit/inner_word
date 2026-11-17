@@ -9,12 +9,12 @@ use gpui::{
     Pixels, Render, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle,
     WindowOptions, div, point, prelude::*, px, size,
 };
-use serde::{Deserialize, Serialize};
 use innerword_library::Library;
 use innerword_ui::{
     Button, Icon, IconName, KeyHint,
     theme::{self, ActiveTheme},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     actions::{AcceptMessage, Quit},

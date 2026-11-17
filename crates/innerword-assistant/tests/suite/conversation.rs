@@ -2,11 +2,11 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::json;
 use innerword_assistant::{
     AssistantEvent, Backend, ConversationOptions, HistoryMessage, NameBook, Role, Selection,
     ToolState, TurnEnd, library_tools_named,
 };
+use serde_json::json;
 
 use super::support::{Answer, PATIENCE, Stage, Talk, fixture, value_after};
 

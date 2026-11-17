@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use serde_json::json;
 use innerword_assistant::{
     AssistantError, AssistantEvent, ChatSession, ConversationOptions, MessageState, Selection,
 };
+use serde_json::json;
 
 use super::session::settle;
 use super::support::{Stage, Talk, value_after};

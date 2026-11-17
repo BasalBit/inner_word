@@ -1,9 +1,11 @@
 //! Whether Claude Code is there, which version, whether the user is signed in, and
 //! which models it offers: asked of the stand-in program.
 
-use serde_json::json;
 use innerword_assistant::claude::Search;
-use innerword_assistant::{Availability, Backend, CatalogSource, ClaudeCode, Mode, Selection, SignIn};
+use innerword_assistant::{
+    Availability, Backend, CatalogSource, ClaudeCode, Mode, Selection, SignIn,
+};
+use serde_json::json;
 
 use super::support::{Stage, fixture};
 

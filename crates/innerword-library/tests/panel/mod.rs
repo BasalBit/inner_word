@@ -1404,7 +1404,10 @@ fn mouse(cx: &mut TestAppContext) {
     }
     assert_eq!(f.documents(None, cx), vec![f.at_root]);
     cx.simulate_click(
-        point(viewport.width - px(30.), innerword_library::HEADER_HEIGHT / 2.),
+        point(
+            viewport.width - px(30.),
+            innerword_library::HEADER_HEIGHT / 2.,
+        ),
         none,
     );
     assert!(!f.panel.read_with(cx, |p, _| p.is_showing_trash()));
@@ -1761,7 +1764,8 @@ fn commands_from_the_text_act_on_the_open_document(cx: &mut TestAppContext) {
         let toast = layer.toasts().last().unwrap().clone();
         (
             toast.action_label().cloned(),
-            innerword_ui::KeyHint::for_action(&innerword_library::UndoTrash, cx).map(|hint| hint.text()),
+            innerword_ui::KeyHint::for_action(&innerword_library::UndoTrash, cx)
+                .map(|hint| hint.text()),
         )
     });
     assert_eq!(

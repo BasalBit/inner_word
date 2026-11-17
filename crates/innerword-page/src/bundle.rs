@@ -18,15 +18,18 @@ use crate::fetch::{FetchError, Fetched, Fetcher};
 use crate::html::quoted_attr;
 use crate::importmap::{ImportMap, MapKind};
 use crate::input::{Input, too_heavy, too_large, too_many_files};
-use crate::limits::{ALSO_LOADS, FETCH_BUDGET, FETCH_PARALLEL, MAX_DEPTH, MAX_EXTERNALS, MAX_FILE_BYTES, MAX_FILES, MAX_PAGE_BYTES};
+use crate::limits::{
+    ALSO_LOADS, FETCH_BUDGET, FETCH_PARALLEL, MAX_DEPTH, MAX_EXTERNALS, MAX_FILE_BYTES, MAX_FILES,
+    MAX_PAGE_BYTES,
+};
 use crate::media::{
-    Kind, OCTET_STREAM, essence, file_id_hex, find, is_html_type, is_text_type, looks_like_html, looks_like_svg,
-    looks_like_text, media_type, served_type, sniffed_type,
+    Kind, OCTET_STREAM, essence, file_id_hex, find, is_html_type, is_text_type, looks_like_html,
+    looks_like_svg, looks_like_text, media_type, served_type, sniffed_type,
 };
 use crate::naming::{external_dir, external_path};
 use crate::resolve::{
-    Resolved, absolute_reference, as_specifier, local_base, local_root, normal_address, relative_reference, resolve,
-    root_reference,
+    Resolved, absolute_reference, as_specifier, local_base, local_root, normal_address,
+    relative_reference, resolve, root_reference,
 };
 use crate::scan::{Ctx, Expect, Place, Ref, Scan, Write, scan_file};
 
@@ -55,7 +58,13 @@ pub struct BundleFile {
 
 impl fmt::Debug for BundleFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BundleFile {{ path: {:?}, media_type: {:?}, bytes: {} }}", self.path, self.media_type, self.bytes.len())
+        write!(
+            f,
+            "BundleFile {{ path: {:?}, media_type: {:?}, bytes: {} }}",
+            self.path,
+            self.media_type,
+            self.bytes.len()
+        )
     }
 }
 
@@ -90,7 +99,10 @@ impl Bundle {
         let external: HashSet<&str> = self.externals.iter().map(|e| e.path.as_str()).collect();
         let mut out = vec![self.entry.clone()];
         for file in &self.served {
-            if file.path != self.entry && !external.contains(file.path.as_str()) && is_html_type(&file.media_type) {
+            if file.path != self.entry
+                && !external.contains(file.path.as_str())
+                && is_html_type(&file.media_type)
+            {
                 out.push(file.path.clone());
             }
         }
@@ -118,7 +130,11 @@ impl Bundle {
 pub(crate) fn too_many_html(html: usize) -> Problem {
     Problem::new(
         "the page",
-        format!("the page has {} HTML pages; at most {} can be checked", count(html), count(ALSO_LOADS + 1)),
+        format!(
+            "the page has {} HTML pages; at most {} can be checked",
+            count(html),
+            count(ALSO_LOADS + 1)
+        ),
     )
 }
 
@@ -137,14 +153,31 @@ struct Piece {
 }
 
 pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> {
-    let entry_bytes = input.files.iter().find(|f| f.path == input.entry).map(|f| f.bytes.clone());
-    let shown = entry_bytes.as_deref().and_then(static_title).unwrap_or_else(|| input.name.clone());
-    let refuse = |problems: Vec<Problem>| PageError::Incomplete { name: shown.clone(), problems };
+    let entry_bytes = input
+        .files
+        .iter()
+        .find(|f| f.path == input.entry)
+        .map(|f| f.bytes.clone());
+    let shown = entry_bytes
+        .as_deref()
+        .and_then(static_title)
+        .unwrap_or_else(|| input.name.clone());
+    let refuse = |problems: Vec<Problem>| PageError::Incomplete {
+        name: shown.clone(),
+        problems,
+    };
 
     if entry_bytes.is_none() {
-        return Err(PageError::input(format!("the page has no file {}", input.entry)));
+        return Err(PageError::input(format!(
+            "the page has no file {}",
+            input.entry
+        )));
     }
-    let html = input.files.iter().filter(|f| Kind::of_path(&f.path) == Kind::Html).count();
+    let html = input
+        .files
+        .iter()
+        .filter(|f| Kind::of_path(&f.path) == Kind::Html)
+        .count();
     if html > ALSO_LOADS + 1 {
         return Err(refuse(vec![too_many_html(html)]));
     }
@@ -163,8 +196,14 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
         .iter()
         .map(|file| {
             let kind = Kind::of_file(&file.path, &file.bytes);
-            let scan = kind.is_text().then(|| scan_file(kind, &file.bytes, &local_base(&file.path)));
-            LocalFile { path: file.path.clone(), bytes: file.bytes.clone(), scan }
+            let scan = kind
+                .is_text()
+                .then(|| scan_file(kind, &file.bytes, &local_base(&file.path)));
+            LocalFile {
+                path: file.path.clone(),
+                bytes: file.bytes.clone(),
+                scan,
+            }
         })
         .collect();
     let maps = absolute_maps(locals.iter().filter_map(|l| l.scan.as_ref()));
@@ -220,7 +259,9 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
             }
             let (kind, media) = what_a_piece_is(&fetched, expect);
             let scan = if kind.is_text() {
-                Url::parse(&fetched.final_url).ok().map(|base| scan_file(kind, &fetched.bytes, &base))
+                Url::parse(&fetched.final_url)
+                    .ok()
+                    .map(|base| scan_file(kind, &fetched.bytes, &base))
             } else {
                 None
             };
@@ -233,7 +274,16 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
                     }
                 }
             }
-            pieces.insert(url, Piece { fetched, kind, media_type: media, scan, path: String::new() });
+            pieces.insert(
+                url,
+                Piece {
+                    fetched,
+                    kind,
+                    media_type: media,
+                    scan,
+                    path: String::new(),
+                },
+            );
         }
     }
     if !problems.is_empty() {
@@ -241,11 +291,19 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
     }
 
     // Where each piece is stored.
-    let mut taken: HashMap<String, String> = locals.iter().map(|l| (l.path.clone(), String::new())).collect();
+    let mut taken: HashMap<String, String> = locals
+        .iter()
+        .map(|l| (l.path.clone(), String::new()))
+        .collect();
     for (url, piece) in pieces.iter_mut() {
         piece.path = external_path(url, piece.kind, &mut taken);
     }
-    let rewriter = Rewriter { stored: pieces.iter().map(|(url, piece)| (url.clone(), piece.path.clone())).collect() };
+    let rewriter = Rewriter {
+        stored: pieces
+            .iter()
+            .map(|(url, piece)| (url.clone(), piece.path.clone()))
+            .collect(),
+    };
 
     // The served files: the page's own, rewritten where they name a piece, and the pieces.
     let mut served: Vec<BundleFile> = Vec::with_capacity(locals.len() + pieces.len());
@@ -257,15 +315,30 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
             },
             None => local.bytes.clone(),
         };
-        served.push(BundleFile { path: local.path.clone(), media_type: served_type(&local.path, &bytes), bytes });
+        served.push(BundleFile {
+            path: local.path.clone(),
+            media_type: served_type(&local.path, &bytes),
+            bytes,
+        });
     }
     for piece in pieces.values() {
         let bytes: Vec<u8> = match &piece.scan {
-            Some(scan) => rewrite(&piece.fetched.bytes, scan, &piece.path, &rewriter, true, false)
-                .unwrap_or_else(|| piece.fetched.bytes.clone()),
+            Some(scan) => rewrite(
+                &piece.fetched.bytes,
+                scan,
+                &piece.path,
+                &rewriter,
+                true,
+                false,
+            )
+            .unwrap_or_else(|| piece.fetched.bytes.clone()),
             None => piece.fetched.bytes.clone(),
         };
-        served.push(BundleFile { path: piece.path.clone(), media_type: piece.media_type.clone(), bytes: Arc::from(bytes) });
+        served.push(BundleFile {
+            path: piece.path.clone(),
+            media_type: piece.media_type.clone(),
+            bytes: Arc::from(bytes),
+        });
     }
     served.sort_by(|a, b| a.path.cmp(&b.path));
     let original: Vec<BundleFile> = input
@@ -277,14 +350,23 @@ pub fn bundle(input: Input, fetcher: &dyn Fetcher) -> Result<Bundle, PageError> 
             bytes: file.bytes.clone(),
         })
         .collect();
-    let externals: Vec<External> =
-        pieces.iter().map(|(url, piece)| External { url: url.clone(), path: piece.path.clone() }).collect();
+    let externals: Vec<External> = pieces
+        .iter()
+        .map(|(url, piece)| External {
+            url: url.clone(),
+            path: piece.path.clone(),
+        })
+        .collect();
 
     let mut warnings = input.warnings.clone();
     warnings.extend(not_kept(&locals, &pieces));
-    if locals.iter().any(|l| l.scan.is_some() && uses_claude(&l.bytes)) {
+    if locals
+        .iter()
+        .any(|l| l.scan.is_some() && uses_claude(&l.bytes))
+    {
         warnings.push(
-            "it uses claude.ai's storage (window.claude): what it saved there is not in this copy".to_string(),
+            "it uses claude.ai's storage (window.claude): what it saved there is not in this copy"
+                .to_string(),
         );
     }
 
@@ -332,13 +414,21 @@ fn lazy_and_missing(locals: &[LocalFile], entry: &str) -> Vec<Problem> {
     let mut named: HashSet<String> = HashSet::new();
     for local in locals {
         let Some(scan) = &local.scan else { continue };
-        let subject = if local.path == entry { "the page" } else { local.path.as_str() };
+        let subject = if local.path == entry {
+            "the page"
+        } else {
+            local.path.as_str()
+        };
         for reference in scan.all_refs() {
             if !reference.lazy {
                 continue;
             }
             if let Resolved::Local { path, .. } = resolve(&reference.raw, &reference.base) {
-                if path.is_empty() || path.ends_with('/') || files.contains(path.as_str()) || !named.insert(path.clone()) {
+                if path.is_empty()
+                    || path.ends_with('/')
+                    || files.contains(path.as_str())
+                    || !named.insert(path.clone())
+                {
                     continue;
                 }
                 problems.push(Problem::new(
@@ -358,7 +448,11 @@ fn absolute_maps<'a>(scans: impl Iterator<Item = &'a Scan>) -> Vec<ImportMap> {
         for (map, base) in scan.all_maps() {
             let mut map = map.clone();
             for item in &mut map.items {
-                let join = |text: &str| base.join(text.trim()).map(|u| u.to_string()).unwrap_or_else(|_| text.to_string());
+                let join = |text: &str| {
+                    base.join(text.trim())
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|_| text.to_string())
+                };
                 match item.kind {
                     MapKind::ScopeKey => {
                         item.value = join(&item.value);
@@ -391,7 +485,12 @@ fn fetch_target(reference: &Ref) -> Option<String> {
 }
 
 /// Every address a scan has fetched that is not in `seen`, into `wanted`.
-fn want_from(scan: &Scan, maps: &[ImportMap], wanted: &mut BTreeMap<String, Expect>, seen: &HashSet<String>) {
+fn want_from(
+    scan: &Scan,
+    maps: &[ImportMap],
+    wanted: &mut BTreeMap<String, Expect>,
+    seen: &HashSet<String>,
+) {
     for reference in scan.all_refs() {
         if let Some(url) = fetch_target(reference) {
             if !seen.contains(&url) {
@@ -401,7 +500,9 @@ fn want_from(scan: &Scan, maps: &[ImportMap], wanted: &mut BTreeMap<String, Expe
     }
     for (specifier, referrer) in scan.all_bare() {
         for map in maps {
-            let Some(target) = map.resolve(specifier, referrer.as_str()) else { continue };
+            let Some(target) = map.resolve(specifier, referrer.as_str()) else {
+                continue;
+            };
             if let Resolved::External { url, .. } = resolve(&target, &local_root()) {
                 if !target.trim_end().ends_with('/') && !seen.contains(&url) {
                     wanted.entry(url).or_insert(Expect::Js);
@@ -411,8 +512,13 @@ fn want_from(scan: &Scan, maps: &[ImportMap], wanted: &mut BTreeMap<String, Expe
     }
 }
 
-fn fetch_all(fetcher: &dyn Fetcher, urls: &[String], started: Instant) -> Vec<Result<Fetched, FetchError>> {
-    let results: Vec<Mutex<Option<Result<Fetched, FetchError>>>> = urls.iter().map(|_| Mutex::new(None)).collect();
+fn fetch_all(
+    fetcher: &dyn Fetcher,
+    urls: &[String],
+    started: Instant,
+) -> Vec<Result<Fetched, FetchError>> {
+    let results: Vec<Mutex<Option<Result<Fetched, FetchError>>>> =
+        urls.iter().map(|_| Mutex::new(None)).collect();
     let next = AtomicUsize::new(0);
     let workers = FETCH_PARALLEL.min(urls.len());
     std::thread::scope(|scope| {
@@ -426,7 +532,10 @@ fn fetch_all(fetcher: &dyn Fetcher, urls: &[String], started: Instant) -> Vec<Re
                     let result = if started.elapsed() >= FETCH_BUDGET {
                         Err(FetchError::new(
                             &urls[i],
-                            format!("the {} s for fetching the pieces of the page ran out", FETCH_BUDGET.as_secs()),
+                            format!(
+                                "the {} s for fetching the pieces of the page ran out",
+                                FETCH_BUDGET.as_secs()
+                            ),
                         ))
                     } else {
                         fetcher.fetch(&urls[i])
@@ -462,10 +571,22 @@ fn fetch_all(fetcher: &dyn Fetcher, urls: &[String], started: Instant) -> Vec<Re
 ///    unless it says HTML.
 fn what_a_piece_is(fetched: &Fetched, expect: Expect) -> (Kind, String) {
     let bytes = &fetched.bytes;
-    let header = fetched.media_type.as_deref().map(str::trim).unwrap_or("").to_string();
-    let path = Url::parse(&fetched.final_url).map(|u| u.path().to_string()).unwrap_or_default();
+    let header = fetched
+        .media_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let path = Url::parse(&fetched.final_url)
+        .map(|u| u.path().to_string())
+        .unwrap_or_default();
     let by_ending = media_type(&path);
-    let vague = |t: &str| matches!(essence(t).as_str(), "" | "text/plain" | OCTET_STREAM | "binary/octet-stream");
+    let vague = |t: &str| {
+        matches!(
+            essence(t).as_str(),
+            "" | "text/plain" | OCTET_STREAM | "binary/octet-stream"
+        )
+    };
 
     if let Some(found) = sniffed_type(bytes) {
         return (Kind::Other, found.to_string());
@@ -480,7 +601,10 @@ fn what_a_piece_is(fetched: &Fetched, expect: Expect) -> (Kind, String) {
         return (Kind::Other, font);
     }
     if !looks_like_text(bytes) {
-        let typed = [header.as_str(), by_ending].into_iter().find(|t| not_text(t)).unwrap_or(OCTET_STREAM);
+        let typed = [header.as_str(), by_ending]
+            .into_iter()
+            .find(|t| not_text(t))
+            .unwrap_or(OCTET_STREAM);
         return (Kind::Other, typed.to_string());
     }
 
@@ -496,7 +620,11 @@ fn what_a_piece_is(fetched: &Fetched, expect: Expect) -> (Kind, String) {
     if lower.ends_with(".css") || fetched.final_url.contains("fonts.googleapis.com/css") {
         return (Kind::Css, "text/css".to_string());
     }
-    if lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs") || lower.ends_with("/+esm") {
+    if lower.ends_with(".js")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs")
+        || lower.ends_with("/+esm")
+    {
         return (Kind::Js, "text/javascript".to_string());
     }
     if !html && (vague(&header) || header_says_html) {
@@ -506,13 +634,21 @@ fn what_a_piece_is(fetched: &Fetched, expect: Expect) -> (Kind, String) {
             _ => {}
         }
     }
-    if looks_like_svg(bytes) || (by_ending == "image/svg+xml" && !html && !lower.ends_with(".svgz")) {
+    if looks_like_svg(bytes) || (by_ending == "image/svg+xml" && !html && !lower.ends_with(".svgz"))
+    {
         return (Kind::Svg, "image/svg+xml".to_string());
     }
     if html {
         // A web page from the web, named as no document (a script's string, an object):
         // kept as HTML, never loaded as a page of the page.
-        return (Kind::Other, if header.is_empty() || vague(&header) { "text/html".to_string() } else { header });
+        return (
+            Kind::Other,
+            if header.is_empty() || vague(&header) {
+                "text/html".to_string()
+            } else {
+                header
+            },
+        );
     }
     if !header.is_empty() && !header_says_html {
         return (Kind::Other, header);
@@ -534,8 +670,14 @@ fn has_scheme(text: &str) -> bool {
         Some(colon) => {
             let scheme = &text[..colon];
             !scheme.is_empty()
-                && scheme.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
-                && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+                && scheme
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_alphabetic())
+                    .unwrap_or(false)
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         }
         None => false,
     }
@@ -544,11 +686,19 @@ fn has_scheme(text: &str) -> bool {
 impl Rewriter {
     /// The reference written in place of `reference` in the file at `file`, and whether
     /// it now names a stored copy; None leaves it as it is.
-    fn new_reference(&self, reference: &Ref, file: &str, base_removed: bool) -> Option<(String, bool)> {
+    fn new_reference(
+        &self,
+        reference: &Ref,
+        file: &str,
+        base_removed: bool,
+    ) -> Option<(String, bool)> {
         let raw = reference.raw.trim();
         let protocol_relative = raw.starts_with("//") || raw.starts_with("\\\\");
         let relative_again = base_removed && !has_scheme(raw);
-        let specifier = matches!(reference.ctx, Ctx::Specifier | Ctx::MapValue | Ctx::MapScope);
+        let specifier = matches!(
+            reference.ctx,
+            Ctx::Specifier | Ctx::MapValue | Ctx::MapScope
+        );
         let finish = |text: String| if specifier { as_specifier(text) } else { text };
         match resolve(raw, &reference.base) {
             Resolved::Nothing | Resolved::Outside => None,
@@ -563,7 +713,8 @@ impl Rewriter {
                 Some((finish(text), false))
             }
             Resolved::External { url, fragment } => {
-                let prefix = reference.ctx == Ctx::MapScope || (reference.ctx == Ctx::MapValue && raw.ends_with('/'));
+                let prefix = reference.ctx == Ctx::MapScope
+                    || (reference.ctx == Ctx::MapValue && raw.ends_with('/'));
                 if prefix {
                     let dir = external_dir(&url)?;
                     return Some((as_specifier(relative_reference(file, &dir, None)), false));
@@ -615,8 +766,18 @@ fn rewrite(
         }
     }
     for nested in &scan.nested {
-        if let Some(new) = rewrite(nested.text.as_bytes(), &nested.scan, file, rewriter, false, base_removed) {
-            edits.push((nested.span.clone(), quoted_attr(&String::from_utf8_lossy(&new)).into_bytes()));
+        if let Some(new) = rewrite(
+            nested.text.as_bytes(),
+            &nested.scan,
+            file,
+            rewriter,
+            false,
+            base_removed,
+        ) {
+            edits.push((
+                nested.span.clone(),
+                quoted_attr(&String::from_utf8_lossy(&new)).into_bytes(),
+            ));
         }
     }
     for span in &scan.removals {
@@ -653,7 +814,11 @@ fn uses_claude(bytes: &[u8]) -> bool {
         return false;
     }
     let mut text = String::from_utf8_lossy(bytes).into_owned();
-    for hook in ["window.claude && window.claude.hot", "window.claude?.hot", "window.claude.hot"] {
+    for hook in [
+        "window.claude && window.claude.hot",
+        "window.claude?.hot",
+        "window.claude.hot",
+    ] {
         text = text.replace(hook, "");
     }
     text.contains("window.claude") || text.contains("claude.use(")
@@ -683,7 +848,11 @@ fn not_kept(locals: &[LocalFile], pieces: &BTreeMap<String, Piece>) -> Vec<Strin
                 continue;
             }
             let key = normal_address(value).unwrap_or_else(|| value.to_string());
-            let shown = if literal.substituted { format!("{value}…") } else { value.to_string() };
+            let shown = if literal.substituted {
+                format!("{value}…")
+            } else {
+                value.to_string()
+            };
             note(clip(&shown), key);
         }
         for reference in scan.all_refs() {
@@ -726,7 +895,10 @@ fn clip(text: &str) -> String {
 /// W3C (`http://www.w3.org/2000/svg`), which nobody fetches.
 fn is_named_address(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    let rest = match lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://")) {
+    let rest = match lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+    {
         Some(rest) => rest,
         None => return false,
     };

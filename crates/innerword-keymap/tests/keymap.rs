@@ -3,12 +3,12 @@
 //! every kind of change, the shortcuts file there and back, files of
 //! other versions, files that are not such files.
 
-use serde_json::{Value, json};
 use innerword_keymap::{
     Catalogue, Changes, Context, DefaultBinding, Defaults, Effective, FILE_FORMAT, FILE_NAME,
     FILE_VERSION, ImportError, ImportMode, InactiveReason, KeySequence, Keymap, Keystroke, Origin,
     Overlap, Places, Refusal, Row, SkipReason, Target, VerdictKind, apply,
 };
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------
 // The keys of the tree

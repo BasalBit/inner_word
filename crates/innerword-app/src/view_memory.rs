@@ -27,10 +27,10 @@
 //!   ([`named_outside`]): the flag is set when the app first sees it, so
 //!   the next save keeps the name.
 
-use serde::{Deserialize, Serialize};
 use innerword_core::Document;
 use innerword_editor::{Editor, ViewState};
 use innerword_library::DocumentMeta;
+use serde::{Deserialize, Serialize};
 
 use crate::document_io::derived_title;
 

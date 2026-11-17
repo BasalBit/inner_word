@@ -112,9 +112,9 @@ pub(crate) use socket::private_dir;
 
 use std::time::Duration;
 
+use innerword_store::{DocumentId, FolderId, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use innerword_store::{DocumentId, FolderId, Store};
 
 use crate::error::{Candidate, Error, ErrorKind, ItemKind, Occurrence};
 use crate::library::Session;

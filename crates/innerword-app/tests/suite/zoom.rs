@@ -812,9 +812,12 @@ fn cmd_with_the_wheel_zooms_under_the_pointer_and_is_stored_once(cx: &mut TestAp
     let writes = Rc::new(std::cell::Cell::new(0));
     let _subscription = cx.update(|_, cx| {
         let writes = writes.clone();
-        cx.subscribe(&library, move |_, _: &innerword_library::LibraryEvent, _| {
-            writes.set(writes.get() + 1);
-        })
+        cx.subscribe(
+            &library,
+            move |_, _: &innerword_library::LibraryEvent, _| {
+                writes.set(writes.get() + 1);
+            },
+        )
     });
     // A swipe: many small turns of the wheel.
     for _ in 0..12 {

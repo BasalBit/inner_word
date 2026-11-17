@@ -14,7 +14,9 @@ use gpui::{
 use innerword_core::{
     Alignment, Block, BlockKind, Document, EditorState, Image, ImageWidth, Position, Selection,
 };
-use innerword_editor::{Editor, EditorConfig, FakeImages, NewImageSource, actions as editor_actions};
+use innerword_editor::{
+    Editor, EditorConfig, FakeImages, NewImageSource, actions as editor_actions,
+};
 use innerword_editor_tools::{
     EditorTools, Mark, ToolKind,
     actions::{CloseTool, EditImageDescription},

@@ -41,13 +41,14 @@ pub mod limits;
 
 pub use crate::bundle::{Bundle, BundleFile, External, bundle};
 pub use crate::check::{
-    Blocked, CheckReport, CheckRequest, LoadReport, STATIC_ENGINE, check_request, read_check_dir, static_check,
-    write_check_dir, write_served_dir,
+    Blocked, CheckReport, CheckRequest, LoadReport, STATIC_ENGINE, check_request, read_check_dir,
+    static_check, write_check_dir, write_served_dir,
 };
 pub use crate::error::{PROBLEMS_NAMED, PageError, Problem, megabytes, reasons_sentence};
 pub use crate::export::{Which, Written, write_folder};
 pub use crate::fetch::{
-    CachingFetcher, CurlFetcher, FetchError, Fetched, Fetcher, KnownPieces, LOCAL_ADDRESS, MapFetcher, USER_AGENT,
+    CachingFetcher, CurlFetcher, FetchError, Fetched, Fetcher, KnownPieces, LOCAL_ADDRESS,
+    MapFetcher, USER_AGENT,
 };
 pub use crate::input::{Input, InputFile, read_input};
 pub use crate::limits::*;

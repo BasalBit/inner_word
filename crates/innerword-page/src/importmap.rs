@@ -46,7 +46,11 @@ pub(crate) fn scan_import_map(bytes: &[u8]) -> ImportMap {
         let b = bytes[i];
         match b {
             b'{' | b'[' => {
-                frames.push(Frame { object: b == b'{', key: None, expecting_key: b == b'{' });
+                frames.push(Frame {
+                    object: b == b'{',
+                    key: None,
+                    expecting_key: b == b'{',
+                });
                 i += 1;
             }
             b'}' | b']' => {
@@ -71,8 +75,14 @@ pub(crate) fn scan_import_map(bytes: &[u8]) -> ImportMap {
                 let (end, value) = json_string(bytes, i);
                 let span = i + 1..end.saturating_sub(1).max(i + 1);
                 let depth = frames.len();
-                let is_key = frames.last().map(|f| f.object && f.expecting_key).unwrap_or(false);
-                let root_key = frames.first().and_then(|f| f.key.clone()).unwrap_or_default();
+                let is_key = frames
+                    .last()
+                    .map(|f| f.object && f.expecting_key)
+                    .unwrap_or(false);
+                let root_key = frames
+                    .first()
+                    .and_then(|f| f.key.clone())
+                    .unwrap_or_default();
                 if is_key {
                     if depth == 2 && root_key == "scopes" {
                         map.items.push(MapItem {
@@ -88,11 +98,23 @@ pub(crate) fn scan_import_map(bytes: &[u8]) -> ImportMap {
                     }
                 } else if depth == 2 && root_key == "imports" {
                     let key = frames[1].key.clone().unwrap_or_default();
-                    map.items.push(MapItem { span, value, kind: MapKind::Import, key, scope: String::new() });
+                    map.items.push(MapItem {
+                        span,
+                        value,
+                        kind: MapKind::Import,
+                        key,
+                        scope: String::new(),
+                    });
                 } else if depth == 3 && root_key == "scopes" {
                     let scope = frames[1].key.clone().unwrap_or_default();
                     let key = frames[2].key.clone().unwrap_or_default();
-                    map.items.push(MapItem { span, value, kind: MapKind::ScopeValue, key, scope });
+                    map.items.push(MapItem {
+                        span,
+                        value,
+                        kind: MapKind::ScopeValue,
+                        key,
+                        scope,
+                    });
                 }
                 i = end;
             }
@@ -127,7 +149,9 @@ impl ImportMap {
         let mut scopes: Vec<&str> = self
             .items
             .iter()
-            .filter(|item| item.kind == MapKind::ScopeKey && referrer.starts_with(item.value.as_str()))
+            .filter(|item| {
+                item.kind == MapKind::ScopeKey && referrer.starts_with(item.value.as_str())
+            })
             .map(|item| item.value.as_str())
             .collect();
         scopes.sort_by_key(|scope| std::cmp::Reverse(scope.len()));
@@ -140,7 +164,12 @@ impl ImportMap {
                 return Some(found);
             }
         }
-        lookup(self.items.iter().filter(|item| item.kind == MapKind::Import), specifier)
+        lookup(
+            self.items
+                .iter()
+                .filter(|item| item.kind == MapKind::Import),
+            specifier,
+        )
     }
 }
 

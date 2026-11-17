@@ -4,9 +4,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use innerword_core::{
+    BlockId, CommentId, Document, DocumentSettings, Orientation, PaperSize, Stats,
+};
+use innerword_store::{
+    DocumentContent, DocumentId, DocumentKind, DocumentMeta, SnapshotMeta, Store,
+};
 use serde::{Deserialize, Serialize};
-use innerword_core::{BlockId, CommentId, Document, DocumentSettings, Orientation, PaperSize, Stats};
-use innerword_store::{DocumentContent, DocumentId, DocumentKind, DocumentMeta, SnapshotMeta, Store};
 
 use crate::error::{Error, Result, quoted_excerpt};
 use crate::resolve::{UNTITLED, title_of};

@@ -174,7 +174,8 @@ impl PickerDelegate for PageExportDelegate {
 /// The name of the folder (or, with `.pdf`, the file) an export of a page
 /// titled `title` suggests.
 pub fn suggested_name(title: &str) -> String {
-    let file = innerword_export::suggested_file_name(title, innerword_export::ExportFormat::PlainText);
+    let file =
+        innerword_export::suggested_file_name(title, innerword_export::ExportFormat::PlainText);
     file.strip_suffix(".txt").unwrap_or(&file).to_string()
 }
 
@@ -341,7 +342,9 @@ impl Workspace {
                                 innerword_web::PdfInput {
                                     source,
                                     entry: manifest.entry.clone(),
-                                    settle_max: Duration::from_millis(innerword_page::SETTLE_MAX_MS),
+                                    settle_max: Duration::from_millis(
+                                        innerword_page::SETTLE_MAX_MS,
+                                    ),
                                     limit: Duration::from_millis(innerword_page::CHECK_LIMIT_MS),
                                     rules_dir,
                                 },
@@ -400,7 +403,12 @@ impl Workspace {
 }
 
 /// What the toast says about a folder written for page `title`.
-fn folder_sentence(title: &str, dir: &Path, entry: &str, written: &innerword_page::Written) -> String {
+fn folder_sentence(
+    title: &str,
+    dir: &Path,
+    entry: &str,
+    written: &innerword_page::Written,
+) -> String {
     let files = crate::workspace::counted(written.files, "file", "files");
     let mut said = format!(
         "Exported \u{201c}{title}\u{201d} to {} ({files}). Open {entry} in a browser; a few \

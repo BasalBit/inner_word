@@ -218,8 +218,9 @@ impl Sandbox {
         let mut with_json = args.to_vec();
         with_json.push("--json");
         let out = self.ok(&with_json);
-        serde_json::from_str(&out)
-            .unwrap_or_else(|error| panic!("innerword {args:?} --json is not JSON ({error}): {out}"))
+        serde_json::from_str(&out).unwrap_or_else(|error| {
+            panic!("innerword {args:?} --json is not JSON ({error}): {out}")
+        })
     }
 
     /// Runs a command that must fail with this exit code and gives its message. A failure
@@ -284,7 +285,9 @@ impl Sandbox {
     /// (every version before 0.6.0: it listens nowhere), until the returned value is
     /// dropped. The app has been running for a while: the tools give one that has only
     /// just taken the lock a few seconds to say where it listens.
-    pub fn open_an_app_that_takes_no_changes(&self) -> innerword_store::instance_lock::InstanceLock {
+    pub fn open_an_app_that_takes_no_changes(
+        &self,
+    ) -> innerword_store::instance_lock::InstanceLock {
         use innerword_store::instance_lock::{Acquired, HolderKind, LOCK_FILE_NAME, acquire_as};
         let lock = match acquire_as(&self.library(), HolderKind::App)
             .expect("the lock file can be made")

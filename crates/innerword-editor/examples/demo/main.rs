@@ -1122,7 +1122,9 @@ impl Demo {
             .iter()
             .enumerate()
             .filter_map(|(index, block)| match block.kind() {
-                innerword_core::BlockKind::TodoItem { checked } => Some(format!("{index}:{checked}")),
+                innerword_core::BlockKind::TodoItem { checked } => {
+                    Some(format!("{index}:{checked}"))
+                }
                 _ => None,
             })
             .take(8)

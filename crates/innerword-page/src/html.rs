@@ -40,17 +40,24 @@ impl Tag {
     }
 
     pub fn value(&self, name: &str) -> Option<&str> {
-        self.attr(name).and_then(|attr| attr.value.as_ref()).map(|value| value.decoded.as_str())
+        self.attr(name)
+            .and_then(|attr| attr.value.as_ref())
+            .map(|value| value.decoded.as_str())
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum Token {
     Start(Tag),
-    End { name: String },
+    End {
+        name: String,
+    },
     Text(Range<usize>),
     /// The contents of a raw-text element (`script`, `style`, `textarea`, `title`, ...).
-    Raw { element: String, span: Range<usize> },
+    Raw {
+        element: String,
+        span: Range<usize>,
+    },
     Comment,
     /// Doctype, processing instruction, CDATA section.
     Other,
@@ -65,8 +72,16 @@ fn is_raw(name: &str, xml: bool) -> bool {
     }
     matches!(
         name,
-        "script" | "style" | "textarea" | "title" | "xmp" | "noembed" | "noframes" | "noscript"
-            | "iframe" | "plaintext"
+        "script"
+            | "style"
+            | "textarea"
+            | "title"
+            | "xmp"
+            | "noembed"
+            | "noframes"
+            | "noscript"
+            | "iframe"
+            | "plaintext"
     )
 }
 
@@ -86,13 +101,21 @@ pub(crate) fn tokenize(bytes: &[u8], xml: bool) -> Vec<Token> {
         }
         let rest = &bytes[i..];
         let markup: Option<(Token, usize)> = if rest.starts_with(b"<!--") {
-            let end = find(&bytes[i + 4..], b"-->").map(|e| i + 4 + e + 3).unwrap_or(n);
+            let end = find(&bytes[i + 4..], b"-->")
+                .map(|e| i + 4 + e + 3)
+                .unwrap_or(n);
             Some((Token::Comment, end))
         } else if rest.starts_with(b"<![CDATA[") {
-            let end = find(&bytes[i + 9..], b"]]>").map(|e| i + 9 + e + 3).unwrap_or(n);
+            let end = find(&bytes[i + 9..], b"]]>")
+                .map(|e| i + 9 + e + 3)
+                .unwrap_or(n);
             Some((Token::Other, end))
         } else if rest.starts_with(b"<!") || rest.starts_with(b"<?") {
-            let end = bytes[i + 2..].iter().position(|&b| b == b'>').map(|e| i + 2 + e + 1).unwrap_or(n);
+            let end = bytes[i + 2..]
+                .iter()
+                .position(|&b| b == b'>')
+                .map(|e| i + 2 + e + 1)
+                .unwrap_or(n);
             Some((Token::Other, end))
         } else if rest.len() > 2 && rest[1] == b'/' && rest[2].is_ascii_alphabetic() {
             let mut j = i + 2;
@@ -100,7 +123,11 @@ pub(crate) fn tokenize(bytes: &[u8], xml: bool) -> Vec<Token> {
                 j += 1;
             }
             let name = lower(&bytes[i + 2..j]);
-            let end = bytes[j..].iter().position(|&b| b == b'>').map(|e| j + e + 1).unwrap_or(n);
+            let end = bytes[j..]
+                .iter()
+                .position(|&b| b == b'>')
+                .map(|e| j + e + 1)
+                .unwrap_or(n);
             Some((Token::End { name }, end))
         } else if rest.len() > 1 && rest[1].is_ascii_alphabetic() {
             let (tag, end) = start_tag(bytes, i);
@@ -125,8 +152,15 @@ pub(crate) fn tokenize(bytes: &[u8], xml: bool) -> Vec<Token> {
         i = end;
         text_start = end;
         if let Some(element) = raw {
-            let close = if element == "plaintext" { n } else { closing_tag(bytes, i, &element) };
-            tokens.push(Token::Raw { element, span: i..close });
+            let close = if element == "plaintext" {
+                n
+            } else {
+                closing_tag(bytes, i, &element)
+            };
+            tokens.push(Token::Raw {
+                element,
+                span: i..close,
+            });
             i = close;
             text_start = close;
         }
@@ -149,7 +183,10 @@ fn closing_tag(bytes: &[u8], from: usize, name: &str) -> usize {
         let name_end = start + 2 + name.len();
         if name_end <= n
             && bytes[start + 2..name_end].eq_ignore_ascii_case(name.as_bytes())
-            && (name_end == n || is_space(bytes[name_end]) || bytes[name_end] == b'>' || bytes[name_end] == b'/')
+            && (name_end == n
+                || is_space(bytes[name_end])
+                || bytes[name_end] == b'>'
+                || bytes[name_end] == b'/')
         {
             return start;
         }
@@ -188,7 +225,12 @@ fn start_tag(bytes: &[u8], at: usize) -> (Tag, usize) {
         if bytes[j] == b'=' {
             j += 1;
         }
-        while j < n && !is_space(bytes[j]) && bytes[j] != b'/' && bytes[j] != b'>' && bytes[j] != b'=' {
+        while j < n
+            && !is_space(bytes[j])
+            && bytes[j] != b'/'
+            && bytes[j] != b'>'
+            && bytes[j] != b'='
+        {
             j += 1;
         }
         let attr_name = lower(&bytes[name_start..j]);
@@ -204,21 +246,43 @@ fn start_tag(bytes: &[u8], at: usize) -> (Tag, usize) {
             }
             if k < n && (bytes[k] == b'"' || bytes[k] == b'\'') {
                 let quote = bytes[k];
-                let close = bytes[k + 1..].iter().position(|&b| b == quote).map(|e| k + 1 + e).unwrap_or(n);
-                value = Some(AttrValue { span: k..(close + 1).min(n), decoded: decode(&bytes[k + 1..close]) });
+                let close = bytes[k + 1..]
+                    .iter()
+                    .position(|&b| b == quote)
+                    .map(|e| k + 1 + e)
+                    .unwrap_or(n);
+                value = Some(AttrValue {
+                    span: k..(close + 1).min(n),
+                    decoded: decode(&bytes[k + 1..close]),
+                });
                 j = (close + 1).min(n);
             } else {
                 let start = k;
                 while k < n && !is_space(bytes[k]) && bytes[k] != b'>' {
                     k += 1;
                 }
-                value = Some(AttrValue { span: start..k, decoded: decode(&bytes[start..k]) });
+                value = Some(AttrValue {
+                    span: start..k,
+                    decoded: decode(&bytes[start..k]),
+                });
                 j = k;
             }
         }
-        attrs.push(Attr { name: attr_name, span: lead..j, value });
+        attrs.push(Attr {
+            name: attr_name,
+            span: lead..j,
+            value,
+        });
     }
-    (Tag { name, span: at..j, attrs, self_closing }, j)
+    (
+        Tag {
+            name,
+            span: at..j,
+            attrs,
+            self_closing,
+        },
+        j,
+    )
 }
 
 fn lower(bytes: &[u8]) -> String {
@@ -256,7 +320,11 @@ pub(crate) fn decode(bytes: &[u8]) -> String {
 fn reference(text: &str) -> Option<(String, usize)> {
     let bytes = text.as_bytes();
     if bytes.first() == Some(&b'#') {
-        let (radix, start) = if matches!(bytes.get(1), Some(b'x') | Some(b'X')) { (16, 2) } else { (10, 1) };
+        let (radix, start) = if matches!(bytes.get(1), Some(b'x') | Some(b'X')) {
+            (16, 2)
+        } else {
+            (10, 1)
+        };
         let mut end = start;
         while end < bytes.len() && (bytes[end] as char).is_digit(radix) {
             end += 1;
@@ -265,8 +333,14 @@ fn reference(text: &str) -> Option<(String, usize)> {
             return None;
         }
         let code = u32::from_str_radix(&text[start..end], radix).ok()?;
-        let ch = char::from_u32(code).filter(|&c| c != '\0').unwrap_or('\u{FFFD}');
-        let used = if bytes.get(end) == Some(&b';') { end + 1 } else { end };
+        let ch = char::from_u32(code)
+            .filter(|&c| c != '\0')
+            .unwrap_or('\u{FFFD}');
+        let used = if bytes.get(end) == Some(&b';') {
+            end + 1
+        } else {
+            end
+        };
         return Some((ch.to_string(), used));
     }
     let mut end = 0;

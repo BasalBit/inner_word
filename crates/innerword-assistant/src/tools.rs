@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
 use innerword_mcp::protocol::{Effect, ToolHost};
+use serde_json::Value;
 
 use crate::backend::{ToolDescriber, ToolObserver, ToolServer, one_line};
 

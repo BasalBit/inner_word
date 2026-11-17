@@ -3,8 +3,8 @@
 //! when the document is opened again.
 
 use gpui::{Context, px};
-use serde::{Deserialize, Serialize};
 use innerword_core::{Position, Selection};
+use serde::{Deserialize, Serialize};
 
 use crate::{editor::Editor, scroll::Autoscroll};
 

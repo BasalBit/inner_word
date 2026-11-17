@@ -600,7 +600,8 @@ impl Workspace {
             let mut found = None;
             let tree = library.tree();
             let mut folders: Vec<&innerword_library::FolderNode> = tree.folders.iter().collect();
-            let mut documents: Vec<&innerword_library::DocumentMeta> = tree.documents.iter().collect();
+            let mut documents: Vec<&innerword_library::DocumentMeta> =
+                tree.documents.iter().collect();
             while let Some(folder) = folders.pop() {
                 documents.extend(folder.documents.iter());
                 folders.extend(folder.folders.iter());

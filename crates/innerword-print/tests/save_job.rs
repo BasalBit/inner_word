@@ -18,11 +18,11 @@
 
 use std::{cell::Cell, path::PathBuf, process::ExitCode, rc::Rc, sync::Arc};
 
-use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 use innerword_print::{
     Anchor, Color, FontSpec, GlyphStart, Item, JobInfo, Label, Page, PdfFile, PdfWriter,
     PrintError, PrintRequest, RectItem, RowRun, TextRow, check_selectors, run_save_job, run_sheet,
 };
+use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 
 const A4: (f32, f32) = (595.276, 841.89);
 const INK: Color = Color {

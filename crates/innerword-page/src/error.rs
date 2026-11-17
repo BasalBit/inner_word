@@ -10,14 +10,26 @@ use std::path::PathBuf;
 pub enum PageError {
     /// The input cannot be used as asked (no such file, a folder with several pages and
     /// no entry, a reference outside the root, an address given as input).
-    Input { message: String },
+    Input {
+        message: String,
+    },
     /// Cannot be kept whole: each problem names a piece and why.
-    Incomplete { name: String, problems: Vec<Problem> },
+    Incomplete {
+        name: String,
+        problems: Vec<Problem>,
+    },
     /// The checker itself failed.
-    CheckFailed { reason: String },
+    CheckFailed {
+        reason: String,
+    },
     /// Stored content that is no manifest.
-    Unreadable { reason: String },
-    Io { path: PathBuf, error: io::Error },
+    Unreadable {
+        reason: String,
+    },
+    Io {
+        path: PathBuf,
+        error: io::Error,
+    },
 }
 
 /// One reason a page cannot be kept whole.
@@ -35,7 +47,10 @@ pub struct Problem {
 
 impl Problem {
     pub fn new(what: impl Into<String>, reason: impl Into<String>) -> Problem {
-        Problem { what: what.into(), reason: reason.into() }
+        Problem {
+            what: what.into(),
+            reason: reason.into(),
+        }
     }
 
     /// The problem as a clause of the sentence ("… could not be fetched: HTTP 404").
@@ -58,8 +73,11 @@ pub const PROBLEMS_NAMED: usize = 5;
 /// ("The page asks for https://claude.ai/api/… at run time (data it fetches), which
 /// cannot be kept; and 2 more")
 pub fn reasons_sentence(problems: &[Problem]) -> String {
-    let mut parts: Vec<String> =
-        problems.iter().take(PROBLEMS_NAMED).map(|problem| problem.reason.clone()).collect();
+    let mut parts: Vec<String> = problems
+        .iter()
+        .take(PROBLEMS_NAMED)
+        .map(|problem| problem.reason.clone())
+        .collect();
     if problems.len() > PROBLEMS_NAMED {
         parts.push(format!("and {} more", problems.len() - PROBLEMS_NAMED));
     }
@@ -73,7 +91,9 @@ impl PageError {
             PageError::Input { message } => message.clone(),
             PageError::Incomplete { name, problems } => {
                 if problems.is_empty() {
-                    format!("“{name}” was not added: it could not be kept whole. Nothing was saved.")
+                    format!(
+                        "“{name}” was not added: it could not be kept whole. Nothing was saved."
+                    )
                 } else {
                     format!(
                         "“{name}” was not added: it could not be kept whole. {}. Nothing was saved.",
@@ -88,11 +108,16 @@ impl PageError {
     }
 
     pub(crate) fn input(message: impl Into<String>) -> PageError {
-        PageError::Input { message: message.into() }
+        PageError::Input {
+            message: message.into(),
+        }
     }
 
     pub(crate) fn io(path: impl Into<PathBuf>, error: io::Error) -> PageError {
-        PageError::Io { path: path.into(), error }
+        PageError::Io {
+            path: path.into(),
+            error,
+        }
     }
 }
 

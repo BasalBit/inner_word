@@ -4,11 +4,14 @@
 use std::fs;
 use std::path::Path;
 
-use tempfile::TempDir;
 use innerword_page::{Bundle, MapFetcher, PageError, bundle, read_input};
+use tempfile::TempDir;
 
 pub fn temp() -> TempDir {
-    tempfile::Builder::new().prefix("innerword-page-test-").tempdir().expect("a temporary folder")
+    tempfile::Builder::new()
+        .prefix("innerword-page-test-")
+        .tempdir()
+        .expect("a temporary folder")
 }
 
 pub fn write(dir: &Path, path: &str, contents: impl AsRef<[u8]>) {
@@ -39,10 +42,14 @@ pub fn web(answers: &[(&str, &str, &str)]) -> MapFetcher {
 
 /// The page a folder of these files makes with these answers of the web.
 pub fn page(files: &[(&str, &str)], answers: &[(&str, &str, &str)]) -> Bundle {
-    try_page(files, answers).unwrap_or_else(|error| panic!("the page was refused: {}", error.sentence()))
+    try_page(files, answers)
+        .unwrap_or_else(|error| panic!("the page was refused: {}", error.sentence()))
 }
 
-pub fn try_page(files: &[(&str, &str)], answers: &[(&str, &str, &str)]) -> Result<Bundle, PageError> {
+pub fn try_page(
+    files: &[(&str, &str)],
+    answers: &[(&str, &str, &str)],
+) -> Result<Bundle, PageError> {
     let dir = folder(files);
     let input = read_input(dir.path(), None)?;
     bundle(input, &web(answers))
@@ -72,14 +79,21 @@ pub fn stored(bundle: &Bundle, url: &str) -> String {
         .externals
         .iter()
         .find(|e| e.url == url)
-        .unwrap_or_else(|| panic!("{url} was not fetched; fetched: {:?}", external_urls(bundle)))
+        .unwrap_or_else(|| {
+            panic!(
+                "{url} was not fetched; fetched: {:?}",
+                external_urls(bundle)
+            )
+        })
         .path
         .clone()
 }
 
 pub fn problems(error: &PageError) -> Vec<String> {
     match error {
-        PageError::Incomplete { problems, .. } => problems.iter().map(|p| p.reason.clone()).collect(),
+        PageError::Incomplete { problems, .. } => {
+            problems.iter().map(|p| p.reason.clone()).collect()
+        }
         other => panic!("not a refusal of a page that is not whole: {other:?}"),
     }
 }

@@ -5,11 +5,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::{Value, json};
 use innerword_assistant::{
     AssistantError, AssistantEvent, Backend, ClaudeCode, Conversation, ConversationOptions,
     EventStream, TurnEnd, TurnId, event_channel,
 };
+use serde_json::{Value, json};
 
 /// How long a test waits for something the stand-in does at once.
 pub const PATIENCE: Duration = Duration::from_secs(20);

@@ -293,11 +293,9 @@ fn a_writing_session_from_first_launch_to_reopening(cx: &mut TestAppContext) {
         // What it shows, from its menu.
         vcx.simulate_keystrokes("ctrl-enter");
         vcx.run_until_parked();
-        assert!(
-            vcx.update(|window, cx| {
-                innerword_ui::ContextMenu::choose("Description…", window, cx)
-            })
-        );
+        assert!(vcx.update(|window, cx| {
+            innerword_ui::ContextMenu::choose("Description…", window, cx)
+        }));
         vcx.run_until_parked();
         assert_eq!(tool(&workspace, vcx), Some(ToolKind::ImageDescription));
         vcx.simulate_input("The harbour at night");

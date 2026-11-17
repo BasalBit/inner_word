@@ -143,12 +143,12 @@
 
 use std::borrow::Cow;
 
-use pulldown_cmark::{
-    Alignment as ColumnAlignment, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd,
-};
 use innerword_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, Highlight, Image, ImageWidth,
     InlineAttrs, MAX_INDENT, Rgb, text::normalize_input,
+};
+use pulldown_cmark::{
+    Alignment as ColumnAlignment, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd,
 };
 
 use super::html::{self, Tag as HtmlTag};

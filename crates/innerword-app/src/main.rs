@@ -162,7 +162,9 @@ fn open_window(may_activate: bool, cx: &mut App) -> Option<AnyWindowHandle> {
     // lock keeps (a second look could answer otherwise while the folder of
     // the old name is being moved).
     let opened = match &locked {
-        Some(data_dir) => Library::open(data_dir.join(innerword_library::store::DATABASE_FILE_NAME)),
+        Some(data_dir) => {
+            Library::open(data_dir.join(innerword_library::store::DATABASE_FILE_NAME))
+        }
         None => Library::open_default(),
     };
     let library = match opened {

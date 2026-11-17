@@ -223,7 +223,8 @@ fn register_commands(cx: &mut App) {
     commands::register(
         innerword_library::commands().into_iter().filter(|command| {
             let name = command.action_name();
-            name != innerword_library::NewDocument.name() && name != innerword_library::NewFolder.name()
+            name != innerword_library::NewDocument.name()
+                && name != innerword_library::NewFolder.name()
         }),
         cx,
     );

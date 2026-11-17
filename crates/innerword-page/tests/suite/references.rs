@@ -15,9 +15,16 @@ fn holds(html: &str, answers: &[(&str, &str, &str)]) -> innerword_page::Bundle {
     let index = served(&bundle, "index.html");
     for (url, _, _) in answers {
         let path = stored(&bundle, url);
-        assert!(index.contains(&path) || bundle.served.iter().any(|f| f.path != "index.html" && String::from_utf8_lossy(&f.bytes).contains(&path_tail(&path))),
-            "{path} is not named in the page:\n{index}");
-        assert!(!index.contains(*url), "{url} is still named in the page:\n{index}");
+        assert!(
+            index.contains(&path)
+                || bundle.served.iter().any(|f| f.path != "index.html"
+                    && String::from_utf8_lossy(&f.bytes).contains(&path_tail(&path))),
+            "{path} is not named in the page:\n{index}"
+        );
+        assert!(
+            !index.contains(*url),
+            "{url} is still named in the page:\n{index}"
+        );
     }
     bundle
 }
@@ -53,15 +60,28 @@ fn script_link_img_and_media_attributes() {
             ("https://cdn.test/t.vtt", "text/vtt", "WEBVTT"),
             ("https://cdn.test/v2.webm", "video/webm", "webm"),
             ("https://cdn.test/s.mp3", "audio/mpeg", "mp3"),
-            ("https://cdn.test/e.swf", "application/x-shockwave-flash", "swf"),
+            (
+                "https://cdn.test/e.swf",
+                "application/x-shockwave-flash",
+                "swf",
+            ),
             ("https://cdn.test/o.pdf", "application/pdf", "%PDF"),
             ("https://cdn.test/button.png", PNG, "png5"),
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#"<script src="_external/cdn.test/app.js"></script>"#), "{index}");
-    assert!(index.contains(r#"<img src="_external/cdn.test/unquoted.png">"#), "{index}");
-    assert!(index.contains(r#"<IMG SRC="_external/cdn.test/upper.png">"#), "{index}");
+    assert!(
+        index.contains(r#"<script src="_external/cdn.test/app.js"></script>"#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"<img src="_external/cdn.test/unquoted.png">"#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"<IMG SRC="_external/cdn.test/upper.png">"#),
+        "{index}"
+    );
 }
 
 #[test]
@@ -82,11 +102,21 @@ fn srcset_and_imagesrcset_name_each_candidate() {
     );
     let index = served(&bundle, "index.html");
     assert!(
-        index.contains(r#"srcset="_external/cdn.test/a-1x.webp 1x, _external/cdn.test/a-2x.webp 2x""#),
+        index.contains(
+            r#"srcset="_external/cdn.test/a-1x.webp 1x, _external/cdn.test/a-2x.webp 2x""#
+        ),
         "{index}"
     );
-    assert!(index.contains(r#"srcset="_external/cdn.test/b-480.png 480w,_external/cdn.test/b-800.png 800w""#), "{index}");
-    assert!(index.contains(r#"sizes="(max-width: 600px) 480px, 800px""#), "{index}");
+    assert!(
+        index.contains(
+            r#"srcset="_external/cdn.test/b-480.png 480w,_external/cdn.test/b-800.png 800w""#
+        ),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"sizes="(max-width: 600px) 480px, 800px""#),
+        "{index}"
+    );
 }
 
 #[test]
@@ -105,7 +135,11 @@ fn every_link_rel_that_loads_something() {
             ("https://cdn.test/touch.png", PNG, "touch"),
             ("https://cdn.test/f.woff2", "font/woff2", "woff2"),
             ("https://cdn.test/m.js", JS, "export {}"),
-            ("https://cdn.test/site.webmanifest", "application/manifest+json", "{}"),
+            (
+                "https://cdn.test/site.webmanifest",
+                "application/manifest+json",
+                "{}",
+            ),
             ("https://cdn.test/next.png", PNG, "next"),
         ],
     );
@@ -121,7 +155,10 @@ fn preconnect_dns_prefetch_and_prerender_to_another_origin_are_removed() {
         &[],
     );
     let index = served(&bundle, "index.html");
-    assert_eq!(index, r#"<head><link rel="canonical" href="https://example.com/page"></head>"#);
+    assert_eq!(
+        index,
+        r#"<head><link rel="canonical" href="https://example.com/page"></head>"#
+    );
     assert!(bundle.externals.is_empty());
 }
 
@@ -154,12 +191,28 @@ body { background: url(https://cdn.test/bg.png) no-repeat; }
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains("url(https://cdn.test/commented.png) is not loaded"), "a comment is left as it is");
-    assert!(index.contains(r#"<div style="background: url(&quot;_external/cdn.test/attr.png&quot;)">"#), "{index}");
-    assert!(index.contains("@import \"_external/cdn.test/one.css\";"), "{index}");
-    assert!(index.contains("@import url(_external/cdn.test/two.css) screen;"), "{index}");
+    assert!(
+        index.contains("url(https://cdn.test/commented.png) is not loaded"),
+        "a comment is left as it is"
+    );
+    assert!(
+        index.contains(r#"<div style="background: url(&quot;_external/cdn.test/attr.png&quot;)">"#),
+        "{index}"
+    );
+    assert!(
+        index.contains("@import \"_external/cdn.test/one.css\";"),
+        "{index}"
+    );
+    assert!(
+        index.contains("@import url(_external/cdn.test/two.css) screen;"),
+        "{index}"
+    );
     assert!(index.contains("local(\"X\")"), "{index}");
-    assert!(!external_urls(&bundle).iter().any(|u| u.contains("commented")));
+    assert!(
+        !external_urls(&bundle)
+            .iter()
+            .any(|u| u.contains("commented"))
+    );
 }
 
 #[test]
@@ -193,17 +246,35 @@ const re = /["'`]import "https:\/\/cdn.test\/regex.js"/;
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#"import { a } from "./_external/cdn.test/a.js";"#), "a specifier keeps ./: {index}");
-    assert!(index.contains("import(`./_external/cdn.test/tick.js`)"), "{index}");
-    assert!(index.contains(r#"new Worker("_external/cdn.test/worker.js""#), "{index}");
+    assert!(
+        index.contains(r#"import { a } from "./_external/cdn.test/a.js";"#),
+        "a specifier keeps ./: {index}"
+    );
+    assert!(
+        index.contains("import(`./_external/cdn.test/tick.js`)"),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"new Worker("_external/cdn.test/worker.js""#),
+        "{index}"
+    );
     for gone in ["commented.js", "also-commented.js", "regex.js"] {
-        assert!(!external_urls(&bundle).iter().any(|u| u.contains(gone)), "{gone} was fetched");
+        assert!(
+            !external_urls(&bundle).iter().any(|u| u.contains(gone)),
+            "{gone} was fetched"
+        );
     }
 }
 
 #[test]
 fn a_dynamic_import_with_a_substitution_is_not_a_reference() {
-    let bundle = page(&[("index.html", "<script type=module>const m = await import(`https://cdn.test/${name}.js`);</script>")], &[]);
+    let bundle = page(
+        &[(
+            "index.html",
+            "<script type=module>const m = await import(`https://cdn.test/${name}.js`);</script>",
+        )],
+        &[],
+    );
     assert!(bundle.externals.is_empty());
 }
 
@@ -216,13 +287,28 @@ const font = 'https://fonts.gstatic.com/s/inter/v1/a.woff2';
 const other = "https://api.example.com/data.json";
 </script>"#,
         &[
-            ("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js", JS, "self.x=1"),
-            ("https://fonts.gstatic.com/s/inter/v1/a.woff2", "font/woff2", "woff2"),
+            (
+                "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
+                JS,
+                "self.x=1",
+            ),
+            (
+                "https://fonts.gstatic.com/s/inter/v1/a.woff2",
+                "font/woff2",
+                "woff2",
+            ),
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains("https://api.example.com/data.json"), "an address not on a known CDN is left");
-    assert!(!external_urls(&bundle).iter().any(|u| u.contains("api.example.com")));
+    assert!(
+        index.contains("https://api.example.com/data.json"),
+        "an address not on a known CDN is left"
+    );
+    assert!(
+        !external_urls(&bundle)
+            .iter()
+            .any(|u| u.contains("api.example.com"))
+    );
 }
 
 #[test]
@@ -249,20 +335,50 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 </script>"#,
         )],
         &[
-            ("https://cdn.test/three@0.160.0/build/three.module.js", JS, "import 'helper'; export const T = 1;"),
-            ("https://cdn.test/three@0.160.0/examples/jsm/controls/OrbitControls.js", JS, "import { T } from 'three'; export const OrbitControls = T;"),
-            ("https://cdn.test/helper@1/helper.js", JS, "export const h = 1;"),
+            (
+                "https://cdn.test/three@0.160.0/build/three.module.js",
+                JS,
+                "import 'helper'; export const T = 1;",
+            ),
+            (
+                "https://cdn.test/three@0.160.0/examples/jsm/controls/OrbitControls.js",
+                JS,
+                "import { T } from 'three'; export const OrbitControls = T;",
+            ),
+            (
+                "https://cdn.test/helper@1/helper.js",
+                JS,
+                "export const h = 1;",
+            ),
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#""three": "./_external/cdn.test/three@0.160.0/build/three.module.js""#), "{index}");
-    assert!(index.contains(r#""three/addons/": "./_external/cdn.test/three@0.160.0/examples/jsm/""#), "{index}");
-    assert!(index.contains(r#""./_external/cdn.test/three@0.160.0/": {"#), "the scope is the folder of its pieces: {index}");
-    assert!(index.contains(r#""helper": "./_external/cdn.test/helper@1/helper.js""#), "{index}");
-    assert!(index.contains(r#"import * as THREE from "three";"#), "a bare specifier stays bare");
+    assert!(
+        index.contains(r#""three": "./_external/cdn.test/three@0.160.0/build/three.module.js""#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#""three/addons/": "./_external/cdn.test/three@0.160.0/examples/jsm/""#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#""./_external/cdn.test/three@0.160.0/": {"#),
+        "the scope is the folder of its pieces: {index}"
+    );
+    assert!(
+        index.contains(r#""helper": "./_external/cdn.test/helper@1/helper.js""#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"import * as THREE from "three";"#),
+        "a bare specifier stays bare"
+    );
     // The module the prefix maps is fetched and stored where the prefix now points.
     assert_eq!(
-        stored(&bundle, "https://cdn.test/three@0.160.0/examples/jsm/controls/OrbitControls.js"),
+        stored(
+            &bundle,
+            "https://cdn.test/three@0.160.0/examples/jsm/controls/OrbitControls.js"
+        ),
         "_external/cdn.test/three@0.160.0/examples/jsm/controls/OrbitControls.js"
     );
 }
@@ -288,11 +404,20 @@ fn svg_references_inline_and_in_a_file() {
         ],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#"xlink:href="_external/cdn.test/sprite.svg#icon""#), "the fragment is kept: {index}");
+    assert!(
+        index.contains(r#"xlink:href="_external/cdn.test/sprite.svg#icon""#),
+        "the fragment is kept: {index}"
+    );
     assert!(index.contains(r##"<use href="#local">"##));
     let drawing = served(&bundle, "drawing.svg");
-    assert!(drawing.contains(r#"xlink:href="_external/cdn.test/inside.png""#), "{drawing}");
-    assert!(drawing.contains("url(_external/cdn.test/svg.css)"), "{drawing}");
+    assert!(
+        drawing.contains(r#"xlink:href="_external/cdn.test/inside.png""#),
+        "{drawing}"
+    );
+    assert!(
+        drawing.contains("url(_external/cdn.test/svg.css)"),
+        "{drawing}"
+    );
     assert!(drawing.contains(r#"xmlns="http://www.w3.org/2000/svg""#));
 }
 
@@ -304,7 +429,9 @@ fn srcdoc_is_html_written_back_escaped() {
     );
     let index = served(&bundle, "index.html");
     assert!(
-        index.contains(r#"srcdoc="<p>Hi</p><img src=&quot;_external/cdn.test/in-srcdoc.png&quot;>""#),
+        index.contains(
+            r#"srcdoc="<p>Hi</p><img src=&quot;_external/cdn.test/in-srcdoc.png&quot;>""#
+        ),
         "{index}"
     );
 }
@@ -316,16 +443,32 @@ fn character_references_are_decoded_for_reading() {
             "index.html",
             r#"<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;display=swap">"#,
         )],
-        &[(
-            "https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap",
-            CSS,
-            "@font-face{src:url(https://fonts.gstatic.com/s/inter/v13/x.woff2) format('woff2')}",
-        ), ("https://fonts.gstatic.com/s/inter/v13/x.woff2", "font/woff2", "woff2")],
+        &[
+            (
+                "https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap",
+                CSS,
+                "@font-face{src:url(https://fonts.gstatic.com/s/inter/v13/x.woff2) format('woff2')}",
+            ),
+            (
+                "https://fonts.gstatic.com/s/inter/v13/x.woff2",
+                "font/woff2",
+                "woff2",
+            ),
+        ],
     );
-    let path = stored(&bundle, "https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");
-    assert!(path.starts_with("_external/fonts.googleapis.com/css2__") && path.ends_with(".css"), "{path}");
+    let path = stored(
+        &bundle,
+        "https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap",
+    );
+    assert!(
+        path.starts_with("_external/fonts.googleapis.com/css2__") && path.ends_with(".css"),
+        "{path}"
+    );
     let css = served(&bundle, &path);
-    assert!(css.contains("url(../fonts.gstatic.com/s/inter/v13/x.woff2)"), "{css}");
+    assert!(
+        css.contains("url(../fonts.gstatic.com/s/inter/v13/x.woff2)"),
+        "{css}"
+    );
 }
 
 #[test]
@@ -346,12 +489,21 @@ fn what_is_not_a_reference() {
     );
     assert!(bundle.externals.is_empty());
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#"<a href="https://example.com/elsewhere">"#), "a link is left as it is");
+    assert!(
+        index.contains(r#"<a href="https://example.com/elsewhere">"#),
+        "a link is left as it is"
+    );
 }
 
 #[test]
 fn an_iframe_of_another_site_is_left_for_the_check() {
-    let bundle = page(&[("index.html", r#"<iframe src="https://www.youtube.com/embed/x"></iframe>"#)], &[]);
+    let bundle = page(
+        &[(
+            "index.html",
+            r#"<iframe src="https://www.youtube.com/embed/x"></iframe>"#,
+        )],
+        &[],
+    );
     assert!(bundle.externals.is_empty());
     assert!(served(&bundle, "index.html").contains("https://www.youtube.com/embed/x"));
 }
@@ -359,23 +511,38 @@ fn an_iframe_of_another_site_is_left_for_the_check() {
 #[test]
 fn a_protocol_relative_reference_is_https() {
     let bundle = page(
-        &[("index.html", r#"<script src="//cdn.test/p.js"></script><a href="//example.com/x">x</a>"#)],
+        &[(
+            "index.html",
+            r#"<script src="//cdn.test/p.js"></script><a href="//example.com/x">x</a>"#,
+        )],
         &[("https://cdn.test/p.js", JS, "1")],
     );
     let index = served(&bundle, "index.html");
-    assert!(index.contains(r#"<script src="_external/cdn.test/p.js">"#), "{index}");
-    assert!(index.contains(r#"<a href="https://example.com/x">"#), "a protocol-relative link points where it pointed: {index}");
+    assert!(
+        index.contains(r#"<script src="_external/cdn.test/p.js">"#),
+        "{index}"
+    );
+    assert!(
+        index.contains(r#"<a href="https://example.com/x">"#),
+        "a protocol-relative link points where it pointed: {index}"
+    );
 }
 
 #[test]
 fn a_refresh_to_a_file_of_the_page_and_to_the_web() {
     let bundle = page(
-        &[("index.html", r#"<meta http-equiv="refresh" content="5; url=https://example.com/next">"#)],
+        &[(
+            "index.html",
+            r#"<meta http-equiv="refresh" content="5; url=https://example.com/next">"#,
+        )],
         &[],
     );
     assert!(bundle.externals.is_empty());
     assert!(
-        bundle.warnings.iter().any(|w| w.contains("https://example.com/next")),
+        bundle
+            .warnings
+            .iter()
+            .any(|w| w.contains("https://example.com/next")),
         "a refresh to the web is said: {:?}",
         bundle.warnings
     );
@@ -388,10 +555,20 @@ fn integrity_goes_with_a_reference_to_a_stored_copy() {
             "index.html",
             r#"<script src="https://cdn.test/lib.js" integrity="sha384-abc" crossorigin="anonymous"></script>"#,
         )],
-        &[("https://cdn.test/lib.js", JS, "var x = 1;\n//# sourceMappingURL=lib.js.map\n")],
+        &[(
+            "https://cdn.test/lib.js",
+            JS,
+            "var x = 1;\n//# sourceMappingURL=lib.js.map\n",
+        )],
     );
     let index = served(&bundle, "index.html");
-    assert_eq!(index, r#"<script src="_external/cdn.test/lib.js" crossorigin="anonymous"></script>"#);
+    assert_eq!(
+        index,
+        r#"<script src="_external/cdn.test/lib.js" crossorigin="anonymous"></script>"#
+    );
     let lib = served(&bundle, "_external/cdn.test/lib.js");
-    assert!(!lib.contains("sourceMappingURL"), "a fetched file loses its source map comment: {lib}");
+    assert!(
+        !lib.contains("sourceMappingURL"),
+        "a fetched file loses its source map comment: {lib}"
+    );
 }

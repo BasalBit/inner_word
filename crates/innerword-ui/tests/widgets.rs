@@ -123,9 +123,7 @@ fn text_field_does_not_blink_in_an_inactive_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn text_field_does_not_start_blinking_when_focused_in_an_inactive_window(
-    cx: &mut TestAppContext,
-) {
+fn text_field_does_not_start_blinking_when_focused_in_an_inactive_window(cx: &mut TestAppContext) {
     let (field, cx, _) = field_window(cx, "Hello");
     cx.update(|window, _| window.blur());
     cx.run_until_parked();
@@ -1188,7 +1186,11 @@ fn no_toast_draws_its_message_past_its_edge(cx: &mut TestAppContext) {
 fn toast_bounds_are_where_the_toasts_were_drawn(cx: &mut TestAppContext) {
     let (root, cx) = root_window(cx);
     let toasts = root.read_with(cx, |root, _| root.toasts.clone());
-    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+    assert!(
+        toasts
+            .read_with(cx, |layer, _| layer.toast_bounds())
+            .is_empty()
+    );
 
     let ids = cx.update(|_, cx| {
         toasts.update(cx, |layer, cx| {
@@ -1212,7 +1214,11 @@ fn toast_bounds_are_where_the_toasts_were_drawn(cx: &mut TestAppContext) {
     assert_eq!(bounds, expected);
     // oldest first, stacked downwards
     assert!(bounds[0].origin.y < bounds[1].origin.y);
-    assert!(bounds.iter().all(|b| b.size.width > px(0.) && b.size.height > px(0.)));
+    assert!(
+        bounds
+            .iter()
+            .all(|b| b.size.width > px(0.) && b.size.height > px(0.))
+    );
 
     // one expires: one left, where it is drawn now
     cx.executor().advance_clock(Duration::from_millis(600));
@@ -1223,7 +1229,11 @@ fn toast_bounds_are_where_the_toasts_were_drawn(cx: &mut TestAppContext) {
     // none: empty
     cx.executor().advance_clock(Duration::from_secs(5));
     cx.run_until_parked();
-    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+    assert!(
+        toasts
+            .read_with(cx, |layer, _| layer.toast_bounds())
+            .is_empty()
+    );
 }
 
 fn toast_number(debug: &str) -> String {

@@ -261,7 +261,10 @@ fn an_exported_pdf_is_the_pdf_print_makes(cx: &mut TestAppContext) {
     // The save panel starts there next time.
     let library = workspace.read_with(cx, |w, _| w.library().clone());
     let stored: String = library.read_with(cx, |library, _| {
-        library.setting_or(innerword_app::settings::keys::EXPORT_DIRECTORY, String::new())
+        library.setting_or(
+            innerword_app::settings::keys::EXPORT_DIRECTORY,
+            String::new(),
+        )
     });
     assert_eq!(PathBuf::from(stored), out.path());
     // Nothing went to the print target.

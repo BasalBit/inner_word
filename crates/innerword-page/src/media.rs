@@ -10,7 +10,10 @@ pub fn file_id_hex(bytes: &[u8]) -> String {
 
 /// Whether `text` is a file id: 32 lowercase hex digits.
 pub fn is_file_id(text: &str) -> bool {
-    text.len() == 32 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    text.len() == 32
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -97,7 +100,9 @@ pub(crate) const OCTET_STREAM: &str = "application/octet-stream";
 /// Every signature that is made of letters is held to the byte after it that no text has
 /// (a TrueType font begins with "true" and then its table count, which begins with 0).
 pub fn sniffed_type(bytes: &[u8]) -> Option<&'static str> {
-    let at = |from: usize, sig: &[u8]| bytes.len() >= from + sig.len() && &bytes[from..from + sig.len()] == sig;
+    let at = |from: usize, sig: &[u8]| {
+        bytes.len() >= from + sig.len() && &bytes[from..from + sig.len()] == sig
+    };
     let byte = |i: usize| bytes.get(i).copied();
     let found = if at(0, b"wOF2") {
         "font/woff2"
@@ -109,7 +114,11 @@ pub fn sniffed_type(bytes: &[u8]) -> Option<&'static str> {
         "font/ttf"
     } else if at(0, b"ttcf") && byte(4) == Some(0) {
         "font/collection"
-    } else if bytes.len() >= 36 && at(34, b"LP") && byte(8).map(|b| b <= 2).unwrap_or(false) && byte(9) == Some(0) {
+    } else if bytes.len() >= 36
+        && at(34, b"LP")
+        && byte(8).map(|b| b <= 2).unwrap_or(false)
+        && byte(9) == Some(0)
+    {
         // Embedded OpenType: the magic number 0x504C at offset 34, after the sizes and
         // a format version whose last two bytes are 0x0001, 0x0002 or 0x0000.
         "application/vnd.ms-fontobject"
@@ -140,7 +149,9 @@ pub fn sniffed_type(bytes: &[u8]) -> Option<&'static str> {
         "image/tiff"
     } else if at(0, b"ID3") && byte(3).map(|v| (2..=4).contains(&v)).unwrap_or(false) {
         "audio/mpeg"
-    } else if byte(0) == Some(0xFF) && matches!(byte(1), Some(0xFB | 0xFA | 0xF3 | 0xF2 | 0xE3 | 0xE2)) {
+    } else if byte(0) == Some(0xFF)
+        && matches!(byte(1), Some(0xFB | 0xFA | 0xF3 | 0xF2 | 0xE3 | 0xE2))
+    {
         "audio/mpeg"
     } else if byte(0) == Some(0xFF) && matches!(byte(1), Some(0xF1 | 0xF9)) {
         "audio/aac"
@@ -173,7 +184,10 @@ pub(crate) fn looks_like_text(bytes: &[u8]) -> bool {
     if has_bom(bytes) {
         return true;
     }
-    !bytes.iter().take(1445).any(|&b| matches!(b, 0x00..=0x08 | 0x0B | 0x0E..=0x1A | 0x1C..=0x1F))
+    !bytes
+        .iter()
+        .take(1445)
+        .any(|&b| matches!(b, 0x00..=0x08 | 0x0B | 0x0E..=0x1A | 0x1C..=0x1F))
 }
 
 /// Whether text begins as an HTML document does, by the patterns of the WHATWG's MIME
@@ -185,16 +199,35 @@ pub(crate) fn looks_like_html(bytes: &[u8]) -> bool {
         return false;
     }
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
-    let start = bytes.iter().position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0C)).unwrap_or(bytes.len());
+    let start = bytes
+        .iter()
+        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0C))
+        .unwrap_or(bytes.len());
     let rest = &bytes[start..];
     const TAGS: &[&[u8]] = &[
-        b"<!doctype html", b"<html", b"<head", b"<body", b"<script", b"<iframe", b"<h1", b"<div", b"<font",
-        b"<table", b"<a", b"<style", b"<title", b"<b", b"<br", b"<p", b"<!--",
+        b"<!doctype html",
+        b"<html",
+        b"<head",
+        b"<body",
+        b"<script",
+        b"<iframe",
+        b"<h1",
+        b"<div",
+        b"<font",
+        b"<table",
+        b"<a",
+        b"<style",
+        b"<title",
+        b"<b",
+        b"<br",
+        b"<p",
+        b"<!--",
     ];
     TAGS.iter().any(|tag| {
         rest.len() > tag.len()
             && rest[..tag.len()].eq_ignore_ascii_case(tag)
-            && (matches!(rest[tag.len()], b' ' | b'>' | b'\t' | b'\n' | b'\r' | 0x0C) || *tag == b"<!--")
+            && (matches!(rest[tag.len()], b' ' | b'>' | b'\t' | b'\n' | b'\r' | 0x0C)
+                || *tag == b"<!--")
     })
 }
 
@@ -206,10 +239,20 @@ pub(crate) fn looks_like_svg(bytes: &[u8]) -> bool {
         return false;
     }
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
-    let head: Vec<u8> = bytes.iter().take(4096).map(u8::to_ascii_lowercase).collect();
-    let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
+    let head: Vec<u8> = bytes
+        .iter()
+        .take(4096)
+        .map(u8::to_ascii_lowercase)
+        .collect();
+    let start = head
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(head.len());
     let rest = &head[start..];
-    (rest.starts_with(b"<svg") || rest.starts_with(b"<?xml") || rest.starts_with(b"<!--") || rest.starts_with(b"<!doctype svg"))
+    (rest.starts_with(b"<svg")
+        || rest.starts_with(b"<?xml")
+        || rest.starts_with(b"<!--")
+        || rest.starts_with(b"<!doctype svg"))
         && find(rest, b"<svg").is_some()
 }
 
@@ -221,8 +264,12 @@ pub(crate) fn is_text_type(media_type: &str) -> bool {
         || essence.ends_with("+json")
         || matches!(
             essence.as_str(),
-            "application/xml" | "application/json" | "application/javascript" | "application/x-javascript"
-                | "application/ecmascript" | "application/x-subrip"
+            "application/xml"
+                | "application/json"
+                | "application/javascript"
+                | "application/x-javascript"
+                | "application/ecmascript"
+                | "application/x-subrip"
         )
 }
 
@@ -243,8 +290,13 @@ impl Kind {
             "text/html" | "application/xhtml+xml" => Kind::Html,
             "image/svg+xml" => Kind::Svg,
             "text/css" => Kind::Css,
-            "text/javascript" | "application/javascript" | "application/x-javascript"
-            | "text/ecmascript" | "application/ecmascript" | "text/jsx" | "text/babel" => Kind::Js,
+            "text/javascript"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+            | "text/jsx"
+            | "text/babel" => Kind::Js,
             _ => Kind::Other,
         }
     }
@@ -273,12 +325,20 @@ impl Kind {
 /// The media type without its parameters, lower case ("text/css; charset=utf-8" ->
 /// "text/css").
 pub(crate) fn essence(media_type: &str) -> String {
-    media_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+    media_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// Whether the file is HTML by its media type.
 pub(crate) fn is_html_type(media_type: &str) -> bool {
-    matches!(essence(media_type).as_str(), "text/html" | "application/xhtml+xml")
+    matches!(
+        essence(media_type).as_str(),
+        "text/html" | "application/xhtml+xml"
+    )
 }
 
 /// The media type a file of the page is served with: its ending's type (or what its
@@ -298,7 +358,12 @@ pub(crate) fn served_type(path: &str, bytes: &[u8]) -> String {
     };
     let wants_charset = matches!(
         base,
-        "text/html" | "text/css" | "text/javascript" | "text/plain" | "text/csv" | "text/vtt"
+        "text/html"
+            | "text/css"
+            | "text/javascript"
+            | "text/plain"
+            | "text/csv"
+            | "text/vtt"
             | "text/tab-separated-values"
     );
     if !wants_charset || has_bom(bytes) || std::str::from_utf8(bytes).is_err() {
@@ -324,7 +389,9 @@ fn declares_charset(bytes: &[u8]) -> bool {
     let mut at = 0;
     while let Some(found) = find(&lower[at..], b"<meta") {
         let start = at + found;
-        let end = find(&lower[start..], b">").map(|e| start + e).unwrap_or(lower.len());
+        let end = find(&lower[start..], b">")
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
         if find(&lower[start..end], b"charset").is_some() {
             return true;
         }
@@ -340,6 +407,7 @@ pub(crate) fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
-

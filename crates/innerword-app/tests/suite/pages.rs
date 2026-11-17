@@ -390,20 +390,28 @@ fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
         (Box::new(TogglePageView), NOT_FOR_A_PAGE),
         (Box::new(UseTitleFromText), TITLE_OF_A_PAGE),
         (Box::new(SaveNow), NOTHING_TO_SAVE_ON_A_PAGE),
-        (Box::new(innerword_comments::AddComment), NO_COMMENTS_ON_A_PAGE),
+        (
+            Box::new(innerword_comments::AddComment),
+            NO_COMMENTS_ON_A_PAGE,
+        ),
         (Box::new(innerword_app::zoom::FitWidth), NO_FIT_ON_A_PAGE),
         // The texts' comment panel is not switched from a page without a word.
-        (Box::new(innerword_comments::ToggleComments), NO_COMMENTS_ON_A_PAGE),
-        (Box::new(innerword_comments::ToggleShowResolved), NO_COMMENTS_ON_A_PAGE),
+        (
+            Box::new(innerword_comments::ToggleComments),
+            NO_COMMENTS_ON_A_PAGE,
+        ),
+        (
+            Box::new(innerword_comments::ToggleShowResolved),
+            NO_COMMENTS_ON_A_PAGE,
+        ),
         // Not 300 % without a word.
         (
             innerword_app::zoom::step_action(400).unwrap(),
             innerword_app::workspace::PAGE_ZOOM_AT_MOST,
         ),
     ];
-    let comments_shown = |vcx: &mut VisualTestContext| {
-        state_line(&workspace, vcx).contains("comments=[shown")
-    };
+    let comments_shown =
+        |vcx: &mut VisualTestContext| state_line(&workspace, vcx).contains("comments=[shown");
     let shown_before = comments_shown(vcx);
     for (action, sentence) in cases {
         workspace.update(vcx, |w, cx| {
@@ -421,7 +429,11 @@ fn the_commands_of_a_document_say_what_a_page_is(cx: &mut TestAppContext) {
     }
     // Nothing of a text happened meanwhile.
     assert_eq!(comments_shown(vcx), shown_before);
-    assert!(state_line(&workspace, vcx).contains("zoom=100%"), "{}", state_line(&workspace, vcx));
+    assert!(
+        state_line(&workspace, vcx).contains("zoom=100%"),
+        "{}",
+        state_line(&workspace, vcx)
+    );
     workspace.read_with(vcx, |w, cx| {
         assert!(!w.modal_layer().read(cx).has_modal());
         assert!(w.open_document_id().is_none());
@@ -445,7 +457,10 @@ fn vim_mode_switched_over_a_page_says_that_it_is_for_texts(cx: &mut TestAppConte
     vcx.run_until_parked();
     assert!(vim_on(vcx));
     let said = toasts(&workspace, vcx);
-    assert!(said.iter().any(|toast| toast == VIM_ON_FOR_TEXTS), "{said:?}");
+    assert!(
+        said.iter().any(|toast| toast == VIM_ON_FOR_TEXTS),
+        "{said:?}"
+    );
     // The command, from wherever it comes.
     workspace.update(vcx, |w, cx| {
         w.toast_layer().update(cx, |layer, cx| layer.clear(cx));
@@ -456,11 +471,16 @@ fn vim_mode_switched_over_a_page_says_that_it_is_for_texts(cx: &mut TestAppConte
     vcx.run_until_parked();
     assert!(!vim_on(vcx));
     let said = toasts(&workspace, vcx);
-    assert!(said.iter().any(|toast| toast == VIM_OFF_FOR_TEXTS), "{said:?}");
+    assert!(
+        said.iter().any(|toast| toast == VIM_OFF_FOR_TEXTS),
+        "{said:?}"
+    );
     // In a text the indicator says it, and no toast does.
     workspace.update_in(vcx, |workspace, window, cx| {
         assert!(workspace.open_document(text, true, window, cx));
-        workspace.toast_layer().update(cx, |layer, cx| layer.clear(cx));
+        workspace
+            .toast_layer()
+            .update(cx, |layer, cx| layer.clear(cx));
     });
     vcx.run_until_parked();
     vcx.update(|window, cx| {
@@ -1117,8 +1137,9 @@ fn a_folder_export_leaves_its_pages_out_and_says_so(cx: &mut TestAppContext) {
     assert!(!text.contains("Harbour Guide"), "no page: {text}");
     let said = toasts(&workspace, vcx);
     assert!(
-        said.iter().any(|toast| toast.starts_with("Exported 2 documents")
-            && toast.ends_with(&pages_left_out_sentence(2))),
+        said.iter()
+            .any(|toast| toast.starts_with("Exported 2 documents")
+                && toast.ends_with(&pages_left_out_sentence(2))),
         "{said:?}"
     );
 }
@@ -1136,9 +1157,8 @@ fn the_versions_of_a_page_show_its_text_and_one_is_restored(cx: &mut TestAppCont
             b"<html><head><title>Harbour Guide</title></head><body><p>The ferry runs at noon.</p></body></html>".to_vec(),
         )],
     );
-    let title_before = library.read_with(vcx, |library, _| {
-        library.document_meta(page).unwrap().title
-    });
+    let title_before =
+        library.read_with(vcx, |library, _| library.document_meta(page).unwrap().title);
     library.update(vcx, |library, cx| {
         library.create_snapshot(page, cx).unwrap();
     });

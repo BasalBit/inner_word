@@ -29,17 +29,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use innerword_web::{
+    Appearance, CheckInput, CheckOutcome, EditCommand, KeyPress, MemorySource, MenuEntry,
+    PageEvents, PageSource, PdfInput, Rect, ServedFile, ViewConfig, WebPage, available,
+    check_blocking, check_selectors, menu, print_offscreen, testing,
+};
 use objc::{
     Encode, Encoding, class,
     declare::ClassDecl,
     msg_send,
     runtime::{BOOL, NO, Object, Sel, YES},
     sel, sel_impl,
-};
-use innerword_web::{
-    Appearance, CheckInput, CheckOutcome, EditCommand, KeyPress, MemorySource, MenuEntry,
-    PageEvents, PageSource, PdfInput, Rect, ServedFile, ViewConfig, WebPage, available,
-    check_blocking, check_selectors, menu, print_offscreen, testing,
 };
 
 type Id = *mut Object;
@@ -1026,11 +1026,16 @@ fn the_text_keeps_apart_what_layout_shows_apart(report: &mut Report, rules: &Pat
         "0 50 100",
         "First line Second line",
     ] {
-        report.check(flat.contains(apart), &format!("{apart:?} is apart in the text"));
+        report.check(
+            flat.contains(apart),
+            &format!("{apart:?} is apart in the text"),
+        );
     }
     report.check(
-        text.contains("First line
-Second line"),
+        text.contains(
+            "First line
+Second line",
+        ),
         "two boxes on two lines are two lines",
     );
     for together in [
@@ -1733,7 +1738,10 @@ fn the_gate_opens_only_the_link_the_reader_acted_on(
     settle();
     report.check(
         opened().is_empty(),
-        &format!("a click on words does not open the link the page clicks ({:?})", opened()),
+        &format!(
+            "a click on words does not open the link the page clicks ({:?})",
+            opened()
+        ),
     );
     // A key typed in a field, and enter in it: nothing opens.
     view.focus();
@@ -1745,7 +1753,10 @@ fn the_gate_opens_only_the_link_the_reader_acted_on(
     settle();
     report.check(
         opened().is_empty(),
-        &format!("a key in a field does not open the link the page clicks ({:?})", opened()),
+        &format!(
+            "a key in a field does not open the link the page clicks ({:?})",
+            opened()
+        ),
     );
     // Enter on the focused link opens that link and no other.
     let _ = eval(&view, "document.getElementById('real').focus(); 1");
@@ -1755,7 +1766,10 @@ fn the_gate_opens_only_the_link_the_reader_acted_on(
     settle();
     report.check(
         opened() == vec![real.clone()],
-        &format!("enter on a link opens that link and no other ({:?})", opened()),
+        &format!(
+            "enter on a link opens that link and no other ({:?})",
+            opened()
+        ),
     );
     // A click on the link opens it, and the page's clicks of the other link do not.
     report.check(click_on("real"), "the link has a place on the page");
@@ -1763,7 +1777,10 @@ fn the_gate_opens_only_the_link_the_reader_acted_on(
     settle();
     report.check(
         opened() == vec![real.clone(), real.clone()],
-        &format!("a click on a link opens that link and no other ({:?})", opened()),
+        &format!(
+            "a click on a link opens that link and no other ({:?})",
+            opened()
+        ),
     );
     // A link of an SVG drawing is a link too.
     report.check(click_on("drawn"), "the drawn link has a place on the page");
@@ -1792,14 +1809,23 @@ fn the_gate_opens_only_the_link_the_reader_acted_on(
             settle();
             report.check(
                 opened().last() == Some(&server.url("framed")) && opened().len() == 4,
-                &format!("a click on a link in a frame of the page opens it ({:?})", opened()),
+                &format!(
+                    "a click on a link in a frame of the page opens it ({:?})",
+                    opened()
+                ),
             );
         }
-        _ => report.check(false, &format!("the link in the frame has a place ({framed:?})")),
+        _ => report.check(
+            false,
+            &format!("the link in the frame has a place ({framed:?})"),
+        ),
     }
     report.check(
         !opened().contains(&other),
-        &format!("the link only the page clicked never opened ({:?})", opened()),
+        &format!(
+            "the link only the page clicked never opened ({:?})",
+            opened()
+        ),
     );
 }
 
@@ -1830,13 +1856,19 @@ fn lazy_pieces_are_asked_for(report: &mut Report, server: &Server, rules: &Path)
         (outcome, load)
     };
     let (outcome, load) = missing(vec![("index.html", html(&page))]);
-    report.check(outcome.failure.is_none(), &format!("the lazy check ran ({:?})", outcome.failure));
+    report.check(
+        outcome.failure.is_none(),
+        &format!("the lazy check ran ({:?})", outcome.failure),
+    );
     let load = load.unwrap_or_default();
     let mut gone = load.missing.clone();
     gone.sort();
     report.check(
         gone == vec!["frames/late.html", "pics/added.png", "pics/late.png"],
-        &format!("lazy pieces that are not there are missing ({:?})", load.missing),
+        &format!(
+            "lazy pieces that are not there are missing ({:?})",
+            load.missing
+        ),
     );
     let blocked = blocked_paths(&outcome);
     report.check(
@@ -1847,7 +1879,10 @@ fn lazy_pieces_are_asked_for(report: &mut Report, server: &Server, rules: &Path)
         ("index.html", html(&page)),
         ("pics/late.png", file("image/png", &png)),
         ("pics/added.png", file("image/png", &png)),
-        ("frames/late.html", html("<!doctype html><title>Late</title><p>late</p>")),
+        (
+            "frames/late.html",
+            html("<!doctype html><title>Late</title><p>late</p>"),
+        ),
     ]);
     let load = load.unwrap_or_default();
     report.check(

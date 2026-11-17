@@ -13,7 +13,13 @@ use crate::resolve::decode;
 /// Every character outside `[A-Za-z0-9._@+-]` written as `_`.
 fn safe(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '+' | '-') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '+' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -70,7 +76,11 @@ pub(crate) fn external_path(url: &str, kind: Kind, taken: &mut HashMap<String, S
         ending = ".js".to_string();
     }
     parts.push(format!("{base}{ending}"));
-    let mut path = format!("{EXTERNAL_DIR}/{}/{}", safe(&netloc(&parsed)), parts.join("/"));
+    let mut path = format!(
+        "{EXTERNAL_DIR}/{}/{}",
+        safe(&netloc(&parsed)),
+        parts.join("/")
+    );
     if taken.get(&path).map(|owner| owner != url).unwrap_or(false) {
         let mark = &sha1_hex(url)[..8];
         path = if ending.is_empty() {

@@ -3,10 +3,10 @@
 //! with the user's own configuration in place: skills, a session hook, plugins, a
 //! claude.ai connector) show it had.
 
-use serde_json::{Value, json};
 use innerword_assistant::{
     ConversationOptions, QUICK_SYSTEM_PROMPT, Selection, library_tools, read_only_tools,
 };
+use serde_json::{Value, json};
 
 use super::support::{Stage, Talk, fixture, value_after};
 

@@ -39,11 +39,15 @@ pub struct FetchError {
 }
 
 /// The reason of an address on this Mac or its local network (`FetchError::local`).
-pub const LOCAL_ADDRESS: &str = "is on this Mac or its local network; only addresses on the internet are fetched";
+pub const LOCAL_ADDRESS: &str =
+    "is on this Mac or its local network; only addresses on the internet are fetched";
 
 impl FetchError {
     pub fn new(url: impl Into<String>, reason: impl Into<String>) -> FetchError {
-        FetchError { url: url.into(), reason: reason.into() }
+        FetchError {
+            url: url.into(),
+            reason: reason.into(),
+        }
     }
 
     /// The refusal of an address on this Mac or its local network.
@@ -143,12 +147,20 @@ impl CurlFetcher {
                 if loopback_name && !self.allow_loopback {
                     return Err(FetchError::local(shown));
                 }
-                if !loopback_name && (!name.contains('.') || name.ends_with(".local") || name.ends_with(".internal") || name.ends_with(".lan") || name.ends_with(".home.arpa")) {
+                if !loopback_name
+                    && (!name.contains('.')
+                        || name.ends_with(".local")
+                        || name.ends_with(".internal")
+                        || name.ends_with(".lan")
+                        || name.ends_with(".home.arpa"))
+                {
                     return Err(FetchError::local(shown));
                 }
                 match (name.as_str(), port).to_socket_addrs() {
                     Ok(found) => found.map(|a| a.ip()).collect(),
-                    Err(_) => return Err(FetchError::new(shown, "no network: Could not resolve host")),
+                    Err(_) => {
+                        return Err(FetchError::new(shown, "no network: Could not resolve host"));
+                    }
                 }
             }
         };
@@ -176,8 +188,14 @@ impl CurlFetcher {
             .arg("-q")
             .args(["--silent", "--show-error", "--globoff"])
             .args(["--proto", "=http,https"])
-            .args(["--connect-timeout", &self.time_limit.as_secs().clamp(1, 10).to_string()])
-            .args(["--max-time", &format!("{:.3}", self.time_limit.as_secs_f64())])
+            .args([
+                "--connect-timeout",
+                &self.time_limit.as_secs().clamp(1, 10).to_string(),
+            ])
+            .args([
+                "--max-time",
+                &format!("{:.3}", self.time_limit.as_secs_f64()),
+            ])
             .args(["--max-filesize", &MAX_FILE_BYTES.to_string()])
             .args(["--user-agent", &self.user_agent]);
         if let (Some(pin), Some(host)) = (pin, url.host_str()) {
@@ -202,14 +220,24 @@ impl CurlFetcher {
         if code != 0 {
             let _ = fs::remove_file(&body);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(FetchError::new(&shown, curl_reason(code, &stderr, self.time_limit)));
+            return Err(FetchError::new(
+                &shown,
+                curl_reason(code, &stderr, self.time_limit),
+            ));
         }
         let written = String::from_utf8_lossy(&output.stdout).into_owned();
         let mut parts = written.splitn(2, '\t');
         let status: u16 = parts.next().unwrap_or("").trim().parse().unwrap_or(0);
         let content_type = parts.next().unwrap_or("").trim().to_string();
-        let location = fs::read_to_string(&headers).ok().and_then(|text| header(&text, "location"));
-        Ok(Answer { status, content_type, location, body })
+        let location = fs::read_to_string(&headers)
+            .ok()
+            .and_then(|text| header(&text, "location"));
+        Ok(Answer {
+            status,
+            content_type,
+            location,
+            body,
+        })
     }
 }
 
@@ -222,13 +250,25 @@ struct Answer {
 
 /// curl's own sentence, without "curl: (6) ".
 fn curl_reason(code: i32, stderr: &str, limit: Duration) -> String {
-    let last = stderr.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    let last = stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     let sentence = match last.find(") ") {
         Some(at) if last.starts_with("curl: (") => last[at + 2..].to_string(),
         _ => last.to_string(),
     };
     match code {
-        6 => format!("no network: {}", if sentence.is_empty() { "Could not resolve host".to_string() } else { sentence }),
+        6 => format!(
+            "no network: {}",
+            if sentence.is_empty() {
+                "Could not resolve host".to_string()
+            } else {
+                sentence
+            }
+        ),
         7 => format!("no connection: {sentence}"),
         28 => format!("it took longer than {} s", limit.as_secs().max(1)),
         63 => "over 32 MB".to_string(),
@@ -267,7 +307,8 @@ impl Fetcher for CurlFetcher {
             std::process::id(),
             FETCH_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&dir).map_err(|error| FetchError::new(url, format!("no temporary folder: {error}")))?;
+        fs::create_dir_all(&dir)
+            .map_err(|error| FetchError::new(url, format!("no temporary folder: {error}")))?;
         let result = (|| {
             for hop in 0..=MAX_REDIRECTS {
                 let pin = match self.check(&current) {
@@ -276,7 +317,8 @@ impl Fetcher for CurlFetcher {
                         if hop > 0 {
                             // A redirect led there: the address the page names is said,
                             // and where it was sent.
-                            error.reason = format!("it is sent on to {}, which {}", error.url, error.reason);
+                            error.reason =
+                                format!("it is sent on to {}, which {}", error.url, error.reason);
                         }
                         error.url = url.to_string();
                         return Err(error);
@@ -289,11 +331,21 @@ impl Fetcher for CurlFetcher {
                 if matches!(answer.status, 301 | 302 | 303 | 307 | 308) {
                     let _ = fs::remove_file(&answer.body);
                     let Some(location) = answer.location else {
-                        return Err(FetchError::new(url, format!("HTTP {} without a Location", answer.status)));
+                        return Err(FetchError::new(
+                            url,
+                            format!("HTTP {} without a Location", answer.status),
+                        ));
                     };
                     current = match current.join(&location) {
                         Ok(next) if next.scheme() == "http" || next.scheme() == "https" => next,
-                        _ => return Err(FetchError::new(url, format!("it is sent on to {location}, which is no http or https address"))),
+                        _ => {
+                            return Err(FetchError::new(
+                                url,
+                                format!(
+                                    "it is sent on to {location}, which is no http or https address"
+                                ),
+                            ));
+                        }
                     };
                     current.set_fragment(None);
                     continue;
@@ -312,9 +364,16 @@ impl Fetcher for CurlFetcher {
                 } else {
                     answer.content_type
                 };
-                return Ok(Fetched { final_url: current.to_string(), media_type: Some(media), bytes });
+                return Ok(Fetched {
+                    final_url: current.to_string(),
+                    media_type: Some(media),
+                    bytes,
+                });
             }
-            Err(FetchError::new(url, format!("too many redirects (more than {MAX_REDIRECTS})")))
+            Err(FetchError::new(
+                url,
+                format!("too many redirects (more than {MAX_REDIRECTS})"),
+            ))
         })();
         let _ = fs::remove_dir_all(&dir);
         result
@@ -324,7 +383,13 @@ impl Fetcher for CurlFetcher {
 fn is_loopback(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback(),
-        IpAddr::V6(v6) => v6.is_loopback() || v6.to_ipv4_mapped().map(|v4| v4.is_loopback()).unwrap_or(false),
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6
+                    .to_ipv4_mapped()
+                    .map(|v4| v4.is_loopback())
+                    .unwrap_or(false)
+        }
     }
 }
 
@@ -340,7 +405,8 @@ pub(crate) fn is_public(ip: &IpAddr) -> bool {
             let s = v6.segments();
             // NAT64 (64:ff9b::/96) carries an IPv4 address.
             if s[0] == 0x64 && s[1] == 0xff9b && s[2..6].iter().all(|&x| x == 0) {
-                let v4 = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
+                let v4 =
+                    Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
                 return is_public_v4(&v4);
             }
             !(v6.is_loopback()
@@ -384,7 +450,10 @@ pub struct KnownPieces {
 }
 
 impl KnownPieces {
-    pub fn read(map: &BTreeMap<String, PathBuf>, inner: Arc<dyn Fetcher>) -> Result<KnownPieces, PageError> {
+    pub fn read(
+        map: &BTreeMap<String, PathBuf>,
+        inner: Arc<dyn Fetcher>,
+    ) -> Result<KnownPieces, PageError> {
         let mut known = HashMap::new();
         for (address, file) in map {
             let Some(normal) = normal_address(address) else {
@@ -394,7 +463,10 @@ impl KnownPieces {
             };
             let meta = fs::metadata(file).map_err(|error| PageError::io(file, error))?;
             if !meta.is_file() {
-                return Err(PageError::input(format!("{} is not a file", file.display())));
+                return Err(PageError::input(format!(
+                    "{} is not a file",
+                    file.display()
+                )));
             }
             if meta.len() > MAX_FILE_BYTES {
                 return Err(PageError::Incomplete {
@@ -405,17 +477,31 @@ impl KnownPieces {
             let bytes = fs::read(file).map_err(|error| PageError::io(file, error))?;
             let name = file.to_string_lossy();
             let media = match media_type(&name) {
-                OCTET_STREAM => media_type(Url::parse(&normal).map(|u| u.path().to_string()).unwrap_or_default().as_str()),
+                OCTET_STREAM => media_type(
+                    Url::parse(&normal)
+                        .map(|u| u.path().to_string())
+                        .unwrap_or_default()
+                        .as_str(),
+                ),
                 found => found,
             };
-            known.insert(normal.clone(), Fetched { final_url: normal, media_type: Some(media.to_string()), bytes });
+            known.insert(
+                normal.clone(),
+                Fetched {
+                    final_url: normal,
+                    media_type: Some(media.to_string()),
+                    bytes,
+                },
+            );
         }
         Ok(KnownPieces { known, inner })
     }
 }
 
 fn file_label(file: &Path) -> String {
-    file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| file.display().to_string())
+    file.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.display().to_string())
 }
 
 impl Fetcher for KnownPieces {
@@ -446,14 +532,23 @@ const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 impl CachingFetcher {
     pub fn new(inner: Arc<dyn Fetcher>) -> CachingFetcher {
-        CachingFetcher { inner, cache: Mutex::new(Cache::default()) }
+        CachingFetcher {
+            inner,
+            cache: Mutex::new(Cache::default()),
+        }
     }
 }
 
 impl Fetcher for CachingFetcher {
     fn fetch(&self, url: &str) -> Result<Fetched, FetchError> {
         let key = normal_address(url).unwrap_or_else(|| url.to_string());
-        if let Some(found) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).answers.get(&key) {
+        if let Some(found) = self
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .answers
+            .get(&key)
+        {
             return found.clone();
         }
         let answer = self.inner.fetch(url);
@@ -464,7 +559,9 @@ impl Fetcher for CachingFetcher {
             cache.order.push_back(key);
             cache.bytes += size;
             while cache.bytes > CACHE_BYTES {
-                let Some(oldest) = cache.order.pop_front() else { break };
+                let Some(oldest) = cache.order.pop_front() else {
+                    break;
+                };
                 if let Some(Ok(gone)) = cache.answers.remove(&oldest) {
                     cache.bytes -= gone.bytes.len() as u64;
                 }
@@ -483,7 +580,11 @@ impl MapFetcher {
     pub fn with(mut self, url: &str, media_type: &str, bytes: impl Into<Vec<u8>>) -> MapFetcher {
         self.0.insert(
             url.to_string(),
-            Fetched { final_url: url.to_string(), media_type: Some(media_type.to_string()), bytes: bytes.into() },
+            Fetched {
+                final_url: url.to_string(),
+                media_type: Some(media_type.to_string()),
+                bytes: bytes.into(),
+            },
         );
         self
     }
@@ -512,7 +613,11 @@ impl Fetcher for MapFetcher {
             if let Some(found) = self.0.get(&normal) {
                 return Ok(found.clone());
             }
-            if let Some(found) = self.0.iter().find(|(key, _)| normal_address(key).as_deref() == Some(normal.as_str())) {
+            if let Some(found) = self
+                .0
+                .iter()
+                .find(|(key, _)| normal_address(key).as_deref() == Some(normal.as_str()))
+            {
                 return Ok(found.1.clone());
             }
         }

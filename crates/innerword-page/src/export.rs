@@ -30,11 +30,17 @@ fn target(dir: &Path, path: &str) -> Result<PathBuf, PageError> {
     if path.is_empty()
         || path.starts_with('/')
         || path.contains('\0')
-        || path.split('/').any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
     {
-        return Err(PageError::Unreadable { reason: format!("{path:?} is not a path of a page") });
+        return Err(PageError::Unreadable {
+            reason: format!("{path:?} is not a path of a page"),
+        });
     }
-    Ok(path.split('/').fold(dir.to_path_buf(), |acc, segment| acc.join(segment)))
+    Ok(path
+        .split('/')
+        .fold(dir.to_path_buf(), |acc, segment| acc.join(segment)))
 }
 
 /// Writes the files of the page into `dir` (made when it is not there). A file that is
@@ -62,7 +68,10 @@ pub fn write_folder(
     for file in files {
         let path = target(dir, &file.path)?;
         if !overwrite && fs::symlink_metadata(&path).is_ok() {
-            return Err(PageError::io(path, io::Error::from(io::ErrorKind::AlreadyExists)));
+            return Err(PageError::io(
+                path,
+                io::Error::from(io::ErrorKind::AlreadyExists),
+            ));
         }
         targets.push((file, path));
     }
@@ -105,7 +114,12 @@ pub fn write_folder(
         made.take_back();
     }
     result?;
-    let mut written = Written { dir: dir.to_path_buf(), files: 0, bytes: 0, missing };
+    let mut written = Written {
+        dir: dir.to_path_buf(),
+        files: 0,
+        bytes: 0,
+        missing,
+    };
     for (_, _, bytes) in &read {
         written.files += 1;
         written.bytes += bytes.len() as u64;
@@ -151,16 +165,29 @@ impl Made {
     }
 }
 
-fn write_all(dir: &Path, read: &[(&ManifestFile, PathBuf, Vec<u8>)], made: &mut Made) -> Result<(), PageError> {
-    made.dir_all(dir).map_err(|error| PageError::io(dir, error))?;
+fn write_all(
+    dir: &Path,
+    read: &[(&ManifestFile, PathBuf, Vec<u8>)],
+    made: &mut Made,
+) -> Result<(), PageError> {
+    made.dir_all(dir)
+        .map_err(|error| PageError::io(dir, error))?;
     for (_, path, bytes) in read {
         if let Some(parent) = path.parent() {
-            made.dir_all(parent).map_err(|error| PageError::io(parent, error))?;
+            made.dir_all(parent)
+                .map_err(|error| PageError::io(parent, error))?;
         }
         let existing = fs::symlink_metadata(path);
-        if existing.as_ref().map(|m| m.file_type().is_symlink() || m.is_dir()).unwrap_or(false) {
+        if existing
+            .as_ref()
+            .map(|m| m.file_type().is_symlink() || m.is_dir())
+            .unwrap_or(false)
+        {
             // Never written through a link, nor over a folder.
-            return Err(PageError::io(path, io::Error::from(io::ErrorKind::AlreadyExists)));
+            return Err(PageError::io(
+                path,
+                io::Error::from(io::ErrorKind::AlreadyExists),
+            ));
         }
         fs::write(path, bytes).map_err(|error| PageError::io(path, error))?;
         if existing.is_err() {

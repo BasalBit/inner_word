@@ -485,7 +485,8 @@ fn the_title_follows_the_text_after_every_change(cx: &mut TestAppContext) {
     // A library on disk, as the app has: its autosave runs in the
     // background and reports back later.
     let dir = tempfile::tempdir().unwrap();
-    let library = cx.new(|_| innerword_library::Library::open(dir.path().join("library.db")).unwrap());
+    let library =
+        cx.new(|_| innerword_library::Library::open(dir.path().join("library.db")).unwrap());
     library.update(cx, |library, cx| {
         library
             .set_setting(keys::WELCOME_CREATED, &true, cx)
@@ -756,9 +757,14 @@ fn only_a_real_launch_asks_for_the_default_data_directory() {
             if code.starts_with("//") {
                 continue;
             }
-            if ["data_dir()", "database_path()", "open_default()", "default_location()"]
-                .iter()
-                .any(|call| code.contains(call))
+            if [
+                "data_dir()",
+                "database_path()",
+                "open_default()",
+                "default_location()",
+            ]
+            .iter()
+            .any(|call| code.contains(call))
             {
                 let name = path.file_name().unwrap().to_string_lossy().into_owned();
                 found.push(format!("{name}:{}: {}", n + 1, code));
@@ -768,15 +774,33 @@ fn only_a_real_launch_asks_for_the_default_data_directory() {
     let allowed = ["main.rs", "pages.rs", "window.rs"];
     let elsewhere: Vec<&String> = found
         .iter()
-        .filter(|line| !allowed.iter().any(|name| line.starts_with(&format!("{name}:"))))
+        .filter(|line| {
+            !allowed
+                .iter()
+                .any(|name| line.starts_with(&format!("{name}:")))
+        })
         .collect();
     assert!(
         elsewhere.is_empty(),
         "the default data directory is asked for outside a real launch: {elsewhere:#?}"
     );
     // In those three files, only where a launch asks.
-    let in_pages: Vec<&String> = found.iter().filter(|l| l.starts_with("pages.rs:")).collect();
-    assert_eq!(in_pages.len(), 1, "pages.rs asks only in use_webkit: {in_pages:#?}");
-    let in_window: Vec<&String> = found.iter().filter(|l| l.starts_with("window.rs:")).collect();
-    assert_eq!(in_window.len(), 1, "window.rs asks only in library_error_text: {in_window:#?}");
+    let in_pages: Vec<&String> = found
+        .iter()
+        .filter(|l| l.starts_with("pages.rs:"))
+        .collect();
+    assert_eq!(
+        in_pages.len(),
+        1,
+        "pages.rs asks only in use_webkit: {in_pages:#?}"
+    );
+    let in_window: Vec<&String> = found
+        .iter()
+        .filter(|l| l.starts_with("window.rs:"))
+        .collect();
+    assert_eq!(
+        in_window.len(),
+        1,
+        "window.rs asks only in library_error_text: {in_window:#?}"
+    );
 }

@@ -3,11 +3,11 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::json;
 use innerword_assistant::claude::MINIMUM_VERSION;
 use innerword_assistant::{
     AssistantError, Backend, ClaudeCode, ConversationOptions, Selection, TurnEnd,
 };
+use serde_json::json;
 
 use super::support::{Answer, PATIENCE, Stage, Talk, fixture};
 

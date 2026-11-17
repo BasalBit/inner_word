@@ -76,7 +76,11 @@ pub fn check_request(bundle: &Bundle) -> CheckRequest {
     CheckRequest {
         entry: bundle.entry.clone(),
         also: html.into_iter().skip(1).take(ALSO_LOADS).collect(),
-        media_types: bundle.served.iter().map(|f| (f.path.clone(), f.media_type.clone())).collect(),
+        media_types: bundle
+            .served
+            .iter()
+            .map(|f| (f.path.clone(), f.media_type.clone()))
+            .collect(),
         settle_min_ms: SETTLE_MIN_MS,
         settle_max_ms: SETTLE_MAX_MS,
         limit_ms: CHECK_LIMIT_MS,
@@ -87,12 +91,19 @@ pub fn check_request(bundle: &Bundle) -> CheckRequest {
 fn under(dir: &Path, path: &str) -> io::Result<PathBuf> {
     if path.is_empty()
         || path.starts_with('/')
-        || path.split('/').any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         || path.contains('\0')
     {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{path} is not a path of a page")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{path} is not a path of a page"),
+        ));
     }
-    Ok(path.split('/').fold(dir.to_path_buf(), |acc, segment| acc.join(segment)))
+    Ok(path
+        .split('/')
+        .fold(dir.to_path_buf(), |acc, segment| acc.join(segment)))
 }
 
 fn make_private_dir(dir: &Path) -> io::Result<()> {
@@ -142,12 +153,17 @@ pub fn write_served_dir(
     let external: HashSet<&str> = manifest.externals.iter().map(|e| e.path.as_str()).collect();
     let mut also: Vec<String> = Vec::new();
     for file in &manifest.files {
-        let target = under(&files, &file.path).map_err(|error| PageError::Unreadable { reason: error.to_string() })?;
+        let target = under(&files, &file.path).map_err(|error| PageError::Unreadable {
+            reason: error.to_string(),
+        })?;
         let bytes = bytes_of(&file.file).map_err(|error| PageError::io(&target, error))?;
         let document = file.path != manifest.entry
             && !external.contains(file.path.as_str())
             && is_html_type(&file.media_type)
-            && bytes.as_deref().map(|b| sniffed_type(b).is_none() && looks_like_text(b)).unwrap_or(true);
+            && bytes
+                .as_deref()
+                .map(|b| sniffed_type(b).is_none() && looks_like_text(b))
+                .unwrap_or(true);
         if document && also.len() < ALSO_LOADS {
             also.push(file.path.clone());
         }
@@ -160,7 +176,11 @@ pub fn write_served_dir(
     let request = CheckRequest {
         entry: manifest.entry.clone(),
         also,
-        media_types: manifest.files.iter().map(|f| (f.path.clone(), f.media_type.clone())).collect(),
+        media_types: manifest
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.media_type.clone()))
+            .collect(),
         settle_min_ms: SETTLE_MIN_MS,
         settle_max_ms: SETTLE_MAX_MS,
         limit_ms: CHECK_LIMIT_MS,
@@ -170,10 +190,12 @@ pub fn write_served_dir(
 
 /// What `write_check_dir` (or `write_served_dir`) wrote: the request, and every file
 /// under `files/` as path -> (media type, bytes).
-pub fn read_check_dir(dir: &Path) -> io::Result<(CheckRequest, BTreeMap<String, (String, Vec<u8>)>)> {
+pub fn read_check_dir(
+    dir: &Path,
+) -> io::Result<(CheckRequest, BTreeMap<String, (String, Vec<u8>)>)> {
     let text = fs::read_to_string(dir.join("request.json"))?;
-    let request: CheckRequest =
-        serde_json::from_str(&text).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let request: CheckRequest = serde_json::from_str(&text)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let mut files = BTreeMap::new();
     let root = dir.join("files");
     let mut stack: Vec<(PathBuf, String)> = vec![(root, String::new())];
@@ -185,15 +207,24 @@ pub fn read_check_dir(dir: &Path) -> io::Result<(CheckRequest, BTreeMap<String, 
         };
         for entry in entries {
             let entry = entry?;
-            let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
-            let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let path = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
                 stack.push((entry.path(), path));
             } else if file_type.is_file() {
                 let bytes = fs::read(entry.path())?;
-                let media =
-                    request.media_types.get(&path).cloned().unwrap_or_else(|| media_type(&path).to_string());
+                let media = request
+                    .media_types
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| media_type(&path).to_string());
                 files.insert(path, (media, bytes));
             }
         }
@@ -211,7 +242,15 @@ pub fn static_check(bundle: &Bundle) -> CheckReport {
         match bundle.served_file(&path) {
             Some(file) => {
                 let (title, first_heading, text) = static_text(&file.bytes);
-                loads.push(LoadReport { path, title, first_heading, text, finished: true, requests: 1, ..LoadReport::default() });
+                loads.push(LoadReport {
+                    path,
+                    title,
+                    first_heading,
+                    text,
+                    finished: true,
+                    requests: 1,
+                    ..LoadReport::default()
+                });
             }
             None => loads.push(LoadReport {
                 path,
@@ -220,7 +259,12 @@ pub fn static_check(bundle: &Bundle) -> CheckReport {
             }),
         }
     }
-    CheckReport { engine: STATIC_ENGINE.to_string(), elapsed_ms: 0, loads, failure: None }
+    CheckReport {
+        engine: STATIC_ENGINE.to_string(),
+        elapsed_ms: 0,
+        loads,
+        failure: None,
+    }
 }
 
 /// The `<title>` of an HTML file, trimmed, at most MAX_TITLE_CHARS.
@@ -230,10 +274,53 @@ pub(crate) fn static_title(bytes: &[u8]) -> Option<String> {
 }
 
 const BLOCKS: &[&str] = &[
-    "address", "article", "aside", "blockquote", "br", "dd", "details", "dialog", "div", "dl", "dt",
-    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
-    "hr", "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
-    "th", "thead", "tr", "ul", "option", "legend", "caption", "body", "html", "button", "label",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "br",
+    "dd",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+    "option",
+    "legend",
+    "caption",
+    "body",
+    "html",
+    "button",
+    "label",
 ];
 
 /// (title, first h1, text) of an HTML file as the fake check reads it.
@@ -292,8 +379,16 @@ fn static_text(bytes: &[u8]) -> (String, String, String) {
             _ => {}
         }
     }
-    let lines: Vec<String> = out.lines().map(collapse).filter(|line| !line.is_empty()).collect();
-    (clip_title(&title), clip_title(&collapse(&heading)), lines.join("\n"))
+    let lines: Vec<String> = out
+        .lines()
+        .map(collapse)
+        .filter(|line| !line.is_empty())
+        .collect();
+    (
+        clip_title(&title),
+        clip_title(&collapse(&heading)),
+        lines.join("\n"),
+    )
 }
 
 fn collapse(text: &str) -> String {
@@ -305,5 +400,10 @@ pub(crate) fn clip_title(text: &str) -> String {
     if trimmed.chars().count() <= MAX_TITLE_CHARS {
         return trimmed.to_string();
     }
-    trimmed.chars().take(MAX_TITLE_CHARS).collect::<String>().trim_end().to_string()
+    trimmed
+        .chars()
+        .take(MAX_TITLE_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }

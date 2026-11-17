@@ -50,16 +50,23 @@ pub(crate) enum Resolved {
     /// `mailto:`, `tel:` or any scheme but http(s).
     Nothing,
     /// A file of the page: its path (decoded, no query), and the fragment as written.
-    Local { path: String, fragment: Option<String> },
+    Local {
+        path: String,
+        fragment: Option<String>,
+    },
     /// An address on the web without its fragment, and the fragment.
-    External { url: String, fragment: Option<String> },
+    External {
+        url: String,
+        fragment: Option<String>,
+    },
     /// A path that leaves the root of the page.
     Outside,
 }
 
 /// The address a file of the page stands at while its references are resolved.
 pub(crate) fn local_base(path: &str) -> Url {
-    Url::parse(&format!("https://{LOCAL_HOST}/{}", encode_path(path))).expect("a local address parses")
+    Url::parse(&format!("https://{LOCAL_HOST}/{}", encode_path(path)))
+        .expect("a local address parses")
 }
 
 /// The root of the page.
@@ -89,7 +96,9 @@ fn scheme_of(text: &str) -> Option<String> {
     let scheme = &text[..colon];
     let mut chars = scheme.chars();
     let first = chars.next()?;
-    if !first.is_ascii_alphabetic() || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+    if !first.is_ascii_alphabetic()
+        || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
         return None;
     }
     Some(scheme.to_ascii_lowercase())
@@ -130,9 +139,15 @@ pub(crate) fn resolve(raw: &str, base: &Url) -> Resolved {
 }
 
 fn classify(mut url: Url) -> Resolved {
-    let fragment = url.fragment().map(|f| f.to_string()).filter(|f| !f.is_empty());
+    let fragment = url
+        .fragment()
+        .map(|f| f.to_string())
+        .filter(|f| !f.is_empty());
     if is_local(&url) {
-        return Resolved::Local { path: local_path(&url), fragment };
+        return Resolved::Local {
+            path: local_path(&url),
+            fragment,
+        };
     }
     if url.scheme() != "http" && url.scheme() != "https" {
         return Resolved::Nothing;
@@ -141,7 +156,10 @@ fn classify(mut url: Url) -> Resolved {
         return Resolved::Nothing;
     }
     url.set_fragment(None);
-    Resolved::External { url: url.to_string(), fragment }
+    Resolved::External {
+        url: url.to_string(),
+        fragment,
+    }
 }
 
 /// The normal form of an absolute address the bundler keys pieces by: as the `url`
@@ -158,7 +176,11 @@ pub(crate) fn normal_address(text: &str) -> Option<String> {
 /// Whether a relative reference from a file at `from` (a local path) climbs above the
 /// root of the page.
 fn leaves_root(from: &str, raw: &str) -> bool {
-    let path = raw.split(['?', '#']).next().unwrap_or("").replace('\\', "/");
+    let path = raw
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .replace('\\', "/");
     let mut depth: usize = if path.starts_with('/') {
         0
     } else {
@@ -195,7 +217,11 @@ pub(crate) fn relative_reference(from: &str, to: &str, fragment: Option<&str>) -
     for _ in common..from_dir.len() {
         out.push_str("../");
     }
-    let rest: Vec<&str> = to_dir[common..].iter().chain(name.iter()).copied().collect();
+    let rest: Vec<&str> = to_dir[common..]
+        .iter()
+        .chain(name.iter())
+        .copied()
+        .collect();
     out.push_str(&encode_path(&rest.join("/")));
     with_fragment(out, fragment)
 }

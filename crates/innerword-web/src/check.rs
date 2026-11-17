@@ -1238,7 +1238,10 @@ mod tests {
 
     #[test]
     fn a_frame_is_named_by_its_path() {
-        assert_eq!(display("innerword-page://check/art/a%20b.svg"), "art/a b.svg");
+        assert_eq!(
+            display("innerword-page://check/art/a%20b.svg"),
+            "art/a b.svg"
+        );
         assert_eq!(display("https://example.com/x"), "https://example.com/x");
         assert_eq!(
             without_fragment("innerword-page://check/a.svg#x"),

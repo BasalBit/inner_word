@@ -99,7 +99,6 @@ use gpui::{
     AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels,
     PromptLevel, SharedString, Subscription, Task, Window, WindowBounds, px,
 };
-use serde::Serialize;
 use innerword_comments::{CommentsEvent, CommentsPanel};
 use innerword_core::Document;
 use innerword_editor::{Editor, EditorConfig, EditorEvent};
@@ -112,6 +111,7 @@ use innerword_ui::{
     theme::{self},
 };
 use innerword_vim_mode::{HostRequest, VimCommandLine, VimEvent, VimMode, VimStatusItem};
+use serde::Serialize;
 
 use crate::{
     actions::*,
@@ -136,8 +136,8 @@ pub use page::{
     CRASH_AGAIN_WITHIN, NO_COMMENTS_ON_A_PAGE, NO_FIT_ON_A_PAGE, NO_SPELLING_ON_A_PAGE,
     NOT_FOR_A_PAGE, NOTHING_TO_SAVE_ON_A_PAGE, OpenContextMenu as OpenPageContextMenu,
     Overlay as PageOverlay, PAGE_STOPPED, PAGE_VIEW_CONTEXT, PAGE_ZOOM_AT_MOST, PAGE_ZOOM_STEPS,
-    PageState,
-    TITLE_OF_A_PAGE, VIM_OFF_FOR_TEXTS, VIM_ON_FOR_TEXTS, holes_in as page_holes_in, page_key_bindings,
+    PageState, TITLE_OF_A_PAGE, VIM_OFF_FOR_TEXTS, VIM_ON_FOR_TEXTS, holes_in as page_holes_in,
+    page_key_bindings,
 };
 pub use page_import::{
     AddedPage, AddingPhase, AddingProgress, NOTE_DELAY as ADDING_NOTE_DELAY, PageOutcome,
@@ -368,7 +368,10 @@ impl Workspace {
         // Everything that extends the editor attaches to the one editor
         // entity here and follows `DocumentReplaced` by itself.
         let recent_fonts: Vec<String> = library.read(cx).setting_or(keys::RECENT_FONTS, Vec::new());
-        innerword_editor_tools::set_recent_fonts(recent_fonts.into_iter().map(SharedString::from), cx);
+        innerword_editor_tools::set_recent_fonts(
+            recent_fonts.into_iter().map(SharedString::from),
+            cx,
+        );
         let tools = cx.new(|cx| {
             let mut tools = EditorTools::new(editor.clone(), window, cx);
             tools.set_format_bar_enabled(settings.format_bar, cx);

@@ -1,13 +1,18 @@
 //! The verdict: `prepare` keeps a page whole or refuses it, with every reason of section 3.
 
-use innerword_page::{Blocked, CheckReport, LoadReport, PageError, bundle, limits, prepare, read_input, static_check};
+use innerword_page::{
+    Blocked, CheckReport, LoadReport, PageError, bundle, limits, prepare, read_input, static_check,
+};
 
 use super::support::*;
 
 fn two_pages() -> innerword_page::Bundle {
     page(
         &[
-            ("index.html", "<title>Atlas</title><h1>The atlas</h1><p>Shown.</p><a href=\"b.html\">b</a>"),
+            (
+                "index.html",
+                "<title>Atlas</title><h1>The atlas</h1><p>Shown.</p><a href=\"b.html\">b</a>",
+            ),
             ("b.html", "<title>Second</title><p>More.</p>"),
             ("img/a.png", "a"),
         ],
@@ -27,16 +32,26 @@ fn load(path: &str, title: &str, text: &str) -> LoadReport {
 }
 
 fn report(loads: Vec<LoadReport>) -> CheckReport {
-    CheckReport { engine: "WebKit 621.1".to_string(), elapsed_ms: 1234, loads, failure: None }
+    CheckReport {
+        engine: "WebKit 621.1".to_string(),
+        elapsed_ms: 1234,
+        loads,
+        failure: None,
+    }
 }
 
 fn whole() -> CheckReport {
-    report(vec![load("index.html", "Atlas", "The atlas\nShown."), load("b.html", "Second", "More.")])
+    report(vec![
+        load("index.html", "Atlas", "The atlas\nShown."),
+        load("b.html", "Second", "More."),
+    ])
 }
 
 fn refused(report: &CheckReport) -> (String, Vec<String>) {
     match prepare(two_pages(), report) {
-        Err(PageError::Incomplete { name, problems }) => (name, problems.into_iter().map(|p| p.reason).collect()),
+        Err(PageError::Incomplete { name, problems }) => {
+            (name, problems.into_iter().map(|p| p.reason).collect())
+        }
         other => panic!("not refused: {other:?}"),
     }
 }
@@ -55,7 +70,10 @@ fn a_whole_page_is_prepared() {
     assert_eq!(prepared.blobs.len(), 3);
     assert_eq!(prepared.served.len(), 3);
     assert_eq!(prepared.original.len(), 3);
-    assert_eq!(prepared.distinct_bytes(), prepared.blobs.iter().map(|b| b.size).sum::<u64>());
+    assert_eq!(
+        prepared.distinct_bytes(),
+        prepared.blobs.iter().map(|b| b.size).sum::<u64>()
+    );
     for blob in &prepared.blobs {
         assert_eq!(blob.file, innerword_page::file_id_hex(&blob.data));
         assert_eq!(blob.size, blob.data.len() as u64);
@@ -74,7 +92,14 @@ fn the_title_falls_back_to_the_heading_then_to_the_name() {
     assert_eq!(prepared.title_found, "");
     assert_eq!(prepared.title(), prepared.name);
     r.loads[0].title = "x".repeat(300);
-    assert_eq!(prepare(two_pages(), &r).unwrap().title_found.chars().count(), limits::MAX_TITLE_CHARS);
+    assert_eq!(
+        prepare(two_pages(), &r)
+            .unwrap()
+            .title_found
+            .chars()
+            .count(),
+        limits::MAX_TITLE_CHARS
+    );
 }
 
 #[test]
@@ -82,12 +107,24 @@ fn every_reason_of_refusal() {
     let mut r = whole();
     r.loads[0].missing = vec!["audio/18.mp3".to_string()];
     r.loads[0].blocked = vec![
-        Blocked { url: "https://api.example.com/grades".to_string(), directive: "connect-src".to_string() },
-        Blocked { url: "https://fonts.gstatic.com/x.woff2".to_string(), directive: "font-src".to_string() },
-        Blocked { url: "https://example.com/".to_string(), directive: "navigation".to_string() },
+        Blocked {
+            url: "https://api.example.com/grades".to_string(),
+            directive: "connect-src".to_string(),
+        },
+        Blocked {
+            url: "https://fonts.gstatic.com/x.woff2".to_string(),
+            directive: "font-src".to_string(),
+        },
+        Blocked {
+            url: "https://example.com/".to_string(),
+            directive: "navigation".to_string(),
+        },
     ];
     r.loads[1].unwatched_frames = vec!["a.svg".to_string()];
-    r.loads[1].blocked = vec![Blocked { url: "https://cdn.test/x.png".to_string(), directive: "img-src".to_string() }];
+    r.loads[1].blocked = vec![Blocked {
+        url: "https://cdn.test/x.png".to_string(),
+        directive: "img-src".to_string(),
+    }];
     let (name, reasons) = refused(&r);
     assert_eq!(name, "Atlas");
     assert_eq!(
@@ -109,23 +146,42 @@ fn the_entry_must_load() {
     r.loads[0].finished = false;
     assert_eq!(refused(&r).1, vec!["the page did not finish loading"]);
     r.loads[0].navigation_error = Some("the file could not be read".to_string());
-    assert_eq!(refused(&r).1, vec!["the page failed to load: the file could not be read"]);
+    assert_eq!(
+        refused(&r).1,
+        vec!["the page failed to load: the file could not be read"]
+    );
     r.loads[0].crashed = true;
-    assert_eq!(refused(&r).1, vec!["the page stopped working while it was checked (its web process crashed)"]);
+    assert_eq!(
+        refused(&r).1,
+        vec!["the page stopped working while it was checked (its web process crashed)"]
+    );
 }
 
 #[test]
 fn running_out_of_time_before_every_html_file_is_a_refusal() {
     let r = report(vec![load("index.html", "Atlas", "x")]);
-    assert_eq!(refused(&r).1, vec!["the page could not be checked in time: 1 of its HTML files was not loaded within 120 s"]);
+    assert_eq!(
+        refused(&r).1,
+        vec![
+            "the page could not be checked in time: 1 of its HTML files was not loaded within 120 s"
+        ]
+    );
 }
 
 #[test]
 fn a_checker_that_failed_is_no_verdict() {
-    let failed = CheckReport { engine: String::new(), elapsed_ms: 0, loads: vec![], failure: Some("no window server".to_string()) };
+    let failed = CheckReport {
+        engine: String::new(),
+        elapsed_ms: 0,
+        loads: vec![],
+        failure: Some("no window server".to_string()),
+    };
     match prepare(two_pages(), &failed) {
         Err(error @ PageError::CheckFailed { .. }) => {
-            assert_eq!(error.sentence(), "the page could not be checked: no window server")
+            assert_eq!(
+                error.sentence(),
+                "the page could not be checked: no window server"
+            )
         }
         other => panic!("{other:?}"),
     }
@@ -155,7 +211,14 @@ fn the_text_is_cut_at_its_limit() {
     r.loads[0].text = "é".repeat(limits::MAX_TEXT_CHARS + 10);
     let prepared = prepare(two_pages(), &r).unwrap();
     assert_eq!(prepared.text.chars().count(), limits::MAX_TEXT_CHARS);
-    assert!(prepared.warnings.iter().any(|w| w.contains("2,000,000 characters")), "{:?}", prepared.warnings);
+    assert!(
+        prepared
+            .warnings
+            .iter()
+            .any(|w| w.contains("2,000,000 characters")),
+        "{:?}",
+        prepared.warnings
+    );
 }
 
 #[test]
@@ -169,7 +232,10 @@ fn the_bundle_warnings_travel_with_the_page() {
 fn a_prepared_page_travels_as_json_with_its_bytes_in_base64() {
     let prepared = prepare(two_pages(), &whole()).unwrap();
     let json = serde_json::to_string(&prepared).unwrap();
-    assert!(json.contains("\"data\":\"PHRpdGxl") || json.contains("\"data\":\""), "{json}");
+    assert!(
+        json.contains("\"data\":\"PHRpdGxl") || json.contains("\"data\":\""),
+        "{json}"
+    );
     assert!(!json.contains("\"stored\""), "stored never travels");
     let back: innerword_page::Prepared = serde_json::from_str(&json).unwrap();
     assert_eq!(back, prepared);
@@ -203,14 +269,23 @@ fn a_lazy_picture_that_is_not_there_is_named() {
         ]
     );
     let sentence = error.sentence();
-    assert!(sentence.starts_with("“Long” was not added: it could not be kept whole. The page asks for pics/late.png"), "{sentence}");
+    assert!(
+        sentence.starts_with(
+            "“Long” was not added: it could not be kept whole. The page asks for pics/late.png"
+        ),
+        "{sentence}"
+    );
 
     // A single file without them.
     let dir = folder(&[("long.html", page_text)]);
     let input = read_input(&dir.path().join("long.html"), None).unwrap();
     let error = bundle(input, &web(&[])).unwrap_err();
     assert_eq!(reasons(&error).len(), 2, "{}", error.sentence());
-    assert!(error.sentence().contains("pics/late.png"), "{}", error.sentence());
+    assert!(
+        error.sentence().contains("pics/late.png"),
+        "{}",
+        error.sentence()
+    );
 
     // With them, as a folder and as a single file: added.
     let files = [
@@ -228,5 +303,11 @@ fn a_lazy_picture_that_is_not_there_is_named() {
 
     // Eager pictures are left to the check, which asks for them (and a lazy one on the
     // web is fetched as any other picture is).
-    assert!(try_page(&[("index.html", "<title>A</title><img src=\"gone.png\">")], &[]).is_ok());
+    assert!(
+        try_page(
+            &[("index.html", "<title>A</title><img src=\"gone.png\">")],
+            &[]
+        )
+        .is_ok()
+    );
 }

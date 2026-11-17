@@ -597,11 +597,10 @@ impl Workspace {
                 "fit" | "width" | "fit-width" | "page" | "fit-page" | "life" | "auto"
                 | "automatic" => self.say_about_page(super::NO_FIT_ON_A_PAGE, cx),
                 other => {
-                    let percent: u16 = other
-                        .trim_end_matches('%')
-                        .trim()
-                        .parse()
-                        .map_err(|_| anyhow::anyhow!("on a page: in, out, actual or a percent"))?;
+                    let percent: u16 =
+                        other.trim_end_matches('%').trim().parse().map_err(|_| {
+                            anyhow::anyhow!("on a page: in, out, actual or a percent")
+                        })?;
                     self.set_page_zoom(percent, cx);
                 }
             }

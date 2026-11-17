@@ -272,7 +272,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Globals, Action)
                     };
                     return Err(UsageError::of(
                         spec,
-                        format!("\"innerword {}\" has no option --{name} ({known})", spec.name),
+                        format!(
+                            "\"innerword {}\" has no option --{name} ({known})",
+                            spec.name
+                        ),
                     ));
                 };
                 if option.value.is_some() {

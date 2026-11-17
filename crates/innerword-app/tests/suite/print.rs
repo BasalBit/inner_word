@@ -850,7 +850,9 @@ fn a_long_job_says_so_and_can_be_cancelled(cx: &mut TestAppContext) {
     cx.run_until_parked();
     begin(cx);
     assert_eq!(
-        cx.update(|_, cx| innerword_ui::KeyHint::for_action(&CancelPrint, cx).map(|hint| hint.text())),
+        cx.update(
+            |_, cx| innerword_ui::KeyHint::for_action(&CancelPrint, cx).map(|hint| hint.text())
+        ),
         Some("⌃⌥.".to_string())
     );
     cx.simulate_keystrokes("ctrl-alt-.");

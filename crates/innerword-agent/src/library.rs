@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::de::DeserializeOwned;
 use innerword_store::instance_lock::{self, Acquired, HolderKind, InstanceLock};
 use innerword_store::{Clock, OpenOptions, ReadOnlyLibrary, Store};
+use serde::de::DeserializeOwned;
 
 use crate::checker::PageChecker;
 use crate::error::{Error, Refusal, Result};

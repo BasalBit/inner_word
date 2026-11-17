@@ -5,7 +5,9 @@ use innerword_assistant_quick::{
     Capture,
     apply::{answer_fragment, can_insert, can_replace, insert_below, replace_selection},
 };
-use innerword_core::{Block, BlockKind, Document, InlineAttrs, InlineStyle, Position, Rgb, TextRange};
+use innerword_core::{
+    Block, BlockKind, Document, InlineAttrs, InlineStyle, Position, Rgb, TextRange,
+};
 use innerword_editor::Editor;
 
 use crate::support::*;

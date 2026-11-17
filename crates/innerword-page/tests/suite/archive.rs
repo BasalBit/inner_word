@@ -38,11 +38,12 @@ fn archive() -> Option<PathBuf> {
 }
 
 fn normal(url: &str) -> String {
-    url::Url::parse(url).map(|mut u| {
-        u.set_fragment(None);
-        u.to_string()
-    })
-    .unwrap_or_else(|_| url.to_string())
+    url::Url::parse(url)
+        .map(|mut u| {
+            u.set_fragment(None);
+            u.to_string()
+        })
+        .unwrap_or_else(|_| url.to_string())
 }
 
 /// The family of a font file of Google Fonts (`fonts.gstatic.com/s/<family>/…`, or
@@ -63,11 +64,18 @@ fn google_font(url: &str) -> Option<String> {
 #[test]
 fn a_font_file_of_google_fonts_is_known_by_its_family() {
     assert_eq!(
-        google_font("https://fonts.gstatic.com/s/azeretmono/v21/3XFuErsiyJsY9O_Gepph.woff2").as_deref(),
+        google_font("https://fonts.gstatic.com/s/azeretmono/v21/3XFuErsiyJsY9O_Gepph.woff2")
+            .as_deref(),
         Some("s/azeretmono")
     );
-    assert_eq!(google_font("https://fonts.gstatic.com/l/font?kit=Jqz&skey=e9&v=v7").as_deref(), Some("l"));
-    assert_eq!(google_font("https://fonts.googleapis.com/css2?family=Inter"), None);
+    assert_eq!(
+        google_font("https://fonts.gstatic.com/l/font?kit=Jqz&skey=e9&v=v7").as_deref(),
+        Some("l")
+    );
+    assert_eq!(
+        google_font("https://fonts.googleapis.com/css2?family=Inter"),
+        None
+    );
     assert_eq!(google_font("https://cdn.jsdelivr.net/npm/x@1/x.js"), None);
 }
 
@@ -90,16 +98,23 @@ fn archive_every_external_of_the_originals_is_found_and_fetched() {
     for folder in folders {
         let name = folder.file_name().unwrap().to_string_lossy().into_owned();
         let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap())
+                .unwrap();
         let wanted: BTreeSet<String> = manifest["externals"]
             .as_object()
             .map(|m| m.keys().map(|k| normal(k)).collect())
             .unwrap_or_default();
         let not_kept: BTreeSet<String> = manifest["not_kept"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().or_else(|| v["url"].as_str())).map(normal).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().or_else(|| v["url"].as_str()))
+                    .map(normal)
+                    .collect()
+            })
             .unwrap_or_default();
-        let input = read_input(&folder.join("original"), None).unwrap_or_else(|e| panic!("{name}: {}", e.sentence()));
+        let input = read_input(&folder.join("original"), None)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.sentence()));
         let started = std::time::Instant::now();
         let bundled = match bundle(input, &fetcher) {
             Ok(bundled) => bundled,
@@ -109,7 +124,8 @@ fn archive_every_external_of_the_originals_is_found_and_fetched() {
             }
         };
         let fetched: BTreeSet<String> = bundled.externals.iter().map(|e| normal(&e.url)).collect();
-        let fetched_fonts: BTreeSet<String> = fetched.iter().filter_map(|u| google_font(u)).collect();
+        let fetched_fonts: BTreeSet<String> =
+            fetched.iter().filter_map(|u| google_font(u)).collect();
         let mut missed: Vec<String> = wanted
             .iter()
             .filter(|u| google_font(u).is_none() && !fetched.contains(*u) && !not_kept.contains(*u))
@@ -139,7 +155,11 @@ fn archive_every_external_of_the_originals_is_found_and_fetched() {
             bundled.distinct_bytes() / (1024 * 1024),
             started.elapsed().as_secs_f64(),
             bundled.warnings.len(),
-            if missed.is_empty() { String::new() } else { format!("; MISSED {missed:?}") }
+            if missed.is_empty() {
+                String::new()
+            } else {
+                format!("; MISSED {missed:?}")
+            }
         ));
     }
     let text = report.join("\n");
@@ -218,18 +238,30 @@ fn archive_offline_every_external_of_the_originals_is_found() {
     for folder in folders {
         let name = folder.file_name().unwrap().to_string_lossy().into_owned();
         let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap())
+                .unwrap();
         let map: std::collections::HashMap<String, String> = manifest["externals"]
             .as_object()
-            .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (normal(k), v.to_string()))).collect())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|v| (normal(k), v.to_string())))
+                    .collect()
+            })
             .unwrap_or_default();
-        let fetcher = FromTheArchive { folder: folder.clone(), map: map.clone(), asked: Default::default() };
-        let input = read_input(&folder.join("original"), None).unwrap_or_else(|e| panic!("{name}: {}", e.sentence()));
+        let fetcher = FromTheArchive {
+            folder: folder.clone(),
+            map: map.clone(),
+            asked: Default::default(),
+        };
+        let input = read_input(&folder.join("original"), None)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.sentence()));
         let outcome = bundle(input, &fetcher);
         let asked = fetcher.asked.lock().unwrap().clone();
         let missed: Vec<&String> = map
             .iter()
-            .filter(|(url, path)| !asked.contains(*url) && !asked.contains(&normal(&format!("{ARCHIVE_HOST}{path}"))))
+            .filter(|(url, path)| {
+                !asked.contains(*url) && !asked.contains(&normal(&format!("{ARCHIVE_HOST}{path}")))
+            })
             .map(|(url, _)| url)
             .collect();
         match outcome {
@@ -239,13 +271,25 @@ fn archive_offline_every_external_of_the_originals_is_found() {
                 bundled.externals.len(),
                 map.len(),
                 bundled.warnings.len(),
-                if missed.is_empty() { String::new() } else { format!("; MISSED {missed:?}") },
-                bundled.warnings.iter().map(|w| format!("\n    {w}")).collect::<String>()
+                if missed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; MISSED {missed:?}")
+                },
+                bundled
+                    .warnings
+                    .iter()
+                    .map(|w| format!("\n    {w}"))
+                    .collect::<String>()
             )),
             Err(error) => report.push(format!(
                 "{name}: not bundled from the archive alone: {}{}",
                 error.sentence(),
-                if missed.is_empty() { String::new() } else { format!("; MISSED {missed:?}") }
+                if missed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; MISSED {missed:?}")
+                }
             )),
         }
     }

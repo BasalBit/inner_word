@@ -195,7 +195,10 @@ fn dropping_vim_mode_gives_the_editor_back(cx: &mut TestAppContext) {
     cx.run_until_parked();
     editor.read_with(cx, |editor, _| {
         assert!(editor.text_input_enabled());
-        assert_eq!(editor.config().caret_style, innerword_editor::CaretStyle::Bar);
+        assert_eq!(
+            editor.config().caret_style,
+            innerword_editor::CaretStyle::Bar
+        );
     });
     cx.simulate_input("x");
     editor.read_with(cx, |editor, _| assert_eq!(editor.plain_text(), "xello"));

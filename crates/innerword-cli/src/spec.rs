@@ -153,7 +153,8 @@ const ITEM: &str = "A document or a folder: an id (doc:12, folder:3) or a path i
 const THREAD: &str = "A comment thread: its id as \"innerword comments\" prints it";
 const VERSION: &str = "A version: its id as \"innerword history\" prints it";
 const VERSION_DOCUMENT: &str = "The document the version belongs to (a check; may be left out)";
-const AGENT: &str = "An agent by its id as \"innerword agents\" prints it (claude-code, codex, ...)";
+const AGENT: &str =
+    "An agent by its id as \"innerword agents\" prints it (claude-code, codex, ...)";
 
 /// The options every command with text has.
 pub const CONTENT_OPTIONS: [Opt; 3] = [
@@ -728,7 +729,10 @@ many files and bytes it holds. Pages in the trash are listed too, marked. With -
 \"content_at\", \"updated_at\" and \"trashed\": what a copy of many pages compares against to \
 skip the ones that are in already. Also written \"innerword pages\".",
         positionals: &[optional("folder", FOLDER)],
-        examples: &["innerword pages", "innerword page list \"Claude Pages\" --json"],
+        examples: &[
+            "innerword pages",
+            "innerword page list \"Claude Pages\" --json",
+        ],
         ..reading("page list", Group::Documents)
     },
     // ----- Documents and folders -----------------------------------------------------
@@ -883,7 +887,9 @@ with the name given with --author.",
         about: "Adds a reply to a comment thread, signed with the name given with --author.",
         positionals: &[arg("document", DOCUMENT), arg("thread", THREAD)],
         options: &[value("body", "text", "What the reply says")],
-        examples: &["innerword comment reply doc:12 3 --body \"Done in chapter 1.\" --author Claude"],
+        examples: &[
+            "innerword comment reply doc:12 3 --body \"Done in chapter 1.\" --author Claude",
+        ],
         ..writing("comment reply", Group::Comments)
     },
     Spec {
@@ -1021,7 +1027,10 @@ Nothing is changed: run the command or paste the configuration yourself. For eac
 says how to remove the entry \"the-writer\" it may still have from when the app was called The \
 Writer.",
         positionals: &[optional("agent", AGENT)],
-        examples: &["innerword agents mcp", "innerword agents mcp claude-code --json"],
+        examples: &[
+            "innerword agents mcp",
+            "innerword agents mcp claude-code --json",
+        ],
         ..reading("agents mcp", Group::Agents)
     },
     Spec {

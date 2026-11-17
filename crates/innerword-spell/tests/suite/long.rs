@@ -67,7 +67,11 @@ fn a_book_is_checked_from_the_screen_outwards_in_slices(cx: &mut TestAppContext)
     // Far away, before the background pass gets there: scrolling brings
     // those blocks to the front.
     editor.update(cx, |editor, cx| {
-        editor.scroll_to_position(Position::new(7_000, 0), innerword_editor::Autoscroll::Top, cx)
+        editor.scroll_to_position(
+            Position::new(7_000, 0),
+            innerword_editor::Autoscroll::Top,
+            cx,
+        )
     });
     cx.run_until_parked();
     wait(SLICE_PAUSE, cx);
@@ -213,7 +217,11 @@ fn zooming_out_checks_what_comes_into_view_first(cx: &mut TestAppContext) {
     // large zoom: a few paragraphs are on screen, and checked.
     editor.update(cx, |editor, cx| {
         editor.set_zoom(innerword_editor::Zoom::Percent(300), cx);
-        editor.scroll_to_position(Position::new(6_000, 0), innerword_editor::Autoscroll::Top, cx)
+        editor.scroll_to_position(
+            Position::new(6_000, 0),
+            innerword_editor::Autoscroll::Top,
+            cx,
+        )
     });
     cx.run_until_parked();
     wait(SLICE_PAUSE, cx);

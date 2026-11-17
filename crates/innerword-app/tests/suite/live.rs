@@ -70,7 +70,11 @@ fn library_on_disk(cx: &mut TestAppContext) -> (tempfile::TempDir, InstanceLock,
         Acquired::Taken(copy) => panic!("the lock of a new directory is taken: {copy:?}"),
     };
     let library = cx.new(|_| {
-        Library::open(dir.path().join(innerword_library::store::DATABASE_FILE_NAME)).unwrap()
+        Library::open(
+            dir.path()
+                .join(innerword_library::store::DATABASE_FILE_NAME),
+        )
+        .unwrap()
     });
     library.update(cx, |library, cx| {
         library
@@ -2853,7 +2857,12 @@ fn a_change_arrives_while_a_key_is_being_chosen_or_a_font(cx: &mut TestAppContex
 /// library.
 fn desk_with_a_picture(
     cx: &mut TestAppContext,
-) -> (Desk, DocumentId, innerword_core::Image, &mut VisualTestContext) {
+) -> (
+    Desk,
+    DocumentId,
+    innerword_core::Image,
+    &mut VisualTestContext,
+) {
     use super::images::{picture, stored_png};
     let (dir, lock, library) = library_on_disk(cx);
     let image = stored_png(&library, 400, 300, [50, 80, 190], cx);
@@ -2883,7 +2892,12 @@ fn desk_with_a_picture(
 fn pictures(
     desk: &Desk,
     cx: &mut VisualTestContext,
-) -> Vec<(usize, innerword_core::ImageId, u16, innerword_core::Alignment)> {
+) -> Vec<(
+    usize,
+    innerword_core::ImageId,
+    u16,
+    innerword_core::Alignment,
+)> {
     desk.workspace.read_with(cx, |workspace, cx| {
         let document = workspace.editor().read(cx).document();
         document
@@ -2993,7 +3007,10 @@ fn an_agent_adds_an_image_to_the_open_document_and_the_writer_can_take_it_out(
 fn an_agents_edit_of_the_text_keeps_the_image_and_its_width(cx: &mut TestAppContext) {
     let (desk, id, image, cx) = desk_with_a_picture(cx);
     let before = pictures(&desk, cx);
-    assert_eq!(before, [(2, image.id, 50, innerword_core::Alignment::Right)]);
+    assert_eq!(
+        before,
+        [(2, image.id, 50, innerword_core::Alignment::Right)]
+    );
 
     // A word in the paragraph above the picture, and one below it.
     let tool = desk.tool();

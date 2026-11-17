@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use unicode_segmentation::UnicodeSegmentation;
 use innerword_core::{
     Alignment, Block, BlockKind, DocumentSettings, EditorState, Fragment, ImageId, InlineAttrs,
     InlineStyle, Position, Rgb, TextRange,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::diff;
 use crate::error::Result;

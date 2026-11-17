@@ -151,7 +151,8 @@ fn a_version_an_agent_left_says_why_it_was_kept(cx: &mut TestAppContext) {
     // The library as the `innerword` tool leaves it: a version kept before an agent's
     // edit, with its label, and one kept while writing, without.
     let clock = Clock::manual(1_800_000_000_000);
-    let mut store = innerword_library::store::Store::open_in_memory_with_clock(clock.clone()).unwrap();
+    let mut store =
+        innerword_library::store::Store::open_in_memory_with_clock(clock.clone()).unwrap();
     let form = StoredForm::of(&simple_document("Chapter", "Draft."), None);
     let id = store.create_document(None, &form.content()).unwrap().id;
     store.create_snapshot(id).unwrap();

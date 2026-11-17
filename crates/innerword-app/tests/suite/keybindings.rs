@@ -237,8 +237,14 @@ fn with_the_default_keys_the_menu_bar_shows_what_it_showed_before(cx: &mut TestA
             .iter()
             .map(|(name, keys)| {
                 let action = cx.build_action(name, None).expect("a registered action");
-                innerword_app::keymap::bind(keys, action.as_ref(), Some(context.clone()), None, None)
-                    .expect("a key GPUI reads")
+                innerword_app::keymap::bind(
+                    keys,
+                    action.as_ref(),
+                    Some(context.clone()),
+                    None,
+                    None,
+                )
+                .expect("a key GPUI reads")
             })
             .chain(innerword_app::keymap::defaults(cx).iter().cloned())
             .collect();
@@ -626,7 +632,10 @@ fn a_removed_key_does_nothing_and_is_shown_nowhere(cx: &mut TestAppContext) {
     );
 
     assert_eq!(hint(&innerword_editor::actions::ToggleItalic, vcx), None);
-    assert_eq!(menu_key(&innerword_editor::actions::ToggleItalic, vcx), None);
+    assert_eq!(
+        menu_key(&innerword_editor::actions::ToggleItalic, vcx),
+        None
+    );
     assert!(row_keys("Italic", Place::Text, vcx).is_empty());
     // The command is still there, and still runs from the palette.
     vcx.dispatch_action(innerword_editor::actions::ToggleItalic);
@@ -747,7 +756,10 @@ fn a_key_bound_in_two_spellings_is_changed_as_one(cx: &mut TestAppContext) {
     assert_eq!(hint(&action, vcx).as_deref(), Some("⇧⌘1"));
     assert_eq!(menu_key(&action, vcx).as_deref(), Some("cmd-shift-1"));
     assert_eq!(row_keys("Numbered list", Place::Text, vcx), ["cmd-shift-1"]);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
 
     // A key without a second spelling in the place of one with two, and
     // back to the default: two bindings again, where they stood.
@@ -803,13 +815,19 @@ fn a_conflict_is_shown_and_settled_each_way(cx: &mut TestAppContext) {
         "{choices:?}"
     );
     // Nothing changed yet, and nothing ran: the text is not italic.
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     assert!(!is_italic(&workspace, "paragraph", vcx));
 
     // Cancel: nothing changes.
     choose(&view, Choice::Cancel, vcx);
     assert_eq!(view.read_with(vcx, |view, _| view.mode()), ModeKind::List);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
 
     // Take it from that command.
     press(vcx, "enter");
@@ -817,7 +835,10 @@ fn a_conflict_is_shown_and_settled_each_way(cx: &mut TestAppContext) {
     choose(&view, Choice::TakeKey, vcx);
     assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-i"]);
     assert!(row_keys("Italic", Place::Text, vcx).is_empty());
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 2);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        2
+    );
     // The list shows it at once.
     view.read_with(vcx, |view, _| {
         assert_eq!(view.selected_keys(), vec![key("cmd-i")]);
@@ -908,7 +929,10 @@ fn a_key_that_would_stop_text_from_being_typed_is_refused(cx: &mut TestAppContex
     assert_eq!(choices, ["Press Another Key", "Cancel"], "{title}: {says}");
     assert!(says.contains("macOS"), "{says}");
     choose(&view, Choice::Cancel, vcx);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     // Nothing of what was pressed was typed or run.
     assert_eq!(
         editor_text(&workspace, vcx),
@@ -959,7 +983,10 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
         keymap.replace_key(&bold(), &key("cmd-b"), key("cmd-alt-b"));
         keymap.remove_key(&italic, &key("cmd-i"));
     });
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 2);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        2
+    );
     let stored = |cx: &mut VisualTestContext| -> Option<serde_json::Value> {
         library.read_with(cx, |library, _| {
             library
@@ -973,7 +1000,10 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
     let view = open_list_at(&workspace, &bold(), vcx);
     press(vcx, "cmd-d");
     assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-b"]);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
     assert_eq!(
         runs_in_text("cmd-b", vcx).as_deref(),
         Some("editor::ToggleBold")
@@ -987,9 +1017,15 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
         view.read_with(vcx, |view, _| view.mode()),
         ModeKind::Question
     );
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
     choose(&view, Choice::ResetAll, vcx);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     assert!(row_keys("Italic", Place::Text, vcx) == ["cmd-i"]);
     assert_eq!(
         stored(vcx),
@@ -1005,7 +1041,10 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
     );
     // Undo, from the toast.
     press_toast_button(&workspace, "Undo", vcx);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
     assert!(row_keys("Italic", Place::Text, vcx).is_empty());
     assert!(stored(vcx).is_some());
     press(vcx, "escape");
@@ -1015,10 +1054,16 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
     vcx.dispatch_action(innerword_app::actions::ResetAllShortcuts);
     vcx.run_until_parked();
     assert!(vcx.has_pending_prompt());
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
     vcx.simulate_prompt_answer("Reset All");
     vcx.run_until_parked();
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     assert_eq!(stored(vcx), None);
     // With nothing changed there is nothing to ask.
     vcx.dispatch_action(innerword_app::actions::ResetAllShortcuts);
@@ -1027,7 +1072,10 @@ fn one_command_and_everything_can_be_put_back(cx: &mut TestAppContext) {
     // The palette's own undo brings the last reset back as well.
     vcx.dispatch_action(innerword_app::actions::UndoShortcutsChange);
     vcx.run_until_parked();
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
 }
 
 /// What `keys` runs with the keyboard in the text, wherever it is now.
@@ -1157,7 +1205,10 @@ fn the_changes_are_stored_in_the_library_and_survive_a_relaunch(cx: &mut TestApp
     let library = launch(cx);
     let (workspace, vcx) = open_workspace(&library, cx);
     assert_eq!(installed(vcx), changed);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 4);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        4
+    );
     assert!(editor_focused(&workspace, vcx));
     assert_eq!(
         runs("cmd-alt-b", vcx).as_deref(),
@@ -1266,7 +1317,10 @@ fn what_a_later_version_stored_is_not_lost(cx: &mut TestAppContext) {
     vcx.update(|window, _| window.remove_window());
     vcx.run_until_parked();
     let (workspace, vcx) = open_workspace(&library, cx);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     assert_eq!(runs("cmd-b", vcx).as_deref(), Some("editor::ToggleBold"));
     let said = toasts(&workspace, vcx);
     assert!(
@@ -1411,7 +1465,10 @@ fn an_exported_file_imported_into_another_library_gives_the_same_keymap(cx: &mut
         changed,
         "the same keymap as where it came from"
     );
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 4);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        4
+    );
     assert!(stored_shortcuts(&library, vcx).is_some());
     let said = toasts(&workspace, vcx);
     assert!(
@@ -1477,7 +1534,10 @@ fn an_import_can_replace_the_users_changes_or_add_to_them(cx: &mut TestAppContex
     choose(&view, Choice::ImportReplace, vcx);
     assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
     assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-i"]);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
 
     // Cancelled: nothing changes.
     own(&workspace, vcx);
@@ -1544,7 +1604,10 @@ fn a_file_with_things_this_version_cannot_take_says_which_and_why(cx: &mut TestA
     assert_eq!(row_keys("Bold", Place::Text, vcx), ["cmd-alt-b"]);
     assert_eq!(row_keys("Italic", Place::Text, vcx), ["cmd-i"]);
     assert_eq!(row_keys("Underline", Place::Text, vcx), ["cmd-u"]);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 1);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        1
+    );
     assert!(
         toasts(&workspace, vcx)
             .iter()
@@ -1724,7 +1787,10 @@ fn a_row_of_several_key_contexts_is_changed_as_one(cx: &mut TestAppContext) {
     });
     // Back to the default, from the row: both again.
     press(vcx, "cmd-d");
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     // Removed from the row: from both.
     press(vcx, "cmd-backspace");
     vcx.update(|_, cx| {
@@ -1740,7 +1806,10 @@ fn a_row_of_several_key_contexts_is_changed_as_one(cx: &mut TestAppContext) {
     // A key taken from a command is taken from its whole row: "whole word"
     // gets the key of "case sensitive", which the bar binds twice as well.
     press(vcx, "cmd-d");
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     press(vcx, "enter");
     press(vcx, "cmd-alt-c");
     let (title, says, _) = question(&view, vcx);
@@ -2377,7 +2446,10 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
     press(vcx, "cmd-alt-y");
     choose(&view, Choice::UseKey, vcx);
     // Two key contexts were changed ...
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 2);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        2
+    );
     // ... which is one row, and one command to the user.
     assert_eq!(view.read_with(vcx, |view, _| view.changed_count()), 1);
     assert_eq!(
@@ -2430,7 +2502,10 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
         workspace.reset_all_shortcuts_now(window, cx)
     });
     vcx.run_until_parked();
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
     import_from(&file, vcx);
     let view = list(&workspace, vcx);
     let (_, says, _) = question(&view, vcx);
@@ -2439,7 +2514,10 @@ fn a_row_of_several_key_contexts_counts_as_one_command(cx: &mut TestAppContext) 
     assert_eq!(rows.len(), 2, "a heading and one row: {rows:?}");
     assert!(rows[0].ends_with("(1)"), "{rows:?}");
     choose(&view, Choice::ImportMerge, vcx);
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 2);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        2
+    );
     assert_eq!(toasts(&workspace, vcx), ["Imported the keys of 1 command"]);
 }
 
@@ -3294,7 +3372,10 @@ fn every_count_of_changed_shortcuts_counts_commands(cx: &mut TestAppContext) {
         })
         .expect("whole word is listed");
     vcx.run_until_parked();
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 4);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        4
+    );
     assert_eq!(
         vcx.update(|_, cx| innerword_app::workspace::changed_command_count(cx)),
         3
@@ -3828,7 +3909,10 @@ fn the_zoom_commands_are_given_other_keys_in_the_list(cx: &mut TestAppContext) {
     );
     choose(&view, Choice::Cancel, vcx);
     press(vcx, "escape");
-    assert_eq!(vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)), 0);
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::keymap::changed_count(cx)),
+        0
+    );
 
     // Each of the six gets a key of its own, in the list, with the
     // keyboard.

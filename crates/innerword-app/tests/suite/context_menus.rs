@@ -1114,7 +1114,10 @@ fn the_library_menus_import_pages_and_a_page_row_has_its_address(cx: &mut TestAp
     init(cx);
     cx.update(innerword_app::pages::use_fake);
     cx.update(|cx| {
-        innerword_app::pages::set_fetcher(std::sync::Arc::new(innerword_page::MapFetcher::new()), cx)
+        innerword_app::pages::set_fetcher(
+            std::sync::Arc::new(innerword_page::MapFetcher::new()),
+            cx,
+        )
     });
     let library = library(cx);
     let folder = library.update(cx, |library, cx| {

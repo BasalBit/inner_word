@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use innerword_core::{
     Alignment, Block, BlockKind, Document, EditorState, Highlight, Image, ImageId, ImageWidth,
     InlineAttrs, InlineStyle, Position, Rgb, Selection,
@@ -16,6 +15,7 @@ use innerword_export::{
     MarkdownPageBreak, PartTitles, export, export_package, images_dir_name, to_markdown,
     to_plain_text,
 };
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 // ----- builders ---------------------------------------------------------------------------
 

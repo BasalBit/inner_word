@@ -58,8 +58,8 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use serde_json::json;
 use innerword_mcp::{ErrorKind, Failure, Library, Reply, Toolbox};
+use serde_json::json;
 
 use parse::{Action, Globals};
 

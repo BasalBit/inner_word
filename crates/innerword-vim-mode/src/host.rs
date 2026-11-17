@@ -22,7 +22,9 @@ use std::ops::Range;
 use gpui::{App, ClipboardItem, px};
 use innerword_core::{Document, EditorState, Fragment, Position, TextRange, text};
 use innerword_editor::RowOracle;
-use innerword_vim::{GoalColumn, RegisterContent, Scroll, SpellCommand, SpellOff, Viewport, VimHost};
+use innerword_vim::{
+    GoalColumn, RegisterContent, Scroll, SpellCommand, SpellOff, Viewport, VimHost,
+};
 
 use crate::spell::{SpellAnswers, SpellHost};
 

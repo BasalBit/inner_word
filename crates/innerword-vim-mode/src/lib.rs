@@ -258,14 +258,14 @@ mod views;
 use gpui::{App, actions};
 use innerword_ui::CommandDescriptor;
 
-pub use mode::{KEY_CONTEXT_MODE, SEARCH_LAYER, VimMode};
-pub use spell::{VimSpelling, VimSuggestions};
-pub use status::{VimEvent, VimMessage, VimStatus};
-pub use views::{VimCommandLine, VimStatusItem};
 /// The engine types that appear in this crate's API.
 pub use innerword_vim::{
     CaretShape, CommandLine, HostRequest, Mode, RegisterContent, SearchPattern, VimOptions,
 };
+pub use mode::{KEY_CONTEXT_MODE, SEARCH_LAYER, VimMode};
+pub use spell::{VimSpelling, VimSuggestions};
+pub use status::{VimEvent, VimMessage, VimStatus};
+pub use views::{VimCommandLine, VimStatusItem};
 
 actions!(
     vim_mode,

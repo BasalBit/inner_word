@@ -290,7 +290,11 @@ fn toast_bounds_leave_the_open_menu_out(cx: &mut TestAppContext) {
         .read_with(cx, |menu, _| menu.bounds())
         .expect("the menu was drawn");
     // a menu and no toast: nothing
-    assert!(toasts.read_with(cx, |layer, _| layer.toast_bounds()).is_empty());
+    assert!(
+        toasts
+            .read_with(cx, |layer, _| layer.toast_bounds())
+            .is_empty()
+    );
 
     cx.update(|_, cx| {
         toasts.update(cx, |layer, cx| {

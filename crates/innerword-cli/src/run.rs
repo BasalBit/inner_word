@@ -8,8 +8,8 @@
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
 use innerword_mcp::{ErrorKind, Failure, Item, Reply, Toolbox};
+use serde_json::{Map, Value, json};
 
 use crate::parse::{Globals, Parsed};
 use crate::spec::{Content, Spec};
@@ -689,7 +689,11 @@ pub fn run(
                 if info.data["document"]["id"] != reply.data["document"]["id"] {
                     // `doc:12`, or `page:12` for a page.
                     let named = |document: &serde_json::Value| {
-                        let prefix = if document["kind"] == "page" { "page" } else { "doc" };
+                        let prefix = if document["kind"] == "page" {
+                            "page"
+                        } else {
+                            "doc"
+                        };
                         format!(
                             "{prefix}:{} \"{}\"",
                             document["id"],

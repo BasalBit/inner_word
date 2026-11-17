@@ -21,9 +21,9 @@
 //!   a document created at that moment.
 
 use gpui::{App, Entity};
-use serde::{Deserialize, Serialize};
 use innerword_assistant::{Role, Transcript};
 use innerword_library::{DocumentId, Library};
+use serde::{Deserialize, Serialize};
 
 use crate::settings::keys;
 

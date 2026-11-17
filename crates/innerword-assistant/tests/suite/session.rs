@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use serde_json::json;
 use innerword_assistant::{
     Attachment, ChatSession, EventStream, MessageState, OpenDocument, OpenKind, Role, Selection,
     Transcript, library_tools,
 };
+use serde_json::json;
 
 use super::support::{PATIENCE, Stage, fixture, value_after};
 

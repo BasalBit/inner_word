@@ -287,7 +287,10 @@ fn both_uses_of_a_font_can_be_chosen_with_the_mouse(cx: &mut TestAppContext) {
     use innerword_ui::ContextMenu;
     setup(cx);
     cx.update(|cx| {
-        innerword_editor_tools::set_font_families(["Baskerville", "Georgia", "Menlo", "Zapfino"], cx)
+        innerword_editor_tools::set_font_families(
+            ["Baskerville", "Georgia", "Menlo", "Zapfino"],
+            cx,
+        )
     });
     let (tools, editor, cx) = open_with_menus(paragraphs(&["Set this in another face"]), cx);
     select(&editor, TextRange::in_block(0, 4, 8), cx);

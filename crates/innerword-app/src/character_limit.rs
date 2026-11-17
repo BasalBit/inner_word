@@ -18,9 +18,9 @@
 //! falls back to counting the whole text, so the number is always the one
 //! [`SocialNetwork::count`] gives for [`Document::plain_text`].
 
-use unicode_segmentation::GraphemeCursor;
 use innerword_core::{BlockId, Document};
 use innerword_export::{SocialCount, SocialNetwork};
+use unicode_segmentation::GraphemeCursor;
 
 /// The counts of one block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

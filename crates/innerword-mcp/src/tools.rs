@@ -18,9 +18,6 @@
 //! result of `read_document` and `list_library`, so the tools that read stay the ones
 //! they were.
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Map, Value, json};
 use innerword_agent::{
     AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
     CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
@@ -32,6 +29,9 @@ use innerword_agent::{
     RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target,
     TrashDocumentRequest, TrashFolderRequest, TreeRequest,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value, json};
 
 use crate::args::{self, boolean, integer, integer_between, one_of, string, string_map};
 use crate::protocol::{Effect, ToolDef, ToolHost, ToolOutput};
@@ -1583,7 +1583,9 @@ fn fresh_fetcher() -> std::sync::Arc<dyn innerword_page::Fetcher> {
     {
         curl = curl.allowing_local();
     }
-    std::sync::Arc::new(innerword_page::CachingFetcher::new(std::sync::Arc::new(curl)))
+    std::sync::Arc::new(innerword_page::CachingFetcher::new(std::sync::Arc::new(
+        curl,
+    )))
 }
 
 impl ToolHost for Toolbox {

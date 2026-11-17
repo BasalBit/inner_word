@@ -55,7 +55,6 @@ use gpui::{
     App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
     MouseButton, ScrollHandle, SharedString, Subscription, Window, actions, div, prelude::*, px,
 };
-use serde::Serialize;
 use innerword_core::{DocumentSettings, Orientation, PaperSize};
 use innerword_editor::{Autoscroll, Editor, EditorEvent};
 use innerword_editor_tools::FontList;
@@ -68,6 +67,7 @@ use innerword_ui::{
         UI_TEXT_BASE, UI_TEXT_LG, UI_TEXT_SM, UI_TEXT_XS, focus_ring,
     },
 };
+use serde::Serialize;
 
 use crate::{
     font_choice::FontTarget,

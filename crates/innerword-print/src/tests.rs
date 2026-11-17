@@ -845,8 +845,14 @@ fn a_finished_pdf_is_a_pdf_and_a_clone_shares_it() {
 #[test]
 fn a_pdf_from_bytes_gives_them_back() {
     let (made, _) = write(&[
-        page(A4, vec![Item::Row(fixed_row("One.", courier(), 12., 72., 100.))]),
-        page(A4, vec![Item::Row(fixed_row("Two.", courier(), 12., 72., 100.))]),
+        page(
+            A4,
+            vec![Item::Row(fixed_row("One.", courier(), 12., 72., 100.))],
+        ),
+        page(
+            A4,
+            vec![Item::Row(fixed_row("Two.", courier(), 12., 72., 100.))],
+        ),
     ]);
     let bytes = made.bytes().to_vec();
     let pdf = Pdf::from_bytes(bytes.clone(), 2);

@@ -1054,7 +1054,9 @@ impl Workspace {
     /// The PDF of the open page as it is now: WebKit's print operation
     /// into the user's default paper, or the fake engine's page. Call it
     /// from a task, outside any update.
-    pub fn page_print_job(&self) -> Option<pages::Answer<Result<innerword_web::PrintedPdf, String>>> {
+    pub fn page_print_job(
+        &self,
+    ) -> Option<pages::Answer<Result<innerword_web::PrintedPdf, String>>> {
         let view = self.page_view_handle()?;
         let (tx, rx) = pages::answer();
         start_printing(&view, tx);
@@ -2119,7 +2121,10 @@ impl Workspace {
 
 /// Starts the print of `view`; the answer goes to `tx` (from inside AppKit
 /// for WebKit: it only notes it).
-fn start_printing(view: &SharedView, tx: pages::AnswerTx<Result<innerword_web::PrintedPdf, String>>) {
+fn start_printing(
+    view: &SharedView,
+    tx: pages::AnswerTx<Result<innerword_web::PrintedPdf, String>>,
+) {
     let view = view.borrow();
     match view.as_ref() {
         Some(PageViewHandle::WebKit(web)) => web.print_to_pdf(move |printed| tx.send(printed)),

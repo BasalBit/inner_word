@@ -451,7 +451,9 @@ impl ReadPictures {
 }
 
 /// Makes `source` into what the library stores.
-fn prepare(source: &NewImageSource) -> Result<innerword_image::Prepared, innerword_image::PrepareError> {
+fn prepare(
+    source: &NewImageSource,
+) -> Result<innerword_image::Prepared, innerword_image::PrepareError> {
     match source {
         NewImageSource::File(path) => innerword_image::prepare_file(path),
         NewImageSource::Bytes(bytes) => innerword_image::prepare(bytes),
@@ -857,10 +859,7 @@ fn tell_of_files_moved_aside(
         .iter()
         .map(|name| as_in_this_folder(Path::new(name), database))
         .collect();
-    let new: Vec<&PathBuf> = found
-        .iter()
-        .filter(|path| !told.contains(path))
-        .collect();
+    let new: Vec<&PathBuf> = found.iter().filter(|path| !told.contains(path)).collect();
     if new.is_empty() && told.len() == named.len() {
         return;
     }

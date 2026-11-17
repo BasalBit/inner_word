@@ -1,11 +1,11 @@
 //! The tools of the side chat: the read-only tools of the library's own server, and the
 //! words for what a call is doing.
 
-use serde_json::json;
 use innerword_assistant::{
     LIBRARY_SERVER_NAME, NameBook, describe_library_tool, describe_unknown_tool, library_observer,
     library_tools, library_tools_named, read_only_tools, withheld_tools,
 };
+use serde_json::json;
 
 #[test]
 fn the_lists_are_the_servers_own_and_every_tool_is_on_exactly_one() {

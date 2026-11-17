@@ -142,7 +142,12 @@ fn given_title(request: &AddPageRequest) -> Option<String> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    (!title.is_empty()).then(|| title.chars().take(innerword_page::MAX_TITLE_CHARS).collect())
+    (!title.is_empty()).then(|| {
+        title
+            .chars()
+            .take(innerword_page::MAX_TITLE_CHARS)
+            .collect()
+    })
 }
 
 // ----- preparing, in the process that was asked ---------------------------------------------
@@ -344,7 +349,9 @@ fn check_prepared(page: &Prepared, dry_run: bool) -> Result<()> {
         }
         out
     };
-    if page.served.len() > innerword_page::MAX_FILES || page.original.len() > innerword_page::MAX_FILES {
+    if page.served.len() > innerword_page::MAX_FILES
+        || page.original.len() > innerword_page::MAX_FILES
+    {
         problems.push(Problem::new(
             "the page",
             format!(

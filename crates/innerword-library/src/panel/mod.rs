@@ -25,7 +25,6 @@ use gpui::{
     KeyBinding, Pixels, ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle,
     Window, actions, prelude::*, px,
 };
-use serde::{Deserialize, Serialize};
 use innerword_store::{DocumentContent, DocumentId, FolderId, Result};
 use innerword_ui::context_menu::OpenContextMenu;
 use innerword_ui::toast::show_toast;
@@ -33,6 +32,7 @@ use innerword_ui::{
     CommandDescriptor, ConfirmDialog, FieldAppearance, IconName, ModalLayer, Picker, TextField,
     TextFieldEvent, Toast,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::library::{Library, LibraryEvent};
 use drag::DropTarget;

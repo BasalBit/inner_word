@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use innerword_core::{
     Alignment, Block, BlockKind, Document, EditorState, Fragment, ImageId, ImageWidth, PageSetup,
 };
-use innerword_export::{ExportSource, MarkdownOptions, PlainTextOptions, to_markdown, to_plain_text};
+use innerword_export::{
+    ExportSource, MarkdownOptions, PlainTextOptions, to_markdown, to_plain_text,
+};
 use innerword_store::{DocumentId, DocumentMeta, Folder, FolderId, Store};
 
 use crate::attach;

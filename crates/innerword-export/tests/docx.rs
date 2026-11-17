@@ -6,7 +6,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
-use roxmltree::Node;
 use innerword_core::{
     Alignment, Block, BlockKind, Document, DocumentSettings, EditorState, Highlight, Image,
     ImageId, ImageWidth, InlineAttrs, InlineStyle, Margins, Orientation, PageSetup, PaperSize,
@@ -16,6 +15,7 @@ use innerword_export::docx::parts;
 use innerword_export::{
     DocxOptions, ExportSource, ImageData, ImageFileFormat, ImageSource, PartTitles, to_docx,
 };
+use roxmltree::Node;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";

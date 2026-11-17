@@ -6,6 +6,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::MANIFEST_VERSION;
 use crate::bundle::{Bundle, External, too_many_html};
 use crate::check::{CheckReport, LoadReport, clip_title};
 use crate::error::{PageError, Problem, count};
@@ -13,7 +14,6 @@ use crate::input::too_heavy;
 use crate::limits::{ALSO_LOADS, CHECK_LIMIT_MS, MAX_PAGE_BYTES, MAX_TEXT_CHARS};
 use crate::manifest::{Checked, Manifest, ManifestFile};
 use crate::media::file_id_hex;
-use crate::MANIFEST_VERSION;
 
 /// A page that was checked whole, with everything the library stores of it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,7 +103,10 @@ fn directive_words(directive: &str) -> String {
 pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageError> {
     if report.loads.is_empty() {
         return Err(PageError::CheckFailed {
-            reason: report.failure.clone().unwrap_or_else(|| "the check loaded nothing".to_string()),
+            reason: report
+                .failure
+                .clone()
+                .unwrap_or_else(|| "the check loaded nothing".to_string()),
         });
     }
     let entry = bundle.entry.clone();
@@ -113,9 +116,17 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
     let title_found = entry_load
         .map(|load| clip_title(&load.title))
         .filter(|title| !title.is_empty())
-        .or_else(|| entry_load.map(|load| clip_title(&load.first_heading)).filter(|h| !h.is_empty()))
+        .or_else(|| {
+            entry_load
+                .map(|load| clip_title(&load.first_heading))
+                .filter(|h| !h.is_empty())
+        })
         .unwrap_or_default();
-    let shown = if title_found.is_empty() { bundle.name.clone() } else { title_found.clone() };
+    let shown = if title_found.is_empty() {
+        bundle.name.clone()
+    } else {
+        title_found.clone()
+    };
 
     let mut problems: Vec<Problem> = Vec::new();
     let mut warnings: Vec<String> = bundle.warnings.clone();
@@ -123,10 +134,16 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
         problems.push(too_many_html(html.len()));
     }
     if let Some(failure) = &report.failure {
-        problems.push(Problem::new("the page", format!("the page could not be checked whole: {failure}")));
+        problems.push(Problem::new(
+            "the page",
+            format!("the page could not be checked whole: {failure}"),
+        ));
     }
     match entry_load {
-        None => problems.push(Problem::new(entry.clone(), format!("the page could not be checked: {entry} was not loaded"))),
+        None => problems.push(Problem::new(
+            entry.clone(),
+            format!("the page could not be checked: {entry} was not loaded"),
+        )),
         Some(load) => {
             if load.crashed {
                 problems.push(Problem::new(
@@ -134,14 +151,23 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
                     "the page stopped working while it was checked (its web process crashed)",
                 ));
             } else if let Some(error) = &load.navigation_error {
-                problems.push(Problem::new(entry.clone(), format!("the page failed to load: {error}")));
+                problems.push(Problem::new(
+                    entry.clone(),
+                    format!("the page failed to load: {error}"),
+                ));
             } else if !load.finished {
-                problems.push(Problem::new(entry.clone(), "the page did not finish loading"));
+                problems.push(Problem::new(
+                    entry.clone(),
+                    "the page did not finish loading",
+                ));
             }
         }
     }
     let loaded: HashSet<&str> = report.loads.iter().map(|load| load.path.as_str()).collect();
-    let not_loaded = html.iter().filter(|path| !loaded.contains(path.as_str())).count();
+    let not_loaded = html
+        .iter()
+        .filter(|path| !loaded.contains(path.as_str()))
+        .count();
     if entry_load.is_some() && not_loaded > 0 {
         problems.push(Problem::new(
             "the page",
@@ -154,13 +180,23 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
         ));
     }
     for load in ordered_loads(report, &html) {
-        let subject = if load.path == entry { "the page".to_string() } else { load.path.clone() };
+        let subject = if load.path == entry {
+            "the page".to_string()
+        } else {
+            load.path.clone()
+        };
         for path in &load.missing {
-            problems.push(Problem::new(path.clone(), format!("{subject} asks for {path}, which is not among its files")));
+            problems.push(Problem::new(
+                path.clone(),
+                format!("{subject} asks for {path}, which is not among its files"),
+            ));
         }
         for blocked in &load.blocked {
             let reason = if blocked.directive.trim().eq_ignore_ascii_case("navigation") {
-                format!("{subject} goes to {} at run time, which cannot be kept", blocked.url)
+                format!(
+                    "{subject} goes to {} at run time, which cannot be kept",
+                    blocked.url
+                )
             } else {
                 format!(
                     "{subject} asks for {} at run time ({}), which cannot be kept",
@@ -178,9 +214,15 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
         }
         if load.path != entry {
             if load.crashed {
-                warnings.push(format!("{} stopped working while it was checked", load.path));
+                warnings.push(format!(
+                    "{} stopped working while it was checked",
+                    load.path
+                ));
             } else if let Some(error) = &load.navigation_error {
-                warnings.push(format!("{} failed to load while it was checked: {error}", load.path));
+                warnings.push(format!(
+                    "{} failed to load while it was checked: {error}",
+                    load.path
+                ));
             }
         }
         for error in load.script_errors.iter().take(SCRIPT_ERRORS_NAMED) {
@@ -199,7 +241,10 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
     let mut seen_reasons = HashSet::new();
     problems.retain(|problem| seen_reasons.insert(problem.reason.clone()));
     if !problems.is_empty() {
-        return Err(PageError::Incomplete { name: shown, problems });
+        return Err(PageError::Incomplete {
+            name: shown,
+            problems,
+        });
     }
 
     // The text: the entry's, then each other HTML file's after a blank line, under its title.
@@ -208,7 +253,11 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
         if load.path == entry {
             continue;
         }
-        let heading = if load.title.trim().is_empty() { load.path.clone() } else { load.title.trim().to_string() };
+        let heading = if load.title.trim().is_empty() {
+            load.path.clone()
+        } else {
+            load.title.trim().to_string()
+        };
         text.push_str("\n\n");
         text.push_str(&heading);
         text.push('\n');
@@ -224,19 +273,29 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
 
     let mut blobs: Vec<Blob> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    let mut entries = |files: &[crate::bundle::BundleFile], blobs: &mut Vec<Blob>| -> Vec<PathEntry> {
-        files
-            .iter()
-            .map(|file| {
-                let id = file_id_hex(&file.bytes);
-                let blob = *index.entry(id.clone()).or_insert_with(|| {
-                    blobs.push(Blob { file: id, size: file.bytes.len() as u64, data: file.bytes.to_vec(), stored: false });
-                    blobs.len() - 1
-                });
-                PathEntry { path: file.path.clone(), media_type: file.media_type.clone(), blob }
-            })
-            .collect()
-    };
+    let mut entries =
+        |files: &[crate::bundle::BundleFile], blobs: &mut Vec<Blob>| -> Vec<PathEntry> {
+            files
+                .iter()
+                .map(|file| {
+                    let id = file_id_hex(&file.bytes);
+                    let blob = *index.entry(id.clone()).or_insert_with(|| {
+                        blobs.push(Blob {
+                            file: id,
+                            size: file.bytes.len() as u64,
+                            data: file.bytes.to_vec(),
+                            stored: false,
+                        });
+                        blobs.len() - 1
+                    });
+                    PathEntry {
+                        path: file.path.clone(),
+                        media_type: file.media_type.clone(),
+                        blob,
+                    }
+                })
+                .collect()
+        };
     let served = entries(&bundle.served, &mut blobs);
     let original = entries(&bundle.original, &mut blobs);
 
@@ -259,7 +318,10 @@ pub fn prepare(bundle: Bundle, report: &CheckReport) -> Result<Prepared, PageErr
     };
     let bytes = prepared.distinct_bytes();
     if bytes > MAX_PAGE_BYTES {
-        return Err(PageError::Incomplete { name: shown, problems: vec![too_heavy(bytes)] });
+        return Err(PageError::Incomplete {
+            name: shown,
+            problems: vec![too_heavy(bytes)],
+        });
     }
     Ok(prepared)
 }
@@ -288,13 +350,22 @@ impl Prepared {
 
     /// The title rule's middle steps: title_found, else name.
     pub fn title(&self) -> String {
-        if self.title_found.trim().is_empty() { self.name.clone() } else { self.title_found.clone() }
+        if self.title_found.trim().is_empty() {
+            self.name.clone()
+        } else {
+            self.title_found.clone()
+        }
     }
 
     pub fn manifest(&self, source_url: Option<&str>, now_ms: i64) -> Manifest {
         let file = |entry: &PathEntry| {
             let blob = &self.blobs[entry.blob];
-            ManifestFile { path: entry.path.clone(), file: blob.file.clone(), media_type: entry.media_type.clone(), size: blob.size }
+            ManifestFile {
+                path: entry.path.clone(),
+                file: blob.file.clone(),
+                media_type: entry.media_type.clone(),
+                size: blob.size,
+            }
         };
         let mut files: Vec<ManifestFile> = self.served.iter().map(file).collect();
         let mut original: Vec<ManifestFile> = self.original.iter().map(file).collect();

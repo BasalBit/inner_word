@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{PageError, Problem, count, megabytes};
 use crate::limits::{MAX_FILE_BYTES, MAX_FILES, MAX_PAGE_BYTES};
-use crate::media::{Kind, hex, media_type, sha256, OCTET_STREAM};
+use crate::media::{Kind, OCTET_STREAM, hex, media_type, sha256};
 use crate::resolve::{Resolved, local_base, resolve};
 use crate::scan::scan_file;
 
@@ -43,7 +43,12 @@ pub struct InputFile {
 
 impl fmt::Debug for InputFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InputFile {{ path: {:?}, bytes: {} }}", self.path, self.bytes.len())
+        write!(
+            f,
+            "InputFile {{ path: {:?}, bytes: {} }}",
+            self.path,
+            self.bytes.len()
+        )
     }
 }
 
@@ -65,11 +70,45 @@ const ADDRESS_AS_INPUT: &str = "a page is added from a file or a folder on this 
 
 /// Directories macOS shows as a file: never walked into.
 const PACKAGES: &[&str] = &[
-    "app", "appex", "bundle", "framework", "plugin", "kext", "xpc", "saver", "prefpane",
-    "qlgenerator", "mdimporter", "component", "photoslibrary", "musiclibrary", "tvlibrary",
-    "imovielibrary", "photolibrary", "aplibrary", "fcpbundle", "logicx", "band", "rtfd", "pages",
-    "numbers", "key", "xcodeproj", "xcworkspace", "playground", "sparsebundle", "pkg", "mpkg",
-    "dsym", "docarchive", "scptd", "wdgt", "lpdf", "nib", "xcassets", "sketch",
+    "app",
+    "appex",
+    "bundle",
+    "framework",
+    "plugin",
+    "kext",
+    "xpc",
+    "saver",
+    "prefpane",
+    "qlgenerator",
+    "mdimporter",
+    "component",
+    "photoslibrary",
+    "musiclibrary",
+    "tvlibrary",
+    "imovielibrary",
+    "photolibrary",
+    "aplibrary",
+    "fcpbundle",
+    "logicx",
+    "band",
+    "rtfd",
+    "pages",
+    "numbers",
+    "key",
+    "xcodeproj",
+    "xcworkspace",
+    "playground",
+    "sparsebundle",
+    "pkg",
+    "mpkg",
+    "dsym",
+    "docarchive",
+    "scptd",
+    "wdgt",
+    "lpdf",
+    "nib",
+    "xcassets",
+    "sketch",
 ];
 
 /// A file: that file and what its references name, never a walk of its folder.
@@ -84,7 +123,9 @@ pub fn read_input(path: &Path, entry: Option<&str>) -> Result<Input, PageError> 
     let meta = match fs::metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(PageError::input(format!("there is no file or folder at {shown}")));
+            return Err(PageError::input(format!(
+                "there is no file or folder at {shown}"
+            )));
         }
         Err(error) => return Err(PageError::io(path, error)),
     };
@@ -93,7 +134,9 @@ pub fn read_input(path: &Path, entry: Option<&str>) -> Result<Input, PageError> 
     } else if meta.is_file() {
         read_single(path, entry)
     } else {
-        Err(PageError::input(format!("{shown} is neither a file nor a folder")))
+        Err(PageError::input(format!(
+            "{shown} is neither a file nor a folder"
+        )))
     }
 }
 
@@ -103,7 +146,9 @@ fn is_html_name(name: &str) -> bool {
 }
 
 fn file_name(path: &Path) -> String {
-    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn stem(name: &str) -> String {
@@ -120,20 +165,44 @@ fn stem(name: &str) -> String {
 /// "is 40.2 MB; a file can be 32 MB at most"
 pub(crate) fn too_large(what: &str, bytes: u64) -> Problem {
     let size = megabytes(bytes);
-    let size = if size == megabytes(MAX_FILE_BYTES) { format!("over {size}") } else { size };
-    Problem::new(what, format!("{what} is {size}; a file can be {} at most", megabytes(MAX_FILE_BYTES)))
+    let size = if size == megabytes(MAX_FILE_BYTES) {
+        format!("over {size}")
+    } else {
+        size
+    };
+    Problem::new(
+        what,
+        format!(
+            "{what} is {size}; a file can be {} at most",
+            megabytes(MAX_FILE_BYTES)
+        ),
+    )
 }
 
 pub(crate) fn too_heavy(bytes: u64) -> Problem {
     let size = megabytes(bytes);
-    let size = if size == megabytes(MAX_PAGE_BYTES) { format!("over {size}") } else { size };
-    Problem::new("the page", format!("the page weighs {size}; a page can be {} at most", megabytes(MAX_PAGE_BYTES)))
+    let size = if size == megabytes(MAX_PAGE_BYTES) {
+        format!("over {size}")
+    } else {
+        size
+    };
+    Problem::new(
+        "the page",
+        format!(
+            "the page weighs {size}; a page can be {} at most",
+            megabytes(MAX_PAGE_BYTES)
+        ),
+    )
 }
 
 pub(crate) fn too_many_files(files: usize) -> Problem {
     Problem::new(
         "the page",
-        format!("the page has {} files; a page can have {} at most", count(files), count(MAX_FILES)),
+        format!(
+            "the page has {} files; a page can have {} at most",
+            count(files),
+            count(MAX_FILES)
+        ),
     )
 }
 
@@ -153,7 +222,10 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
         }
     }
     let canonical = fs::canonicalize(path).map_err(|error| PageError::io(path, error))?;
-    let root = canonical.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
+    let root = canonical
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
     let name = stem(&entry_name);
 
     let mut taken: BTreeMap<String, Arc<[u8]>> = BTreeMap::new();
@@ -228,8 +300,11 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             if literal.substituted || !looks_like_path(&literal.value) {
                 continue;
             }
-            if let Resolved::Local { path: local, .. } = resolve(literal.value.trim(), &literal.base) {
-                if !local.is_empty() && !taken.contains_key(&local) && is_file_inside(&root, &local) {
+            if let Resolved::Local { path: local, .. } =
+                resolve(literal.value.trim(), &literal.base)
+            {
+                if !local.is_empty() && !taken.contains_key(&local) && is_file_inside(&root, &local)
+                {
                     if is_hidden(&local) {
                         hidden.insert(local);
                     } else {
@@ -269,9 +344,20 @@ fn read_single(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
         });
     }
 
-    let files: Vec<InputFile> = taken.into_iter().map(|(path, bytes)| InputFile { path, bytes }).collect();
+    let files: Vec<InputFile> = taken
+        .into_iter()
+        .map(|(path, bytes)| InputFile { path, bytes })
+        .collect();
     let fingerprint = fingerprint_of(&files, Some(&entry_name), None);
-    Ok(Input { name, root, entry: entry_name, files, fingerprint, single_file: true, warnings })
+    Ok(Input {
+        name,
+        root,
+        entry: entry_name,
+        files,
+        fingerprint,
+        single_file: true,
+        warnings,
+    })
 }
 
 /// A string of a page that may be the path of a file it loads later: no scheme, no white
@@ -280,10 +366,19 @@ fn looks_like_path(text: &str) -> bool {
     if text.is_empty() || text.len() > 300 || text.trim() != text {
         return false;
     }
-    if text.contains("://") || text.starts_with('#') || text.starts_with('?') || text.starts_with("data:") {
+    if text.contains("://")
+        || text.starts_with('#')
+        || text.starts_with('?')
+        || text.starts_with("data:")
+    {
         return false;
     }
-    if text.chars().any(|c| matches!(c, '<' | '>' | '"' | '\n' | '\r' | '\t' | '*' | '|' | '{' | '}' | '\\')) {
+    if text.chars().any(|c| {
+        matches!(
+            c,
+            '<' | '>' | '"' | '\n' | '\r' | '\t' | '*' | '|' | '{' | '}' | '\\'
+        )
+    }) {
         return false;
     }
     if text.contains(':') && !text.contains('/') {
@@ -302,7 +397,10 @@ fn is_hidden(path: &str) -> bool {
 
 /// Whether the page's path names a plain file inside the root (no link leads out of it).
 fn is_file_inside(root: &Path, path: &str) -> bool {
-    if path.split('/').any(|segment| segment == ".." || segment.is_empty()) {
+    if path
+        .split('/')
+        .any(|segment| segment == ".." || segment.is_empty())
+    {
         return false;
     }
     let full = root.join(path);
@@ -357,13 +455,18 @@ fn normal_entry(entry: &str) -> String {
 
 fn is_package(name: &str) -> bool {
     match name.rsplit_once('.') {
-        Some((stem, ending)) if !stem.is_empty() => PACKAGES.contains(&ending.to_ascii_lowercase().as_str()),
+        Some((stem, ending)) if !stem.is_empty() => {
+            PACKAGES.contains(&ending.to_ascii_lowercase().as_str())
+        }
         _ => false,
     }
 }
 
 fn skipped_name(name: &str) -> bool {
-    name.starts_with('.') || name == "__MACOSX" || name.eq_ignore_ascii_case("Thumbs.db") || name == "Icon\r"
+    name.starts_with('.')
+        || name == "__MACOSX"
+        || name.eq_ignore_ascii_case("Thumbs.db")
+        || name == "Icon\r"
 }
 
 fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
@@ -385,7 +488,9 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             let Some(item_name) = item.file_name().to_str().map(str::to_string) else {
                 continue;
             };
-            let file_type = item.file_type().map_err(|error| PageError::io(item.path(), error))?;
+            let file_type = item
+                .file_type()
+                .map_err(|error| PageError::io(item.path(), error))?;
             entries.push((item_name, file_type, item.path()));
         }
         entries.sort_by(|a, b| b.0.cmp(&a.0));
@@ -393,7 +498,11 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             if skipped_name(&item_name) {
                 continue;
             }
-            let relative = if prefix.is_empty() { item_name.clone() } else { format!("{prefix}/{item_name}") };
+            let relative = if prefix.is_empty() {
+                item_name.clone()
+            } else {
+                format!("{prefix}/{item_name}")
+            };
             if file_type.is_symlink() {
                 links += 1;
                 continue;
@@ -407,9 +516,14 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
             if !file_type.is_file() {
                 continue;
             }
-            let size = fs::metadata(&full).map_err(|error| PageError::io(&full, error))?.len();
+            let size = fs::metadata(&full)
+                .map_err(|error| PageError::io(&full, error))?
+                .len();
             if size > MAX_FILE_BYTES {
-                return Err(PageError::Incomplete { name, problems: vec![too_large(&relative, size)] });
+                return Err(PageError::Incomplete {
+                    name,
+                    problems: vec![too_large(&relative, size)],
+                });
             }
             found.push((relative, size));
             total += size;
@@ -418,7 +532,11 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
                     name,
                     problems: vec![Problem::new(
                         "the folder",
-                        format!("the folder has more than {} files; a page can have {} at most", count(MAX_FILES), count(MAX_FILES)),
+                        format!(
+                            "the folder has more than {} files; a page can have {} at most",
+                            count(MAX_FILES),
+                            count(MAX_FILES)
+                        ),
                     )],
                 });
             }
@@ -427,7 +545,11 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
                     name,
                     problems: vec![Problem::new(
                         "the folder",
-                        format!("the folder holds more than {}; a page can be {} at most", megabytes(MAX_PAGE_BYTES), megabytes(MAX_PAGE_BYTES)),
+                        format!(
+                            "the folder holds more than {}; a page can be {} at most",
+                            megabytes(MAX_PAGE_BYTES),
+                            megabytes(MAX_PAGE_BYTES)
+                        ),
                     )],
                 });
             }
@@ -441,39 +563,70 @@ fn read_folder(path: &Path, entry: Option<&str>) -> Result<Input, PageError> {
         let full = root.join(relative);
         let bytes = fs::read(&full).map_err(|error| PageError::io(&full, error))?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err(PageError::Incomplete { name, problems: vec![too_large(relative, bytes.len() as u64)] });
+            return Err(PageError::Incomplete {
+                name,
+                problems: vec![too_large(relative, bytes.len() as u64)],
+            });
         }
-        files.push(InputFile { path: relative.clone(), bytes: Arc::from(bytes) });
+        files.push(InputFile {
+            path: relative.clone(),
+            bytes: Arc::from(bytes),
+        });
     }
     let mut warnings = Vec::new();
     if links > 0 {
         warnings.push(if links == 1 {
             "the folder has a link to another file or folder, which was left out".to_string()
         } else {
-            format!("the folder has {} links to other files or folders, which were left out", count(links))
+            format!(
+                "the folder has {} links to other files or folders, which were left out",
+                count(links)
+            )
         });
     }
     let fingerprint = fingerprint_of(&files, None, Some(&entry));
-    Ok(Input { name, root, entry, files, fingerprint, single_file: false, warnings })
+    Ok(Input {
+        name,
+        root,
+        entry,
+        files,
+        fingerprint,
+        single_file: false,
+        warnings,
+    })
 }
 
-fn choose_entry(found: &[(String, u64)], entry: Option<&str>, _name: &str) -> Result<String, PageError> {
+fn choose_entry(
+    found: &[(String, u64)],
+    entry: Option<&str>,
+    _name: &str,
+) -> Result<String, PageError> {
     if let Some(given) = entry {
         let given = normal_entry(given);
         if given.is_empty() {
-            return Err(PageError::input("the entry is empty: name the HTML file the page opens with"));
+            return Err(PageError::input(
+                "the entry is empty: name the HTML file the page opens with",
+            ));
         }
         let exact = found.iter().find(|(path, _)| *path == given);
-        let any_case = found.iter().find(|(path, _)| path.eq_ignore_ascii_case(&given));
+        let any_case = found
+            .iter()
+            .find(|(path, _)| path.eq_ignore_ascii_case(&given));
         let Some((path, _)) = exact.or(any_case) else {
             return Err(PageError::input(format!("the folder has no file {given}")));
         };
         if !is_html_name(path) {
-            return Err(PageError::input(format!("{path} is not an HTML file: the entry is the HTML file the page opens with")));
+            return Err(PageError::input(format!(
+                "{path} is not an HTML file: the entry is the HTML file the page opens with"
+            )));
         }
         return Ok(path.clone());
     }
-    let top: Vec<&String> = found.iter().map(|(path, _)| path).filter(|path| !path.contains('/')).collect();
+    let top: Vec<&String> = found
+        .iter()
+        .map(|(path, _)| path)
+        .filter(|path| !path.contains('/'))
+        .collect();
     for wanted in ["index.html", "index.htm"] {
         if let Some(path) = top.iter().find(|path| path.as_str() == wanted) {
             return Ok((*path).clone());
@@ -491,7 +644,9 @@ fn choose_entry(found: &[(String, u64)], entry: Option<&str>, _name: &str) -> Re
                     "the folder has no HTML file at its top and no index.html: say which one opens with --entry",
                 ))
             } else {
-                Err(PageError::input("the folder has no HTML file, so it is no page"))
+                Err(PageError::input(
+                    "the folder has no HTML file, so it is no page",
+                ))
             }
         }
         n => Err(PageError::input(format!(
@@ -506,7 +661,11 @@ fn choose_entry(found: &[(String, u64)], entry: Option<&str>, _name: &str) -> Re
 /// hashed after the files (two NUL bytes, `entry`, a NUL byte, its path) when it is not
 /// `index.html`, so that the same folder opening with another page is another input
 /// (and a folder that opens with its index.html keeps the fingerprint it had).
-pub(crate) fn fingerprint_of(files: &[InputFile], single_entry: Option<&str>, folder_entry: Option<&str>) -> String {
+pub(crate) fn fingerprint_of(
+    files: &[InputFile],
+    single_entry: Option<&str>,
+    folder_entry: Option<&str>,
+) -> String {
     let mut named: Vec<(String, [u8; 32])> = files
         .iter()
         .map(|file| {

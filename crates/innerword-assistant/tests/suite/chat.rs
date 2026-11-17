@@ -337,7 +337,10 @@ fn the_side_chat_has_the_document_the_attachments_and_the_tools() {
     pump(&mut chat);
 
     let started = &fake.started()[0];
-    assert_eq!(started.system_prompt, innerword_assistant::SIDE_SYSTEM_PROMPT);
+    assert_eq!(
+        started.system_prompt,
+        innerword_assistant::SIDE_SYSTEM_PROMPT
+    );
     let server = started
         .tools
         .as_ref()

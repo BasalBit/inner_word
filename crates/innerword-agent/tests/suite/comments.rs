@@ -352,7 +352,10 @@ fn comments_stay_where_they_are_when_the_text_is_edited_elsewhere() {
     // New blocks above and between move the anchors along.
     for (position, heading) in [
         (innerword_agent::InsertPosition::Start, None),
-        (innerword_agent::InsertPosition::BeforeHeading, Some("Later")),
+        (
+            innerword_agent::InsertPosition::BeforeHeading,
+            Some("Later"),
+        ),
     ] {
         fx.library
             .insert(&InsertRequest {

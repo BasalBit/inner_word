@@ -1036,13 +1036,24 @@ fn the_welcome_document_of_the_old_name_is_the_welcome_document(cx: &mut TestApp
     let (workspace, vcx) = open_workspace(&library, cx);
     workspace.update_in(vcx, |w, window, cx| w.new_document(window, cx));
     vcx.run_until_parked();
-    assert_ne!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(old));
+    assert_ne!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(old)
+    );
 
     vcx.dispatch_action(OpenWelcomeDocument);
     vcx.run_until_parked();
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(old));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(old)
+    );
     let titles: Vec<String> = library.read_with(vcx, |library, _| {
-        library.tree().documents.iter().map(|meta| meta.title.clone()).collect()
+        library
+            .tree()
+            .documents
+            .iter()
+            .map(|meta| meta.title.clone())
+            .collect()
     });
     assert!(
         !titles.iter().any(|title| title == welcome::WELCOME_TITLE),

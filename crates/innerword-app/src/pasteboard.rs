@@ -198,8 +198,8 @@ mod mac {
         path::PathBuf,
     };
 
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     use innerword_editor::NewImageSource;
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 
     use super::{Contents, FILE_URL, PLAIN_TEXT, Take, decide};
 
@@ -326,8 +326,8 @@ mod mac {
 pub mod private {
     use std::ffi::c_void;
 
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     use innerword_editor::NewImageSource;
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 
     use super::mac::{ns_string, read};
 

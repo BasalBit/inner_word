@@ -196,6 +196,6 @@ pub use error::{
     Candidate, Error, ErrorKind, ErrorReport, ItemKind, Occurrence, PAGE_IS_NOT_A_TEXT_FILE,
     Refusal, Result,
 };
+pub use innerword_store::{Clock, DATA_DIR_ENV};
 pub use library::{DEFAULT_AUTHOR, FETCH_LOCAL_ENV, Library};
 pub use types::*;
-pub use innerword_store::{Clock, DATA_DIR_ENV};

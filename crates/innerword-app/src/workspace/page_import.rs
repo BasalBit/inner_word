@@ -1027,7 +1027,8 @@ async fn add_one(
     };
 
     // 1. Read and fetch, on a thread of its own: a fetch can take minutes.
-    let handoff: Handoff<Result<innerword_page::Bundle, innerword_page::PageError>> = Handoff::new();
+    let handoff: Handoff<Result<innerword_page::Bundle, innerword_page::PageError>> =
+        Handoff::new();
     {
         let handoff = handoff.clone();
         let path = path.to_path_buf();

@@ -1133,7 +1133,9 @@ impl Workspace {
 /// again, and a folder created later must not start out open because an
 /// earlier one was. Called before the sidebar reads its settings.
 pub(crate) fn forget_missing_sidebar_items(library: &gpui::Entity<Library>, cx: &mut gpui::App) {
-    use innerword_library::{EXPANDED_FOLDERS_SETTING, FolderId, SELECTED_ITEM_SETTING, StoreError};
+    use innerword_library::{
+        EXPANDED_FOLDERS_SETTING, FolderId, SELECTED_ITEM_SETTING, StoreError,
+    };
     let (expanded, selected) = {
         let library = library.read(cx);
         let gone = |item: LibraryItem| match item {

@@ -7,11 +7,11 @@ use std::collections::{BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::MANIFEST_VERSION;
 use crate::bundle::External;
 use crate::error::PageError;
 use crate::media::is_file_id;
 use crate::resolve::decode;
-use crate::MANIFEST_VERSION;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -52,10 +52,14 @@ pub struct Checked {
 
 impl Manifest {
     pub fn from_json(text: &str) -> Result<Manifest, PageError> {
-        let manifest: Manifest = serde_json::from_str(text)
-            .map_err(|error| PageError::Unreadable { reason: format!("it is no page manifest ({error})") })?;
+        let manifest: Manifest =
+            serde_json::from_str(text).map_err(|error| PageError::Unreadable {
+                reason: format!("it is no page manifest ({error})"),
+            })?;
         if manifest.page == 0 {
-            return Err(PageError::Unreadable { reason: "it is no page manifest (no version)".to_string() });
+            return Err(PageError::Unreadable {
+                reason: "it is no page manifest (no version)".to_string(),
+            });
         }
         if manifest.page > MANIFEST_VERSION {
             return Err(PageError::Unreadable {
@@ -67,14 +71,27 @@ impl Manifest {
         }
         for file in manifest.files.iter().chain(manifest.original.iter()) {
             if !is_file_id(&file.file) {
-                return Err(PageError::Unreadable { reason: format!("{} names no stored file", file.path) });
+                return Err(PageError::Unreadable {
+                    reason: format!("{} names no stored file", file.path),
+                });
             }
-            if file.path.is_empty() || file.path.starts_with('/') || file.path.split('/').any(|s| s == "..") {
-                return Err(PageError::Unreadable { reason: format!("{:?} is not a path of a page", file.path) });
+            if file.path.is_empty()
+                || file.path.starts_with('/')
+                || file.path.split('/').any(|s| s == "..")
+            {
+                return Err(PageError::Unreadable {
+                    reason: format!("{:?} is not a path of a page", file.path),
+                });
             }
         }
-        if !manifest.files.iter().any(|file| file.path == manifest.entry) {
-            return Err(PageError::Unreadable { reason: format!("its entry {} is not among its files", manifest.entry) });
+        if !manifest
+            .files
+            .iter()
+            .any(|file| file.path == manifest.entry)
+        {
+            return Err(PageError::Unreadable {
+                reason: format!("its entry {} is not among its files", manifest.entry),
+            });
         }
         Ok(manifest)
     }
@@ -97,7 +114,11 @@ impl Manifest {
         if let Some(found) = find(path) {
             return Some(found);
         }
-        let bare = path.split(['?', '#']).next().unwrap_or("").trim_start_matches('/');
+        let bare = path
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('/');
         let decoded = decode(bare);
         for candidate in [bare.to_string(), decoded.clone()] {
             if let Some(found) = find(&candidate) {
@@ -114,7 +135,11 @@ impl Manifest {
 
     /// Every file id the manifest names, served and original.
     pub fn file_ids(&self) -> BTreeSet<String> {
-        self.files.iter().chain(self.original.iter()).map(|file| file.file.clone()).collect()
+        self.files
+            .iter()
+            .chain(self.original.iter())
+            .map(|file| file.file.clone())
+            .collect()
     }
 
     /// The distinct bytes of the page, served and original together.
@@ -131,6 +156,10 @@ impl Manifest {
     /// The served bytes alone (what the view loads).
     pub fn served_bytes(&self) -> u64 {
         let mut seen = HashSet::new();
-        self.files.iter().filter(|file| seen.insert(file.file.as_str())).map(|file| file.size).sum()
+        self.files
+            .iter()
+            .filter(|file| seen.insert(file.file.as_str()))
+            .map(|file| file.size)
+            .sum()
     }
 }

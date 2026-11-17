@@ -930,7 +930,13 @@ mod tests {
             assert!(next.iter().any(|word| message.contains(word)), "{message}");
             // The words serve the command line and the MCP server: no command of the
             // one, no tool of the other.
-            for word in ["Run this", "run this", "innerword get", "read_document", "--"] {
+            for word in [
+                "Run this",
+                "run this",
+                "innerword get",
+                "read_document",
+                "--",
+            ] {
                 assert!(!message.contains(word), "{word} in: {message}");
             }
             // As data: the reason, and whether anything may have changed.

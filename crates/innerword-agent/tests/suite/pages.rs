@@ -521,7 +521,8 @@ fn a_page_the_request_says_was_prepared_is_prepared_again() {
     );
     let store = fx.store();
     let manifest =
-        innerword_page::Manifest::from_json(&store.document(added.page.id).unwrap().content).unwrap();
+        innerword_page::Manifest::from_json(&store.document(added.page.id).unwrap().content)
+            .unwrap();
     for file in &manifest.files {
         let id = innerword_store::FileId::parse(&file.file).unwrap();
         assert!(

@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use innerword_store::{DocumentId, DocumentKind, FolderId, SnapshotId};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{Occurrence, Refusal};
 

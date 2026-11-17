@@ -1118,7 +1118,10 @@ fn replacing_a_document_keeps_what_markdown_cannot_say() {
         Some(Rgb { r: 200, g: 0, b: 0 })
     );
     assert_eq!(after.blocks()[1].attrs_at(8).unwrap().color, None);
-    assert_eq!(after.blocks()[2].alignment(), innerword_core::Alignment::Right);
+    assert_eq!(
+        after.blocks()[2].alignment(),
+        innerword_core::Alignment::Right
+    );
     assert_eq!(after.settings(), &settings.sanitized());
 }
 

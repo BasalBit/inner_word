@@ -174,7 +174,7 @@
 //! of [`VimSpelling`] (its documentation has the snippet). Until then, and
 //! while the checker says it is off for the editor, the keys report
 //! `E756: Spell checking is off` in the status. What a command did is a
-//! status message too (`Learned spelling: Hasanaj`,
+//! status message too (`Learned spelling: Velmorin`,
 //! `Sorry, only 2 suggestions`, `No misspelled word under the cursor`).
 //!
 //! A replacement made with `{count}z=` is one undo step (`u` takes it

@@ -4,8 +4,8 @@
 //! window server for the window's pixels with `screencapture -l <window id>`.
 //! That captures only this window (no other apps, no desktop), even when it is
 //! partly covered, but not when it is minimized or on another Space. It needs
-//! the Screen Recording permission for the process that launched the app (on
-//! this machine the terminal already has it).
+//! the Screen Recording permission for the process that launched the app
+//! (System Settings > Privacy & Security > Screen Recording).
 
 use std::{
     path::{Path, PathBuf},

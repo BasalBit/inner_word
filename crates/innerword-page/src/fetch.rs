@@ -65,7 +65,7 @@ impl FetchError {
     }
 }
 
-/// The user agent of Safari 17.5 on macOS (the one `archive.py` used), which makes Google
+/// The user agent of Safari 17.5 on macOS, which makes Google
 /// Fonts serve WOFF2.
 pub const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
 

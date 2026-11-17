@@ -45,7 +45,7 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
    among the backups, the damaged-file handling and the collector cover it. `images.db`
    goes to its schema 2.
 3. Per file 32 MB, per page 64 MB of distinct bytes (served and original together), one
-   page per request on the live channel and one page per MCP call. Reading Orbitarium
+   page per request on the live channel and one page per MCP call. The archive's narrated explainer
    (17 MP3s, about 12 MB) fits five times over.
 4. The bundler is a pure crate. It fetches with `/usr/bin/curl` (no TLS stack compiled),
    with a Safari user agent so Google Fonts answers with WOFF2, only from public
@@ -54,7 +54,7 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
 5. Whole or nothing is decided by a headless WebKit load with a
    `Content-Security-Policy` header on **every** response of the page and a listener for
    `securitypolicyviolation` in a content world of the check's own: every request that
-   would leave is blocked **and named**. Tried on this Mac (Appendix A): 13 kinds of
+   would leave is blocked **and named**. Tried on the author's Mac (Appendix A): 13 kinds of
    request, all blocked, all reported, zero hits on a local server. A content rule list
    blocks the same again. WebRTC, which neither of the two sees, is switched off
    (`_setPeerConnectionEnabled:` NO; a critic's probe found STUN and TURN packets leave
@@ -285,7 +285,7 @@ row. The original and the served copy of an MP3 are one row.
   "fingerprint": "64 hex digits",
   "added_at": 1794306980000,
   "checked": {"engine": "WebKit 621.1", "at": 1794306980000, "requests": 31, "warnings": []},
-  "text": "Orbitarium\nas built at a3c2306 · 10 Nov 2026\n…"
+  "text": "Orbitarium\nA reader's guide to the night sky\n…"
 }
 ```
 
@@ -367,14 +367,14 @@ pictures.
 
 | Limit | Value | Where it is enforced | Why that much |
 |---|---|---|---|
-| One file | 32 MB | bundler (input and each external), and again where a request is carried out | The archive's largest file is 1.95 MB (a PNG of BasalBit), its largest MP3 1.37 MB. 32 MB leaves room for a short video and keeps one blob within one slice of the backup copy. |
-| One page | 64 MB of distinct bytes, served and original together | bundler; again in `pages::add_page` | Archive: Lantern Redesign Concepts 16.2 MB served (125 files), Reading Orbitarium 11.8 MB (30 files). The 17 MP3s are about 11 MB. |
-| Files per page | 2,000 | bundler | The archive's largest has 180 (Landing Variants). |
+| One file | 32 MB | bundler (input and each external), and again where a request is carried out | The archive's largest file is 1.95 MB (a PNG of the redesign study), its largest MP3 1.37 MB. 32 MB leaves room for a short video and keeps one blob within one slice of the backup copy. |
+| One page | 64 MB of distinct bytes, served and original together | bundler; again in `pages::add_page` | Archive: a redesign study 16.2 MB served (125 files), a narrated explainer 11.8 MB (30 files). The 17 MP3s are about 11 MB. |
+| Files per page | 2,000 | bundler | The archive's largest has 180 (a set of landing-page options). |
 | Externals per page | 500 | bundler | The archive has at most 133. |
 | One request on the channel | one page; `live::MAX_PAGE_BYTES` = 64 MB before base64 | tool and app | Base64 makes 86 MB, under the 256 MB a line may have (`live` module docs). |
 | One MCP call of `add_page` | one page | `innerword-mcp` | A call is bounded by one page's fetch and check (seconds for the archive's pages); many pages go through the command line's `--list`. |
-| HTML files per page | 101: the entry and `ALSO_LOADS` = 100 others; more is refused | bundler | Every HTML file is loaded by the check, or the page is not checked whole. The archive's largest has 13 (BasalBit). |
-| Rendered text | 2,000,000 characters (`innerword_page::MAX_TEXT_CHARS`) | bundler (`prepare`) | Reading Orbitarium has 56,326 with its hidden chapters (23,331 of them shown). The rest is cut, with a warning. |
+| HTML files per page | 101: the entry and `ALSO_LOADS` = 100 others; more is refused | bundler | Every HTML file is loaded by the check, or the page is not checked whole. The archive's largest has 13 (the redesign study). |
+| Rendered text | 2,000,000 characters (`innerword_page::MAX_TEXT_CHARS`) | bundler (`prepare`) | The archive's narrated explainer has 56,326 with its hidden chapters (23,331 of them shown). The rest is cut, with a warning. |
 | Fetch | 30 s per address, 180 s per page, 6 at a time, 5 redirects | `CurlFetcher` | Google Fonts answers in well under a second. |
 | The check | 120 s in all (`CHECK_LIMIT`); the tool kills the child at 135 s | `innerword-web`, `ProcessChecker` | The archive's checker settled every page in 3 s; 100 other HTML files at up to 1 s each fit. Running out is a refusal ("could not be checked in time"). |
 
@@ -396,7 +396,7 @@ pictures.
   the file's folder) is **not taken** but named in a warning: "explainer.html names
   audio/01-intro.mp3 and 16 more files beside it that it may load later; they were not
   taken. To keep them, add the folder." Such pages build a path at run time from a table
-  of literal paths (Reading Orbitarium: `fetch(NARR.chapters[next.id].src)`), which the
+  of literal paths (a narrated explainer: `fetch(NARR.chapters[next.id].src)`), which the
   check does not see until the reader presses Play. The root of the page is the file's
   folder; a reference that leaves it (`../vendor/a.css`) is refused with: "index.html
   names ../vendor/a.css, outside its folder: add the folder that holds both and say which
@@ -480,8 +480,8 @@ dot, which the walk of a folder never takes either) and names it in a warning of
   --dump-header <file> --output <file> --write-out '%{http_code}\t%{content_type}' <url>`.
   `-q` comes first so that a `~/.curlrc` changes nothing. Why curl: it is on every Mac,
   speaks TLS through the system, and costs nothing to build; a Rust TLS stack would be
-  compiled into both target directories on a disk that is nearly full. The user agent is
-  the one `_tools/archive.py` used (`Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+  compiled into both target directories and make every build larger. The user agent is
+  a desktop Safari's (`Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
   AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15`), which makes
   Google Fonts serve WOFF2.
 - **Only public addresses.** A page written by a model that read anything could name
@@ -519,9 +519,8 @@ dot, which the walk of a folder never takes either) and names it in a warning of
 An external is stored at `_external/<host>/<path segments>` with every character outside
 `[A-Za-z0-9._@+-]` written as `_`, a missing ending added for CSS (`.css`) and JS
 (`.js`), and `__<first 10 hex of the SHA-1 of the query>` (`sha1_smol` 1.0, already in
-`Cargo.lock`) before the ending when the address has a query (the scheme of `archive.py`'s `local_path_for`, which produced the
-archive). Two addresses that come out the same get `__<8 hex of the address>`. The
-reference is replaced by the **relative** path from the file that names it to the stored
+`Cargo.lock`) before the ending when the address has a query. Two addresses that come out
+the same get `__<8 hex of the address>`. The reference is replaced by the **relative** path from the file that names it to the stored
 copy (`../_external/fonts.gstatic.com/...`), so the served files also work as an exported
 folder. A reference to a local file is left as it is.
 
@@ -584,7 +583,7 @@ The page is **not saved** (exit 14, `page_incomplete`) when:
 
 The sentence names the first five problems and counts the rest, and always ends "Nothing
 was saved." Script errors are warnings in the result, not reasons (pages written for
-claude.ai call `window.claude` and catch the error; Quiz Marking Desk does).
+claude.ai call `window.claude` and catch the error; the grading page does).
 
 **Lazy pieces.** The check never scrolls, and a picture or a frame under
 `loading="lazy"` is asked for only near the screen: one far down the page was never
@@ -623,9 +622,9 @@ The text of one load is, after the scripts ran:
    the first part already.
 
 The second part matters on the user's own pages (read only, by a critic, against the
-archive): Reading Orbitarium shows 23,331 characters and holds 56,326 (its other
-chapters); Nimbus Landing Variants 33,284 of 40,542 (nine closed `<details>`); Tidewater
-Field Guide 90,535 of 95,171. The user keeps pages "for the information it shows", so
+archive): the narrated explainer shows 23,331 characters and holds 56,326 (its other
+chapters); a set of landing-page options 33,284 of 40,542 (nine closed `<details>`); a field
+guide 90,535 of 95,171. The user keeps pages "for the information it shows", so
 search, agents and the assistant get all of it.
 
 `text` is the entry's text, then for each other HTML file loaded a blank line, its title
@@ -1044,7 +1043,7 @@ pub(crate) struct PageSession {
   "answers its key through AppKit when GPUI has no binding for it where the keyboard is"
   (CLAUDE.md, "Commands for the text work wherever the keyboard is").
 - **Every other key goes to the page** (letters, space, arrows, page keys, tab, escape):
-  the page scrolls and runs its own keyboard handlers (Reading Orbitarium: space plays,
+  the page scrolls and runs its own keyboard handlers (a narrated explainer: space plays,
   arrows step). Except: the web view subclass's `keyDown:` asks
   `PageEvents::takes_key(&KeyPress)`; the app answers true when the installed keymap has
   a binding for that keystroke in the `PageView` context or a context around it (read
@@ -1053,7 +1052,7 @@ pub(crate) struct PageSession {
   subclass hands the event to GPUI's view (`keyDown:`) instead of WebKit. In the
   defaults that is `ctrl-enter` and `shift-f10` (the page's context menu). A key the user
   gives a page command later is taken the same way. Because a page has fields of its own
-  (Quiz Marking Desk has three inputs and a text area), `PageView` is a place where
+  (the grading page has three inputs and a text area), `PageView` is a place where
   text is typed (section 10): the guard rails refuse a bare character there, so no page
   command can take a letter from the page.
 - **The find keys are bound in `PageView` too.** `cmd-f`, `cmd-opt-f`, `cmd-g` and
@@ -1317,7 +1316,7 @@ waits until its gesture is done and logs one line per page (and the summary).
   apply) on a page: the view makes the PDF with WebKit's print operation as a save job
   into a temporary file (`printOperationWithPrintInfo:`, both panels off, run with
   `runOperationModalForWindow:…`, which the spike found is the call that draws), on the
-  paper of the user's default print info (`NSPrintInfo.sharedPrintInfo`, A4 on this Mac),
+  paper of the user's default print info (`NSPrintInfo.sharedPrintInfo`, A4 on the author's Mac),
   in print colours (the spike: A4 pages). The bytes become a
   `innerword_print::Pdf::from_bytes(bytes, pages)` (new, WP4), the job a
   `printing::PrintJob { title, paper, pdf }`, and it goes to the installed
@@ -1785,8 +1784,9 @@ emits it, and WP9 fills the arm in.
 - No test reaches the internet. A test that fetches runs a server on 127.0.0.1 in a
   thread (`std::net::TcpListener`); every other test uses `innerword_page::MapFetcher`.
 - No test of a GPUI crate makes a `WKWebView`. The app's tests install the fake engine.
-- The archive at `<page archive>/` is read only. A test that reads
-  it is `#[ignore]` and copies nothing there.
+- The archive of saved artifacts (a folder named by `INNER_WORD_PAGE_ARCHIVE`) is read
+  only. A test that reads it is `#[ignore]`, does nothing when the variable is unset, and
+  copies nothing there.
 - Commit only your paths; the two lines of attribution end every message.
 
 ### WP1. Store: pages and their files (innerword-store)
@@ -2143,7 +2143,7 @@ server to a private address (resolution only: no request reaches anything);
 archive, read only, bundled with `CurlFetcher` (this one reaches the internet, so it is
 never run by default) into a temporary directory: every external of each page's
 `manifest.json` is found and fetched. (The real check of the same 14 is WP9's: 13 are
-whole, Quiz Marking Desk too, whose grades live on claude.ai and which says so
+whole, the grading page too, whose grades live on claude.ai and which says so
 offline, with the warning about `window.claude`; the Docs document is refused, its
 viewer asks claude.ai.)
 
@@ -2352,7 +2352,7 @@ the menu can be driven, section 6); the rule list compiled twice leaves one list
 store; `check_selectors` and `available` pass. Unit tests: the menu filter over
 identifiers and actions, range parsing, the frame conversion, the 1 s gate.
 
-Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-web` passes on this Mac, and
+Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-web` passes on a Mac with macOS 12.3 or later, and
 `CARGO_TARGET_DIR=target-pure cargo check -p innerword-web --target x86_64-apple-darwin`
 passes where that target's standard library is installed (`rustup target list
 --installed`; it is not installed for this stage if the disk does not allow it, and
@@ -2736,7 +2736,7 @@ it); `innerword-assistant`'s own tests for the prompt.
 Done: `cargo test -p innerword-app`, `cargo test -p innerword-assistant-ui` and
 `CARGO_TARGET_DIR=target-pure cargo test -p innerword-assistant` pass; the person checks 3
 to 6 of section 13 are done; the 14 pages of the archive go into a throwaway library
-with `innerword page add --list` (13 are added, Quiz Marking Desk with its warning about
+with `innerword page add --list` (13 are added, the grading page with its warning about
 `window.claude`; the Docs document is refused with its reason) and show in the app with
 Wi-Fi off.
 
@@ -2767,12 +2767,12 @@ archive's pages: added with `innerword --library <dir> page add --list …` once
 before that (WP7's milestone) with a scripted run of `page:make:<artifact folder>|offline/index.html`
 for each, followed by `quit`, then a normal launch on the same directory.
 
-1. **Keys in an active window.** Open Reading Orbitarium, click into the page. Space plays
+1. **Keys in an active window.** Open the narrated explainer, click into the page. Space plays
    and pauses, the arrows step. `cmd-shift-p`: the palette comes up over a still picture
    of the page; type, `escape`: the arrows work in the page again. `cmd-0` then `cmd-1`:
    the page has the keys again. Select a sentence, `cmd-c`, paste into TextEdit.
    `ctrl-enter`: our menu. `cmd-f`, type a word: it is marked in the page; `shift-enter`
-   goes back. Type into a field of Quiz Marking Desk: every letter goes to the field.
+   goes back. Type into a field of the grading page: every letter goes to the field.
    `tab` until a link is marked, `enter`: the browser opens it.
 2. **Overlays.** With a page open: quick open (`cmd-p`), the settings (`cmd-,`), the list
    of shortcuts (`cmd-/`), a context menu: each is visible over the page and the page
@@ -2785,12 +2785,12 @@ for each, followed by `quit`, then a normal launch on the same directory.
    like the page.
 4. **A drop from the Finder.** Drag an `.html` file onto the sidebar: it is added in that
    folder. Drag a folder onto an open page: it is added and opens.
-5. **No autoplay.** Open Reading Orbitarium: silence until Play is clicked.
+5. **No autoplay.** Open the narrated explainer: silence until Play is clicked.
 6. **A link.** Click a link to another site in a page: Safari (the default browser) opens
    it; the page stays. Open a test page (in the temporary library) whose script "clicks"
    a link to another site 300 ms after load: nothing opens.
 7. **Offline.** Turn Wi-Fi off, quit and open the app, open a page with Google Fonts and
-   one with three.js (Nimbus Landing Variants): fonts and the 3D scene are there.
+   one with three.js (the landing-page options): fonts and the 3D scene are there.
 8. **The pointer.** Over a page: a hand over links, a text cursor over text, no flicker
    between GPUI's arrow and WebKit's cursors. Right-click: WebKit's menu without Reload,
    Download, Inspect, with our items at the end.
@@ -2883,11 +2883,11 @@ Each has a default the design uses until the user says otherwise.
 12. A page the user put in the trash, whose artifact is copied again: leave it in the
     trash and say so ("trashed"), or add it again? Default: leave it, unless
     `--include-trashed` is given.
-13. The first milestone of the page view needs ten minutes at this Mac's keyboard (checks
+13. The first milestone of the page view needs ten minutes at a Mac's keyboard (checks
     1 and 2 of section 13: keys and overlays in an active window, which no script can
     see). When can that be? Default: the builder asks when the milestone is committed,
     and the rest of the work goes on meanwhile.
-14. A page that kept data on claude.ai (Quiz Marking Desk's grades): the skill reads
+14. A page that kept data on claude.ai (the grading page's grades): the skill reads
     the rows with ArtifactData and keeps them as a document "<title> (saved data)" beside
     the page. Fine? Default: yes.
 
@@ -2919,23 +2919,25 @@ when it may not play; the beacon of the control was not sent before the probe en
 
 ## Appendix B. The archive in numbers
 
-Read from `<page archive>/archive.json` and the folders (read only).
+The archive is a folder of 14 claude.ai artifacts saved by one user (each with its
+`manifest.json`, its original files and an offline copy), read only. The pages are
+described by kind; their titles are private.
 
 | Page | Kind | Externals | Served (offline + vendor) | Files | Largest file |
 |---|---|---|---|---|---|
-| Lantern Redesign Concepts | index + 12 concept pages, 6 style sheets, 42 images | 64 | 16.2 MB | 125 | 1.95 MB PNG |
-| Nimbus Landing Variants | index + 9 option pages + 37 images | 133 | 10.6 MB | 180 | 0.6 MB (three.js r128) |
-| Reading Orbitarium | page + 17 narration MP3s | 12 | 11.8 MB | 30 | 1.37 MB MP3 |
-| Nimbus Brand Sheet | page + 42 PNGs | 19 | 6.3 MB | 62 | 0.32 MB |
-| Orbitarium | plain page | 31 | 0.9 MB | 32 | 0.2 MB |
-| Tidewater Field Guide | plain page | 34 | 1.1 MB | 35 | 0.23 MB |
+| A redesign study | index + 12 concept pages, 6 style sheets, 42 images | 64 | 16.2 MB | 125 | 1.95 MB PNG |
+| Landing-page options | index + 9 option pages + 37 images | 133 | 10.6 MB | 180 | 0.6 MB (three.js r128) |
+| A narrated explainer | page + 17 narration MP3s | 12 | 11.8 MB | 30 | 1.37 MB MP3 |
+| A branding sheet | page + 42 PNGs | 19 | 6.3 MB | 62 | 0.32 MB |
+| An explainer | plain page | 31 | 0.9 MB | 32 | 0.2 MB |
+| A field guide | plain page | 34 | 1.1 MB | 35 | 0.23 MB |
 | the six other plain pages | plain page | 12 to 28 | 0.3 to 0.5 MB | 13 to 29 | under 0.1 MB |
-| Quiz Marking Desk | page with `window.claude` db and user | 16 | 0.4 MB | 17 | 0.1 MB |
-| Nimbus Planning Doc | a Claude Docs document (the type's page connects to the service) | 0 | 0.1 MB offline rebuild; 32 MB original viewer | 1 | |
+| A grading page | page with `window.claude` db and user | 16 | 0.4 MB | 17 | 0.1 MB |
+| A Docs document | a Claude Docs document (the type's page connects to the service) | 0 | 0.1 MB offline rebuild; 32 MB original viewer | 1 | |
 
-The externals are mostly Google Fonts (CSS and WOFF2); Nimbus Landing Variants also has
+The externals are mostly Google Fonts (CSS and WOFF2); the landing-page options also have
 three.js r128 from cdnjs. Two are not keepable as they come: the Docs document (its viewer
-needs the service; its content is kept when exported) and Quiz Marking Desk's saved
+needs the service; its content is kept when exported) and the grading page's saved
 grades (they live in a claude.ai database; the page itself is kept).
 
 ## Review notes
@@ -2948,7 +2950,7 @@ the code or the critic's own experiment (in this session's scratchpad,
 |---|---|---|
 | requirements-R1 | accepted | The probe's logs show STUN and TURN packets on 127.0.0.1 under this design's CSP and rule list, and none with `_setPeerConnectionEnabled:` NO. A row in section 5, both switches required by `available()`, a UDP test in WP3. |
 | requirements-R2 | accepted | A script's `a.click()` looks like the reader's click to the navigation delegate. Links open only within 1 s of a real `mouseUp:`/`keyDown:` (public), plus `_isUserInitiated` where it answers; the WP3 test is turned around. |
-| requirements-R3 | accepted | innerText leaves out closed `<details>` and hidden chapters (Reading Orbitarium 23,331 of 56,326 characters). The text adds what is not shown, after the shown text, without repeats; `MAX_TEXT_CHARS`'s note corrected. |
+| requirements-R3 | accepted | innerText leaves out closed `<details>` and hidden chapters (the archive's narrated explainer: 23,331 of 56,326 characters). The text adds what is not shown, after the shown text, without repeats; `MAX_TEXT_CHARS`'s note corrected. |
 | requirements-R4 | accepted | An iframed SVG without the header was blocked silently. The CSP and DNS headers go on every answer, and an unwatched frame of SVG/XHTML/XML is a problem of the check. |
 | requirements-R5 | accepted, with T9 | A single file no longer takes siblings by the string rule (its folder is never walked); such literals are named in a warning that says to add the folder. A folder is taken whole, as chosen. |
 | requirements-R6 | accepted | The recipe leaves `out_dir` out (no approval prompt per artifact), lists and reads assets, and passes `externals` (address to saved file) in `--list`; the bundler takes them as fetched (`KnownPieces`). |
@@ -3032,4 +3034,4 @@ sections above say the same where they are about it.
 | A link opens outside only when the navigation goes to the link the reader acted on: the one under the pointer at the real `mouseDown:` or the focused one at a real `enter`, asked in the client's content world, once per act (section 5) | innerword-web, 45811e2 (review ISO-4) | Any key or click opened the gate for a second, so a page's listener could `a.click()` a link of its choosing and send the reader's browser to any address |
 | The check's probe makes pictures and frames under `loading="lazy"` eager; the bundler names a lazy one that is not among the page's files, for a folder and a single file alike (section 3) | innerword-web, 45811e2; innerword-page, 331e502 (review ISO-3) | The check never scrolls: a missing file far down the page was never asked for, and the page was added as whole |
 | The online test of the archive compares the font files of Google Fonts by what matters (there are some where the archive has some, no style sheet still names one on the web), every other address as it is | innerword-page, d05847e | Google's style sheets name other font files as time goes on (a new `/s/<family>/v22/`, other `/l/font?kit=` addresses, a family moved between the two): the test failed on addresses while the pages were whole. Run on purpose on 2026-11-14: every original bundled, nothing missed |
-| The media type of a stored piece is decided by its bytes (a signature: fonts, pictures, sound, film), then by where the page names it (a `url()` of `@font-face` and a preload as a font are fonts, never text) and its ending, and the server's Content-Type only where those say nothing against it; bytes that are no text are never HTML (also a file of the page, and as innerword-web serves a stored one); a piece from the web is never a document of the page, which the check loads and reads for text (`Bundle::html_paths`, `write_served_dir`) | innerword-page, innerword-web, 36c8053 (QA of the bundled 0.8.0) | Google Fonts answers some `/l/font?kit=` addresses with `text/html; charset=utf-8` for WOFF2 bytes: an add of Nimbus Brand Sheet stored 7 of its 9 kits as HTML files of the page, the check read their bytes, and the page's text grew from 4,982 to 370,903 characters (850 words to 79,760) in the search, the word counts, what agents read and the assistant's context; the kits also counted toward the 101 HTML files |
+| The media type of a stored piece is decided by its bytes (a signature: fonts, pictures, sound, film), then by where the page names it (a `url()` of `@font-face` and a preload as a font are fonts, never text) and its ending, and the server's Content-Type only where those say nothing against it; bytes that are no text are never HTML (also a file of the page, and as innerword-web serves a stored one); a piece from the web is never a document of the page, which the check loads and reads for text (`Bundle::html_paths`, `write_served_dir`) | innerword-page, innerword-web, 36c8053 (QA of the bundled 0.8.0) | Google Fonts answers some `/l/font?kit=` addresses with `text/html; charset=utf-8` for WOFF2 bytes: an add of the archive's branding sheet stored 7 of its 9 kits as HTML files of the page, the check read their bytes, and the page's text grew from 4,982 to 370,903 characters (850 words to 79,760) in the search, the word counts, what agents read and the assistant's context; the kits also counted toward the 101 HTML files |

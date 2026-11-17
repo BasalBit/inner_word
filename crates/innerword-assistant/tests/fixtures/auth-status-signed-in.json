@@ -9,7 +9,7 @@
   "email": "someone@example.com",
   "orgId": "00000000-0000-4000-8000-000000000000",
   "orgName": "someone@example.com's Organization",
-  "subscriptionType": "max",
+  "subscriptionType": "pro",
   "storedClaudeAiLogin": true,
-  "planTier": "max_20x"
+  "planTier": "pro"
 }

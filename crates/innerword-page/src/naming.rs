@@ -1,6 +1,6 @@
 //! Where a piece from the web is stored among the served files:
-//! `_external/<host>/<path segments>`, the scheme of `archive.py`'s `local_path_for`, which
-//! produced the archive.
+//! `_external/<host>/<path segments>`, the same scheme as the archive of saved artifacts the
+//! bundler was tried against (`tests/suite/archive.rs`).
 
 use std::collections::HashMap;
 

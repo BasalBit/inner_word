@@ -1,6 +1,6 @@
 //! Headless GPUI tests on gpui 0.2.2 (`test-support` feature).
 //!
-//! These prove the test harness works on this machine and pin down API
+//! These prove the test harness works on the Mac that runs them and pin down API
 //! behaviour that `docs/gpui-notes.md` relies on. Every claim in the notes
 //! marked "(tested)" has a test here.
 

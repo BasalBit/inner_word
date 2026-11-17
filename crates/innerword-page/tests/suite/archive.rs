@@ -1,11 +1,15 @@
-//! The user's archive of claude.ai artifacts, read only: every original bundled with the
-//! real fetcher, and every piece `archive.py` fetched for it is found and fetched again.
-//! This one reaches the internet, so it never runs by default:
-//! `CARGO_TARGET_DIR=target-pure cargo test -p innerword-page -- --ignored archive`.
+//! An archive of saved claude.ai artifacts, read only: every original bundled with the
+//! real fetcher, and every piece the archive holds for it is found and fetched again.
+//! The archive is a folder named by `INNER_WORD_PAGE_ARCHIVE`, with one folder per
+//! artifact: its `manifest.json` (whose `externals` maps each address on the web to the
+//! saved copy), its `original/` files and the saved pieces beside them. Without the
+//! variable both tests say so on stderr and pass. The first reaches the internet, so
+//! neither runs by default:
+//! `INNER_WORD_PAGE_ARCHIVE=<folder> CARGO_TARGET_DIR=target-pure cargo test -p innerword-page -- --ignored archive`.
 //!
 //! The font files of Google Fonts are not compared by address: its style sheets name
 //! other files as time goes on (a new version in `/s/<family>/v22/`, another kit in
-//! `/l/font?kit=…`), so what `archive.py` fetched in October is not what the same style
+//! `/l/font?kit=…`), so what the archive fetched when it was made is not what the same style
 //! sheet names now (a family's files even move between `/s/<family>/` and a kit). For
 //! them it is enough that the page has font files of Google Fonts where the archive has
 //! them, and that no style sheet of the page still names a font file on the web: the
@@ -19,9 +23,18 @@ use innerword_page::{CachingFetcher, CurlFetcher, bundle, read_input, write_chec
 
 use super::support::temp;
 
-fn archive() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("page archive")
+/// The variable that names the archive's folder.
+const ARCHIVE_ENV: &str = "INNER_WORD_PAGE_ARCHIVE";
+
+/// The archive's folder, or None (with a line on stderr) when the variable is not set.
+fn archive() -> Option<PathBuf> {
+    match std::env::var_os(ARCHIVE_ENV) {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => {
+            eprintln!("skipped: {ARCHIVE_ENV} names no archive of artifacts");
+            None
+        }
+    }
 }
 
 fn normal(url: &str) -> String {
@@ -59,9 +72,11 @@ fn a_font_file_of_google_fonts_is_known_by_its_family() {
 }
 
 #[test]
-#[ignore = "reaches the internet and reads the user's archive (read only)"]
+#[ignore = "reaches the internet and reads the archive named by INNER_WORD_PAGE_ARCHIVE (read only)"]
 fn archive_every_external_of_the_originals_is_found_and_fetched() {
-    let root = archive();
+    let Some(root) = archive() else {
+        return;
+    };
     let fetcher = CachingFetcher::new(Arc::new(CurlFetcher::new()));
     let mut folders: Vec<PathBuf> = std::fs::read_dir(&root)
         .expect("the archive")
@@ -132,10 +147,11 @@ fn archive_every_external_of_the_originals_is_found_and_fetched() {
     assert!(!text.contains("MISSED"), "{text}");
 }
 
-/// The pieces `archive.py` stored, answered from the archive itself (no network): an
+/// The pieces the archive stored, answered from the archive itself (no network): an
 /// address the archive names answers with its stored copy at
-/// `https://archive.invalid/<path in the archive>`, so that what that copy names (archive.py
-/// rewrote it to relative paths) is asked there again and answered from the archive too.
+/// `https://archive.invalid/<path in the archive>`, so that what that copy names (the
+/// archive rewrote it to relative paths) is asked there again and answered from the
+/// archive too.
 struct FromTheArchive {
     folder: PathBuf,
     map: std::collections::HashMap<String, String>,
@@ -186,9 +202,11 @@ fn percent_decode(text: &str) -> String {
 }
 
 #[test]
-#[ignore = "reads the user's archive (read only, no network)"]
+#[ignore = "reads the archive named by INNER_WORD_PAGE_ARCHIVE (read only, no network)"]
 fn archive_offline_every_external_of_the_originals_is_found() {
-    let root = archive();
+    let Some(root) = archive() else {
+        return;
+    };
     let mut folders: Vec<PathBuf> = std::fs::read_dir(&root)
         .expect("the archive")
         .filter_map(|e| e.ok())

@@ -87,7 +87,7 @@ fn comments_are_added_answered_resolved_and_deleted() {
     assert_eq!(second["thread"]["heading"], "The harbour");
 
     let replied = sandbox.ok(&[
-        "comment", "reply", "doc:1", "1", "--body", "Agreed.", "--author", "Eraldo",
+        "comment", "reply", "doc:1", "1", "--body", "Agreed.", "--author", "Tamsin",
     ]);
     assert!(
         replied
@@ -95,7 +95,7 @@ fn comments_are_added_answered_resolved_and_deleted() {
         "{replied}"
     );
     assert!(
-        replied.contains("    reply 1  Eraldo: Agreed.\n"),
+        replied.contains("    reply 1  Tamsin: Agreed.\n"),
         "{replied}"
     );
 
@@ -114,13 +114,13 @@ fn comments_are_added_answered_resolved_and_deleted() {
         "{listed}"
     );
     assert!(
-        lines[4].starts_with("    reply 1  Eraldo (20") && lines[4].ends_with("): Agreed."),
+        lines[4].starts_with("    reply 1  Tamsin (20") && lines[4].ends_with("): Agreed."),
         "{listed}"
     );
     assert_eq!(lines[5], "thread 2  open  under \"The harbour\"");
     let json = sandbox.json(&["comments", "doc:1"]);
     assert_eq!(json["threads"].as_array().unwrap().len(), 2);
-    assert_eq!(json["threads"][0]["replies"][0]["author"], "Eraldo");
+    assert_eq!(json["threads"][0]["replies"][0]["author"], "Tamsin");
     assert_eq!(json["document"]["id"], 1);
 
     assert!(

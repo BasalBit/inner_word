@@ -91,7 +91,7 @@ fn system_languages() {
 fn system_english() {
     let _guard = serial();
     let service = SystemSpellService::new();
-    let text = "Ths is a sentense with teh mispelled words, a URL https://example.com, and a name like Eraldo.";
+    let text = "Ths is a sentense with teh mispelled words, a URL https://example.com, and a name like Velmorin.";
     let english = SpellLanguage::fixed("en");
     let started = Instant::now();
     let check = service.check(text, &english, SpellDocument::NONE);

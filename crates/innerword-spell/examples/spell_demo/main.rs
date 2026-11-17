@@ -75,7 +75,7 @@ fn document() -> Document {
         Block::with_text(BlockKind::heading(1), "Spelling, checked by the Mac"),
         Block::paragraph(
             "Ths is a sentense with teh mispelled words, a URL https://example.com, and a name \
-             like Eraldo. The harbour was a plain grey fact and nobody owed the town anything.",
+             like Velmorin. The harbour was a plain grey fact and nobody owed the town anything.",
         ),
         Block::paragraph("A word that is ")
             .with_span("partly bo", bold.clone())

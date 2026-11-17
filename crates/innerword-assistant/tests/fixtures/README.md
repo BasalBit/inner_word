@@ -3,7 +3,7 @@
 Output of the real `claude` program (Claude Code 2.1.322), recorded on 2026-11-12 and
 replayed by the stand-in program of the process tests (`tests/fake_claude`). Everything
 that identifies the user, the account or the machine was replaced (paths, the e-mail
-address, organisation and ids, dates of the sign-in); session ids and message ids are
+address, organisation and ids, dates of the sign-in, the plan); session ids and message ids are
 the random ones of the recording.
 
 Recorded with the user's own sign-in and configuration in place, against the real

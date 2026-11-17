@@ -32,9 +32,10 @@ gpui.workspace = true
 gpui = { workspace = true, features = ["test-support"] }   # #[gpui::test], TestAppContext
 ```
 
-- **`runtime_shaders` is required on this machine.** Without it the gpui build script runs
-  `xcrun metal` and fails: `cannot execute tool 'metal' due to missing Metal Toolchain`
-  (Xcode 27.2 ships without the offline Metal compiler). With the feature, `shaders.metal`
+- **`runtime_shaders` is required where Xcode has no offline Metal compiler.** Without it
+  the gpui build script runs `xcrun metal` and fails: `cannot execute tool 'metal' due to
+  missing Metal Toolchain` (recent Xcode, 27.2 on the author's Mac, ships without it; it is
+  a separate download, `xcodebuild -downloadComponent MetalToolchain`). With the feature, `shaders.metal`
   is compiled at startup by Metal.framework. No other patch needed (tested: build, tests, app).
 - `test-support` as a dev-dependency means `cargo test -p <crate>` builds a second copy of
   gpui (with `leak-detection` etc.). Normal builds are unaffected. Expect one extra gpui
@@ -104,9 +105,10 @@ WindowOptions {
   (`Windowed/Maximized/Fullscreen(restore_bounds)`) in `cx.observe_window_bounds(window, |this, window, cx| ..)`
   (fires on move and resize); pass it back as `window_bounds` on next launch. `Bounds<Pixels>`
   is in screen points, origin top-left of the main display.
-- **This machine has a tiling window manager**: new windows are placed at the right half
-  (observed 1489×1672 at x=1509, y=10, 2× scale) regardless of the requested size, and
-  `window.resize(..)` is overridden (app).
+- **A tiling window manager overrides the size**: on the author's Mac one places new windows
+  at the right half (observed 1489×1672 at x=1509, y=10, 2× scale) regardless of the
+  requested size, and overrides `window.resize(..)` (app). Without one the requested size
+  holds.
 - Quit and close hooks:
   - `cx.on_app_quit(|cx| async {})` / `Context::on_app_quit(|this, cx| async {})` →
     `Subscription`. **Do the flushing synchronously in the closure body.** The returned
@@ -360,7 +362,7 @@ Per visual row ranges (tested, probe): row starts are
 Trailing spaces stay on the row they end ("aaaa bbbb " | "cccc"). `LineWrapper::wrap_line(&[LineFragment::text(s)], width)`
 yields `Boundary { ix /*next row start*/, next_indent }` with the same breaks (tested).
 
-Facts (probe on this Mac, Charter 17px):
+Facts (probe on the author's Mac, macOS 27 on Apple silicon, Charter 17px):
 - **`shape_line` merges runs with different fonts when their decorations are equal.**
   `WindowTextSystem::layout_line` only starts a new font run when colour/underline/strikethrough
   change, so "regular **bold** *italic* `code`" with one colour shaped as a single Charter run
@@ -386,7 +388,7 @@ Facts (probe on this Mac, Charter 17px):
   `x_for_index` of an index inside a cluster returns the cluster end. Move carets by grapheme.
 - Ligatures: none produced by Charter for "office fit" (probe). Disable explicitly in code
   fonts with `FontFeatures::disable_ligatures()`.
-- Installed families here (probe, 237 total): Charter yes, **Iowan Old Style no**, Georgia
+- Installed families on the author's Mac (probe, 237 total; another Mac may differ): Charter yes, **Iowan Old Style no**, Georgia
   yes, **SF Mono no** (only inside Terminal.app), Menlo yes, Monaco yes, Palatino,
   Baskerville, Avenir Next, Helvetica Neue yes, New York no. `.SystemUIFont` = SF Pro (UI).
 - Cost and caching: 1000 distinct 60-char lines shaped in ~19ms (debug build), the same 1000
@@ -689,8 +691,8 @@ Wheel, pinch and drawing at a scale (from the zoom of the text, 0.6.0):
   `bounds()` in logical pixels); `u32::from(display.id())` is the `CGDirectDisplayID`, and
   `CGDisplayScreenSize(id)` (CoreGraphics, a plain C call) gives the glass in millimetres,
   zero when the display does not say. Pixels to the inch over 72 is the scale at which a
-  point is a real point (`innerword-app`, `zoom.rs`: 127.5 and 177 % on this Mac's built-in
-  display at its default scaling, 151 and 210 % at "More Space"). The test platform's
+  point is a real point (`innerword-app`, `zoom.rs`: 127.5 and 177 % on the built-in
+  display of the author's MacBook at its default scaling, 151 and 210 % at "More Space"). The test platform's
   display has no size.
 
 ## State and async
@@ -792,8 +794,8 @@ Source: `$G/src/app.rs`, `$G/src/platform.rs`, `$G/src/platform/app_menu.rs`,
 
 What GPUI has and has not for laying a document out off screen and putting it on paper.
 The code: `crates/innerword-editor/src/print.rs` (the print pass), `crates/innerword-print` (the
-PDF writer, the PDF reader, the print operation). Everything here was run on this Mac
-unless it says "read".
+PDF writer, the PDF reader, the print operation). Everything here was run on the author's
+Mac (macOS 27, Apple silicon) unless it says "read".
 
 - **There is no text system without a window.** `WindowTextSystem::new` is `pub(crate)`
   (`$G/src/text_system.rs:340`); the only way to one is `window.text_system()`, which is
@@ -895,7 +897,7 @@ unless it says "read".
   line's `descent` is negative there (the font's sign; the Mac's line layout has it
   positive), so a label's baseline, centred with it, is lower than its row's in a test and
   on it with real fonts; and the theme names the first family of each font stack
-  (`SF Mono`, which this Mac does not have as a family) because the test platform lists
+  (`SF Mono`, which macOS does not install as a family outside Terminal.app) because the test platform lists
   no installed fonts, so the PDF writer reports it missing and sets code in Helvetica.
 
 ## Images
@@ -1023,7 +1025,7 @@ editor's demo in a real window (`cargo run -p innerword-editor --example demo`).
 What it takes to put an AppKit view (WebKit's `WKWebView`, for a page) into a GPUI window
 and keep the two in step. The code: `crates/innerword-web` (the view, its subclass, no GPUI),
 `crates/innerword-app/src/workspace/page.rs` (the element, focus, overlays) and `pages.rs`
-(the inbox, the keys). Everything here was run on this Mac in scripted runs and in
+(the inbox, the keys). Everything here was run on the author's Mac (macOS 27) in scripted runs and in
 `innerword-web`'s own test program unless it says "read"; **what a person does in an active
 key window (keys, the first responder, the cursor) was not checked by a person yet**
 (`docs/pages-design.md`, section 13, checks 1 and 2).
@@ -1228,11 +1230,12 @@ fn typing(cx: &mut TestAppContext) {            // BackgroundExecutor, StdRng (n
 
 ## Visual QA
 
-Works on this machine (verified): the app runs a script from `INNER_WORD_AUTOMATION`
+Verified on the author's Mac: the app runs a script from `INNER_WORD_AUTOMATION`
 (`crates/innerword-app/src/automation.rs`) and captures **only its own window** with
 `screencapture -x -o -l <CGWindowID>` (the window number comes from the NSView behind the
-GPUI window). The terminal already has the Screen Recording permission, so captures contain
-the real window content. GPUI 0.2.2 cannot render a window to an image itself.
+GPUI window). `screencapture` needs the Screen Recording permission for the terminal (or
+other program) that launches the run (System Settings > Privacy & Security > Screen
+Recording); with it, captures contain the real window content. GPUI 0.2.2 cannot render a window to an image itself.
 
 Script steps (`;` or newline separated, `#` comment lines; `INNER_WORD_AUTOMATION=@file` reads a file):
 
@@ -1242,7 +1245,7 @@ Script steps (`;` or newline separated, `#` comment lines; `INNER_WORD_AUTOMATIO
 | `keys:<keystrokes>` | GPUI keystrokes, space separated (`keys:cmd-shift-p escape`); logs handled / not handled. The key `;` is written `\;` (`keys:cmd-\;`), because `;` separates steps |
 | `type:<text>` | one keystroke per character (bindings first, then the focused input handler). Escapes `\;` `\n` `\t` `\s` `\\`. **The argument is trimmed: write a leading or trailing space as `\s`** |
 | `action:<name>` | dispatch a registered action by name (`action:app::Quit`) |
-| `resize:<w>x<h>` | resize window content (overridden by the tiling window manager here) |
+| `resize:<w>x<h>` | resize window content (a tiling window manager may override it; check with `info`) |
 | `theme:<light\|dark\|system>` | switch theme mode |
 | `screenshot:<path>` | draw a fresh frame, wait 250ms, capture this window to PNG (Retina 2×) |
 | `info` | print window bounds, viewport, scale, appearance, active, focused, theme |
@@ -1414,7 +1417,8 @@ Notes:
   scripted run. Check those paths headlessly, where the test window is activated.
 - Scripts must not write the system clipboard (copy, cut, "Copy as Markdown", Vim's `"+`
   register): it is the user's clipboard.
-- The window is placed by the tiling window manager at ~1489×1672 points (2978×3344 px PNG).
+- Under a tiling window manager the window is placed where it decides (on the author's Mac
+  ~1489×1672 points, a 2978×3344 px PNG), not at the size asked for.
 - **A stall of almost exactly one second while frames are forced is not the spell
   checker.** With real scroll events posted to the background window and a frame forced
   every 16 ms (`stall:`), one frame or timer wait of 1005 to 1015 ms showed up about once a
@@ -1423,11 +1427,12 @@ Notes:
   after one second when the window server hands no drawable back, as it may for a window
   it is not showing. Not seen without posted scroll events.
 - Measure in a release build, and run a second time with spell checking off (palette
-  "Check spelling while typing" first): this Mac has other work, and single waits of 20 to
-  40 ms turn up in both runs.
+  "Check spelling while typing" first): a Mac has other work, and single waits of 20 to
+  40 ms turn up in both runs (measured on the author's Mac).
 - If a capture ever comes back black/wallpaper-only or `screencapture` fails with a permission
-  error, the Screen Recording permission was revoked for the launching terminal. Do not try to
-  change system settings; fall back to headless tests and ask the user.
+  error, the launching terminal does not have the Screen Recording permission (or it was
+  revoked). Do not try to change system settings from a script; fall back to headless
+  tests and ask the person at the Mac to grant it.
 
 ## Theme API (innerword-ui)
 
@@ -1452,6 +1457,6 @@ theme::{UI_FONT_FAMILY, UI_TEXT_XS..UI_TEXT_TITLE, DOCUMENT_TEXT_SIZE (17px), DO
         DOCUMENT_COLUMN_WIDTH (700px), HEADING_SCALE, document_line_height(size), SPACE_1..SPACE_16, space(n),
         RADIUS_SM/MD/LG/PAGE, TITLEBAR_HEIGHT, TRAFFIC_LIGHT_*}
 ```
-Resolved on this Mac: document = Charter, mono = Menlo (SF Mono is not installed), UI = `.SystemUIFont`.
+Resolved on the author's Mac: document = Charter, mono = Menlo (SF Mono is not installed as a family outside Terminal.app), UI = `.SystemUIFont`.
 Contrast is enforced by unit tests (ink ≥ 12:1 on all surfaces, muted ≥ 4.5:1, ink ≥ 7:1 on
 every highlight, accent ≥ 3:1 on canvas).

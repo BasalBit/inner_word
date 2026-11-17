@@ -139,7 +139,7 @@ fn names_of_stored_pieces_follow_archive_py() {
             ("https://cdn.test:8443/port.png", "image/png", "p"),
         ],
     );
-    // As archive.py named it in the archive: the query's SHA-1, first 10 hex digits, before
+    // As the archive of saved artifacts names it: the query's SHA-1, first 10 hex digits, before
     // the ending.
     assert_eq!(
         stored(&bundle, "https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap"),

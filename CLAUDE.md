@@ -200,9 +200,9 @@ seconds for it (`single_instance::TOOL_PATIENCE`) before it says the library is 
 A scripted run stays in the background and draws its own frames, so it works while the
 window is covered. Do not script anything that writes the system clipboard (copy, cut,
 "Copy as Markdown"): it is the user's clipboard. A scripted run does not write user defaults
-either (the accent-menu default below) unless `INNER_WORD_USER_DEFAULTS=1` is set. The window
-manager on this machine sometimes tiles the window and then ignores `resize:`; check with
-`info`.
+either (the accent-menu default below) unless `INNER_WORD_USER_DEFAULTS=1` is set. A tiling window
+manager (macOS's own tiling, or a third-party one) can tile the window and then ignore
+`resize:`; check with `info`.
 
 Measure in a release build (`cargo build --release -p innerword-app`, then
 `./target/release/inner-word` with the same variables). What an autosave of a book costs:
@@ -812,7 +812,9 @@ open" below).
 
 ## Working rules
 
-- **Two target directories, no more.** Disk on this machine is nearly full. Everything that
+- **Two target directories, no more.** A build of this workspace is large (every GPUI test
+  binary alone is about 150 MB), and a third copy of the dependency stack can fill a
+  laptop's disk, so the project keeps to two. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`innerword-core`,
   `innerword-store`, `innerword-image`, `innerword-export`, `innerword-vim`, `innerword-agent`, `innerword-mcp`, `innerword-cli`,
   `innerword-agent-setup`, `innerword-assistant`, `innerword-keymap`, `innerword-page`, `innerword-web`) build and test with
@@ -826,16 +828,20 @@ open" below).
   disk. Its test binaries are small (no GPUI is linked); `tests/save_job.rs` is a program of
   its own (`harness = false`), because AppKit runs a print operation on the main thread of
   the process. Do not create other
-  target dirs, git worktrees, or copies of the repo. Do not run `cargo clean`.
+  target dirs, git worktrees, or copies of the repo (each worktree or copy brings target
+  directories of its own). Do not run `cargo clean`: rebuilding GPUI from nothing takes many
+  minutes, and builds running beside yours lose theirs.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
   150 MB. Keep at most one integration-test binary per GPUI crate (`tests/main.rs` with
   submodules) or use unit tests; add an example only when your task says so.
 - **Cargo may block** with "waiting for file lock on build directory" while another build
   runs. That is normal; wait for it (use long command timeouts).
-- **Stay in your crate.** Edit only the crate(s) you were assigned. If another crate needs a
-  change, make the smallest additive change only if its owner is not currently working on it;
-  otherwise report it. Compile errors in a crate you do not own are usually another change in
-  flight: wait a minute and retry rather than "fixing" it.
+- **Several agents at once: stay in your crate.** When work is split between agents (or
+  people) running in parallel in one checkout, each is given crates of its own and edits
+  only those. If another crate needs a change, make the smallest additive change only if
+  nobody else is working in that crate; otherwise report it. While others work beside you,
+  compile errors in a crate that is not yours are usually another change in flight: wait a
+  minute and retry rather than "fixing" it. Working alone, the whole workspace is yours.
 - **Saved names keep their old spelling.** The project was called "The Writer" until 0.9.0.
   Three names written into files people keep are still spelled that way on purpose:
   `"the-writer-document"` and `"the-writer-fragment"` (the document JSON in the library, its
@@ -1430,8 +1436,9 @@ item and its menu, storing), `pinch.rs` (the trackpad).
   stands for, or as wide as the window where that is narrower ("fit width up to life size",
   `zoom::first_page_zoom`; it follows the window and is not stored). Life size is the
   display's: `CGDisplayScreenSize` and the display's width in pixels give pixels to the
-  inch, over 72 (177 % on this Mac's built-in display at its default scaling, 210 % at
-  "More Space"). `main` asks this Mac (`zoom::use_this_mac`); a test names a density
+  inch, over 72 (on the author's Mac, a MacBook's built-in display: 177 % at its default
+  scaling, 210 % at "More Space"). `main` asks the Mac it runs on (`zoom::use_this_mac`);
+  a test names a density
   (`zoom::set_display_density`) or has none, and with none a page opens at 100 % (still
   as wide as its room where the window is narrower, which is all a page did before 0.6.0)
   and there is no "Life Size" to choose.
@@ -1920,8 +1927,8 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   is measured and marked before `innerText` is read, only white space is added). The text
   is that of every HTML file of the page the check loads (the entry first, the others under
   their titles; never a piece from the web), so the words a page counts (status bar, `innerword list`) can be many more than
-  the entry shows (Nimbus Landing Variants: 54,000 words, of which 6,900 in its
-  `index.html`), and a search can find a page by a word only another of its HTML files
+  the entry shows (one page of nine landing-page options counted 54,000 words, of which
+  6,900 in its `index.html`), and a search can find a page by a word only another of its HTML files
   has. `page:make` stores the static check's text (tags stripped, every file), whose
   counts differ from an import's.
 - **A single file is never a walk of its folder**: an `.html` file is taken with the local
@@ -2032,7 +2039,7 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   run switches WebKit's occlusion detection off for its view (`pages::draw_when_covered`),
   or a covered background window draws the page blank.
 - **Scripted runs**: `page:make:<folder>[|<entry>]` stores a folder that is offline already
-  as it is (QA: the archive's `offline/index.html`), `page:import:<path>` adds one as the
+  as it is (QA: the `offline/index.html` of a saved artifact), `page:import:<path>` adds one as the
   import does (with the real check), `page:wait`, `page:text`, `page:find:<q>`,
   `page:js:<script>`, `page:menu`; `state` has `web=[…]` and `adding=[…]`. Copy Page Address
   puts text on the clipboard: do not script it.
@@ -2048,9 +2055,12 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   `loading="lazy"` far down a page printed offscreen (`__page-pdf`): the probe that makes
   it eager is the check's only.
 - **The tests that reach the internet** are ignored and run on purpose only:
-  `CARGO_TARGET_DIR=target-pure cargo test -p innerword-page -- --ignored archive` bundles
-  every original of the archive with the real fetcher and finds every piece the archive
-  has (read only). The font files of Google Fonts are not compared by address (its style
+  `INNER_WORD_PAGE_ARCHIVE=<folder> CARGO_TARGET_DIR=target-pure cargo test -p
+  innerword-page -- --ignored archive` bundles every original of an archive of saved
+  claude.ai artifacts (a folder per artifact with its `manifest.json`, `original/` and the
+  saved pieces; the layout is in `crates/innerword-page/tests/suite/archive.rs`) with the
+  real fetcher and finds every piece the archive has (read only). Without the variable
+  the two tests say so on stderr and pass. The font files of Google Fonts are not compared by address (its style
   sheets name other files as time goes on, even moving a family between `/s/<family>/`
   and a kit): enough that the page has some where the archive has some and that no style
   sheet still names one on the web.

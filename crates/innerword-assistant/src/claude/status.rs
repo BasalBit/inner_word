@@ -201,7 +201,7 @@ mod tests {
 
     /// The output of `claude auth status` of Claude Code 2.1.322, signed in with a
     /// claude.ai subscription, recorded 2026-11-12 with what identifies the account
-    /// replaced.
+    /// replaced (the plan too: it reads "pro").
     const SIGNED_IN: &str = include_str!("../../tests/fixtures/auth-status-signed-in.json");
     /// The same with an empty configuration directory (exit code 1).
     const SIGNED_OUT: &str = include_str!("../../tests/fixtures/auth-status-signed-out.json");
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(
             parse_auth_status(SIGNED_IN),
             SignIn::SignedIn {
-                account: Some("Claude Max plan".to_string())
+                account: Some("Claude Pro plan".to_string())
             }
         );
         assert_eq!(parse_auth_status(SIGNED_OUT), SignIn::SignedOut);

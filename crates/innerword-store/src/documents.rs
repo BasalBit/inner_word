@@ -293,6 +293,15 @@ fn require_kind(conn: &Connection, id: DocumentId, saving: DocumentKind) -> Resu
     Ok(())
 }
 
+/// The query of [`Store::boards`], by itself so that a test can hold its plan to the
+/// covering index (`schema.rs`).
+pub(crate) fn boards_query() -> String {
+    format!(
+        "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
+         WHERE kind = 'board' ORDER BY updated_at DESC, id DESC"
+    )
+}
+
 /// The stamp of the content the row `id` has now; `NotFound` when there is none.
 fn stamp_of(conn: &Connection, id: DocumentId) -> Result<ContentStamp> {
     conn.query_row("SELECT content FROM documents WHERE id = ?1", [id], |r| {
@@ -848,17 +857,21 @@ impl Store {
         board: &BoardContent<'_>,
         expect: Option<ContentStamp>,
     ) -> Result<BoardSaved> {
-        // A look first, so that a save that would be refused anyway touches no file and a
-        // stale save is told so before anything about its files.
+        // A look at the kind first, so that a save of another kind touches no file.
         require_kind(&self.conn, id, DocumentKind::Board)?;
-        if let Some(expect) = expect {
-            let stored = stamp_of(&self.conn, id)?;
-            if stored != expect {
-                return Err(StoreError::Stale { id: id.0, stored });
-            }
-        }
         let missing = self.board_files_missing(Some(id), board.files)?;
         if !missing.is_empty() {
+            // A stale save is told so before anything about its files: the app reads the
+            // stored scene and merges, whatever the late post named. Only a refusal pays
+            // for this look; the stamp of a save that goes on is read once, below, under
+            // the write lock (the stored scene can be large, and reading and hashing it
+            // is the cost of the check).
+            if let Some(expect) = expect {
+                let stored = stamp_of(&self.conn, id)?;
+                if stored != expect {
+                    return Err(StoreError::Stale { id: id.0, stored });
+                }
+            }
             return Err(StoreError::FilesMissing { ids: missing });
         }
         let now = self.now();
@@ -919,13 +932,7 @@ impl Store {
     /// Every whiteboard, live and trashed, most recently updated first (`trashed_at` says
     /// which is which). Answered from the covering index: no scene is read.
     pub fn boards(&self) -> Result<Vec<DocumentMeta>> {
-        self.query_metas(
-            &format!(
-                "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
-                 WHERE kind = 'board' ORDER BY updated_at DESC, id DESC"
-            ),
-            [],
-        )
+        self.query_metas(&boards_query(), [])
     }
 
     /// All live documents, most recently edited first.

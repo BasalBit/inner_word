@@ -587,6 +587,23 @@ mod tests {
         assert!(plan.contains("COVERING INDEX documents_meta"), "{plan}");
     }
 
+    /// The list of whiteboards is answered from the covering index too, at schema 5 (where
+    /// a library has whiteboards) as at 4: a plan that visits the table reads every scene.
+    #[test]
+    fn the_list_of_whiteboards_does_not_read_the_scenes() {
+        let mut conn = version_1();
+        migrate(&mut conn).unwrap();
+        let sql = crate::documents::boards_query();
+        let at_4 = plan(&conn, &sql);
+        assert!(at_4.contains("COVERING INDEX documents_meta"), "{at_4}");
+        let tx = conn.transaction().unwrap();
+        take_steps_above_open(&tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(inspect(&conn).unwrap().user_version, 5);
+        let at_5 = plan(&conn, &sql);
+        assert!(at_5.contains("COVERING INDEX documents_meta"), "{at_5}");
+    }
+
     /// A page that is added again is looked up by its address through the index of the
     /// addresses, not by reading every row.
     #[test]

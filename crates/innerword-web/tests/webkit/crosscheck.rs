@@ -182,6 +182,48 @@ fn same_value(x: Option<&Value>, y: Option<&Value>) -> bool {
     }
 }
 
+/// How far a label's x may lie from Excalidraw's, given how far its container's x
+/// (`container_x`) and width (`container_width`) and its own width (`text_apart`) lie
+/// from Excalidraw's. Excalidraw places a label in the room its container has
+/// (`getContainerCoords`, `getBoundTextMaxWidth`; `innerword-board`'s `place_label`): the
+/// room starts at the container's x plus a padding and a share `k` of its width (none in
+/// a rectangle, `(1 - √2/2)/2` in an ellipse, a quarter in a diamond) and is a share `m`
+/// of its width wide less the paddings (all of it, `√2/2` rounded, a half rounded). So a
+/// left label lies `k` of the container's difference apart, a centred one `k + m/2` of it
+/// (a half in all three) and half its own, a right one `k + m` of it and all its own. The
+/// room of an ellipse or a diamond is rounded to a whole pixel, on each side by its own
+/// width: when the widths differ that may add a pixel to the room, half of one to the
+/// middle. A label of an arrow is centred on the arrow's middle, which the container's x
+/// and width bound.
+fn label_place_slack(
+    kind: &str,
+    align: &str,
+    container_x: f64,
+    container_width: f64,
+    text_apart: f64,
+) -> f64 {
+    let half_root = std::f64::consts::SQRT_2 / 2.;
+    let (k, m, rounded) = match kind {
+        "ellipse" => ((1. - half_root) / 2., half_root, true),
+        "diamond" => (0.25, 0.5, true),
+        "arrow" | "line" => {
+            return container_x + (container_width + text_apart) / 2.;
+        }
+        _ => (0., 1., false),
+    };
+    let rounding = if rounded && container_width > SAME {
+        1.
+    } else {
+        0.
+    };
+    container_x
+        + match align {
+            "left" => k * container_width,
+            "right" => (k + m) * container_width + text_apart + rounding,
+            _ => (k + m / 2.) * container_width + text_apart / 2. + rounding / 2.,
+        }
+}
+
 fn compare(ours: &[Value], theirs: &[Value]) -> Comparison {
     let mut out = Comparison {
         differences: Vec::new(),
@@ -330,17 +372,15 @@ fn compare(ours: &[Value], theirs: &[Value]) -> Comparison {
                         ("text", "x") => {
                             // Where a text stands follows from its width only where it
                             // is aligned by its middle or its right edge: a left-aligned
-                            // text keeps its x. A label stands in its container, whose
-                            // own place and width may differ too: the text area starts
-                            // at the container's x plus a share of its width (a padding
-                            // in a rectangle, 15 % of it in an ellipse, a quarter in a
-                            // diamond), so a left label may move by half the container's
-                            // difference, a centred one by half of both, a right one by
-                            // both.
+                            // free text keeps its x. A label stands in its container,
+                            // whose own place and width may differ too
+                            // (`label_place_slack`).
                             let text_apart = width_apart.get(key).copied().unwrap_or(0.);
-                            let (container_x, container_width) = if is_label {
+                            let align = a["textAlign"].as_str().unwrap_or("left");
+                            if is_label {
                                 let container = a["containerId"].as_str().unwrap_or("");
-                                mine.get(container)
+                                let (kind, container_x, container_width) = mine
+                                    .get(container)
                                     .zip(excalidraws.get(container))
                                     .map(|(c, d)| {
                                         let apart = |field: &str| {
@@ -348,26 +388,35 @@ fn compare(ours: &[Value], theirs: &[Value]) -> Comparison {
                                                 - d[field].as_f64().unwrap_or(0.))
                                             .abs()
                                         };
-                                        (apart("x"), apart("width"))
+                                        (
+                                            c["type"].as_str().unwrap_or("rectangle"),
+                                            apart("x"),
+                                            apart("width"),
+                                        )
                                     })
-                                    .unwrap_or((0., 0.))
+                                    .unwrap_or(("rectangle", 0., 0.));
+                                (
+                                    label_place_slack(
+                                        kind,
+                                        align,
+                                        container_x,
+                                        container_width,
+                                        text_apart,
+                                    ),
+                                    "a label's place, by its container's and its width's differences as it is aligned",
+                                )
                             } else {
-                                (0., 0.)
-                            };
-                            match a["textAlign"].as_str() {
-                                Some("center") => (
-                                    container_x + (container_width + text_apart) / 2.,
-                                    "a centred text's place, by half its width's difference",
-                                ),
-                                Some("right") => (
-                                    container_x + container_width + text_apart,
-                                    "a right-aligned text's place, by its width's difference",
-                                ),
-                                _ if is_label => (
-                                    container_x + container_width / 2.,
-                                    "a left-aligned label's place, by its container's only",
-                                ),
-                                _ => (0., "a left-aligned text keeps its place"),
+                                match align {
+                                    "center" => (
+                                        text_apart / 2.,
+                                        "a centred text's place, by half its width's difference",
+                                    ),
+                                    "right" => (
+                                        text_apart,
+                                        "a right-aligned text's place, by its width's difference",
+                                    ),
+                                    _ => (0., "a left-aligned text keeps its place"),
+                                }
                             }
                         }
                         ("rectangle" | "ellipse" | "diamond", "width") => (
@@ -464,6 +513,9 @@ pub(super) fn the_converter_against_excalidraw(report: &mut Report, rules: &Path
         }
         if name == "text.json" {
             a_text_may_move_only_as_it_is_aligned(report, &ours, &theirs);
+        }
+        if name == "shapes.json" {
+            a_label_may_move_only_as_it_is_aligned(report, &ours, &theirs);
         }
         let comparison = compare(&ours, &theirs);
         for allowed in &comparison.allowed {
@@ -659,6 +711,82 @@ fn a_text_may_move_only_as_it_is_aligned(report: &mut Report, ours: &[Value], th
         named == ["centred.x", "title.x"],
         &format!(
             "the cross-check gives a text's place slack only as it is aligned: a left one none, a centred one half its width's difference, a right one all of it ({named:?})"
+        ),
+    );
+}
+
+/// The place of a label is held by its alignment and its container's kind. Planted in
+/// both sides, for the labels of a rectangle (`corner`), an ellipse (`oval`) and a
+/// diamond (`choice`), each aligned left, centred and right in turn: Excalidraw's label
+/// 2.5 % wider than ours (within the 3 % a width may differ), its container wider by one
+/// and a half times that (within the twice a shape fitted to its label may differ), and
+/// the label moved from our place by nine tenths of its slack, which is not named, or by
+/// its slack and a tenth of the container's difference more, which is. A slack that is too
+/// tight names the first (a forgotten rounding, a share of the label's own difference); one
+/// that is too loose lets the second through (half the container's difference for a left
+/// label in a rectangle, all of it for a right one in an ellipse).
+fn a_label_may_move_only_as_it_is_aligned(report: &mut Report, ours: &[Value], theirs: &[Value]) {
+    let mut wrong: Vec<String> = Vec::new();
+    for container in ["corner", "oval", "choice"] {
+        for align in ["left", "center", "right"] {
+            for beyond in [false, true] {
+                let mut mine: Vec<Value> = ours.to_vec();
+                let mut planted: Vec<Value> = theirs.to_vec();
+                let label_of = |list: &[Value]| {
+                    list.iter()
+                        .position(|e| e["type"] == "text" && e["containerId"] == container)
+                };
+                let shape_of = |list: &[Value]| list.iter().position(|e| e["id"] == container);
+                let (Some(my_label), Some(their_label), Some(my_shape), Some(their_shape)) = (
+                    label_of(&mine),
+                    label_of(&planted),
+                    shape_of(&mine),
+                    shape_of(&planted),
+                ) else {
+                    wrong.push(format!("{container}: no label to plant on"));
+                    continue;
+                };
+                mine[my_label]["textAlign"] = Value::from(align);
+                planted[their_label]["textAlign"] = Value::from(align);
+                let kind = mine[my_shape]["type"].as_str().unwrap_or("?").to_string();
+                let (x, width) = (
+                    mine[my_label]["x"].as_f64().unwrap_or(0.),
+                    mine[my_label]["width"].as_f64().unwrap_or(0.),
+                );
+                let text_apart = width * 0.025;
+                let container_apart = text_apart * 1.5;
+                planted[their_label]["width"] = Value::from(width + text_apart);
+                planted[their_shape]["width"] =
+                    Value::from(mine[my_shape]["width"].as_f64().unwrap_or(0.) + container_apart);
+                let slack = label_place_slack(&kind, align, 0., container_apart, text_apart);
+                let moved = if beyond {
+                    slack + container_apart / 10.
+                } else {
+                    slack * 0.9
+                };
+                planted[their_label]["x"] = Value::from(x + moved);
+                let named: Vec<String> = compare(&mine, &planted)
+                    .differences
+                    .iter()
+                    .map(|d| format!("{}.{}", d.element, d.field))
+                    .collect();
+                let expected: Vec<String> = if beyond {
+                    vec![format!("label of {container}.x")]
+                } else {
+                    Vec::new()
+                };
+                if named != expected {
+                    wrong.push(format!(
+                        "{align} label of the {kind} moved by {moved:.3} px (slack {slack:.3}): named {named:?}, expected {expected:?}"
+                    ));
+                }
+            }
+        }
+    }
+    report.check(
+        wrong.is_empty(),
+        &format!(
+            "the cross-check gives a label's place slack only as it is aligned in its container: left, centred and right in a rectangle, an ellipse and a diamond, a move within the slack not named and one past it named ({wrong:?})"
         ),
     );
 }

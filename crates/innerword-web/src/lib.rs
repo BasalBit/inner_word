@@ -80,9 +80,22 @@ pub const SCHEME: &str = "innerword-page";
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'self'";
 
 /// The policy of every answer of a whiteboard's view (`ViewExtras::csp`): the bundle is
-/// our own code and needs neither an inline script nor eval, so neither runs, nor does
-/// any frame (an `iframe` element of a pasted scene renders its `srcdoc` as a frame,
-/// which inherits this policy and could run nothing even before the glue deletes it).
+/// our own code and needs neither an inline script nor eval, so neither runs.
+///
+/// What it does with frames, as measured in the WebKit program
+/// (`frames_never_reach_the_bridge`): a frame of a file does not load (`frame-src
+/// 'none'`), and neither an inline script in a frame nor a `data:` frame runs. It does
+/// **not** stop a `srcdoc` frame: a `srcdoc` document is of the view's own origin and
+/// inherits this policy, so it runs any script of that origin it names (`script-src
+/// 'self'`; `frame-src` does not apply to `about:srcdoc`). That held for a static
+/// `srcdoc` frame, one a script made after the load, one sandboxed with `allow-scripts
+/// allow-same-origin`, and a frame of a file turned into a `srcdoc` frame later. What
+/// keeps every frame from the bridge is the view, not this policy: a view with the
+/// bridge loads no subframe at all (every subframe navigation is cancelled, a file,
+/// `srcdoc`, `data:`, `blob:` and `about:blank` with a source alike; `ViewShared::bridged`,
+/// `ViewHost::subframe_may_load`), so an `iframe` element of a pasted scene runs nothing
+/// even before the glue deletes it. A view under this policy without the bridge would run
+/// such a frame.
 pub const BOARD_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
 
 /// The longest side of a PDF [`run_script`] makes, in points: Acrobat's limit, and the

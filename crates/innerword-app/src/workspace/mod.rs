@@ -132,9 +132,9 @@ pub use board::{
     AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
     BOARD_SAVE_DELAY, BOARD_STOPPED, End, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
     MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, NO_PAPER_ON_A_BOARD, NO_SETTINGS_ON_A_BOARD,
-    NO_SPELLING_ON_A_BOARD, NO_VIM_ON_A_BOARD, OpenContextMenu as OpenBoardContextMenu, RELOADED,
-    Recovered, STILL_LOADING, ShapeLibraryDelegate, TITLE_OF_A_BOARD, ToggleShapeLibrary,
-    board_key_bindings,
+    NO_SPELLING_ON_A_BOARD, NO_VIM_ON_A_BOARD, NOT_RELOADED,
+    OpenContextMenu as OpenBoardContextMenu, RELOADED, Recovered, STILL_LOADING,
+    ShapeLibraryDelegate, TITLE_OF_A_BOARD, ToggleShapeLibrary, board_key_bindings,
 };
 pub use images::{SELECT_AN_IMAGE_FIRST, is_image_command};
 pub use live::{
@@ -476,7 +476,7 @@ impl Workspace {
             // returned future only 100ms. The window is still there.
             cx.on_app_quit(move |this, cx| {
                 this.keep_what_the_tools_hold_at_quit(window_handle, cx);
-                this.flush(cx);
+                this.flush_at_an_end(cx);
                 this.store_assistant_conversation(cx);
                 this.save_window_bounds(cx);
                 async {}
@@ -512,7 +512,7 @@ impl Workspace {
                     return false;
                 }
                 this.keep_what_the_tools_hold(window, cx);
-                this.flush(cx);
+                this.flush_at_an_end(cx);
                 this.store_assistant_conversation(cx);
                 this.store_zoom_now(cx);
                 this.save_window_bounds(cx);
@@ -1116,8 +1116,8 @@ impl Workspace {
         } else {
             self.commands_not_for_the_open_page(cx)
         };
-        // The commands of a whiteboard, only while one is open.
-        if !board_open {
+        // The commands of a whiteboard, only while one is open and drawn.
+        if !board_open || !self.board_drawable() {
             left_out.extend(Self::board_only_commands());
         }
         // The library's own New whiteboard is a row of the list of

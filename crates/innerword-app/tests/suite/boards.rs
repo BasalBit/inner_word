@@ -16,8 +16,8 @@ use innerword_app::{
     printing,
     workspace::{
         AddRectangle, AddToShapeLibrary, BOARD_SAVE_DELAY, InsertFromShapeLibrary,
-        LIBRARY_TOO_LARGE, MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, RELOADED, Recovered,
-        ToggleShapeLibrary,
+        LIBRARY_TOO_LARGE, MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, NOT_RELOADED, RELOADED,
+        Recovered, ToggleShapeLibrary,
     },
 };
 use innerword_board::Scene;
@@ -909,7 +909,9 @@ fn the_shape_library_is_stored_and_served_to_the_next_whiteboard(cx: &mut TestAp
     vcx.run_until_parked();
     let served = fake.library_served();
     assert!(served.last().unwrap().contains("item1"), "{served:?}");
-    // The picker lists the held items.
+    // The picker lists the held items (once the page can insert one).
+    fake.board_ready();
+    vcx.run_until_parked();
     vcx.update(|window, cx| window.dispatch_action(Box::new(InsertFromShapeLibrary), cx));
     vcx.run_until_parked();
     assert!(workspace.read_with(vcx, |w, cx| w.modal_layer().read(cx).has_modal()));
@@ -1041,17 +1043,21 @@ fn the_status_bar_says_the_save_state_and_the_elements(cx: &mut TestAppContext) 
     status.elements = 14;
     fake.set_status(status);
     vcx.run_until_parked();
-    // What the status bar shows: the save state and the elements.
+    // What the status bar shows: the save state and the elements, counted
+    // as the listing counts them, of the stored scene (not the page's own
+    // count, which has the labels in it).
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.board_save_label()),
         Some(("Saved".to_string(), false))
     );
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.board_elements_label()),
-        Some("14 elements".to_string())
+        Some("0 elements".to_string())
     );
+    let mut labelled = rect("a", 0.0, 2);
+    labelled["boundElements"] = json!([{ "id": "label", "type": "text" }]);
     fake.draw_unposted(&scene(&[rect("a", 0.0, 1)]));
-    fake.draw(&scene(&[rect("a", 0.0, 2)]));
+    fake.draw(&scene(&[labelled, label("label", "a", "Server")]));
     vcx.run_until_parked();
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.board_save_label()),
@@ -1064,13 +1070,54 @@ fn the_status_bar_says_the_save_state_and_the_elements(cx: &mut TestAppContext) 
     );
     assert_eq!(
         workspace.read_with(vcx, |w, _| w.board_elements_label()),
-        Some("1 element".to_string())
+        Some("1 element".to_string()),
+        "a label is part of its shape"
     );
     let labels = workspace.update(vcx, |w, cx| {
         w.menu_items(innerword_app::workspace::MenuKind::Save, cx)
             .len()
     });
     assert_eq!(labels, 1, "Save Now");
+    // The menu of the counts says the same, in plain words.
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_menu(
+            innerword_app::workspace::MenuKind::Statistics,
+            None,
+            window,
+            cx
+        ));
+    });
+    vcx.run_until_parked();
+    let labels = vcx.update(|window, cx| {
+        innerword_ui::ContextMenu::current(window, cx)
+            .map(|menu| menu.read(cx).labels())
+            .unwrap_or_default()
+    });
+    for wanted in ["1 element with 1 label", "1 rectangle", "1 word"] {
+        assert!(
+            labels.iter().any(|label| label == wanted),
+            "{wanted}: {labels:?}"
+        );
+    }
+    assert!(
+        !labels.iter().any(|label| label.contains("picture")),
+        "{labels:?}"
+    );
+}
+
+/// A text bound to `container` (its label), as Excalidraw keeps it.
+fn label(id: &str, container: &str, text: &str) -> Value {
+    json!({
+        "id": id, "type": "text", "x": 10.0, "y": 10.0, "width": 80.0, "height": 25.0,
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+        "opacity": 100, "groupIds": [], "frameId": null, "roundness": null,
+        "seed": 1, "version": 1, "versionNonce": 1, "isDeleted": false,
+        "boundElements": null, "updated": 1, "link": null, "locked": false,
+        "index": "a9", "text": text, "originalText": text, "fontSize": 20,
+        "fontFamily": 5, "textAlign": "center", "verticalAlign": "middle",
+        "containerId": container, "autoResize": true, "lineHeight": 1.25,
+    })
 }
 
 #[gpui::test]
@@ -1869,13 +1916,26 @@ fn the_menu_bar_leaves_the_whiteboards_keys_to_it_and_has_them_back_after(cx: &m
         })
     };
     let on_a_board = keys(vcx);
+    // The Edit menu's six keep theirs: AppKit offers them to the menu only
+    // after the page left them, and copy and paste reach Excalidraw only as
+    // the `copy:` and `paste:` those items send.
+    let kept = ["Undo", "Redo", "Cut", "Copy", "Paste", "Select All"];
     for (name, key) in &on_a_board {
-        if let Some(key) = key {
+        if let Some(key) = key
+            && !kept.contains(&name.as_str())
+        {
             assert!(
                 !innerword_app::boards::is_whiteboard_keys(key),
                 "{name} shows {key}, a key of the whiteboard's"
             );
         }
+    }
+    for wanted in kept {
+        let key = on_a_board
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .and_then(|(_, key)| key.clone());
+        assert!(key.is_some(), "{wanted} keeps its key on a whiteboard");
     }
     workspace.update_in(vcx, |w, window, cx| {
         w.open_document(text, true, window, cx);
@@ -1897,7 +1957,7 @@ fn the_menu_bar_leaves_the_whiteboards_keys_to_it_and_has_them_back_after(cx: &m
             .iter()
             .find(|(name, _)| name == wanted)
             .and_then(|(_, key)| key.clone());
-        if innerword_app::boards::is_whiteboard_keys(&after) {
+        if innerword_app::boards::is_whiteboard_keys(&after) && wanted != "Undo" {
             assert_eq!(
                 before, None,
                 "{wanted} ({after}) shows no key on a whiteboard"
@@ -2114,4 +2174,290 @@ fn an_add_command_asks_the_page_first_when_it_holds_more(cx: &mut TestAppContext
         .find(|element| element["id"] == "a")
         .unwrap();
     assert_eq!(a["x"], 50.0);
+}
+
+// ----- what the final review found --------------------------------------------------------
+
+#[test]
+fn a_percent_before_a_character_of_several_bytes_is_kept_as_it_is() {
+    use innerword_app::boards::data_url_bytes;
+    assert_eq!(
+        data_url_bytes("data:image/png,%€"),
+        Some("%€".as_bytes().to_vec())
+    );
+    assert_eq!(
+        data_url_bytes("data:image/png,%a€"),
+        Some("%a€".as_bytes().to_vec())
+    );
+    assert_eq!(
+        data_url_bytes("data:text/plain,%41%2"),
+        Some(b"A%2".to_vec())
+    );
+    assert_eq!(data_url_bytes("data:text/plain,%4"), Some(b"%4".to_vec()));
+}
+
+#[test]
+fn the_engines_sentence_is_worded_for_whiteboards() {
+    use innerword_app::boards::whiteboards_sentence;
+    assert_eq!(
+        whiteboards_sentence("Pages need macOS 12.3 or later."),
+        "Whiteboards need macOS 12.3 or later."
+    );
+    assert_eq!(
+        whiteboards_sentence(
+            "This macOS does not have what pages need to stay offline (_setPeerConnectionEnabled:)"
+        ),
+        "This macOS does not have what whiteboards need (_setPeerConnectionEnabled:)"
+    );
+}
+
+/// From now on the saves of whiteboards fail (or no longer do).
+fn saves_fail(fail: bool, cx: &mut VisualTestContext) {
+    cx.update(|_, cx| innerword_app::boards::fail_board_saves(cx, fail));
+}
+
+/// What a library in memory kept of a drawing that could not be saved.
+fn recovered_json(recovered: Option<Recovered>) -> String {
+    match recovered {
+        Some(Recovered::Memory(json)) => json,
+        other => panic!("no copy in memory: {other:?}"),
+    }
+}
+
+#[gpui::test]
+fn closing_the_window_while_the_save_fails_keeps_the_drawing_in_the_recovery_copy(
+    cx: &mut TestAppContext,
+) {
+    let (fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    saves_fail(true, vcx);
+    fake.draw(&scene(&[rect("kept", 0.0, 1)]));
+    settle(vcx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.board_recovered()),
+        None,
+        "one failed save writes no copy yet"
+    );
+    vcx.simulate_keystrokes("cmd-w");
+    vcx.run_until_parked();
+    let recovered = workspace.read_with(cx, |w, _| w.board_recovered());
+    assert!(recovered_json(recovered).contains("kept"));
+}
+
+#[gpui::test]
+fn quitting_while_the_save_fails_keeps_the_drawing_in_the_recovery_copy(cx: &mut TestAppContext) {
+    let (fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    saves_fail(true, vcx);
+    // Posted, its save not yet due: the quit hook's flush is the first try.
+    fake.draw(&scene(&[rect("kept", 0.0, 1)]));
+    vcx.run_until_parked();
+    cx.quit();
+    cx.run_until_parked();
+    let recovered = workspace.read_with(cx, |w, _| w.board_recovered());
+    assert!(recovered_json(recovered).contains("kept"));
+}
+
+#[gpui::test]
+fn reload_whiteboard_while_the_save_fails_keeps_the_view_and_the_drawing(cx: &mut TestAppContext) {
+    let (fake, library, workspace, board, _, vcx) = open_board(cx);
+    saves_fail(true, vcx);
+    fake.draw(&scene(&[rect("kept", 0.0, 1)]));
+    settle(vcx);
+    vcx.update(|window, cx| window.dispatch_action(Box::new(ReloadPage), cx));
+    vcx.run_until_parked();
+    assert_eq!(fake.reloads(), 0, "the view is not loaded over the drawing");
+    assert!(
+        toasts(&workspace, vcx).iter().any(|t| t == NOT_RELOADED),
+        "{:?}",
+        toasts(&workspace, vcx)
+    );
+    assert!(state_line(&workspace, vcx).contains("dirty=yes"));
+    // The library comes back: the retry saves it.
+    saves_fail(false, vcx);
+    vcx.executor()
+        .advance_clock(innerword_app::workspace::RETRY_DELAY + Duration::from_millis(200));
+    vcx.run_until_parked();
+    assert_eq!(ids(&stored(&library, board, vcx)), ["kept"]);
+}
+
+/// The recovery files of a library on disk, each one's text.
+fn recovery_files(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir.join("Recovered")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .collect()
+}
+
+#[gpui::test]
+fn a_newer_drawing_goes_to_the_recovery_file_after_an_earlier_copy(cx: &mut TestAppContext) {
+    init(cx);
+    let fake = cx.update(pages::use_fake);
+    let dir = tempfile::tempdir().unwrap();
+    let library = cx.new(|_| Library::open(dir.path().join("library.db")).unwrap());
+    library.update(cx, |library, cx| {
+        library
+            .set_setting(innerword_app::settings::keys::WELCOME_CREATED, &true, cx)
+            .unwrap();
+    });
+    let text = add_document(&library, None, &simple_document("Notes", "Words."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let board = workspace
+        .update_in(vcx, |w, window, cx| w.new_board(Some("Plan"), window, cx))
+        .unwrap();
+    vcx.run_until_parked();
+    fake.board_ready();
+    vcx.run_until_parked();
+    // Three failed saves in a row: the first drawing goes to a copy.
+    saves_fail(true, vcx);
+    fake.draw(&scene(&[rect("early", 0.0, 1)]));
+    settle(vcx);
+    for _ in 0..2 {
+        vcx.executor()
+            .advance_clock(innerword_app::workspace::RETRY_DELAY + Duration::from_millis(200));
+        vcx.run_until_parked();
+    }
+    let files = recovery_files(dir.path());
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].contains("early"));
+    // The library comes back and saves it.
+    saves_fail(false, vcx);
+    vcx.executor()
+        .advance_clock(innerword_app::workspace::RETRY_DELAY + Duration::from_millis(200));
+    vcx.run_until_parked();
+    assert_eq!(ids(&stored(&library, board, vcx)), ["early"]);
+    // A later stroke whose last save fails as the writer leaves: it is
+    // written too, beside the earlier copy.
+    saves_fail(true, vcx);
+    fake.draw(&scene(&[rect("early", 0.0, 1), rect("late", 200.0, 1)]));
+    vcx.run_until_parked();
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(text, true, window, cx);
+    });
+    vcx.run_until_parked();
+    let files = recovery_files(dir.path());
+    assert!(
+        files.iter().any(|file| file.contains("late")),
+        "the newer drawing has a copy: {files:?}"
+    );
+}
+
+#[gpui::test]
+fn a_shape_library_change_the_page_has_not_posted_is_kept_when_another_item_opens(
+    cx: &mut TestAppContext,
+) {
+    let (fake, library, workspace, _board, text, vcx) = open_board(cx);
+    let focus = workspace.read_with(vcx, |w, _| w.page_focus_handle().unwrap());
+    vcx.update(|window, _| window.focus(&focus));
+    // Add selection to shape library: the page posts the change 300 ms
+    // later; no change of the scene is outstanding.
+    vcx.update(|window, cx| window.dispatch_action(Box::new(AddToShapeLibrary), cx));
+    vcx.run_until_parked();
+    assert!(library_items(&library, vcx).is_empty(), "not posted yet");
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(text, true, window, cx);
+    });
+    vcx.run_until_parked();
+    assert!(fake.collects_asked() >= 1, "the page was asked for it");
+    assert_eq!(library_items(&library, vcx), ["added-1"]);
+}
+
+#[gpui::test]
+fn the_commands_that_open_something_in_the_page_give_it_the_keyboard(cx: &mut TestAppContext) {
+    let (_fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    for action in [
+        Box::new(AddRectangle) as Box<dyn gpui::Action>,
+        Box::new(innerword_app::workspace::AddText),
+        Box::new(innerword_editor_tools::actions::Find),
+        Box::new(MermaidToDrawing),
+        Box::new(ToggleShapeLibrary),
+    ] {
+        let name = action.name();
+        // The keyboard in the library.
+        vcx.simulate_keystrokes("cmd-0");
+        vcx.run_until_parked();
+        assert!(
+            state_line(&workspace, vcx).contains("focus=elsewhere"),
+            "{name}: {}",
+            state_line(&workspace, vcx)
+        );
+        vcx.update(|window, cx| window.dispatch_action(action, cx));
+        vcx.run_until_parked();
+        vcx.executor().advance_clock(Duration::from_secs(3));
+        vcx.run_until_parked();
+        let line = state_line(&workspace, vcx);
+        assert!(line.contains("focus=board"), "{name}: {line}");
+    }
+}
+
+#[gpui::test]
+fn a_whiteboard_that_is_not_drawn_offers_nothing_that_draws(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let board = make_board(
+        &library,
+        None,
+        "Plan",
+        &stored_scene(&[rect("api", 0.0, 1), rect("db", 200.0, 1)], &[]),
+        &[],
+        vcx,
+    );
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_document(board, true, window, cx));
+    });
+    vcx.run_until_parked();
+    // Its listing's count, no zoom, and the menu bar keeps every key.
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.board_elements_label()),
+        Some("2 elements".to_string())
+    );
+    assert_eq!(
+        vcx.update(|_, cx| innerword_app::menus::open_item(cx)),
+        innerword_app::menus::OpenItemKind::Other
+    );
+    vcx.update(|window, cx| window.dispatch_action(Box::new(AddRectangle), cx));
+    vcx.run_until_parked();
+    let said = toasts(&workspace, vcx);
+    assert!(
+        said.iter()
+            .any(|t| t == innerword_app::boards::NOT_SHOWN_IN_THIS_RUN),
+        "{said:?}"
+    );
+    assert!(
+        !said
+            .iter()
+            .any(|t| t == innerword_app::workspace::STILL_LOADING),
+        "{said:?}"
+    );
+}
+
+#[gpui::test]
+fn opening_another_item_after_reopening_a_closing_whiteboard_keeps_that_item(
+    cx: &mut TestAppContext,
+) {
+    let (fake, library, workspace, board, text, vcx) = open_board(cx);
+    let form = innerword_app::document_io::StoredForm::of(&simple_document("Other", "More."), None);
+    let other = library.update(vcx, |l, cx| {
+        l.create_document(None, &form.content(), cx).unwrap().id
+    });
+    fake.hold_collects();
+    fake.draw_unposted(&scene(&[rect("late", 0.0, 1)]));
+    vcx.run_until_parked();
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(text, true, window, cx);
+        // Opened again while it is closing: it would open once saved...
+        w.open_document(board, true, window, cx);
+        // ...but the writer went on to another item.
+        w.open_document(other, true, window, cx);
+    });
+    vcx.run_until_parked();
+    fake.release_collects();
+    settle(vcx);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(other)
+    );
+    assert_eq!(workspace.read_with(vcx, |w, _| w.open_board_id()), None);
 }

@@ -115,11 +115,19 @@ pub const NO_PAPER_ON_A_BOARD: &str =
     "A whiteboard has no paper size: Zoom to Fit shows the whole drawing.";
 /// What a whiteboard shows when its WebContent process ended twice in a row.
 pub const BOARD_STOPPED: &str = "This whiteboard stopped working.";
+/// What a command that draws says on a whiteboard whose page could not be
+/// shown.
+pub const NOT_DRAWN: &str = "This whiteboard could not be shown, so nothing can be added to it.";
 /// What the Add commands say before the canvas is there.
 pub const STILL_LOADING: &str = "The whiteboard is still loading.";
 /// Reload whiteboard's toast.
 pub const RELOADED: &str =
     "Reloaded. Undo starts again from here; Version History has the earlier states.";
+/// Reload whiteboard when what the page holds could not be saved first.
+pub const NOT_RELOADED: &str = "Not reloaded: the drawing could not be saved first, and \
+     reloading would lose it. It is kept, and the save is tried again.";
+/// The reason of a recovery file written at an end of the session.
+const CLOSED_BEFORE_SAVED: &str = "the whiteboard was closed before it could be saved";
 /// The shape library over its limits.
 pub const LIBRARY_TOO_LARGE: &str = "The shape library is too large to keep (over 8 MB). Remove \
      some of its items; until then the last library kept comes back.";
@@ -215,6 +223,12 @@ pub(crate) fn open_text_argument(id: Option<&str>) -> String {
 /// How soon after a post the whiteboard is saved: the page posts at the end
 /// of a gesture already, this only gathers a burst of them.
 pub const BOARD_SAVE_DELAY: Duration = Duration::from_millis(150);
+
+/// The most parts a scene the app keeps comes in (a part is at most
+/// `PART_BYTES`, a scene at most `MAX_VIEW_SCENE_BYTES`).
+const MAX_SCENE_PARTS: usize = innerword_board::limits::MAX_VIEW_SCENE_BYTES
+    .div_ceil(innerword_board_web::bridge::PART_BYTES)
+    + 1;
 
 /// How often a wait for a picture still being stored looks again.
 const PICTURE_POLL: Duration = Duration::from_millis(20);
@@ -324,6 +338,19 @@ pub(crate) struct BoardState {
     pub failure: Option<String>,
     failures_in_a_row: u32,
     pub recovered: Option<Recovered>,
+    /// The scene last written to the recovery file: the same scene is not
+    /// written twice, a newer one always is.
+    recovered_scene: Option<Arc<str>>,
+    /// The newest counter of the shape library a call of the app's own
+    /// answered (Add selection to shape library): above
+    /// [`BoardState::library_lrev`], the page holds a change it has not
+    /// posted yet (it posts 300 ms after a change).
+    library_answered: u64,
+    /// The elements of the stored scene the view's descends from, as the
+    /// listing counts them (a label is part of its shape): what the status
+    /// bar says, counted where the scene is read anyway. `None` until then
+    /// (the page's own count stands in).
+    base_elements: Option<u64>,
     large_told: bool,
     /// The view state as last written.
     stored_view: Option<String>,
@@ -359,6 +386,24 @@ impl BoardState {
     /// Whether the app holds a scene it has not saved.
     pub fn dirty(&self) -> bool {
         self.held.as_ref().is_some_and(|held| held.rev > self.saved)
+    }
+
+    /// Whether the page holds something the app has not been given: a
+    /// newer scene, a text being edited, a gesture in its middle (its
+    /// status), or a change of the shape library a call answered and the
+    /// page has not posted yet. A deliberate end asks it first then.
+    pub fn holds_more(&self) -> bool {
+        self.ready && (self.status.holds_more() || self.library_answered > self.library_lrev)
+    }
+
+    /// Whether the held scene is the one last written to the recovery file.
+    fn held_is_recovered(&self) -> bool {
+        match (&self.held, &self.recovered_scene) {
+            (Some(held), Some(written)) => {
+                Arc::ptr_eq(&held.json, written) || *held.json == **written
+            }
+            _ => false,
+        }
     }
 
     /// The pictures the app has stored, for a save.
@@ -659,6 +704,16 @@ impl Workspace {
         true
     }
 
+    /// Every whiteboard still closing but `id` forgets that it was to open
+    /// again once saved: another item was opened after it.
+    pub(crate) fn forget_reopening_but(&mut self, id: DocumentId) {
+        for closing in &mut self.closing_boards {
+            if closing.session.id != id {
+                closing.then_open = None;
+            }
+        }
+    }
+
     fn load_board(&mut self, id: DocumentId, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let stored = match self.library.read(cx).document(id) {
             Ok(stored) => stored,
@@ -721,6 +776,9 @@ impl Workspace {
             failure: None,
             failures_in_a_row: 0,
             recovered: None,
+            recovered_scene: None,
+            library_answered: 0,
+            base_elements: Some(scene.summary().elements),
             large_told: false,
             stored_view: stored.view_state.clone(),
             ready_waiters: Vec::new(),
@@ -732,7 +790,7 @@ impl Workspace {
         let mut board = Box::new(board);
         board.seed_pictures(&scene);
         let made = self.install_board_session(id, &stored, board, cell, window, cx);
-        if made {
+        if made && self.board_drawable() {
             // The menu bar loses the keys that are the whiteboard's here.
             crate::menus::set_open_item(crate::menus::OpenItemKind::Board, cx);
         }
@@ -786,6 +844,7 @@ impl Workspace {
                 board.status.posted = 0;
                 // The glue counts the shape library's changes from 0 again.
                 board.library_lrev = 0;
+                board.library_answered = 0;
                 for waiter in board.ready_waiters.drain(..) {
                     waiter.send(());
                 }
@@ -808,6 +867,12 @@ impl Workspace {
                 count,
                 text,
             } => {
+                // No scene the app keeps has more parts than this (a count
+                // above it is a fault of the page, never allocated for).
+                if count as usize > MAX_SCENE_PARTS || count == 0 {
+                    eprintln!("Inner Word: a scene in {count} parts was dropped");
+                    return;
+                }
                 let whole = {
                     let Some(board) = self.board_of_mut(id) else {
                         return;
@@ -829,7 +894,11 @@ impl Workspace {
                     if let Some(slot) = parts.texts.get_mut(index as usize) {
                         *slot = Some(text);
                     }
-                    if parts.texts.iter().all(Option::is_some) {
+                    let length: usize = parts.texts.iter().flatten().map(String::len).sum();
+                    if length > innerword_board::limits::MAX_VIEW_SCENE_BYTES {
+                        eprintln!("Inner Word: a scene over the limit was dropped");
+                        None
+                    } else if parts.texts.iter().all(Option::is_some) {
                         Some(parts.texts.into_iter().flatten().collect::<String>())
                     } else {
                         board.parts = Some(parts);
@@ -932,11 +1001,28 @@ impl Workspace {
                 data_url: data_url.clone(),
             },
         );
+        self.store_posted_picture(id, file, data_url, false, cx);
+    }
+
+    /// Makes and stores a posted picture in the background. What is no
+    /// picture the library takes is refused for good; a store that fails
+    /// (the library busy, the disk full) is tried again after a pause, the
+    /// picture staying on its way (the saves wait for it), and said once
+    /// (`told`).
+    fn store_posted_picture(
+        &mut self,
+        id: DocumentId,
+        file: String,
+        data_url: Arc<str>,
+        told: bool,
+        cx: &mut Context<Self>,
+    ) {
         let images = self.images.clone();
         cx.spawn(async move |this, cx| {
+            let made = data_url.clone();
             let prepared = cx
                 .background_spawn(async move {
-                    let bytes = boards::data_url_bytes(&data_url)
+                    let bytes = boards::data_url_bytes(&made)
                         .ok_or_else(|| "The pasted picture could not be read.".to_string())?;
                     boards::prepare_picture(&bytes, "The pasted picture")
                 })
@@ -956,14 +1042,44 @@ impl Workspace {
                     images.put_files(vec![(prepared.file.clone(), prepared.bytes.clone())], cx)
                 })
                 .ok();
-            let result = match stored {
-                Some(task) => task.await.map(|()| prepared),
-                None => return,
+            let Some(stored) = stored else {
+                return;
             };
-            this.update(cx, |this, cx| {
-                this.board_picture_done(id, &file, result, cx)
-            })
-            .ok();
+            match stored.await {
+                Ok(()) => {
+                    this.update(cx, |this, cx| {
+                        this.board_picture_done(id, &file, Ok(prepared), cx)
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    if !told {
+                        this.update(cx, |this, cx| {
+                            this.toast_error(
+                                format!(
+                                    "A pasted picture is not stored yet; it is tried again. ({error})"
+                                ),
+                                cx,
+                            )
+                        })
+                        .ok();
+                    }
+                    cx.background_executor().timer(RETRY_DELAY).await;
+                    this.update(cx, |this, cx| {
+                        let still_on_its_way = this.board_of(id).is_some_and(|board| {
+                            matches!(
+                                board.pictures.get(&file),
+                                Some(Picture::Pending { data_url: pending })
+                                    if Arc::ptr_eq(pending, &data_url)
+                            )
+                        });
+                        if still_on_its_way {
+                            this.store_posted_picture(id, file, data_url, true, cx);
+                        }
+                    })
+                    .ok();
+                }
+            }
         })
         .detach();
     }
@@ -1048,7 +1164,7 @@ impl Workspace {
             // `board_picture_done` and the `files` answer save again.
             return;
         }
-        if !background {
+        if !background || boards::board_saves_fail(cx) {
             self.save_board_asking(id, true, cx);
             return;
         }
@@ -1127,7 +1243,14 @@ impl Workspace {
         }
         board.in_flight = None;
         match outcome {
-            BoardSaveOutcome::Superseded => {}
+            // A synchronous save of another item settled the background: what
+            // this whiteboard holds is saved again, unless that save was its
+            // own.
+            BoardSaveOutcome::Superseded => {
+                if board.dirty() {
+                    self.schedule_board_save(id, Duration::ZERO, cx);
+                }
+            }
             BoardSaveOutcome::Saved(written) => {
                 if self.board_written(id, rev, written, cx) {
                     self.schedule_board_save(id, Duration::ZERO, cx);
@@ -1159,6 +1282,7 @@ impl Workspace {
             return false;
         };
         board.set_base(written.stamp, written.scene, &written.files);
+        board.base_elements = Some(written.elements);
         board.base_rev = rev;
         board.saved = board.saved.max(rev);
         board.failures_in_a_row = 0;
@@ -1242,6 +1366,10 @@ impl Workspace {
         let Some(expect) = self.board_of(id).map(|board| board.stamp) else {
             return true;
         };
+        if boards::board_saves_fail(cx) {
+            self.board_save_failed(id, boards::FAILED_ON_PURPOSE.to_string(), cx);
+            return false;
+        }
         let (result, _) = self.library.update(cx, |library, cx| {
             library.change_outside(
                 |store| {
@@ -1266,6 +1394,7 @@ impl Workspace {
                     return true;
                 };
                 board.set_base(saved.stamp, Arc::from(prepared.scene), &files);
+                board.base_elements = Some(prepared.elements);
                 board.base_rev = held.rev;
                 board.saved = board.saved.max(held.rev);
                 board.failures_in_a_row = 0;
@@ -1500,25 +1629,34 @@ impl Workspace {
             let prepared = boards::data_url_bytes(&data_url)
                 .ok_or_else(|| "The pasted picture could not be read.".to_string())
                 .and_then(|bytes| boards::prepare_picture(&bytes, "The pasted picture"));
-            let result = prepared.and_then(|prepared| {
-                self.library
-                    .update(cx, |library, _| library.put_file(&prepared.bytes))
-                    .map(|_| prepared)
-                    .map_err(|error| error.to_string())
-            });
-            if let Some(board) = self.board_of_mut(id) {
-                let picture = match result {
-                    Ok(prepared) => {
-                        if let Ok(mut cell) = board.cell.lock() {
-                            cell.files.insert(prepared.file.clone());
-                        }
-                        Picture::Stored {
+            let picture = match prepared {
+                // No picture the library takes: refused for good.
+                Err(sentence) => Picture::Refused(sentence),
+                Ok(prepared) => {
+                    match self
+                        .library
+                        .update(cx, |library, _| library.put_file(&prepared.bytes))
+                    {
+                        Ok(_) => Picture::Stored {
                             file: prepared.file,
                             mime: prepared.mime_type,
+                        },
+                        // The library could not take it now: it stays on its
+                        // way (this save goes without it, the background tries
+                        // again).
+                        Err(error) => {
+                            eprintln!("Inner Word: a pasted picture was not stored yet: {error}");
+                            continue;
                         }
                     }
-                    Err(sentence) => Picture::Refused(sentence),
-                };
+                }
+            };
+            if let Some(board) = self.board_of_mut(id) {
+                if let Picture::Stored { file, .. } = &picture
+                    && let Ok(mut cell) = board.cell.lock()
+                {
+                    cell.files.insert(file.clone());
+                }
                 board.pictures.insert(file, picture);
             }
         }
@@ -1604,6 +1742,7 @@ impl Workspace {
             .map(|parsed| parsed.scene)
             .unwrap_or_else(|_| Scene::empty());
         let delta = theirs.delta_from(&before);
+        board.base_elements = Some(theirs.summary().elements);
         let base_rev = board.base_rev;
         let stamp = ContentStamp::of(content);
         let files: Vec<String> = theirs
@@ -1886,6 +2025,8 @@ impl Workspace {
     /// Writes the held scene of whiteboard `id` to its recovery file
     /// (`<data directory>/Recovered/whiteboard-<id>-<ms>.json`; a library in
     /// memory keeps it in [`BoardState::recovered`]).
+    /// The same scene is written once: a later failure of the same
+    /// drawing writes nothing more, a newer drawing always is written.
     fn write_board_recovery(&mut self, id: DocumentId, reason: &str, cx: &mut Context<Self>) {
         let Some(board) = self.board_of(id) else {
             return;
@@ -1893,6 +2034,9 @@ impl Workspace {
         let Some(held) = board.held.clone() else {
             return;
         };
+        if board.held_is_recovered() {
+            return;
+        }
         let now = self.library.read(cx).clock().now_ms();
         let recovered = match self.library.read(cx).path().and_then(boards::recovery_dir) {
             Some(dir) => {
@@ -1923,6 +2067,7 @@ impl Workspace {
         };
         if let Some(board) = self.board_of_mut(id) {
             board.recovered = Some(recovered);
+            board.recovered_scene = Some(held.json.clone());
         }
         let mut toast = Toast::new(format!(
             "Not saved: {reason}. A copy of the drawing is in {place}."
@@ -1932,6 +2077,31 @@ impl Workspace {
             toast = toast.on_action("Show in Finder", move |_, cx| cx.reveal_path(&path));
         }
         self.show_toast(toast, cx);
+    }
+
+    /// What whiteboard `id` holds and could not save goes to the recovery
+    /// file (once for each scene): an end of its session is near, and the
+    /// view, which has it too, goes then (section 4.6).
+    fn recover_if_unsaved(&mut self, id: DocumentId, reason: &str, cx: &mut Context<Self>) {
+        if self.board_of(id).is_some_and(BoardState::dirty) {
+            self.write_board_recovery(id, reason, cx);
+        }
+    }
+
+    /// The synchronous save of an end of the session (the window closes, the
+    /// app quits): [`Workspace::flush`], and what a whiteboard (open or
+    /// closing) still holds unsaved after it goes to the recovery file.
+    pub(crate) fn flush_at_an_end(&mut self, cx: &mut Context<Self>) -> bool {
+        let saved = self.flush(cx);
+        let ids: Vec<DocumentId> = self
+            .open_board_id()
+            .into_iter()
+            .chain(self.boards_closing())
+            .collect();
+        for id in ids {
+            self.recover_if_unsaved(id, CLOSED_BEFORE_SAVED, cx);
+        }
+        saved
     }
 
     /// The synchronous save of the open and the closing whiteboard: what the
@@ -2055,6 +2225,9 @@ impl Workspace {
         if !self.shape_library.dirty() {
             return true;
         }
+        // A background write of an older library that has begun ends first,
+        // and one that has not is cancelled: none comes after this one.
+        self.saver.settle();
         self.shape_library.in_flight = None;
         let Some((lrev, items)) = self.shape_library.held.clone() else {
             return true;
@@ -2240,9 +2413,7 @@ impl Workspace {
     ) {
         let id = session.id;
         let holds_more = match &session.item {
-            WebItem::Board(board) => {
-                (board.ready && board.status.holds_more()) || board.status.too_large
-            }
+            WebItem::Board(board) => board.holds_more() || board.status.too_large,
             WebItem::Page(_) => false,
         };
         let has_view = session.view.borrow().is_some()
@@ -2281,12 +2452,8 @@ impl Workspace {
             then_open: None,
             _task: None,
         });
-        if !self.save_board_now(id, cx)
-            && self
-                .board_of(id)
-                .is_some_and(|board| board.dirty() && board.recovered.is_none())
-        {
-            self.write_board_recovery(id, "the whiteboard was closed before it could be saved", cx);
+        if !self.save_board_now(id, cx) {
+            self.recover_if_unsaved(id, CLOSED_BEFORE_SAVED, cx);
         }
         self.closing_boards
             .retain(|closing| closing.session.id != id);
@@ -2302,14 +2469,9 @@ impl Workspace {
         else {
             return;
         };
-        if self
-            .board_of(id)
-            .is_some_and(|board| board.dirty() && board.recovered.is_none())
-        {
-            // Not saved (the save failed): its drawing is written to the
-            // recovery file before the view goes.
-            self.write_board_recovery(id, "the whiteboard was closed before it could be saved", cx);
-        }
+        // Not saved (the save failed): its drawing is written to the
+        // recovery file before the view goes.
+        self.recover_if_unsaved(id, CLOSED_BEFORE_SAVED, cx);
         let mut closing = self.closing_boards.remove(index);
         closing.session.release_pictures(window);
         let then_open = closing.then_open.take();
@@ -2332,10 +2494,7 @@ impl Workspace {
     /// Whether a whiteboard is closing or the open one's page holds more
     /// than it posted (a deliberate end then asks it first).
     pub fn board_holds_more(&self) -> bool {
-        !self.closing_boards.is_empty()
-            || self
-                .board()
-                .is_some_and(|board| board.ready && board.status.holds_more())
+        !self.closing_boards.is_empty() || self.board().is_some_and(BoardState::holds_more)
     }
 
     // ----- commands --------------------------------------------------------------------
@@ -2387,9 +2546,12 @@ impl Workspace {
             return;
         };
         if !self.board_ready() {
-            self.say_about_page(STILL_LOADING, cx);
+            self.say_about_page(&self.board_not_ready_sentence(cx), cx);
             return;
         }
+        // The new element is the writer's to go on with (a text is open for
+        // typing): the canvas has the keyboard.
+        self.give_the_board_the_keyboard(window, cx);
         let kind = skeleton
             .get("type")
             .and_then(serde_json::Value::as_str)
@@ -2537,6 +2699,59 @@ impl Workspace {
         Ok(ids)
     }
 
+    /// Whether the open whiteboard is drawn, or will be once its page has
+    /// loaded: it has a view (a page engine, the bundle), which did not fail
+    /// to start and has not stopped.
+    pub(crate) fn board_drawable(&self) -> bool {
+        self.page.as_ref().is_some_and(|page| {
+            matches!(page.item, WebItem::Board(_))
+                && page.has_a_view()
+                && !matches!(
+                    page.state,
+                    PageState::Failed(_) | PageState::Crashed { again: true, .. }
+                )
+        })
+    }
+
+    /// What a command that draws says on a whiteboard that is not ready:
+    /// that it is still loading, or why it is not drawn at all.
+    pub(crate) fn board_not_ready_sentence(&self, cx: &App) -> String {
+        if self.board_drawable() {
+            return STILL_LOADING.to_string();
+        }
+        match self.page.as_ref().map(|page| &page.state) {
+            Some(PageState::Crashed { again: true, .. }) => BOARD_STOPPED.to_string(),
+            Some(PageState::Failed(_)) if pages::engine(cx).is_some() => NOT_DRAWN.to_string(),
+            _ => boards::not_shown_sentence(cx),
+        }
+    }
+
+    /// Whether the open whiteboard's page can be asked to do something now;
+    /// when not, the writer is told why.
+    fn board_answers_or_say(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.board_ready() {
+            return true;
+        }
+        let sentence = self.board_not_ready_sentence(cx);
+        self.say_about_page(&sentence, cx);
+        false
+    }
+
+    /// The open whiteboard takes the keyboard (a dialog over it closes).
+    pub(crate) fn give_the_board_the_keyboard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_board_id().is_none() {
+            return;
+        }
+        self.dismiss_modal(window, cx);
+        if let Some(focus) = self.page_focus_handle() {
+            window.focus(&focus);
+        }
+    }
+
     /// "Mermaid to drawing…": Excalidraw's dialog; with `definition` (the
     /// scripted step) converts it as the dialog's Insert does.
     pub(crate) fn mermaid_on_board(&mut self, definition: Option<&str>) {
@@ -2572,6 +2787,9 @@ impl Workspace {
         let Some(id) = self.open_board_id() else {
             return;
         };
+        let Some(session) = self.board().map(|board| board.session) else {
+            return;
+        };
         let answer = self.board_call(id, calls::LIBRARY, calls::library_argument(&action));
         cx.spawn(async move |this, cx| {
             let Some(answer) = answer else {
@@ -2580,12 +2798,20 @@ impl Workspace {
             let Some(Ok(text)) = answer.await else {
                 return;
             };
-            if let Ok(answered) = calls::answer::<calls::LibraryAnswered>(&text)
-                && let Some(refused) = answered.refused
-            {
-                this.update(cx, |this, cx| this.say_about_page(&refused, cx))
-                    .ok();
-            }
+            let Ok(answered) = calls::answer::<calls::LibraryAnswered>(&text) else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                // A change the page posts a moment later: until it is here, a
+                // deliberate end asks the page for it.
+                if let Some(board) = this.board_in_session_mut(id, session) {
+                    board.library_answered = board.library_answered.max(answered.lrev);
+                }
+                if let Some(refused) = &answered.refused {
+                    this.say_about_page(refused, cx);
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -2598,8 +2824,14 @@ impl Workspace {
         };
         let collect = self.collect_board(id, cx);
         cx.spawn(async move |this, cx| {
-            collect.await;
+            let saved = collect.await;
             this.update(cx, |this, cx| {
+                // The view would load the stored scene over what could not
+                // be saved: it stays as it is, and the save is retried.
+                if !saved && this.board_of(id).is_some_and(BoardState::dirty) {
+                    this.toast_error(NOT_RELOADED, cx);
+                    return;
+                }
                 this.reload_board_view(id, cx);
                 this.show_toast(Toast::new(RELOADED).duration(Duration::from_secs(6)), cx);
             })
@@ -2615,14 +2847,10 @@ impl Workspace {
         let Some(id) = self.open_board_id() else {
             return;
         };
-        if !self.save_board_now(id, cx)
-            && self
-                .board_of(id)
-                .is_some_and(|board| board.held.is_some() && board.recovered.is_none())
-        {
+        if !self.save_board_now(id, cx) {
             // The view loads the stored scene: what could not be saved is kept
             // in the recovery file first.
-            self.write_board_recovery(id, "the whiteboard stopped and was loaded again", cx);
+            self.recover_if_unsaved(id, "the whiteboard stopped and was loaded again", cx);
         }
         if let Some(board) = self.board_of_mut(id) {
             board.ready = false;
@@ -2786,14 +3014,14 @@ impl Workspace {
         Some(("Saved".to_string(), false))
     }
 
-    /// The element count of the open whiteboard, as the status bar says it.
+    /// The element count of the open whiteboard, as the status bar says it:
+    /// as the listing and agents count (a label is part of its shape or
+    /// arrow), of the scene last stored, which a gesture's save follows in a
+    /// moment.
     pub fn board_elements_label(&self) -> Option<String> {
         let board = self.board()?;
-        Some(super::counted(
-            board.status.elements as usize,
-            "element",
-            "elements",
-        ))
+        let count = board.base_elements.unwrap_or(board.status.elements);
+        Some(super::counted(count as usize, "element", "elements"))
     }
 
     /// The element of an open whiteboard without a page engine: its listing
@@ -2833,6 +3061,24 @@ fn stored_file_hexes(content: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// How the status bar's menu names an element of Excalidraw's `kind`, one
+/// and many: plain words, not Excalidraw's names.
+pub(crate) fn kind_words(kind: &str) -> (&str, &str) {
+    match kind {
+        "rectangle" => ("rectangle", "rectangles"),
+        "ellipse" => ("ellipse", "ellipses"),
+        "diamond" => ("diamond", "diamonds"),
+        "arrow" => ("arrow", "arrows"),
+        "line" => ("line", "lines"),
+        "freedraw" => ("drawing", "drawings"),
+        "text" => ("text", "texts"),
+        "frame" | "magicframe" => ("frame", "frames"),
+        "image" => ("picture", "pictures"),
+        "embeddable" | "iframe" => ("embedded page", "embedded pages"),
+        _ => ("other element", "other elements"),
+    }
 }
 
 /// The six Add items, for the menus of a whiteboard.
@@ -3165,8 +3411,7 @@ impl Workspace {
                                 .file_name()
                                 .map(|name| format!("“{}”", name.to_string_lossy()))
                                 .unwrap_or_else(|| "The file".to_string());
-                            let bytes = std::fs::read(path)
-                                .map_err(|error| format!("{name} could not be read ({error})."))?;
+                            let bytes = boards::read_picture_file(path, &name)?;
                             boards::prepare_picture(&bytes, &name)
                         })
                         .collect()
@@ -3293,16 +3538,34 @@ impl Workspace {
                     this.collect_board(id, cx).detach();
                 }
             }))
-            .on_action(cx.listener(|this, _: &tools::Find, _, _| this.search_board(None)))
-            .on_action(cx.listener(|this, _: &MermaidToDrawing, _, _| this.mermaid_on_board(None)))
-            .on_action(cx.listener(|this, _: &ToggleShapeLibrary, _, cx| {
-                this.shape_library_call(calls::LibraryAction::Toggle, cx)
+            // What opens a field or a panel in the page gives the page the
+            // keyboard first (from the palette, the menu bar or a menu while
+            // the keyboard is in the library or a chat).
+            .on_action(cx.listener(|this, _: &tools::Find, window, cx| {
+                this.give_the_board_the_keyboard(window, cx);
+                this.search_board(None)
+            }))
+            .on_action(cx.listener(|this, _: &MermaidToDrawing, window, cx| {
+                if this.board_answers_or_say(cx) {
+                    this.give_the_board_the_keyboard(window, cx);
+                    this.mermaid_on_board(None)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleShapeLibrary, window, cx| {
+                if this.board_answers_or_say(cx) {
+                    this.give_the_board_the_keyboard(window, cx);
+                    this.shape_library_call(calls::LibraryAction::Toggle, cx)
+                }
             }))
             .on_action(cx.listener(|this, _: &AddToShapeLibrary, _, cx| {
-                this.shape_library_call(calls::LibraryAction::AddSelection, cx)
+                if this.board_answers_or_say(cx) {
+                    this.shape_library_call(calls::LibraryAction::AddSelection, cx)
+                }
             }))
             .on_action(cx.listener(|this, _: &InsertFromShapeLibrary, window, cx| {
-                this.show_shape_library_picker(window, cx)
+                if this.board_answers_or_say(cx) {
+                    this.show_shape_library_picker(window, cx)
+                }
             }))
             .on_action(cx.listener(
                 |this, _: &innerword_editor::actions::InsertImage, window, cx| {
@@ -3316,13 +3579,18 @@ impl Workspace {
                 this.open_board_menu(window, cx)
             }))
             // Duplicate of the open whiteboard while its page holds more than it
-            // posted: the copy gets the last gesture.
+            // posted, or the app holds a scene not stored yet (the save's
+            // timer, a save in flight, a picture still being stored): it is
+            // collected and saved first, so the copy gets the last gesture.
             .capture_action(
                 cx.listener(|this, _: &innerword_library::Duplicate, _, cx| {
                     let Some(id) = this.open_board_id() else {
                         return;
                     };
-                    if !this.board_holds_more() {
+                    let unsaved = this.board().is_some_and(|board| {
+                        board.dirty() || board.in_flight.is_some() || board.pictures_pending()
+                    });
+                    if !this.board_holds_more() && !unsaved {
                         return;
                     }
                     cx.stop_propagation();
@@ -3362,6 +3630,11 @@ impl Workspace {
         root = say::<innerword_vim_mode::ToggleVimMode>(root, NO_VIM_ON_A_BOARD, cx);
         root = say::<crate::zoom::LifeSize>(root, NO_PAPER_ON_A_BOARD, cx);
         root = say::<crate::zoom::Automatic>(root, NO_PAPER_ON_A_BOARD, cx);
+        // Without the assistant its key does nothing here either (the page
+        // has it).
+        if !self.assistant.shown {
+            return root;
+        }
         root.capture_action(cx.listener(|this, _: &AskAssistant, _, cx| {
             cx.stop_propagation();
             let key = crate::keymap::hint_in(&FocusAssistant, "Workspace > BoardView", cx)
@@ -3772,10 +4045,7 @@ impl Workspace {
         self.ending = Some(end);
         let collect = self
             .open_board_id()
-            .filter(|_| {
-                self.board()
-                    .is_some_and(|board| board.ready && board.status.holds_more())
-            })
+            .filter(|_| self.board().is_some_and(BoardState::holds_more))
             .map(|id| self.collect_board(id, cx));
         cx.spawn_in(window, async move |this, cx| {
             let started = Instant::now();
@@ -3809,7 +4079,7 @@ impl Workspace {
     /// Saves everything and closes the window or quits.
     fn perform_end(&mut self, end: End, window: &mut Window, cx: &mut Context<Self>) {
         self.keep_what_the_tools_hold(window, cx);
-        self.flush(cx);
+        self.flush_at_an_end(cx);
         self.store_assistant_conversation(cx);
         match end {
             End::CloseWindow => {

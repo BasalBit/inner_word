@@ -2988,7 +2988,10 @@ fn a_message_over_a_whiteboard_waits_for_what_its_page_holds(cx: &mut TestAppCon
     // What the app holds is what the last message had: the whiteboard is
     // said to be unchanged, and the text the page kept is not in it.
     let sent = fake.last_sent().expect("a message was sent");
-    assert!(sent.contains("has not changed since my last message"), "{sent}");
+    assert!(
+        sent.contains("has not changed since my last message"),
+        "{sent}"
+    );
     assert!(!sent.contains("Never handed over"), "{sent}");
     assert!(sent.ends_with("And now?"), "{sent}");
     pages.release_collects();

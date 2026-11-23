@@ -87,6 +87,28 @@ pub fn release_board_saves(cx: &mut App) {
     }
 }
 
+/// Whether the saves of whiteboards fail (tests: the library busy past its
+/// timeout, or the disk full, without waiting five seconds for a lock).
+#[derive(Default)]
+struct FailingSaves(bool);
+
+impl Global for FailingSaves {}
+
+/// From now on every save of a whiteboard fails as a store error does, until
+/// called again with `false` (tests).
+pub fn fail_board_saves(cx: &mut App, fail: bool) {
+    cx.default_global::<FailingSaves>().0 = fail;
+}
+
+/// Whether [`fail_board_saves`] is on.
+pub(crate) fn board_saves_fail(cx: &App) -> bool {
+    cx.try_global::<FailingSaves>()
+        .is_some_and(|failing| failing.0)
+}
+
+/// The message of a save [`fail_board_saves`] fails.
+pub const FAILED_ON_PURPOSE: &str = "the library is busy";
+
 /// What a background save of a whiteboard waits for before its answer is
 /// taken: nothing, unless a test holds the answers.
 pub(crate) fn board_save_gate(cx: &mut App) -> Option<crate::pages::Answer<()>> {
@@ -97,6 +119,24 @@ pub(crate) fn board_save_gate(cx: &mut App) -> Option<crate::pages::Answer<()>> 
     let (tx, rx) = crate::pages::answer();
     cx.global_mut::<HeldSaveAnswers>().waiting.push(tx);
     Some(rx)
+}
+
+/// The sentence of pages' engine (`innerword_web::available`, or that this
+/// run shows none) worded for whiteboards: "Pages need macOS 12.3 or later."
+/// is "Whiteboards need macOS 12.3 or later.", "This macOS does not have
+/// what pages need to stay offline (…)" is "… what whiteboards need …".
+pub fn whiteboards_sentence(pages: &str) -> String {
+    if pages == crate::pages::NOT_SHOWN_IN_THIS_RUN {
+        return NOT_SHOWN_IN_THIS_RUN.to_string();
+    }
+    pages
+        .replacen("Pages need", "Whiteboards need", 1)
+        .replacen(
+            "what pages need to stay offline",
+            "what whiteboards need",
+            1,
+        )
+        .replacen("what pages need", "what whiteboards need", 1)
 }
 
 /// The host of a whiteboard's origin, `innerword-page://<host>/`: its id and
@@ -110,12 +150,7 @@ pub fn board_host(id: DocumentId, created_at: i64) -> String {
 /// sentence of `innerword_web::available`, worded for whiteboards, or that
 /// this run shows none.
 pub fn not_shown_sentence(cx: &App) -> String {
-    let pages = crate::pages::not_shown_sentence(cx);
-    if pages == crate::pages::NOT_SHOWN_IN_THIS_RUN {
-        NOT_SHOWN_IN_THIS_RUN.to_string()
-    } else {
-        "Whiteboards need macOS 12.3 or later.".to_string()
-    }
+    whiteboards_sentence(&crate::pages::not_shown_sentence(cx))
 }
 
 // ----- the bundle -----------------------------------------------------------------
@@ -356,6 +391,38 @@ pub fn prepare_picture(bytes: &[u8], subject: &str) -> Result<PreparedPicture, S
     })
 }
 
+/// The bytes of the picture file at `path`, read only when it is a plain
+/// file no larger than `innerword_image` takes (a named pipe would wait for
+/// a writer, a film would be read whole only to be refused). `Err` is the
+/// sentence about `subject`.
+pub fn read_picture_file(path: &Path, subject: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let limit = innerword_image::MAX_INPUT_BYTES;
+    let too_large =
+        || innerword_image::PrepareError::TooLarge { animated: false }.sentence(subject);
+    let unreadable = |error: std::io::Error| format!("{subject} could not be read ({error}).");
+    // Asked before the file is opened: opening a named pipe waits.
+    let metadata = std::fs::metadata(path).map_err(unreadable)?;
+    if !metadata.is_file() {
+        return Err(innerword_image::PrepareError::NotAnImage.sentence(subject));
+    }
+    if metadata.len() > limit {
+        return Err(too_large());
+    }
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    if !file.metadata().map_err(unreadable)?.is_file() {
+        return Err(innerword_image::PrepareError::NotAnImage.sentence(subject));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 /// The bytes of a `data:` URL (base64, or percent-encoded text such as an
 /// SVG Mermaid makes); `None` for anything else.
 pub fn data_url_bytes(url: &str) -> Option<Vec<u8>> {
@@ -372,16 +439,24 @@ pub fn data_url_bytes(url: &str) -> Option<Vec<u8>> {
     }
 }
 
+/// `%XX` as the byte `XX`; anything else (a `%` not followed by two hex
+/// digits, a character of several bytes) as it is. Read by bytes: the text
+/// comes from a page and a `%` may stand before any character.
 fn percent_decode(text: &str) -> Vec<u8> {
+    fn hex(byte: u8) -> Option<u8> {
+        char::from(byte).to_digit(16).map(|digit| digit as u8)
+    }
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut ix = 0;
     while ix < bytes.len() {
         if bytes[ix] == b'%'
-            && ix + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&text[ix + 1..ix + 3], 16)
+            && let (Some(high), Some(low)) = (
+                bytes.get(ix + 1).copied().and_then(hex),
+                bytes.get(ix + 2).copied().and_then(hex),
+            )
         {
-            out.push(byte);
+            out.push(high << 4 | low);
             ix += 3;
             continue;
         }
@@ -1520,6 +1595,30 @@ impl crate::pages::FakeView {
                 let lrev = {
                     let mut board = pages.board.borrow_mut();
                     board.calls.push(format!("library {words}"));
+                    // As the glue: the selection becomes an item, and the
+                    // change is posted a moment later (never, here: a
+                    // collect takes it).
+                    if words == "addSelection" {
+                        let id = format!("added-{}", board.lrev + 1);
+                        let shape = json!({
+                            "id": format!("{id}-shape"), "type": "rectangle", "x": 0.0,
+                            "y": 0.0, "width": 100.0, "height": 50.0, "angle": 0,
+                            "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+                            "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid",
+                            "roughness": 1, "opacity": 100, "groupIds": [], "frameId": null,
+                            "roundness": null, "seed": 1, "version": 1, "versionNonce": 8,
+                            "isDeleted": false, "boundElements": null, "updated": 1,
+                            "link": null, "locked": false, "index": "a0",
+                        });
+                        let item = json!({ "id": id, "status": "unpublished",
+                            "created": board.lrev + 1, "elements": [shape] });
+                        if let Some(items) = board.library.as_array_mut() {
+                            items.insert(0, item);
+                        } else {
+                            board.library = json!([item]);
+                        }
+                        board.lrev += 1;
+                    }
                     board.lrev
                 };
                 done(Ok(

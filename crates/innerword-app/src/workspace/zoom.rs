@@ -432,6 +432,11 @@ impl Workspace {
         if self.session.is_none() && self.page.is_none() {
             return None;
         }
+        // A whiteboard has a zoom once its page said it (not while it
+        // loads, nor when it is not drawn).
+        if self.open_board_id().is_some() && !self.board_ready() {
+            return None;
+        }
         let label = self.zoom_label(cx);
         let hint = KeyHint::for_action(&ZoomIn, cx);
         let item = self

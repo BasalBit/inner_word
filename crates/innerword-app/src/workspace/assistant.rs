@@ -977,7 +977,8 @@ impl Workspace {
         }
         let collect = self.collect_board(id, cx);
         let (done, answer) = crate::pages::answer();
-        cx.spawn(async move |_, _| done.send(collect.await)).detach();
+        cx.spawn(async move |_, _| done.send(collect.await))
+            .detach();
         Some(answer)
     }
 

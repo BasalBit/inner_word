@@ -210,6 +210,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A whiteboard still closing that was to open again once saved does
+        // not, when another item is opened after it.
+        self.forget_reopening_but(id);
         // A page is opened as a page: its content is a manifest, never a
         // text (`page.rs`); a whiteboard as a whiteboard (`board.rs`).
         if self.open_document_id() != Some(id) {

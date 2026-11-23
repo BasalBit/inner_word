@@ -343,16 +343,26 @@ impl Workspace {
                 };
                 let summary = scene.summary();
                 let mut items = vec![ContextMenuItem::section("On this whiteboard")];
+                // As the listing and agents count: a label is part of its
+                // shape or arrow, and said apart.
+                let labels = match summary.labels {
+                    0 => String::new(),
+                    n => format!(" with {}", super::counted(n as usize, "label", "labels")),
+                };
+                items.push(ContextMenuItem::new(
+                    format!(
+                        "{}{labels}",
+                        super::counted(summary.elements as usize, "element", "elements")
+                    ),
+                    |_, _: &mut gpui::App| {},
+                ));
                 for (kind, count) in &summary.by_type {
+                    let (one, many) = super::board::kind_words(kind);
                     items.push(ContextMenuItem::new(
-                        format!("{count} {kind}"),
+                        super::counted(*count as usize, one, many),
                         |_, _: &mut gpui::App| {},
                     ));
                 }
-                items.push(ContextMenuItem::new(
-                    super::counted(summary.pictures as usize, "picture", "pictures"),
-                    |_, _: &mut gpui::App| {},
-                ));
                 items.push(ContextMenuItem::new(
                     super::counted(summary.words as usize, "word", "words"),
                     |_, _: &mut gpui::App| {},

@@ -470,13 +470,19 @@ pub fn menu_actions(menus: &[Menu]) -> Vec<(String, Box<dyn Action>)> {
 /// While a whiteboard is the open item (`open`), no item shows a key that
 /// is the whiteboard's own (`innerword_board_web::keys::WHITEBOARD_KEYS`):
 /// such an item gets the two-key placeholder, so AppKit offers none of those
-/// chords to the menu bar and the whiteboard has them (section 4.7).
+/// chords to the menu bar and the whiteboard has them (section 4.7). The
+/// Edit menu's Undo, Redo, Cut, Copy, Paste and Select All keep theirs
+/// ([`keeps_its_key_on_a_board`]): the page is asked first and Excalidraw
+/// handles undo, redo and select all on the canvas, while copy and paste
+/// reach it only as the `copy:` and `paste:` the menu items send (it has no
+/// key handler for them), and a text field of the page needs `selectAll:`.
 pub fn menu_key_bindings(keymap: &Keymap, open: OpenItemKind) -> Vec<KeyBinding> {
     let context: Rc<gpui::KeyBindingContextPredicate> = Rc::new(
         gpui::KeyBindingContextPredicate::parse(MENU_KEY_CONTEXT).expect("a valid key context"),
     );
     let the_boards = |binding: &KeyBinding| {
         open == OpenItemKind::Board
+            && !keeps_its_key_on_a_board(binding.action())
             && crate::boards::is_whiteboard_keys(&crate::keymap::keys_of(binding))
     };
     let mut bindings = Vec::new();
@@ -519,6 +525,22 @@ pub fn menu_key_bindings(keymap: &Keymap, open: OpenItemKind) -> Vec<KeyBinding>
         seen.push(action);
     }
     bindings
+}
+
+/// Whether the menu bar item of `action` keeps its key while a whiteboard is
+/// open although the key is the whiteboard's: the six items of the Edit menu
+/// that AppKit offers a key to only after the page left it (see
+/// [`menu_key_bindings`]).
+pub fn keeps_its_key_on_a_board(action: &dyn Action) -> bool {
+    let kept: [&dyn Action; 6] = [
+        &editor::Undo,
+        &editor::Redo,
+        &editor::Cut,
+        &editor::Copy,
+        &editor::Paste,
+        &editor::SelectAll,
+    ];
+    kept.iter().any(|kept| kept.partial_eq(action))
 }
 
 /// Whether `binding` exists only to give a menu bar item its key.

@@ -382,6 +382,13 @@ pub(crate) struct PageSession {
     _events: Task<()>,
 }
 
+impl PageSession {
+    /// Whether it has a view, or one is made at the next frame.
+    pub(crate) fn has_a_view(&self) -> bool {
+        self.view.borrow().is_some() || self.seed.borrow().is_some()
+    }
+}
+
 impl Drop for PageSession {
     fn drop(&mut self) {
         pages::close(&self.inbox);
@@ -2165,6 +2172,11 @@ impl Workspace {
         // what the next text shows, with nothing to see here.
         root = say::<comments::ToggleComments>(root, NO_COMMENTS_ON_A_PAGE, cx);
         root = say::<comments::ToggleShowResolved>(root, NO_COMMENTS_ON_A_PAGE, cx);
+        // Without the assistant its key does nothing here either (the page
+        // has it).
+        if !self.assistant.shown {
+            return root;
+        }
         root.capture_action(cx.listener(|this, _: &AskAssistant, _, cx| {
             cx.stop_propagation();
             let key = crate::keymap::hint_in(&FocusAssistant, "Workspace > PageView", cx)

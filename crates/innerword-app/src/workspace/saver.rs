@@ -263,6 +263,8 @@ pub(crate) struct PreparedBoard {
     pub plain_text: String,
     pub words: u64,
     pub characters: u64,
+    /// Its elements, as the listing counts them (labels apart).
+    pub elements: u64,
 }
 
 impl PreparedBoard {
@@ -332,6 +334,7 @@ pub(crate) fn prepared_of(scene: &innerword_board::Scene) -> PreparedBoard {
         plain_text,
         words: stats.words as u64,
         characters: stats.characters as u64,
+        elements: scene.summary().elements,
     }
 }
 
@@ -362,6 +365,8 @@ pub(crate) struct WrittenBoard {
     /// The stored scene that was written.
     pub scene: Arc<str>,
     pub files: Vec<String>,
+    /// Its elements, as the listing counts them.
+    pub elements: u64,
     /// The view state stored with it (its `at` is `stamp`).
     pub view_state: Option<String>,
     pub duration: Duration,
@@ -423,6 +428,7 @@ impl Saver {
                         meta: saved.meta,
                         stamp: saved.stamp,
                         files: prepared.files.iter().map(|id| id.to_hex()).collect(),
+                        elements: prepared.elements,
                         scene: Arc::from(prepared.scene),
                         view_state,
                         duration: started.elapsed(),

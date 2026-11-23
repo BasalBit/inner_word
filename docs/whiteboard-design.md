@@ -1064,12 +1064,18 @@ adopted:
    save state says "Not saved: <the reason>. A copy of the drawing is in <short path>."
    with Show in Finder. At every end of the session a held scene that is not saved is
    written there before the view goes, so a drawing is never dropped (reviewer's point,
-   taken). The recovery file is never read by the app: it is for the writer, and for us.
+   taken): another item opened, the whiteboard closed, a crash, and the flush of closing
+   the window and quitting (`Workspace::flush_at_an_end`, also the quit hook). A scene
+   already written is not written again, a newer one always is (`recovered_scene`, the
+   final review: an earlier copy no longer stops a later one). Reload whiteboard does
+   not load the view over a scene it could not save first ("Not reloaded: …"). The
+   recovery file is never read by the app: it is for the writer, and for us.
 
 A `file` message goes to the background too: base64 decoded, `sniff_svg` or `prepare`
 (section 2, "Pictures"), stored with `LibraryImages::put_files` (the pictures' own
 connection), and the map says `Stored` (and the source learns the `FileId`) or `Refused` (a
-toast with the sentence).
+toast with the sentence). A store that fails (the library busy, the disk full) is no
+refusal: the picture stays on its way and is stored again after `RETRY_DELAY`, said once.
 
 **After an outside write** (an agent's change, a restored version, 6.7): from the moment
 the app wrote it until `adopt` answers, posts of the view are held and not saved (a post
@@ -1231,8 +1237,15 @@ in `BoardView`, routed to Excalidraw's search, 4.10), `cmd-alt-s` and the sideba
   in `innerword-vim-mode`; so their items stay enabled on a whiteboard, and when AppKit
   offers a chord to the menu bar first, `cmd-alt-c` would show the comments): **while a
   whiteboard is the open item, the menu bar is built without any key equivalent that is in
-  `WHITEBOARD_KEYS`**. `menus::menu_key_bindings(keymap, open: OpenItemKind)` leaves those
-  keystrokes out for `OpenItemKind::Board`; the workspace rebuilds the menu bar when a
+  `WHITEBOARD_KEYS`**, except the six of the Edit menu that AppKit sends to the web view
+  (Undo, Redo, Cut, Copy, Paste, Select All; `menus::keeps_its_key_on_a_board`): the web
+  view asks the page first, and Excalidraw takes undo, redo and select all on the canvas,
+  while copy and paste reach it only as the `copy:` and `paste:` those items send (0.18.1
+  has no key handler for them), and a text field of the page needs `selectAll:` (final
+  review: without them `cmd-c` and `cmd-v` did nothing on a whiteboard).
+  `menus::menu_key_bindings(keymap, open: OpenItemKind)` leaves the others out for
+  `OpenItemKind::Board`, and keeps every key while the whiteboard is not drawn (no engine,
+  a page that failed to start); the workspace rebuilds the menu bar when a
   whiteboard becomes or stops being the open item (1 to 5 ms, the cost of a key change,
   measured for 0.5.0), as `menus::set_assistant_shown` does. A click on such an item still
   works: on a whiteboard the workspace root's `capture_action` (which already captures the
@@ -1465,7 +1478,11 @@ the library** (answer 6).
   it in the background through the saver's second connection (`SaveJob::ShapeLibrary`:
   `ShapeLibrary::from_view`, the limits, `to_stored`, the setting), newest wins; the
   synchronous flush writes what is held; every `collect` (4.5) brings a change not posted
-  yet, so the deliberate ends of 4.6 keep the last one. Only one whiteboard view lives at a
+  yet, so the deliberate ends of 4.6 keep the last one. A change the app's own `library`
+  call answered (Add selection to shape library: its `lrev` above the last post taken)
+  counts as "the page holds more" until it is posted, so a deliberate end collects then
+  (final review). A change made in Excalidraw's sidebar is known to the app only from its
+  post; that the status says one is waiting is the glue's to add (`innerword-board-web`). Only one whiteboard view lives at a
   time, so there is no merge between two libraries; the app is the setting's only writer
   (no tool and no MCP tool reads or writes it, and the live channel has no operation for
   it).

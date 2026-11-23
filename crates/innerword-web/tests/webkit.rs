@@ -709,6 +709,11 @@ fn main() -> ExitCode {
     if wanted("bundle") {
         bundle::the_bundle(&mut report, &server, &rules);
     }
+    // What the glue keeps of the writer's while an outside write is adopted, and its start
+    // and shape library at their limits (B3's review fixes).
+    if wanted("bundle_glue") {
+        bundle::the_glue_keeps_what_the_writer_does(&mut report, &rules);
+    }
     // The converter of agents' skeletons (innerword-board) against Excalidraw's own.
     if wanted("crosscheck") {
         crosscheck::the_converter_against_excalidraw(&mut report, &rules);

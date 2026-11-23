@@ -2,7 +2,7 @@
 //! `innerword-board-web` (`dist/`, found by `Assets::find`) under the whiteboard's policies
 //! (`docs/whiteboard-design.md`, 9.2 B4: "the bundle", Mermaid, the shape library).
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Condvar};
 
 use super::board::{BRIDGE, call};
 use super::*;
@@ -20,12 +20,27 @@ use serde_json::{Value, json};
 
 /// The bundle's files, and what the app's source answers beside them (`board.json`,
 /// `library.json`, `scene.json`, `_files/<id>`), which a case may change while a view runs.
+/// A case can hold the files under a prefix (`hold`): their reads wait, on the scheme
+/// handler's background queue, until `release` (a font load still in flight).
 struct BundleSource {
     assets: Assets,
     extra: Mutex<HashMap<String, ServedFile>>,
     cache: Mutex<HashMap<String, ServedFile>>,
     asked: Mutex<Vec<String>>,
+    hold: Mutex<Hold>,
+    released: Condvar,
 }
+
+/// The files a [`BundleSource`] holds back: the prefix, and the paths waiting.
+#[derive(Default)]
+struct Hold {
+    prefix: Option<String>,
+    held: Vec<String>,
+}
+
+/// The longest a held read waits, so that a case that fails before its release never
+/// leaves a thread of the scheme handler waiting for good.
+const LONGEST_HOLD: Duration = Duration::from_secs(30);
 
 impl BundleSource {
     fn new(assets: &Assets) -> Arc<BundleSource> {
@@ -34,7 +49,27 @@ impl BundleSource {
             extra: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
             asked: Mutex::new(Vec::new()),
+            hold: Mutex::new(Hold::default()),
+            released: Condvar::new(),
         })
+    }
+
+    /// From now on, a read of a path under `prefix` waits until [`BundleSource::release`].
+    fn hold(&self, prefix: &str) {
+        self.hold.lock().unwrap().prefix = Some(prefix.to_string());
+    }
+
+    /// The paths whose reads are waiting.
+    fn held(&self) -> Vec<String> {
+        self.hold.lock().unwrap().held.clone()
+    }
+
+    /// Lets every held read go on, and holds nothing more.
+    fn release(&self) {
+        let mut hold = self.hold.lock().unwrap();
+        hold.prefix = None;
+        hold.held.clear();
+        self.released.notify_all();
     }
 
     fn set(&self, path: &str, media_type: &str, bytes: &[u8]) {
@@ -52,6 +87,20 @@ impl BundleSource {
 impl PageSource for BundleSource {
     fn file(&self, path: &str) -> Option<ServedFile> {
         self.asked.lock().unwrap().push(path.to_string());
+        {
+            let holds = |hold: &Hold| {
+                hold.prefix
+                    .as_deref()
+                    .is_some_and(|prefix| path.starts_with(prefix))
+            };
+            let mut hold = self.hold.lock().unwrap();
+            if holds(&hold) {
+                hold.held.push(path.to_string());
+                let _ = self
+                    .released
+                    .wait_timeout_while(hold, LONGEST_HOLD, |hold| holds(hold));
+            }
+        }
         if let Some(found) = self.extra.lock().unwrap().get(path) {
             return Some(found.clone());
         }
@@ -1351,4 +1400,612 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
         violations.is_empty(),
         &format!("the shape library made no report of the policy ({violations:?})"),
     );
+}
+
+// ---------------------------------------------------------------------------
+// The glue holds what the writer does: the cases of B3's review fixes (`adopt` that waits
+// first and then merges in one stretch, `state` outside the queue, a start that cannot read
+// its scene, a shape library longer than one message), in a real view under the
+// whiteboard's policy. They were written as a Swift harness beside B3's fixes and are kept
+// here, where they run with every other case: against the dist of before those fixes
+// (5f9f3b1 and 3008498), 15 of their checks fail, at least one in each case.
+
+/// The six cases.
+pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &Path) {
+    let assets = match Assets::find() {
+        Ok(assets) => assets,
+        Err(why) => {
+            report.check(false, &format!("the whiteboard's bundle is found ({why})"));
+            return;
+        }
+    };
+    adopt_while_a_font_loads(report, &assets, rules);
+    adopt_during_a_stroke(report, &assets, rules);
+    adopt_as_a_stroke_begins(report, &assets, rules);
+    adopt_while_a_new_text_is_typed(report, &assets, rules);
+    a_start_without_a_stored_scene(report, &assets, rules);
+    a_library_longer_than_one_message(report, &assets, rules);
+}
+
+/// Three rectangles, r1 to r3, as `board.json` serves them.
+fn three_rectangles(source: &BundleSource) {
+    let scene = stored_scene(json!([
+        rectangle("r1", 0., "a0"),
+        rectangle("r2", 200., "a1"),
+        rectangle("r3", 400., "a2"),
+    ]));
+    source.set_json(
+        BOARD_PATH,
+        &json!({"stamp": STAMP, "scene": scene, "view": {}}),
+    );
+    source.set_json(LIBRARY_PATH, &json!({}));
+}
+
+/// A whiteboard's view of [`three_rectangles`] in `host`, once it posted `ready` and
+/// settled; `None` (and a failed check) when it did not.
+fn ready_view(
+    report: &mut Report,
+    host: &Host,
+    case: &str,
+    view_host: &str,
+    source: Arc<BundleSource>,
+    rules: &Path,
+) -> Option<(WebPage, Rc<Events>)> {
+    let (view, events) = open(host, view_host, source, rules);
+    if wait_for(&events, 0, Duration::from_secs(20), |m| {
+        matches!(m, Message::Ready { .. })
+    })
+    .is_none()
+    {
+        report.check(
+            false,
+            &format!("{case}: the view is ready ({:?})", page_errors(&events)),
+        );
+        return None;
+    }
+    wait(Duration::from_millis(300));
+    Some((view, events))
+}
+
+/// A call whose body answers JSON, read (`null` when it did not answer JSON).
+fn page_json(view: &WebPage, body: &str) -> Value {
+    call(view, body, "{}")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// The x of a live element on the canvas (NaN when there is none).
+fn x_on_canvas(view: &WebPage, id: &str) -> f64 {
+    page_json(
+        view,
+        &format!(
+            "const e = window.innerwordBoard.api.getSceneElements().find((e) => e.id === '{id}'); return JSON.stringify(e ? e.x : null);"
+        ),
+    )
+    .as_f64()
+    .unwrap_or(f64::NAN)
+}
+
+/// The messages of a kind the view was posted, as JSON.
+fn posted(events: &Events, kind: &str) -> Vec<Value> {
+    events
+        .messages
+        .borrow()
+        .iter()
+        .filter_map(|body| serde_json::from_str::<Value>(body).ok())
+        .filter(|message| message["kind"] == kind)
+        .collect()
+}
+
+/// The x of an element in a posted `scene`.
+fn x_in_post(post: &Value, id: &str) -> Option<f64> {
+    post["scene"]["elements"]
+        .as_array()?
+        .iter()
+        .find(|e| e["id"] == id)?["x"]
+        .as_f64()
+}
+
+/// An agent's delta on the canvas's rev now: r1 moved by `dx`, and `extra` beside it.
+fn r1_moved(view: &WebPage, dx: f64, extra: Vec<Value>) -> String {
+    let rev = page_json(view, calls::COLLECT)["rev"]
+        .as_i64()
+        .unwrap_or(-1);
+    let r1 = element(&canvas(view), "r1").cloned().unwrap_or_default();
+    let mut moved = r1.clone();
+    moved["x"] = json!(r1["x"].as_f64().unwrap_or(0.) + dx);
+    moved["version"] = json!(r1["version"].as_u64().unwrap_or(0) + 1);
+    moved["versionNonce"] = json!(4242);
+    let mut upserted = vec![json!({"element": moved, "baseVersion": r1["version"]})];
+    upserted.extend(extra);
+    json!({"baseRev": rev, "upserted": upserted, "removed": [], "files": {}, "undoable": true})
+        .to_string()
+}
+
+/// A pointer event dispatched on Excalidraw's interactive canvas, at (x, y) from its top
+/// left (the writer's hand, as far as Excalidraw can tell).
+fn pointer(view: &WebPage, kind: &str, x: f64, y: f64) {
+    let buttons = if kind == "pointerup" { 0 } else { 1 };
+    let _ = call(
+        view,
+        &format!(
+            "const canvas = document.querySelector('canvas.interactive') ?? document.querySelector('.excalidraw__canvas.interactive');
+             const r = canvas.getBoundingClientRect();
+             canvas.dispatchEvent(new PointerEvent('{kind}', {{ clientX: r.left + {x}, clientY: r.top + {y}, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: {buttons}, bubbles: true, cancelable: true, composed: true, view: window }}));
+             return '1';"
+        ),
+        "{}",
+    );
+}
+
+/// The last freehand stroke on the canvas: its id, points, whether deleted, its last point,
+/// and how many strokes there are.
+fn last_stroke(view: &WebPage) -> Value {
+    page_json(
+        view,
+        "const f = window.innerwordBoard.api.getSceneElementsIncludingDeleted().filter((e) => e.type === 'freedraw');
+         const e = f[f.length - 1];
+         return JSON.stringify(e ? { id: e.id, n: e.points.length, deleted: e.isDeleted, last: e.points[e.points.length - 1], count: f.length } : {});",
+    )
+}
+
+/// Zoom 100 % and Excalidraw's tool `tool`.
+fn take_tool(view: &WebPage, tool: &str) {
+    let _ = call(
+        view,
+        calls::ZOOM,
+        &calls::zoom_argument(calls::Zoom::To(1.0)),
+    );
+    let _ = call(
+        view,
+        &format!("window.innerwordBoard.api.setActiveTool({{ type: '{tool}' }}); return '1';"),
+        "{}",
+    );
+    wait(Duration::from_millis(100));
+}
+
+/// 1. An adopt that waits for the font of an incoming text (held in flight here), while
+/// the writer nudges another shape: the nudge stays, the answer is not `same`, and the
+/// merge is posted at or above the answered rev, with the nudge.
+fn adopt_while_a_font_loads(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "an adopt waiting for a font";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) = ready_view(
+        report,
+        &host,
+        case,
+        "board-41-1700000000000",
+        source.clone(),
+        rules,
+    ) else {
+        return;
+    };
+    let loaded_fonts: Vec<String> = source
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p.starts_with("fonts/"))
+        .cloned()
+        .collect();
+    report.note(&format!(
+        "{case}: the fonts asked for at the load: {loaded_fonts:?}"
+    ));
+    source.hold("fonts/Lilita/");
+    let mut lilita = rust_text("t7", "Lilita text from an agent", "a3");
+    lilita["fontFamily"] = json!(7);
+    let delta = r1_moved(
+        &view,
+        1000.,
+        vec![json!({"element": lilita, "baseVersion": null})],
+    );
+    let x2_before = x_on_canvas(&view, "r2");
+    let slot: Rc<RefCell<Option<Result<String, String>>>> = Rc::new(RefCell::new(None));
+    let answer = slot.clone();
+    view.call_async(calls::ADOPT, &delta, move |result| {
+        *answer.borrow_mut() = Some(result)
+    });
+    testing::run_until(Duration::from_secs(2), || !source.held().is_empty());
+    report.check(
+        !source.held().is_empty() && slot.borrow().is_none(),
+        &format!(
+            "{case}: the font's load is held and the adopt waits for it ({:?})",
+            source.held()
+        ),
+    );
+    // The writer nudges r2 while the adopt waits.
+    let _ = call(
+        &view,
+        "const api = window.innerwordBoard.api;
+         api.updateScene({ elements: api.getSceneElementsIncludingDeleted().map((e) => e.id === 'r2' ? { ...e, x: e.x + 37, version: e.version + 1, versionNonce: 555 } : e), captureUpdate: 'IMMEDIATELY' });
+         return '1';",
+        "{}",
+    );
+    wait(Duration::from_millis(400));
+    let nudge_posted = posted(&events, "scene")
+        .iter()
+        .any(|post| x_in_post(post, "r2") == Some(x2_before + 37.));
+    report.note(&format!(
+        "{case}: the nudge was posted while the adopt waited: {nudge_posted}"
+    ));
+    source.release();
+    testing::run_until(Duration::from_secs(20), || slot.borrow().is_some());
+    let adopted = slot
+        .borrow_mut()
+        .take()
+        .unwrap_or_else(|| Err("no answer in 20 s".to_string()))
+        .and_then(|text| calls::answer::<calls::Adopted>(&text));
+    report.check(
+        matches!(&adopted, Ok(a) if !a.same && a.conflicts.is_empty()),
+        &format!("{case}: the answer is not same (the canvas holds a change of the writer's), without conflicts ({adopted:?})"),
+    );
+    let x2_after = x_on_canvas(&view, "r2");
+    report.check(
+        x2_after == x2_before + 37.,
+        &format!(
+            "{case}: the writer's nudge made while the adopt waited stays (r2.x {x2_before} -> {x2_after})"
+        ),
+    );
+    let x1 = x_on_canvas(&view, "r1");
+    let t7 = live(&canvas(&view), "t7");
+    report.check(
+        x1 == 1000. && t7,
+        &format!("{case}: the agent's change is on the canvas (r1.x {x1}, t7 {t7})"),
+    );
+    wait(Duration::from_millis(400));
+    let rev = adopted.as_ref().map(|a| a.rev).unwrap_or(u64::MAX);
+    let after: Vec<Value> = posted(&events, "scene")
+        .into_iter()
+        .filter(|post| post["rev"].as_u64().is_some_and(|r| r >= rev))
+        .collect();
+    let posted_r2 = after.last().and_then(|post| x_in_post(post, "r2"));
+    report.check(
+        posted_r2 == Some(x2_before + 37.),
+        &format!(
+            "{case}: the merge is posted at or above the answered rev {rev}, with the nudge ({} posts, r2.x {posted_r2:?})",
+            after.len()
+        ),
+    );
+    let state = page_json(&view, calls::STATE);
+    report.check(
+        state["rev"].is_u64() && state["rev"] == state["posted"],
+        &format!("{case}: nothing is left unposted ({state})"),
+    );
+    report.check(
+        page_errors(&events).is_empty(),
+        &format!("{case}: no page error ({:?})", page_errors(&events)),
+    );
+}
+
+/// 2. An adopt in the middle of a freehand stroke: the whole stroke is on the canvas after
+/// the pointer goes up, and in the last post.
+fn adopt_during_a_stroke(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "an adopt during a stroke";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-42-1700000000000", source, rules)
+    else {
+        return;
+    };
+    take_tool(&view, "freedraw");
+    pointer(&view, "pointerdown", 300., 400.);
+    for i in 1..=10 {
+        pointer(
+            &view,
+            "pointermove",
+            300. + i as f64 * 10.,
+            400. + i as f64 * 3.,
+        );
+        wait(Duration::from_millis(35));
+    }
+    let middle = last_stroke(&view);
+    let delta = r1_moved(&view, 500., Vec::new());
+    let adopted =
+        call(&view, calls::ADOPT, &delta).and_then(|text| calls::answer::<calls::Adopted>(&text));
+    report.check(
+        matches!(&adopted, Ok(a) if a.conflicts.is_empty()),
+        &format!(
+            "{case}: the adopt answers while the pointer is down ({adopted:?}; stroke {middle})"
+        ),
+    );
+    for i in 11..=20 {
+        pointer(
+            &view,
+            "pointermove",
+            300. + i as f64 * 10.,
+            400. + i as f64 * 3.,
+        );
+        wait(Duration::from_millis(35));
+    }
+    pointer(&view, "pointerup", 500., 460.);
+    wait(Duration::from_millis(300));
+    let end = last_stroke(&view);
+    let n = end["n"].as_u64().unwrap_or(0);
+    let last_x = end["last"][0].as_f64().unwrap_or(-1.);
+    report.check(
+        n > middle["n"].as_u64().unwrap_or(0) + 5
+            && end["deleted"] == false
+            && (last_x - 200.).abs() < 1.5,
+        &format!("{case}: the whole stroke is on the canvas after the pointer went up (in the middle {middle}, at the end {end})"),
+    );
+    let x1 = x_on_canvas(&view, "r1");
+    report.check(
+        x1 == 500.,
+        &format!("{case}: the agent's change is on the canvas (r1.x {x1})"),
+    );
+    let in_last_post = posted(&events, "scene").last().and_then(|post| {
+        post["scene"]["elements"]
+            .as_array()?
+            .iter()
+            .find(|e| e["type"] == "freedraw")
+            .and_then(|e| e["points"].as_array().map(Vec::len))
+    });
+    report.check(
+        in_last_post == Some(n as usize),
+        &format!("{case}: the last post has the whole stroke ({in_last_post:?} of {n} points)"),
+    );
+    report.check(
+        page_errors(&events).is_empty(),
+        &format!("{case}: no page error ({:?})", page_errors(&events)),
+    );
+}
+
+/// 3. An adopt right after a stroke has begun (too small yet for Excalidraw to keep in a
+/// restore): the stroke stays, and is drawn whole.
+fn adopt_as_a_stroke_begins(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "an adopt as a stroke begins";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-43-1700000000000", source, rules)
+    else {
+        return;
+    };
+    take_tool(&view, "freedraw");
+    pointer(&view, "pointerdown", 300., 400.);
+    wait(Duration::from_millis(40));
+    let begun = last_stroke(&view);
+    let delta = r1_moved(&view, 500., Vec::new());
+    let adopted = call(&view, calls::ADOPT, &delta);
+    let right_after = last_stroke(&view);
+    report.check(
+        begun["id"].is_string() && right_after["id"] == begun["id"] && right_after["deleted"] == false,
+        &format!("{case}: a stroke that has just begun is still there after the adopt (before {begun}, after {right_after}, {adopted:?})"),
+    );
+    for i in 1..=12 {
+        pointer(&view, "pointermove", 300. + i as f64 * 10., 400.);
+        wait(Duration::from_millis(35));
+    }
+    pointer(&view, "pointerup", 420., 400.);
+    wait(Duration::from_millis(300));
+    let end = last_stroke(&view);
+    report.check(
+        end["n"].as_u64().unwrap_or(0) >= 10 && end["deleted"] == false && end["count"] == 1,
+        &format!("{case}: and it is drawn whole, one stroke ({end})"),
+    );
+    report.check(
+        page_errors(&events).is_empty(),
+        &format!("{case}: no page error ({:?})", page_errors(&events)),
+    );
+}
+
+/// 4. An adopt while a new, empty text is being typed: the text stays and stays in its
+/// editor, and what is typed after the adopt lands in it.
+fn adopt_while_a_new_text_is_typed(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "an adopt while a new text is typed";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-44-1700000000000", source, rules)
+    else {
+        return;
+    };
+    take_tool(&view, "text");
+    pointer(&view, "pointerdown", 600., 500.);
+    pointer(&view, "pointerup", 600., 500.);
+    wait(Duration::from_millis(300));
+    const EDITING: &str =
+        "return JSON.stringify(!!document.querySelector('textarea.excalidraw-wysiwyg'));";
+    let new_text = page_json(
+        &view,
+        "const t = window.innerwordBoard.api.getSceneElementsIncludingDeleted().filter((e) => e.type === 'text');
+         const e = t[t.length - 1];
+         return JSON.stringify(e ? { id: e.id, text: e.text, deleted: e.isDeleted } : {});",
+    );
+    report.check(
+        page_json(&view, EDITING) == true && new_text["text"] == "",
+        &format!("{case}: a new, empty text is being edited ({new_text})"),
+    );
+    let id = new_text["id"].as_str().unwrap_or("?").to_string();
+    let text_of = |view: &WebPage| {
+        page_json(
+            view,
+            &format!(
+                "const e = window.innerwordBoard.api.getSceneElementsIncludingDeleted().find((e) => e.id === '{id}');
+                 return JSON.stringify(e ? {{ text: e.text, deleted: e.isDeleted }} : null);"
+            ),
+        )
+    };
+    let delta = r1_moved(&view, 500., Vec::new());
+    let adopted = call(&view, calls::ADOPT, &delta);
+    let after_adopt = text_of(&view);
+    let still_editing = page_json(&view, EDITING) == true;
+    report.check(
+        after_adopt["deleted"] == false && still_editing,
+        &format!("{case}: after the adopt the text is there and still being edited ({after_adopt}, editing {still_editing}, {adopted:?})"),
+    );
+    let _ = call(
+        &view,
+        "const t = document.querySelector('textarea.excalidraw-wysiwyg');
+         t.value = 'Typed after the adopt';
+         t.dispatchEvent(new Event('input', { bubbles: true }));
+         return '1';",
+        "{}",
+    );
+    wait(Duration::from_millis(200));
+    let _ = call(
+        &view,
+        "document.querySelector('textarea.excalidraw-wysiwyg').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return '1';",
+        "{}",
+    );
+    wait(Duration::from_millis(300));
+    let committed = text_of(&view);
+    report.check(
+        committed["text"] == "Typed after the adopt" && committed["deleted"] == false,
+        &format!("{case}: what is typed after the adopt lands in the text ({committed})"),
+    );
+    let x1 = x_on_canvas(&view, "r1");
+    report.check(
+        x1 == 500.,
+        &format!("{case}: the agent's change is on the canvas (r1.x {x1})"),
+    );
+    report.check(
+        page_errors(&events).is_empty(),
+        &format!("{case}: no page error ({:?})", page_errors(&events)),
+    );
+}
+
+/// 5. A `board.json` that is missing or is no stored scene: the start fails with an error
+/// that says so (`bridge::START_FAILED`), no `ready` comes, and `state` answers at once
+/// behind a call that waits for `ready`.
+fn a_start_without_a_stored_scene(report: &mut Report, assets: &Assets, rules: &Path) {
+    for (n, (what, board)) in [
+        ("missing", None),
+        ("not a stored scene", Some(r#"{"stamp": 5, "scene": []}"#)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let case = format!("a board.json {what}");
+        let source = BundleSource::new(assets);
+        source.set_json(LIBRARY_PATH, &json!({}));
+        if let Some(board) = board {
+            source.set(BOARD_PATH, "application/json", board.as_bytes());
+        }
+        let host = Host::new();
+        let (view, events) = open(
+            &host,
+            &format!("board-{}-1700000000000", 45 + n),
+            source,
+            rules,
+        );
+        let errored = wait_for(&events, 0, Duration::from_secs(10), |m| {
+            matches!(m, Message::Error { .. })
+        });
+        let message = errored
+            .and_then(|at| match messages(&events, at).into_iter().next() {
+                Some(Ok(Message::Error { message })) => Some(message),
+                _ => None,
+            })
+            .unwrap_or_default();
+        report.check(
+            message.starts_with(bridge::START_FAILED),
+            &format!("{case}: the start fails with an error that says so ({message:?})"),
+        );
+        // A call that waits for `ready`, and `state` behind it.
+        view.call_async(calls::COLLECT, "{}", |_| {});
+        wait(Duration::from_millis(100));
+        let started = Instant::now();
+        let state = call(&view, calls::STATE, "{}");
+        let took = started.elapsed();
+        let rev = state
+            .as_ref()
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .map(|value| value["rev"].clone())
+            .unwrap_or(Value::Null);
+        report.check(
+            took < Duration::from_millis(500) && rev.is_u64(),
+            &format!(
+                "{case}: state answers at once behind a call that waits for ready ({took:?}, {state:?})"
+            ),
+        );
+        wait(Duration::from_millis(500));
+        report.check(
+            posted(&events, "ready").is_empty(),
+            &format!("{case}: no ready is posted"),
+        );
+    }
+}
+
+/// 6. A shape library longer than one message: posted small, as too large and without its
+/// items (and not counted as posted), and `collect` brings it whole.
+fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "a library longer than one message";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-47-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let bytes = MAX_MESSAGE_BYTES + 1024 * 1024;
+    let _ = call(
+        &view,
+        &format!(
+            "const api = window.innerwordBoard.api;
+             const base = api.getSceneElements()[0];
+             const big = 'x'.repeat({bytes});
+             await api.updateLibrary({{ libraryItems: [{{ id: 'huge', status: 'unpublished', created: 1, elements: [{{ ...base, id: 'lib1', customData: {{ big }} }}] }}], merge: false, openLibraryMenu: false }});
+             return '1';"
+        ),
+        "{}",
+    );
+    wait(Duration::from_millis(800));
+    let posts = posted(&events, "library");
+    let last = posts.last().cloned().unwrap_or_default();
+    report.check(
+        last["tooLarge"] == true && last["items"].is_null(),
+        &format!(
+            "{case}: it is posted as too large, without its items ({} posts, the last {})",
+            posts.len(),
+            short_json(&last)
+        ),
+    );
+    report.check(
+        view.stats().messages_dropped == 0,
+        &format!(
+            "{case}: nothing the bridge would drop was posted ({:?})",
+            view.stats()
+        ),
+    );
+    let collected =
+        call(&view, calls::COLLECT, "{}").and_then(|text| calls::answer::<calls::Collected>(&text));
+    let items: Vec<Value> = collected
+        .as_ref()
+        .ok()
+        .and_then(|c| c.library.as_ref())
+        .and_then(|library| serde_json::from_str(library.items.get()).ok())
+        .unwrap_or_default();
+    report.check(
+        items.len() == 1 && items[0]["id"] == "huge",
+        &format!(
+            "{case}: collect brings it whole ({} items{})",
+            items.len(),
+            collected
+                .as_ref()
+                .err()
+                .map(|e| format!(", {e}"))
+                .unwrap_or_default()
+        ),
+    );
+}
+
+/// A message, short enough for a line.
+fn short_json(value: &Value) -> String {
+    let text = value.to_string();
+    if text.len() > 300 {
+        let head: String = text.chars().take(300).collect();
+        format!("{head}… ({} bytes)", text.len())
+    } else {
+        text
+    }
 }

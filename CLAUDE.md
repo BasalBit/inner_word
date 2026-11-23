@@ -488,18 +488,27 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   `whiteboard` and one JSON object `{"title"?, "add"?, "update"?, "remove"?}` in the agents'
   formats (skeletons, changes by id, ids; a bare array is `add`; several blocks are joined).
   An `image` element, a type the converter does not make, an id that is not 1 to 64 of
-  `[A-Za-z0-9_-]`, an unknown key and more than 2,000 entries make it unusable when it is
-  read. **The chat never shows the JSON**: each block is one italic line the app writes from
+  `[A-Za-z0-9_-]`, an id `add` gives twice (also across blocks: "its second block adds cache
+  again"), an unknown key and more than 2,000 entries make it unusable when it is read.
+  **The chat never shows the JSON**: each block is one italic line the app writes from
   it, the counts first ("Drawing: adds an ellipse and an arrow; changes the rectangle
   “API”."; over a document "… (new whiteboard “Who serves whom”)."; "Drawing that cannot be
-  used: …"; "Drawing…" while it is written), every word of the model's in it escaped. The
+  used: …"; "Drawing…" while it is written; a second block's line ends "Drawn together with
+  the drawing above."; with the open whiteboard's names, "…; the whiteboard has no api." for
+  an id of a change or a removal it does not have), every word of the model's in it escaped
+  (the note an older drawing becomes in the history is plain text: ids as written). A link
+  is named by its host as the converter reads it (`innerword_board::link_host`; it refuses
+  an `http(s)` link with a backslash or without a host, which a browser would open
+  elsewhere). The
   system prompt follows the open item (`DrawingTarget`, on the panel's `DocumentRef`, so each
   item's conversation starts with its own prompt): a whiteboard adds "Drawing on the open
   whiteboard", a document "Drawing a new whiteboard" (draw only when asked), a page, nothing
   open or no page engine nothing. Insert, Replace and Copy take the answer without its
   blocks. **The writer applies it**: the first button under the answer and the last item of
   its menu, `cmd-shift-d` in the side chat (the marked answer, else the latest), the palette
-  ("New whiteboard from answer", "Draw answer on whiteboard" while a whiteboard is open, left
+  ("New whiteboard from answer" over a document, "Draw answer on whiteboard" while a
+  whiteboard is open, and in the list of shortcuts "Draw answer (on the whiteboard, or as a
+  new whiteboard)", `DRAW_ANSWER_TITLE`, which "draw" finds; left
   out where nothing can be drawn; with the side chat closed or behind the comments the first
   run only brings it with the answer marked and says to run it again); no menu bar item. An
   answer drawn before (`Message::drawn_at`, stored) reads "Draw Again", and its key and
@@ -526,8 +535,13 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
     The toast: "Drew on “Plan”: 2 elements added, 1 changed. The whiteboard as it was is kept
     as a version.", with what was gone already, the conflicts the view reports, the
     converter's warnings and where it was put, and **Undo** (one step, while the canvas has
-    not moved on; later "Not undone: …"). The converter's refusal is "Nothing was drawn: …"
-    and offers the empty composer "Your drawing could not be used: … Please write it again."
+    not moved on, in the same session and the same load of the page, `DrawnAt`,
+    `BoardState::loads`: its revs start again at every load; later "Not undone: …"). An adopt
+    the flush itself started (a stale save merged) makes the press "The whiteboard is taking
+    in another change." too. The converter's refusal is "Nothing was drawn: …", naming the
+    list of the entry ("the element at index 1 of add (id): …", "the change at index 0 of
+    update (label): …", `DrawError::Entry`), and offers the empty composer "Your drawing
+    could not be used: … Please write it again."
   - **Over a document** ("New Whiteboard"; only a drawing that only adds): a new whiteboard
     in the document's folder (at the root when the document or a folder above it is in the
     trash), titled with the block's `title`, else "<document title> (drawing)", else
@@ -1431,7 +1445,8 @@ document"). Three crates: `innerword-keymap` knows what a change is,
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
   list has 443 rows and the shortcuts file 425 entries, one for each key context of a
   command; without the assistant 412 rows, and the same 425 entries. The assistant's
-  drawing added one row and one entry ("New whiteboard from answer", `cmd-shift-d`, "In the
+  drawing added one row and one entry ("Draw answer (on the whiteboard, or as a new
+  whiteboard)", `cmd-shift-d`, "In the
   assistant's chats"; counted in a scripted run when it was added, as below). Before whiteboards
   they were 385 rows (384 commands in places and the `/` of the insert menu, which is no
   binding) and 410 entries (13 rows stand for several key contexts, 26 more than there

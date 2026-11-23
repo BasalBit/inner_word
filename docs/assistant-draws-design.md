@@ -504,13 +504,16 @@ pub enum DrawError {
     /// `named` by references (an arrow's `start` or `end`, a frame's `children`, in `add`
     /// or in `update`) that are neither in the scene nor among its own adds.
     Gone { changed: Vec<String>, named: Vec<String> },
-    /// The converter's refusal: a field, a value, the whiteboard's limits for agents.
+    /// The converter's refusal of one entry: "add" or "update", its index there.
+    Entry { list: &'static str, index: usize, field: Option<String>, message: String },
+    /// The converter's refusal of the whole: the whiteboard's limits for agents.
     Board(BoardError),
 }
 
-/// The open whiteboard's words: "the answer changes api and db, which are no longer on the
-/// whiteboard" / "the answer joins arrows or frames to cache, which is no longer on the
-/// whiteboard"; `BoardError`'s words. (A new whiteboard's words are the app's, 6.)
+/// The open whiteboard's words: "the answer changes api and db, which the whiteboard does
+/// not have" / "the answer joins arrows or frames to cache, which the whiteboard does not
+/// have"; "the element at index 3 of add (fillStyle): …" / "the change at index 0 of
+/// update (label): …"; `BoardError`'s words. (A new whiteboard's words are the app's, 6.)
 impl std::fmt::Display for DrawError { /* … */ }
 
 /// Applies `drawing` to `scene`, whole or not at all (on an error the scene is as it was):
@@ -1250,9 +1253,9 @@ Nothing drawn (`Toast::error`):
 
 | Why | Words |
 |---|---|
-| gone ids (changes) | "Nothing was drawn: the answer changes api and db, which are no longer on the whiteboard. Ask again: the assistant is sent the whiteboard as it is now." |
-| gone ids (named by new elements) | "Nothing was drawn: the answer joins arrows or frames to cache, which is no longer on the whiteboard. Ask again: …" |
-| the converter refused | "Nothing was drawn: the element at index 3 of add (fillStyle): …" (`BoardError`'s words); and the composer, when empty, is offered "Your drawing could not be used: <the same words>. Please write it again." (`offer_message`), so one `enter` asks |
+| gone ids (changes) | "Nothing was drawn: the answer changes api and db, which the whiteboard does not have. Ask again: the assistant is sent the whiteboard as it is now." (an id may have been removed meanwhile or never been there) |
+| gone ids (named by new elements) | "Nothing was drawn: the answer joins arrows or frames to cache, which the whiteboard does not have. Ask again: …" |
+| the converter refused | "Nothing was drawn: the element at index 3 of add (fillStyle): …" or "… the change at index 0 of update (label): …" (`DrawError::Entry`, the list named; `BoardError`'s words for the whole); and the composer, when empty, is offered "Your drawing could not be used: <the same words>. Please write it again." (`offer_message`), so one `enter` asks |
 | the flush failed | "Nothing was drawn: the whiteboard as it is now could not be saved first." |
 | the version failed | "Nothing was drawn: the whiteboard as it was could not be kept as a version." |
 | stale | "Nothing was drawn: the whiteboard changed while the drawing was made. Press again." |
@@ -1285,7 +1288,7 @@ elements near the view.
    `making = HashedMaking::new(&[document id, drawing.to_json(), now], now)`; an error:
    "Nothing was drawn: …" (and the composer offered the message, as in 5.5). On an empty
    scene `DrawError::Gone` can only be a reference to an id the drawing does not add, so
-   the app words it for this case, not with `Display`'s "no longer on the whiteboard":
+   the app words it for this case, not with `Display`'s "which the whiteboard does not have":
    "Nothing was drawn: the answer joins arrows or frames to cache, which the drawing does
    not have. Ask again." (`NEW_BOARD_NAMES_MISSING`).
 3. **Where**: the folder of the open document (`document_meta(id).folder_id`), at its end;
@@ -1552,7 +1555,7 @@ cannot do:
 - `a_document_in_the_trash_makes_its_whiteboard_at_the_root` (the document trashed, and
   its folder trashed)
 - `an_answer_that_names_what_it_does_not_add_says_so_over_a_document` (the new
-  whiteboard's words, not "no longer on the whiteboard")
+  whiteboard's words, not "which the whiteboard does not have")
 - `each_item_starts_its_chat_with_its_own_prompt` (a document, then a whiteboard, then a
   page: one process start each, none restarted)
 - `a_drawing_that_changes_a_whiteboard_is_not_offered_over_a_document`
@@ -1789,3 +1792,42 @@ Where it does not, or chose between two fixes:
   a new command (6).
 - **`cmd-shift-d`** is bound once, in `AssistantPanel`; the file has 425 entries, not 426
   (7).
+
+## 14. After the review of the build
+
+Two reviewers read the built feature. What changed:
+
+- **A link is read one way.** `innerword_board::link_host` is the host the converter judges
+  a link by and the line names it by: the converter refuses an `http(s)` link with a
+  backslash (a browser reads it as `/`, `https://evil.example\@good.example/` goes to
+  evil.example) and a link whose host is empty (`https:///evil.example`, which a browser
+  opens as evil.example), has a `%` or white space; the line names the whole address,
+  cut, should a link without a host come all the same, never nothing (section 8).
+- **The toast's Undo is bound to one load of the page** (`DrawnAt`: the whiteboard, its
+  session, `BoardState::loads`, counted at every `ready`, and the rev): the page's revs
+  start again at 0 at every load, so after a reload, a crash, a failed adopt or the
+  whiteboard opened again a stroke of the writer's was at a rev below the drawing's and
+  Undo would have taken it out (5.4).
+- **No second adopt after the flush**: the flush of 5.1 can itself send an adopt (a stale
+  save merged); the press then says `BOARD_BUSY` as before the flush.
+- **New Whiteboard from Answer that cannot open** the whiteboard says where it is
+  ("Made the whiteboard “…” in Part one from the answer. It could not be opened: it is in
+  the library.", `NOT_OPENED`).
+- **A refusal names its list** (`DrawError::Entry`): "the element at index 1 of add (id)",
+  "the change at index 0 of update (label)" (5.5).
+- **The history note is plain text**: ids and hosts reach the model as written (an
+  Excalidraw id has `_` and `-`); only the shown line escapes Markdown (3.5).
+- **The list of shortcuts finds the key by "draw"**: the command's title is "Draw answer
+  (on the whiteboard, or as a new whiteboard)" (`DRAW_ANSWER_TITLE`, as the zoom's
+  Automatic names both its meanings); the palette names the one that applies, "Draw
+  answer on whiteboard" or "New whiteboard from answer" (7).
+- **Several blocks are said to be drawn together**: a second block's line ends "Drawn
+  together with the drawing above." (`DRAWN_TOGETHER`), and a block that adds an id a
+  block above adds cannot be used, before the press: "its second block adds cache again"
+  (`DrawingError::AddedAgain`; an id written twice in one block, `IdTwice`) (2.2).
+- **The prompts** say "plain JSON (no comments, no trailing commas), and its fences start
+  their own lines, never inside a list item or a quote" and that "a change never has
+  \"label\"" (4,369 and 3,230 characters, within 4,600 and 3,600) (3.5).
+- **An id the whiteboard does not have** is said in the line before the press, with the
+  names the host gives: "…; the whiteboard has no api." (2.3).
+- **With no answer yet** the key says "There is no answer to draw yet." (`NO_ANSWER_YET`).
